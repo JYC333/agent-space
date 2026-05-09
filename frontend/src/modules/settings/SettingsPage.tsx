@@ -1,5 +1,5 @@
 import { useState, useEffect, useId } from 'react'
-import { Settings, KeyRound, User, Sun, Moon, Users, Plus, Mail, Send } from 'lucide-react'
+import { Settings, User, Sun, Moon, Users, Plus, Mail, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../contexts/AuthContext'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -24,12 +24,11 @@ const SPACE_TYPES: { value: Exclude<SpaceType, 'personal'>; label: string; descr
 ]
 
 export default function SettingsPage() {
-  const { apiKey, saveApiKey, clearApiKey, currentUser } = useAuth()
+  const { currentUser } = useAuth()
   const { spaceId, userId, spaces, setSpace, reloadSpaces } = useSpace()
   const { theme, setTheme } = useTheme()
 
   // Legacy dev-mode context
-  const [draftApiKey, setDraftApiKey] = useState(apiKey)
   const [draftSpace, setDraftSpace]   = useState(spaceId)
   const [draftUser, setDraftUser]     = useState(userId)
 
@@ -57,12 +56,6 @@ export default function SettingsPage() {
       .catch(() => setMembers([]))
       .finally(() => setLoadingMembers(false))
   }, [spaceId, currentUser])
-
-  function handleSaveApiKey(e: React.FormEvent) {
-    e.preventDefault()
-    saveApiKey(draftApiKey)
-    toast.success('API key saved')
-  }
 
   function handleSaveSpace(e: React.FormEvent) {
     e.preventDefault()
@@ -152,38 +145,6 @@ export default function SettingsPage() {
             </button>
           ))}
         </div>
-      </Card>
-
-      {/* API Key */}
-      <Card>
-        <CardTitle className="flex items-center gap-2">
-          <KeyRound className="size-3.5" /> API Key
-        </CardTitle>
-        <form onSubmit={handleSaveApiKey} className="space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="api-key">Anthropic API key</Label>
-            <Input
-              id="api-key"
-              type="password"
-              value={draftApiKey}
-              onChange={e => setDraftApiKey(e.target.value)}
-              placeholder="ask_…"
-              className="font-mono text-sm"
-            />
-            <p className="text-xs text-muted-foreground">
-              Used for agent runs and LLM features. Stored in localStorage only.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Button type="submit" size="sm">Save key</Button>
-            {apiKey && (
-              <Button type="button" size="sm" variant="outline"
-                onClick={() => { clearApiKey(); setDraftApiKey(''); toast.success('API key cleared') }}>
-                Clear
-              </Button>
-            )}
-          </div>
-        </form>
       </Card>
 
       {/* ── Space management (authenticated users only) ── */}

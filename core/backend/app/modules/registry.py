@@ -53,6 +53,7 @@ _REGISTRY: list[Module] = [
     Module("deployment",    "Deployment",     "app.deployment",    always_on=True),
     Module("activity",  "Activity Inbox",  "app.activity",   always_on=True),
     Module("workspace_console", "Workspace Console", "app.workspace_console", always_on=True),
+    Module("providers",         "Providers",        "app.providers",        always_on=True),
     # Optional modules — not yet implemented; uncomment when ready.
     # Module("wiki",     "Wiki",            "app.knowledge",  always_on=False),
     # Module("cards",    "Cards",           "app.cards",      always_on=False),

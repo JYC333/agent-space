@@ -63,6 +63,7 @@ async function request<T = unknown>(method: string, path: string, body?: unknown
 const get   = <T>(path: string)                => request<T>('GET',    path)
 const post  = <T>(path: string, body?: unknown) => request<T>('POST',   path, body)
 const patch = <T>(path: string, body?: unknown) => request<T>('PATCH',  path, body)
+const put   = <T>(path: string, body?: unknown) => request<T>('PUT',    path, body)
 const del   = <T>(path: string)                => request<T>('DELETE', path)
 
 // ── Memory ────────────────────────────────────────────────────────────────
@@ -284,4 +285,79 @@ export const spacesApi = {
   invite:         (spaceId: string, data: { email: string; role: string }) =>
     post<SpaceInvitationOut>(`/spaces/${spaceId}/invitations`, data),
   acceptInvite:   (token: string)                                => post<{ space_id: string; role: string; space_name: string }>(`/invitations/${token}/accept`),
+}
+
+// ── Providers ─────────────────────────────────────────────────────────────
+export interface ProviderConfigOut {
+  id: string
+  space_id: string
+  name: string
+  provider: string
+  models: string[]
+  api_base: string | null
+  is_default: boolean
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CatalogInfo {
+  id: string
+  name: string
+  description: string
+  model_hint: string
+}
+
+export interface TestConnectionOut {
+  success: boolean
+  message: string
+  model?: string
+}
+
+export interface ChatRequest {
+  provider_id?: string
+  model?: string
+  messages: { role: string; content: string }[]
+  system?: string
+  temperature?: number
+  max_tokens?: number
+}
+
+export interface ChatResponse {
+  content: string
+  provider: string
+  model: string
+  usage: { input_tokens: number; output_tokens: number; total_tokens: number }
+}
+
+export const providersApi = {
+  list: () => get<ProviderConfigOut[]>('/providers'),
+
+  litellmProviders: () => get<string[]>('/providers/litellm-providers'),
+
+  create: (data: {
+    name: string
+    provider: string
+    api_key: string
+    models: string[]
+    api_base?: string
+    is_default: boolean
+  }) => post<ProviderConfigOut>('/providers', data),
+
+  update: (id: string, data: Partial<{
+    name: string
+    api_key: string
+    models: string[]
+    api_base?: string
+    is_default: boolean
+    status: string
+  }>) => put<ProviderConfigOut>(`/providers/${id}`, data),
+
+  delete: (id: string) => del<void>(`/providers/${id}`),
+
+  test: (id: string) => post<TestConnectionOut>(`/providers/${id}/test`, {}),
+
+  catalog: () => get<CatalogInfo>('/providers/catalog'),
+
+  chat: (data: ChatRequest) => post<ChatResponse>('/providers/chat', data),
 }

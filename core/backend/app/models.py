@@ -1175,6 +1175,34 @@ class ApiKey(Base):
 
 
 # ---------------------------------------------------------------------------
+# Provider Config (space-scoped LLM provider credentials via litellm)
+# ---------------------------------------------------------------------------
+
+class ProviderConfig(Base):
+    """
+    Space-scoped LLM provider configuration with encrypted API key storage.
+    Used for direct chat/completion tasks via litellm — separate from runtime CLI credentials.
+    """
+    __tablename__ = "provider_configs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    space_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Base64-encoded encrypted API key and nonce (binary can't be stored in SQLite as UTF-8 cleanly)
+    encrypted_key: Mapped[str] = mapped_column(Text, nullable=False)
+    key_nonce: Mapped[str] = mapped_column(String(24), nullable=False)  # base64 of 12-byte nonce
+    models: Mapped[list] = mapped_column(JSON, nullable=False)
+    api_base: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+
+# ---------------------------------------------------------------------------
 # Durable Job Queue
 # ---------------------------------------------------------------------------
 

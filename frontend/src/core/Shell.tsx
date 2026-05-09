@@ -1,12 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { KeyRound, X, Settings, Sun, Moon, LogOut } from 'lucide-react'
+import { Settings, Sun, Moon, LogOut } from 'lucide-react'
 import { Toaster } from 'sonner'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
 import { SpaceSwitcher } from '../components/SpaceSwitcher'
-import { Button } from '../components/ui/button'
-import { Input } from '../components/ui/input'
 import { cn } from '../lib/utils'
 
 /* ── Aperture A brand mark ─────────────────────────────────────────────────── */
@@ -24,80 +22,6 @@ function ApertureMark({ size = 22 }: { size?: number }) {
         stroke="var(--primary)" strokeWidth="44" strokeLinecap="round" />
       <circle cx="256" cy="288" r="18" fill="var(--accent-foreground)" />
     </svg>
-  )
-}
-
-/* ── API key panel — opens as a popover from the key icon button ─────────────── */
-function ApiKeyPanel() {
-  const { apiKey, saveApiKey, clearApiKey, authRequired, setAuthRequired } = useAuth()
-  const [open, setOpen]   = useState(false)
-  const [draft, setDraft] = useState(apiKey)
-
-  useEffect(() => { if (authRequired) setOpen(true) }, [authRequired])
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => { setDraft(apiKey); setOpen(o => !o) }}
-        className={cn(
-          'flex items-center justify-center w-8 h-8 rounded-md border transition-colors',
-          authRequired
-            ? 'border-warning/60 text-warning bg-warning/10'
-            : apiKey
-              ? 'border-border text-muted-foreground hover:text-foreground hover:bg-accent'
-              : 'border-warning/40 text-warning/80 hover:bg-warning/10',
-        )}
-        title={apiKey ? 'API key configured' : 'No API key set'}
-      >
-        <KeyRound className="size-3.5" />
-      </button>
-
-      {open && (
-        <div className="absolute top-[calc(100%+8px)] right-0 w-72 bg-card border border-border rounded-lg p-3.5 z-50">
-          <div className="flex items-center justify-between mb-2.5">
-            <span className="text-xs font-medium text-foreground">API Key</span>
-            <button
-              onClick={() => { setOpen(false); setAuthRequired(false) }}
-              className="text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-          {authRequired && (
-            <p className="text-xs text-warning mb-2">Authentication required by server.</p>
-          )}
-          <Input
-            type="password"
-            value={draft}
-            onChange={e => setDraft(e.target.value)}
-            placeholder="ask_…"
-            className="h-7 text-xs mb-2"
-            onKeyDown={e => {
-              if (e.key === 'Enter') { saveApiKey(draft); setOpen(false) }
-            }}
-          />
-          <div className="flex gap-1.5">
-            <Button
-              size="sm"
-              className="flex-1 h-6 text-xs"
-              onClick={() => { saveApiKey(draft); setOpen(false) }}
-            >
-              Save
-            </Button>
-            {apiKey && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-6 text-xs"
-                onClick={() => { clearApiKey(); setDraft(''); setOpen(false) }}
-              >
-                Clear
-              </Button>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -214,8 +138,6 @@ function TopBar() {
         </NavLink>
 
         <ThemeToggle />
-
-        <ApiKeyPanel />
 
         <UserMenu />
 

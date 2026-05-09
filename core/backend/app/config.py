@@ -39,6 +39,11 @@ class AppPaths:
     def cli_credentials_config(self) -> Path:
         return self.config_dir / "cli-credentials.yaml"
 
+    @property
+    def provider_keys_key(self) -> Path:
+        """AES-256-GCM master key for encrypting provider API keys at rest."""
+        return self.secrets_dir / "provider_keys.key"
+
     def init_dirs(self) -> None:
         """Create all required directories with correct permissions (idempotent)."""
         entries = [

@@ -255,6 +255,14 @@ export const MODULE_REGISTRY: Module[] = [
     component: lazy(() => import('./capabilities/CapabilitiesPage')),
   },
   {
+    id: 'providers', label: 'Providers', path: '/providers',
+    section: 'dev', group: 'system', icon: 'key',
+    description: 'Configure API keys for LLM model providers.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    component: lazy(() => import('./providers/ModelProvidersPage')),
+  },
+  {
     id: 'context', label: 'Context Preview', path: '/context',
     section: 'dev', group: 'system', icon: 'code',
     description: 'Preview the assembled context package for a space.',
