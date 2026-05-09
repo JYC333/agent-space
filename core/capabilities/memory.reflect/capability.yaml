@@ -1,0 +1,30 @@
+id: memory.reflect
+name: Memory Reflector
+version: "0.1.0"
+description: >
+  Analyzes session messages and generates structured memory proposals
+  for user review. Supports placeholder (pattern-matching) and LLM modes.
+
+entrypoint: null
+
+memory_access:
+  read:
+    - scope: user
+      types: [preference, semantic, episodic]
+    - scope: system
+      types: [semantic]
+  write:
+    - scope: user
+      types: [preference, semantic, episodic, procedural, project]
+      requires_proposal: true
+
+tools: []
+
+permissions:
+  network: false
+  filesystem: false
+  subprocess: false
+
+validation:
+  min_messages: 1
+  max_proposals_per_session: 10

@@ -1,0 +1,24 @@
+id: agent.echo
+name: Echo Agent
+version: "0.1.0"
+description: >
+  Development and testing capability. Echoes the prompt and context keys
+  back as output. Useful for verifying context injection and run logging.
+
+entrypoint: null
+
+memory_access:
+  read:
+    - scope: user
+      types: [preference, semantic]
+  write: []
+
+tools: []
+
+permissions:
+  network: false
+  filesystem: false
+  subprocess: false
+
+validation:
+  max_prompt_length: 10000

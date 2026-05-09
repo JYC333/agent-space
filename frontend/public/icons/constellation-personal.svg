@@ -1,0 +1,21 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Frame -->
+  <rect width="512" height="512" rx="96" fill="#0f1117"/>
+  <rect x="80" y="80" width="352" height="352" rx="48" fill="#15171f" stroke="#2a2d3a" stroke-width="4"/>
+
+  <!-- Orbit 1 (solid) -->
+  <circle cx="256" cy="256" r="56" fill="none" stroke="#3a3f52" stroke-width="2"/>
+
+  <!-- Inner agents (orbit 1) -->
+  <circle cx="256" cy="200" r="6" fill="#818cf8"/>
+  <circle cx="306" cy="280" r="6" fill="#818cf8"/>
+  <circle cx="212" cy="288" r="6" fill="#818cf8"/>
+
+  <!-- Core — Aperture A glyph -->
+  <path d="M 224 296 L 244 232 Q 256 212 268 232 L 288 296"
+        fill="none" stroke="#6366f1" stroke-width="16"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="234" y1="270" x2="278" y2="270"
+        stroke="#6366f1" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="256" cy="270" r="10" fill="#818cf8"/>
+</svg>

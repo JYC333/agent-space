@@ -1,0 +1,48 @@
+# Private deployment instance
+/instance/
+
+# External managed projects
+/workspaces/
+
+# Temporary agent execution environments
+/sandboxes/
+
+# Local deployment secrets/state
+/deployments/**/.env
+/deployments/**/data/
+/deployments/**/volumes/
+
+# Environment files
+.env
+
+# Keep folder placeholders
+!/core/.gitkeep
+!/instance/.gitkeep
+!/workspaces/.gitkeep
+!/sandboxes/.gitkeep
+!/deployments/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Frontend dependencies and build output
+node_modules/
+frontend/dist/
+
+# Rust / Tauri
+frontend/src-tauri/target/
+
+# Logs and caches
+*.log
+.cache/
+.DS_Store
+Thumbs.db

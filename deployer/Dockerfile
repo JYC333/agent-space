@@ -1,0 +1,36 @@
+# agent-space deployer — host-level deployment supervisor
+#
+# Runs as a sidecar container in the Compose stack.
+# This is the ONLY container with Docker socket access for deployment purposes.
+# The backend uses Docker socket separately for sandbox runs.
+#
+# Responsibilities: receive approved deploy jobs via Unix socket, run whitelisted
+# scripts (rebuild/restart/health_check), return result.
+
+FROM python:3.12-slim
+
+# docker CLI — for running docker compose commands against the host daemon
+# curl     — used in health_check.sh
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# docker compose plugin (v2)
+RUN mkdir -p /usr/local/lib/docker/cli-plugins \
+    && curl -fsSL \
+       https://github.com/docker/compose/releases/download/v2.24.7/docker-compose-linux-x86_64 \
+       -o /usr/local/lib/docker/cli-plugins/docker-compose \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+WORKDIR /deployer
+COPY deployer.py protocol.py ./
+COPY scripts/ ./scripts/
+RUN chmod +x scripts/*.sh
+
+# /repo — repo root mounted by docker-compose.yml (needed by deploy scripts)
+# /var/run/agent-space — shared with backend for Unix socket
+ENV DEPLOYER_SOCKET=/var/run/agent-space/deployer.sock
+ENV REPO_ROOT=/repo
+
+CMD ["python", "deployer.py"]

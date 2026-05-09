@@ -1,0 +1,81 @@
+services:
+  backend:
+    build:
+      context: ../../core/backend
+      dockerfile: Dockerfile
+      network: host   # avoids ECONNRESET on WSL2 during pip install
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../core/backend/app:/app/app            # live source mount — enables hot reload
+      - ~/aspace:/app/aspace                       # Agent Space data root (db, workspaces, sandboxes, secrets, …)
+      - ../../core/capabilities:/app/capabilities:ro  # capability manifests
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket — SandboxManager spawns sandbox containers (high-risk agent runs only, NOT deployment)
+      - /var/run/agent-space:/var/run/agent-space  # deployer Unix socket — backend sends deploy jobs here
+      - claude-home:/home/agentspace/.claude         # Claude Code state — agentspace user home, persists across restarts
+    group_add:
+      - "${DOCKER_GID:-989}"   # grants agentspace user access to the Docker socket
+    env_file:
+      - ${ASPACE_HOME}/config/.env
+    environment:
+      - AGENT_SPACE_HOME=/app/aspace
+      - DATABASE_URL=sqlite:////app/aspace/db/agent_space.sqlite
+      - DEPLOYER_SOCKET_PATH=/var/run/agent-space/deployer.sock
+      - CLAUDE_HOME=/home/agentspace/.claude
+
+  deployer:
+    build:
+      context: ../../deployer
+      dockerfile: Dockerfile
+      network: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker access for compose build/restart
+      - /var/run/agent-space:/var/run/agent-space  # Unix socket shared with backend
+      - ../../:/repo:ro                             # repo root — deploy scripts read compose file here
+    group_add:
+      - "${DOCKER_GID:-989}"   # grants access to Docker socket
+    environment:
+      - DEPLOYER_SOCKET=/var/run/agent-space/deployer.sock
+      - REPO_ROOT=/repo
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+      network: host   # avoids ECONNRESET on WSL2 during npm ci
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../../frontend:/app              # live source mount — enables hot reload
+      - /app/node_modules               # anonymous volume keeps container's node_modules intact
+    environment:
+      - API_URL=http://backend:8000     # Vite proxy target — server-side only, never sent to browser
+      - CHOKIDAR_USEPOLLING=true        # polling required for WSL2 — inotify doesn't propagate
+    depends_on:
+      - backend
+
+volumes:
+  claude-home:   # persists /home/agentspace/.claude (credentials, stats-cache) across container restarts
+
+# Data layout:
+#   ~/aspace (host) is mounted as /app/aspace inside the container.
+#   AGENT_SPACE_HOME=/app/aspace tells the app where to find all runtime data.
+#   Sub-directories (db/, workspaces/, sandboxes/, secrets/, …) are created
+#   automatically on first startup with correct permissions.
+#
+#   The source repo (~/agent-space) is NOT mounted as a data directory.
+#
+# Build the sandbox image separately before starting:
+#   docker build --network=host -t agent-space-sandbox deployments/sandbox/
+#
+# Docker socket (/var/run/docker.sock):
+#   Mounted for SandboxManager to spawn high-risk agent sandbox containers.
+#   NOT used for deployment — deployment goes through the deployer Unix socket.
+#
+# Deployer sidecar (deployer service):
+#   Runs as a container with Docker socket access. It is the only service that can
+#   rebuild/restart the compose stack. The backend submits jobs via the shared
+#   /var/run/agent-space Unix socket directory.
+#
+# Desktop (Tauri) is deferred — see docs/FUTURE_ROADMAP.md

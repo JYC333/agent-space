@@ -1,0 +1,177 @@
+import { useState, useEffect, useCallback } from 'react'
+import { MessageSquare } from 'lucide-react'
+import { toast } from 'sonner'
+import { sessionsApi } from '../../api/client'
+import { useSpace } from '../../contexts/SpaceContext'
+import { errMsg } from '../../lib/utils'
+import type { Session, Message } from '../../types/api'
+import { Card, CardTitle } from '../../components/ui/card'
+import { Button } from '../../components/ui/button'
+import { Input } from '../../components/ui/input'
+import { Label } from '../../components/ui/label'
+import { Textarea } from '../../components/ui/textarea'
+import { StatusBadge } from '../../components/ui/badge'
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table'
+
+function fmt(dt: string | null | undefined) { return dt ? new Date(dt).toLocaleString() : '—' }
+
+export default function SessionsPage() {
+  const { spaceId } = useSpace()
+  const [sessions, setSessions]           = useState<Session[]>([])
+  const [activeSession, setActiveSession] = useState<Session | null>(null)
+  const [messages, setMessages]           = useState<Message[]>([])
+  const [title, setTitle]                 = useState('')
+  const [workspace, setWorkspace]         = useState('')
+  const [msgInput, setMsgInput]           = useState('')
+  const [loading, setLoading]             = useState(false)
+
+  const loadSessions = useCallback(async () => {
+    try { setSessions((await sessionsApi.list()).items) }
+    catch (e) { toast.error(errMsg(e)) }
+  }, [])
+
+  useEffect(() => { loadSessions() }, [loadSessions, spaceId])
+
+  async function createSession() {
+    try {
+      await sessionsApi.create({ title: title || undefined, workspace_id: workspace || undefined })
+      setTitle(''); setWorkspace('')
+      toast.success('Session created')
+      await loadSessions()
+    } catch (e) { toast.error(errMsg(e)) }
+  }
+
+  async function openSession(id: string) {
+    try {
+      const [sess, msgs] = await Promise.all([sessionsApi.get(id), sessionsApi.messages(id)])
+      setActiveSession(sess)
+      setMessages(msgs)
+    } catch (e) { toast.error(errMsg(e)) }
+  }
+
+  async function sendMessage() {
+    if (!activeSession || !msgInput.trim()) return
+    try {
+      await sessionsApi.addMessage(activeSession.id, { role: 'user', content: msgInput.trim() })
+      setMsgInput('')
+      setMessages(await sessionsApi.messages(activeSession.id))
+    } catch (e) { toast.error(errMsg(e)) }
+  }
+
+  async function reflect() {
+    if (!activeSession) return
+    setLoading(true)
+    try {
+      const result = await sessionsApi.reflect(activeSession.id)
+      toast.success(`${result.proposals_created} proposal(s) created`)
+    } catch (e) { toast.error(errMsg(e)) }
+    finally { setLoading(false) }
+  }
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* Page header */}
+      <div className="flex items-center gap-4 pb-4 border-b border-border">
+        <div
+          className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
+          style={{
+            background: 'color-mix(in oklch, var(--primary) 12%, transparent)',
+            border: '1px solid color-mix(in oklch, var(--primary) 35%, transparent)',
+          }}
+        >
+          <MessageSquare className="size-5 text-accent-foreground" />
+        </div>
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Sessions</h1>
+          <p className="text-sm text-muted-foreground">Create and replay agent conversation sessions.</p>
+        </div>
+      </div>
+
+      <Card>
+        <CardTitle>New Session</CardTitle>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <Label>Title (optional)</Label>
+            <Input
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="Describe this session…"
+              onKeyDown={e => e.key === 'Enter' && createSession()}
+            />
+          </div>
+          <div>
+            <Label>Workspace ID (optional)</Label>
+            <Input value={workspace} onChange={e => setWorkspace(e.target.value)} placeholder="e.g. agent-core" />
+          </div>
+        </div>
+        <Button onClick={createSession}>Create Session</Button>
+      </Card>
+
+      <Card>
+        <CardTitle>Sessions</CardTitle>
+        {sessions.length === 0
+          ? <p className="text-muted-foreground text-center py-10 text-sm">No sessions yet.</p>
+          : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Title</TableHead><TableHead>ID</TableHead>
+                  <TableHead>Status</TableHead><TableHead>Created</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sessions.map(s => (
+                  <TableRow key={s.id}>
+                    <TableCell>{s.title ?? <span className="text-muted-foreground">—</span>}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">{s.id.slice(0, 16)}…</TableCell>
+                    <TableCell><StatusBadge status={s.status} /></TableCell>
+                    <TableCell className="text-muted-foreground text-xs">{fmt(s.created_at)}</TableCell>
+                    <TableCell>
+                      <Button variant="ghost" size="sm" onClick={() => openSession(s.id)}>Open</Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+      </Card>
+
+      {activeSession && (
+        <Card>
+          <CardTitle>Session: {activeSession.title ?? activeSession.id.slice(0, 16)}</CardTitle>
+          <div className="flex flex-col gap-2.5 max-h-72 overflow-y-auto mb-4 pr-1">
+            {messages.length === 0
+              ? <p className="text-muted-foreground text-center py-6 text-sm">No messages.</p>
+              : messages.map(m => (
+                <div
+                  key={m.id}
+                  className={`px-3 py-2.5 rounded-lg max-w-[80%] text-sm ${
+                    m.role === 'user'
+                      ? 'self-end bg-primary/15 text-foreground'
+                      : 'self-start bg-card border border-border'
+                  }`}
+                >
+                  <span className="text-[11px] text-muted-foreground mr-2">{m.role}</span>
+                  {m.content}
+                </div>
+              ))}
+          </div>
+          <Textarea
+            value={msgInput}
+            onChange={e => setMsgInput(e.target.value)}
+            placeholder="Type a message…"
+            className="mb-3"
+            onKeyDown={e => { if (e.key === 'Enter' && e.metaKey) sendMessage() }}
+          />
+          <div className="flex gap-2">
+            <Button onClick={sendMessage} disabled={!msgInput.trim()}>Send</Button>
+            <Button variant="outline" onClick={reflect} disabled={loading}>
+              {loading ? 'Reflecting…' : 'Reflect → Proposals'}
+            </Button>
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}

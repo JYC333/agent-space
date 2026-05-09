@@ -1,0 +1,232 @@
+# Context Bundle Configuration
+#
+# Maps task types to the minimal set of docs and code roots an agent should load.
+# Do not load all bundles for every task — use the smallest relevant set.
+#
+# Usage (future ContextCompiler integration):
+#   classifier = TaskClassifier(prompt)
+#   bundle = context_bundles[classifier.type]
+#   compiler.compile(context, target, task_goal, bundle=bundle)
+
+default:
+  docs:
+    - .agent/INDEX.md
+    - .agent/ARCHITECTURE.md
+    - .agent/BOUNDARIES.md
+    - .agent/COMMANDS.md
+    - .agent/tasks/current-focus.md
+
+memory:
+  docs:
+    - .agent/modules/memory.md
+    - .agent/modules/activity.md
+    - .agent/modules/memory-review.md
+    - .agent/decisions/0003-memory-proposal-flow.md
+    - .agent/BOUNDARIES.md
+  code_roots:
+    - core/backend/app/memory
+    - core/backend/app/activity
+    - core/backend/tests/test_memory.py
+    - core/backend/tests/test_context_builder.py
+    - core/backend/tests/test_context_compiler.py
+    - core/backend/tests/test_proposals.py
+
+agents:
+  docs:
+    - .agent/modules/agents.md
+    - .agent/modules/sandbox.md
+    - .agent/decisions/0002-agent-model.md
+    - .agent/decisions/0004-context-wrapper.md
+    - .agent/decisions/0007-plugin-module-architecture.md
+    - .agent/BOUNDARIES.md
+  code_roots:
+    - core/backend/app/agents            # service + adapters + api.py
+    - core/backend/app/modules/registry.py
+    - core/backend/app/workspace/sandbox_manager.py
+    - core/backend/tests/test_agents.py
+
+policy:
+  docs:
+    - .agent/modules/policy.md
+    - .agent/BOUNDARIES.md
+  code_roots:
+    - core/backend/app/policy
+
+capability:
+  docs:
+    - .agent/modules/capability.md
+    - .agent/modules/context-compiler.md
+    - .agent/BOUNDARIES.md
+  code_roots:
+    - core/capabilities
+    - core/backend/app/capabilities
+    - core/backend/tests/test_capabilities.py
+
+proposals:
+  docs:
+    - .agent/modules/proposals.md
+    - .agent/decisions/0003-memory-proposal-flow.md
+  code_roots:
+    - core/backend/app/memory/proposals.py
+    - core/backend/app/memory/reflector.py
+    - core/backend/tests/test_proposals.py
+
+sandbox:
+  docs:
+    - .agent/modules/sandbox.md
+    - .agent/modules/context-compiler.md
+    - .agent/decisions/0004-context-wrapper.md
+  code_roots:
+    - core/backend/app/workspace
+    - core/backend/app/agents/cli_adapter.py
+    - deployments/sandbox
+
+workspace_console:
+  docs:
+    - .agent/modules/workspace-console.md
+    - .agent/modules/git-diff-review.md
+    - .agent/modules/sandbox.md
+    - .agent/BOUNDARIES.md
+  code_roots:
+    - core/backend/app/workspace
+    - frontend/src/modules/workspace    # TODO: not yet created
+
+activity:
+  docs:
+    - .agent/modules/activity.md
+    - .agent/modules/activity-inbox.md
+    - .agent/modules/assistant-capture.md
+    - .agent/decisions/0003-memory-proposal-flow.md
+  code_roots:
+    - core/backend/app/activity
+    - core/backend/app/models.py
+
+wiki:
+  docs:
+    - .agent/modules/llm-wiki.md
+    - .agent/modules/activity-inbox.md
+    - .agent/modules/proposals.md
+    - .agent/decisions/0007-plugin-module-architecture.md
+  code_roots:
+    - core/backend/app/knowledge        # TODO: not yet created
+    - frontend/src/modules/wiki/WikiPage.jsx   # stub exists
+
+cards:
+  docs:
+    - .agent/modules/spaced-repetition.md
+    - .agent/modules/llm-wiki.md
+    - .agent/modules/media-cards.md
+    - .agent/modules/proposals.md
+    - .agent/decisions/0007-plugin-module-architecture.md
+  code_roots:
+    - core/backend/app/cards            # TODO: not yet created
+    - frontend/src/modules/cards/CardReviewPage.jsx   # stub exists
+
+frontend:
+  docs:
+    - .agent/modules/product-shell.md
+    - .agent/modules/frontend-layout.md
+    - .agent/modules/client-server-protocol.md
+    - .agent/decisions/0007-plugin-module-architecture.md
+    - .agent/BOUNDARIES.md
+    - .agent/COMMANDS.md
+  code_roots:
+    - frontend/src/core              # Shell, layout primitives
+    - frontend/src/modules           # module pages + registry.js
+    - frontend/src/api/client.js
+    - frontend/vite.config.js
+
+assistant:
+  docs:
+    - .agent/modules/assistant-capture.md
+    - .agent/modules/activity-inbox.md
+    - .agent/modules/memory.md
+  code_roots:
+    - core/backend/app/agents
+    - core/backend/app/memory/context_builder.py
+
+runtime_status:
+  docs:
+    - .agent/modules/server-status.md
+    - .agent/modules/product-shell.md
+    - .agent/modules/client-server-protocol.md
+  code_roots:
+    - core/backend/app/main.py          # existing /health endpoint
+    - core/backend/app/api             # TODO: status router
+    - frontend/src/components          # TODO: RuntimeStatusBar
+
+sync:
+  docs:
+    - .agent/modules/sync-and-conflicts.md
+    - .agent/modules/client-server-protocol.md
+    - .agent/modules/mobile-client.md
+  code_roots:
+    - core/backend/app/models.py       # UUID PKs required
+
+mobile:
+  docs:
+    - .agent/modules/mobile-client.md
+    - .agent/modules/frontend-layout.md
+    - .agent/modules/spaced-repetition.md
+    - .agent/modules/activity-inbox.md
+    - .agent/BOUNDARIES.md
+  code_roots:
+    - frontend/src
+    - frontend/public                  # manifest.json, service worker
+
+module_registry:
+  docs:
+    - .agent/decisions/0007-plugin-module-architecture.md
+    - .agent/BOUNDARIES.md
+  code_roots:
+    - core/backend/app/modules/registry.py
+    - core/backend/app/main.py
+    - frontend/src/modules/registry.js
+    - frontend/src/core/Shell.jsx
+    - frontend/src/App.jsx
+
+credentials:
+  docs:
+    - .agent/modules/credentials.md
+    - .agent/BOUNDARIES.md
+  code_roots:
+    - core/backend/app/credentials/
+    - core/backend/app/agents/base.py
+    - core/backend/app/agents/claude_adapter.py
+    - core/backend/app/agents/runner.py
+    - core/backend/app/agents/cli_adapter.py
+    - core/backend/app/workspace/sandbox_manager.py
+    - instance/config/cli-credentials.yaml
+
+cli_adapters:
+  docs:
+    - .agent/modules/runtime-adapters.md
+    - .agent/decisions/0008-multi-cli-mvp.md
+    - .agent/BOUNDARIES.md
+  code_roots:
+    - core/backend/app/cli_adapters/
+    - core/backend/app/agents/base.py
+    - core/backend/app/agents/claude_adapter.py
+    - core/backend/app/agents/codex_adapter.py
+    - core/backend/app/agents/runner.py
+    - frontend/src/modules/cli_adapters/
+
+deployment:
+  docs:
+    - .agent/modules/deployment.md
+    - .agent/modules/proposals.md
+    - .agent/BOUNDARIES.md
+  code_roots:
+    - deployer/
+    - core/backend/app/deployment/
+    - core/backend/app/models.py     # DeploymentJob model
+
+space:
+  docs:
+    - .agent/modules/space.md
+    - .agent/decisions/0001-space-model.md
+    - .agent/BOUNDARIES.md
+  code_roots:
+    - core/backend/app/models.py
+    - core/backend/app/config.py
+    - core/backend/app/memory/context_builder.py
