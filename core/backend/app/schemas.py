@@ -46,6 +46,7 @@ DEFAULT_RUNTIME_POLICY: dict = {
 class WorkspaceCreate(BaseModel):
     name: str
     description: Optional[str] = None
+    workspace_type: Optional[str] = None  # system_core blocked in create endpoint
     kind: str = "project"
     repo_url: Optional[str] = None
     root_path: Optional[str] = None
@@ -72,12 +73,16 @@ class WorkspaceOut(BaseModel):
     name: str
     slug: Optional[str]
     description: Optional[str]
+    workspace_type: str
     kind: str
     repo_url: Optional[str]
     root_path: Optional[str]
     default_branch: Optional[str]
     visibility: str
     status: str
+    protected: bool
+    system_managed: bool
+    registered_from: Optional[str]
     metadata_json: Optional[dict]
     created_at: datetime
     updated_at: datetime

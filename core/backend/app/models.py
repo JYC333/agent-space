@@ -140,6 +140,12 @@ class Workspace(Base):
 
     root_path — optional local filesystem path (managed by WorkspaceManager + PathPolicy).
     Sharing with other Spaces is deferred to WorkspaceSpaceAccess.
+
+    workspace_type values:
+      project | repo | knowledge_base | personal | team  (default: project)
+      system_core — registered automatically on startup when ENABLE_SYSTEM_EVOLUTION=true; governed by
+        system_core policy (no direct writes, git worktree sandbox, code_patch proposals,
+        explicit approval required, test-then-prod deploy).
     """
     __tablename__ = "workspaces"
 
@@ -150,7 +156,8 @@ class Workspace(Base):
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     slug: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, index=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # project | repo | knowledge_base | personal | team
+    # project | repo | knowledge_base | personal | team | system_core
+    workspace_type: Mapped[str] = mapped_column(String(32), nullable=False, default="project")
     kind: Mapped[str] = mapped_column(String(32), nullable=False, default="project")
     repo_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Root path on disk (absolute or relative to WORKSPACE_ROOT)
@@ -160,6 +167,12 @@ class Workspace(Base):
     visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="private")
     # active | archived
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+
+    # Protection flags for system-managed workspaces
+    protected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    system_managed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # env | manual — how the workspace was registered
+    registered_from: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 

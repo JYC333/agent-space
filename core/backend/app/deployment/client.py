@@ -25,9 +25,17 @@ class DeployerClient:
     def available(self) -> bool:
         return Path(self.socket_path).exists()
 
-    def submit_job(self, job: dict) -> dict:
+    def submit_job(self, job: dict, args: dict | None = None) -> dict:
         """
         Send a deployment job request and return the result dict.
+
+        For self-evolution jobs, pass job-specific args:
+            {
+                "job_id": "...",
+                "job_type": "create_system_worktree",
+                "args": {"RUN_ID": "abc123"}
+            }
+
         Never raises — returns a failed result on any error.
         """
         if not self.available:
@@ -42,7 +50,12 @@ class DeployerClient:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.settimeout(310)
                 sock.connect(self.socket_path)
-                sock.sendall(json.dumps(job).encode() + b"\n")
+
+                request = dict(job)
+                if args:
+                    request["args"] = args
+
+                sock.sendall(json.dumps(request).encode() + b"\n")
 
                 buf = b""
                 while True:

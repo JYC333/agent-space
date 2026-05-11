@@ -5,12 +5,14 @@ agent-space host deployer — Unix domain socket server.
 Runs on the HOST (outside the main app container) and handles deployment
 requests from the backend. The backend cannot restart itself; this process can.
 
+Supports both core deployment jobs and self-evolution jobs.
+
 Start:
     python deployer/deployer.py
 
 Or via systemd — see deployer/README.md.
 
-Socket path: $DEPLOYER_SOCKET or /var/run/agent-space/deployer.sock
+Socket path: $DEPLOYER_SOCKET or /aspace/run/deployer.sock
 """
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import stat
 from datetime import datetime, UTC
 from pathlib import Path
@@ -29,17 +32,29 @@ log = logging.getLogger("deployer")
 SCRIPT_DIR = Path(__file__).parent / "scripts"
 
 JOB_SCRIPTS: dict[str, Path] = {
-    "rebuild_agent_space": SCRIPT_DIR / "rebuild.sh",
-    "restart_agent_space": SCRIPT_DIR / "restart.sh",
-    "health_check":        SCRIPT_DIR / "health_check.sh",
+    # Self-evolution jobs
+    "init_agent_space_worktree":      SCRIPT_DIR / "init_agent_space_worktree.sh",
+    "create_system_worktree":          SCRIPT_DIR / "create_system_worktree.sh",
+    "collect_system_diff":          SCRIPT_DIR / "collect_system_diff.sh",
+    "run_system_tests":             SCRIPT_DIR / "run_system_tests.sh",
+    "run_test_deploy":              SCRIPT_DIR / "run_test_deploy.sh",
+    "merge_approved_system_patch":  SCRIPT_DIR / "merge_approved_system_patch.sh",
+    "run_prod_deploy":              SCRIPT_DIR / "run_prod_deploy.sh",
+    "cleanup_system_worktree":      SCRIPT_DIR / "cleanup_system_worktree.sh",
 }
 
 
-async def _run_script(script: Path, timeout: int = 300) -> tuple[int, str, str]:
+async def _run_script(script: Path, args: dict, timeout: int = 300) -> tuple[int, str, str]:
+    env = os.environ.copy()
+    for k, v in args.items():
+        if v is not None:
+            env[k] = str(v)
+
     proc = await asyncio.create_subprocess_exec(
         str(script),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     return proc.returncode, stdout.decode(), stderr.decode()
@@ -53,10 +68,9 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
         job_id   = request.get("job_id", "unknown")
         job_type = request.get("job_type", "")
-        proposal = request.get("proposal_id", "")
-        user     = request.get("requested_by_user_id", "unknown")
+        args     = request.get("args", {})
 
-        log.info("job %s type=%s proposal=%s user=%s", job_id, job_type, proposal, user)
+        log.info("job %s type=%s args=%s peer=%s", job_id, job_type, args, peer)
 
         if job_type not in ALLOWED_JOB_TYPES:
             result = {"job_id": job_id, "status": "failed",
@@ -73,7 +87,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
         started_at = datetime.now(UTC).isoformat()
         try:
-            exit_code, stdout, stderr = await _run_script(script)
+            exit_code, stdout, stderr = await _run_script(script, args)
         except asyncio.TimeoutError:
             result = {"job_id": job_id, "status": "failed", "error": "Script timed out",
                       "started_at": started_at, "completed_at": datetime.now(UTC).isoformat()}
@@ -85,6 +99,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
         result = {
             "job_id":       job_id,
+            "job_type":     job_type,
             "status":       status,
             "exit_code":    exit_code,
             "stdout":       stdout,
@@ -117,21 +132,38 @@ def _write(writer: asyncio.StreamWriter, obj: dict) -> None:
 async def main() -> None:
     socket_path = os.environ.get(
         "DEPLOYER_SOCKET",
-        "/var/run/agent-space/deployer.sock",
+        "/aspace/run/deployer.sock",
     )
     sock_file = Path(socket_path)
     sock_file.parent.mkdir(parents=True, exist_ok=True)
 
     if sock_file.exists():
-        sock_file.unlink()
+        try:
+            sock_file.unlink()
+        except PermissionError:
+            # Socket owned by another user (e.g. previous run as root) — try to use it anyway
+            pass
 
     server = await asyncio.start_unix_server(handle_client, path=socket_path)
-    # Owner read/write only — the backend user must be in the same group or run as the same user
     os.chmod(socket_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IWGRP)
 
     log.info("deployer listening on %s", socket_path)
-    async with server:
-        await server.serve_forever()
+
+    # Graceful shutdown on SIGTERM/SIGINT
+    shutdown_event = asyncio.Event()
+
+    async def shutdown() -> None:
+        log.info("shutdown signal received, stopping server...")
+        shutdown_event.set()
+        server.close()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown()))
+
+    await shutdown_event.wait()
+    await server.wait_closed()
+    log.info("deployer shutdown complete")
 
 
 if __name__ == "__main__":

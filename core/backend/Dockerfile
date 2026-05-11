@@ -36,6 +36,8 @@ COPY app/ ./app/
 
 # Non-root user
 RUN useradd -m -u 1000 agentspace && chown -R agentspace /app
+# Pre-create aspace subdirectories so bind-mounts don't create them as root
+RUN mkdir -p /aspace/run && chown agentspace:agentspace /aspace
 # Pre-create .claude owned by agentspace so the named volume inherits the right
 # permissions when Docker seeds it on first mount (new empty volumes copy the
 # image directory including ownership).

@@ -13,6 +13,7 @@ FROM python:3.12-slim
 # curl     — used in health_check.sh
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    git \
     docker.io \
     && rm -rf /var/lib/apt/lists/*
 
@@ -29,8 +30,13 @@ COPY scripts/ ./scripts/
 RUN chmod +x scripts/*.sh
 
 # /repo — repo root mounted by docker-compose.yml (needed by deploy scripts)
-# /var/run/agent-space — shared with backend for Unix socket
-ENV DEPLOYER_SOCKET=/var/run/agent-space/deployer.sock
+# /aspace/run — shared with backend for Unix socket
+ENV DEPLOYER_SOCKET=/aspace/run/deployer.sock
 ENV REPO_ROOT=/repo
+
+# Non-root user matching backend (uid 1000) so socket files are accessible to both
+RUN useradd -m -u 1000 deployer && chown -R deployer /deployer
+RUN mkdir -p /aspace/run && chown deployer:deployer /aspace
+USER deployer
 
 CMD ["python", "deployer.py"]

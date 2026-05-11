@@ -44,32 +44,80 @@ class AppPaths:
         """AES-256-GCM master key for encrypting provider API keys at rest."""
         return self.secrets_dir / "provider_keys.key"
 
+    def system_core_workspace_dir_for_space(self, space_id: str) -> Path:
+        """Git worktree root for agent-space self-evolution in a specific space."""
+        return self.workspaces_dir / space_id / "agent-space"
+
     def init_dirs(self) -> None:
         """Create all required directories with correct permissions (idempotent)."""
+        import os
+
+        def _skip_path(p: Path) -> bool:
+            """Skip if path is a mount point or not writable by current user."""
+            try:
+                if os.path.ismount(p):
+                    return True
+                stat_info = p.stat()
+                # Skip if we don't own it (and we're not root)
+                if stat_info.st_uid != 0 and stat_info.st_uid != os.getuid():
+                    # Check if we can actually write
+                    if not os.access(p, os.W_OK):
+                        return True
+            except (OSError, PermissionError):
+                pass
+            return False
+
+        def safe_mkdir(p: Path, mode: int) -> None:
+            """Create directory, skip if mount point or no permission."""
+            try:
+                if _skip_path(p):
+                    return
+                p.mkdir(parents=True, exist_ok=True)
+            except (OSError, PermissionError):
+                pass
+
         entries = [
             (self.home,           0o700),
             (self.config_dir,     0o700),
             (self.secrets_dir,    0o700),
             (self.db_dir,         0o700),
             (self.runtime_dir,    0o700),
-            (self.storage_dir,    0o750),
-            (self.logs_dir,       0o750),
-            (self.cache_dir,      0o750),
-            (self.workspaces_dir, 0o750),
-            (self.sandboxes_dir,  0o750),
-            (self.artifacts_dir,  0o750),
+            (self.storage_dir,    0o700),
+            (self.logs_dir,       0o700),
+            (self.cache_dir,      0o700),
+            (self.workspaces_dir, 0o700),
+            (self.sandboxes_dir,  0o700),
+            (self.artifacts_dir,  0o700),
         ]
         for path, mode in entries:
-            path.mkdir(parents=True, exist_ok=True)
-            path.chmod(mode)
+            safe_mkdir(path, mode)
 
     def validate(self) -> None:
-        """Fail fast if sensitive dirs are world-accessible or not writable."""
+        """Fail fast if sensitive dirs are world-accessible or not writable.
+
+        In Docker containers (non-root, uid != 0), skip this check because:
+        - Docker bind mounts inherit host permissions which may be 755 for group access
+        - The container user (uid 1000) can't chmod host directories from inside the container
+        - group_add is the correct mechanism for Docker permission handling
+        """
+        import os
+        # In a non-root container, skip all permission checks — we can't chmod host volumes
+        if os.getuid() != 0:
+            return
         sensitive = [self.home, self.secrets_dir, self.db_dir, self.runtime_dir, self.config_dir]
         for path in sensitive:
             if not path.exists():
                 continue
-            mode = path.stat().st_mode
+            # Skip mount points (e.g. /instance when running in Docker)
+            try:
+                if os.path.ismount(path):
+                    continue
+            except (OSError, PermissionError):
+                pass
+            try:
+                mode = path.stat().st_mode
+            except (OSError, PermissionError):
+                continue
             if mode & stat.S_IRWXO:
                 raise RuntimeError(
                     f"Security: {path} is world-accessible (mode {oct(mode)}). "
@@ -132,7 +180,7 @@ class Settings(BaseSettings):
     default_sandbox_level: str = "worktree"
 
     # Deployer Unix socket path (host deployer process, outside the app container)
-    deployer_socket_path: str = "/var/run/agent-space/deployer.sock"
+    deployer_socket_path: str = "/aspace/run/deployer.sock"
 
     # CLI credential management
     # Root directory for CLI login state profiles (one subdir per runtime/profile)
@@ -152,6 +200,15 @@ class Settings(BaseSettings):
     # Context builder limits
     context_max_memories: int = 20
     context_max_episodes: int = 5
+
+    # System evolution — registers the agent-space worktree as a system_core workspace
+    # in the owner user's personal space on backend startup.
+    enable_system_evolution: bool = False
+    system_core_owner_email: str = ""
+    system_core_base_branch: str = "master"
+
+    # Agent Space environment (dev, test, prod)
+    agent_space_env: str = "dev"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

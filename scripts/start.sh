@@ -2,62 +2,79 @@
 # Start agent-space locally — backend + frontend
 #
 # Usage:
-#   ./scripts/start.sh           — Docker Compose (default)
-#   ./scripts/start.sh --local   — bare processes, no Docker (dev mode)
-#   ./scripts/start.sh --build   — Docker Compose with image rebuild
+#   ./scripts/start.sh              — Docker Compose dev (default)
+#   ./scripts/start.sh --dev         — dev environment (hot reload, port 3000/8000)
+#   ./scripts/start.sh --test        — test environment (isolated, port 3100/8100)
+#   ./scripts/start.sh --prod        — prod environment (port 3000/8000)
+#   ./scripts/start.sh --local       — bare processes, no Docker (dev mode)
+#   ./scripts/start.sh --build       — Docker Compose with image rebuild
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMPOSE_FILE="$REPO_ROOT/deployments/local/docker-compose.yml"
+COMPOSE_DIR="$REPO_ROOT/deployments/local"
 SANDBOX_IMAGE="agent-space-sandbox"
 
-mode="docker"
+mode="dev"
 build_flag=""
 
 for arg in "$@"; do
   case $arg in
-    --local) mode="local" ;;
-    --build) build_flag="--build" ;;
+    --dev)    mode="dev" ;;
+    --test)   mode="test" ;;
+    --prod)   mode="prod" ;;
+    --local)  mode="local" ;;
+    --build)  build_flag="--build" ;;
     *) echo "Unknown argument: $arg" && exit 1 ;;
   esac
 done
 
 # ── Resolve ASPACE_HOME ───────────────────────────────────────────────────────
-# Exported so docker-compose can use ${ASPACE_HOME} in env_file and volume paths.
 ASPACE_HOME="${AGENT_SPACE_HOME:-$HOME/aspace}"
-ASPACE_HOME="${ASPACE_HOME/#\~/$HOME}"   # expand leading ~
+ASPACE_HOME="${ASPACE_HOME/#\~/$HOME}"
 export ASPACE_HOME
 
-ENV_FILE="$ASPACE_HOME/config/.env"
+# ── Per-mode root (no instance/ layer) ────────────────────────────────────────
+MODE_ROOT="$ASPACE_HOME/$mode"
+export MODE_ROOT
 
-# ── Initialize ASPACE_HOME directories (idempotent) ──────────────────────────
-init_aspace_dirs() {
-  echo "  → data root: $ASPACE_HOME"
+ENV_FILE="$MODE_ROOT/.env"
+
+# ── Initialize data root directories (idempotent) ──────────────────────────────
+init_data_dirs() {
+  echo "  → aspace home: $ASPACE_HOME"
+  echo "  → mode root: $MODE_ROOT"
+
+  # Top-level aspace home (minimal — just holds per-mode dirs)
   install -d -m 700 "$ASPACE_HOME"
-  install -d -m 700 "$ASPACE_HOME/config"
-  install -d -m 700 "$ASPACE_HOME/secrets"
-  install -d -m 700 "$ASPACE_HOME/db"
-  install -d -m 700 "$ASPACE_HOME/runtime"
-  install -d -m 750 "$ASPACE_HOME/storage"
-  install -d -m 750 "$ASPACE_HOME/logs"
-  install -d -m 750 "$ASPACE_HOME/cache"
-  install -d -m 750 "$ASPACE_HOME/workspaces"
-  install -d -m 750 "$ASPACE_HOME/sandboxes"
-  install -d -m 750 "$ASPACE_HOME/artifacts"
+
+  # Per-mode directories — 700 for container user access
+  install -d -m 700 "$MODE_ROOT"
+  install -d -m 700 "$MODE_ROOT/storage"
+  install -d -m 700 "$MODE_ROOT/logs"
+  install -d -m 700 "$MODE_ROOT/db"
+  install -d -m 700 "$MODE_ROOT/secrets"
+  install -d -m 700 "$MODE_ROOT/artifacts"
+  install -d -m 700 "$MODE_ROOT/cache"
+  install -d -m 700 "$MODE_ROOT/run"
+  install -d -m 700 "$MODE_ROOT/sandboxes"
 }
 
-# ── Ensure .env exists in ASPACE_HOME/config/ ────────────────────────────────
+# ── Ensure .env exists in mode root ───────────────────────────────────────────
 ensure_env() {
   if [[ ! -f "$ENV_FILE" ]]; then
-    echo "No .env found — copying .env.example to $ENV_FILE"
-    cp "$REPO_ROOT/deployments/local/.env.example" "$ENV_FILE"
+    echo "No .env found — copying template to $ENV_FILE"
+    if [[ -f "$COMPOSE_DIR/instance/$mode/.env" ]]; then
+      cp "$COMPOSE_DIR/instance/$mode/.env" "$ENV_FILE"
+    else
+      cp "$COMPOSE_DIR/.env.example" "$ENV_FILE"
+    fi
     chmod 600 "$ENV_FILE"
   fi
 }
 
-# ── Docker mode ───────────────────────────────────────────────────────────────
-if [[ "$mode" == "docker" ]]; then
+# ── Docker mode ────────────────────────────────────────────────────────────────
+if [[ "$mode" != "local" ]]; then
   export DOCKER_GID
   DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 989)
 
@@ -66,18 +83,42 @@ if [[ "$mode" == "docker" ]]; then
     docker build --network=host -t "$SANDBOX_IMAGE" "$REPO_ROOT/deployments/sandbox/"
   fi
 
-  init_aspace_dirs
+  init_data_dirs
   ensure_env
 
-  echo "Starting agent-space (Docker Compose)..."
-  docker compose -f "$COMPOSE_FILE" up $build_flag
+  case "$mode" in
+    dev)
+      COMPOSE_FILE="$COMPOSE_DIR/docker-compose.dev.yml"
+      COMPOSE_PROJECT="agent-space-dev"
+      ;;
+    test)
+      COMPOSE_FILE="$COMPOSE_DIR/docker-compose.test.yml"
+      COMPOSE_PROJECT="agent-space-test"
+      ;;
+    prod)
+      COMPOSE_FILE="$COMPOSE_DIR/docker-compose.prod.yml"
+      COMPOSE_PROJECT="agent-space-prod"
+      ;;
+  esac
+
+  echo "Starting agent-space ($mode) with Docker Compose..."
+  echo "  compose file: $COMPOSE_FILE"
+  echo "  project: $COMPOSE_PROJECT"
+  echo "  mode root: $MODE_ROOT"
+
+  # Pass ASPACE_HOME to docker compose so volume paths can use it
+  ASPACE_HOME="$ASPACE_HOME" docker compose \
+    -p "$COMPOSE_PROJECT" \
+    -f "$COMPOSE_FILE" \
+    --env-file "$ENV_FILE" \
+    up $build_flag
   exit 0
 fi
 
-# ── Local mode (no Docker) ────────────────────────────────────────────────────
+# ── Local mode (no Docker) ───────────────────────────────────────────────────
 echo "Starting agent-space (local processes)..."
 
-init_aspace_dirs
+init_data_dirs
 ensure_env
 set -a && source "$ENV_FILE" && set +a
 

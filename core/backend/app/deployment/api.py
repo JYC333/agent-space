@@ -16,13 +16,29 @@ from .client import DeployerClient
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
 
-ALLOWED_JOB_TYPES = {"rebuild_agent_space", "restart_agent_space", "health_check"}
+# Core deployment job types
+_CORE_JOB_TYPES = {"rebuild_agent_space", "restart_agent_space", "health_check"}
+
+# Self-evolution job types
+_SELF_EVOLUTION_JOB_TYPES = {
+    "init_agent_space_worktree",
+    "create_system_worktree",
+    "collect_system_diff",
+    "run_system_tests",
+    "run_test_deploy",
+    "merge_approved_system_patch",
+    "run_prod_deploy",
+    "cleanup_system_worktree",
+}
+
+ALLOWED_JOB_TYPES = _CORE_JOB_TYPES | _SELF_EVOLUTION_JOB_TYPES
 
 
 class DeploymentJobCreate(BaseModel):
     job_type: str
     proposal_id: Optional[str] = None
     target: str = "local"
+    args: Optional[dict] = None
 
 
 class DeploymentJobOut(BaseModel):
@@ -78,7 +94,7 @@ def create_deployment_job(
         "requested_by_user_id":  job.requested_by_user_id,
         "job_type":              job.job_type,
         "target":                job.target,
-    })
+    }, args=body.args)
 
     job.result_json = result
     job.status = result.get("status", "failed")

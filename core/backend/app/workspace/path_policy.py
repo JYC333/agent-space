@@ -8,6 +8,11 @@ agents can only access their declared workspace or sandbox root.
 
 Allowed roots come from settings.workspace_root and settings.sandbox_root,
 which default to $AGENT_SPACE_HOME/workspaces and $AGENT_SPACE_HOME/sandboxes.
+
+System-core workspaces (workspace_type=system_core):
+  - All writes must go through a git worktree sandbox — never direct to root_path
+  - code_patch proposals required for all code changes
+  - Explicit approval required before changes can be applied
 """
 
 from pathlib import Path
@@ -28,6 +33,9 @@ _FORBIDDEN_FRAGMENTS = {
 
 # Agents may not write these file types directly — must go through a patch proposal
 _FORBIDDEN_WRITE_SUFFIXES = {".py", ".sh", ".bash", ".zsh", ".fish"}
+
+# system_core workspaces additionally block read access to .git directly
+_SYSTEM_CORE_FORBIDDEN_SUFFIXES = {".git"}
 
 
 class PathPolicy:
@@ -53,6 +61,7 @@ class PathPolicy:
         path: str | Path,
         allowed_root: str | Path | None = None,
         mode: str = "read",
+        workspace_type: str = "project",
     ) -> Path:
         """
         Validate that `path` is safe to access.
@@ -62,6 +71,10 @@ class PathPolicy:
             allowed_root — workspace or sandbox root for this run;
                            defaults to workspace_root
             mode         — "read" or "write"
+            workspace_type — workspace type (project, system_core, etc.)
+                           system_core enforces additional restrictions:
+                             - all writes must go through worktree sandbox
+                             - code_patch proposals required for code changes
 
         Returns the resolved absolute Path.
         Raises PathPolicyError on any violation.
@@ -83,12 +96,22 @@ class PathPolicy:
             if fragment in resolved_str:
                 raise PathPolicyError(f"Access to '{fragment}' is forbidden")
 
-        # Write restrictions
+        # Write restrictions — applies to all workspaces
         if mode == "write" and resolved.suffix in _FORBIDDEN_WRITE_SUFFIXES:
             raise PathPolicyError(
                 f"Agents may not write '{resolved.suffix}' files directly — "
                 "use a code_patch Proposal instead"
             )
+
+        # system_core additionally forbids direct .git access (must use worktree)
+        if workspace_type == "system_core":
+            if ".git" in resolved_str:
+                raise PathPolicyError(
+                    "system_core workspace: direct access to .git is forbidden — "
+                    "use git worktree sandbox for all operations"
+                )
+            # system_core writes are only allowed through worktree sandbox
+            # (callers must check workspace_type and route through sandbox_manager)
 
         return resolved
 
@@ -122,3 +145,12 @@ class PathPolicy:
             return True
         except PathPolicyError:
             return False
+
+    def is_system_core_workspace(self, workspace_id: str, db) -> bool:
+        """
+        Check if a workspace is system_core type.
+        Used by callers to enforce system_core policy (worktree-only, no direct writes).
+        """
+        from ..models import Workspace
+        ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+        return ws is not None and ws.workspace_type == "system_core" and ws.system_managed

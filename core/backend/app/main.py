@@ -11,28 +11,10 @@ from .config import settings, paths
 from .db import init_db
 from .modules.registry import register as register_modules, list_modules
 
-_LEGACY_REPO_DIRS = ["instance", "workspaces", "sandboxes"]
-
-
-def _warn_legacy_dirs() -> None:
-    """Warn if old repo-relative runtime dirs still exist (pre-AGENT_SPACE_HOME layout)."""
-    import logging
-    repo_root = Path(__file__).parent.parent.parent.parent  # agent-space/
-    found = [str(repo_root / d) for d in _LEGACY_REPO_DIRS if (repo_root / d).exists()]
-    if found:
-        logging.getLogger("agent-space").warning(
-            "Legacy runtime directories found inside the source repo:\n  %s\n"
-            "These are no longer used. Move their contents to %s/ and remove them.",
-            "\n  ".join(found),
-            paths.home,
-        )
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     paths.init_dirs()
     paths.validate()
-    _warn_legacy_dirs()
     init_db()
     from .db import migrate_db
     migrate_db()
@@ -52,6 +34,11 @@ async def lifespan(app: FastAPI):
         CapabilityRegistry(db).reload()
         seed_system_memories(db)
         seed_builtin_agents(db, space_id=settings.default_space_id)
+
+        # Register system-core workspace if configured
+        from .workspaces.system_core import register_system_core_workspace
+        register_system_core_workspace(db)
+
         if settings.debug:
             existing = ApiKeyService(db).list(space_id=settings.default_space_id)
             if not existing:

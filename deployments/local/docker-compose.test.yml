@@ -1,0 +1,62 @@
+services:
+  backend:
+    build:
+      context: ../../core/backend
+      dockerfile: Dockerfile
+      network: host
+    ports:
+      - "8100:8100"
+    volumes:
+      - ${HOME}/aspace/test:/aspace
+      - claude-home:/home/agentspace/.claude
+    group_add:
+      - "${DOCKER_GID:-989}"
+    env_file:
+      - ${HOME}/aspace/test/.env
+    environment:
+      - AGENT_SPACE_HOME=/aspace
+      - INSTANCE_ROOT=/aspace
+      - STORAGE_ROOT=/aspace/storage
+      - LOG_ROOT=/aspace/logs
+      - DATABASE_URL=sqlite:////aspace/db/agent_space.sqlite
+      - DEPLOYER_SOCKET_PATH=/aspace/run/deployer.sock
+      - CLAUDE_HOME=/home/agentspace/.claude
+      - AGENT_SPACE_ENV=test
+    working_dir: /app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8100
+
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+      network: host
+    ports:
+      - "3100:5173"
+    volumes:
+      - ../../frontend:/app
+      - /app/node_modules
+    environment:
+      - API_URL=http://backend:8100
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      - backend
+
+  deployer:
+    build:
+      context: ../../deployer
+      dockerfile: Dockerfile
+      network: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../../:/repo:rw
+      - ${HOME}/aspace/test:/aspace
+    user: "1000:989"
+    environment:
+      - DEPLOYER_SOCKET=/aspace/run/deployer.sock
+      - REPO_ROOT=/repo
+      - AGENT_SPACE_HOME=/aspace
+      - AGENT_SPACE_ENV=test
+    restart: unless-stopped
+
+volumes:
+  claude-home:

@@ -29,14 +29,15 @@ def _folder_name(name: str) -> str:
     return slug or 'workspace'
 
 
-def _unique_dir(workspace_root: Path, base: str) -> Path:
-    """Return a path under workspace_root that does not already exist."""
-    candidate = workspace_root / base
+def _unique_dir(workspace_root: Path, space_id: str, base: str) -> Path:
+    """Return a path under workspace_root/<space_id>/ that does not already exist."""
+    space_root = workspace_root / space_id
+    candidate = space_root / base
     if not candidate.exists():
         return candidate
     i = 1
     while True:
-        candidate = workspace_root / f"{base}-{i}"
+        candidate = space_root / f"{base}-{i}"
         if not candidate.exists():
             return candidate
         i += 1
@@ -79,6 +80,14 @@ def create_workspace(
 ):
     space_id, user_id = ids
 
+    # Reject system_core workspace creation — only registered via env on startup
+    if data.workspace_type == "system_core":
+        raise HTTPException(
+            status_code=400,
+            detail="system_core workspaces cannot be created through the UI; "
+                   "set ENABLE_SYSTEM_EVOLUTION=true to register one",
+        )
+
     # Reject duplicate names within the same space
     duplicate = db.query(Workspace).filter(
         Workspace.owner_space_id == space_id,
@@ -97,7 +106,7 @@ def create_workspace(
         resolved_path = data.root_path
     else:
         workspace_root = Path(settings.workspace_root)
-        ws_dir = _unique_dir(workspace_root, _folder_name(data.name.strip()))
+        ws_dir = _unique_dir(workspace_root, space_id, _folder_name(data.name.strip()))
         try:
             ws_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -110,6 +119,7 @@ def create_workspace(
         created_by_user_id=user_id,
         name=data.name,
         description=data.description,
+        workspace_type=data.workspace_type or "project",
         kind=data.kind,
         root_path=resolved_path,
         metadata_json=data.metadata_json,
@@ -134,6 +144,7 @@ def scan_workspaces(
     """
     space_id, user_id = ids
     workspace_root = Path(settings.workspace_root).resolve()
+    space_workspace_root = workspace_root / space_id
 
     existing = db.query(Workspace).filter(
         Workspace.owner_space_id == space_id,
@@ -161,11 +172,11 @@ def scan_workspaces(
         db.commit()
 
     # ── Phase 2: register directories not yet in DB ───────────────────────────
-    if not workspace_root.exists():
+    if not space_workspace_root.exists():
         return ScanResult(created=[], deleted=deleted_names)
 
     created: list[Workspace] = []
-    for entry in sorted(workspace_root.iterdir()):
+    for entry in sorted(space_workspace_root.iterdir()):
         if not entry.is_dir():
             continue
         if entry.resolve() in known_paths:
