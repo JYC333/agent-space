@@ -93,11 +93,11 @@
 - Multi-agent orchestration
 - Scheduled capability runs (cron)
 
-## Design principles that hold across all phases
+## Design principles that hold across all milestones
 
 1. The memory system is the source of truth — agents are stateless executors.
 2. No agent writes long-term memory without user approval.
-3. All IDs are ULIDs (client-generatable) for local-first compatibility.
+3. All IDs are ULIDs (client-generatable) for local-first coexistence across clients.
 4. Multi-tenant schema from day one.
 5. Capability system is the extension point — not hard-coded plugins.
 6. One React codebase serves web, PWA, and desktop (Tauri). Mobile shares logic, not components.

@@ -1,15 +1,32 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from ..db import get_db
-from ..schemas import TaskCreate, TaskOut, AgentRunOut, Page
+from app.auth.api_key import get_identity
+from app.db import get_db
+from app.proposals.read_model import proposal_to_summary_out
+from app.schemas import (
+    Page,
+    RunOutV2,
+    TaskArtifactOut,
+    TaskCreate,
+    TaskOut,
+    TaskProposalOut,
+    TaskRunCreateBody,
+    TaskRunListItem,
+    TaskRunOut,
+    TaskUpdate,
+)
+
+from .board_api import router as board_router
 from .service import TaskService
-from ..agents.runner import AgentRunService
-from ..auth.api_key import get_identity
-from ..jobs.queue import get_queue
-from ..jobs.schemas import JobOut
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+extra_routers = [board_router]
 
 
 @router.post("", response_model=TaskOut, status_code=201)
@@ -19,103 +36,113 @@ def create_task(
     db: Session = Depends(get_db),
 ):
     space_id, user_id = ids
-    if not data.space_id:
-        data.space_id = space_id
-    if not data.user_id:
-        data.user_id = user_id
-    svc = TaskService(db)
-    return svc.create(data)
+    return TaskService(db).create(data, space_id, user_id)
 
 
 @router.get("", response_model=Page[TaskOut])
 def list_tasks(
-    status: str | None = Query(None),
+    board_id: str | None = Query(None),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, user_id = ids
-    svc = TaskService(db)
-    total = svc.count(space_id=space_id, user_id=user_id, status=status)
-    items = svc.list(space_id=space_id, user_id=user_id, status=status, limit=limit, offset=offset)
+    space_id, _user_id = ids
+    total, items = TaskService(db).list_tasks(space_id, board_id=board_id, limit=limit, offset=offset)
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{task_id}", response_model=TaskOut)
-def get_task(task_id: str, db: Session = Depends(get_db)):
+def get_task(
+    task_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, _user_id = ids
+    return TaskService(db).get(task_id, space_id)
+
+
+@router.patch("/{task_id}", response_model=TaskOut)
+def patch_task(
+    task_id: str,
+    data: TaskUpdate,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, _user_id = ids
+    return TaskService(db).update(task_id, space_id, data)
+
+
+@router.post("/{task_id}/runs", response_model=RunOutV2, status_code=201)
+def create_task_run(
+    task_id: str,
+    body: TaskRunCreateBody,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, user_id = ids
+    _link, run = TaskService(db).create_queued_run_for_task(task_id, space_id, user_id, body)
+    return run
+
+
+@router.get("/{task_id}/runs", response_model=Page[TaskRunListItem])
+def list_task_runs(
+    task_id: str,
+    limit: int = Query(50, le=200),
+    offset: int = Query(0),
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, _user_id = ids
     svc = TaskService(db)
-    task = svc.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task
+    total, links, runs = svc.list_task_runs(task_id, space_id, limit=limit, offset=offset)
+    run_by_id = {r.id: r for r in runs}
+    items: list[TaskRunListItem] = []
+    for link in links:
+        r = run_by_id.get(link.run_id)
+        if r:
+            items.append(TaskRunListItem(link=TaskRunOut.model_validate(link), run=RunOutV2.model_validate(r)))
+    return Page(items=items, total=total, limit=limit, offset=offset)
 
 
-@router.post("/{task_id}/run", response_model=JobOut, status_code=202)
-async def run_task(
+@router.get("/{task_id}/artifacts", response_model=Page[TaskArtifactOut])
+def list_task_artifacts(
     task_id: str,
-    adapter_type: str = Query("echo"),
-    workspace_path: str | None = Query(None),
-    risk_level: str = Query("medium"),
+    limit: int = Query(50, le=200),
+    offset: int = Query(0),
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, user_id = ids
-    task_svc = TaskService(db)
-    task = task_svc.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    # Build context at enqueue time so the worker has everything it needs
-    from ..memory.context_builder import ContextBuilder
-    context = ContextBuilder(db).build(
-        space_id=space_id,
-        user_id=user_id,
-        capability_id=task.capability_id,
-        session_id=task.session_id,
-    ).model_dump()
-
-    # Pre-create the AgentRun record so callers can track it immediately
-    runner = AgentRunService(db)
-    run = runner.create_pending(
-        prompt=task.description or task.title,
-        context=context,
-        adapter_type=adapter_type,
-        space_id=space_id,
-        user_id=user_id,
-        task_id=task_id,
-        capability_id=task.capability_id,
-        workspace_id=task.workspace_id,
-    )
-
-    # Mark task as running now; worker will flip it to completed/failed
-    task_svc.update_status(task_id, status="running")
-
-    job = await get_queue().enqueue(
-        "agent_run",
-        {
-            "run_id": run.id,
-            "adapter_type": adapter_type,
-            "prompt": task.description or task.title,
-            "context": context,
-            "workspace_path": workspace_path,
-            "timeout": 300,
-            "risk_level": risk_level,
-            "task_id": task_id,
-        },
-        space_id=space_id,
-        user_id=user_id,
-        workspace_id=task.workspace_id,
-    )
-    return job
+    space_id, _user_id = ids
+    total, rows = TaskService(db).list_task_artifacts(task_id, space_id, limit=limit, offset=offset)
+    out: list[TaskArtifactOut] = []
+    for row in rows:
+        out.append(TaskArtifactOut.model_validate(row))
+    return Page(items=out, total=total, limit=limit, offset=offset)
 
 
-@router.get("/{task_id}/runs", response_model=list[AgentRunOut])
-def list_runs(
+@router.get("/{task_id}/proposals", response_model=Page[TaskProposalOut])
+def list_task_proposals(
     task_id: str,
+    limit: int = Query(50, le=200),
+    offset: int = Query(0),
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, user_id = ids
-    runner = AgentRunService(db)
-    return runner.list_runs(space_id=space_id, user_id=user_id, task_id=task_id)
+    space_id, _user_id = ids
+    now = datetime.now(UTC)
+    total, rows = TaskService(db).list_task_proposals(task_id, space_id, limit=limit, offset=offset)
+    out: list[TaskProposalOut] = []
+    for r in rows:
+        out.append(
+            TaskProposalOut(
+                id=r.id,
+                space_id=r.space_id,
+                task_id=r.task_id,
+                proposal_id=r.proposal_id,
+                role=r.role,
+                created_at=r.created_at,
+                proposal=proposal_to_summary_out(r.proposal, now=now),
+            )
+        )
+    return Page(items=out, total=total, limit=limit, offset=offset)

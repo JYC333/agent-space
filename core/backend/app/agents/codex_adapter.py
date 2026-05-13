@@ -11,7 +11,7 @@ import json
 import shutil
 import subprocess
 from datetime import datetime, UTC
-from .base import AgentAdapter, AgentRunResult, CLIStatus, CLIAdapterCapabilities, CredentialSpec
+from .base import AgentAdapter, RuntimeExecutionResult, CLIStatus, CLIAdapterCapabilities, CredentialSpec
 from .cli_adapter import LocalExecutor
 
 
@@ -71,9 +71,9 @@ class CodexCLIAdapter(AgentAdapter):
         workspace_path: str | None = None,
         timeout: int = 300,
         **_kwargs,
-    ) -> AgentRunResult:
+    ) -> RuntimeExecutionResult:
         if not self.is_available():
-            return AgentRunResult(
+            return RuntimeExecutionResult(
                 success=False, output="",
                 error="codex CLI is not installed or not in PATH.",
                 exit_code=-1,
@@ -107,7 +107,7 @@ class CodexCLIAdapter(AgentAdapter):
         )
         completed = datetime.now(UTC)
 
-        return AgentRunResult(
+        return RuntimeExecutionResult(
             success=result.returncode == 0,
             output=result.stdout,
             error=result.stderr if result.stderr else None,

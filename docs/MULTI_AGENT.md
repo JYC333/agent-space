@@ -2,7 +2,7 @@
 
 ## Core principle: kernel is source of truth
 
-The agent kernel — `AgentService` + `AgentRunService` — owns all agent state:
+The agent kernel — `AgentService` + `RunExecutionService` — owns all agent state:
 identity, memory policy, delegation rules, run logs, and context assembly.
 Adapters are thin execution wrappers. They receive a pre-built prompt + context
 snapshot and return a result. They own nothing.
@@ -16,18 +16,18 @@ AgentService.run() / .delegate()
     ├── ContextBuilder.build()  ← memory policy scoping
     │
     ▼
-AgentRunService.run()
-    ├── writes AgentRun record (status=running)
+RunExecutionService.run()
+    ├── writes Run record (status=running)
     ├── gets adapter from _ADAPTER_REGISTRY
     │
     ▼
 AgentAdapter.run(prompt, context_snapshot, ...)
     │   (pure execution — no DB access, no memory writes)
     ▼
-AgentRunResult
+RuntimeExecutionResult
     │
     ▼
-AgentRun record updated (status, output, error, completed_at)
+Run record updated (status, output, error, completed_at)
 ```
 
 ## Adapter boundary
@@ -51,7 +51,7 @@ added as adapters without touching the kernel:
 
 ```python
 # core/backend/app/agents/my_framework_adapter.py
-from .base import AgentAdapter, AgentRunResult
+from .base import AgentAdapter, RuntimeExecutionResult
 
 class MyFrameworkAdapter(AgentAdapter):
     adapter_type = "my_framework"
@@ -63,7 +63,7 @@ class MyFrameworkAdapter(AgentAdapter):
         except ImportError:
             return False
 
-    def run(self, prompt, context, workspace_path=None, timeout=300) -> AgentRunResult:
+    def run(self, prompt, context, workspace_path=None, timeout=300) -> RuntimeExecutionResult:
         # call my_framework here
         ...
 ```
@@ -138,6 +138,6 @@ Agents **never write memory directly**. All writes go through
 ## Design constraints
 
 1. Never import `AgentService` or DB models inside an adapter — adapters are stateless.
-2. Never call adapters outside of `AgentRunService.run()` — the run record must exist before execution.
+2. Never call adapters outside of `RunExecutionService` — the run record must exist before execution.
 3. `delegation_depth` is set by the kernel, not the adapter.
 4. An agent's `space_id` never changes after creation. Cross-space delegation is not supported.

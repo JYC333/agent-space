@@ -3,17 +3,15 @@
 ## Quick Start
 
 ```bash
-# First time: copy env template and fill in ANTHROPIC_API_KEY
-cp deployments/local/.env.example deployments/local/.env
-
-# Start everything (Docker Compose — recommended)
+# Start everything (Docker Compose). First run creates ~/aspace/dev/.env from template.
 ./scripts/start.sh
+
+# Other profiles
+./scripts/start.sh --test
+./scripts/start.sh --prod
 
 # Force rebuild images
 ./scripts/start.sh --build
-
-# Local mode (no Docker, for rapid iteration)
-./scripts/start.sh --local
 ```
 
 ## Backend
@@ -104,5 +102,5 @@ See `deployments/local/.env.example` for the full list. Key vars:
 | `DATABASE_URL` | sqlite:// | Set by docker-compose |
 | `DEFAULT_SPACE_ID` | `personal` | |
 | `DEFAULT_USER_ID` | `default_user` | |
-| `REFLECTOR_MODE` | `placeholder` | Set to `llm` to enable AI reflection |
+| `REFLECTOR_MODE` | `pattern` | Set to `llm` to enable AI reflection |
 | `MAX_CONCURRENT_SANDBOX_RUNS` | `3` | Sandbox concurrency cap |

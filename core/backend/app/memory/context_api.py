@@ -9,6 +9,10 @@ from .context_builder import ContextBuilder
 router = APIRouter(prefix="/context", tags=["context"])
 
 
+# Memory follow-up: optionally extend ContextBuildRequest + this handler to pass
+# run_id and context_reason into ContextBuilder.build when product needs them.
+
+
 @router.post("/build", response_model=ContextPackage)
 def build_context(
     req: ContextBuildRequest,

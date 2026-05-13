@@ -41,15 +41,31 @@ class ProviderConfigOut(BaseModel):
 
     @classmethod
     def from_db_row(cls, row) -> "ProviderConfigOut":
+        caps = getattr(row, "capabilities_json", None)
+        if caps is None:
+            caps = getattr(row, "models", None)
+        if isinstance(caps, dict):
+            models_list = caps.get("models", [])
+        elif isinstance(caps, list):
+            models_list = caps
+        else:
+            models_list = []
+        cfg = getattr(row, "config_json", None) or {}
+        lifecycle = cfg.get("lifecycle_status", "active")
+        is_default = bool(cfg.get("is_default", False))
+        prov = getattr(row, "provider", None) or getattr(row, "provider_type", "")
+        api_base = getattr(row, "api_base", None)
+        if api_base is None:
+            api_base = getattr(row, "base_url", None)
         return cls(
             id=row.id,
             space_id=row.space_id,
             name=row.name,
-            provider=row.provider,
-            models=row.models,
-            api_base=row.api_base,
-            is_default=row.is_default,
-            status=row.status,
+            provider=prov,
+            models=models_list,
+            api_base=api_base,
+            is_default=is_default,
+            status=lifecycle,
             created_at=row.created_at.isoformat(),
             updated_at=row.updated_at.isoformat(),
         )

@@ -3,31 +3,17 @@ Tests for DatabaseQueueService and the built-in agent_run job handler.
 """
 import pytest
 import pytest_asyncio
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 from datetime import datetime, timedelta, UTC
 
-from app.db import Base
+from app.models import Space
 from app.jobs.queue import DatabaseQueueService
 from app.jobs.handlers import get_handler, list_registered
 
+pytestmark = pytest.mark.canonical
+
 SPACE = "personal"
 USER = "default_user"
-
-
-@pytest.fixture
-def db_engine():
-    # StaticPool ensures all sessions share the same in-memory SQLite connection,
-    # so tables created by Base.metadata.create_all() are visible to every session.
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    yield engine
-    Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture
@@ -59,89 +45,66 @@ def test_get_handler_returns_none_for_unknown():
 
 
 # ---------------------------------------------------------------------------
-# handle_agent_run — integration with AgentRun record
+# handle_agent_run contract:
+#   - payload.run_id  → execute the existing queued Run.
+#   - payload.task_id → create a Run for the product Task (canonical
+#                       TaskRun link), then execute.
+#   - payload.agent_id → create a Run, then execute.
 # ---------------------------------------------------------------------------
 
-def test_handle_agent_run_calls_execute_pending_run(monkeypatch):
-    """handle_agent_run dispatches to execute_pending_run with correct args."""
-    from app.jobs.handlers import handle_agent_run
-
-    captured = {}
-
-    # execute_pending_run is imported locally inside the handler, so patch at source
-    monkeypatch.setattr("app.agents.runner.execute_pending_run",
-                        lambda **kwargs: captured.update(kwargs))
-
-    job = type("Job", (), {"payload": {
-        "run_id": "run-test-1",
-        "adapter_type": "echo",
-        "prompt": "Hello",
-        "context": {},
-        "workspace_path": None,
-        "timeout": 120,
-        "risk_level": "low",
-    }})()
-
-    handle_agent_run(job)
-
-    assert captured["run_id"] == "run-test-1"
-    assert captured["adapter_type"] == "echo"
-    assert captured["prompt"] == "Hello"
-    assert captured["timeout"] == 120
-    assert captured["risk_level"] == "low"
-
-
-def test_handle_agent_run_raises_without_run_id():
-    from app.jobs.handlers import handle_agent_run
-
-    job = type("Job", (), {"payload": {}})()
-    with pytest.raises(ValueError, match="run_id"):
-        handle_agent_run(job)
-
-
-def test_handle_agent_run_syncs_task_status(db_engine, monkeypatch):
-    """After handle_agent_run, Task.status mirrors the AgentRun outcome."""
+def test_handle_agent_run_executes_existing_run_via_echo_adapter(db_engine, monkeypatch):
+    """A queued Run drives through the default echo adapter to ``succeeded``."""
     from sqlalchemy.orm import sessionmaker
-    from app.models import AgentRun, Task
+    from app.agents.agent_service import AgentService
     from app.jobs.handlers import handle_agent_run
-    from ulid import ULID
+    from app.models import Run
+    from app.runs.run_service import RunService
+    from app.schemas import AgentCreate, RunCreate
 
     Session = sessionmaker(bind=db_engine)
-    db = Session()
-
-    run_id = str(ULID())
-    task_id = str(ULID())
-
-    run = AgentRun(
-        id=run_id, space_id=SPACE, user_id=USER,
-        adapter_type="echo", prompt="test",
-        status="completed", output="done",
-    )
-    task = Task(
-        id=task_id, space_id=SPACE, user_id=USER,
-        title="My task", status="running",
-    )
-    db.add(run)
-    db.add(task)
-    db.commit()
-    db.close()
-
-    # Patch execute_pending_run (local import inside handler) to a no-op
-    monkeypatch.setattr("app.agents.runner.execute_pending_run", lambda **kw: None)
-    # Patch SessionLocal so _sync_task_status opens our test DB
     monkeypatch.setattr("app.db.SessionLocal", Session)
 
-    job = type("Job", (), {"payload": {
-        "run_id": run_id, "adapter_type": "echo", "prompt": "test",
-        "context": {}, "timeout": 30, "risk_level": "low", "task_id": task_id,
-    }})()
+    db = Session()
+    try:
+        agent = AgentService(db).create(
+            AgentCreate(name="Job handler test agent"),
+            requesting_user_id=USER,
+        )
+        run = RunService(db).create_run(
+            agent_id=agent.id,
+            data=RunCreate(),
+            space_id=SPACE,
+            user_id=USER,
+        )
+        run_id = run.id
+    finally:
+        db.close()
 
-    handle_agent_run(job)
+    job = type("Job", (), {
+        "payload": {"run_id": run_id},
+        "space_id": SPACE,
+        "user_id": USER,
+    })()
+    result = handle_agent_run(job)
+    assert result == {"run_id": run_id, "status": "succeeded"}
 
     db2 = Session()
-    updated = db2.query(Task).filter(Task.id == task_id).first()
-    assert updated.status == "completed"
-    db2.close()
+    try:
+        fetched = db2.query(Run).filter(Run.id == run_id).one()
+        assert fetched.status == "succeeded"
+        assert fetched.started_at is not None
+        assert fetched.ended_at is not None
+    finally:
+        db2.close()
+
+
+def test_handle_agent_run_raises_without_known_payload_id():
+    """No run_id / task_id / agent_id → handler raises so the queue marks failed."""
+    from app.jobs.handlers import handle_agent_run
+
+    job = type("Job", (), {"payload": {}, "space_id": SPACE, "user_id": USER})()
+    with pytest.raises(ValueError):
+        handle_agent_run(job)
 
 
 # ---------------------------------------------------------------------------
@@ -324,7 +287,14 @@ async def test_append_and_get_events(queue):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_list_jobs_space_isolation(queue):
+async def test_list_jobs_space_isolation(queue, db_factory):
+    db = db_factory()
+    try:
+        db.add_all([Space(id="space_a", name="Space A"), Space(id="space_b", name="Space B")])
+        db.commit()
+    finally:
+        db.close()
+
     await queue.enqueue("agent_run", {}, space_id="space_a", user_id=USER)
     await queue.enqueue("agent_run", {}, space_id="space_b", user_id=USER)
     jobs_a = await queue.list_jobs("space_a")

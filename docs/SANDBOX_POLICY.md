@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Sandboxes provide isolated temporary environments where agents can make changes
+Sandboxes provide isolated short-lived environments where agents can make changes
 without modifying real workspaces directly.
 
 ## Default flow

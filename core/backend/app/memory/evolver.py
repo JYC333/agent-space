@@ -23,7 +23,7 @@ Evolution operations:
 EvoMap integration plan:
   1. Export memories as population to EvoMap format
   2. Run EvoMap fitness evaluation + evolutionary selection
-  3. Apply resulting mutations back to Memory records via MemoryStore
+  3. Apply resulting mutations back to MemoryEntry records via MemoryStore
   4. Log each evolution run as a MemoryEvolutionRun record
 
 Current status: STUB — decay/archive work; merge/synthesize pending EvoMap integration.
@@ -35,7 +35,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from ..models import Memory
+from ..models import MemoryEntry
 
 
 # Decay constant per scope — higher λ = faster decay
@@ -51,7 +51,7 @@ _DECAY_LAMBDA: dict[str, float] = {
 _ARCHIVE_THRESHOLD = 0.05  # fitness below this → archive candidate
 
 
-def _recency_decay(memory: Memory, now: Optional[datetime] = None) -> float:
+def _recency_decay(memory: MemoryEntry, now: Optional[datetime] = None) -> float:
     now = now or datetime.now(UTC)
     reference = memory.last_accessed_at or memory.created_at
     # Normalize both sides to naive UTC — SQLite strips timezone info on round-trip
@@ -62,7 +62,7 @@ def _recency_decay(memory: Memory, now: Optional[datetime] = None) -> float:
     return math.exp(-lam * days)
 
 
-def _fitness(memory: Memory, now: Optional[datetime] = None) -> float:
+def _fitness(memory: MemoryEntry, now: Optional[datetime] = None) -> float:
     importance = memory.importance or 0.5
     confidence = memory.confidence or 1.0
     recency = _recency_decay(memory, now)
@@ -90,11 +90,11 @@ class MemoryEvolver:
         """
         now = datetime.now(UTC)
         memories = (
-            self.db.query(Memory)
+            self.db.query(MemoryEntry)
             .filter(
-                Memory.space_id == space_id,
-                Memory.status == "active",
-                Memory.deleted_at.is_(None),
+                MemoryEntry.space_id == space_id,
+                MemoryEntry.status == "active",
+                MemoryEntry.deleted_at.is_(None),
             )
             .all()
         )
@@ -119,8 +119,8 @@ class MemoryEvolver:
         archived = 0
         if not dry_run and candidates:
             result = (
-                self.db.query(Memory)
-                .filter(Memory.id.in_(candidates), Memory.scope != "system")
+                self.db.query(MemoryEntry)
+                .filter(MemoryEntry.id.in_(candidates), MemoryEntry.scope != "system")
                 .update({"status": "archived"}, synchronize_session=False)
             )
             self.db.commit()

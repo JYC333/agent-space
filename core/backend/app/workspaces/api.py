@@ -151,7 +151,7 @@ def scan_workspaces(
         Workspace.status == "active",
     ).all()
 
-    # ── Phase 1: hard-delete records whose directory is gone ─────────────────
+    # ── Pass 1: hard-delete records whose directory is gone ─────────────────
     deleted_names: list[str] = []
     known_paths: set[Path] = set()
     for ws in existing:
@@ -171,7 +171,7 @@ def scan_workspaces(
     if deleted_names:
         db.commit()
 
-    # ── Phase 2: register directories not yet in DB ───────────────────────────
+    # ── Pass 2: register directories not yet in DB ───────────────────────────
     if not space_workspace_root.exists():
         return ScanResult(created=[], deleted=deleted_names)
 

@@ -5,7 +5,7 @@ Scoped, long-term context for agents and users. Not raw data — curated, approv
 
 ## Owns
 - `Memory` model, `MemoryStore` CRUD
-- `MemoryAccessLog` (every read recorded)
+- `MemoryReadTrace` (every read recorded)
 - `MemoryProposal` model and proposal workflow
 - `MemoryProvider` ABC + `LocalMemoryProvider`
 - `ContextBuilder` — assembles ContextPackage; resolves ContextAttachments
@@ -40,7 +40,7 @@ MemoryProposal:
   review_metadata  — reviewer notes, requested changes
   approved_by, resulting_memory_id
 
-MemoryAccessLog:
+MemoryReadTrace:
   memory_id, user_id, agent_id, space_id, access_type, reason, created_at
 ```
 
@@ -65,7 +65,7 @@ MemoryAccessLog:
 ## Invariants
 - `space_id` required; ContextBuilder raises without it
 - Agents never call `MemoryStore.create()` directly — always via proposals
-- Every memory read logs to MemoryAccessLog
+- Every memory read logs to MemoryReadTrace
 - Memory from space A never appears in a context built for space B
 - All content passes security scanning before entering compiled context
 

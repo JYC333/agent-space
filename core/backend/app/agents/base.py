@@ -3,10 +3,9 @@ from __future__ import annotations
 Agent adapter interface — runtime execution backends only.
 
 AgentAdapter decouples the agent kernel from execution backends. The kernel
-(AgentService + AgentRunService) is the single source of truth for agent
-identity, memory policy, delegation rules, and run logging. Adapters are
-thin execution wrappers: they receive a prompt + context snapshot and return
-a result. They own nothing.
+(AgentService) is the single source of truth for agent identity, memory policy,
+delegation rules, and run logging. Adapters are thin execution wrappers: they
+receive a prompt + context snapshot and return a result. They own nothing.
 
 Adapter types built in:
   "echo"       — deterministic test adapter; no external deps
@@ -25,7 +24,13 @@ from typing import Optional
 
 
 @dataclass
-class AgentRunResult:
+class RuntimeExecutionResult:
+    """
+    Result returned by an AgentAdapter after execution.
+
+    This is the adapter's execution output — NOT a Run record.
+    Named RuntimeExecutionResult to distinguish from the Run/Activity/Artifact product model.
+    """
     success: bool
     output: str
     error: str | None = None
@@ -34,6 +39,10 @@ class AgentRunResult:
     tool_calls: list[dict] = field(default_factory=list)
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    stdout: str | None = None
+    stderr: str | None = None
+    error_code: str | None = None
+    adapter_log_json: dict | None = None
 
 
 @dataclass
@@ -104,7 +113,7 @@ class AgentAdapter(ABC):
         context: dict,
         workspace_path: str | None = None,
         timeout: int = 300,
-    ) -> AgentRunResult:
+    ) -> RuntimeExecutionResult:
         ...
 
     def detect(self) -> CLIStatus:

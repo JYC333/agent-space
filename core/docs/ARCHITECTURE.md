@@ -26,7 +26,7 @@ User input
 | `CapabilityRegistry` | Load, validate, and register capabilities |
 | `SessionService` | Manage sessions and messages |
 | `TaskService` | Track units of agent work |
-| `AgentRunService` | Execute agent runs via registered adapters |
+| `RunExecutionService` | Execute queued runs via registered adapters |
 
 ## Database schema (key tables)
 

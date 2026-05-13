@@ -76,9 +76,10 @@
 ## Key Cross-Cutting Concerns
 
 - **space_id** — every record carries it; the primary isolation boundary
+- **Run is the central execution object** — every agent invocation creates a Run; Run produces Activities, Artifacts, and Proposals; Session is conversation-level, Run is execution-level
 - **Proposal gate** — memory, wiki, code, and capability changes require approval
-- **Runtime-agnostic core** — Agent is a product-level actor; Runtime Adapter (claude_cli, codex_cli, …) is a replaceable execution backend; Model Provider (Anthropic, OpenAI, …) is the underlying LLM. These three are distinct.
-- **Sandbox enforcement** — `claude_cli` and `codex_cli` always run sandboxed; risk_level controls the sandbox level (worktree default, Docker for high-risk). See `modules/sandbox.md`.
+- **Runtime-agnostic core** — Agent is a product-level actor; Runtime Adapter (echo, claude_code, codex_cli, anthropic_api, opencode, …) is a replaceable execution backend; Model Provider (Anthropic, OpenAI, litellm) is the underlying LLM. These three are distinct.
+- **Sandbox enforcement** — sandboxed adapters (those in `_SANDBOXED_ADAPTERS`: claude_code, codex_cli, and future coding runtimes) always run sandboxed; risk_level controls the sandbox level (worktree default, Docker for high-risk). See `modules/sandbox.md`.
 - **ContextCompiler** — vendor files (CLAUDE.md, AGENTS.md, SOUL.md) are compiled artefacts written to the sandbox, never source of truth; security scanning, token budgets, and `.agent/` progressive loading enforced at compile time
 - **ContextSnapshot** — frozen ContextPackage saved at run-start; immutable; stored in `context_snapshots` for audit
 - **ContextAttachment** — structured context references (file, git_diff, memory_entry, etc.) resolved and scanned by ContextBuilder
@@ -86,6 +87,8 @@
 - **Module registry** — `app/modules/registry.py` (backend) and `src/modules/registry.js` (frontend) are the single sources of truth for which features are active; see [ADR 0007](decisions/0007-plugin-module-architecture.md)
 - **Client-server protocol** — REST (current) + WebSocket events + SSE streaming (planned)
 - **Offline-first** — mobile captures and card reviews work without connection; sync on reconnect
+- **Run resilience fields** — status includes `degraded`; mode includes `live|dry_run`; temporal fields are explicit; artifacts are exportable; proposals have urgency/deadline
+- **Home summary API** — Home UI consumes lightweight summaries only; no full ContextPackage
 
 ## Where Does a New Feature Belong?
 

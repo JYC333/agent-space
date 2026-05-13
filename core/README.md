@@ -65,7 +65,7 @@ pytest tests/ -v
 | Variable | Default | Description |
 |---|---|---|
 | `DATABASE_URL` | `sqlite:///./data/agent_core.db` | Backend DB |
-| `REFLECTOR_MODE` | `placeholder` | `placeholder` or `llm` |
+| `REFLECTOR_MODE` | `pattern` | `pattern` or `llm` |
 | `ANTHROPIC_API_KEY` | `` | Required for `llm` reflector mode |
 | `VITE_API_URL` | `/api/v1` | Frontend API base URL |
 

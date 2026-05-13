@@ -1,8 +1,7 @@
 import pytest
 from app.agents.agent_service import AgentService
-from app.agents.runner import AgentRunService
-from app.schemas import AgentCreate, AgentUpdate, AgentRunRequest
-from tests.conftest import SPACE, USER
+from app.schemas import AgentCreate, AgentUpdate, RunRequest
+from tests.conftest import SPACE, USER, ensure_space, ensure_user
 
 
 def _make_agent(db, **kwargs) -> object:
@@ -35,8 +34,13 @@ def test_create_agent(db):
     assert agent.space_id == SPACE
     assert agent.created_by_user_id == USER
     assert agent.visibility == "private"
-    assert "model" in agent.model_config_json
-    assert "readable_scopes" in agent.memory_policy_json
+    # Agent executable config lives on AgentVersion, not Agent
+    assert agent.current_version_id is not None
+    from app.agents.version_service import AgentVersionService
+    version_svc = AgentVersionService(db)
+    version = version_svc.get_or_404(agent.current_version_id)
+    assert "model" in version.model_config_json
+    assert "readable_scopes" in version.memory_policy_json
 
 
 def test_get_agent(db):
@@ -48,6 +52,8 @@ def test_get_agent(db):
 
 
 def test_list_agents_by_creator(db):
+    ensure_user(db, "user_a")
+    ensure_user(db, "user_b")
     _make_agent(db, created_by_user_id="user_a")
     _make_agent(db, created_by_user_id="user_a")
     _make_agent(db, created_by_user_id="user_b")
@@ -60,6 +66,8 @@ def test_list_agents_by_creator(db):
 
 
 def test_list_agents_space_isolation(db):
+    ensure_space(db, "space_a")
+    ensure_space(db, "space_b")
     _make_agent(db, space_id="space_a")
     _make_agent(db, space_id="space_b")
 
@@ -80,7 +88,8 @@ def test_delete_agent(db):
     agent = _make_agent(db)
     svc = AgentService(db)
     assert svc.delete(agent.id) is True
-    assert svc.get(agent.id) is None  # soft-deleted
+    # soft-delete: status → "archived", agent is still queryable
+    assert svc.get(agent.id).status == "archived"
 
 
 def test_agent_visibility(db):
@@ -107,12 +116,12 @@ def test_user_runs_agent(db):
     svc = AgentService(db)
     run = svc.run(
         agent_id=agent.id,
-        req=AgentRunRequest(prompt="Hello, agent!", adapter_type="echo"),
+        req=RunRequest(prompt="Hello, agent!", adapter_type="echo"),
         space_id=SPACE,
         instructed_by_user_id=USER,
     )
     assert run.id
-    assert run.status == "completed"
+    assert run.status == "queued"  # Run is queued until the worker executes it
     assert run.agent_id == agent.id
     assert run.instructed_by_user_id == USER
     assert run.delegation_depth == 0
@@ -128,7 +137,7 @@ def test_run_disabled_agent_fails(db):
     with pytest.raises(HTTPException) as exc_info:
         svc.run(
             agent_id=agent.id,
-            req=AgentRunRequest(prompt="Hello", adapter_type="echo"),
+            req=RunRequest(prompt="Hello", adapter_type="echo"),
             space_id=SPACE,
             instructed_by_user_id=USER,
         )
@@ -147,7 +156,7 @@ def test_run_with_disallowed_adapter_fails(db):
     with pytest.raises(HTTPException) as exc_info:
         svc.run(
             agent_id=agent.id,
-            req=AgentRunRequest(prompt="Hi", adapter_type="claude_cli"),
+            req=RunRequest(prompt="Hi", adapter_type="claude_cli"),
             space_id=SPACE,
             instructed_by_user_id=USER,
         )
@@ -166,7 +175,7 @@ def test_agent_delegates_to_agent(db):
     # User starts agent A
     parent_run = svc.run(
         agent_id=agent_a.id,
-        req=AgentRunRequest(prompt="Do the work", adapter_type="echo"),
+        req=RunRequest(prompt="Do the work", adapter_type="echo"),
         space_id=SPACE,
         instructed_by_user_id=USER,
     )
@@ -175,7 +184,7 @@ def test_agent_delegates_to_agent(db):
     # Agent A delegates to Agent B
     child_run = svc.delegate(
         target_agent_id=agent_b.id,
-        req=AgentRunRequest(prompt="Sub-task", adapter_type="echo"),
+        req=RunRequest(prompt="Sub-task", adapter_type="echo"),
         space_id=SPACE,
         parent_run_id=parent_run.id,
         instructed_by_agent_id=agent_a.id,
@@ -199,26 +208,26 @@ def test_delegation_depth_limit_enforced(db):
 
     parent_run = svc.run(
         agent_id=agent_a.id,
-        req=AgentRunRequest(prompt="Start", adapter_type="echo"),
+        req=RunRequest(prompt="Start", adapter_type="echo"),
         space_id=SPACE,
         instructed_by_user_id=USER,
     )
-    # depth=0 → depth=1 is fine
+    # depth=0 → depth=1: parent depth 0 < max_depth 1 → allowed
     child_run = svc.delegate(
         target_agent_id=agent_b.id,
-        req=AgentRunRequest(prompt="Level 1", adapter_type="echo"),
+        req=RunRequest(prompt="Level 1", adapter_type="echo"),
         space_id=SPACE,
         parent_run_id=parent_run.id,
         instructed_by_agent_id=agent_a.id,
     )
     assert child_run.delegation_depth == 1
 
-    # depth=1 → depth=2 exceeds max_delegation_depth=1
+    # depth=1 → depth=2: parent depth 1 == max_depth 1 → DENIED
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc_info:
         svc.delegate(
             target_agent_id=agent_c.id,
-            req=AgentRunRequest(prompt="Level 2", adapter_type="echo"),
+            req=RunRequest(prompt="Level 2", adapter_type="echo"),
             space_id=SPACE,
             parent_run_id=child_run.id,
             instructed_by_agent_id=agent_a.id,
@@ -237,7 +246,7 @@ def test_no_delegation_permission_enforced(db):
 
     parent_run = svc.run(
         agent_id=agent_a.id,
-        req=AgentRunRequest(prompt="Start", adapter_type="echo"),
+        req=RunRequest(prompt="Start", adapter_type="echo"),
         space_id=SPACE,
         instructed_by_user_id=USER,
     )
@@ -246,7 +255,7 @@ def test_no_delegation_permission_enforced(db):
     with pytest.raises(HTTPException) as exc_info:
         svc.delegate(
             target_agent_id=agent_b.id,
-            req=AgentRunRequest(prompt="Delegate", adapter_type="echo"),
+            req=RunRequest(prompt="Delegate", adapter_type="echo"),
             space_id=SPACE,
             parent_run_id=parent_run.id,
             instructed_by_agent_id=agent_a.id,
@@ -262,26 +271,24 @@ def test_delegation_chain_retrieval(db):
     agent_a = _make_agent(db, name="A")
     agent_b = _make_agent(db, name="B")
     svc = AgentService(db)
-    runner = AgentRunService(db)
 
     run_a = svc.run(
         agent_id=agent_a.id,
-        req=AgentRunRequest(prompt="Root", adapter_type="echo"),
+        req=RunRequest(prompt="Root", adapter_type="echo"),
         space_id=SPACE,
         instructed_by_user_id=USER,
     )
     run_b = svc.delegate(
         target_agent_id=agent_b.id,
-        req=AgentRunRequest(prompt="Child", adapter_type="echo"),
+        req=RunRequest(prompt="Child", adapter_type="echo"),
         space_id=SPACE,
         parent_run_id=run_a.id,
         instructed_by_agent_id=agent_a.id,
     )
 
-    chain = runner.get_delegation_chain(run_b.id)
-    assert len(chain) == 2
-    assert chain[0].id == run_a.id   # root first
-    assert chain[1].id == run_b.id
+    # Delegation chain is stored via parent_run_id on Run records
+    assert run_b.parent_run_id == run_a.id
+    assert run_b.delegation_depth == 1
 
 
 # ---------------------------------------------------------------------------
@@ -295,15 +302,18 @@ def test_agent_with_restricted_memory_policy(db):
 
     # Seed a user-scope memory
     store = MemoryStore(db)
-    store.create(MemoryCreate(
-        title="User pref",
-        content="I prefer Python.",
-        type="preference",
-        scope="user",
-        namespace="user.default.preferences",
-        space_id=SPACE,
-        owner_user_id=USER,
-    ))
+    store.create(
+        MemoryCreate(
+            title="User pref",
+            content="I prefer Python.",
+            type="preference",
+            scope="user",
+            namespace="user.default.preferences",
+            space_id=SPACE,
+            subject_user_id=USER,
+        ),
+        acting_user_id=USER,
+    )
 
     # Agent with memory policy restricted to ["system", "agent"] only — cannot read "user"
     restricted_policy = {
@@ -328,16 +338,19 @@ def test_agent_with_full_memory_policy(db):
     from app.memory.context_builder import ContextBuilder
 
     store = MemoryStore(db)
-    store.create(MemoryCreate(
-        title="User pref",
-        content="I prefer Rust.",
-        type="preference",
-        scope="user",
-        namespace="user.default.preferences",
-        space_id=SPACE,
-        owner_user_id=USER,
-        importance=0.8,
-    ))
+    store.create(
+        MemoryCreate(
+            title="User pref",
+            content="I prefer Rust.",
+            type="preference",
+            scope="user",
+            namespace="user.default.preferences",
+            space_id=SPACE,
+            subject_user_id=USER,
+            importance=0.8,
+        ),
+        acting_user_id=USER,
+    )
 
     # Default full policy allows all scopes
     from app.schemas import DEFAULT_MEMORY_POLICY

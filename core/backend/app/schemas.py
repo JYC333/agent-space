@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Generic, Optional, TypeVar
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, Field, model_validator
 
 ItemT = TypeVar('ItemT')
 
@@ -34,8 +35,17 @@ DEFAULT_RUNTIME_POLICY: dict = {
     "can_delegate": True,
     "max_delegation_depth": 3,
     "max_run_time_seconds": 300,
-    # adapter_ids this agent may use; matches CLIAdapterConfig.adapter_id or adapter_type
-    "allowed_adapter_types": ["echo", "claude_code", "codex_cli", "opencode", "gemini_cli"],
+    # adapter_ids this agent may use; matches RuntimeAdapter.adapter_id or adapter_type
+    "allowed_adapter_types": [
+        "echo",
+        "anthropic_messages",
+        "claude_code",
+        "codex_cli",
+        "opencode",
+        "gemini_cli",
+    ],
+    # Used when no RuntimeAdapter FK and no explicit adapter_type on Run / runtime_config_json.
+    "default_adapter_type": "echo",
 }
 
 
@@ -94,18 +104,57 @@ class WorkspaceOut(BaseModel):
 # Agent
 # ---------------------------------------------------------------------------
 
+class AgentVersionOut(BaseModel):
+    id: str
+    agent_id: str
+    space_id: str
+    version_label: str
+    model_provider_id: Optional[str]
+    model_name: Optional[str]
+    runtime_adapter_id: Optional[str]
+    system_prompt: Optional[str]
+    model_config_json: dict
+    runtime_config_json: dict
+    context_policy_json: dict
+    memory_policy_json: dict
+    capabilities_json: list
+    tool_permissions_json: dict
+    runtime_policy_json: dict
+    created_at: datetime
+    published_at: Optional[datetime]
+    archived_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
+class AgentVersionCreate(BaseModel):
+    version_label: Optional[str] = None
+    model_provider_id: Optional[str] = None
+    model_name: Optional[str] = None
+    runtime_adapter_id: Optional[str] = None
+    system_prompt: Optional[str] = None
+    model_config_json: dict = Field(default_factory=lambda: dict(DEFAULT_MODEL_CONFIG))
+    runtime_config_json: dict = Field(default_factory=lambda: dict(DEFAULT_RUNTIME_POLICY))
+    context_policy_json: dict = Field(default_factory=dict)
+    memory_policy_json: dict = Field(default_factory=lambda: dict(DEFAULT_MEMORY_POLICY))
+    capabilities_json: list[str] = Field(default_factory=list)
+    tool_permissions_json: dict = Field(default_factory=dict)
+    runtime_policy_json: dict = Field(default_factory=lambda: dict(DEFAULT_RUNTIME_POLICY))
+
+
 class AgentCreate(BaseModel):
     name: str
     description: Optional[str] = None
-    created_by_user_id: Optional[str] = None  # defaults to the requesting user if omitted
+    created_by_user_id: Optional[str] = None
     visibility: str = "private"
     role_instruction: Optional[str] = None
-    model_config_json: dict = Field(default_factory=lambda: dict(DEFAULT_MODEL_CONFIG))
-    memory_policy_json: dict = Field(default_factory=lambda: dict(DEFAULT_MEMORY_POLICY))
-    capabilities_json: list[str] = Field(default_factory=list)
-    tool_policy_json: list[str] = Field(default_factory=list)
-    runtime_policy_json: dict = Field(default_factory=lambda: dict(DEFAULT_RUNTIME_POLICY))
     space_id: Optional[str] = None
+    # Optional v1 execution snapshot (stored on initial AgentVersion).
+    model_config_json: Optional[dict] = None
+    memory_policy_json: Optional[dict] = None
+    capabilities_json: Optional[list[str]] = None
+    tool_permissions_json: Optional[dict] = None
+    runtime_policy_json: Optional[dict] = None
 
 
 class AgentUpdate(BaseModel):
@@ -113,12 +162,13 @@ class AgentUpdate(BaseModel):
     description: Optional[str] = None
     visibility: Optional[str] = None
     role_instruction: Optional[str] = None
+    status: Optional[str] = None
+    # Execution config fields create a new AgentVersion when provided.
     model_config_json: Optional[dict] = None
     memory_policy_json: Optional[dict] = None
     capabilities_json: Optional[list[str]] = None
     tool_policy_json: Optional[list[str]] = None
     runtime_policy_json: Optional[dict] = None
-    status: Optional[str] = None
 
 
 class AgentOut(BaseModel):
@@ -129,24 +179,20 @@ class AgentOut(BaseModel):
     description: Optional[str]
     visibility: str
     role_instruction: Optional[str]
-    model_config_json: dict
-    memory_policy_json: dict
-    capabilities_json: list
-    tool_policy_json: list
-    runtime_policy_json: dict
     status: str
+    current_version_id: Optional[str]
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
 
 
-class AgentRunRequest(BaseModel):
+class RunRequest(BaseModel):
     """Used by both user→agent and agent→agent calls."""
     prompt: str
     workspace_id: Optional[str] = None
     workspace_path: Optional[str] = None
-    # Prefer cli_adapter_config_id. adapter_type is the legacy fallback.
+    # Prefer cli_adapter_config_id; adapter_type is used when no config id is supplied.
     cli_adapter_config_id: Optional[str] = None
     adapter_type: str = "echo"
     # cli_default | cli_model_override | agent_space_provider
@@ -160,7 +206,7 @@ class AgentRunRequest(BaseModel):
     # CLI adapters are only used when at least one of the requires_* flags is True
     # or the task_type maps to a heavy task. Lightweight tasks are redirected to
     # the direct Anthropic API adapter (no subprocess, no sandbox).
-    task_type: Optional[str] = None  # e.g. summarize | classify | code_modify | refactor
+    task_type: Optional[str] = None  # e.g. summarize | classify | code_modify | maintenance
     requires_filesystem: bool = False
     requires_terminal: bool = False
     requires_git: bool = False
@@ -177,15 +223,54 @@ class MemoryCreate(BaseModel):
     type: str  # preference | semantic | episodic | procedural | project
     scope: str = "user"
     namespace: str = "user.default"
-    # private | space_shared | workspace_shared | restricted | public_template
+    # private | space_shared | workspace_shared | selected_users | summary_only |
+    # restricted | public_template
     visibility: str = "private"
+    sensitivity_level: str = "normal"
     confidence: float = 1.0
     importance: float = 0.5
     tags: Optional[list[str]] = None
     source_id: Optional[str] = None
     space_id: Optional[str] = None
-    owner_user_id: Optional[str] = None
+    subject_user_id: Optional[str] = None
+    owner_user_id: Optional[str] = Field(
+        default=None,
+        description="Human who controls this memory for ACL; distinct from subject_user_id.",
+    )
+    selected_user_ids: Optional[list[str]] = None
+    last_confirmed_at: Optional[datetime] = None
+    source_proposal_id: Optional[str] = None
     workspace_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_memory_fields(self) -> "MemoryCreate":
+        from app.memory.read_auth import SENSITIVITY_LEVELS, VISIBILITY_VALUES
+
+        sl = (self.sensitivity_level or "normal").lower()
+        if sl not in SENSITIVITY_LEVELS:
+            raise ValueError(f"invalid sensitivity_level: {self.sensitivity_level!r}")
+        object.__setattr__(self, "sensitivity_level", sl)
+
+        vis = (self.visibility or "private").lower()
+        if vis not in VISIBILITY_VALUES:
+            raise ValueError(f"invalid visibility: {self.visibility!r}")
+        object.__setattr__(self, "visibility", vis)
+
+        if sl == "highly_restricted" and vis == "space_shared":
+            raise ValueError("highly_restricted memories cannot use space_shared visibility for MVP")
+
+        if self.selected_user_ids is not None and vis not in ("selected_users", "restricted"):
+            raise ValueError("selected_user_ids is only valid when visibility is selected_users or restricted")
+
+        if vis == "private" and self.owner_user_id is None:
+            # Filled from acting user in MemoryStore.create when omitted
+            pass
+
+        if sl == "highly_restricted" and self.owner_user_id is None:
+            raise ValueError("owner_user_id is required when sensitivity_level is highly_restricted")
+
+        # TODO: validate subject_user_id / owner_user_id belong to the same space when membership service exists
+        return self
 
 
 class MemoryUpdate(BaseModel):
@@ -193,27 +278,61 @@ class MemoryUpdate(BaseModel):
     content: Optional[str] = None
     status: Optional[str] = None
     visibility: Optional[str] = None
+    sensitivity_level: Optional[str] = None
     confidence: Optional[float] = None
     importance: Optional[float] = None
     tags: Optional[list[str]] = None
+    subject_user_id: Optional[str] = None
+    owner_user_id: Optional[str] = None
+    selected_user_ids: Optional[list[str]] = None
+    last_confirmed_at: Optional[datetime] = None
+    scope: Optional[str] = None
+    namespace: Optional[str] = None
+    type: Optional[str] = None
+    workspace_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_memory_update(self) -> "MemoryUpdate":
+        from app.memory.read_auth import SENSITIVITY_LEVELS, VISIBILITY_VALUES
+
+        if self.sensitivity_level is not None:
+            sl = self.sensitivity_level.lower()
+            if sl not in SENSITIVITY_LEVELS:
+                raise ValueError(f"invalid sensitivity_level: {self.sensitivity_level!r}")
+            object.__setattr__(self, "sensitivity_level", sl)
+        if self.visibility is not None:
+            vis = self.visibility.lower()
+            if vis not in VISIBILITY_VALUES:
+                raise ValueError(f"invalid visibility: {self.visibility!r}")
+            object.__setattr__(self, "visibility", vis)
+        if self.selected_user_ids is not None and self.visibility is not None:
+            if self.visibility not in ("selected_users", "restricted"):
+                raise ValueError("selected_user_ids is only valid when visibility is selected_users or restricted")
+        if self.sensitivity_level == "highly_restricted" and self.visibility == "space_shared":
+            raise ValueError("highly_restricted memories cannot use space_shared visibility for MVP")
+        return self
 
 
 class MemoryOut(BaseModel):
     id: str
     space_id: str
-    owner_user_id: str
+    subject_user_id: Optional[str] = None
+    owner_user_id: Optional[str] = None
     workspace_id: Optional[str]
     scope: str
     namespace: str
     type: str
-    title: str
-    content: str
+    title: Optional[str] = None
+    content: Optional[str] = None
     status: str
     visibility: str
+    sensitivity_level: str = "normal"
+    selected_user_ids: Optional[list[str]] = None
+    last_confirmed_at: Optional[datetime] = None
     confidence: float
     importance: float
     source_id: Optional[str]
-    created_by: str
+    created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     deleted_at: Optional[datetime]
@@ -246,6 +365,8 @@ class ProposalOut(BaseModel):
     source_session_id: Optional[str]
     source_task_id: Optional[str]
     source_run_id: Optional[str]
+    created_by_run_id: Optional[str] = None
+    proposal_type: str = "memory_update"
     target_scope: str
     target_namespace: str
     memory_type: str
@@ -253,9 +374,61 @@ class ProposalOut(BaseModel):
     proposed_content: str
     rationale: str
     status: str
+    risk_level: str = "low"
+    urgency: str = "normal"
+    preview: bool = False
+    review_deadline: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    expired: bool = False
     created_at: datetime
     decided_at: Optional[datetime]
     resulting_memory_id: Optional[str]
+    owner_user_id: Optional[str] = None
+    subject_user_id: Optional[str] = None
+    sensitivity_level: Optional[str] = None
+    selected_user_ids: Optional[list] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ActivityRecordOut(BaseModel):
+    id: str
+    space_id: str
+    source_run_id: Optional[str] = None
+    session_id: Optional[str] = None
+    user_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    source_task_id: Optional[str] = None
+    source_url: Optional[str] = None
+    activity_type: str
+    title: Optional[str] = None
+    content: Optional[str] = None
+    payload_json: dict = Field(default_factory=dict)
+    occurred_at: datetime
+    created_at: datetime
+    status: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ArtifactOut(BaseModel):
+    id: str
+    space_id: str
+    run_id: Optional[str] = None
+    proposal_id: Optional[str] = None
+    artifact_type: str
+    title: str
+    mime_type: Optional[str] = None
+    exportable: bool = True
+    preview: bool = False
+    storage_ref: Optional[str] = None
+    storage_path: Optional[str] = None
+    has_inline_content: bool = False
+    content: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -361,38 +534,268 @@ class CapabilityReloadResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Tasks
+# Task board (product-level tasks; not infrastructure jobs)
 # ---------------------------------------------------------------------------
+
+
+class BoardCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    workspace_id: Optional[str] = None
+    board_type: str = Field(default="workspace")
+    status: str = Field(default="active")
+    default_view: Optional[str] = None
+    sort_order: Optional[int] = None
+    metadata_json: Optional[dict] = None
+    create_default_columns: bool = Field(default=True, description="Create standard workflow columns")
+
+
+class BoardUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    board_type: Optional[str] = None
+    status: Optional[str] = None
+    default_view: Optional[str] = None
+    sort_order: Optional[int] = None
+    metadata_json: Optional[dict] = None
+    deleted_at: Optional[datetime] = None
+
+
+class BoardColumnOut(BaseModel):
+    id: str
+    space_id: str
+    board_id: str
+    name: str
+    description: Optional[str]
+    status_key: str
+    position: int
+    wip_limit: Optional[int]
+    is_done_column: bool
+    is_default_column: bool
+    metadata_json: Optional[dict]
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
+class BoardOut(BaseModel):
+    id: str
+    space_id: str
+    workspace_id: Optional[str]
+    name: str
+    description: Optional[str]
+    board_type: str
+    status: str
+    default_view: Optional[str]
+    sort_order: Optional[int]
+    metadata_json: Optional[dict]
+    created_by_user_id: Optional[str]
+    created_by_agent_id: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
 
 class TaskCreate(BaseModel):
     title: str
     description: Optional[str] = None
-    capability_id: Optional[str] = None
-    session_id: Optional[str] = None
     workspace_id: Optional[str] = None
-    space_id: Optional[str] = None
-    user_id: Optional[str] = None
+    board_id: Optional[str] = None
+    column_id: Optional[str] = None
+    parent_task_id: Optional[str] = None
+    task_type: str = Field(default="general")
+    status: str = Field(default="inbox")
+    priority: str = Field(default="normal")
+    risk_level: str = Field(default="low")
+    assigned_user_id: Optional[str] = None
+    assigned_agent_id: Optional[str] = None
+    source_activity_id: Optional[str] = None
+    source_run_id: Optional[str] = None
+    source_proposal_id: Optional[str] = None
+    source_artifact_id: Optional[str] = None
+    acceptance_criteria_json: Optional[dict] = None
+    definition_of_done: Optional[str] = None
+    required_outputs_json: Optional[list] = None
+    due_at: Optional[datetime] = None
+    start_after: Optional[datetime] = None
+    max_runs: Optional[int] = None
+    max_cost: Optional[float] = None
+    max_duration_seconds: Optional[int] = None
+    policy_json: Optional[dict] = None
+    metadata_json: Optional[dict] = None
+    tags: Optional[list] = None
+
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    workspace_id: Optional[str] = None
+    board_id: Optional[str] = None
+    column_id: Optional[str] = None
+    parent_task_id: Optional[str] = None
+    task_type: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    risk_level: Optional[str] = None
+    assigned_user_id: Optional[str] = None
+    assigned_agent_id: Optional[str] = None
+    claimed_by_user_id: Optional[str] = None
+    claimed_by_agent_id: Optional[str] = None
+    completed_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    blocked_reason: Optional[str] = None
+    due_at: Optional[datetime] = None
+    start_after: Optional[datetime] = None
+    estimated_effort: Optional[str] = None
+    actual_effort: Optional[str] = None
+    max_runs: Optional[int] = None
+    max_cost: Optional[float] = None
+    max_duration_seconds: Optional[int] = None
+    policy_json: Optional[dict] = None
+    metadata_json: Optional[dict] = None
+    tags: Optional[list] = None
+    deleted_at: Optional[datetime] = None
 
 
 class TaskOut(BaseModel):
     id: str
     space_id: str
-    user_id: str
     workspace_id: Optional[str]
-    session_id: Optional[str]
+    board_id: Optional[str]
+    column_id: Optional[str]
+    parent_task_id: Optional[str]
     title: str
     description: Optional[str]
-    capability_id: Optional[str]
+    task_type: str
     status: str
-    result: Optional[str]
-    error: Optional[str]
+    priority: str
+    risk_level: str
+    created_by_user_id: Optional[str]
+    created_by_agent_id: Optional[str]
+    assigned_user_id: Optional[str]
+    assigned_agent_id: Optional[str]
+    claimed_by_user_id: Optional[str]
+    claimed_by_agent_id: Optional[str]
+    source_activity_id: Optional[str]
+    source_run_id: Optional[str]
+    source_proposal_id: Optional[str]
+    source_artifact_id: Optional[str]
+    due_at: Optional[datetime]
+    start_after: Optional[datetime]
+    completed_at: Optional[datetime]
+    cancelled_at: Optional[datetime]
+    blocked_reason: Optional[str]
     created_at: datetime
     updated_at: datetime
+    deleted_at: Optional[datetime]
 
     model_config = {"from_attributes": True}
 
 
-class AgentRunOut(BaseModel):
+class TaskRunCreateBody(BaseModel):
+    """POST /tasks/{id}/runs — optional overrides; agent_id falls back to task.assigned_agent_id."""
+
+    agent_id: Optional[str] = None
+    mode: str = Field(default="live")
+    run_type: str = Field(default="agent")
+    trigger_origin: str = Field(default="manual")
+    session_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+    prompt: Optional[str] = None
+    instruction: Optional[str] = None
+    set_task_in_progress: bool = Field(default=True)
+    parent_run_id: Optional[str] = None
+    instructed_by_agent_id: Optional[str] = None
+    adapter_type: Optional[str] = None
+
+
+class TaskRunOut(BaseModel):
+    id: str
+    space_id: str
+    task_id: str
+    run_id: str
+    role: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ArtifactSummaryOut(BaseModel):
+    id: str
+    space_id: str
+    run_id: Optional[str]
+    proposal_id: Optional[str]
+    artifact_type: str
+    title: str
+    mime_type: Optional[str]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ProposalSummaryOut(BaseModel):
+    id: str
+    space_id: str
+    proposal_type: str
+    status: str
+    title: str
+    created_at: datetime
+    preview: bool = False
+    urgency: str = "normal"
+    review_deadline: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    expired: bool = False
+    created_by_run_id: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class TaskArtifactOut(BaseModel):
+    id: str
+    space_id: str
+    task_id: str
+    artifact_id: str
+    role: str
+    created_at: datetime
+    artifact: ArtifactSummaryOut
+
+    model_config = {"from_attributes": True}
+
+
+class TaskProposalOut(BaseModel):
+    id: str
+    space_id: str
+    task_id: str
+    proposal_id: str
+    role: str
+    created_at: datetime
+    proposal: ProposalSummaryOut
+
+    model_config = {"from_attributes": True}
+
+
+class TaskEvaluationOut(BaseModel):
+    id: str
+    space_id: str
+    task_id: str
+    run_id: Optional[str]
+    evaluator_type: str
+    evaluator_user_id: Optional[str]
+    evaluator_agent_id: Optional[str]
+    score: Optional[float]
+    confidence: Optional[float]
+    summary: Optional[str]
+    recommendation: Optional[str]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RunOut(BaseModel):
     id: str
     task_id: Optional[str]
     space_id: str
@@ -423,6 +826,82 @@ class AgentRunOut(BaseModel):
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
     created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Run Creation API
+# ---------------------------------------------------------------------------
+
+class RunCreate(BaseModel):
+    """Input for POST /api/v1/agents/{id}/runs."""
+    mode: str = Field(default="live")
+    run_type: str = Field(default="agent")
+    trigger_origin: str = Field(default="manual")
+    session_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+    prompt: Optional[str] = None
+    instruction: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+    # Delegation (optional). Child runs require ``parent_run_id``;
+    # ``delegation_depth`` is always derived server-side.
+    parent_run_id: Optional[str] = None
+    instructed_by_agent_id: Optional[str] = None
+    adapter_type: Optional[str] = None
+
+
+class RunOutV2(BaseModel):
+    """Canonical Run output for the Run API."""
+    id: str
+    space_id: str
+    agent_id: str
+    agent_version_id: str
+    context_snapshot_id: Optional[str]
+    workspace_id: Optional[str]
+    session_id: Optional[str]
+    parent_run_id: Optional[str]
+    delegation_depth: int = 0
+    instructed_by_agent_id: Optional[str] = None
+    run_type: str
+    trigger_origin: str
+    status: str
+    mode: str
+    prompt: Optional[str]
+    instruction: Optional[str]
+    scheduled_at: Optional[datetime]
+    started_at: Optional[datetime]
+    ended_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+    error_message: Optional[str]
+    error_json: Optional[dict]
+    output_json: Optional[dict]
+    usage_json: Optional[dict]
+    adapter_type: Optional[str] = None
+    model_provider_id: Optional[str] = None
+    required_sandbox_level: str = "none"
+
+    model_config = {"from_attributes": True}
+
+
+class TaskRunListItem(BaseModel):
+    """TaskRun association with full Run payload for task-scoped listing."""
+
+    link: TaskRunOut
+    run: RunOutV2
+
+
+class RunStatusOut(BaseModel):
+    """Lightweight status response for GET /runs/{id}/status."""
+    id: str
+    status: str
+    mode: str
+    run_type: str
+    trigger_origin: str
+    started_at: Optional[datetime]
+    ended_at: Optional[datetime]
+    error_message: Optional[str]
 
     model_config = {"from_attributes": True}
 

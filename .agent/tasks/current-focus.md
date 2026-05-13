@@ -1,53 +1,20 @@
-# Current Focus
+# Current focus
 
-Last updated: 2026-05-06
+The backend and frontend now share a single Run-centric execution model with Alembic-backed schema, task board linkage, and real runtime adapters behind policy.
 
-## Current Implementation Focus
+## Priorities
 
-1. **Layered `.agent/` context documentation** — completed in this session
-2. **ContextCompiler** — implemented and tested (22 tests passing)
-3. **Sandbox infrastructure stabilization** — Docker socket permissions, DOCKER_GID, path translation all fixed
-4. **Architecture boundaries explicitly documented** — BOUNDARIES.md with 22 invariants
+- Keep Run/Task/home surfaces aligned with `BOUNDARIES.md`
+- Finish persistence gaps that still return HTTP 501 (workspace console sessions, API keys, deployment jobs)
+- Expand automated tests around sandbox + adapter failure modes
 
-### Immediate next tasks (in priority order)
+## Non-goals (today)
 
-- Verify `claude_cli` adapter works end-to-end through Docker after socket permission fix
-- Add `ActivityRecord` model to `models.py` (capture layer prerequisite)
-- Alembic migrations — replace `create_all()` dev shortcut
-- Wire `PolicyEngine` to all sensitive API routes
-- `RunMetrics` written at end of every `execute_pending_run`
-- Memory reflection auto-triggered after session completion
-- `WorkspaceManager` CRUD API (Workspace model now exists in models.py)
+- Reintroducing singular `/tasks/{id}/run` routes or product Task = Job shortcuts
+- Synthetic runtime fallbacks in production execution paths
 
-## Current Non-goals
+## Quick links
 
-- Full desktop app (Tauri deferred — see [decisions/0005](../decisions/0005-desktop-runtime.md))
-- Full mobile app
-- Local-first sync
-- Complete Notion/Obsidian replacement
-- Complete Anki replacement
-- Full agentic coding loop automation (multi-step, multi-file autonomous changes)
-- Public open-source release polish
-- LLM Wiki (planned Phase 2)
-- Spaced repetition cards (planned Phase 3)
-- Browser extension for capture
-- Multi-tenant SaaS deployment
-
-## System Status
-
-| Component | Status |
-|---|---|
-| Space / memory data model | Done |
-| ContextBuilder | Done |
-| ContextCompiler | Done, tested |
-| Memory proposals | Done |
-| Sandbox (DockerExecutor) | Done |
-| claude_cli adapter | Done (needs e2e verify) |
-| codex_cli adapter | Done |
-| Policy engine | Partial (not fully wired) |
-| Activity records | Planned |
-| LLM Wiki | Planned |
-| Spaced repetition | Planned |
-| Workspace console UI | Planned |
-| Alembic migrations | TODO |
-| RunMetrics | TODO |
+- [../ARCHITECTURE.md](../ARCHITECTURE.md)
+- [../BOUNDARIES.md](../BOUNDARIES.md)
+- [../COMMANDS.md](../COMMANDS.md)

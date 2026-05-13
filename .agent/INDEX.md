@@ -21,7 +21,8 @@ Load only the modules relevant to your task.
 | Task area | Module doc |
 |---|---|
 | Space / user / workspace data model | [modules/space.md](modules/space.md) |
-| Agent profiles, adapters, runs | [modules/agents.md](modules/agents.md) |
+| Agent profiles, runs, adapters | [modules/agents.md](modules/agents.md) |
+| Activities, artifacts, proposals | [modules/proposals.md](modules/proposals.md) |
 | Long-term memory | [modules/memory.md](modules/memory.md) |
 | Raw input and event capture | [modules/activity.md](modules/activity.md) |
 | Activity inbox UI and quick capture | [modules/activity-inbox.md](modules/activity-inbox.md) |
@@ -43,6 +44,12 @@ Load only the modules relevant to your task.
 | Sync strategy and conflict resolution | [modules/sync-and-conflicts.md](modules/sync-and-conflicts.md) |
 | REST API, WebSocket, SSE protocol | [modules/client-server-protocol.md](modules/client-server-protocol.md) |
 | Mobile PWA client | [modules/mobile-client.md](modules/mobile-client.md) |
+
+## Architecture Deep Dive
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — runtime layers and module placement
+- [architecture/TASK_BOARD_MODEL.md](architecture/TASK_BOARD_MODEL.md) — tasks, runs, jobs
+- [architecture/MEMORY_MODEL.md](architecture/MEMORY_MODEL.md) — memory scopes and access rules
 
 ## Decision Records
 

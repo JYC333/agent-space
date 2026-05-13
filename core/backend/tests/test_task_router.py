@@ -91,7 +91,7 @@ def test_resolve_keeps_claude_code_when_git_required():
 
 
 def test_resolve_keeps_claude_code_for_heavy_task():
-    c = TaskClassification(task_type="refactor")
+    c = TaskClassification(task_type="code_modify")
     assert router.resolve_adapter("claude_code", c) == "claude_code"
 
 
@@ -105,7 +105,7 @@ def test_resolve_keeps_codex_cli_when_filesystem_required():
     assert router.resolve_adapter("codex_cli", c) == "codex_cli"
 
 
-def test_resolve_claude_cli_legacy_alias_downgraded():
+def test_resolve_claude_cli_synonym_downgraded():
     c = TaskClassification(task_type="digest")
     assert router.resolve_adapter("claude_cli", c) == "anthropic_api"
 
@@ -141,16 +141,16 @@ def test_classify_from_request_heavy():
 
 
 # ---------------------------------------------------------------------------
-# AgentRunRequest routing fields integrate with AgentService
+# RunRequest routing fields integrate with AgentService
 # ---------------------------------------------------------------------------
 
 def test_agent_service_resolves_adapter_via_task_router(db):
     """AgentService._resolve_adapter_type uses TaskRouter to downgrade CLI → API."""
     from app.agents.agent_service import AgentService
-    from app.schemas import AgentRunRequest
+    from app.schemas import RunRequest
 
     svc = AgentService(db)
-    req = AgentRunRequest(
+    req = RunRequest(
         prompt="Summarize this session",
         adapter_type="claude_code",
         task_type="summarize",
@@ -164,10 +164,10 @@ def test_agent_service_resolves_adapter_via_task_router(db):
 
 def test_agent_service_keeps_cli_when_git_required(db):
     from app.agents.agent_service import AgentService
-    from app.schemas import AgentRunRequest
+    from app.schemas import RunRequest
 
     svc = AgentService(db)
-    req = AgentRunRequest(
+    req = RunRequest(
         prompt="Fix the failing tests",
         adapter_type="claude_code",
         task_type="test_fix",
@@ -268,12 +268,12 @@ def test_api_adapter_context_with_memories(monkeypatch):
     mock_response = MagicMock()
     mock_response.content = [mock_content]
 
-    def fake_create(**kwargs):
+    def stub_create(**kwargs):
         captured["system"] = kwargs.get("system", "")
         return mock_response
 
     mock_client = MagicMock()
-    mock_client.messages.create.side_effect = lambda **kw: fake_create(**kw)
+    mock_client.messages.create.side_effect = lambda **kw: stub_create(**kw)
 
     mock_anthropic = MagicMock()
     mock_anthropic.Anthropic.return_value = mock_client

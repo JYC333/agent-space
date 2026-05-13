@@ -1,13 +1,13 @@
 # Module: Sync and Conflicts
 
 ## Status
-**PLANNED** — No sync implementation. Single-instance local deployment only. Architecture must remain sync-compatible.
+**PLANNED** — No sync implementation. Single-instance local deployment only. Architecture must remain sync-ready.
 
 ## Purpose
-Define the sync strategy for a future where agent-space can run on multiple devices or have a cloud-backed instance. Sync is not active now, but every data model decision must remain compatible with the sync model described here to avoid a painful migration later.
+Define the sync strategy for a future where agent-space can run on multiple devices or have a cloud-backed instance. Sync is not active now, but every data model decision must remain aligned with the sync model described here to avoid a painful migration later.
 
 ## Owns
-- Sync protocol design (offline-first, CRDT-compatible)
+- Sync protocol design (offline-first, CRDT-friendly merges)
 - Conflict detection and resolution rules
 - Sync status UI indicators
 - Merge policy per model type

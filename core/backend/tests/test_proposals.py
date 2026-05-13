@@ -1,7 +1,7 @@
 import pytest
 from app.memory.proposals import MemoryProposalService
 from app.memory.store import MemoryStore
-from tests.conftest import SPACE, USER
+from tests.conftest import SPACE, USER, ensure_user
 
 
 def _create_proposal(db, **kwargs):
@@ -78,11 +78,13 @@ def test_list_pending_proposals(db):
 
 
 def test_proposal_isolation_across_users(db):
+    ensure_user(db, "user_a")
+    ensure_user(db, "user_b")
     _create_proposal(db, user_id="user_a")
     _create_proposal(db, user_id="user_b")
 
     svc = MemoryProposalService(db)
     a = svc.list_proposals(space_id=SPACE, user_id="user_a")
     b = svc.list_proposals(space_id=SPACE, user_id="user_b")
-    assert len(a) == 1 and a[0].user_id == "user_a"
-    assert len(b) == 1 and b[0].user_id == "user_b"
+    assert len(a) == 1 and a[0].created_by_user_id == "user_a"
+    assert len(b) == 1 and b[0].created_by_user_id == "user_b"

@@ -15,40 +15,38 @@ within a single deployment instance. FastAPI backend with SQLite, React frontend
   docs/                   Architecture documentation
   scripts/                Utility scripts (start.sh)
 
-~/aspace/               ← local Agent Space data root (AGENT_SPACE_HOME, default: ~/aspace)
-  config/                 App configuration (cli-credentials.yaml, …)
-  secrets/                CLI credential profiles
-  db/                     SQLite database
-  storage/                Uploads, exports
-  logs/                   App + agent run logs
-  cache/                  Quota cache, runtime-homes
-  runtime/                Transient runtime state
-  workspaces/             Managed workspace repos  (<workspace_id>/repo)
-  sandboxes/              Per-run agent sandboxes  (<run_id> or <ws_id>/<run_id>)
-  artifacts/              Run artifacts, diffs, patches, reports
+~/aspace/               ← local data parent (optional: set AGENT_SPACE_HOME to override this parent)
+  dev/                  ← default mode root (./scripts/start.sh); bind-mounted as /aspace in Docker
+    .env                  created from deployments/local/.env.example on first run
+    config/ db/ logs/ …   app-created dirs under this mode tree
+  test/ prod/             other modes (--test / --prod)
 ```
 
 The source repo must **not** contain runtime data, user workspaces, sandboxes,
-secrets, db files, or logs. All app-managed runtime data lives under `~/aspace`
-(or wherever `AGENT_SPACE_HOME` points). Directories are created automatically
-on first startup.
+secrets, db files, or logs. When using `scripts/start.sh`, app-managed runtime data for a profile
+lives under **`AGENT_SPACE_HOME/<mode>/`** on the host (defaults: `~/aspace/dev`, etc.). Inside
+containers, **`AGENT_SPACE_HOME=/aspace`** always refers to that mounted mode directory.
 
 ## Starting the system
 
 ```bash
-./scripts/start.sh          # Docker Compose — backend + frontend
-./scripts/start.sh --local  # bare processes, no Docker
-./scripts/start.sh --build  # Docker Compose with image rebuild
+./scripts/start.sh           # Docker Compose — dev (default): backend + frontend + deployer
+./scripts/start.sh --test    # isolated test ports; data under ~/aspace/test
+./scripts/start.sh --prod
+./scripts/start.sh --build   # Docker Compose with image rebuild
 ```
 
-On first run, `start.sh` creates `~/aspace/` and copies `.env.example` to
-`~/aspace/config/.env`. Edit that file to set `ANTHROPIC_API_KEY`, then re-run.
+On first run, `start.sh` creates `~/aspace/<mode>/` and copies `deployments/local/.env.example` to
+`~/aspace/<mode>/.env` when missing. Edit that file to set `ANTHROPIC_API_KEY`, then re-run.
 The `.env` file is never stored in the repo.
 
 ## Running the backend only
 
+Without Docker, set the data root to a **mode directory** so paths match compose:
+
 ```bash
 cd core/backend
+export AGENT_SPACE_HOME="$HOME/aspace/dev"
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
@@ -69,12 +67,12 @@ pytest tests/ -v --tb=short
 - **Workspace** — a project or knowledge area within a space.
 - **Memory** — scoped long-term information; written only through the proposal → approval workflow.
 - **Capability** — code-defined skill registered via `capability.yaml` manifest.
-- **Sandbox** — temporary isolated execution environment for agent runs.
+- **Sandbox** — ephemeral isolated execution environment for agent runs.
 
 ## Key files
 
 - `core/backend/app/config.py` — `AppPaths` class + `Settings`; all runtime paths derive from `AGENT_SPACE_HOME`
-- `core/backend/app/models.py` — SQLAlchemy ORM (Space, Memory, Session, Task, etc.)
+- `core/backend/app/models.py` — SQLAlchemy ORM (Space, Memory, Session, **Task board** `Task`/`Board`/…, Run, Job, etc.)
 - `core/backend/app/modules/registry.py` — backend module loader (which features are active)
 - `core/backend/app/memory/store.py` — MemoryStore CRUD
 - `core/backend/app/memory/context_builder.py` — context package assembly (requires space_id)
@@ -90,7 +88,7 @@ pytest tests/ -v --tb=short
 AGENT_SPACE_HOME=~/aspace    # local data root; all sub-paths derive from this
 ANTHROPIC_API_KEY=
 DEFAULT_MODEL=claude-sonnet-4-6
-REFLECTOR_MODE=placeholder   # or llm
+REFLECTOR_MODE=pattern   # or llm
 DEFAULT_SPACE_ID=personal
 DEFAULT_USER_ID=default_user
 

@@ -5,6 +5,7 @@ import { Toaster } from 'sonner'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
 import { SpaceSwitcher } from '../components/SpaceSwitcher'
+import { UserAvatar } from '../components/UserAvatar'
 import { cn } from '../lib/utils'
 
 /* ── Aperture A brand mark ─────────────────────────────────────────────────── */
@@ -65,19 +66,19 @@ function UserMenu() {
     )
   }
 
-  const initials = currentUser.display_name.slice(0, 2).toUpperCase()
-
   return (
     <div className="relative" ref={ref}>
       <button
+        type="button"
         onClick={() => setOpen(o => !o)}
-        className="flex items-center justify-center w-8 h-8 rounded-full border border-border overflow-hidden hover:opacity-90 transition-opacity"
+        className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border hover:opacity-90 transition-opacity"
         title={currentUser.display_name}
       >
-        {currentUser.avatar_url
-          ? <img src={currentUser.avatar_url} alt={currentUser.display_name} className="w-full h-full object-cover" />
-          : <span className="text-[11px] font-semibold text-accent-foreground">{initials}</span>
-        }
+        <UserAvatar
+          avatarUrl={currentUser.avatar_url}
+          displayName={currentUser.display_name}
+          email={currentUser.email}
+        />
       </button>
 
       {open && (

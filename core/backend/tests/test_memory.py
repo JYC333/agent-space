@@ -1,11 +1,12 @@
 import pytest
 from app.memory.store import MemoryStore
 from app.schemas import MemoryCreate, MemoryUpdate
-from tests.conftest import SPACE, USER
+from tests.conftest import SPACE, USER, ensure_space, ensure_user, ensure_workspace
 
 
 def _make(db, **kwargs) -> object:
     store = MemoryStore(db)
+    subject_user_id = kwargs.get("subject_user_id", kwargs.get("owner_user_id", USER))
     data = MemoryCreate(
         title=kwargs.get("title", "Test memory"),
         content=kwargs.get("content", "Some content"),
@@ -13,12 +14,14 @@ def _make(db, **kwargs) -> object:
         scope=kwargs.get("scope", "user"),
         namespace=kwargs.get("namespace", "user.default"),
         space_id=kwargs.get("space_id", SPACE),
-        owner_user_id=kwargs.get("owner_user_id", USER),
+        subject_user_id=subject_user_id,
+        owner_user_id=kwargs.get("owner_user_id"),
         workspace_id=kwargs.get("workspace_id"),
         visibility=kwargs.get("visibility", "private"),
         importance=kwargs.get("importance", 0.5),
     )
-    return store.create(data)
+    acting = kwargs.get("acting_user_id", subject_user_id)
+    return store.create(data, acting_user_id=acting)
 
 
 def test_create_memory(db):
@@ -62,21 +65,25 @@ def test_list_memories(db):
 
 
 def test_user_scoped_memories_do_not_leak_across_users(db):
-    _make(db, title="User1 memory", owner_user_id="user_1")
-    _make(db, title="User2 memory", owner_user_id="user_2")
+    ensure_user(db, "user_1")
+    ensure_user(db, "user_2")
+    _make(db, title="User1 memory", subject_user_id="user_1")
+    _make(db, title="User2 memory", subject_user_id="user_2")
 
     store = MemoryStore(db)
     user1_mems = store.list(space_id=SPACE, user_id="user_1")
     user2_mems = store.list(space_id=SPACE, user_id="user_2")
 
-    assert all(m.owner_user_id == "user_1" for m in user1_mems)
-    assert all(m.owner_user_id == "user_2" for m in user2_mems)
+    assert all(m.subject_user_id == "user_1" for m in user1_mems)
+    assert all(m.subject_user_id == "user_2" for m in user2_mems)
     assert len(user1_mems) == 1
     assert len(user2_mems) == 1
 
 
 def test_cross_space_memory_does_not_leak(db):
-    _make(db, title="Space A memory", space_id="space_a", owner_user_id=USER, visibility="space_shared")
+    ensure_space(db, "space_a")
+    ensure_space(db, "space_b")
+    _make(db, title="Space A memory", space_id="space_a", subject_user_id=USER, visibility="space_shared")
 
     store = MemoryStore(db)
     # Same user, different space — must not see it
@@ -85,9 +92,13 @@ def test_cross_space_memory_does_not_leak(db):
 
 
 def test_workspace_memories_require_workspace_id(db):
+    ensure_user(db, "user_a")
+    ensure_user(db, "user_b")
+    ensure_workspace(db, "ws-a", SPACE, created_by_user_id="user_a")
+    ensure_workspace(db, "ws-b", SPACE, created_by_user_id="user_b")
     # user_a creates a workspace_shared memory in ws-a
     _make(db, scope="workspace", workspace_id="ws-a", visibility="workspace_shared",
-          owner_user_id="user_a")
+          subject_user_id="user_a")
 
     store = MemoryStore(db)
     # user_b querying with ws-a context can see it (workspace_shared within that workspace)

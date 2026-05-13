@@ -8,12 +8,14 @@ services:
       - "8000:8000"
     volumes:
       - ../../core/backend/app:/app/app:ro
-      - ${HOME}/aspace/dev:/aspace
+      - ../../core/backend/alembic.ini:/app/alembic.ini:ro
+      - ../../core/backend/migrations:/app/migrations:ro
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/dev}:/aspace
       - claude-home:/home/agentspace/.claude
     group_add:
       - "${DOCKER_GID:-989}"
     env_file:
-      - ${HOME}/aspace/dev/.env
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/dev}/.env
     environment:
       - AGENT_SPACE_HOME=/aspace
       - INSTANCE_ROOT=/aspace
@@ -50,7 +52,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../../:/repo:rw
-      - ${HOME}/aspace/dev:/aspace
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/dev}:/aspace
     user: "1000:989"
     environment:
       - DEPLOYER_SOCKET=/aspace/run/deployer.sock

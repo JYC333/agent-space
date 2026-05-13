@@ -6,7 +6,7 @@ Accepted — 2026-05-06
 
 ## Context
 
-The original system contained a `model_config_json` field on the `Agent` model and `DEFAULT_MODEL_CONFIG` in schemas, implying that agent-space would act as a direct model-provider API gateway in the first phase. This is incorrect for the personal/family-first use case.
+The original system contained a `model_config_json` field on the `Agent` model and `DEFAULT_MODEL_CONFIG` in schemas, implying that agent-space would act as a direct model-provider API gateway in the first milestone. This is incorrect for the personal/family-first use case.
 
 The actual motivation:
 
@@ -48,11 +48,11 @@ CLI Tools are adapters to the core, not the foundation.
 
 Runs carry a `model_selection_mode` field:
 
-| Mode | Meaning | Phase |
+| Mode | Meaning | When |
 |---|---|---|
 | `cli_default` | CLI uses its own configured model/account | **MVP** |
 | `cli_model_override` | Agent-space passes `--model` flag to the CLI | Future (CLI must support it) |
-| `agent_space_provider` | Agent-space calls model API directly | Future (Phase 2+) |
+| `agent_space_provider` | Agent-space calls model API directly | Future |
 
 The default is `cli_default` for all MVP runs.
 
@@ -74,7 +74,7 @@ Because monthly subscription CLIs do not expose token counts programmatically, u
 2. `estimated` — CLI output contains parseable usage lines
 3. `unknown` — runtime seconds + run count only (default for MVP)
 
-The `AgentRun` table carries `runtime_seconds`, `usage_accuracy`, `estimated_input_tokens`, `estimated_output_tokens`.
+The `Run` table carries `runtime_seconds`, `usage_accuracy`, `estimated_input_tokens`, `estimated_output_tokens`.
 
 A separate `UsageEvent` table records per-run events for quota dashboards.
 
@@ -96,13 +96,13 @@ Vendor files are never the source of truth and are never written to the real wor
 - The personal/family MVP does not require building a model-provider billing gateway.
 - Users can switch CLI tools on a per-run basis without losing context.
 - Quota awareness is manual but practical (no API access to subscription data needed).
-- Architecture stays clean for future Phase 2 where agent_space_provider mode adds direct API calls.
+- Architecture stays clean for a future milestone where agent_space_provider mode adds direct API calls.
 
 **Negative:**
-- Precise token accounting is not available in Phase 1.
+- Precise token accounting is not available in the MVP slice.
 - The `model_config_json` field on the `Agent` model is now forward-looking (used in cli_model_override and agent_space_provider modes only).
 
-## Out of scope (deferred to Phase 2+)
+## Out of scope (deferred)
 
 - Full ModelProviderRegistry
 - Provider billing / cost accounting

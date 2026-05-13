@@ -13,7 +13,7 @@ import subprocess
 from datetime import datetime, UTC
 from pathlib import Path
 
-from .base import AgentAdapter, AgentRunResult, Executor, ExecutionResult
+from .base import AgentAdapter, RuntimeExecutionResult, Executor, ExecutionResult
 
 
 # Env vars forwarded from the host into sandbox containers.
@@ -198,10 +198,10 @@ class EchoAgentAdapter(AgentAdapter):
         context: dict,
         workspace_path: str | None = None,
         timeout: int = 300,
-    ) -> AgentRunResult:
+    ) -> RuntimeExecutionResult:
         started = datetime.now(UTC)
         output = f"[ECHO AGENT]\nPrompt: {prompt}\n\nContext keys: {list(context.keys())}"
-        return AgentRunResult(
+        return RuntimeExecutionResult(
             success=True,
             output=output,
             exit_code=0,

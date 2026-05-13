@@ -27,7 +27,7 @@ Capability:
 
 CapabilityVersion:
   capability_id, version, manifest_json
-  status (draft|proposed|testing|enabled|disabled|deprecated|rejected|archived)
+  status (draft|proposed|testing|enabled|disabled|retired|rejected|archived)
   created_at
 
 CapabilityTest:
@@ -59,7 +59,7 @@ tests:
 ```
 draft → proposed → testing → enabled
                 ↓          ↓
-             rejected    disabled → deprecated → archived
+             rejected    disabled → retired → archived
 ```
 
 - `draft` — created locally, not reviewed
@@ -67,7 +67,7 @@ draft → proposed → testing → enabled
 - `testing` — sandbox test runs in progress
 - `enabled` — active and available to agents
 - `disabled` — temporarily disabled
-- `deprecated` — replaced by newer version
+- `retired` — replaced by newer version
 - `archived` — permanently retired
 
 ## Main Flows
@@ -82,7 +82,7 @@ draft → proposed → testing → enabled
 1. Agent generates `capability_install` proposal
 2. Sandbox test runs validate the new version
 3. User approves → capability version promoted to `enabled`
-4. Old version deprecated
+4. Old version retired
 
 ## Invariants
 - A capability without tests and a manifest is incomplete — cannot be `enabled`

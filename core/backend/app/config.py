@@ -1,6 +1,7 @@
 import os
 import stat
 from pathlib import Path
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 # Agent Space local data root.
@@ -26,6 +27,14 @@ class AppPaths:
         self.workspaces_dir = self.home / "workspaces"
         self.sandboxes_dir  = self.home / "sandboxes"
         self.artifacts_dir  = self.home / "artifacts"
+
+    @property
+    def artifact_storage_root(self) -> Path:
+        """Root for persisted artifact files (``Artifact.storage_path`` is relative to this)."""
+        p = os.getenv("ARTIFACT_STORAGE_ROOT")
+        if p:
+            return Path(p).expanduser().resolve()
+        return (self.storage_dir / "artifacts").resolve()
 
     @property
     def db_file(self) -> Path:
@@ -88,6 +97,7 @@ class AppPaths:
             (self.workspaces_dir, 0o700),
             (self.sandboxes_dir,  0o700),
             (self.artifacts_dir,  0o700),
+            (self.artifact_storage_root, 0o700),
         ]
         for path, mode in entries:
             safe_mkdir(path, mode)
@@ -150,15 +160,20 @@ class Settings(BaseSettings):
     agent_space_home: str = str(_ASPACE_HOME)
 
     # Runtime paths — all overridable via env vars; derive from AGENT_SPACE_HOME by default.
-    # instance_root kept for internal compatibility; aliases agent_space_home.
+    # instance_root mirrors agent_space_home for kernel helpers that still read this field.
     instance_root: str = str(_ASPACE_HOME)
+    instance_storage_root: str = str(paths.storage_dir)
+    artifact_storage_root: str = Field(
+        default=str(paths.artifact_storage_root),
+        description="Directory where artifact files are stored; ARTIFACT_STORAGE_ROOT env overrides.",
+    )
     workspace_root: str = str(Path(os.getenv("WORKSPACE_ROOT", str(paths.workspaces_dir))))
     sandbox_root: str = str(Path(os.getenv("SANDBOX_ROOT", str(paths.sandboxes_dir))))
     capabilities_dir: str = str(Path(__file__).parent.parent.parent / "capabilities")
     memory_dir: str = str(Path(__file__).parent.parent.parent / "memory")
 
     # Memory reflector
-    reflector_mode: str = "placeholder"  # "placeholder" | "llm"
+    reflector_mode: str = "pattern"  # "pattern" (deterministic) | "llm"
 
     # Google OAuth
     google_client_id: str = ""

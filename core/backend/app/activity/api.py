@@ -72,7 +72,7 @@ class ActivityOut(BaseModel):
             agent_id=m.agent_id,              # type: ignore[attr-defined]
             source_type=m.source_type,        # type: ignore[attr-defined]
             title=m.title,                    # type: ignore[attr-defined]
-            content=m.content,                # type: ignore[attr-defined]
+            content=m.content or "",          # type: ignore[attr-defined]
             source_run_id=m.source_run_id,    # type: ignore[attr-defined]
             source_task_id=m.source_task_id,  # type: ignore[attr-defined]
             source_session_id=m.source_session_id,  # type: ignore[attr-defined]

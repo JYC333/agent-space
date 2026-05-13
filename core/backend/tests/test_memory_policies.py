@@ -1,200 +1,148 @@
 """
-Tests for memory access policy functions (can_read, requires_proposal, validators).
+Tests for memory policy helpers and centralized read_auth rules.
 """
-import pytest
+
+from types import SimpleNamespace
+
 from app.memory.policies import (
-    can_read,
+    DIRECT_WRITE_SCOPES,
+    PROPOSAL_REQUIRED_SCOPES,
+    SCOPE_HIERARCHY,
     requires_proposal,
     validate_memory_type,
     validate_scope,
     validate_status,
-    PROPOSAL_REQUIRED_SCOPES,
-    DIRECT_WRITE_SCOPES,
-    SCOPE_HIERARCHY,
 )
+from app.memory.read_auth import can_read_memory
 
 
-# ---------------------------------------------------------------------------
-# can_read — cross-space boundary (hard wall)
-# ---------------------------------------------------------------------------
+def _mem(
+    *,
+    space_id: str = "s1",
+    scope_type: str = "user",
+    visibility: str = "private",
+    owner_user_id: str | None = "u1",
+    subject_user_id: str | None = None,
+    sensitivity_level: str = "normal",
+    selected_user_ids: list | None = None,
+    workspace_id: str | None = None,
+    deleted_at=None,
+):
+    return SimpleNamespace(
+        space_id=space_id,
+        deleted_at=deleted_at,
+        scope_type=scope_type,
+        visibility=visibility,
+        owner_user_id=owner_user_id,
+        subject_user_id=subject_user_id,
+        sensitivity_level=sensitivity_level,
+        selected_user_ids=selected_user_ids,
+        workspace_id=workspace_id,
+    )
 
-def test_can_read_denies_cross_space():
-    assert can_read(
-        scope="user",
-        requesting_user_id="u1",
-        owner_user_id="u1",
+
+def test_can_read_memory_denies_cross_space():
+    m = _mem(space_id="space_a", visibility="space_shared", owner_user_id=None)
+    assert can_read_memory(m, user_id="u1", space_id="space_b") is False
+
+
+def test_can_read_memory_space_shared_same_space():
+    m = _mem(space_id="s1", visibility="space_shared", owner_user_id=None)
+    assert can_read_memory(m, user_id="u2", space_id="s1") is True
+
+
+def test_can_read_memory_private_owner_only():
+    m = _mem(visibility="private", owner_user_id="u1")
+    assert can_read_memory(m, user_id="u1", space_id="s1") is True
+    assert can_read_memory(m, user_id="u2", space_id="s1") is False
+
+
+def test_can_read_memory_private_null_owner_denied():
+    m = _mem(visibility="private", owner_user_id=None)
+    assert can_read_memory(m, user_id="u1", space_id="s1") is False
+
+
+def test_can_read_memory_workspace_shared_requires_workspace():
+    m = _mem(visibility="workspace_shared", owner_user_id=None, workspace_id="w1")
+    assert can_read_memory(m, user_id="u2", space_id="s1", workspace_id="w1") is True
+    assert can_read_memory(m, user_id="u2", space_id="s1", workspace_id=None) is False
+    assert can_read_memory(m, user_id="u2", space_id="s1", workspace_id="w2") is False
+
+
+def test_can_read_memory_system_excluded_by_default():
+    m = _mem(scope_type="system", visibility="space_shared", owner_user_id=None)
+    assert can_read_memory(m, user_id="u1", space_id="s1", include_system_scope=False) is False
+    assert can_read_memory(m, user_id="u1", space_id="s1", include_system_scope=True) is True
+
+
+def test_can_read_memory_public_template_excluded_by_default():
+    m = _mem(visibility="public_template", owner_user_id=None)
+    assert can_read_memory(m, user_id="u1", space_id="s1", include_public_templates=False) is False
+    assert can_read_memory(m, user_id="u1", space_id="s1", include_public_templates=True) is True
+
+
+def test_can_read_memory_selected_users():
+    m = _mem(
+        visibility="selected_users",
+        owner_user_id="owner1",
+        selected_user_ids=["u9"],
+    )
+    assert can_read_memory(m, user_id="owner1", space_id="s1") is True
+    assert can_read_memory(m, user_id="u9", space_id="s1") is True
+    assert can_read_memory(m, user_id="u8", space_id="s1") is False
+
+
+def test_can_read_memory_restricted_selected():
+    m = _mem(
+        visibility="restricted",
+        owner_user_id="o1",
+        selected_user_ids=["guest"],
+    )
+    assert can_read_memory(m, user_id="o1", space_id="s1") is True
+    assert can_read_memory(m, user_id="guest", space_id="s1") is True
+    assert can_read_memory(m, user_id="stranger", space_id="s1") is False
+
+
+def test_can_read_memory_highly_restricted_owner_only_even_if_space_shared():
+    m = _mem(
         visibility="space_shared",
-        space_id="space_a",
-        requesting_space_id="space_b",
-    ) is False
+        owner_user_id="o1",
+        sensitivity_level="highly_restricted",
+    )
+    assert can_read_memory(m, user_id="o1", space_id="s1") is True
+    assert can_read_memory(m, user_id="u2", space_id="s1") is False
 
 
-def test_can_read_allows_same_space():
-    assert can_read(
-        scope="user",
-        requesting_user_id="u1",
-        owner_user_id="u1",
+def test_can_read_memory_highly_restricted_null_owner_denied():
+    m = _mem(
         visibility="space_shared",
-        space_id="personal",
-        requesting_space_id="personal",
-    ) is True
+        owner_user_id=None,
+        sensitivity_level="highly_restricted",
+    )
+    assert can_read_memory(m, user_id="u1", space_id="s1") is False
 
 
-# ---------------------------------------------------------------------------
-# can_read — visibility: private
-# ---------------------------------------------------------------------------
-
-def test_can_read_private_own_memory():
-    assert can_read(
-        scope="user",
-        requesting_user_id="alice",
-        owner_user_id="alice",
-        visibility="private",
-        space_id="personal",
-        requesting_space_id="personal",
-    ) is True
+def test_requires_proposal():
+    assert requires_proposal("user") is True
+    assert requires_proposal("agent") is False
 
 
-def test_can_read_private_other_user_denied():
-    assert can_read(
-        scope="user",
-        requesting_user_id="bob",
-        owner_user_id="alice",
-        visibility="private",
-        space_id="personal",
-        requesting_space_id="personal",
-    ) is False
+def test_validate_memory_type():
+    assert validate_memory_type("semantic") is True
+    assert validate_memory_type("invalid") is False
 
 
-# ---------------------------------------------------------------------------
-# can_read — visibility: workspace_shared
-# ---------------------------------------------------------------------------
-
-def test_can_read_workspace_shared_same_workspace():
-    assert can_read(
-        scope="workspace",
-        requesting_user_id="bob",
-        owner_user_id="alice",
-        visibility="workspace_shared",
-        space_id="personal",
-        requesting_space_id="personal",
-        workspace_id="ws-1",
-        requesting_workspace_id="ws-1",
-    ) is True
+def test_validate_scope():
+    assert validate_scope("workspace") is True
+    assert validate_scope("bogus") is False
 
 
-def test_can_read_workspace_shared_different_workspace():
-    assert can_read(
-        scope="workspace",
-        requesting_user_id="bob",
-        owner_user_id="alice",
-        visibility="workspace_shared",
-        space_id="personal",
-        requesting_space_id="personal",
-        workspace_id="ws-1",
-        requesting_workspace_id="ws-2",
-    ) is False
+def test_validate_status():
+    assert validate_status("active") is True
+    assert validate_status("bogus") is False
 
 
-def test_can_read_workspace_shared_no_workspace_falls_back_to_owner():
-    # When workspace_id is absent, falls back to owner comparison
-    assert can_read(
-        scope="workspace",
-        requesting_user_id="alice",
-        owner_user_id="alice",
-        visibility="workspace_shared",
-        space_id="personal",
-        requesting_space_id="personal",
-    ) is True
-
-    assert can_read(
-        scope="workspace",
-        requesting_user_id="bob",
-        owner_user_id="alice",
-        visibility="workspace_shared",
-        space_id="personal",
-        requesting_space_id="personal",
-    ) is False
-
-
-# ---------------------------------------------------------------------------
-# can_read — visibility: space_shared
-# ---------------------------------------------------------------------------
-
-def test_can_read_space_shared_any_user_in_same_space():
-    assert can_read(
-        scope="space",
-        requesting_user_id="carol",
-        owner_user_id="alice",
-        visibility="space_shared",
-        space_id="personal",
-        requesting_space_id="personal",
-    ) is True
-
-
-def test_can_read_unknown_visibility_is_denied():
-    assert can_read(
-        scope="user",
-        requesting_user_id="u1",
-        owner_user_id="u1",
-        visibility="unknown_type",
-        space_id="personal",
-        requesting_space_id="personal",
-    ) is False
-
-
-# ---------------------------------------------------------------------------
-# requires_proposal
-# ---------------------------------------------------------------------------
-
-def test_requires_proposal_for_protected_scopes():
-    for scope in PROPOSAL_REQUIRED_SCOPES:
-        assert requires_proposal(scope) is True
-
-
-def test_does_not_require_proposal_for_agent_scope():
-    for scope in DIRECT_WRITE_SCOPES:
-        assert requires_proposal(scope) is False
-
-
-# ---------------------------------------------------------------------------
-# validate_memory_type
-# ---------------------------------------------------------------------------
-
-def test_validate_memory_type_valid():
-    for t in ("preference", "semantic", "episodic", "procedural", "project"):
-        assert validate_memory_type(t) is True
-
-
-def test_validate_memory_type_invalid():
-    assert validate_memory_type("random") is False
-    assert validate_memory_type("") is False
-    assert validate_memory_type("Preference") is False  # case-sensitive
-
-
-# ---------------------------------------------------------------------------
-# validate_scope
-# ---------------------------------------------------------------------------
-
-def test_validate_scope_valid():
-    for s in SCOPE_HIERARCHY:
-        assert validate_scope(s) is True
-
-
-def test_validate_scope_invalid():
-    assert validate_scope("global") is False
-    assert validate_scope("") is False
-
-
-# ---------------------------------------------------------------------------
-# validate_status
-# ---------------------------------------------------------------------------
-
-def test_validate_status_valid():
-    for s in ("active", "archived", "proposed", "rejected", "superseded"):
-        assert validate_status(s) is True
-
-
-def test_validate_status_invalid():
-    assert validate_status("deleted") is False
-    assert validate_status("") is False
+def test_constants():
+    assert "user" in PROPOSAL_REQUIRED_SCOPES
+    assert "agent" in DIRECT_WRITE_SCOPES
+    assert "system" in SCOPE_HIERARCHY

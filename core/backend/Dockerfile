@@ -33,6 +33,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
+COPY alembic.ini ./alembic.ini
+COPY migrations/ ./migrations/
 
 # Non-root user
 RUN useradd -m -u 1000 agentspace && chown -R agentspace /app

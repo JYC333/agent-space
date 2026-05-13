@@ -1,13 +1,13 @@
 from __future__ import annotations
 """
-SessionService — manage sessions, messages, and session summaries.
+SessionService — manage chat sessions and messages.
 """
 
 from datetime import datetime, UTC
 from ulid import ULID
 from sqlalchemy.orm import Session as DBSession
 
-from ..models import Session, Message, SessionSummary
+from ..models import Session, Message
 from ..schemas import SessionCreate, MessageCreate
 from ..config import settings
 
@@ -38,7 +38,7 @@ class SessionService:
     def get_session(self, session_id: str) -> Session | None:
         return (
             self.db.query(Session)
-            .filter(Session.id == session_id, Session.deleted_at.is_(None))
+            .filter(Session.id == session_id, Session.status == "active")
             .first()
         )
 
@@ -47,7 +47,7 @@ class SessionService:
         return self.db.query(_func.count(Session.id)).filter(
             Session.space_id == space_id,
             Session.user_id == user_id,
-            Session.deleted_at.is_(None),
+            Session.status == "active",
         ).scalar() or 0
 
     def list_sessions(
@@ -62,7 +62,7 @@ class SessionService:
             .filter(
                 Session.space_id == space_id,
                 Session.user_id == user_id,
-                Session.deleted_at.is_(None),
+                Session.status == "active",
             )
             .order_by(Session.updated_at.desc())
             .offset(offset)
@@ -110,22 +110,3 @@ class SessionService:
             .limit(limit)
             .all()
         )
-
-    def create_summary(
-        self,
-        session_id: str,
-        space_id: str,
-        user_id: str,
-        summary: str,
-    ) -> SessionSummary:
-        s = SessionSummary(
-            id=_new_id(),
-            session_id=session_id,
-            space_id=space_id,
-            user_id=user_id,
-            summary=summary,
-        )
-        self.db.add(s)
-        self.db.commit()
-        self.db.refresh(s)
-        return s

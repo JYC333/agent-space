@@ -40,66 +40,237 @@ def list_registered() -> list[str]:
     return list(_REGISTRY.keys())
 
 
-# ---------------------------------------------------------------------------
-# Built-in handler: agent_run
+# Built-in handler: agent_run (routes to RunExecutionService)
 #
-# Payload fields:
-#   run_id            — pre-created AgentRun ID (status=pending)
-#   adapter_type      — e.g. "echo", "claude_code"
-#   prompt            — instruction text
-#   context           — context snapshot dict
-#   workspace_path    — optional local path
-#   timeout           — seconds, default 300
-#   risk_level        — "low" | "medium" | "high" | "critical", default "medium"
-#   cli_adapter_config_id — optional CLIAdapterConfig ID
-#   task_id           — optional Task ID; when set, task.status is updated after run
+# This handler is **infrastructure only**. The Job row is queue plumbing,
+# not a product Task. The handler routes intents to the shared
+# ``RunExecutionService`` (adapters from policy / ``RuntimeAdapter``).
+# Removed ``payload.runtime`` overrides are rejected **before** execution: the
+# handler raises ``ValueError`` so the job fails with ``runtime_removed`` semantics
+# and no Run row is mutated for that path.
+#
+#   1. payload.run_id  — execute an existing queued Run.
+#   2. payload.task_id — load the product Task, create a queued Run via
+#                        ``TaskService.create_queued_run_for_task`` (which
+#                        also creates a canonical ``TaskRun`` link), then
+#                        execute that Run.
+#   3. payload.agent_id — create a fresh Run via ``RunService.create_run``,
+#                         then execute it.
+#
+# After execution the handler writes ``{"run_id", "status"}`` (plus a small
+# error snippet on failure) to ``job.result_json`` and lets the queue
+# transition the Job. If execution raises, the handler re-raises so the
+# queue marks the Job ``failed`` (with retry semantics governed by the
+# Job's ``max_attempts``).
+#
+# Not reintroduced:
+#   - POST /api/v1/tasks/{task_id}/run singular route
+#   - job_type="product_task" as product task behaviour
+#   - Task = Job modelling
+#   - monolithic execute_pending_run helpers on the runner module
 # ---------------------------------------------------------------------------
+
+
+def _resolve_identity(job, payload: dict) -> tuple[str, str | None]:
+    space_id = payload.get("space_id") or job.space_id
+    user_id = payload.get("user_id") or job.user_id
+    return space_id, user_id
+
+
+def _reject_removed_job_runtime(payload: dict) -> None:
+    from ..runs.removed_runtime_token import is_obsolete_runtime_override_token
+
+    rt = payload.get("runtime")
+    if rt is None or rt == "":
+        return
+    if is_obsolete_runtime_override_token(rt):
+        raise ValueError(
+            "runtime_removed: removed runtime override in job payload; "
+            "omit payload.runtime or use configured adapters."
+        )
+
+
+def _job_runtime(payload: dict) -> str | None:
+    runtime = payload.get("runtime")
+    if runtime == "":
+        return None
+    return runtime
+
+
+def _execute_existing_run(job, payload: dict, run_id: str) -> dict:
+    from ..db import SessionLocal
+    from ..runs.execution import RunExecutionService
+
+    space_id, _ = _resolve_identity(job, payload)
+    db = SessionLocal()
+    try:
+        result = RunExecutionService(db).execute_run(
+            run_id,
+            space_id=space_id,
+            runtime=_job_runtime(payload),
+            simulate_failure=bool(payload.get("simulate_failure")),
+        )
+        from ..models import Run
+
+        run = db.query(Run).filter(Run.id == run_id).first()
+        out: dict = {"run_id": run_id, "status": run.status if run else "unknown"}
+        if run and run.error_json and isinstance(run.error_json, dict):
+            ec = run.error_json.get("error_code")
+            if ec:
+                out["error_code"] = ec
+            et = run.error_json.get("error_text")
+            if et:
+                out["error_text"] = str(et)[:2000]
+        if result and not result.success and result.error:
+            out["error"] = result.error[:1000]
+        if result and result.error_code:
+            out["error_code"] = result.error_code
+        return out
+    finally:
+        db.close()
+
+
+def _create_and_execute_task_run(job, payload: dict, task_id: str) -> dict:
+    from ..db import SessionLocal
+    from ..runs.execution import RunExecutionService
+    from ..schemas import TaskRunCreateBody
+    from ..tasks.service import TaskService
+
+    space_id, user_id = _resolve_identity(job, payload)
+    if user_id is None:
+        from ..config import settings as _settings
+
+        user_id = _settings.default_user_id
+    db = SessionLocal()
+    try:
+        body = TaskRunCreateBody(
+            agent_id=payload.get("agent_id"),
+            mode=payload.get("mode") or "live",
+            run_type=payload.get("run_type") or "agent",
+            trigger_origin=payload.get("trigger_origin") or "job",
+            session_id=payload.get("session_id"),
+            workspace_id=payload.get("workspace_id"),
+            prompt=payload.get("prompt"),
+            instruction=payload.get("instruction"),
+            set_task_in_progress=bool(payload.get("set_task_in_progress", True)),
+            parent_run_id=payload.get("parent_run_id"),
+            instructed_by_agent_id=payload.get("instructed_by_agent_id"),
+            adapter_type=payload.get("adapter_type"),
+        )
+        _link, run = TaskService(db).create_queued_run_for_task(
+            task_id, space_id, user_id, body
+        )
+        run_id = run.id
+        result = RunExecutionService(db).execute_run(
+            run_id,
+            space_id=space_id,
+            runtime=_job_runtime(payload),
+            simulate_failure=bool(payload.get("simulate_failure")),
+        )
+        from ..models import Run
+
+        run = db.query(Run).filter(Run.id == run_id).first()
+        out: dict = {"run_id": run_id, "status": run.status if run else "unknown"}
+        if run and run.error_json and isinstance(run.error_json, dict):
+            ec = run.error_json.get("error_code")
+            if ec:
+                out["error_code"] = ec
+            et = run.error_json.get("error_text")
+            if et:
+                out["error_text"] = str(et)[:2000]
+        if result and not result.success and result.error:
+            out["error"] = result.error[:1000]
+        if result and result.error_code:
+            out["error_code"] = result.error_code
+        return out
+    finally:
+        db.close()
+
+
+def _create_and_execute_agent_run(job, payload: dict, agent_id: str) -> dict:
+    from ..db import SessionLocal
+    from ..runs.execution import RunExecutionService
+    from ..runs.run_service import RunService
+    from ..schemas import RunCreate
+
+    space_id, user_id = _resolve_identity(job, payload)
+    if user_id is None:
+        from ..config import settings as _settings
+
+        user_id = _settings.default_user_id
+    db = SessionLocal()
+    try:
+        run = RunService(db).create_run(
+            agent_id=agent_id,
+            data=RunCreate(
+                mode=payload.get("mode") or "live",
+                run_type=payload.get("run_type") or "agent",
+                trigger_origin=payload.get("trigger_origin") or "job",
+                session_id=payload.get("session_id"),
+                workspace_id=payload.get("workspace_id"),
+                prompt=payload.get("prompt"),
+                instruction=payload.get("instruction"),
+                parent_run_id=payload.get("parent_run_id"),
+                instructed_by_agent_id=payload.get("instructed_by_agent_id"),
+                adapter_type=payload.get("adapter_type"),
+            ),
+            space_id=space_id,
+            user_id=user_id,
+        )
+        run_id = run.id
+        result = RunExecutionService(db).execute_run(
+            run_id,
+            space_id=space_id,
+            runtime=_job_runtime(payload),
+            simulate_failure=bool(payload.get("simulate_failure")),
+        )
+        from ..models import Run
+
+        run = db.query(Run).filter(Run.id == run_id).first()
+        out: dict = {"run_id": run_id, "status": run.status if run else "unknown"}
+        if run and run.error_json and isinstance(run.error_json, dict):
+            ec = run.error_json.get("error_code")
+            if ec:
+                out["error_code"] = ec
+            et = run.error_json.get("error_text")
+            if et:
+                out["error_text"] = str(et)[:2000]
+        if result and not result.success and result.error:
+            out["error"] = result.error[:1000]
+        if result and result.error_code:
+            out["error_code"] = result.error_code
+        return out
+    finally:
+        db.close()
+
 
 @register_handler("agent_run")
 def handle_agent_run(job) -> dict | None:
-    from ..agents.runner import execute_pending_run
+    """Drive a Run to completion through ``RunExecutionService``.
 
+    Behaviour summary (see module docstring for full notes):
+
+    - payload.run_id → execute that queued Run.
+    - payload.task_id → create+link a Run for the product Task, then execute.
+    - payload.agent_id → create a Run, then execute.
+
+    Returns ``{"run_id", "status"}`` (plus optional ``error``) in
+    ``job.result_json``. Re-raises on internal errors so the queue marks
+    the Job as failed (with retry per ``max_attempts``).
+    """
     payload = job.payload or {}
+    _reject_removed_job_runtime(payload)
     run_id = payload.get("run_id")
-    if not run_id:
-        raise ValueError("agent_run handler requires payload.run_id")
-
-    execute_pending_run(
-        run_id=run_id,
-        adapter_type=payload.get("adapter_type", "echo"),
-        prompt=payload.get("prompt", ""),
-        context=payload.get("context", {}),
-        workspace_path=payload.get("workspace_path"),
-        timeout=payload.get("timeout", 300),
-        risk_level=payload.get("risk_level", "medium"),
-        cli_adapter_config_id=payload.get("cli_adapter_config_id"),
-    )
-
-    # Optionally update the parent Task's status
     task_id = payload.get("task_id")
+    agent_id = payload.get("agent_id")
+
+    if run_id:
+        return _execute_existing_run(job, payload, run_id)
     if task_id:
-        _sync_task_status(task_id, run_id)
+        return _create_and_execute_task_run(job, payload, task_id)
+    if agent_id:
+        return _create_and_execute_agent_run(job, payload, agent_id)
 
-    return {"run_id": run_id}
-
-
-def _sync_task_status(task_id: str, run_id: str) -> None:
-    from datetime import datetime, UTC
-    from ..db import SessionLocal
-    from ..models import AgentRun, Task
-
-    db = SessionLocal()
-    try:
-        run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
-        task = db.query(Task).filter(Task.id == task_id).first()
-        if run and task:
-            task.status = "completed" if run.status == "completed" else "failed"
-            task.result = run.output
-            task.error = run.error
-            task.updated_at = datetime.now(UTC)
-            db.commit()
-    except Exception as exc:
-        log.warning("Failed to sync task %s status: %s", task_id, exc)
-        db.rollback()
-    finally:
-        db.close()
+    raise ValueError(
+        "agent_run handler requires payload.run_id, payload.task_id, or payload.agent_id"
+    )

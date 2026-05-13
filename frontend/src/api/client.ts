@@ -1,12 +1,16 @@
 import type {
-  Memory, MemoryProposal, Session, Message, Task, AgentRun,
+  Memory, MemoryProposal, Session, Message, Task,
   Capability, ContextPackage, Feature, Workspace, Page,
   CapabilitiesReloadResult, ReflectResult, ApiError,
   CLIAdapterConfig, CLIStatus, BuiltinAdapter,
   CredentialLoginMethod, CredentialStatus, LoginEvent,
   CurrentUser, SpaceWithMembership, SpaceMember, SpaceInvitationOut,
-  Job, JobEvent, ActivityRecord,
+  Job, JobEvent, ActivityInboxRecord,
+  Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
+  TaskArtifact, TaskProposal, Artifact, Proposal, AgentOut, RunCreateBody,
+  ActivityRecord,
   FileNode, FileContent, GitStatus, RuntimeInfo, ConsoleSession, WorkspaceInfo,
+  HomeSummaryOut,
 } from '../types/api'
 
 const BASE = '/api/v1'
@@ -79,8 +83,6 @@ export const memoryApi = {
   search: (data: { query: string; scope?: string; type?: string }) =>
     post<Memory[]>('/memory/search', { space_id: _spaceId, user_id: _userId, ...data }),
 
-  proposals: (status = 'pending') =>
-    get<Page<MemoryProposal>>(`/memory/proposals?status=${status}`),
   accept: (id: string) =>
     post<Memory>(`/memory/proposals/${id}/accept`),
   reject: (id: string) =>
@@ -99,16 +101,138 @@ export const sessionsApi = {
   reflect:    (id: string)                          => post<ReflectResult>(`/sessions/${id}/reflect`),
 }
 
-// ── Tasks ─────────────────────────────────────────────────────────────────
+// ── Boards (task surfaces) ────────────────────────────────────────────────
+export const boardsApi = {
+  list:   (params: Record<string, string> = {}) =>
+    get<Page<Board>>('/boards?' + new URLSearchParams(params)),
+  create: (body: Partial<Board> & { name: string }) =>
+    post<Board>('/boards', body),
+  get:    (id: string) => get<Board>(`/boards/${id}`),
+  update: (id: string, body: Record<string, unknown>) =>
+    patch<Board>(`/boards/${id}`, body),
+  tasks:  (boardId: string, params: Record<string, string> = {}) =>
+    get<Page<Task>>(`/boards/${boardId}/tasks?` + new URLSearchParams(params)),
+}
+
+// ── Tasks (product work items) ─────────────────────────────────────────────
 export const tasksApi = {
   list:   (params: Record<string, string> = {}) =>
     get<Page<Task>>('/tasks?' + new URLSearchParams(params)),
-  create: (data: Partial<Task>) =>
-    post<Task>('/tasks', { space_id: _spaceId, user_id: _userId, ...data }),
-  get:    (id: string)                   => get<Task>(`/tasks/${id}`),
-  // Returns a Job (202 Accepted) — use job.payload.run_id to track the AgentRun
-  run:    (id: string, adapter: string)  => post<Job>(`/tasks/${id}/run?adapter_type=${adapter}`),
-  runs:   (id: string)                   => get<AgentRun[]>(`/tasks/${id}/runs`),
+  create: (data: Record<string, unknown>) =>
+    post<Task>('/tasks', data),
+  get:    (id: string) => get<Task>(`/tasks/${id}`),
+  update: (id: string, data: Record<string, unknown>) =>
+    patch<Task>(`/tasks/${id}`, data),
+  createRun: (taskId: string, body: TaskRunCreateBody = {}) =>
+    post<Run>(`/tasks/${taskId}/runs`, body),
+  runs:   (taskId: string, params: Record<string, string> = {}) =>
+    get<Page<TaskRunListItem>>(`/tasks/${taskId}/runs?` + new URLSearchParams(params)),
+  artifacts: (taskId: string, params: Record<string, string> = {}) =>
+    get<Page<TaskArtifact>>(`/tasks/${taskId}/artifacts?` + new URLSearchParams(params)),
+  proposals: (taskId: string, params: Record<string, string> = {}) =>
+    get<Page<TaskProposal>>(`/tasks/${taskId}/proposals?` + new URLSearchParams(params)),
+}
+
+// ── Home (Today Command Center summary) ───────────────────────────────────
+export const homeApi = {
+  summary: (params: Record<string, string> = {}) =>
+    get<HomeSummaryOut>('/home/summary?' + new URLSearchParams(params)),
+}
+
+// ── Runs (canonical API) ──────────────────────────────────────────────────
+export const runsApi = {
+  list: (params: Record<string, string> = {}) =>
+    get<Run[]>('/runs?' + new URLSearchParams(params)),
+  get:    (id: string) => get<Run>(`/runs/${id}`),
+  status: (id: string) => get<RunStatusOut>(`/runs/${id}/status`),
+  stop:   (id: string) => patch<Record<string, unknown>>(`/runs/${id}/stop`),
+  executeQueuedRun: (id: string) => post<Run>(`/runs/${id}/execute`),
+  activities: (id: string, params: Record<string, string> = {}) =>
+    get<Page<ActivityRecord>>(`/runs/${id}/activities?` + new URLSearchParams(params)),
+  artifacts: (id: string, params: Record<string, string> = {}) =>
+    get<Page<Artifact>>(`/runs/${id}/artifacts?` + new URLSearchParams(params)),
+  proposals: (id: string, params: Record<string, string> = {}) =>
+    get<Page<Proposal>>(`/runs/${id}/proposals?` + new URLSearchParams(params)),
+}
+
+// ── Artifacts ─────────────────────────────────────────────────────────────
+export const artifactsApi = {
+  list: (params: Record<string, string> = {}) =>
+    get<Page<Artifact>>('/artifacts?' + new URLSearchParams(params)),
+  get: (id: string) => get<Artifact>(`/artifacts/${id}`),
+  export: (id: string) => downloadArtifactExport(id),
+}
+
+async function downloadArtifactExport(artifactId: string): Promise<void> {
+  const headers: Record<string, string> = {}
+  if (_apiKey) headers['Authorization'] = `Bearer ${_apiKey}`
+  const sep = '/artifacts/' + artifactId + '/export'
+  const url = BASE + sep + (sep.includes('?') ? '&' : '?') + spaceParams()
+  const r = await fetch(url, { method: 'GET', headers })
+  if (r.status === 401) window.dispatchEvent(new CustomEvent('auth:required'))
+  if (r.status === 404) throw new Error('Artifact not found or not exportable')
+  if (!r.ok) {
+    let msg = `${r.status} ${r.statusText}`
+    try {
+      const err = await r.json() as ApiError
+      msg = err.message || msg
+    } catch {
+      const text = await r.text().catch(() => '')
+      if (text) msg = text
+    }
+    throw new Error(msg)
+  }
+  const cd = r.headers.get('Content-Disposition')
+  let filename = 'artifact'
+  if (cd) {
+    const m = /filename="([^"]+)"/.exec(cd) ?? /filename=([^;]+)/.exec(cd)
+    if (m) filename = m[1].trim()
+  }
+  const blob = await r.blob()
+  const href = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = href
+  a.download = filename
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(href)
+}
+
+// ── Proposals (canonical list) ────────────────────────────────────────────
+export const proposalsApi = {
+  list: (params: {
+    status?: string
+    type?: string
+    proposal_type?: string
+    urgency?: string
+    expired?: boolean
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    if (params.type !== undefined) q.type = params.type
+    if (params.proposal_type !== undefined) q.type = params.proposal_type
+    if (params.urgency !== undefined) q.urgency = params.urgency
+    if (params.expired !== undefined) q.expired = String(params.expired)
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<Proposal>>('/proposals?' + new URLSearchParams(q))
+  },
+  get: (id: string) => get<Proposal>(`/proposals/${id}`),
+}
+
+// ── Agents ────────────────────────────────────────────────────────────────
+export const agentsApi = {
+  list: (params: Record<string, string> = {}) =>
+    get<AgentOut[]>('/agents?' + new URLSearchParams(params)),
+  createRun: (agentId: string, body: RunCreateBody = {}) =>
+    post<Run>(`/agents/${agentId}/runs`, body),
+  listRuns:       (limit = 50)        => get<Run[]>(`/agents/runs?limit=${limit}`),
+  getRun:         (runId: string)     => get<Run>(`/agents/runs/${runId}`),
+  listRunsForAgent:  (agentId: string)   => get<Run[]>(`/agents/${agentId}/runs`),
 }
 
 // ── Workspaces ────────────────────────────────────────────────────────────
@@ -134,13 +258,6 @@ export const capabilitiesApi = {
 export const contextApi = {
   build: (data: { workspace_id?: string | null; session_id?: string | null; capability_id?: string | null; query?: string | null }) =>
     post<ContextPackage>('/context/build', data),
-}
-
-// ── Agents ────────────────────────────────────────────────────────────────
-export const agentsApi = {
-  listRuns:       (limit = 50)        => get<AgentRun[]>(`/agents/runs?limit=${limit}`),
-  getRun:         (runId: string)     => get<AgentRun>(`/agents/runs/${runId}`),
-  listAgentRuns:  (agentId: string)   => get<AgentRun[]>(`/agents/${agentId}/runs`),
 }
 
 // ── CLI Adapters ──────────────────────────────────────────────────────────
@@ -213,12 +330,12 @@ export const jobsApi = {
 // ── Activity ──────────────────────────────────────────────────────────────
 export const activityApi = {
   list:   (params: Record<string, string> = {}) =>
-    get<ActivityRecord[]>('/activity?' + new URLSearchParams(params)),
+    get<ActivityInboxRecord[]>('/activity?' + new URLSearchParams(params)),
   create: (data: { source_type: string; content: string; title?: string; workspace_id?: string; metadata_json?: Record<string, unknown> }) =>
-    post<ActivityRecord>('/activity', { space_id: _spaceId, user_id: _userId, ...data }),
-  get:    (id: string) => get<ActivityRecord>(`/activity/${id}`),
-  process:(id: string) => patch<ActivityRecord>(`/activity/${id}/process`),
-  archive:(id: string) => patch<ActivityRecord>(`/activity/${id}/archive`),
+    post<ActivityInboxRecord>('/activity', { space_id: _spaceId, user_id: _userId, ...data }),
+  get:    (id: string) => get<ActivityInboxRecord>(`/activity/${id}`),
+  process:(id: string) => patch<ActivityInboxRecord>(`/activity/${id}/process`),
+  archive:(id: string) => patch<ActivityInboxRecord>(`/activity/${id}/archive`),
   createProposals: (id: string, proposals: { proposed_title: string; proposed_content: string; memory_type: string; target_scope: string; target_namespace: string; rationale: string }[]) =>
     post<MemoryProposal[]>(`/activity/${id}/proposals`, { proposals }),
 }

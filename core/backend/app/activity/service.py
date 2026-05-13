@@ -14,9 +14,12 @@ from datetime import datetime, UTC
 from typing import Optional
 
 from ulid import ULID
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from ..models import ActivityRecord, MemoryProposal
+from ..models import ActivityRecord, Proposal, Run
+from ..param_binding import duplicate_mapper
+from ..memory.proposals import build_memory_update_proposal
 
 
 def _new_id() -> str:
@@ -47,6 +50,7 @@ class ActivityService:
         source_url: str | None = None,
         metadata_json: dict | None = None,
     ) -> ActivityRecord:
+        now = datetime.now(UTC)
         record = ActivityRecord(
             id=_new_id(),
             space_id=space_id,
@@ -62,6 +66,7 @@ class ActivityService:
             source_url=source_url,
             status="raw",
             metadata_json=metadata_json,
+            updated_at=now,
         )
         self.db.add(record)
         self.db.commit()
@@ -95,7 +100,20 @@ class ActivityService:
     ) -> list[ActivityRecord]:
         q = self.db.query(ActivityRecord).filter(ActivityRecord.space_id == space_id)
         if user_id:
-            q = q.filter(ActivityRecord.user_id == user_id)
+            run_for_instructor = duplicate_mapper(Run)
+            visible = or_(
+                ActivityRecord.user_id == user_id,
+                run_for_instructor.instructed_by_user_id == user_id,
+            )
+            q = (
+                q.outerjoin(
+                    run_for_instructor,
+                    and_(
+                        run_for_instructor.id == ActivityRecord.source_run_id,
+                        run_for_instructor.space_id == space_id,
+                    ),
+                ).filter(visible)
+            )
         if workspace_id:
             q = q.filter(ActivityRecord.workspace_id == workspace_id)
         if source_type:
@@ -139,7 +157,7 @@ class ActivityService:
         space_id: str,
         proposals: list[dict],
         user_id: str,
-    ) -> list[MemoryProposal]:
+    ) -> list[Proposal]:
         """
         Create memory proposals sourced from an activity record.
         Marks the record as proposals_generated on success.
@@ -152,28 +170,28 @@ class ActivityService:
           source_evidence, risk_level, target_visibility
         """
         record = self._require(activity_id, space_id)
-        created: list[MemoryProposal] = []
+
+        created: list[Proposal] = []
 
         for p in proposals:
-            proposal = MemoryProposal(
-                id=_new_id(),
-                space_id=space_id,
-                user_id=user_id,
+            proposal = build_memory_update_proposal(
+                _new_id(),
+                space_id,
+                user_id,
                 workspace_id=record.workspace_id,
-                source_activity_id=activity_id,
-                source_run_id=record.source_run_id,
-                source_task_id=record.source_task_id,
-                source_session_id=record.source_session_id,
-                target_scope=p["target_scope"],
-                target_namespace=p["target_namespace"],
-                target_visibility=p.get("target_visibility", "private"),
-                memory_type=p["memory_type"],
                 proposed_title=p["proposed_title"],
                 proposed_content=p["proposed_content"],
                 rationale=p["rationale"],
+                memory_type=p["memory_type"],
+                target_scope=p["target_scope"],
+                target_namespace=p["target_namespace"],
+                source_session_id=record.source_session_id,
+                source_task_id=record.source_task_id,
+                source_run_id=record.source_run_id,
+                source_activity_id=activity_id,
                 source_evidence=p.get("source_evidence"),
+                target_visibility=p.get("target_visibility", "private"),
                 risk_level=p.get("risk_level", "low"),
-                status="pending",
             )
             self.db.add(proposal)
             created.append(proposal)

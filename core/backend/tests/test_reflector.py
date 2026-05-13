@@ -1,5 +1,5 @@
 """
-Tests for MemoryReflector — placeholder and LLM modes.
+Tests for MemoryReflector — deterministic pattern mode and LLM mode.
 """
 import json
 import pytest
@@ -58,7 +58,7 @@ def test_extract_title_first_sentence():
 
 
 # ---------------------------------------------------------------------------
-# Placeholder mode (no LLM, no API key needed)
+# Pattern mode (no LLM, no API key needed)
 # ---------------------------------------------------------------------------
 
 def _seed_messages(db, session_id: str, contents: list[str]) -> list[Message]:
@@ -84,8 +84,8 @@ def _seed_messages(db, session_id: str, contents: list[str]) -> list[Message]:
     return msgs
 
 
-def test_placeholder_mode_extracts_preference(db, monkeypatch):
-    monkeypatch.setattr("app.config.settings.reflector_mode", "placeholder")
+def test_pattern_mode_extracts_preference(db, monkeypatch):
+    monkeypatch.setattr("app.config.settings.reflector_mode", "pattern")
     _seed_messages(db, "session-1", ["I prefer tabs over spaces."])
     reflector = MemoryReflector(db)
     proposals = reflector.reflect("session-1", SPACE, USER)
@@ -93,16 +93,16 @@ def test_placeholder_mode_extracts_preference(db, monkeypatch):
     assert proposals[0].memory_type == "preference"
 
 
-def test_placeholder_mode_ignores_uninteresting(db, monkeypatch):
-    monkeypatch.setattr("app.config.settings.reflector_mode", "placeholder")
+def test_pattern_mode_ignores_uninteresting(db, monkeypatch):
+    monkeypatch.setattr("app.config.settings.reflector_mode", "pattern")
     _seed_messages(db, "session-2", ["Hello!", "How are you?", "OK bye."])
     reflector = MemoryReflector(db)
     proposals = reflector.reflect("session-2", SPACE, USER)
     assert proposals == []
 
 
-def test_placeholder_mode_deduplicates_titles(db, monkeypatch):
-    monkeypatch.setattr("app.config.settings.reflector_mode", "placeholder")
+def test_pattern_mode_deduplicates_titles(db, monkeypatch):
+    monkeypatch.setattr("app.config.settings.reflector_mode", "pattern")
     # Both messages produce the same extracted title ("I prefer Python over Java")
     # because _extract_title splits on sentence boundaries.
     _seed_messages(db, "session-3", [
@@ -114,8 +114,8 @@ def test_placeholder_mode_deduplicates_titles(db, monkeypatch):
     assert len(proposals) == 1
 
 
-def test_placeholder_mode_multiple_types(db, monkeypatch):
-    monkeypatch.setattr("app.config.settings.reflector_mode", "placeholder")
+def test_pattern_mode_multiple_types(db, monkeypatch):
+    monkeypatch.setattr("app.config.settings.reflector_mode", "pattern")
     _seed_messages(db, "session-4", [
         "I prefer vim over emacs.",
         "My goal is to ship by Q3.",
@@ -129,8 +129,8 @@ def test_placeholder_mode_multiple_types(db, monkeypatch):
     assert "semantic" in types
 
 
-def test_placeholder_mode_only_processes_user_messages(db, monkeypatch):
-    monkeypatch.setattr("app.config.settings.reflector_mode", "placeholder")
+def test_pattern_mode_only_processes_user_messages(db, monkeypatch):
+    monkeypatch.setattr("app.config.settings.reflector_mode", "pattern")
     from app.models import Session as ChatSession
     db.add(ChatSession(id="session-5", space_id=SPACE, user_id=USER))
     db.commit()
@@ -151,8 +151,8 @@ def test_placeholder_mode_only_processes_user_messages(db, monkeypatch):
     assert proposals == []
 
 
-def test_placeholder_mode_empty_session(db, monkeypatch):
-    monkeypatch.setattr("app.config.settings.reflector_mode", "placeholder")
+def test_pattern_mode_empty_session(db, monkeypatch):
+    monkeypatch.setattr("app.config.settings.reflector_mode", "pattern")
     reflector = MemoryReflector(db)
     proposals = reflector.reflect("session-empty", SPACE, USER)
     assert proposals == []
@@ -220,7 +220,7 @@ def test_llm_mode_handles_empty_response(db, monkeypatch):
     assert proposals == []
 
 
-def test_llm_mode_falls_back_to_placeholder_on_bad_json(db, monkeypatch):
+def test_llm_mode_falls_back_to_empty_on_bad_json(db, monkeypatch):
     monkeypatch.setattr("app.config.settings.reflector_mode", "llm")
     monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-test")
 
@@ -244,14 +244,14 @@ def test_llm_mode_falls_back_to_placeholder_on_bad_json(db, monkeypatch):
     assert proposals == []
 
 
-def test_llm_mode_falls_back_to_placeholder_without_api_key(db, monkeypatch):
+def test_llm_mode_falls_back_to_pattern_without_api_key(db, monkeypatch):
     monkeypatch.setattr("app.config.settings.reflector_mode", "llm")
     monkeypatch.setattr("app.config.settings.anthropic_api_key", "")
 
     _seed_messages(db, "session-llm-4", ["I prefer dark mode."])
 
     reflector = MemoryReflector(db)
-    # No key → falls back to placeholder
+    # No key → deterministic pattern path
     proposals = reflector.reflect("session-llm-4", SPACE, USER)
     assert len(proposals) == 1
 
@@ -266,5 +266,5 @@ def test_llm_mode_falls_back_when_import_fails(db, monkeypatch):
 
     reflector = MemoryReflector(db)
     proposals = reflector.reflect("session-llm-5", SPACE, USER)
-    # Falls back to placeholder
+    # Import failure → deterministic pattern path
     assert len(proposals) == 1

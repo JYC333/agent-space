@@ -50,7 +50,16 @@ export type ProposalStatus   = 'pending' | 'accepted' | 'rejected' | 'needs_chan
 export type ActivityStatus     = 'raw' | 'processed' | 'proposals_generated' | 'archived'
 export type ActivitySourceType = 'user_input' | 'imported_chat' | 'web_capture' | 'file_import' | 'agent_run' | 'task_log' | 'manual'
 export type SessionStatus    = 'active' | 'closed'
-export type RunStatus        = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+/** Canonical run lifecycle (Run API). */
+export type RunLifecycleStatus =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'degraded'
+  | 'waiting_for_review'
+
 export type MessageRole      = 'user' | 'assistant' | 'system' | 'tool'
 export type WorkspaceStatus  = 'active' | 'archived'
 export type WorkspaceType    = 'project' | 'repo' | 'knowledge_base' | 'personal' | 'team'
@@ -240,7 +249,8 @@ export interface MemoryProposal {
   decided_at: string | null
 }
 
-export interface ActivityRecord {
+/** Activity inbox (`GET /activity`) — distinct from run-scoped activity records. */
+export interface ActivityInboxRecord {
   id: string
   space_id: string
   user_id: string | null
@@ -257,6 +267,21 @@ export interface ActivityRecord {
   metadata_json: Record<string, unknown> | null
   created_at: string
   updated_at: string
+}
+
+/** Run timeline row (`GET /runs/{id}/activities`). */
+export interface ActivityRecord {
+  id: string
+  space_id: string
+  source_run_id: string | null
+  session_id: string | null
+  user_id: string | null
+  activity_type: string
+  title: string | null
+  content: string | null
+  payload_json: Record<string, unknown>
+  occurred_at: string
+  created_at: string
 }
 
 export interface Session {
@@ -281,50 +306,263 @@ export interface Message {
   created_at: string
 }
 
+/** Product task board item (`TaskOut`). */
 export interface Task {
   id: string
   space_id: string
-  user_id: string
   workspace_id: string | null
-  session_id: string | null
+  board_id: string | null
+  column_id: string | null
+  parent_task_id: string | null
   title: string
   description: string | null
-  capability_id: string | null
+  task_type: string
   status: string
-  result: string | null
-  error: string | null
+  priority: string
+  risk_level: string
+  created_by_user_id: string | null
+  created_by_agent_id: string | null
+  assigned_user_id: string | null
+  assigned_agent_id: string | null
+  claimed_by_user_id: string | null
+  claimed_by_agent_id: string | null
+  source_activity_id: string | null
+  source_run_id: string | null
+  source_proposal_id: string | null
+  source_artifact_id: string | null
+  due_at: string | null
+  start_after: string | null
+  completed_at: string | null
+  cancelled_at: string | null
+  blocked_reason: string | null
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+  /** Present when API expands TaskOut; optional on wire today. */
+  acceptance_criteria_json?: Record<string, unknown> | null
+  definition_of_done?: string | null
+  required_outputs_json?: unknown[] | null
+  tags?: string[] | null
+  metadata_json?: Record<string, unknown> | null
+}
+
+export interface BoardColumn {
+  id: string
+  space_id: string
+  board_id: string
+  name: string
+  description: string | null
+  status_key: string
+  position: number
+  wip_limit: number | null
+  is_done_column: boolean
+  is_default_column: boolean
+  metadata_json: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+}
+
+export interface Board {
+  id: string
+  space_id: string
+  workspace_id: string | null
+  name: string
+  description: string | null
+  board_type: string
+  status: string
+  default_view: string | null
+  sort_order: number | null
+  metadata_json: Record<string, unknown> | null
+  created_by_user_id: string | null
+  created_by_agent_id: string | null
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+}
+
+export interface TaskRunCreateBody {
+  agent_id?: string | null
+  mode?: string
+  run_type?: string
+  trigger_origin?: string
+  session_id?: string | null
+  workspace_id?: string | null
+  prompt?: string | null
+  instruction?: string | null
+  set_task_in_progress?: boolean
+}
+
+export interface TaskRunOut {
+  id: string
+  space_id: string
+  task_id: string
+  run_id: string
+  role: string
+  created_at: string
+}
+
+export interface Run {
+  id: string
+  space_id: string
+  agent_id: string
+  agent_version_id: string
+  context_snapshot_id: string | null
+  workspace_id: string | null
+  session_id: string | null
+  parent_run_id: string | null
+  run_type: string
+  trigger_origin: string
+  status: string
+  mode: string
+  prompt: string | null
+  instruction: string | null
+  scheduled_at: string | null
+  started_at: string | null
+  ended_at: string | null
+  created_at: string
+  updated_at: string
+  error_message: string | null
+  error_json: Record<string, unknown> | null
+  output_json: Record<string, unknown> | null
+  usage_json: Record<string, unknown> | null
+  task_id?: string | null
+}
+
+export interface RunStatusOut {
+  id: string
+  status: string
+  mode: string
+  run_type: string
+  trigger_origin: string
+  started_at: string | null
+  ended_at: string | null
+  error_message: string | null
+}
+
+export interface ArtifactSummary {
+  id: string
+  space_id: string
+  run_id: string | null
+  proposal_id: string | null
+  artifact_type: string
+  title: string
+  mime_type: string | null
+  created_at: string
+}
+
+export interface ProposalSummary {
+  id: string
+  space_id: string
+  proposal_type: string
+  status: string
+  title: string
+  created_at: string
+}
+
+export interface TaskRunListItem {
+  link: TaskRunOut
+  run: Run
+}
+
+export interface TaskArtifact {
+  id: string
+  space_id: string
+  task_id: string
+  artifact_id: string
+  role: string
+  created_at: string
+  artifact: ArtifactSummary & { preview?: boolean }
+}
+
+export interface TaskProposal {
+  id: string
+  space_id: string
+  task_id: string
+  proposal_id: string
+  role: string
+  created_at: string
+  proposal: ProposalSummary & {
+    preview?: boolean
+    urgency?: string
+    expired?: boolean
+  }
+}
+
+export interface Artifact {
+  id: string
+  space_id: string
+  run_id: string | null
+  proposal_id: string | null
+  artifact_type: string
+  title: string
+  mime_type: string | null
+  exportable: boolean
+  preview: boolean
+  storage_ref: string | null
+  storage_path: string | null
+  has_inline_content: boolean
+  content?: string | null
   created_at: string
   updated_at: string
 }
 
-export interface AgentRun {
+/** Canonical proposal (`GET /proposals`, `ProposalOut`). */
+export interface Proposal {
   id: string
-  task_id: string | null
   space_id: string
   user_id: string
-  agent_id: string | null
-  cli_adapter_config_id: string | null
-  adapter_type: string
-  capability_id: string | null
-  model_selection_mode: ModelSelectionMode
-  model_override_json: Record<string, unknown> | null
-  prompt: string
-  status: RunStatus
-  output: string | null
-  error: string | null
-  exit_code: number | null
-  sandbox_level: string | null
-  sandbox_path: string | null
-  executor_type: string | null
-  delegation_depth: number
-  runtime_seconds: number | null
-  usage_accuracy: 'precise' | 'estimated' | 'unknown'
-  estimated_input_tokens: number | null
-  estimated_output_tokens: number | null
-  estimated_cost: number | null
-  started_at: string | null
-  completed_at: string | null
+  workspace_id: string | null
+  source_session_id: string | null
+  source_task_id: string | null
+  source_run_id: string | null
+  created_by_run_id: string | null
+  proposal_type: string
+  target_scope: string
+  target_namespace: string
+  memory_type: string
+  proposed_title: string
+  proposed_content: string
+  rationale: string
+  status: string
+  risk_level: string
+  urgency: string
+  preview: boolean
+  review_deadline: string | null
+  expires_at: string | null
+  expired: boolean
   created_at: string
+  decided_at: string | null
+  resulting_memory_id: string | null
+  owner_user_id?: string | null
+  subject_user_id?: string | null
+  sensitivity_level?: string | null
+  selected_user_ids?: string[] | null
+}
+
+export interface AgentOut {
+  id: string
+  space_id: string
+  created_by_user_id: string
+  name: string
+  description: string | null
+  visibility: string
+  role_instruction: string | null
+  status: string
+  current_version_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface RunCreateBody {
+  mode?: string
+  run_type?: string
+  trigger_origin?: string
+  session_id?: string | null
+  workspace_id?: string | null
+  prompt?: string | null
+  instruction?: string | null
+  scheduled_at?: string | null
 }
 
 export interface Workspace {
@@ -470,4 +708,122 @@ export interface WorkspaceInfo {
   path: string | null
   type: string
   description: string | null
+}
+
+// ── Home summary (`GET /api/v1/home/summary`, Phase 9) ─────────────────────
+
+export type HomeSuggestedActionPriority = 'high' | 'normal' | 'low'
+
+export interface HomeRunSummaryItem {
+  id: string
+  status: string
+  mode: string
+  run_type: string
+  agent_id: string
+  task_id: string | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  error_text: string | null
+}
+
+export interface HomePendingProposalItem {
+  id: string
+  title: string
+  proposal_type: string
+  status: string
+  risk_level: string
+  urgency: string
+  review_deadline: string | null
+  expires_at: string | null
+  expired: boolean
+  preview: boolean
+  created_by_run_id: string | null
+}
+
+export interface HomePendingProposalsSection {
+  count: number
+  items: HomePendingProposalItem[]
+}
+
+export interface HomeArtifactSummaryItem {
+  id: string
+  title: string
+  artifact_type: string
+  preview: boolean
+  run_id: string | null
+  created_at: string
+}
+
+export interface HomeTaskSummarySection {
+  by_status: Record<string, number>
+  total_open: number
+  needs_review_count: number
+  blocked_count: number
+  done_count: number
+}
+
+export interface HomeActiveTaskItem {
+  id: string
+  title: string
+  status: string
+  priority: string
+  risk_level: string
+  task_type: string
+  assigned_user_id: string | null
+  assigned_agent_id: string | null
+  due_at: string | null
+  updated_at: string
+}
+
+export interface HomeActivitySummarySection {
+  recent_count: number
+  raw_count: number
+  today_count: number
+}
+
+export interface HomeRunStatsTodaySection {
+  created: number
+  queued: number
+  running: number
+  succeeded: number
+  failed: number
+  cancelled: number
+  dry_run_count: number
+}
+
+export interface HomeJobQueueStatusSection {
+  queued: number
+  running: number
+  failed: number
+  retryable: number
+  recent_error_preview: string | null
+}
+
+export interface HomeRuntimeStatusSection {
+  real_adapters_configured_count: number
+  configured_adapter_types: string[]
+  message: string
+}
+
+export interface HomeSuggestedActionItem {
+  id: string
+  label: string
+  reason: string
+  target_path: string
+  priority: HomeSuggestedActionPriority
+}
+
+export interface HomeSummaryOut {
+  recent_runs: HomeRunSummaryItem[]
+  active_runs: HomeRunSummaryItem[]
+  pending_proposals: HomePendingProposalsSection
+  recent_artifacts: HomeArtifactSummaryItem[]
+  task_summary: HomeTaskSummarySection
+  active_tasks: HomeActiveTaskItem[]
+  activity_summary: HomeActivitySummarySection
+  run_stats_today: HomeRunStatsTodaySection
+  job_queue_status: HomeJobQueueStatusSection
+  runtime_status: HomeRuntimeStatusSection
+  suggested_actions: HomeSuggestedActionItem[]
 }

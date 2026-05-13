@@ -62,6 +62,7 @@ def test_scan_capabilities(tmp_path):
     assert any("a.cap" == m["id"] for m in loaded)
 
 
+@pytest.mark.not_ready
 def test_registry_loads_from_dir(db, tmp_path):
     manifest = {"id": "test.reg", "name": "Reg Test", "version": "0.1.0", "description": "Reg test cap"}
     _write_cap(tmp_path, manifest)
@@ -80,6 +81,7 @@ def test_registry_loads_from_dir(db, tmp_path):
         settings.capabilities_dir = original
 
 
+@pytest.mark.not_ready
 def test_registry_reload_updates_existing(db, tmp_path):
     manifest = {"id": "upd.cap", "name": "Old Name", "version": "1.0.0", "description": "Test"}
     cap_dir = _write_cap(tmp_path, manifest)

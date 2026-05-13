@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -7,6 +9,7 @@ from ..schemas import (
 )
 from .service import SessionService
 from ..memory.reflector import MemoryReflector
+from ..proposals.read_model import proposal_to_out
 from ..auth.api_key import get_identity
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -99,8 +102,9 @@ def reflect_session(
         workspace_id=session.workspace_id,
     )
 
+    now = datetime.now(UTC)
     return ReflectResponse(
         session_id=session_id,
         proposals_created=len(proposals),
-        proposals=[ProposalOut.model_validate(p) for p in proposals],
+        proposals=[proposal_to_out(p, now=now) for p in proposals],
     )

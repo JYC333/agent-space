@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import {
   Sun, Plus, Inbox, Clock, BookOpen, Layers, Database, Cpu,
   CheckCircle, Activity, Folder, Settings, Zap, Code, MessageSquare,
+  ListTodo, Package,
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { Module } from '../modules/registry'
@@ -25,6 +26,8 @@ const ICONS: Record<string, LucideComponent> = {
   zap:              Zap,
   code:             Code,
   'message-square': MessageSquare,
+  'list-todo':      ListTodo,
+  package:          Package,
 }
 
 interface AppCardProps {

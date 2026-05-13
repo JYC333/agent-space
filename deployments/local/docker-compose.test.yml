@@ -7,12 +7,12 @@ services:
     ports:
       - "8100:8100"
     volumes:
-      - ${HOME}/aspace/test:/aspace
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/test}:/aspace
       - claude-home:/home/agentspace/.claude
     group_add:
       - "${DOCKER_GID:-989}"
     env_file:
-      - ${HOME}/aspace/test/.env
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/test}/.env
     environment:
       - AGENT_SPACE_HOME=/aspace
       - INSTANCE_ROOT=/aspace
@@ -49,7 +49,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../../:/repo:rw
-      - ${HOME}/aspace/test:/aspace
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/test}:/aspace
     user: "1000:989"
     environment:
       - DEPLOYER_SOCKET=/aspace/run/deployer.sock

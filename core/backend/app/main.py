@@ -15,15 +15,16 @@ from .modules.registry import register as register_modules, list_modules
 async def lifespan(app: FastAPI):
     paths.init_dirs()
     paths.validate()
-    init_db()
+    # Alembic upgrade is synchronous and can take noticeable time on cold DBs.
+    await asyncio.to_thread(init_db)
     from .db import migrate_db
     migrate_db()
 
     from .db import SessionLocal
     from .capabilities.registry import CapabilityRegistry
-    from .memory.seeder import seed_system_memories
-    from .agents.seeder import seed_builtin_agents
     from .auth.api_key import ApiKeyService
+    from .feature_gates import API_KEYS_DB_PERSISTED
+    from .models import Space, SpaceMembership
     from .agents import hooks as _hooks  # noqa: F401 — registers post-run hooks
     from .jobs import handlers as _job_handlers  # noqa: F401 — registers job handlers
     from .jobs.queue import DatabaseQueueService, init_queue
@@ -32,22 +33,31 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         CapabilityRegistry(db).reload()
-        seed_system_memories(db)
-        seed_builtin_agents(db, space_id=settings.default_space_id)
 
         # Register system-core workspace if configured
         from .workspaces.system_core import register_system_core_workspace
         register_system_core_workspace(db)
 
         if settings.debug:
-            existing = ApiKeyService(db).list(space_id=settings.default_space_id)
-            if not existing:
-                _, raw = ApiKeyService(db).create(
-                    space_id=settings.default_space_id,
-                    owner_user_id=settings.default_user_id,
-                    name="dev-key",
+            dev_space = db.query(Space).filter(Space.id == settings.default_space_id).first()
+            owner_ms = (
+                db.query(SpaceMembership)
+                .filter(
+                    SpaceMembership.space_id == settings.default_space_id,
+                    SpaceMembership.role == "owner",
+                    SpaceMembership.status == "active",
                 )
-                print(f"\n[agent-space] Dev API key: {raw}\n")
+                .first()
+            )
+            if dev_space and owner_ms and API_KEYS_DB_PERSISTED:
+                existing = ApiKeyService(db).list(space_id=settings.default_space_id)
+                if not existing:
+                    _, raw = ApiKeyService(db).create(
+                        space_id=settings.default_space_id,
+                        owner_user_id=owner_ms.user_id,
+                        name="dev-key",
+                    )
+                    print(f"\n[agent-space] Dev API key: {raw}\n")
     finally:
         db.close()
 

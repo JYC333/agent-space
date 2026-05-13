@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { Inbox } from 'lucide-react'
 import { toast } from 'sonner'
 import { activityApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
-import type { ActivityRecord, ActivityStatus, ActivitySourceType } from '../../types/api'
+import type { ActivityInboxRecord, ActivityStatus, ActivitySourceType } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
@@ -25,7 +26,7 @@ const SOURCE_COLORS: Record<ActivitySourceType, string> = {
 
 export default function ActivityInboxPage() {
   const { spaceId } = useSpace()
-  const [records, setRecords]   = useState<ActivityRecord[]>([])
+  const [records, setRecords]   = useState<ActivityInboxRecord[]>([])
   const [filter, setFilter]     = useState<ActivityStatus>('raw')
   const [loading, setLoading]   = useState(false)
   const [busy, setBusy]         = useState<string | null>(null)
@@ -103,7 +104,11 @@ export default function ActivityInboxPage() {
         <Card key={r.id}>
           <div className="flex items-start justify-between gap-4 mb-3">
             <div>
-              <span className="font-medium text-sm">{r.title ?? r.content.slice(0, 80)}</span>
+              <span className="font-medium text-sm">
+                <Link to={`/activity/${r.id}`} className="text-accent-foreground hover:underline">
+                  {r.title ?? r.content.slice(0, 80)}
+                </Link>
+              </span>
               {r.title && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{r.content}</p>}
             </div>
             {(r.status === 'raw' || r.status === 'proposals_generated') && (

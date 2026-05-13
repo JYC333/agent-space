@@ -145,15 +145,27 @@ assistant:
     - core/backend/app/agents
     - core/backend/app/memory/context_builder.py
 
+run:
+  docs:
+    - .agent/ARCHITECTURE.md
+    - .agent/architecture/TASK_BOARD_MODEL.md
+    - .agent/BOUNDARIES.md
+    - .agent/modules/agents.md
+    - .agent/modules/proposals.md
+  code_roots:
+    - core/backend/app/agents/runner.py
+    - core/backend/app/models.py          # Run, Artifact, ActivityRecord, Proposal
+    - core/backend/app/schemas.py
+    - core/backend/app/memory/context_builder.py
+
 runtime_status:
   docs:
     - .agent/modules/server-status.md
     - .agent/modules/product-shell.md
-    - .agent/modules/client-server-protocol.md
+    - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/main.py          # existing /health endpoint
-    - core/backend/app/api             # TODO: status router
-    - frontend/src/components          # TODO: RuntimeStatusBar
+    - core/backend/app/main.py          # /health endpoint
+    - core/backend/app/agents/runner.py  # run status fields
 
 sync:
   docs:

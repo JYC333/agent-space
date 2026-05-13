@@ -8,9 +8,11 @@ space_id and user_id are required — this builder is a hard security boundary.
 If agent_memory_policy is provided, only the scopes listed in
 readable_scopes are fetched; this enforces per-agent memory isolation.
 
-Every memory fetched here is recorded in MemoryAccessLog and has its
-access_count / last_accessed_at updated — this is the data collection
-layer for the MemoryEvolver fitness function.
+Memories are filtered with ``read_auth.can_read_memory``. System policy rows are
+only loaded in the explicit system branch (include_system_scope). Each memory
+included in the package is recorded in ``memory_access_logs`` with
+access_type ``context_injection``, and aggregate counters on ``MemoryEntry``
+are updated.
 
 Context attachments (file, git_diff, url, memory_entry, etc.) are resolved
 and security-scanned here before being handed off to ContextCompiler.
@@ -18,25 +20,21 @@ and security-scanned here before being handed off to ContextCompiler.
 
 import logging
 import subprocess
-from datetime import datetime, UTC
 from pathlib import Path
-from ulid import ULID
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models import Memory, MemoryAccessLog, SessionSummary
 from ..schemas import ContextPackage, MemoryOut
 from .store import MemoryStore
+from .serialization import memory_entry_to_out
+from .access_log import record_memory_access
+from .read_auth import can_read_memory, summary_only_redact_content
 from .security import scan_content, scan_attachment, scan_path
 
 log = logging.getLogger(__name__)
 
 # All scopes the system knows about — in priority order
 _ALL_SCOPES = ["system", "space", "user", "workspace", "capability", "agent"]
-
-
-def _new_id() -> str:
-    return str(ULID())
 
 
 # ---------------------------------------------------------------------------
@@ -237,36 +235,50 @@ class ContextBuilder:
         space_id: str,
         workspace_id: str | None,
         agent_id: str | None,
+        run_id: str | None,
+        reason: str | None,
     ) -> None:
-        """Write MemoryAccessLog rows and update access counters for evolver signal."""
+        """Persist memory read audit rows and bump aggregate counters."""
         if not memories:
             return
-        now = datetime.now(UTC)
         for m in memories:
-            self.db.add(MemoryAccessLog(
-                id=_new_id(),
+            record_memory_access(
+                self.db,
+                m,
                 space_id=space_id,
-                workspace_id=workspace_id,
                 user_id=user_id,
                 agent_id=agent_id,
-                memory_id=m.id,
-                access_type="read",
-                reason="context_build",
-            ))
-            m.access_count = (m.access_count or 0) + 1
-            m.last_accessed_at = now
+                run_id=run_id,
+                access_type="context_injection",
+                reason=reason,
+            )
         self.db.commit()
+
+    def _to_out(self, m, *, user_id: str, space_id: str, workspace_id: str | None, include_system: bool):
+        return memory_entry_to_out(
+            m,
+            viewer_user_id=user_id,
+            space_id=space_id,
+            workspace_id=workspace_id,
+            include_system_scope=include_system,
+        )
 
     def _resolve_db_attachments(
         self,
         attachments: list[dict],
         space_id: str,
+        user_id: str,
+        workspace_id: str | None,
+        agent_id: str | None,
+        run_id: str | None,
+        context_reason: str | None,
     ) -> list[dict]:
         """
         Resolve DB-backed attachment types: memory_entry, activity_record, proposal.
         Other types are left for resolve_attachment() (filesystem/git).
         """
         resolved: list[dict] = []
+        memory_reads: list = []
         for att in attachments:
             att = dict(att)
             att_type = att.get("attachment_type", "")
@@ -275,10 +287,22 @@ class ContextBuilder:
             if att_type == "memory_entry":
                 memory_id = ref.get("memory_id")
                 if memory_id:
-                    m = self.store.get(self.db, memory_id, space_id)
-                    if m:
-                        att["resolved_content"] = f"**{m.title}**: {m.content}"
+                    m = self.store.get(memory_id)
+                    if m and can_read_memory(
+                        m,
+                        user_id=user_id,
+                        space_id=space_id,
+                        workspace_id=workspace_id,
+                        include_system_scope=(m.scope_type == "system"),
+                    ):
+                        if summary_only_redact_content(m, viewer_user_id=user_id):
+                            body = "[summary only]"
+                        else:
+                            body = m.content
+                        title = m.title or "(untitled)"
+                        att["resolved_content"] = f"**{title}**: {body}"
                         att["label"] = att.get("label") or m.title
+                        memory_reads.append(m)
                     else:
                         att["approved"] = False
                         att["rejection_reason"] = "memory not found or access denied"
@@ -300,6 +324,16 @@ class ContextBuilder:
                         att["rejection_reason"] = "activity record not found"
 
             resolved.append(att)
+        if memory_reads:
+            self._record_access(
+                memory_reads,
+                user_id,
+                space_id,
+                workspace_id,
+                agent_id,
+                run_id,
+                context_reason,
+            )
         return resolved
 
     def build(
@@ -315,6 +349,8 @@ class ContextBuilder:
         agent_memory_policy: dict | None = None,
         # Optional: agent performing this run (recorded in access logs)
         agent_id: str | None = None,
+        run_id: str | None = None,
+        context_reason: str | None = None,
         # Optional: structured context attachments
         attachments: list[dict] | None = None,
         # Optional: workspace filesystem path for attachment resolution
@@ -408,32 +444,50 @@ class ContextBuilder:
                 reverse=True,
             )[:max_each]
 
-        recent_summaries = []
-        if session_id:
-            summaries = (
-                self.db.query(SessionSummary)
-                .filter(SessionSummary.session_id == session_id)
-                .order_by(SessionSummary.created_at.desc())
-                .limit(3)
-                .all()
-            )
-            recent_summaries = [
-                {"session_id": s.session_id, "summary": s.summary, "created_at": s.created_at.isoformat()}
-                for s in summaries
-            ]
+        _ = session_id  # reserved for future session-summary persistence (not in canonical schema yet)
+        recent_summaries: list[dict] = []
 
-        # Record access for evolver fitness tracking
         all_fetched = (
             system_policy + user_memory + workspace_memory +
             capability_memory + agent_memory + relevant_episodes
         )
-        self._record_access(all_fetched, user_id, space_id, workspace_id, agent_id)
+        self._record_access(
+            all_fetched,
+            user_id,
+            space_id,
+            workspace_id,
+            agent_id,
+            run_id,
+            context_reason,
+        )
+
+        def _outs(rows: list, *, include_system: bool) -> list[MemoryOut]:
+            out: list[MemoryOut] = []
+            for m in rows:
+                mo = self._to_out(
+                    m,
+                    user_id=user_id,
+                    space_id=space_id,
+                    workspace_id=workspace_id,
+                    include_system=include_system,
+                )
+                if mo is not None:
+                    out.append(mo)
+            return out
 
         # Resolve context attachments
         resolved_attachments: list[dict] = []
         if attachments:
             # First pass: DB-backed types
-            db_resolved = self._resolve_db_attachments(attachments, space_id)
+            db_resolved = self._resolve_db_attachments(
+                attachments,
+                space_id,
+                user_id,
+                workspace_id,
+                agent_id,
+                run_id,
+                context_reason,
+            )
             # Second pass: filesystem/git types
             for att in db_resolved:
                 if att.get("resolved_content") is None and att.get("approved", True):
@@ -441,12 +495,12 @@ class ContextBuilder:
                 resolved_attachments.append(att)
 
         return ContextPackage(
-            user_memory=[MemoryOut.model_validate(m) for m in user_memory],
-            workspace_memory=[MemoryOut.model_validate(m) for m in workspace_memory],
-            capability_memory=[MemoryOut.model_validate(m) for m in capability_memory],
-            agent_memory=[MemoryOut.model_validate(m) for m in agent_memory],
-            system_policy=[MemoryOut.model_validate(m) for m in system_policy],
+            user_memory=_outs(user_memory, include_system=False),
+            workspace_memory=_outs(workspace_memory, include_system=False),
+            capability_memory=_outs(capability_memory, include_system=False),
+            agent_memory=_outs(agent_memory, include_system=False),
+            system_policy=_outs(system_policy, include_system=True),
             recent_session_summary=recent_summaries,
-            relevant_episodes=[MemoryOut.model_validate(m) for m in relevant_episodes],
+            relevant_episodes=_outs(relevant_episodes, include_system=False),
             attachments=resolved_attachments,
         )

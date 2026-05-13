@@ -15,7 +15,7 @@ import json
 import logging
 from datetime import datetime, UTC
 
-from .base import AgentAdapter, AgentRunResult, CLIAdapterCapabilities
+from .base import AgentAdapter, RuntimeExecutionResult, CLIAdapterCapabilities
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class AnthropicAPIAdapter(AgentAdapter):
         timeout: int = 300,
         conversation: list[dict] | None = None,
         **_kwargs,
-    ) -> AgentRunResult:
+    ) -> RuntimeExecutionResult:
         """
         Run a prompt via the Anthropic Messages API.
 
@@ -84,7 +84,7 @@ class AnthropicAPIAdapter(AgentAdapter):
         try:
             import anthropic
         except ImportError:
-            return AgentRunResult(
+            return RuntimeExecutionResult(
                 success=False,
                 output="",
                 error="anthropic package not installed",
@@ -112,7 +112,7 @@ class AnthropicAPIAdapter(AgentAdapter):
                 messages=messages,
             )
             output = response.content[0].text if response.content else ""
-            return AgentRunResult(
+            return RuntimeExecutionResult(
                 success=True,
                 output=output,
                 started_at=started_at,
@@ -120,7 +120,7 @@ class AnthropicAPIAdapter(AgentAdapter):
             )
         except Exception as exc:
             log.warning("AnthropicAPIAdapter error: %s", exc)
-            return AgentRunResult(
+            return RuntimeExecutionResult(
                 success=False,
                 output="",
                 error=str(exc),

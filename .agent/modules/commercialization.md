@@ -60,7 +60,7 @@ When commercialization becomes real, the system must satisfy:
 3. An enterprise deployment can disable any runtime adapter without breaking core features.
 4. Enterprise deployments support BYO API keys and model endpoints.
 5. Core modules (LLM Wiki, flashcards, activity records, memory) work without any coding-agent runtime.
-6. Runtime use is auditable (AgentRun records are the audit trail).
+6. Runtime use is auditable (Run records are the audit trail).
 7. Provider and data policy is configurable per space.
 8. Do not assume Claude Code / Codex licenses allow commercial embedding without separate terms.
 

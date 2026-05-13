@@ -23,7 +23,7 @@ on the host. Stale paths silently return 404 from the file tree API.
 ```
 ws.path is absolute → use as-is
 ws.path is relative → workspace_root / ws.path
-ws.path is None     → workspace_root / ws.id   (legacy records only)
+ws.path is None     → workspace_root / ws.id   (pre-normalized rows only)
 ```
 
 ---

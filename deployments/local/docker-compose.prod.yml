@@ -5,12 +5,12 @@ services:
       dockerfile: Dockerfile
       network: host
     volumes:
-      - ${HOME}/aspace/prod:/aspace
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/prod}:/aspace
       - claude-home:/home/agentspace/.claude
     group_add:
       - "${DOCKER_GID:-989}"
     env_file:
-      - ${HOME}/aspace/prod/.env
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/prod}/.env
     environment:
       - AGENT_SPACE_HOME=/aspace
       - INSTANCE_ROOT=/aspace
@@ -43,7 +43,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../../:/repo:rw
-      - ${HOME}/aspace/prod:/aspace
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/prod}:/aspace
     user: "1000:989"
     environment:
       - DEPLOYER_SOCKET=/aspace/run/deployer.sock

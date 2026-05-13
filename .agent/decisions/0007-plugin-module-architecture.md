@@ -10,7 +10,7 @@ As the system grows it will target multiple deployment profiles:
 - **Team** — memory, wiki, agents, workspaces; cards optional
 - **Enterprise** — memory, agents, workspaces; no cards, no media cards
 
-Before the codebase grew too large, we needed a structure that makes adding and excluding features mechanical — not a surgical refactor.
+Before the codebase grew too large, we needed a structure that makes adding and excluding features mechanical — not a surgical restructuring.
 
 The pre-0007 layout had:
 - Backend: all HTTP routes in a flat `app/api/` directory; routers hardcoded in `main.py`
@@ -51,7 +51,7 @@ src/
   modules/
     registry.js     ← module manifest + lazy-loaded component map
     memory/         ← MemoriesPage, ProposalsPage, ContextPreviewPage
-    agents/         ← AgentRunsPage
+    agents/         ← AgentsPage (runs + versions)
     sessions/       ← SessionsPage
     capabilities/   ← CapabilitiesPage
     activity/       ← ActivityInboxPage (planned stub)
@@ -81,9 +81,11 @@ The `planned: true` flag renders nav items as greyed-out with a "soon" badge; th
 ## Cross-module imports (allowed exceptions)
 
 The following cross-module references existed before this ADR and are allowed as explicit exceptions documented here:
-- `tasks/api.py` imports `app.agents.runner.AgentRunService` — tasks delegate run execution to the agent runner
+
+- `tasks/api.py` imports `app.runs.run_service.RunService` — **task board** `POST /tasks/{id}/runs` creates a queued `Run` and `TaskRun` link; **Task is not modeled as Job** and this path does not enqueue product tasks as `agent_run` jobs.
 - `sessions/api.py` imports `app.memory.reflector.MemoryReflector` — session reflect triggers memory proposals
-- `tasks/api.py` imports `app.memory.context_builder.ContextBuilder` — task runs need a context package
+
+**Historical:** the singular `POST /tasks/{id}/run` Job enqueue path and `job_type="product_task"` are gone. Tasks enqueue through `POST /api/v1/tasks/{id}/runs`, `RunService`, and `TaskRun` links instead.
 
 These dependencies express real domain relationships. They must be documented here and may not grow without an ADR update.
 

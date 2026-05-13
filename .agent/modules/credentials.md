@@ -4,7 +4,7 @@
 
 CLI login state belongs to agent-space, not to individual sandboxes.
 
-Sandboxes receive temporary, minimal, audited access to one approved CLI credential profile.
+Sandboxes receive short-lived, minimal, audited access to one approved CLI credential profile.
 
 ## Problem
 

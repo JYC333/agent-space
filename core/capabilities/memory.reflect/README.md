@@ -12,7 +12,7 @@ A built-in capability that analyzes session messages and generates memory propos
 
 ## Modes
 
-- **placeholder** (default): pattern-matching, no API key needed
+- **pattern** (default): pattern-matching, no API key needed
 - **llm**: uses Claude to produce higher-quality proposals (requires `ANTHROPIC_API_KEY`)
 
 Set `REFLECTOR_MODE=llm` in your `.env` to enable LLM mode.

@@ -93,6 +93,10 @@ class UserService:
             role="owner",
             status="active",
         ))
+        self.db.flush()
+        from ..spaces.hooks import on_space_created
+
+        on_space_created(self.db, space.id, seeded_by_user_id=user_id)
         return space
 
     def get_user_spaces(self, user_id: str) -> list[dict]:

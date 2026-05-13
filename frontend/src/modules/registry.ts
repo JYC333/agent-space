@@ -1,7 +1,7 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
 
 export type NavSection = 'capture' | 'knowledge' | 'agents' | 'dev'
-export type AppGroup   = 'daily' | 'knowledge' | 'agents' | 'workspace' | 'system'
+export type AppGroup   = 'daily' | 'work' | 'knowledge' | 'agents' | 'workspace' | 'system'
 
 /**
  * Where an app entry originates.
@@ -24,7 +24,7 @@ export interface Module {
   icon: string          // lucide icon name (kebab-case)
   description: string   // gallery card description
   group: AppGroup       // gallery section
-  section: NavSection   // kept for backward compat
+  section: NavSection   // nav grouping for the shell layout
 
   // ── Capability link ────────────────────────────────────────────────────────
   /**
@@ -55,7 +55,7 @@ export interface Module {
   /**
    * Whether the app card is shown in the home gallery.
    * - true  → card renders in gallery grid.
-   * - false → card is hidden (e.g. deprecated capability, space policy).
+   * - false → card is hidden (e.g. retired capability, space policy).
    *
    * Intentionally separate from `enabled`: a capability can be enabled
    * but its gallery card hidden (accessed only via direct URL).
@@ -140,7 +140,8 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Review raw captured records before they become proposals.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
-    component: lazy(() => import('./activity/ActivityInboxPage')),
+    hasSubRoutes: true,
+    component: lazy(() => import('./activity/ActivityModule')),
   },
   {
     id: 'sessions', label: 'Sessions', path: '/sessions',
@@ -157,6 +158,48 @@ export const MODULE_REGISTRY: Module[] = [
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: true,
     component: lazy(() => import('./time/TimePage')),
+  },
+
+  // ── Work (task → run → outputs → review) ───────────────────────────────────
+  {
+    id: 'tasks', label: 'Tasks', path: '/tasks',
+    section: 'agents', group: 'work', icon: 'list-todo',
+    description: 'Plan work, start runs, and review linked outputs.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    order: 10,
+    hasSubRoutes: true,
+    component: lazy(() => import('./tasks/TasksModule')),
+  },
+  {
+    id: 'runs', label: 'Runs', path: '/runs',
+    section: 'agents', group: 'work', icon: 'cpu', accent: true,
+    description: 'Inspect agent runs, status, activities, artifacts, and proposals.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    order: 20,
+    hasSubRoutes: true,
+    component: lazy(() => import('./runs/RunsModule')),
+  },
+  {
+    id: 'proposals', label: 'Proposals', path: '/proposals',
+    section: 'knowledge', group: 'work', icon: 'check-circle',
+    description: 'Review memory, wiki, card, code, and system proposals.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    order: 30,
+    hasSubRoutes: true,
+    component: lazy(() => import('./memory/ProposalsModule')),
+  },
+  {
+    id: 'artifacts', label: 'Artifacts', path: '/artifacts',
+    section: 'agents', group: 'work', icon: 'package',
+    description: 'Browse and export outputs produced by runs.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    order: 40,
+    hasSubRoutes: true,
+    component: lazy(() => import('./artifacts/ArtifactsModule')),
   },
 
   // ── Knowledge ─────────────────────────────────────────────────────────────
@@ -179,33 +222,17 @@ export const MODULE_REGISTRY: Module[] = [
   {
     id: 'memory', label: 'Memory', path: '/memory',
     section: 'knowledge', group: 'knowledge', icon: 'database',
-    description: 'Browse and manage scoped long-term memory records.',
+    description: 'Review scoped memories, visibility, and long-term context.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     component: lazy(() => import('./memory/MemoriesPage')),
   },
 
-  // ── Agents ────────────────────────────────────────────────────────────────
-  {
-    id: 'runs', label: 'Agents', path: '/runs',
-    section: 'agents', group: 'agents', icon: 'cpu', accent: true,
-    description: 'Manage agent profiles, roles, tools, permissions, and runtimes.',
-    source: 'built_in', capabilityId: undefined,
-    enabled: true, visible: true, planned: false,
-    component: lazy(() => import('./agents/AgentRunsPage')),
-  },
-  {
-    id: 'proposals', label: 'Proposals', path: '/proposals',
-    section: 'knowledge', group: 'agents', icon: 'check-circle',
-    description: 'Review memory, wiki, card, code, and system proposals.',
-    source: 'built_in', capabilityId: undefined,
-    enabled: true, visible: true, planned: false,
-    component: lazy(() => import('./memory/ProposalsPage')),
-  },
+  // ── Agents (execution & infrastructure) ─────────────────────────────────────
   {
     id: 'cli_adapters', label: 'Runtime', path: '/cli-tools',
     section: 'agents', group: 'agents', icon: 'activity',
-    description: 'Monitor CLI adapters, queues, sandboxes, and server state.',
+    description: 'Monitor runtime adapters, queues, and execution health.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     component: lazy(() => import('./cli_adapters/CLIStatusPage')),
@@ -213,7 +240,7 @@ export const MODULE_REGISTRY: Module[] = [
   {
     id: 'job_queue', label: 'Job Queue', path: '/jobs',
     section: 'agents', group: 'agents', icon: 'list-checks',
-    description: 'Inspect durable background jobs — status, events, retries, and cancellation.',
+    description: 'Inspect infrastructure jobs, retries, and worker status.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     component: lazy(() => import('./job_queue/JobQueuePage')),
@@ -274,6 +301,7 @@ export const MODULE_REGISTRY: Module[] = [
 
 export const APP_GROUPS: { label: string; key: AppGroup }[] = [
   { label: 'Daily',     key: 'daily'     },
+  { label: 'Work',      key: 'work'      },
   { label: 'Knowledge', key: 'knowledge' },
   { label: 'Agents',    key: 'agents'    },
   { label: 'Workspace', key: 'workspace' },

@@ -123,11 +123,11 @@ It will NOT:
 - Run CLI tools directly outside the Linux/server runtime
 - Replace the browser UI
 
-## Design principles that hold across all phases
+## Design principles that hold across all milestones
 
 1. The memory system is the source of truth — agents are stateless executors.
 2. No agent writes long-term memory without user approval.
-3. All IDs are ULIDs for local-first compatibility.
+3. All IDs are ULIDs for local-first coexistence across clients.
 4. Multi-tenant schema from day one; single-user is just a degenerate case.
 5. Capability system is the extension point — not hard-coded plugins.
 6. The core runtime is always Linux/WSL/server. Desktop and mobile are clients.

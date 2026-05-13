@@ -33,10 +33,10 @@ The governance UI for long-term memory. Memory review is not just a list — it 
 - Version history (version field)
 - Source: linked session or run that produced this memory
 - Access log: when was this memory last read, by which agent?
-- Related proposals (MemoryProposal records)
+- Related proposals (Proposal records)
 
 ### 3. Pending Proposals
-- List all `MemoryProposal` with `status=pending`
+- List all `Proposal` with `status=pending`
 - Shows: proposed_title, proposed_content, rationale
 - Shows: source_session_id, source_run_id (click to open)
 - Actions: Accept, Reject, Edit then Accept
@@ -44,14 +44,14 @@ The governance UI for long-term memory. Memory review is not just a list — it 
 - Reject → calls `POST /api/v1/proposals/{id}/reject`
 
 ### 4. Memory Access Logs
-- Table of MemoryAccessLog entries for the selected memory
+- Table of `MemoryReadTrace` entries for the selected memory
 - Columns: accessed_at, agent_id, access_type, reason
 - Shows which agents read which memories and when
 - Useful for understanding agent context usage
 
 ## Invariants
 - Users can only review memories in their own spaces (enforced by API)
-- Accepting a proposal creates a new Memory record (or updates existing)
+- Accepting a proposal creates a new MemoryEntry record (or updates existing)
 - Rejecting a proposal does not delete the source session or run
 - Memory review is read-write for governance actions, read-only for content (editing goes through a new proposal)
 
@@ -68,8 +68,8 @@ POST /api/v1/proposals/{id}/reject
 
 ## Related Files
 - `core/backend/app/memory/store.py` — MemoryStore CRUD
-- `core/backend/app/memory/proposals.py` — MemoryProposal workflow
-- `core/backend/app/models.py` — Memory, MemoryProposal, MemoryAccessLog
+- `core/backend/app/memory/proposals.py` — Proposal workflow
+- `core/backend/app/models.py` — MemoryEntry, Proposal, MemoryReadTrace
 - `frontend/src/pages/` — TODO: memory review page
 
 ## Related Modules

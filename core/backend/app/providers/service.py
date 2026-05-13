@@ -19,7 +19,9 @@ from ulid import ULID
 from sqlalchemy.orm import Session
 
 from ..crypto import decrypt_from_base64
-from ..models import ProviderConfig
+from sqlalchemy.orm.attributes import flag_modified
+
+from ..models import ModelProvider
 from .models import (
     ChatRequest, ChatResponse, StreamChunk, ChatMessage,
     ProviderConfigDB, ProviderConfigOut,
@@ -28,6 +30,23 @@ from .models import (
 from .registry import registry
 
 log = logging.getLogger(__name__)
+
+
+def _mp_cfg(row: ModelProvider) -> dict:
+    return dict(row.config_json or {})
+
+
+def _mp_set_cfg(row: ModelProvider, data: dict) -> None:
+    row.config_json = data
+    flag_modified(row, "config_json")
+
+
+def _mp_lifecycle(row: ModelProvider) -> str:
+    return _mp_cfg(row).get("lifecycle_status", "active")
+
+
+def _mp_is_default(row: ModelProvider) -> bool:
+    return bool(_mp_cfg(row).get("is_default", False))
 
 
 class ModelService:
@@ -42,32 +61,37 @@ class ModelService:
 
     def list_configs(self, db: Session, space_id: str) -> list[ProviderConfigOut]:
         """List all active provider configs for a space (no raw keys)."""
-        rows = db.query(ProviderConfig).filter(
-            ProviderConfig.space_id == space_id,
-            ProviderConfig.status != "deleted",
-        ).all()
-        return [ProviderConfigOut.from_db_row(r) for r in rows]
+        rows = db.query(ModelProvider).filter(ModelProvider.space_id == space_id).all()
+        return [
+            ProviderConfigOut.from_db_row(r)
+            for r in rows
+            if _mp_lifecycle(r) != "deleted"
+        ]
 
     def get_config(self, db: Session, config_id: str, space_id: str) -> ProviderConfigDB:
         """Load a config by ID and decrypt the API key. Raises if not found or deleted."""
-        row = db.query(ProviderConfig).filter(
-            ProviderConfig.id == config_id,
-            ProviderConfig.space_id == space_id,
-            ProviderConfig.status != "deleted",
+        row = db.query(ModelProvider).filter(
+            ModelProvider.id == config_id,
+            ModelProvider.space_id == space_id,
         ).first()
-        if not row:
+        if not row or _mp_lifecycle(row) == "deleted":
             raise ValueError(f"Provider config '{config_id}' not found")
+
+        ek = _mp_cfg(row).get("encrypted_key")
+        kn = _mp_cfg(row).get("key_nonce")
+        if not ek or not kn:
+            raise ValueError(f"Provider config '{config_id}' has no stored credentials")
 
         return ProviderConfigDB(
             id=row.id,
             space_id=row.space_id,
             name=row.name,
             provider=row.provider,
-            api_key=decrypt_from_base64(row.encrypted_key, row.key_nonce),
-            models=row.models,
+            api_key=decrypt_from_base64(ek, kn),
+            models=row.models if isinstance(row.models, list) else (row.models or {}).get("models", []),
             api_base=row.api_base,
-            is_default=row.is_default,
-            status=row.status,
+            is_default=_mp_is_default(row),
+            status=_mp_lifecycle(row),
         )
 
     def create_config(
@@ -79,17 +103,22 @@ class ModelService:
 
         encrypted_key, key_nonce = _encrypt(data.api_key)
 
-        config = ProviderConfig(
+        cfg = {
+            "encrypted_key": encrypted_key,
+            "key_nonce": key_nonce,
+            "is_default": data.is_default,
+            "lifecycle_status": "active",
+        }
+        config = ModelProvider(
             id=str(ULID()),
             space_id=space_id,
             name=data.name,
-            provider=data.provider,
-            encrypted_key=encrypted_key,
-            key_nonce=key_nonce,
-            models=data.models,
-            api_base=data.api_base,
-            is_default=data.is_default,
-            status="active",
+            provider_type=data.provider,
+            base_url=data.api_base,
+            default_model=data.models[0] if data.models else None,
+            enabled=True,
+            capabilities_json={"models": data.models},
+            config_json=cfg,
         )
         db.add(config)
         db.commit()
@@ -100,30 +129,38 @@ class ModelService:
         self, db: Session, config_id: str, space_id: str, data: ProviderConfigUpdate
     ) -> ProviderConfigOut:
         """Update a provider config (optionally update the API key)."""
-        row = db.query(ProviderConfig).filter(
-            ProviderConfig.id == config_id,
-            ProviderConfig.space_id == space_id,
+        row = db.query(ModelProvider).filter(
+            ModelProvider.id == config_id,
+            ModelProvider.space_id == space_id,
         ).first()
         if not row:
             raise ValueError(f"Provider config '{config_id}' not found")
 
-        if data.is_default and not row.is_default:
+        if data.is_default and not _mp_is_default(row):
             self._clear_default(db, space_id)
 
         if data.name is not None:
             row.name = data.name
         if data.api_key is not None:
             encrypted_key, key_nonce = _encrypt(data.api_key)
-            row.encrypted_key = encrypted_key
-            row.key_nonce = key_nonce
+            c = _mp_cfg(row)
+            c["encrypted_key"] = encrypted_key
+            c["key_nonce"] = key_nonce
+            _mp_set_cfg(row, c)
         if data.models is not None:
-            row.models = data.models
+            row.capabilities_json = {"models": data.models}
+            flag_modified(row, "capabilities_json")
         if data.api_base is not None:
-            row.api_base = data.api_base
+            row.base_url = data.api_base
         if data.is_default is not None:
-            row.is_default = data.is_default
+            c = _mp_cfg(row)
+            c["is_default"] = data.is_default
+            _mp_set_cfg(row, c)
         if data.status is not None:
-            row.status = data.status
+            c = _mp_cfg(row)
+            c["lifecycle_status"] = data.status
+            _mp_set_cfg(row, c)
+            row.enabled = data.status != "deleted"
 
         db.commit()
         db.refresh(row)
@@ -131,34 +168,41 @@ class ModelService:
 
     def delete_config(self, db: Session, config_id: str, space_id: str) -> None:
         """Soft-delete a provider config."""
-        row = db.query(ProviderConfig).filter(
-            ProviderConfig.id == config_id,
-            ProviderConfig.space_id == space_id,
+        row = db.query(ModelProvider).filter(
+            ModelProvider.id == config_id,
+            ModelProvider.space_id == space_id,
         ).first()
         if not row:
             raise ValueError(f"Provider config '{config_id}' not found")
-        row.status = "deleted"
+        c = _mp_cfg(row)
+        c["lifecycle_status"] = "deleted"
+        _mp_set_cfg(row, c)
+        row.enabled = False
         db.commit()
 
     def resolve_default_config(self, db: Session, space_id: str) -> ProviderConfigDB:
         """Find the default active provider config for a space. Raises if none."""
-        row = db.query(ProviderConfig).filter(
-            ProviderConfig.space_id == space_id,
-            ProviderConfig.is_default == True,
-            ProviderConfig.status == "active",
-        ).first()
+        row = None
+        for r in db.query(ModelProvider).filter(ModelProvider.space_id == space_id).all():
+            if _mp_is_default(r) and _mp_lifecycle(r) == "active":
+                row = r
+                break
         if not row:
+            raise ValueError("No default provider configured")
+        ek = _mp_cfg(row).get("encrypted_key")
+        kn = _mp_cfg(row).get("key_nonce")
+        if not ek or not kn:
             raise ValueError("No default provider configured")
         return ProviderConfigDB(
             id=row.id,
             space_id=row.space_id,
             name=row.name,
             provider=row.provider,
-            api_key=decrypt_from_base64(row.encrypted_key, row.key_nonce),
-            models=row.models,
+            api_key=decrypt_from_base64(ek, kn),
+            models=row.models if isinstance(row.models, list) else (row.models or {}).get("models", []),
             api_base=row.api_base,
-            is_default=row.is_default,
-            status=row.status,
+            is_default=True,
+            status=_mp_lifecycle(row),
         )
 
     # -------------------------------------------------------------------------
@@ -285,11 +329,12 @@ class ModelService:
 
     def _clear_default(self, db: Session, space_id: str) -> None:
         """Clear is_default on all configs in a space."""
-        for row in db.query(ProviderConfig).filter(
-            ProviderConfig.space_id == space_id,
-            ProviderConfig.is_default == True,
-        ):
-            row.is_default = False
+        for row in db.query(ModelProvider).filter(ModelProvider.space_id == space_id).all():
+            if not _mp_is_default(row):
+                continue
+            c = _mp_cfg(row)
+            c["is_default"] = False
+            _mp_set_cfg(row, c)
 
 
 def _encrypt(plaintext: str) -> tuple[str, str]:

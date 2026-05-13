@@ -8,7 +8,7 @@ in without changing callers.
 
 Usage:
     provider = LocalMemoryProvider(db_session)
-    memories = provider.list(space_id="personal", scope="user")
+    memories = provider.list(space_id="personal", user_id="...", scope="user")
 """
 
 from abc import ABC, abstractmethod
@@ -16,12 +16,13 @@ from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
-    from ..models import Memory
+    from ..models import MemoryEntry
 
 
 # ---------------------------------------------------------------------------
 # Abstract interface
 # ---------------------------------------------------------------------------
+
 
 class MemoryProvider(ABC):
     """
@@ -91,10 +92,12 @@ class MemoryProvider(ABC):
 # LocalMemoryProvider — database-backed, the only enabled provider in MVP
 # ---------------------------------------------------------------------------
 
-def _row_to_dict(m: "Memory") -> dict:
+
+def _row_to_dict(m: "MemoryEntry") -> dict:
     return {
         "id": m.id,
         "space_id": m.space_id,
+        "subject_user_id": m.subject_user_id,
         "owner_user_id": m.owner_user_id,
         "workspace_id": m.workspace_id,
         "agent_id": m.agent_id,
@@ -106,6 +109,9 @@ def _row_to_dict(m: "Memory") -> dict:
         "content": m.content,
         "status": m.status,
         "visibility": m.visibility,
+        "sensitivity_level": m.sensitivity_level,
+        "selected_user_ids": m.selected_user_ids,
+        "last_confirmed_at": m.last_confirmed_at.isoformat() if m.last_confirmed_at else None,
         "confidence": m.confidence,
         "importance": m.importance,
         "source_id": m.source_id,
@@ -133,6 +139,7 @@ class LocalMemoryProvider(MemoryProvider):
 
     def __init__(self, db: "Session") -> None:
         from .store import MemoryStore
+
         self._db = db
         self._store = MemoryStore(db)
 
@@ -141,8 +148,10 @@ class LocalMemoryProvider(MemoryProvider):
         return "local"
 
     def get(self, memory_id: str, space_id: str) -> Optional[dict]:
-        m = self._store.get(self._db, memory_id, space_id)
-        return _row_to_dict(m) if m else None
+        m = self._store.get(memory_id)
+        if not m or m.space_id != space_id:
+            return None
+        return _row_to_dict(m)
 
     def list(
         self,
@@ -156,10 +165,13 @@ class LocalMemoryProvider(MemoryProvider):
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict]:
+        if not user_id:
+            return []
         rows = self._store.list(
             space_id=space_id,
             user_id=user_id,
             workspace_id=workspace_id,
+            scope=scope,
             memory_type=memory_type,
             status=status,
             limit=limit,
@@ -176,6 +188,8 @@ class LocalMemoryProvider(MemoryProvider):
         workspace_id: str | None = None,
         limit: int = 20,
     ) -> list[dict]:
+        if not user_id:
+            return []
         rows = self._store.search(
             query=query,
             space_id=space_id,
@@ -186,12 +200,29 @@ class LocalMemoryProvider(MemoryProvider):
         return [_row_to_dict(m) for m in rows]
 
     def create(self, space_id: str, data: dict) -> dict:
-        m = self._store.create(space_id=space_id, **data)
+        from ..schemas import MemoryCreate
+
+        payload = dict(data)
+        payload.setdefault("space_id", space_id)
+        acting = payload.pop("acting_user_id", None) or payload.pop("user_id", None)
+        mc = MemoryCreate.model_validate(payload)
+        m = self._store.create(mc, acting_user_id=acting)
         return _row_to_dict(m)
 
     def update(self, memory_id: str, space_id: str, updates: dict) -> dict:
-        m = self._store.update(memory_id, space_id, **updates)
-        return _row_to_dict(m)
+        from ..schemas import MemoryUpdate
+
+        m = self._store.get(memory_id)
+        if not m or m.space_id != space_id:
+            raise ValueError("memory not found")
+        mu = MemoryUpdate.model_validate(updates)
+        m2 = self._store.update(memory_id, mu)
+        if not m2:
+            raise ValueError("memory not found")
+        return _row_to_dict(m2)
 
     def delete(self, memory_id: str, space_id: str) -> bool:
-        return self._store.delete(memory_id, space_id)
+        m = self._store.get(memory_id)
+        if not m or m.space_id != space_id:
+            return False
+        return self._store.delete(memory_id)

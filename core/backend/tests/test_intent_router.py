@@ -1,5 +1,5 @@
 """
-Tests for IntentRouter — slash-command routing (Phase 1).
+Tests for IntentRouter — slash-command routing.
 """
 import pytest
 from app.router.intent_router import IntentRouter, RoutingDecision

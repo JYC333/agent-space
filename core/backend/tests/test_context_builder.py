@@ -2,26 +2,39 @@ import pytest
 from app.memory.store import MemoryStore
 from app.memory.context_builder import ContextBuilder
 from app.schemas import MemoryCreate
-from tests.conftest import SPACE, USER
+from tests.conftest import SPACE, USER, ensure_space, ensure_user, ensure_workspace
 
 
-def _seed(db, scope, namespace, title, content, memory_type="semantic", importance=0.5):
+def _seed(db, scope, namespace, title, content, memory_type="semantic", importance=0.5, **kwargs):
     store = MemoryStore(db)
-    store.create(MemoryCreate(
+    fields = dict(
         title=title,
         content=content,
         type=memory_type,
         scope=scope,
         namespace=namespace,
         space_id=SPACE,
-        owner_user_id=USER,
         importance=importance,
-    ))
+    )
+    fields.update(kwargs)
+    if "subject_user_id" not in fields:
+        fields["subject_user_id"] = USER
+    store.create(MemoryCreate(**fields), acting_user_id=USER)
 
 
 def test_context_builder_returns_package(db):
     _seed(db, "user", "user.default.preferences", "Prefers Python", "I prefer Python.", importance=0.8)
-    _seed(db, "system", "system.policy", "System rule", "Always be concise.", importance=1.0)
+    _seed(
+        db,
+        "system",
+        "system.policy",
+        "System rule",
+        "Always be concise.",
+        importance=1.0,
+        subject_user_id=None,
+        owner_user_id=None,
+        visibility="space_shared",
+    )
 
     builder = ContextBuilder(db)
     pkg = builder.build(space_id=SPACE, user_id=USER)
@@ -49,6 +62,7 @@ def test_context_builder_requires_user_id(db):
 
 
 def test_context_builder_does_not_include_unrelated_memories(db):
+    ensure_user(db, "other_user")
     _seed(db, "user", "user.default", "Alice pref", "Alice prefers Go.", importance=0.8)
 
     builder = ContextBuilder(db)
@@ -59,18 +73,23 @@ def test_context_builder_does_not_include_unrelated_memories(db):
 
 
 def test_context_builder_cross_space_isolation(db):
+    ensure_space(db, "space_a")
+    ensure_space(db, "space_b")
     store = MemoryStore(db)
-    store.create(MemoryCreate(
-        title="Space A memory",
-        content="Private to space A.",
-        type="semantic",
-        scope="user",
-        namespace="user.default",
-        space_id="space_a",
-        owner_user_id=USER,
-        visibility="space_shared",
-        importance=0.9,
-    ))
+    store.create(
+        MemoryCreate(
+            title="Space A memory",
+            content="Private to space A.",
+            type="semantic",
+            scope="user",
+            namespace="user.default",
+            space_id="space_a",
+            subject_user_id=USER,
+            visibility="space_shared",
+            importance=0.9,
+        ),
+        acting_user_id=USER,
+    )
 
     builder = ContextBuilder(db)
     # Context for space_b must not see space_a memory
@@ -79,20 +98,27 @@ def test_context_builder_cross_space_isolation(db):
 
 
 def test_context_builder_workspace_isolation(db):
+    ensure_user(db, "user_creator")
+    ensure_user(db, "user_reader")
+    ensure_workspace(db, "ws-a", SPACE, created_by_user_id="user_creator")
+    ensure_workspace(db, "ws-b", SPACE, created_by_user_id="user_creator")
     # user_creator creates a workspace_shared memory in ws-a
     store = MemoryStore(db)
-    store.create(MemoryCreate(
-        title="WS-A project",
-        content="Project A detail.",
-        type="project",
-        scope="workspace",
-        namespace="workspace.ws-a.project",
-        space_id=SPACE,
-        owner_user_id="user_creator",
-        workspace_id="ws-a",
-        visibility="workspace_shared",
-        importance=0.9,
-    ))
+    store.create(
+        MemoryCreate(
+            title="WS-A project",
+            content="Project A detail.",
+            type="project",
+            scope="workspace",
+            namespace="workspace.ws-a.project",
+            space_id=SPACE,
+            subject_user_id="user_creator",
+            workspace_id="ws-a",
+            visibility="workspace_shared",
+            importance=0.9,
+        ),
+        acting_user_id="user_creator",
+    )
 
     builder = ContextBuilder(db)
     # user_reader querying ws-a sees it

@@ -20,7 +20,7 @@ Agent            — product-level actor (space-scoped, policy-governed, memory-
     ↓ dispatches via
 Runtime Adapter  — CLI tool or execution backend (replaceable)
     ↓ optionally calls
-Model Provider   — underlying LLM API (Anthropic, OpenAI, …) [Phase 2+]
+Model Provider   — underlying LLM API (Anthropic, OpenAI, …) [future direct mode]
 ```
 
 These are three distinct concerns. Mixing them (e.g. "Claude IS the agent") is a design error.
@@ -34,7 +34,7 @@ The agent-space core owns the Agent layer. CLI tools and providers are pluggable
 | `claude_code` | CLI wrapper | `CLAUDE.md`  | active | Wraps `claude` CLI (Claude Code)         |
 | `codex_cli`   | CLI wrapper | `AGENTS.md`  | active | Wraps `codex` CLI (OpenAI Codex CLI)     |
 
-> `claude_cli` is a legacy alias for `claude_code` — prefer `claude_code` in new configs.
+> Configs may still say `claude_cli`; the backend maps that id to the same adapter as `claude_code`. Prefer `claude_code` in new manifests.
 
 ## Planned / Future Adapters
 
@@ -48,11 +48,11 @@ The agent-space core owns the Agent layer. CLI tools and providers are pluggable
 
 Runs carry a `model_selection_mode` field:
 
-| Mode | Meaning | Phase |
+| Mode | Meaning | Milestone |
 |---|---|---|
 | `cli_default` | CLI uses its own configured model/account/subscription | **MVP** |
 | `cli_model_override` | Agent-space passes `--model` flag to the CLI | Future |
-| `agent_space_provider` | Agent-space calls model API directly | Phase 2+ |
+| `agent_space_provider` | Agent-space calls model API directly | Future |
 
 Default is always `cli_default`.
 
@@ -66,7 +66,7 @@ def adapter_type(self) -> str: ...     # stable ID used in _ADAPTER_REGISTRY
 
 def is_available(self) -> bool: ...    # check if CLI/SDK is installed
 
-def run(self, prompt, context, workspace_path, timeout) -> AgentRunResult: ...
+def run(self, prompt, context, workspace_path, timeout) -> RuntimeExecutionResult: ...
 
 # Optional (have defaults in base class):
 def detect(self) -> CLIStatus: ...              # probe version, executable path
@@ -97,7 +97,7 @@ tracking uses an accuracy hierarchy:
 | `estimated` | Parsed from CLI stdout |
 | `unknown` | Runtime seconds + run count only (MVP default) |
 
-The `AgentRun` table carries `runtime_seconds`, `usage_accuracy`, `estimated_input_tokens`,
+The `Run` table carries `runtime_seconds`, `usage_accuracy`, `estimated_input_tokens`,
 `estimated_output_tokens`. A `UsageEvent` table records per-run events.
 
 ## CLIAdapterConfig

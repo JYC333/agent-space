@@ -45,7 +45,7 @@ CREATE TABLE workspace_memberships (
 
 ## Rules
 
-- Every data record (Memory, Session, Task, AgentRun, etc.) carries a `space_id`.
+- Every data record (Memory, Session, Task, Run, etc.) carries a `space_id`.
 - The ContextBuilder requires `space_id` and `user_id` — it will raise if either is missing.
 - Memory queries filter by `space_id` first. No query can retrieve memory across spaces.
 - `space_shared` visibility means visible to all members of the same space.

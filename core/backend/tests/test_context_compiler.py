@@ -269,7 +269,7 @@ def test_constraints_section(tmp_path):
         target=TargetFormat.claude,
         task_goal="Task",
         sandbox_dir=str(tmp_path),
-        constraints=["Do not modify the database schema", "Keep backward compatibility"],
+        constraints=["Do not modify the database schema", "Keep wire format stable"],
     )
     text = (tmp_path / "CLAUDE.md").read_text()
     assert "Constraints" in text

@@ -51,7 +51,7 @@ Request changes → agent re-runs with annotation context
 ```
 DiffReview:
   id, space_id, workspace_id, user_id
-  source_run_id   — FK → AgentRun (null if human-authored)
+  source_run_id   — FK → Run (null if human-authored)
   patch_text      — raw unified diff
   file_paths      — JSON list of affected paths
   status          — pending | approved | rejected | revision_requested

@@ -26,32 +26,25 @@ Runtime execution
 """
 from __future__ import annotations
 
-import logging
 import subprocess
-from datetime import datetime, UTC
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..auth.api_key import get_identity
 from ..config import settings
 from ..db import get_db
-from ..models import WorkspaceSession, Workspace
+from ..feature_gates import feature_not_implemented
+from ..models import Workspace
 from ..workspace.path_policy import PathPolicy, PathPolicyError
-
-log = logging.getLogger(__name__)
+from ..agents.base import RuntimeExecutionResult
 
 router = APIRouter(prefix="/workspace-console", tags=["workspace_console"])
 
 _policy = PathPolicy()
-
-
-def _new_id() -> str:
-    return str(ULID())
 
 
 # ── Path helpers ──────────────────────────────────────────────────────────────
@@ -190,7 +183,7 @@ class RuntimeInfo(BaseModel):
     models: list[str]
 
 
-class WorkspaceSessionCreate(BaseModel):
+class ConsoleSessionCreate(BaseModel):
     workspace_id: Optional[str] = None
     agent_id: Optional[str] = None
     runtime_adapter: str = "claude_code"
@@ -206,9 +199,6 @@ _RUNTIME_SPECS: list[dict] = [
     {"id": "claude_code",   "name": "Claude Code",    "models": ["claude-sonnet-4-6", "claude-opus-4-7"]},
     {"id": "codex",         "name": "OpenAI Codex",   "models": ["codex-latest"]},
 ]
-
-# CLI runtimes that execute asynchronously via BackgroundTask
-_ASYNC_RUNTIMES = frozenset({"claude_code", "codex"})
 
 
 def _make_adapter(runtime: str, model: str | None = None):
@@ -233,8 +223,8 @@ def _is_available(runtime: str) -> bool:
         return False
 
 
-def _result_to_events(result) -> list[dict]:
-    """Convert an AgentRunResult to the RuntimeEvent list stored in WorkspaceSession."""
+def _result_to_events(result: "RuntimeExecutionResult") -> list[dict]:
+    """Convert a RuntimeExecutionResult to the RuntimeEvent list for a console session."""
     events: list[dict] = []
     if result.output:
         events.append({"type": "text_delta", "content": result.output})
@@ -274,93 +264,6 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
         messages.append({"role": "assistant", "content": "".join(current_response)})
 
     return messages
-
-
-# ── Background task execution ─────────────────────────────────────────────────
-
-def _open_session():
-    """Open a DB session for use in background tasks. Overridable in tests."""
-    from ..db import SessionLocal
-    return SessionLocal()
-
-
-def _execute_session_background(
-    session_id: str,
-    runtime: str,
-    prompt: str,
-    workspace_path: str | None,
-    model: str | None,
-    prior_events: list[dict] | None = None,
-) -> None:
-    """
-    Run a real adapter for a console session (new session or continuation).
-
-    Called as a FastAPI BackgroundTask after the HTTP response is sent.
-    Opens its own DB session (the request session is already closed).
-
-    prior_events: events already stored before this turn's user_turn marker.
-    When continuing a session, these contain the conversation history.
-    """
-    db = _open_session()
-    try:
-        s = db.query(WorkspaceSession).filter(WorkspaceSession.id == session_id).first()
-        if not s:
-            return
-
-        adapter = _make_adapter(runtime, model)
-        if adapter is None:
-            new_events = [{"type": "run_failed", "error": f"Unknown runtime: {runtime}"}]
-            s.events_json = (prior_events or []) + [{"type": "user_turn", "prompt": prompt}] + new_events
-            s.status = "failed"
-            s.updated_at = datetime.now(UTC)
-            db.commit()
-            return
-
-        try:
-            # Build conversation history for adapters that support it
-            conversation = _events_to_messages(prior_events or []) if prior_events else None
-            has_prior = bool(prior_events)
-
-            result = adapter.run(
-                prompt,
-                context={},
-                workspace_path=workspace_path,
-                conversation=conversation,
-                continue_conversation=has_prior,
-            )
-            new_events = _result_to_events(result)
-            s.status = "completed" if result.success else "failed"
-        except Exception as exc:
-            log.error("Workspace session %s failed: %s", session_id, exc)
-            new_events = [{"type": "run_failed", "error": str(exc)}]
-            s.status = "failed"
-
-        # Reconstruct full event list: prior history + user_turn + new events
-        s.events_json = (prior_events or []) + [{"type": "user_turn", "prompt": prompt}] + new_events
-        s.updated_at = datetime.now(UTC)
-        db.commit()
-    finally:
-        db.close()
-
-
-# ── Session output helper ─────────────────────────────────────────────────────
-
-def _session_out(s: WorkspaceSession) -> dict:
-    return {
-        "id": s.id,
-        "space_id": s.space_id,
-        "workspace_id": s.workspace_id,
-        "created_by_user_id": s.created_by_user_id,
-        "agent_id": s.agent_id,
-        "runtime_adapter": s.runtime_adapter,
-        "model": s.model,
-        "prompt": s.prompt,
-        "status": s.status,
-        "notes": s.notes,
-        "events": s.events_json or [],
-        "created_at": s.created_at.isoformat(),
-        "updated_at": s.updated_at.isoformat(),
-    }
 
 
 # ── Routes: workspaces ────────────────────────────────────────────────────────
@@ -491,86 +394,26 @@ def list_sessions(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _ = ids
-    q = db.query(WorkspaceSession).filter(WorkspaceSession.space_id == space_id)
-    if workspace_id:
-        q = q.filter(WorkspaceSession.workspace_id == workspace_id)
-    items = q.order_by(WorkspaceSession.created_at.desc()).limit(limit).all()
-    return {"items": [_session_out(s) for s in items]}
+    del workspace_id, limit, ids, db
+    return {"items": []}
 
 
 @router.post("/sessions", status_code=201)
 def create_session(
-    data: WorkspaceSessionCreate,
-    background_tasks: BackgroundTasks,
+    data: ConsoleSessionCreate,
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
     """
-    Create and run a console session.
+    Create and run a console session (not persisted until workspace session storage exists).
 
-    - anthropic_api: runs synchronously, returns completed/failed session.
-    - claude_code / codex: saves as "running", dispatches background task, returns
-      immediately. Client polls GET /sessions/{id} until status changes.
+    Unknown runtimes are rejected with 400 before the not-implemented response.
     """
-    space_id, user_id = ids
-
-    # Reject unknown runtimes early
+    del ids, db
     known = {s["id"] for s in _RUNTIME_SPECS}
     if data.runtime_adapter not in known:
         raise HTTPException(status_code=400, detail=f"Unknown runtime: '{data.runtime_adapter}'")
-
-    # Resolve workspace path if provided
-    workspace_path: str | None = None
-    if data.workspace_id:
-        ws = db.query(Workspace).filter(
-            Workspace.id == data.workspace_id,
-            Workspace.owner_space_id == space_id,
-            Workspace.status == "active",
-        ).first()
-        if ws:
-            workspace_path = str(_ws_path(ws))
-
-    user_turn_event = {"type": "user_turn", "prompt": data.prompt}
-
-    # ── Synchronous runtimes ────────────────────────────────────────────────
-    if data.runtime_adapter == "anthropic_api":
-        adapter = _make_adapter("anthropic_api", data.model)
-        result = adapter.run(data.prompt, context={}, workspace_path=workspace_path)
-        events = [user_turn_event] + _result_to_events(result)
-        status = "completed" if result.success else "failed"
-
-    # ── Async CLI runtimes ──────────────────────────────────────────────────
-    else:
-        # Persist the user_turn marker immediately so the session isn't empty
-        # while the background task is running.
-        events = [user_turn_event]
-        status = "running"
-
-    s = WorkspaceSession(
-        id=_new_id(),
-        space_id=space_id,
-        workspace_id=data.workspace_id,
-        agent_id=data.agent_id,
-        created_by_user_id=user_id,
-        runtime_adapter=data.runtime_adapter,
-        model=data.model,
-        prompt=data.prompt,
-        status=status,
-        events_json=events,
-    )
-    db.add(s)
-    db.commit()
-    db.refresh(s)
-
-    if status == "running":
-        background_tasks.add_task(
-            _execute_session_background,
-            s.id, data.runtime_adapter, data.prompt, workspace_path, data.model,
-            prior_events=None,
-        )
-
-    return _session_out(s)
+    feature_not_implemented("workspace_console_sessions")
 
 
 @router.get("/sessions/{session_id}")
@@ -579,90 +422,23 @@ def get_session(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _ = ids
-    s = db.query(WorkspaceSession).filter(
-        WorkspaceSession.id == session_id,
-        WorkspaceSession.space_id == space_id,
-    ).first()
-    if not s:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return _session_out(s)
+    del session_id, ids, db
+    feature_not_implemented("workspace_console_sessions")
 
 
-class WorkspaceSessionRunTurn(BaseModel):
+class ConsoleSessionRunTurn(BaseModel):
     prompt: str
 
 
 @router.post("/sessions/{session_id}/run")
 def run_session_turn(
     session_id: str,
-    data: WorkspaceSessionRunTurn,
-    background_tasks: BackgroundTasks,
+    data: ConsoleSessionRunTurn,
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    """
-    Append a new prompt turn to an existing session, preserving conversation history.
-
-    The session must be in a terminal state (completed / failed / stopped).
-    For anthropic_api, the full message history is passed to the model.
-    For claude_code, the --continue flag is used to resume Claude's last conversation.
-    Returns the updated session; CLI runtimes return status="running" immediately.
-    """
-    space_id, _ = ids
-    s = db.query(WorkspaceSession).filter(
-        WorkspaceSession.id == session_id,
-        WorkspaceSession.space_id == space_id,
-    ).first()
-    if not s:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if s.status not in ("completed", "failed", "stopped"):
-        raise HTTPException(status_code=409, detail="Session is still running")
-
-    # Resolve workspace path (same workspace as the original session)
-    workspace_path: str | None = None
-    if s.workspace_id:
-        ws = db.query(Workspace).filter(
-            Workspace.id == s.workspace_id,
-            Workspace.owner_space_id == space_id,
-            Workspace.status == "active",
-        ).first()
-        if ws:
-            workspace_path = str(_ws_path(ws))
-
-    prior_events: list[dict] = s.events_json or []
-    user_turn_event = {"type": "user_turn", "prompt": data.prompt}
-
-    if s.runtime_adapter == "anthropic_api":
-        adapter = _make_adapter("anthropic_api", s.model)
-        conversation = _events_to_messages(prior_events)
-        result = adapter.run(
-            data.prompt,
-            context={},
-            workspace_path=workspace_path,
-            conversation=conversation,
-        )
-        new_events = [user_turn_event] + _result_to_events(result)
-        s.events_json = prior_events + new_events
-        s.status = "completed" if result.success else "failed"
-        s.updated_at = datetime.now(UTC)
-        db.commit()
-        db.refresh(s)
-        return _session_out(s)
-
-    # CLI runtimes — async background task
-    s.events_json = prior_events + [user_turn_event]
-    s.status = "running"
-    s.updated_at = datetime.now(UTC)
-    db.commit()
-    db.refresh(s)
-
-    background_tasks.add_task(
-        _execute_session_background,
-        s.id, s.runtime_adapter, data.prompt, workspace_path, s.model,
-        prior_events=prior_events,
-    )
-    return _session_out(s)
+    del session_id, data, ids, db
+    feature_not_implemented("workspace_console_sessions")
 
 
 @router.post("/sessions/{session_id}/stop")
@@ -671,15 +447,5 @@ def stop_session(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _ = ids
-    s = db.query(WorkspaceSession).filter(
-        WorkspaceSession.id == session_id,
-        WorkspaceSession.space_id == space_id,
-    ).first()
-    if not s:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if s.status == "running":
-        s.status = "stopped"
-        s.updated_at = datetime.now(UTC)
-        db.commit()
-    return _session_out(s)
+    del session_id, ids, db
+    feature_not_implemented("workspace_console_sessions")

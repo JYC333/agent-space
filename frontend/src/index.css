@@ -114,7 +114,7 @@ html.theme-light {
 :root {
   --font-sans: "Inter Variable", "Inter", system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --as-bg-2:  var(--accent);   /* hover surface alias */
+  --as-bg-2:  var(--accent);   /* hover surface mirror */
 }
 
 @keyframes as-pulse-ring {

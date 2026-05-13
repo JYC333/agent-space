@@ -18,6 +18,8 @@ class TestDeployerClient:
 
         with patch("app.deployment.client.socket.socket") as mock_sock_class:
             mock_sock = MagicMock()
+            mock_sock.__enter__.return_value = mock_sock
+            mock_sock.__exit__.return_value = False
             mock_sock_class.return_value = mock_sock
             mock_sock.recv.return_value = b'{"job_id": "abc", "status": "succeeded"}\n'
 
@@ -32,12 +34,14 @@ class TestDeployerClient:
             assert sent["args"]["RUN_ID"] == "run-123"
 
     def test_submit_job_no_args(self, tmp_path):
-        """submit_job works without args (backwards compatible)."""
+        """submit_job works without args (same defaults as minimal callers)."""
         sock_path = tmp_path / "deployer.sock"
         sock_path.touch()
 
         with patch("app.deployment.client.socket.socket") as mock_sock_class:
             mock_sock = MagicMock()
+            mock_sock.__enter__.return_value = mock_sock
+            mock_sock.__exit__.return_value = False
             mock_sock_class.return_value = mock_sock
             mock_sock.recv.return_value = b'{"job_id": "abc", "status": "succeeded"}\n'
 

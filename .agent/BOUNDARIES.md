@@ -34,7 +34,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 **B10** — Agents do not directly write active memory. All memory updates must go through the proposal → user approval → activation flow.
 
-**B11** — Every memory read must be logged in `MemoryAccessLog`. This feeds the MemoryEvolver fitness function.
+**B11** — Every memory read must be logged in `MemoryReadTrace` (table `memory_access_logs`). This feeds the MemoryEvolver fitness function.
 
 **B12** — External chat capture (e.g. conversation imports) must create activity records first, not active memory.
 
@@ -42,7 +42,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 ## Execution Boundaries
 
-**B13** — `claude_cli` and `codex_cli` adapters are always sandboxed (`_SANDBOXED_ADAPTERS` in runner.py). The sandbox level is risk-based: `medium` (default) → git worktree + local executor; `high`/`critical` → one-shot Docker container. An agent can escalate `risk_level` but cannot remove itself from `_SANDBOXED_ADAPTERS`.
+**B13** — `_SANDBOXED_ADAPTERS` (claude_code, codex_cli, and future coding runtimes) are always sandboxed. The sandbox level is risk-based: `medium` (default) → git worktree + local executor; `high`/`critical` → one-shot Docker container. An agent can escalate `risk_level` but cannot remove an adapter from `_SANDBOXED_ADAPTERS`.
 
 **B14** — Vendor context files (CLAUDE.md, AGENTS.md, Cursor rules) are generated artefacts written by ContextCompiler to the sandbox directory. They are not the source of truth and are never written directly to the real workspace by default.
 
@@ -56,7 +56,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 **B17** — Workspace file access must go through `WorkspaceManager` and `PathPolicy`. Adapters must not access arbitrary host paths.
 
-**B18** — Sandboxes are temporary execution areas. Long-term records are: artifacts, diffs, logs, and approved proposals. Sandbox directories may be cleaned up after artifact collection.
+**B18** — Sandboxes are short-lived execution areas. Long-term records are: artifacts, diffs, logs, and approved proposals. Sandbox directories may be cleaned up after artifact collection.
 
 **B19** — Agents should not directly modify real workspaces. Preferred flow: `workspace → git worktree/sandbox → agent execution → validation → diff/artifacts → approval → apply patch`.
 
@@ -99,6 +99,20 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 **B31** — All model primary keys must be UUIDs (or equivalent globally-unique strings). Auto-increment integer PKs are not allowed — they break sync across devices.
 
 **B32** — Sync must never overwrite user data without explicit conflict resolution. Sync conflicts surface in the UI; the user decides. Memory changes through sync still require the proposal → approval flow.
+
+---
+
+## Resilience Boundaries
+
+**B-R1** — `Run.status` includes `degraded` in addition to `queued|running|succeeded|failed|cancelled|waiting_for_review`. A run is `degraded` when it completes but with partial or compromised quality — the output is accessible but flagged for user review.
+
+**B-R2** — `Run.mode` includes `live` (real execution, persists changes) and `dry_run` (preview, no persistent changes, artifacts not saved).
+
+**B-R3** — Artifact export is explicit: every artifact has `path` and/or `content`; `GET /api/v1/artifacts/{id}/export` returns a file download. Artifact paths point to persistent storage (`~/aspace/artifacts/`), not sandbox working directories.
+
+**B-R4** — `Proposal` has explicit temporal fields: `created_at`, `decided_at`, `deadline` (soft, optional), and computed `expired` (true when deadline passed and status is still `pending`). `urgency` field (`low|normal|high|critical`) affects sort order.
+
+**B-R5** — All temporal fields are explicit on Run: `created_at`, `started_at`, `completed_at`, `scheduled_at`. No derived timestamps.
 
 ---
 

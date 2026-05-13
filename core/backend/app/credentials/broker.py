@@ -36,15 +36,10 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from ulid import ULID
 
 from ..config import settings
 
 log = logging.getLogger(__name__)
-
-
-def _new_id() -> str:
-    return str(ULID())
 
 
 # ---------------------------------------------------------------------------
@@ -330,25 +325,10 @@ class CredentialBroker:
         action: str = "credential.grant",
         reason: str | None = None,
     ) -> None:
-        """Write a CliCredentialEvent audit record."""
-        from ..models import CliCredentialEvent
-        try:
-            event = CliCredentialEvent(
-                id=_new_id(),
-                run_id=run_id,
-                space_id=space_id,
-                runtime=grant.runtime if grant else "unknown",
-                profile_id=grant.profile_id if grant else "none",
-                executor_mode=grant.executor_mode if grant else "none",
-                risk_level="unknown",
-                readonly=grant.readonly if grant else False,
-                action=action,
-                reason=reason,
-            )
-            db.add(event)
-            db.commit()
-        except Exception as exc:
-            log.warning("credential audit write failed: %s", exc)
+        # DB-backed credential usage events (e.g. CliCredentialEvent rows) are not implemented yet;
+        # there is no matching table in the canonical initial migration. Intentional no-op.
+        del db, run_id, space_id, grant, action, reason
+        return
 
 
 # ---------------------------------------------------------------------------

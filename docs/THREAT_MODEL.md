@@ -16,7 +16,7 @@ for each.
 - `ContextBuilder` raises `ValueError` if called without `space_id`; never queries across spaces.
 - `PolicyEngine.rule_space_boundary` denies any action where requesting `space_id` differs from resource `space_id`.
 - Every `MemoryStore` query includes `space_id` in its WHERE clause — no global query path exists.
-- `MemoryAccessLog` records every read for after-the-fact auditability.
+- `MemoryReadTrace` records every read for after-the-fact auditability.
 
 ---
 
@@ -30,7 +30,7 @@ for each.
 - `Memory.visibility` defaults to `private`; private memories filter to `owner_user_id == user_id`.
 - `ContextBuilder` always passes the requesting `user_id`; the memory store enforces visibility.
 - Agent's `memory_policy_json.readable_scopes` limits which scopes are fetched at all.
-- `MemoryAccessLog` records agent_id alongside user_id for every access.
+- `MemoryReadTrace` records agent_id alongside user_id for every access.
 
 ---
 
@@ -134,7 +134,7 @@ for each.
 
 ## Threat 10: Audit log tampering
 
-**Scenario**: A compromised service deletes `MemoryAccessLog`, `CredentialAccessLog`, or `ApprovalEvent` records to hide actions.
+**Scenario**: A compromised service deletes `MemoryReadTrace`, `CredentialAccessLog`, or `ApprovalEvent` records to hide actions.
 
 **Impact**: Loss of auditability; forensic gap.
 
@@ -147,7 +147,7 @@ for each.
 
 ## Threat 11: PII / secrets in run logs
 
-**Scenario**: Agent prompts or tool outputs contain PII or API keys stored verbatim in `AgentRun.prompt` or `ToolCall.output_json`.
+**Scenario**: Agent prompts or tool outputs contain PII or API keys stored verbatim in `Run.prompt` or `ToolCall.output_json`.
 
 **Impact**: PII exposure via log access.
 
@@ -182,4 +182,4 @@ for each.
 | File access | `PathPolicy.validate()` |
 | Credential access | `Credential.encrypted_secret_ref` + `CredentialAccessLog` |
 | Capability evolution | `draft → proposed → testing → enabled` lifecycle |
-| Audit trail | `MemoryAccessLog`, `CredentialAccessLog`, `ApprovalEvent`, `ToolCall` |
+| Audit trail | `MemoryReadTrace`, `CredentialAccessLog`, `ApprovalEvent`, `ToolCall` |

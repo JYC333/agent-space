@@ -3,10 +3,10 @@ Tests for post-run hooks — docs_sync_reminder and the hook registration system
 """
 import logging
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from app.agents.runner import register_post_run_hook, _fire_post_run_hooks, _POST_RUN_HOOKS
-from app.agents.base import AgentRunResult
+from app.agents.base import RuntimeExecutionResult
 
 
 def _make_run(adapter_type="echo", run_id="test-run"):
@@ -17,7 +17,7 @@ def _make_run(adapter_type="echo", run_id="test-run"):
 
 
 def _make_result(output=""):
-    return AgentRunResult(success=True, output=output)
+    return RuntimeExecutionResult(success=True, output=output)
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ def test_fire_hooks_swallows_exceptions():
     _POST_RUN_HOOKS.remove(bad_hook)
 
 
-def test_fire_hooks_logs_exception_but_continues(caplog):
+def test_fire_hooks_logs_exception_but_continues():
     called_after = []
 
     @register_post_run_hook
@@ -76,11 +76,15 @@ def test_fire_hooks_logs_exception_but_continues(caplog):
     def after(run, result):
         called_after.append(True)
 
-    with caplog.at_level(logging.WARNING, logger="app.agents.hooks"):
+    import app.agents.runner as runner_mod
+
+    with patch.object(runner_mod.log, "warning") as mock_warning:
         _fire_post_run_hooks(_make_run(), _make_result())
 
     assert called_after  # second hook still ran
-    assert any("boom" in r.message for r in caplog.records)
+    mock_warning.assert_called()
+    joined = " ".join(str(c) for c in mock_warning.call_args_list)
+    assert "boom" in joined
 
     _POST_RUN_HOOKS.remove(raises)
     _POST_RUN_HOOKS.remove(after)
@@ -99,7 +103,7 @@ def test_docs_sync_reminder_logs_on_structural_file_mention(caplog):
     with caplog.at_level(logging.INFO, logger="app.agents.hooks"):
         _fire_post_run_hooks(run, result)
 
-    assert any("models.py" in r.message for r in caplog.records)
+    assert "models.py" in caplog.text
 
 
 def test_docs_sync_reminder_silent_when_no_structural_file(caplog):
@@ -112,7 +116,7 @@ def test_docs_sync_reminder_silent_when_no_structural_file(caplog):
         _fire_post_run_hooks(run, result)
 
     # No structural file names → no log message from docs_sync_reminder
-    assert not any("review .agent/ docs" in r.message for r in caplog.records)
+    assert "review .agent/ docs" not in caplog.text
 
 
 def test_docs_sync_reminder_silent_when_result_is_none():
@@ -131,7 +135,6 @@ def test_docs_sync_reminder_detects_multiple_files(caplog):
     with caplog.at_level(logging.INFO, logger="app.agents.hooks"):
         _fire_post_run_hooks(run, result)
 
-    relevant = [r for r in caplog.records if "review .agent/ docs" in r.message]
-    assert len(relevant) == 1
-    assert "runner.py" in relevant[0].message
-    assert "context_compiler.py" in relevant[0].message
+    assert "review .agent/ docs" in caplog.text
+    assert "runner.py" in caplog.text
+    assert "context_compiler.py" in caplog.text

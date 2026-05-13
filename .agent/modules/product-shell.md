@@ -56,7 +56,7 @@ Settings            — space config, user prefs, API keys, runtime
 - Navigation items that have no data must show empty state, not hide entirely
 
 ## Related Files
-- `frontend/src/App.jsx` — current top-level app (needs shell refactor)
+- `frontend/src/App.jsx` — current top-level app (shell redesign pending)
 - `frontend/src/pages/` — page-level components (each needs space awareness)
 - `frontend/src/components/` — reusable component library
 

@@ -1,7 +1,7 @@
 """
 Provider catalog — describes litellm open format.
 
-No hardcoded provider list. Any litellm-compatible model name works.
+No hardcoded provider list. Any model name LiteLLM supports works.
 """
 
 from typing import TypedDict

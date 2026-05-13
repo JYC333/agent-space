@@ -46,6 +46,9 @@ _REGISTRY: list[Module] = [
     Module("sessions",     "Sessions",       "app.sessions",     always_on=True),
     Module("tasks",        "Tasks",          "app.tasks",        always_on=True),
     Module("agents",        "Agents",          "app.agents",        always_on=True),
+    Module("runs",          "Runs",            "app.runs",          always_on=True),
+    Module("proposals",     "Proposals",       "app.proposals",     always_on=True),
+    Module("artifacts",     "Artifacts",       "app.artifacts",     always_on=True),
     Module("jobs",           "Job Queue",         "app.jobs",          always_on=True),
     Module("cli_adapters",  "CLI Adapters",      "app.cli_adapters",  always_on=True),
     Module("credentials",   "CLI Credentials",   "app.credentials",   always_on=True),
@@ -54,6 +57,7 @@ _REGISTRY: list[Module] = [
     Module("activity",  "Activity Inbox",  "app.activity",   always_on=True),
     Module("workspace_console", "Workspace Console", "app.workspace_console", always_on=True),
     Module("providers",         "Providers",        "app.providers",        always_on=True),
+    Module("home",              "Home",             "app.home",             always_on=True),
     # Optional modules — not yet implemented; uncomment when ready.
     # Module("wiki",     "Wiki",            "app.knowledge",  always_on=False),
     # Module("cards",    "Cards",           "app.cards",      always_on=False),

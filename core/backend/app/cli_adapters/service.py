@@ -2,7 +2,7 @@ from __future__ import annotations
 """
 CLIAdapterService — CRUD and detection for per-space CLI tool configurations.
 
-Manages CLIAdapterConfig records and delegates adapter detection to the
+Manages RuntimeAdapter records and delegates adapter detection to the
 registered adapter classes. Detection is non-destructive (read-only probes).
 """
 
@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 log = logging.getLogger(__name__)
 
-from ..models import CLIAdapterConfig
+from ..models import RuntimeAdapter
 from ..schemas import CLIAdapterConfigCreate, CLIAdapterConfigUpdate, CLIStatusOut
 from ..config import settings
 
@@ -46,39 +46,39 @@ class CLIAdapterService:
     # CRUD
     # ------------------------------------------------------------------
 
-    def list(self, space_id: str) -> list[CLIAdapterConfig]:
+    def list(self, space_id: str) -> list[RuntimeAdapter]:
         return (
-            self.db.query(CLIAdapterConfig)
-            .filter(CLIAdapterConfig.space_id == space_id)
-            .order_by(CLIAdapterConfig.created_at)
+            self.db.query(RuntimeAdapter)
+            .filter(RuntimeAdapter.space_id == space_id)
+            .order_by(RuntimeAdapter.created_at)
             .all()
         )
 
-    def get(self, config_id: str, space_id: str) -> CLIAdapterConfig | None:
+    def get(self, config_id: str, space_id: str) -> RuntimeAdapter | None:
         return (
-            self.db.query(CLIAdapterConfig)
-            .filter(CLIAdapterConfig.id == config_id, CLIAdapterConfig.space_id == space_id)
+            self.db.query(RuntimeAdapter)
+            .filter(RuntimeAdapter.id == config_id, RuntimeAdapter.space_id == space_id)
             .first()
         )
 
-    def create(self, data: CLIAdapterConfigCreate, space_id: str) -> CLIAdapterConfig:
-        config = CLIAdapterConfig(
+    def create(self, data: CLIAdapterConfigCreate, space_id: str) -> RuntimeAdapter:
+        config = RuntimeAdapter(
             id=_new_id(),
             space_id=space_id,
             adapter_id=data.adapter_id,
             display_name=data.display_name,
             enabled=data.enabled,
-            executable_path=data.executable_path,
-            default_mode=data.default_mode,
-            quota_status=data.quota_status,
-            notes=data.notes,
+            health_status=data.quota_status,
         )
+        config.executable_path = data.executable_path
+        config.default_mode = data.default_mode
+        config.notes = data.notes
         self.db.add(config)
         self.db.commit()
         self.db.refresh(config)
         return config
 
-    def update(self, config_id: str, space_id: str, data: CLIAdapterConfigUpdate) -> CLIAdapterConfig | None:
+    def update(self, config_id: str, space_id: str, data: CLIAdapterConfigUpdate) -> RuntimeAdapter | None:
         config = self.get(config_id, space_id)
         if not config:
             return None
@@ -249,7 +249,7 @@ def fetch_quota_via_pty() -> dict:
 
         fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack('HHHH', ROWS, COLS, 0, 0))
 
-        # Phase 1 — wait for the interactive prompt (❯).
+        # Step 1 — wait for the interactive prompt (❯).
         prompt_detected = False
         t0 = time.time()
         while time.time() - t0 < 15:
@@ -272,7 +272,7 @@ def fetch_quota_via_pty() -> dict:
         time.sleep(1.0 if prompt_detected else 2.0)
         os.write(master_fd, b'/usage\r')
 
-        # Phase 2 — snapshot until quota data appears or 90 s timeout.
+        # Step 2 — snapshot until quota data appears or 90 s timeout.
         best_screen = ''
         deadline = time.time() + 90
         while time.time() < deadline:
@@ -473,7 +473,7 @@ def _get_adapter_instance(adapter_id: str):
     registry = {
         "echo": EchoAgentAdapter,
         "claude_code": ClaudeCLIAdapter,
-        "claude_cli": ClaudeCLIAdapter,  # legacy alias
+        "claude_cli": ClaudeCLIAdapter,
         "codex_cli": CodexCLIAdapter,
     }
     cls = registry.get(adapter_id)

@@ -340,7 +340,7 @@ function ProviderCard({
   config: ProviderConfig
   onDelete: (id: string) => void
   onTest: (id: string) => Promise<{ success: boolean; message: string }>
-  onUpdate: (id: string, data: { name: string; models: string; api_base: string }) => Promise<void>
+  onUpdate: (id: string, data: { name: string; models: string[]; api_base: string }) => Promise<void>
 }) {
   const [deleting, setDeleting] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -558,7 +558,7 @@ export default function ModelProvidersPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Model Providers</h1>
           <p className="text-sm text-muted-foreground">
-            Configure LLM providers via LiteLLM — any litellm-compatible model works.
+            Configure LLM providers via LiteLLM — any model name LiteLLM supports works.
           </p>
         </div>
       </div>

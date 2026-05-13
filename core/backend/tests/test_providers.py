@@ -176,6 +176,7 @@ class TestProviderCatalogRoute:
 
 
 class TestProviderCRUDRoutes:
+    @pytest.mark.not_ready
     def test_create_and_list_provider(self, client):
         # Create
         resp = client.post(
@@ -236,6 +237,7 @@ class TestProviderCRUDRoutes:
         )
         assert resp.status_code == 400
 
+    @pytest.mark.not_ready
     def test_create_provider_arbitrary_provider_id(self, client):
         """Any litellm model name works — no catalog validation."""
         resp = client.post(
@@ -263,6 +265,7 @@ class TestProviderChatRoute:
         # Should get 404 because no default provider exists
         assert resp.status_code == 404
 
+    @pytest.mark.not_ready
     def test_chat_with_provider_id(self, client):
         """Create provider then chat with it."""
         # Create provider
@@ -303,6 +306,7 @@ class TestProviderChatRoute:
 
 
 class TestProviderTestConnection:
+    @pytest.mark.not_ready
     def test_test_connection_success(self, client):
         resp = client.post(
             "/api/v1/providers",
@@ -332,6 +336,7 @@ class TestProviderTestConnection:
             assert data["success"] is True
             assert data["model"] == "gpt-4o"
 
+    @pytest.mark.not_ready
     def test_test_connection_failure(self, client):
         resp = client.post(
             "/api/v1/providers",

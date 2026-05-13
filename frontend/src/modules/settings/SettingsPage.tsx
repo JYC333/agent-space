@@ -10,6 +10,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { Badge } from '../../components/ui/badge'
+import { UserAvatar } from '../../components/UserAvatar'
 import { cn, errMsg } from '../../lib/utils'
 import type { SpaceMember, SpaceType } from '../../types/api'
 
@@ -203,14 +204,12 @@ export default function SettingsPage() {
               <div className="divide-y divide-border">
                 {members.map(m => (
                   <div key={m.user_id} className="flex items-center gap-3 py-2.5">
-                    <div
-                      className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-[11px] font-semibold text-accent-foreground"
-                      style={{ background: 'color-mix(in oklch, var(--primary) 12%, transparent)' }}
-                    >
-                      {m.avatar_url
-                        ? <img src={m.avatar_url} alt="" className="w-full h-full object-cover rounded-full" />
-                        : m.display_name.slice(0, 2).toUpperCase()
-                      }
+                    <div className="size-7 shrink-0 overflow-hidden rounded-full border border-border">
+                      <UserAvatar
+                        avatarUrl={m.avatar_url}
+                        displayName={m.display_name}
+                        email={m.email}
+                      />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-[13px] font-medium text-foreground truncate">{m.display_name}</div>

@@ -2,14 +2,14 @@ from __future__ import annotations
 """
 IntentRouter — routes user input to the appropriate agent, capability, and workspace.
 
-Current status: STUB — Phase 1 explicit command routing only.
+Current status: STUB — explicit slash-command routing only.
 
-Phase 1 (now): slash-command routing
+Today: slash-command routing
     /memory reflect       → system.memory-curator-agent + memory.reflect
     /agent run <name>     → AgentService.run(agent_name)
     /capabilities list    → CapabilityRegistry.list_capabilities()
 
-Phase 2 (future): LLM-based classification
+Future: LLM-based classification
     - Embedding search to select capability
     - LLM intent classifier
     - All routes still pass through PolicyEngine before dispatch
@@ -33,7 +33,7 @@ class RoutingDecision:
 
 class IntentRouter:
     """
-    Phase 1: parses explicit slash commands.
+    Parses explicit slash commands.
     Returns None for anything that doesn't match — callers fall back to default.
     """
 

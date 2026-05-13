@@ -36,7 +36,7 @@ _LIGHTWEIGHT_TASK_TYPES: frozenset[str] = frozenset({
 
 _HEAVY_TASK_TYPES: frozenset[str] = frozenset({
     "code_modify",
-    "refactor",
+    "structure_change",
     "test_fix",
     "migration",
     "repo_analysis",

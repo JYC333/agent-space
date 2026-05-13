@@ -1,7 +1,7 @@
 import pytest
 from app.sessions.service import SessionService
 from app.schemas import SessionCreate, MessageCreate
-from tests.conftest import SPACE, USER
+from tests.conftest import SPACE, USER, ensure_user
 
 
 def test_create_session(db):
@@ -39,6 +39,8 @@ def test_add_message_to_nonexistent_session(db):
 
 
 def test_session_isolation_across_users(db):
+    ensure_user(db, "user_a")
+    ensure_user(db, "user_b")
     svc = SessionService(db)
     svc.create_session(SessionCreate(title="A session", user_id="user_a", space_id=SPACE))
     svc.create_session(SessionCreate(title="B session", user_id="user_b", space_id=SPACE))

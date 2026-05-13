@@ -85,6 +85,10 @@ def _ensure_personal_space(db: Session, user: User) -> Space:
         role="owner",
         status="active",
     ))
+    db.flush()
+    from ..spaces.hooks import on_space_created
+
+    on_space_created(db, space.id, seeded_by_user_id=user.id)
     log.info("Created personal space '%s' for user %s", space.name, user.email)
     return space
 

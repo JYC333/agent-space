@@ -63,7 +63,7 @@ access_factor(m) = 0.7 + 0.3 × min(log(1 + access_count) / log(101), 1.0)
 | `Memory.access_count` | `memories` table | `ContextBuilder.build()` |
 | `Memory.last_accessed_at` | `memories` table | `ContextBuilder.build()` |
 | `Memory.fitness_score` | `memories` table | `MemoryEvolver.compute_fitness_scores()` |
-| `MemoryAccessLog` row | `memory_access_logs` | `ContextBuilder.build()` |
+| `MemoryReadTrace` row | `memory_access_logs` | `ContextBuilder.build()` |
 
 ---
 

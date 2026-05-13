@@ -14,7 +14,7 @@ import json
 import shutil
 import subprocess
 from datetime import datetime, UTC
-from .base import AgentAdapter, AgentRunResult, CLIStatus, CLIAdapterCapabilities, CredentialSpec
+from .base import AgentAdapter, RuntimeExecutionResult, CLIStatus, CLIAdapterCapabilities, CredentialSpec
 from .cli_adapter import LocalExecutor
 
 
@@ -85,7 +85,7 @@ class ClaudeCLIAdapter(AgentAdapter):
         timeout: int = 300,
         continue_conversation: bool = False,
         **_kwargs,
-    ) -> AgentRunResult:
+    ) -> RuntimeExecutionResult:
         """
         Run a prompt via the Claude Code CLI.
 
@@ -93,7 +93,7 @@ class ClaudeCLIAdapter(AgentAdapter):
         its most recent conversation rather than starting a fresh session.
         """
         if not self.is_available():
-            return AgentRunResult(
+            return RuntimeExecutionResult(
                 success=False, output="",
                 error="claude CLI is not installed or not in PATH.",
                 exit_code=-1,
@@ -135,7 +135,7 @@ class ClaudeCLIAdapter(AgentAdapter):
         )
         completed = datetime.now(UTC)
 
-        return AgentRunResult(
+        return RuntimeExecutionResult(
             success=result.returncode == 0,
             output=result.stdout,
             error=result.stderr if result.stderr else None,

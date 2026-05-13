@@ -2,7 +2,7 @@ from __future__ import annotations
 """
 MemoryReflector — analyzes a session's messages and generates memory proposals.
 
-Mode "placeholder": deterministic extraction without LLM.
+Non-LLM mode: deterministic extraction without an external model.
 Mode "llm": uses Claude to produce structured proposals.
 """
 
@@ -77,11 +77,11 @@ class MemoryReflector:
             return self._reflect_llm(
                 messages, session_id, space_id, user_id, workspace_id
             )
-        return self._reflect_placeholder(
+        return self._reflect_pattern(
             messages, session_id, space_id, user_id, workspace_id
         )
 
-    def _reflect_placeholder(
+    def _reflect_pattern(
         self,
         messages: list[Message],
         session_id: str,
@@ -132,12 +132,12 @@ class MemoryReflector:
         try:
             import anthropic
         except ImportError:
-            return self._reflect_placeholder(
+            return self._reflect_pattern(
                 messages, session_id, space_id, user_id, workspace_id
             )
 
         if not settings.anthropic_api_key:
-            return self._reflect_placeholder(
+            return self._reflect_pattern(
                 messages, session_id, space_id, user_id, workspace_id
             )
 

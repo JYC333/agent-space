@@ -37,18 +37,17 @@ agent-space/
 ## Quick Start
 
 ```bash
-# 1. Copy and fill in secrets
-cp deployments/local/.env.example deployments/local/.env
-# edit .env — set ANTHROPIC_API_KEY at minimum
-
-# 2. Start everything
+# 1. Start everything (creates ~/aspace/dev/ and .env from template on first run)
 ./scripts/start.sh
+
+# 2. Edit secrets
+#    ~/aspace/dev/.env — set ANTHROPIC_API_KEY at minimum, then re-run ./scripts/start.sh
 ```
 
-`start.sh` builds the sandbox image on first run, then starts backend + frontend via Docker Compose.
+`start.sh` builds the sandbox image on first run, then starts backend + frontend + deployer via Docker Compose. Data lives under **`~/aspace/<mode>/`** (default mode `dev`).
 
 ```
-Web UI:           http://localhost:5173
+Web UI:           http://localhost:3000   # Docker maps container 5173 → host 3000 (dev compose)
 API:              http://localhost:8000
 Interactive docs: http://localhost:8000/docs
 ```
@@ -56,9 +55,10 @@ Interactive docs: http://localhost:8000/docs
 ### Options
 
 ```bash
-./scripts/start.sh           # Docker Compose (default, recommended)
+./scripts/start.sh           # Docker Compose — dev (default)
+./scripts/start.sh --test    # separate ports + ~/aspace/test
+./scripts/start.sh --prod
 ./scripts/start.sh --build   # force image rebuild
-./scripts/start.sh --local   # bare processes, no Docker (sandbox agents won't work)
 ```
 
 ### Runtime target
