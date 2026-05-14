@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { FileCheck } from 'lucide-react'
 import { toast } from 'sonner'
-import { memoryApi, proposalsApi } from '../../api/client'
+import { proposalsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
 import type { Proposal } from '../../types/api'
@@ -33,7 +33,7 @@ export default function ProposalsPage() {
   const load = useCallback(async () => {
     try {
       const r = await proposalsApi.list({
-        status: filterStatus || undefined,
+        status: filterStatus === '' ? 'all' : filterStatus,
         type: filterType || undefined,
         urgency: filterUrgency || undefined,
         expired: filterExpired === '' ? undefined : filterExpired === 'true',
@@ -47,15 +47,16 @@ export default function ProposalsPage() {
 
   async function decide(id: string, action: 'accept' | 'reject') {
     try {
-      if (action === 'accept') await memoryApi.accept(id)
-      else await memoryApi.reject(id)
+      if (action === 'accept') await proposalsApi.accept(id)
+      else await proposalsApi.reject(id)
       toast.success(`Proposal ${action}ed`)
       await load()
     } catch (e) { toast.error(errMsg(e)) }
   }
 
-  const canMemoryDecide = (p: Proposal) =>
-    (p.status === 'pending' || p.status === 'needs_changes') && p.proposal_type === 'memory_update'
+  const canDecide = (p: Proposal) =>
+    p.status === 'pending' &&
+    (p.proposal_type === 'memory_update' || p.proposal_type === 'code_patch')
 
   return (
     <div className="p-6 space-y-6">
@@ -74,7 +75,7 @@ export default function ProposalsPage() {
             <h1 className="text-xl font-semibold tracking-tight">Proposals</h1>
             <p className="text-sm text-muted-foreground">
               Canonical list from <code className="text-xs bg-muted px-1 rounded">GET /api/v1/proposals</code>
-              {' '}— memory accept/reject still uses the memory workflow where applicable.
+              {' '}— accept/reject use <code className="text-xs bg-muted px-1 rounded">POST /api/v1/proposals/…</code>.
             </p>
           </div>
         </div>
@@ -87,8 +88,7 @@ export default function ProposalsPage() {
                 { value: 'pending', label: 'pending' },
                 { value: 'accepted', label: 'accepted' },
                 { value: 'rejected', label: 'rejected' },
-                { value: 'needs_changes', label: 'needs_changes' },
-                { value: '', label: 'any' },
+                { value: '', label: 'all statuses' },
               ]}
               onChange={setFilterStatus}
             />
@@ -139,7 +139,7 @@ export default function ProposalsPage() {
               <Link to={`/proposals/${p.id}`} className="font-medium text-sm text-accent-foreground hover:underline">
                 {p.proposed_title}
               </Link>
-              {canMemoryDecide(p) && (
+              {canDecide(p) && (
                 <div className="flex gap-1.5 shrink-0">
                   <Button size="sm" variant="success" onClick={() => decide(p.id, 'accept')}>Accept</Button>
                   <Button size="sm" variant="destructive" onClick={() => decide(p.id, 'reject')}>Reject</Button>

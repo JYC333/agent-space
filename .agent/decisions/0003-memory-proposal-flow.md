@@ -15,7 +15,7 @@ In early versions, agents could call MemoryStore directly to create or update me
 
 Flow:
 1. Raw input or agent session produces outputs
-2. Agent (or reflector) generates a `MemoryProposal` with proposed content and rationale
+2. Agent (or reflector) generates a `memory_update` proposal with proposed content and rationale
 3. User reviews the proposal and approves or rejects it
 4. Only approved proposals call `MemoryStore.create()` / `update()`
 

@@ -18,6 +18,7 @@ def link_run_outputs_to_tasks(
     run: Run,
     artifact: Artifact | None = None,
     proposal: Proposal | None = None,
+    proposal_role: str = "memory_update",
 ) -> None:
     """Attach produced artifact / proposal to every task linked via ``TaskRun``."""
 
@@ -65,7 +66,7 @@ def link_run_outputs_to_tasks(
                         space_id=run.space_id,
                         task_id=tr.task_id,
                         proposal_id=proposal.id,
-                        role="memory_update",
+                        role=proposal_role,
                     )
                 )
     if task_run_rows:

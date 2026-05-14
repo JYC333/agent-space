@@ -2,11 +2,12 @@ from __future__ import annotations
 """
 MemoryStore — CRUD and query operations for long-term memories.
 
-Read access is enforced via ``read_auth.can_read_memory`` on every list/search/get path.
+Single-row reads and mutations require an explicit ``space_id`` via
+:meth:`MemoryStore.get_for_space` (and ``can_read_memory`` / ``can_read_entry`` at
+the API boundary). There is no id-only lookup on the store.
 """
 
 from datetime import datetime, UTC
-from typing import Optional
 from ulid import ULID
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -75,10 +76,15 @@ class MemoryStore:
         self.db.refresh(mem)
         return mem
 
-    def get(self, memory_id: str) -> MemoryEntry | None:
+    def get_for_space(self, space_id: str, memory_id: str) -> MemoryEntry | None:
+        """Return the row only when it belongs to ``space_id`` and is not soft-deleted."""
         return (
             self.db.query(MemoryEntry)
-            .filter(MemoryEntry.id == memory_id, MemoryEntry.deleted_at.is_(None))
+            .filter(
+                MemoryEntry.id == memory_id,
+                MemoryEntry.space_id == space_id,
+                MemoryEntry.deleted_at.is_(None),
+            )
             .first()
         )
 
@@ -101,8 +107,14 @@ class MemoryStore:
             include_public_templates=include_public_templates,
         )
 
-    def update(self, memory_id: str, data: MemoryUpdate) -> MemoryEntry | None:
-        mem = self.get(memory_id)
+    def update(
+        self,
+        memory_id: str,
+        data: MemoryUpdate,
+        *,
+        space_id: str,
+    ) -> MemoryEntry | None:
+        mem = self.get_for_space(space_id, memory_id)
         if not mem:
             return None
         payload = data.model_dump(exclude_none=True)
@@ -119,8 +131,8 @@ class MemoryStore:
         self.db.refresh(mem)
         return mem
 
-    def delete(self, memory_id: str) -> bool:
-        mem = self.get(memory_id)
+    def delete(self, memory_id: str, *, space_id: str) -> bool:
+        mem = self.get_for_space(space_id, memory_id)
         if not mem:
             return False
         mem.deleted_at = datetime.now(UTC)

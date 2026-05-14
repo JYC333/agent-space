@@ -13,7 +13,7 @@ from ..models import Proposal
 from ..schemas import ProposalOut, ProposalSummaryOut
 
 # Proposal statuses treated as still in human review for expiry semantics.
-REVIEWABLE_PROPOSAL_STATUSES = frozenset({"pending", "waiting_for_review"})
+REVIEWABLE_PROPOSAL_STATUSES = frozenset({"pending"})
 
 
 def _to_utc_aware(dt: datetime) -> datetime:

@@ -535,6 +535,7 @@ def upgrade() -> None:
     sa.Column('relevant_period_end', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('metadata_json', sa.JSON(), nullable=True),
     sa.CheckConstraint("storage_path is null or storage_path not like '/%'", name='ck_artifacts_storage_path_relative'),
     sa.ForeignKeyConstraint(['proposal_id'], ['proposals.id'], ),
     sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),

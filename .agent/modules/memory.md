@@ -6,7 +6,7 @@ Scoped, long-term context for agents and users. Not raw data — curated, approv
 ## Owns
 - `Memory` model, `MemoryStore` CRUD
 - `MemoryReadTrace` (every read recorded)
-- `MemoryProposal` model and proposal workflow
+- Memory update proposal workflow
 - `MemoryProvider` ABC + `LocalMemoryProvider`
 - `ContextBuilder` — assembles ContextPackage; resolves ContextAttachments
 - `ContextCompiler` — security-scans, budget-trims, writes vendor files to sandbox
@@ -28,7 +28,7 @@ Memory:
   created_by, approved_by
   access_count, last_accessed_at, fitness_score
 
-MemoryProposal:
+Memory update proposal:
   id, space_id, user_id, workspace_id
   source_session_id, source_task_id, source_run_id, source_activity_id
   target_scope, target_namespace, target_visibility, memory_type
@@ -53,13 +53,13 @@ MemoryReadTrace:
 4. `ContextCompiler.compile()` → scans content → applies budget → writes CLAUDE.md / SOUL.md to sandbox
 
 **Proposal flow:**
-1. Agent creates `MemoryProposal` with rationale + source_evidence
-2. User approves via `POST /api/v1/memory/proposals/{id}/accept`
-3. `MemoryStore.create()` called; `approved_by` + `resulting_memory_id` set
+1. A durable memory mutation request creates a `memory_update` proposal with rationale and source evidence
+2. User approves via `POST /api/v1/proposals/{id}/accept`
+3. `MemoryStore.create()` is called; approval metadata and resulting memory linkage are set
 
 **Activity → proposal:**
 1. `ActivityRecord` created with raw content
-2. `POST /api/v1/activity/{id}/proposals` → `MemoryProposal` records with `source_activity_id`
+2. `POST /api/v1/activity/{id}/proposals` creates `memory_update` proposals with `source_activity_id`
 3. Normal approval flow proceeds
 
 ## Invariants
@@ -75,7 +75,7 @@ MemoryReadTrace:
 - `core/backend/app/memory/security.py`
 - `core/backend/app/memory/context_builder.py`
 - `core/backend/app/memory/context_compiler.py`
-- `core/backend/app/memory/proposals.py`
+- proposal API/service modules
 - `core/backend/app/memory/evolver.py`
 - `core/backend/app/memory/reflector.py`
 - `core/backend/app/schemas.py`

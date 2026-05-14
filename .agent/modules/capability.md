@@ -79,14 +79,14 @@ draft → proposed → testing → enabled
 4. `Capability` record created/updated in DB
 
 **Self-evolution (agent modifying capabilities):**
-1. Agent generates `capability_install` proposal
+1. Agent produces a patch and supporting artifact for review
 2. Sandbox test runs validate the new version
-3. User approves → capability version promoted to `enabled`
-4. Old version retired
+3. User-approved code changes are merged through the workspace review flow
+4. Old version retired after the new version is enabled
 
 ## Invariants
 - A capability without tests and a manifest is incomplete — cannot be `enabled`
-- Capability changes from agents must go through `capability_install` proposals
+- Capability changes from agents must go through the workspace review flow
 - `enabled` capabilities must pass their tests in CI-equivalent before promotion
 
 ## Related Files

@@ -41,7 +41,7 @@ class RuntimeAdapterResult:
     error_code: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    produced_artifact_paths: list[str] = field(default_factory=list)
+    produced_artifact_paths: list[Any] = field(default_factory=list)
     adapter_metadata: dict[str, Any] | None = None
     adapter_log_json: dict[str, Any] | None = None
 

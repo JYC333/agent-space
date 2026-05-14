@@ -20,7 +20,7 @@ User input
 | Service | Responsibility |
 |---|---|
 | `MemoryStore` | CRUD and query for long-term memories |
-| `MemoryProposalService` | Proposal lifecycle (create, accept, reject) |
+| `ProposalService` | Proposal lifecycle (create, accept, reject) |
 | `MemoryReflector` | Analyze sessions, generate proposals |
 | `ContextBuilder` | Assemble scoped context packages for agents |
 | `CapabilityRegistry` | Load, validate, and register capabilities |
@@ -31,7 +31,7 @@ User input
 ## Database schema (key tables)
 
 - `memories` — long-term memory store (multi-scope, multi-tenant)
-- `memory_proposals` — pending/accepted/rejected proposals
+- `proposals` — pending/accepted/rejected durable mutation proposals
 - `sessions` + `messages` + `session_summaries` — short-term conversational state
 - `capabilities` — registered capability manifests
 - `tasks` + `agent_runs` + `tool_calls` + `artifacts` — run logging

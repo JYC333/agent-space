@@ -14,7 +14,7 @@
   },
   "permissions": {
     "allow": [
-      "Bash(python -m pytest tests/test_agents.py -q)"
+      "Bash(python3 -m pytest core/backend/tests/unit/test_memory_store_get_for_space.py -q)"
     ]
   }
 }

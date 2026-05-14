@@ -46,7 +46,7 @@ export type MemoryType       = 'preference' | 'semantic' | 'episodic' | 'procedu
 export type MemoryScope      = 'user' | 'workspace' | 'capability' | 'agent' | 'system' | 'space'
 export type MemoryStatus     = 'active' | 'archived' | 'proposed' | 'rejected' | 'superseded'
 export type MemoryVisibility = 'private' | 'space_shared' | 'workspace_shared' | 'restricted' | 'public_template'
-export type ProposalStatus   = 'pending' | 'accepted' | 'rejected' | 'needs_changes'
+export type ProposalStatus   = 'pending' | 'accepted' | 'rejected'
 export type ActivityStatus     = 'raw' | 'processed' | 'proposals_generated' | 'archived'
 export type ActivitySourceType = 'user_input' | 'imported_chat' | 'web_capture' | 'file_import' | 'agent_run' | 'task_log' | 'manual'
 export type SessionStatus    = 'active' | 'closed'
@@ -540,6 +540,14 @@ export interface Proposal {
   selected_user_ids?: string[] | null
 }
 
+/** `POST /proposals/{id}/accept` — result depends on `proposal_type`. */
+export interface ProposalAcceptOut {
+  proposal: Proposal
+  result_type: 'memory_entry' | 'code_patch_apply'
+  /** `memory` for memory_entry; `updated_paths` for code_patch_apply. */
+  result: { memory?: Memory; updated_paths?: string[] }
+}
+
 export interface AgentOut {
   id: string
   space_id: string
@@ -622,7 +630,7 @@ export interface ReflectResult {
 
 export interface ApiError {
   error: string
-  message: string
+  message: string | Record<string, unknown>
   detail?: unknown
 }
 

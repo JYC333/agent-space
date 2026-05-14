@@ -97,11 +97,10 @@ is seeded automatically and printed to the server log on startup.
 ## Running Tests
 
 ```bash
-cd core/backend
-pytest tests/ -v --tb=short
+cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
 ```
 
-All 51 tests run without Docker (the echo adapter is used; sandbox paths are not exercised).
+``tests/conftest.py`` sets an isolated ``AGENT_SPACE_HOME`` before importing the app, so the suite does not open a real mode database.
 
 ## Key Concepts
 

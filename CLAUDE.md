@@ -55,9 +55,12 @@ API docs: http://localhost:8000/docs
 
 ## Running tests
 
+Canonical backend tests live under ``tests/unit``, ``tests/contracts``,
+``tests/invariants``, and ``tests/workflows``. ``tests/conftest.py`` sets an
+isolated ``AGENT_SPACE_HOME`` before importing the app.
+
 ```bash
-cd core/backend
-pytest tests/ -v --tb=short
+cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
 ```
 
 ## Key concepts
@@ -76,7 +79,7 @@ pytest tests/ -v --tb=short
 - `core/backend/app/modules/registry.py` — backend module loader (which features are active)
 - `core/backend/app/memory/store.py` — MemoryStore CRUD
 - `core/backend/app/memory/context_builder.py` — context package assembly (requires space_id)
-- `core/backend/app/memory/proposals.py` — proposal accept/reject workflow
+- `core/backend/app/proposals/api.py` — proposal review API
 - `core/backend/app/memory/reflector.py` — session → memory proposals
 - `core/backend/app/agents/runner.py` — agent run orchestration
 - `core/backend/app/capabilities/registry.py` — capability loader

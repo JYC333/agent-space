@@ -43,7 +43,7 @@ for each.
 **Mitigations**:
 - Memory content is injected as data in a structured context package, not as system-prompt instructions.
 - System prompt is set only from `Agent.system_prompt` (admin-controlled, not agent-writable).
-- All memory writes go through `MemoryProposalService.accept()` — requiring user approval before activation.
+- All memory writes go through proposal acceptance, requiring user approval before activation.
 - Agents have no tool permission to modify their own `system_prompt`.
 
 ---
@@ -55,7 +55,7 @@ for each.
 **Impact**: Remote code execution; full system compromise.
 
 **Mitigations**:
-- New capabilities must flow through `Proposal` (type: `capability_install`) → `ApprovalEvent`.
+- New capability code must flow through review-gated workspace changes.
 - `CapabilityRegistry.reload()` reads only from `core/capabilities/` (not agent-writable at runtime).
 - `Capability.status` lifecycle: `draft → proposed → testing → enabled`; agents cannot jump to `enabled`.
 - `CapabilityVersion` + `CapabilityTest` require passing tests before promotion.
@@ -125,7 +125,7 @@ for each.
 **Impact**: Incorrect data enters long-term memory; unsafe capability becomes active.
 
 **Mitigations**:
-- `MemoryProposalService.accept()` is the only write path to active `Memory` records.
+- Proposal acceptance is the only write path to active `Memory` records.
 - `Proposal` + `ApprovalEvent` provide a full audit trail (who, what decision, when, comment).
 - `required_approver_role` restricts who may approve high-risk proposals.
 - `PolicyEngine` returns `REQUIRE_APPROVAL` for protected scope writes; agents cannot bypass this.
@@ -178,7 +178,7 @@ for each.
 | Space isolation | `ContextBuilder` + `PolicyEngine.rule_space_boundary` |
 | User isolation | `Memory.visibility` + `owner_user_id` filtering |
 | Agent permissions | `tool_permissions_json` + `memory_policy_json` + `PolicyEngine` |
-| Write gating | `MemoryProposalService` + `Proposal` + `ApprovalEvent` |
+| Write gating | `ProposalService` + `Proposal` + `ApprovalEvent` |
 | File access | `PathPolicy.validate()` |
 | Credential access | `Credential.encrypted_secret_ref` + `CredentialAccessLog` |
 | Capability evolution | `draft → proposed → testing → enabled` lifecycle |

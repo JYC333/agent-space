@@ -24,6 +24,7 @@ def artifact_to_out(row: Artifact, *, include_content: bool = False) -> Artifact
         preview=row.preview,
         storage_ref=row.storage_ref,
         storage_path=row.storage_path,
+        metadata_json=dict(row.metadata_json) if row.metadata_json else None,
         has_inline_content=bool(row.content),
         content=(row.content if include_content else None),
         created_at=row.created_at,

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { Send, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
-import { memoryApi, sessionsApi, homeApi } from '../../api/client'
+import { proposalsApi, sessionsApi, homeApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { useAuth } from '../../contexts/AuthContext'
 import { errMsg } from '../../lib/utils'
@@ -336,8 +336,8 @@ function AppGallerySection({ groupKey, label }: { groupKey: AppGroup; label: str
   )
 }
 
-function canMemoryQuickDecide(p: HomePendingProposalItem) {
-  return p.proposal_type === 'memory_update'
+function canProposalQuickDecide(p: HomePendingProposalItem) {
+  return (p.proposal_type === 'memory_update' || p.proposal_type === 'code_patch')
     && p.status === 'pending'
 }
 
@@ -399,7 +399,7 @@ function ProposalStatusCard({
                   </div>
                 )}
               </div>
-              {canMemoryQuickDecide(p) && (
+              {canProposalQuickDecide(p) && (
                 <div className="flex gap-1 shrink-0">
                   <button
                     type="button"
@@ -585,8 +585,8 @@ export default function HomeGalleryPage() {
 
   async function decide(id: string, action: 'accept' | 'reject') {
     try {
-      if (action === 'accept') await memoryApi.accept(id)
-      else await memoryApi.reject(id)
+      if (action === 'accept') await proposalsApi.accept(id)
+      else await proposalsApi.reject(id)
       toast.success(`Proposal ${action}ed`)
       await loadSummary()
     } catch (e) {

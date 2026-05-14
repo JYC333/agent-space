@@ -1,20 +1,121 @@
 from __future__ import annotations
 """
-MemoryProposalService — manage the proposal → approval → active memory workflow.
+General proposal review: list, accept, reject — dispatches ``memory_update`` and ``code_patch``.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, UTC
 from typing import Optional
+
 from ulid import ULID
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, case, func, not_, or_
+from sqlalchemy.orm.attributes import flag_modified
 
-from ..models import Proposal, Run
+from ..models import MemoryEntry, Proposal, Run, Workspace
 from ..param_binding import duplicate_mapper
 from ..schemas import MemoryCreate
 
 
 _ALLOWED_URGENCY = frozenset({"low", "normal", "high", "critical"})
+_SUPPORTED_ACCEPT_TYPES = frozenset({"memory_update", "code_patch"})
+
+
+class UnsupportedProposalTypeError(Exception):
+    """Raised when ``accept`` is called for a proposal type that has no apply path."""
+
+    def __init__(self, proposal_type: str) -> None:
+        self.proposal_type = proposal_type
+        super().__init__(proposal_type)
+
+
+@dataclass
+class ProposalAcceptResult:
+    """Result of ``ProposalService.accept`` — memory or code_patch branch."""
+
+    proposal: Proposal
+    memory: MemoryEntry | None = None
+    updated_paths: list[str] | None = None
+
+
+class MemoryUpdateProposalApplier:
+    """Apply a vetted ``memory_update`` proposal to active memory (caller commits proposal state)."""
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def apply(self, proposal: Proposal, *, user_id: str) -> MemoryEntry:
+        from .store import MemoryStore
+
+        store = MemoryStore(self.db)
+        payload = proposal.payload_json or {}
+        vis = (payload.get("target_visibility") or "private").lower()
+        sens = (payload.get("sensitivity_level") or "normal").lower()
+
+        mem_data = MemoryCreate(
+            title=proposal.title,
+            content=proposal.proposed_content,
+            type=proposal.memory_type,
+            scope=proposal.target_scope,
+            namespace=proposal.target_namespace,
+            space_id=proposal.space_id,
+            visibility=vis,
+            sensitivity_level=sens,
+            owner_user_id=payload.get("owner_user_id"),
+            subject_user_id=payload.get("subject_user_id"),
+            selected_user_ids=payload.get("selected_user_ids"),
+            workspace_id=proposal.workspace_id,
+            source_proposal_id=proposal.id,
+        )
+        return store.create(
+            mem_data,
+            acting_user_id=user_id,
+            created_by=str(proposal.created_by_user_id or user_id),
+            approved_by=str(user_id),
+        )
+
+
+class CodePatchProposalApplier:
+    """Apply a vetted ``code_patch`` proposal to workspace files (caller commits proposal state)."""
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def apply(self, proposal: Proposal, *, space_id: str, user_id: str) -> list[str]:
+        from .code_patch_apply import CodePatchApplyError, apply_code_patch_payload
+
+        if not proposal.workspace_id:
+            raise CodePatchApplyError("code_patch proposal missing workspace_id")
+        ws = (
+            self.db.query(Workspace)
+            .filter(
+                Workspace.id == proposal.workspace_id,
+                Workspace.space_id == space_id,
+            )
+            .first()
+        )
+        if not ws:
+            raise CodePatchApplyError("workspace not found for proposal")
+
+        payload = proposal.payload_json or {}
+        patch = payload.get("patch")
+        if not isinstance(patch, dict):
+            raise CodePatchApplyError("invalid patch payload")
+
+        try:
+            return apply_code_patch_payload(
+                self.db,
+                workspace=ws,
+                patch=patch,
+                space_id=space_id,
+                user_id=user_id,
+                source_run_id=payload.get("source_run_id") or proposal.created_by_run_id,
+                proposal_id=proposal.id,
+            )
+        except CodePatchApplyError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise CodePatchApplyError(str(exc)) from exc
 
 
 def validate_proposal_review_fields(
@@ -51,8 +152,7 @@ def _urgency_priority_expr():
 
 
 def _expired_filter_sql(now: datetime):
-    reviewable = Proposal.status.in_(["pending", "waiting_for_review"])
-    return and_(reviewable, Proposal.expires_at.isnot(None), Proposal.expires_at < now)
+    return and_(Proposal.status == "pending", Proposal.expires_at.isnot(None), Proposal.expires_at < now)
 
 
 def _new_id() -> str:
@@ -85,6 +185,7 @@ def build_memory_update_proposal(
     urgency: str = "normal",
     review_deadline: datetime | None = None,
     expires_at: datetime | None = None,
+    created_by_run_id: str | None = None,
 ) -> Proposal:
     """Construct a canonical Proposal row for a memory_update workflow."""
     payload: dict = {
@@ -123,6 +224,7 @@ def build_memory_update_proposal(
         rationale=rationale,
         workspace_id=workspace_id,
         created_by_user_id=user_id,
+        created_by_run_id=created_by_run_id,
         risk_level=risk_level,
         urgency=urgency,
         review_deadline=review_deadline,
@@ -130,9 +232,13 @@ def build_memory_update_proposal(
     )
 
 
-class MemoryProposalService:
+class ProposalService:
+    """List, count, accept, and reject proposals for a space (memory_update + code_patch apply paths)."""
+
     def __init__(self, db: Session):
         self.db = db
+        self._memory_applier = MemoryUpdateProposalApplier(db)
+        self._code_patch_applier = CodePatchProposalApplier(db)
 
     def create_proposal(
         self,
@@ -290,7 +396,7 @@ class MemoryProposalService:
         return q.offset(offset).limit(limit).all()
 
     def count_reviewable_proposals(self, space_id: str, user_id: str) -> int:
-        """Count pending + waiting_for_review visible to user (same rules as list_proposals)."""
+        """Count pending proposals visible to user (same visibility rules as list_proposals)."""
         run_for_instructed = duplicate_mapper(Run)
         visible = or_(
             Proposal.created_by_user_id == user_id,
@@ -309,7 +415,7 @@ class MemoryProposalService:
             .filter(
                 Proposal.space_id == space_id,
                 visible,
-                Proposal.status.in_(["pending", "waiting_for_review"]),
+                Proposal.status == "pending",
             )
         )
         return q.scalar() or 0
@@ -322,7 +428,7 @@ class MemoryProposalService:
         limit: int = 20,
         offset: int = 0,
     ) -> list[Proposal]:
-        """List pending + waiting_for_review visible to user (same visibility as list_proposals)."""
+        """List pending proposals visible to user (same visibility as list_proposals)."""
         run_for_instructed = duplicate_mapper(Run)
         visible = or_(
             Proposal.created_by_user_id == user_id,
@@ -340,7 +446,7 @@ class MemoryProposalService:
             .filter(
                 Proposal.space_id == space_id,
                 visible,
-                Proposal.status.in_(["pending", "waiting_for_review"]),
+                Proposal.status == "pending",
             )
         )
         prio = _urgency_priority_expr()
@@ -460,49 +566,40 @@ class MemoryProposalService:
         proposal_id: str,
         space_id: str,
         user_id: str,
-    ) -> tuple[Proposal, "MemoryEntry"] | None:
-        from .store import MemoryStore
-        from ..models import MemoryEntry
-
+    ) -> ProposalAcceptResult | None:
         proposal = self.get(proposal_id)
         if not proposal or proposal.status != "pending":
+            return None
+        if proposal.preview:
             return None
         if proposal.space_id != space_id or proposal.created_by_user_id != user_id:
             return None
 
-        store = MemoryStore(self.db)
-        payload = proposal.payload_json or {}
-        vis = (payload.get("target_visibility") or "private").lower()
-        sens = (payload.get("sensitivity_level") or "normal").lower()
+        if proposal.proposal_type not in _SUPPORTED_ACCEPT_TYPES:
+            raise UnsupportedProposalTypeError(proposal.proposal_type)
 
-        mem_data = MemoryCreate(
-            title=proposal.title,
-            content=proposal.proposed_content,
-            type=proposal.memory_type,
-            scope=proposal.target_scope,
-            namespace=proposal.target_namespace,
-            space_id=proposal.space_id,
-            visibility=vis,
-            sensitivity_level=sens,
-            owner_user_id=payload.get("owner_user_id"),
-            subject_user_id=payload.get("subject_user_id"),
-            selected_user_ids=payload.get("selected_user_ids"),
-            workspace_id=proposal.workspace_id,
-            source_proposal_id=proposal.id,
-        )
-        memory = store.create(
-            mem_data,
-            acting_user_id=user_id,
-            created_by=str(proposal.created_by_user_id or user_id),
-            approved_by=str(user_id),
-        )
+        if proposal.proposal_type == "code_patch":
+            paths = self._code_patch_applier.apply(proposal, space_id=space_id, user_id=user_id)
+            proposal.status = "accepted"
+            proposal.decided_at = datetime.now(UTC)
+            payload = proposal.payload_json or {}
+            data = dict(payload)
+            data["applied_paths"] = paths
+            data["applied_at"] = datetime.now(UTC).isoformat()
+            proposal.payload_json = data
+            flag_modified(proposal, "payload_json")
+            self.db.commit()
+            self.db.refresh(proposal)
+            return ProposalAcceptResult(proposal=proposal, memory=None, updated_paths=paths)
+
+        memory = self._memory_applier.apply(proposal, user_id=user_id)
 
         proposal.status = "accepted"
         proposal.decided_at = datetime.now(UTC)
         proposal.resulting_memory_id = memory.id
         self.db.commit()
         self.db.refresh(proposal)
-        return proposal, memory
+        return ProposalAcceptResult(proposal=proposal, memory=memory, updated_paths=None)
 
     def reject(
         self,

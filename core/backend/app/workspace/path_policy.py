@@ -62,6 +62,8 @@ class PathPolicy:
         allowed_root: str | Path | None = None,
         mode: str = "read",
         workspace_type: str = "project",
+        *,
+        for_trusted_code_patch_apply: bool = False,
     ) -> Path:
         """
         Validate that `path` is safe to access.
@@ -75,6 +77,9 @@ class PathPolicy:
                            system_core enforces additional restrictions:
                              - all writes must go through worktree sandbox
                              - code_patch proposals required for code changes
+            for_trusted_code_patch_apply — when True with mode="write", allows approved
+                           ``code_patch`` apply to write otherwise-forbidden suffixes
+                           (e.g. ``.py``) under ``allowed_root`` only.
 
         Returns the resolved absolute Path.
         Raises PathPolicyError on any violation.
@@ -96,8 +101,12 @@ class PathPolicy:
             if fragment in resolved_str:
                 raise PathPolicyError(f"Access to '{fragment}' is forbidden")
 
-        # Write restrictions — applies to all workspaces
-        if mode == "write" and resolved.suffix in _FORBIDDEN_WRITE_SUFFIXES:
+        # Write restrictions — applies to all workspaces (bypass for user-approved patch apply)
+        if (
+            mode == "write"
+            and not for_trusted_code_patch_apply
+            and resolved.suffix in _FORBIDDEN_WRITE_SUFFIXES
+        ):
             raise PathPolicyError(
                 f"Agents may not write '{resolved.suffix}' files directly — "
                 "use a code_patch Proposal instead"

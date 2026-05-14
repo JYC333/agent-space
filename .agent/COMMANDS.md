@@ -27,12 +27,6 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # Run (development, with hot reload)
 uvicorn app.main:app --reload --port 8000
 
-# Run tests
-pytest tests/ -v --tb=short
-
-# Run a single test file
-pytest tests/test_context_compiler.py -v
-
 # Lint  [TODO: add ruff/flake8 config]
 # ruff check app/
 
@@ -42,6 +36,14 @@ pytest tests/test_context_compiler.py -v
 ```
 
 API docs (interactive): http://localhost:8000/docs
+
+Canonical backend test command from repo root:
+
+```bash
+cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
+```
+
+`tests/conftest.py` sets an isolated `AGENT_SPACE_HOME` before importing the app, so the suite cannot touch a real mode DB. Use `AGENT_SPACE_PYTEST_USE_REAL_HOME=1` only for explicit manual debugging.
 
 ## Frontend
 

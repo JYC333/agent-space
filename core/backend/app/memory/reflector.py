@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import Message
-from .proposals import MemoryProposalService
+from .proposals import ProposalService
 
 
 # Signal phrases that suggest a memory-worthy statement
@@ -57,7 +57,7 @@ def _extract_title(content: str) -> str:
 class MemoryReflector:
     def __init__(self, db: Session):
         self.db = db
-        self.proposal_svc = MemoryProposalService(db)
+        self.proposal_svc = ProposalService(db)
 
     def reflect(
         self,

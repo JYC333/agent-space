@@ -28,7 +28,8 @@ case "$TEST_PROFILE" in
             if [[ -f requirements.txt ]]; then
                 pip install -q -r requirements.txt 2>&1 | tail -5
             fi
-            pytest tests/ -v --tb=short 2>&1
+            # tests/conftest.py isolates AGENT_SPACE_HOME unless AGENT_SPACE_PYTEST_USE_REAL_HOME=1
+            python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short 2>&1
         else
             echo "ERROR: backend directory not found" >&2
             exit 1

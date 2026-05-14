@@ -26,10 +26,10 @@ memory:
   code_roots:
     - core/backend/app/memory
     - core/backend/app/activity
-    - core/backend/tests/test_memory.py
-    - core/backend/tests/test_context_builder.py
-    - core/backend/tests/test_context_compiler.py
-    - core/backend/tests/test_proposals.py
+    - core/backend/tests/contracts/test_memory_api.py
+    - core/backend/tests/invariants/test_memory_proposal_boundary.py
+    - core/backend/tests/unit/test_memory_store_get_for_space.py
+    - core/backend/tests/workflows/test_activity_to_memory_workflow.py
 
 agents:
   docs:
@@ -43,7 +43,8 @@ agents:
     - core/backend/app/agents            # service + adapters + api.py
     - core/backend/app/modules/registry.py
     - core/backend/app/workspace/sandbox_manager.py
-    - core/backend/tests/test_agents.py
+    - core/backend/tests/invariants/test_agent_version_immutability.py
+    - core/backend/tests/workflows/test_run_execution_workflow.py
 
 policy:
   docs:
@@ -60,16 +61,18 @@ capability:
   code_roots:
     - core/capabilities
     - core/backend/app/capabilities
-    - core/backend/tests/test_capabilities.py
+    - core/backend/tests/invariants/test_runtime_provider_separation.py
 
 proposals:
   docs:
     - .agent/modules/proposals.md
     - .agent/decisions/0003-memory-proposal-flow.md
   code_roots:
-    - core/backend/app/memory/proposals.py
+    - core/backend/app/proposals
+    - core/backend/app/memory
     - core/backend/app/memory/reflector.py
-    - core/backend/tests/test_proposals.py
+    - core/backend/tests/contracts/test_general_proposal_api.py
+    - core/backend/tests/invariants/test_proposal_approval_boundary.py
 
 sandbox:
   docs:

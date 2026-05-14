@@ -20,11 +20,13 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..agents.base import RuntimeExecutionResult
-from ..models import AgentVersion, MemoryEntry, Run
+from ..models import ActivityRecord, AgentVersion, MemoryEntry, Run
 from ..runtimes.base import RuntimeAdapterResult, RuntimeExecutionContext
 from ..runtimes.registry import instantiate_runtime_adapter
 from .adapter_resolution import AdapterResolutionError, resolve_runtime_adapter
 from .artifact_persistence import ArtifactPersistenceService
+from .produced_artifact_path_ingestion import ingest_produced_artifact_paths
+from .run_output_materialization import RunOutputMaterializer
 from .runtime_policy import compute_runtime_policy_decision
 from .sandbox_manager import execution_workspace
 from .removed_runtime_token import is_obsolete_runtime_override_token
@@ -57,6 +59,35 @@ def _assert_run_executable(run: Run) -> None:
             status_code=409,
             detail=f"Run '{run.id}' is waiting for review and cannot be executed",
         )
+
+
+def _append_run_execution_activity(
+    db: Session,
+    run: Run,
+    *,
+    activity_type: str,
+    title: str,
+    content: str,
+) -> None:
+    """Minimal durable audit trail for run execution (no HTTP / TestClient)."""
+    from ulid import ULID
+
+    now = _utcnow()
+    db.add(
+        ActivityRecord(
+            id=str(ULID()),
+            space_id=run.space_id,
+            source_run_id=run.id,
+            user_id=run.instructed_by_user_id,
+            activity_type=activity_type,
+            title=title,
+            content=(content or "")[:8000],
+            payload_json={},
+            occurred_at=now,
+            status="processed",
+            updated_at=now,
+        )
+    )
 
 
 class RunExecutionService:
@@ -182,10 +213,20 @@ class RunExecutionService:
         self.db.add(run)
         self.db.flush()
 
-        adapter = instantiate_runtime_adapter(resolved.adapter_type)
         user_prompt = (run.prompt or "").strip() or "(empty prompt)"
+        _append_run_execution_activity(
+            self.db,
+            run,
+            activity_type="run.execution.started",
+            title=f"Run execution started ({resolved.adapter_type})",
+            content=user_prompt,
+        )
+        self.db.flush()
+
+        adapter = instantiate_runtime_adapter(resolved.adapter_type)
 
         raw: RuntimeAdapterResult | None = None
+        path_ingest_errors: list[str] = []
         try:
             with execution_workspace(
                 space_id=run.space_id,
@@ -209,6 +250,17 @@ class RunExecutionService:
                     simulate_failure=simulate_failure,
                 )
                 raw = adapter.execute(ctx)
+                if (
+                    raw is not None
+                    and raw.success
+                    and getattr(raw, "produced_artifact_paths", None)
+                ):
+                    path_ingest_errors = ingest_produced_artifact_paths(
+                        self.db,
+                        run=run,
+                        source_root=workdir,
+                        entries=raw.produced_artifact_paths,
+                    )
         except Exception as exc:  # noqa: BLE001
             run.sandbox_path = None
             self.db.add(run)
@@ -249,6 +301,18 @@ class RunExecutionService:
             run.output_json = out
             self.db.flush()
 
+            mat_errors = RunOutputMaterializer(self.db).materialize(
+                run=run,
+                adapter_output=raw.output_json,
+                adapter_type=resolved.adapter_type,
+            )
+            merged_errors = [*path_ingest_errors, *mat_errors]
+            if merged_errors:
+                merged = dict(run.output_json or {})
+                merged["materialization_errors"] = merged_errors
+                run.output_json = merged
+                self.db.flush()
+
             if raw.output_text:
                 art = ArtifactPersistenceService(self.db).persist_text_file(
                     run=run,
@@ -262,6 +326,13 @@ class RunExecutionService:
             else:
                 artifacts_out = []
 
+            _append_run_execution_activity(
+                self.db,
+                run,
+                activity_type="run.execution.succeeded",
+                title=f"Run execution succeeded ({resolved.adapter_type})",
+                content=(raw.output_text or "")[:8000],
+            )
             self.db.commit()
             self._assert_no_memory_writes(run.id, run.space_id, mem_before)
 
@@ -298,6 +369,13 @@ class RunExecutionService:
             "runtime_policy_decision": decision.policy_snapshot,
             "required_sandbox_level": run.required_sandbox_level,
         }
+        _append_run_execution_activity(
+            self.db,
+            run,
+            activity_type="run.execution.failed",
+            title=f"Run execution failed ({resolved.adapter_type})",
+            content=run.error_message or "",
+        )
         self.db.commit()
         self._assert_no_memory_writes(run.id, run.space_id, mem_before)
 
@@ -340,6 +418,13 @@ class RunExecutionService:
             "required_sandbox_level": run.required_sandbox_level,
         }
         self.db.add(run)
+        _append_run_execution_activity(
+            self.db,
+            run,
+            activity_type="run.execution.failed",
+            title="Run execution failed",
+            content=f"{error_code}: {error_text}",
+        )
         self.db.commit()
         return RuntimeExecutionResult(
             success=False,

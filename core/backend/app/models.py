@@ -617,6 +617,7 @@ class Artifact(Base):
     relevant_period_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     # ORM mirrors for historical artifact field names.
     path = synonym("storage_path")

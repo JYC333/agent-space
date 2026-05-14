@@ -24,14 +24,6 @@ router = APIRouter(prefix="/providers", tags=["providers"])
 service = ModelService()
 
 
-def _get_db():
-    db = next(get_db())
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 @router.get("/litellm-providers")
 def get_litellm_providers():
     """Return the list of provider IDs supported by litellm."""
@@ -67,7 +59,7 @@ def get_catalog():
 @router.get("", response_model=list[ProviderConfigOut])
 def list_configs(
     ids: tuple[str, str] = Depends(get_identity),
-    db: Session = Depends(_get_db),
+    db: Session = Depends(get_db),
 ):
     """List all provider configurations for the current space."""
     space_id, _ = ids
@@ -78,7 +70,7 @@ def list_configs(
 def create_config(
     body: ProviderConfigCreate,
     ids: tuple[str, str] = Depends(get_identity),
-    db: Session = Depends(_get_db),
+    db: Session = Depends(get_db),
 ):
     """Add a new provider configuration. No provider catalog validation — any litellm model name works."""
     space_id, _ = ids
@@ -96,7 +88,7 @@ def create_config(
 def get_config(
     config_id: str,
     ids: tuple[str, str] = Depends(get_identity),
-    db: Session = Depends(_get_db),
+    db: Session = Depends(get_db),
 ):
     """Get a single provider configuration."""
     space_id, _ = ids
@@ -124,7 +116,7 @@ def update_config(
     config_id: str,
     body: ProviderConfigUpdate,
     ids: tuple[str, str] = Depends(get_identity),
-    db: Session = Depends(_get_db),
+    db: Session = Depends(get_db),
 ):
     """Update a provider configuration."""
     space_id, _ = ids
@@ -138,7 +130,7 @@ def update_config(
 def delete_config(
     config_id: str,
     ids: tuple[str, str] = Depends(get_identity),
-    db: Session = Depends(_get_db),
+    db: Session = Depends(get_db),
 ):
     """Delete (soft) a provider configuration."""
     space_id, _ = ids
@@ -152,12 +144,12 @@ def delete_config(
 async def test_config(
     config_id: str,
     ids: tuple[str, str] = Depends(get_identity),
-    db: Session = Depends(_get_db),
+    db: Session = Depends(get_db),
 ):
     """Test a provider configuration."""
     space_id, _ = ids
     try:
-        return await service.test_connection(config_id, space_id)
+        return await service.test_connection(db, config_id, space_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -170,7 +162,7 @@ async def test_config(
 async def chat(
     body: ChatRequestModel,
     ids: tuple[str, str] = Depends(get_identity),
-    db: Session = Depends(_get_db),
+    db: Session = Depends(get_db),
 ):
     """
     Send a chat message via a configured LLM provider.
@@ -180,7 +172,7 @@ async def chat(
     """
     space_id, _ = ids
     try:
-        return await service.chat(body, space_id)
+        return await service.chat(db, body, space_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:

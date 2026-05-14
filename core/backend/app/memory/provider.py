@@ -148,8 +148,8 @@ class LocalMemoryProvider(MemoryProvider):
         return "local"
 
     def get(self, memory_id: str, space_id: str) -> Optional[dict]:
-        m = self._store.get(memory_id)
-        if not m or m.space_id != space_id:
+        m = self._store.get_for_space(space_id, memory_id)
+        if not m:
             return None
         return _row_to_dict(m)
 
@@ -212,17 +212,17 @@ class LocalMemoryProvider(MemoryProvider):
     def update(self, memory_id: str, space_id: str, updates: dict) -> dict:
         from ..schemas import MemoryUpdate
 
-        m = self._store.get(memory_id)
-        if not m or m.space_id != space_id:
+        m = self._store.get_for_space(space_id, memory_id)
+        if not m:
             raise ValueError("memory not found")
         mu = MemoryUpdate.model_validate(updates)
-        m2 = self._store.update(memory_id, mu)
+        m2 = self._store.update(memory_id, mu, space_id=space_id)
         if not m2:
             raise ValueError("memory not found")
         return _row_to_dict(m2)
 
     def delete(self, memory_id: str, space_id: str) -> bool:
-        m = self._store.get(memory_id)
-        if not m or m.space_id != space_id:
+        m = self._store.get_for_space(space_id, memory_id)
+        if not m:
             return False
-        return self._store.delete(memory_id)
+        return self._store.delete(memory_id, space_id=space_id)

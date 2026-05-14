@@ -68,7 +68,7 @@ POST /api/v1/proposals/{id}/reject
 
 ## Related Files
 - `core/backend/app/memory/store.py` — MemoryStore CRUD
-- `core/backend/app/memory/proposals.py` — Proposal workflow
+- proposal API/service modules — Proposal workflow
 - `core/backend/app/models.py` — MemoryEntry, Proposal, MemoryReadTrace
 - `frontend/src/pages/` — TODO: memory review page
 

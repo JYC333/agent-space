@@ -65,7 +65,7 @@ All writes go through:
 ```
 Session messages
 → MemoryReflector (analyze + generate proposals)
-→ memory_proposals table (status: pending)
+→ proposals table (status: pending, type: memory_update)
 → User review (accept / reject)
 → On accept: Memory created (status: active)
 → On reject: Proposal marked rejected, no memory created

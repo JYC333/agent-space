@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.memory.proposals import MemoryProposalService
+from app.memory.proposals import ProposalService
 from app.models import ActivityRecord, Artifact, Job, Run, RuntimeAdapter, Task
 from app.proposals.read_model import compute_proposal_expired
 
@@ -172,7 +172,7 @@ def build_home_summary(
         .all()
     )
 
-    prop_svc = MemoryProposalService(db)
+    prop_svc = ProposalService(db)
     pending_count = prop_svc.count_reviewable_proposals(space_id, user_id)
     pending_models = prop_svc.list_reviewable_proposals(
         space_id, user_id, limit=pending_preview_limit, offset=0

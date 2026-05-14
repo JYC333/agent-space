@@ -39,6 +39,7 @@ from ..config import settings
 from ..db import get_db
 from ..feature_gates import feature_not_implemented
 from ..models import Workspace
+from ..workspace.disk_path import workspace_absolute_root
 from ..workspace.path_policy import PathPolicy, PathPolicyError
 from ..agents.base import RuntimeExecutionResult
 
@@ -51,11 +52,7 @@ _policy = PathPolicy()
 
 def _ws_path(ws: Workspace) -> Path:
     """Resolve the on-disk root for a workspace record."""
-    workspace_root = Path(settings.workspace_root).resolve()
-    if ws.root_path:
-        p = Path(ws.root_path)
-        return p.resolve() if p.is_absolute() else (workspace_root / ws.root_path).resolve()
-    return (workspace_root / ws.id).resolve()
+    return workspace_absolute_root(ws)
 
 
 def _get_ws(db: Session, workspace_id: str, space_id: str) -> Workspace:

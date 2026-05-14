@@ -20,9 +20,12 @@ API docs: http://localhost:8000/docs
 
 ## Running tests
 
+Canonical backend tests live under ``tests/unit``, ``tests/contracts``,
+``tests/invariants``, and ``tests/workflows``. ``tests/conftest.py`` sets an
+isolated ``AGENT_SPACE_HOME`` before importing the app.
+
 ```bash
-cd backend
-pytest tests/ -v --tb=short
+cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
 ```
 
 ## Key files
@@ -30,7 +33,7 @@ pytest tests/ -v --tb=short
 - `backend/app/models.py` — SQLAlchemy ORM (Space, Memory, Session, **task board** `Task`/`Board`, Run, etc.)
 - `backend/app/memory/store.py` — MemoryStore CRUD
 - `backend/app/memory/context_builder.py` — context package (requires space_id + user_id)
-- `backend/app/memory/proposals.py` — proposal accept/reject workflow
+- `backend/app/proposals/api.py` — proposal review API
 - `backend/app/memory/reflector.py` — session → memory proposals
 - `backend/app/agents/runner.py` — agent run orchestration
 - `backend/app/capabilities/registry.py` — capability loader
@@ -51,7 +54,7 @@ DEFAULT_USER_ID=default_user
 
 - **space_id** — every data record is scoped to a space. The context builder enforces this boundary.
 - **Visibility** — `private` | `space_shared` | `workspace_shared` | `restricted` | `public_template`
-- **Memory proposal workflow** — agents never write memory directly; all writes go through proposals → user approval.
+- **Proposal workflow** — durable memory and code mutations require proposals and user approval.
 
 ## Adding a new capability
 

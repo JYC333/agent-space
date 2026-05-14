@@ -1,0 +1,453 @@
+"""Explicit DB factories for tests — minimal valid rows, no surprise side effects.
+
+Persistence:
+- By default each factory only ``add`` + ``flush`` so primary keys and FKs are
+  available within the current transaction.
+- Pass ``commit=True`` to ``commit()`` and ``refresh()`` the primary return value
+  when a test needs data visible to another connection/session (e.g. ``TestClient``).
+
+Rules:
+- Call sites pass ``space_id`` (and ownership fields) explicitly when isolation matters.
+- Proposals default to ``pending`` and never imply approval or active memory.
+- No implicit second space or cross-tenant rows.
+
+See ``# TODO: Capability`` at the bottom for registry-only capability objects.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from typing import Any, TypeVar
+
+from sqlalchemy.orm import Session as DBSession
+from ulid import ULID
+
+from app.models import (
+    ActivityRecord,
+    Agent,
+    AgentVersion,
+    Artifact,
+    ContextSnapshot,
+    Credential,
+    MemoryEntry,
+    ModelProvider,
+    Policy,
+    Proposal,
+    Run,
+    RuntimeAdapter,
+    Space,
+    User,
+    Workspace,
+)
+from app.schemas import (
+    DEFAULT_MEMORY_POLICY,
+    DEFAULT_MODEL_CONFIG,
+    DEFAULT_RUNTIME_POLICY,
+    RunCreate,
+)
+
+T = TypeVar("T")
+
+
+def _new_id() -> str:
+    return str(ULID())
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _finish(db: DBSession, row: T, *, commit: bool) -> T:
+    db.flush()
+    if commit:
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def create_test_space(
+    db: DBSession,
+    *,
+    space_id: str,
+    name: str | None = None,
+    space_type: str = "personal",
+    created_by_user_id: str | None = None,
+    commit: bool = False,
+) -> Space:
+    row = Space(
+        id=space_id,
+        name=name or f"space-{space_id}",
+        type=space_type,
+        created_by_user_id=created_by_user_id,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_user(
+    db: DBSession,
+    *,
+    space_id: str,
+    user_id: str | None = None,
+    email: str | None = None,
+    display_name: str | None = None,
+    commit: bool = False,
+) -> User:
+    uid = user_id or _new_id()
+    row = User(
+        id=uid,
+        space_id=space_id,
+        email=email or f"{uid}@test.invalid",
+        display_name=display_name or uid,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_agent(
+    db: DBSession,
+    *,
+    space_id: str,
+    owner_user_id: str,
+    name: str = "test-agent",
+    commit: bool = False,
+) -> Agent:
+    """Materialize ``Agent`` + initial ``AgentVersion`` (v1) like ``AgentService``, without committing."""
+    agent_id = _new_id()
+    version_id = _new_id()
+    agent = Agent(
+        id=agent_id,
+        space_id=space_id,
+        owner_user_id=owner_user_id,
+        name=name,
+        status="active",
+        current_version_id=version_id,
+    )
+    version = AgentVersion(
+        id=version_id,
+        agent_id=agent_id,
+        space_id=space_id,
+        version_label="v1",
+        model_config_json=dict(DEFAULT_MODEL_CONFIG),
+        memory_policy_json=dict(DEFAULT_MEMORY_POLICY),
+        capabilities_json=[],
+        tool_permissions_json={},
+        runtime_policy_json=dict(DEFAULT_RUNTIME_POLICY),
+    )
+    db.add(agent)
+    db.add(version)
+    return _finish(db, agent, commit=commit)
+
+
+def create_test_model_provider(
+    db: DBSession,
+    *,
+    space_id: str,
+    name: str = "test-model-provider",
+    provider_type: str = "openai",
+    credential_id: str | None = None,
+    default_model: str | None = "gpt-test",
+    commit: bool = False,
+) -> ModelProvider:
+    row = ModelProvider(
+        id=_new_id(),
+        space_id=space_id,
+        name=name,
+        provider_type=provider_type,
+        credential_id=credential_id,
+        default_model=default_model,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_runtime_adapter(
+    db: DBSession,
+    *,
+    space_id: str,
+    name: str = "test-runtime-adapter",
+    adapter_type: str = "echo",
+    provider_id: str | None = None,
+    credential_id: str | None = None,
+    enabled: bool = True,
+    commit: bool = False,
+) -> RuntimeAdapter:
+    row = RuntimeAdapter(
+        id=_new_id(),
+        space_id=space_id,
+        name=name,
+        adapter_type=adapter_type,
+        enabled=enabled,
+        provider_id=provider_id,
+        credential_id=credential_id,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_credential_stub(
+    db: DBSession,
+    *,
+    space_id: str,
+    name: str = "stub-credential",
+    credential_type: str = "api_key",
+    secret_ref: str = "stub://no-secret",
+    commit: bool = False,
+) -> Credential:
+    row = Credential(
+        id=_new_id(),
+        space_id=space_id,
+        name=name,
+        credential_type=credential_type,
+        secret_ref=secret_ref,
+        scopes_json=[],
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_workspace(
+    db: DBSession,
+    *,
+    space_id: str,
+    root_path: str | None = None,
+    name: str | None = None,
+    created_by_user_id: str | None = None,
+    commit: bool = False,
+) -> Workspace:
+    row = Workspace(
+        id=_new_id(),
+        space_id=space_id,
+        name=name or "test-workspace",
+        root_path=root_path,
+        created_by_user_id=created_by_user_id,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_policy(
+    db: DBSession,
+    *,
+    space_id: str,
+    name: str = "test-policy",
+    domain: str = "runtime",
+    policy_json: dict[str, Any] | None = None,
+    enabled: bool = True,
+    commit: bool = False,
+) -> Policy:
+    row = Policy(
+        id=_new_id(),
+        space_id=space_id,
+        name=name,
+        domain=domain,
+        policy_json=dict(policy_json or {}),
+        enabled=enabled,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_run(
+    db: DBSession,
+    *,
+    space_id: str,
+    user_id: str,
+    agent: Agent | None = None,
+    owner_user_id: str | None = None,
+    mode: str = "live",
+    commit: bool = False,
+) -> Run:
+    """Queued ``Run`` + ``ContextSnapshot`` (same shape as ``RunService.create_run`` defaults)."""
+    owner = owner_user_id or user_id
+    ag = agent or create_test_agent(db, space_id=space_id, owner_user_id=owner, commit=False)
+    data = RunCreate(mode=mode)
+
+    snapshot = ContextSnapshot(
+        id=_new_id(),
+        space_id=space_id,
+        source_refs_json=[],
+        compiled_summary=None,
+        token_estimate=None,
+    )
+    db.add(snapshot)
+
+    run = Run(
+        id=_new_id(),
+        space_id=space_id,
+        agent_id=ag.id,
+        agent_version_id=ag.current_version_id,
+        context_snapshot_id=snapshot.id,
+        workspace_id=data.workspace_id,
+        session_id=data.session_id,
+        parent_run_id=None,
+        instructed_by_user_id=user_id,
+        instructed_by_agent_id=None,
+        delegation_depth=0,
+        run_type=data.run_type,
+        trigger_origin=data.trigger_origin,
+        status="queued",
+        mode=data.mode,
+        prompt=data.prompt,
+        instruction=data.instruction,
+        scheduled_at=data.scheduled_at,
+        adapter_type=data.adapter_type,
+        required_sandbox_level="none",
+    )
+    db.add(run)
+    return _finish(db, run, commit=commit)
+
+
+def create_test_activity(
+    db: DBSession,
+    *,
+    space_id: str,
+    actor_user_id: str | None = None,
+    activity_type: str = "test.activity",
+    title: str = "Test activity",
+    content: str = "body",
+    source_run_id: str | None = None,
+    session_id: str | None = None,
+    workspace_id: str | None = None,
+    agent_id: str | None = None,
+    payload_json: dict[str, Any] | None = None,
+    commit: bool = False,
+) -> ActivityRecord:
+    now = _utcnow()
+    row = ActivityRecord(
+        id=_new_id(),
+        space_id=space_id,
+        source_run_id=source_run_id,
+        session_id=session_id,
+        user_id=actor_user_id,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        activity_type=activity_type,
+        title=title,
+        content=content,
+        payload_json=dict(payload_json or {}),
+        occurred_at=now,
+        status="raw",
+        updated_at=now,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_artifact(
+    db: DBSession,
+    *,
+    space_id: str,
+    run_id: str | None = None,
+    artifact_type: str = "test_report",
+    title: str = "Test artifact",
+    content: str = "artifact body",
+    preview: bool = False,
+    commit: bool = False,
+) -> Artifact:
+    row = Artifact(
+        id=_new_id(),
+        space_id=space_id,
+        run_id=run_id,
+        artifact_type=artifact_type,
+        title=title,
+        content=content,
+        mime_type="text/plain",
+        preview=preview,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_proposal(
+    db: DBSession,
+    *,
+    space_id: str,
+    run_id: str | None = None,
+    proposal_type: str = "memory_update",
+    status: str = "pending",
+    preview: bool = False,
+    title: str = "Test proposal",
+    created_by_user_id: str | None = None,
+    created_by_agent_id: str | None = None,
+    workspace_id: str | None = None,
+    payload_json: dict[str, Any] | None = None,
+    commit: bool = False,
+) -> Proposal:
+    now = _utcnow()
+    base_payload: dict[str, Any] = {
+        "proposed_content": "proposed text",
+        "memory_type": "semantic",
+        "target_scope": "agent",
+        "target_namespace": "agent.test",
+        "target_visibility": "private",
+        "sensitivity_level": "normal",
+    }
+    merged = {**base_payload, **(payload_json or {})}
+    row = Proposal(
+        id=_new_id(),
+        space_id=space_id,
+        created_by_run_id=run_id,
+        proposal_type=proposal_type,
+        status=status,
+        risk_level="low",
+        urgency="normal",
+        preview=preview,
+        title=title,
+        summary="factory proposal",
+        payload_json=merged,
+        rationale="test factory",
+        workspace_id=workspace_id,
+        created_by_user_id=created_by_user_id,
+        created_by_agent_id=created_by_agent_id,
+        review_deadline=now + timedelta(hours=48),
+        expires_at=now + timedelta(days=14),
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_memory_entry(
+    db: DBSession,
+    *,
+    space_id: str,
+    content: str = "memory content",
+    scope_type: str = "agent",
+    scope_id: str | None = None,
+    memory_type: str = "semantic",
+    status: str = "active",
+    source_proposal_id: str | None = None,
+    owner_user_id: str | None = None,
+    subject_user_id: str | None = None,
+    agent_id: str | None = None,
+    workspace_id: str | None = None,
+    namespace: str | None = None,
+    commit: bool = False,
+) -> MemoryEntry:
+    row = MemoryEntry(
+        id=_new_id(),
+        space_id=space_id,
+        scope_type=scope_type,
+        scope_id=scope_id,
+        memory_type=memory_type,
+        content=content,
+        status=status,
+        source_proposal_id=source_proposal_id,
+        owner_user_id=owner_user_id,
+        subject_user_id=subject_user_id,
+        agent_id=agent_id,
+        workspace_id=workspace_id,
+        namespace=namespace,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+# ---------------------------------------------------------------------------
+# TODO: Capability (no ORM / table)
+# ---------------------------------------------------------------------------
+#
+# Capabilities are file-defined (``FileDefinedCapability``) and loaded via
+# ``CapabilityRegistry`` — there is no ``capabilities`` SQL table. Tests that
+# need a capability manifest should build an in-memory dict / temp YAML file
+# instead of calling a DB factory here.

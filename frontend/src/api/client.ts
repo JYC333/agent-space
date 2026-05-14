@@ -7,7 +7,7 @@ import type {
   CurrentUser, SpaceWithMembership, SpaceMember, SpaceInvitationOut,
   Job, JobEvent, ActivityInboxRecord,
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
-  TaskArtifact, TaskProposal, Artifact, Proposal, AgentOut, RunCreateBody,
+  TaskArtifact, TaskProposal, Artifact, Proposal, ProposalAcceptOut, AgentOut, RunCreateBody,
   ActivityRecord,
   FileNode, FileContent, GitStatus, RuntimeInfo, ConsoleSession, WorkspaceInfo,
   HomeSummaryOut,
@@ -32,6 +32,18 @@ function spaceParams(): string {
   return `space_id=${encodeURIComponent(_spaceId)}&user_id=${encodeURIComponent(_userId)}`
 }
 
+function formatApiErrorMessage(err: ApiError, fallback: string): string {
+  const m = err.message
+  if (typeof m === 'string') return m
+  if (m && typeof m === 'object') {
+    const rec = m as Record<string, unknown>
+    const code = rec.code
+    if (typeof code === 'string') return code
+    return JSON.stringify(m)
+  }
+  return fallback
+}
+
 async function request<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (_apiKey) headers['Authorization'] = `Bearer ${_apiKey}`
@@ -52,7 +64,7 @@ async function request<T = unknown>(method: string, path: string, body?: unknown
     let msg = `${r.status} ${r.statusText}`
     try {
       const err = await r.json() as ApiError
-      msg = err.message || msg
+      msg = formatApiErrorMessage(err, msg)
     } catch {
       const text = await r.text().catch(() => '')
       if (text) msg = text
@@ -82,11 +94,6 @@ export const memoryApi = {
     del<null>(`/memory/${id}`),
   search: (data: { query: string; scope?: string; type?: string }) =>
     post<Memory[]>('/memory/search', { space_id: _spaceId, user_id: _userId, ...data }),
-
-  accept: (id: string) =>
-    post<Memory>(`/memory/proposals/${id}/accept`),
-  reject: (id: string) =>
-    post<MemoryProposal>(`/memory/proposals/${id}/reject`),
 }
 
 // ── Sessions ──────────────────────────────────────────────────────────────
@@ -175,7 +182,7 @@ async function downloadArtifactExport(artifactId: string): Promise<void> {
     let msg = `${r.status} ${r.statusText}`
     try {
       const err = await r.json() as ApiError
-      msg = err.message || msg
+      msg = formatApiErrorMessage(err, msg)
     } catch {
       const text = await r.text().catch(() => '')
       if (text) msg = text
@@ -222,6 +229,8 @@ export const proposalsApi = {
     return get<Page<Proposal>>('/proposals?' + new URLSearchParams(q))
   },
   get: (id: string) => get<Proposal>(`/proposals/${id}`),
+  accept: (id: string) => post<ProposalAcceptOut>(`/proposals/${id}/accept`),
+  reject: (id: string) => post<Proposal>(`/proposals/${id}/reject`),
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────
@@ -332,7 +341,7 @@ export const activityApi = {
   list:   (params: Record<string, string> = {}) =>
     get<ActivityInboxRecord[]>('/activity?' + new URLSearchParams(params)),
   create: (data: { source_type: string; content: string; title?: string; workspace_id?: string; metadata_json?: Record<string, unknown> }) =>
-    post<ActivityInboxRecord>('/activity', { space_id: _spaceId, user_id: _userId, ...data }),
+    post<ActivityInboxRecord>('/activity', data),
   get:    (id: string) => get<ActivityInboxRecord>(`/activity/${id}`),
   process:(id: string) => patch<ActivityInboxRecord>(`/activity/${id}/process`),
   archive:(id: string) => patch<ActivityInboxRecord>(`/activity/${id}/archive`),

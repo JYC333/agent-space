@@ -9,16 +9,20 @@ Routes:
   PATCH  /activity/{id}/process — mark a record as processed
   PATCH  /activity/{id}/archive — archive a record
   POST   /activity/{id}/proposals — create memory proposals from this record
+
+Space and authenticated user come from ``get_identity`` (same as Memory/Runs).
+Optional query ``for_user_id`` limits the list to that user and must equal the
+current user (cannot enumerate another user's inbox via query).
 """
 
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..auth import get_identity
 from ..db import get_db
-from ..config import settings
 from .service import ActivityService
 
 router = APIRouter(prefix="/activity", tags=["activity"])
@@ -32,7 +36,10 @@ class ActivityCreate(BaseModel):
     source_type: str
     content: str
     title: Optional[str] = None
-    user_id: Optional[str] = None
+    user_id: Optional[str] = Field(
+        default=None,
+        description="Deprecated: ignored for authorization; row user_id is always the authenticated user.",
+    )
     workspace_id: Optional[str] = None
     agent_id: Optional[str] = None
     source_run_id: Optional[str] = None
@@ -97,7 +104,8 @@ class ProposalSpec(BaseModel):
 
 
 class CreateProposalsRequest(BaseModel):
-    user_id: str
+    """Proposals are created on behalf of the authenticated user (``get_identity``)."""
+
     proposals: list[ProposalSpec]
 
 
@@ -121,16 +129,21 @@ class ProposalOut(BaseModel):
 @router.post("", response_model=ActivityOut)
 def create_activity(
     body: ActivityCreate,
-    space_id: str = Query(default=None),
+    ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ) -> ActivityOut:
-    effective_space = space_id or settings.default_space_id
+    space_id, auth_user_id = ids
+    if body.user_id is not None and body.user_id != auth_user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="user_id in body must match the authenticated user",
+        )
     svc = ActivityService(db)
     record = svc.create(
-        space_id=effective_space,
+        space_id=space_id,
         source_type=body.source_type,
         content=body.content,
-        user_id=body.user_id,
+        user_id=auth_user_id,
         workspace_id=body.workspace_id,
         agent_id=body.agent_id,
         title=body.title,
@@ -145,8 +158,11 @@ def create_activity(
 
 @router.get("", response_model=list[ActivityOut])
 def list_activities(
-    space_id: str = Query(default=None),
-    user_id: Optional[str] = Query(default=None),
+    ids: tuple[str, str] = Depends(get_identity),
+    for_user_id: Optional[str] = Query(
+        default=None,
+        description="If set, restrict listing to this user; must equal the authenticated user.",
+    ),
     workspace_id: Optional[str] = Query(default=None),
     source_type: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
@@ -154,11 +170,16 @@ def list_activities(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> list[ActivityOut]:
-    effective_space = space_id or settings.default_space_id
+    space_id, auth_user_id = ids
+    if for_user_id is not None and for_user_id != auth_user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="for_user_id must match the authenticated user",
+        )
     svc = ActivityService(db)
     records = svc.list(
-        space_id=effective_space,
-        user_id=user_id,
+        space_id=space_id,
+        user_id=for_user_id,
         workspace_id=workspace_id,
         source_type=source_type,
         status=status,
@@ -171,12 +192,12 @@ def list_activities(
 @router.get("/{activity_id}", response_model=ActivityOut)
 def get_activity(
     activity_id: str,
-    space_id: str = Query(default=None),
+    ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ) -> ActivityOut:
-    effective_space = space_id or settings.default_space_id
+    space_id, _ = ids
     svc = ActivityService(db)
-    record = svc.get(activity_id, effective_space)
+    record = svc.get(activity_id, space_id)
     if not record:
         raise HTTPException(status_code=404, detail="Activity record not found")
     return ActivityOut.from_orm_model(record)
@@ -185,13 +206,13 @@ def get_activity(
 @router.patch("/{activity_id}/process", response_model=ActivityOut)
 def mark_processed(
     activity_id: str,
-    space_id: str = Query(default=None),
+    ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ) -> ActivityOut:
-    effective_space = space_id or settings.default_space_id
+    space_id, _ = ids
     svc = ActivityService(db)
     try:
-        record = svc.mark_processed(activity_id, effective_space)
+        record = svc.mark_processed(activity_id, space_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return ActivityOut.from_orm_model(record)
@@ -200,13 +221,13 @@ def mark_processed(
 @router.patch("/{activity_id}/archive", response_model=ActivityOut)
 def archive_activity(
     activity_id: str,
-    space_id: str = Query(default=None),
+    ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ) -> ActivityOut:
-    effective_space = space_id or settings.default_space_id
+    space_id, _ = ids
     svc = ActivityService(db)
     try:
-        record = svc.mark_archived(activity_id, effective_space)
+        record = svc.mark_archived(activity_id, space_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return ActivityOut.from_orm_model(record)
@@ -216,17 +237,17 @@ def archive_activity(
 def create_proposals(
     activity_id: str,
     body: CreateProposalsRequest,
-    space_id: str = Query(default=None),
+    ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ) -> list[ProposalOut]:
-    effective_space = space_id or settings.default_space_id
+    space_id, auth_user_id = ids
     svc = ActivityService(db)
     try:
         created = svc.create_proposals_from(
             activity_id=activity_id,
-            space_id=effective_space,
+            space_id=space_id,
             proposals=[p.model_dump() for p in body.proposals],
-            user_id=body.user_id,
+            user_id=auth_user_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

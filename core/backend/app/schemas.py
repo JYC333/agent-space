@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Generic, Optional, TypeVar
+from typing import Any, Generic, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -391,6 +391,14 @@ class ProposalOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ProposalAcceptOut(BaseModel):
+    """Body for ``POST /api/v1/proposals/{id}/accept`` — result varies by ``proposal_type``."""
+
+    proposal: ProposalOut
+    result_type: Literal["memory_entry", "code_patch_apply"]
+    result: dict[str, Any]
+
+
 class ActivityRecordOut(BaseModel):
     id: str
     space_id: str
@@ -425,6 +433,7 @@ class ArtifactOut(BaseModel):
     preview: bool = False
     storage_ref: Optional[str] = None
     storage_path: Optional[str] = None
+    metadata_json: Optional[dict] = None
     has_inline_content: bool = False
     content: Optional[str] = None
     created_at: datetime

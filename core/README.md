@@ -56,9 +56,10 @@ React Native (future) will share API calls and business logic with the web app.
 ## Running tests
 
 ```bash
-cd backend
-pytest tests/ -v
+cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
 ```
+
+``tests/conftest.py`` sets an isolated ``AGENT_SPACE_HOME`` before importing the app, so pytest does not open a real mode database.
 
 ## Environment variables
 

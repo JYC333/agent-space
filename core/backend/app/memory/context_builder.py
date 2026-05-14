@@ -287,7 +287,7 @@ class ContextBuilder:
             if att_type == "memory_entry":
                 memory_id = ref.get("memory_id")
                 if memory_id:
-                    m = self.store.get(memory_id)
+                    m = self.store.get_for_space(space_id, memory_id)
                     if m and can_read_memory(
                         m,
                         user_id=user_id,

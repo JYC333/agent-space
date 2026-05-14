@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
-import { memoryApi, proposalsApi } from '../../api/client'
+import { proposalsApi } from '../../api/client'
 import { errMsg } from '../../lib/utils'
 import type { Proposal } from '../../types/api'
 import { Card } from '../../components/ui/card'
@@ -41,17 +41,17 @@ export default function ProposalDetailPage() {
     return () => { cancelled = true }
   }, [proposalId])
 
-  const canMemoryDecide =
+  const canDecide =
     p &&
-    (p.status === 'pending' || p.status === 'needs_changes') &&
-    p.proposal_type === 'memory_update'
+    p.status === 'pending' &&
+    (p.proposal_type === 'memory_update' || p.proposal_type === 'code_patch')
 
   async function decide(action: 'accept' | 'reject') {
     if (!p) return
     setBusy(true)
     try {
-      if (action === 'accept') await memoryApi.accept(p.id)
-      else await memoryApi.reject(p.id)
+      if (action === 'accept') await proposalsApi.accept(p.id)
+      else await proposalsApi.reject(p.id)
       toast.success(`Proposal ${action}ed`)
       const r = await proposalsApi.get(p.id)
       setP(r)
@@ -78,7 +78,7 @@ export default function ProposalDetailPage() {
         <Card className="p-5 space-y-4">
           <div className="flex flex-wrap justify-between gap-3 items-start">
             <h1 className="text-lg font-semibold tracking-tight">{p.proposed_title}</h1>
-            {canMemoryDecide && (
+            {canDecide && (
               <div className="flex gap-1.5 shrink-0">
                 <Button size="sm" variant="success" disabled={busy} onClick={() => decide('accept')}>Accept</Button>
                 <Button size="sm" variant="destructive" disabled={busy} onClick={() => decide('reject')}>Reject</Button>

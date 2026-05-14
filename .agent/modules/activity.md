@@ -27,7 +27,7 @@ ActivityRecord:
 ## Invariants
 - Raw input always creates an ActivityRecord first
 - ActivityRecords go through the proposal workflow before becoming memory
-- `source_activity_id` set on all derived MemoryProposals
+- `source_activity_id` set on all derived `memory_update` proposals
 
 ## Related Files
 - `core/backend/app/activity/service.py`

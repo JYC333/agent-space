@@ -31,7 +31,7 @@ from ..schemas import (
 from ..auth import get_identity
 from ..artifacts.service import artifact_to_out
 from ..proposals.read_model import proposal_to_out
-from ..memory.proposals import MemoryProposalService
+from ..memory.proposals import ProposalService
 from .execution import RunExecutionService
 from .run_service import RunService
 from .removed_runtime_token import is_obsolete_runtime_override_token
@@ -90,7 +90,7 @@ def list_run_proposals(
     space_id, _ = ids
     RunService(db).get_run(run_id, space_id)
     now = datetime.now(UTC)
-    psvc = MemoryProposalService(db)
+    psvc = ProposalService(db)
     total = psvc.count_proposals_for_run(
         run_id,
         space_id,

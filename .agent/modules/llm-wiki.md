@@ -125,7 +125,7 @@ KnowledgeRelation:
 
 ## Related Files
 - `core/backend/app/models.py` — TODO: add KnowledgeItem, KnowledgeRelation
-- `core/backend/app/memory/proposals.py` — existing proposal pattern to follow
+- proposal API/service modules — proposal pattern to follow
 - `core/backend/app/knowledge/` — TODO: wiki CRUD module
 - `frontend/src/pages/` — TODO: wiki browser page
 

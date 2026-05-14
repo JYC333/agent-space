@@ -34,14 +34,14 @@ GET    /api/v1/activity               — list (filter: source_type, status, wor
 GET    /api/v1/activity/{id}
 PATCH  /api/v1/activity/{id}/process
 PATCH  /api/v1/activity/{id}/archive
-POST   /api/v1/activity/{id}/proposals — generate MemoryProposals
+POST   /api/v1/activity/{id}/proposals — generate memory update proposals
 ```
 
 ## Flow
 
 ```
 raw input → ActivityRecord (status=raw)
-    → POST /activity/{id}/proposals → MemoryProposals created
+    → POST /activity/{id}/proposals → memory update proposals created
     → ActivityRecord (status=proposals_generated)
     → user approves proposals → Memory created
     → ActivityRecord (status=processed)

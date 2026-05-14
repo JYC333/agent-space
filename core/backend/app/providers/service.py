@@ -209,87 +209,62 @@ class ModelService:
     # Chat / Completion
     # -------------------------------------------------------------------------
 
-    async def chat(self, request: ChatRequest, space_id: str) -> ChatResponse:
+    async def chat(self, db: Session, request: ChatRequest, space_id: str) -> ChatResponse:
         """
         Send a chat request to a provider.
 
         Resolves provider from request.provider_id or falls back to default.
         Uses the registered adapter (default: LiteLLMProvider) to make the call.
+
+        ``db`` must be the request-scoped session (e.g. FastAPI ``Depends(get_db)``)
+        so TestClient overrides and transaction boundaries stay consistent.
         """
-        from ..db import get_db
+        if request.provider_id:
+            config = self.get_config(db, request.provider_id, space_id)
+        else:
+            config = self.resolve_default_config(db, space_id)
 
-        # Get DB session for this request
-        db_gen = get_db()
-        db = next(db_gen)
-        try:
-            if request.provider_id:
-                config = self.get_config(db, request.provider_id, space_id)
-            else:
-                config = self.resolve_default_config(db, space_id)
+        adapter = registry.get(config.provider)
+        if not adapter:
+            adapter = registry.get("litellm")
 
-            adapter = registry.get(config.provider)
-            if not adapter:
-                # Fall back to litellm for unknown providers
-                adapter = registry.get("litellm")
+        log.info(
+            "chat: provider=%s model=%s space=%s",
+            config.provider,
+            request.model or config.models[0] if config.models else "unknown",
+            space_id,
+        )
 
-            log.info(
-                "chat: provider=%s model=%s space=%s",
-                config.provider,
-                request.model or config.models[0] if config.models else "unknown",
-                space_id,
-            )
+        response = await adapter.complete(config.api_key, config.api_base, request)
 
-            response = await adapter.complete(config.api_key, config.api_base, request)
-
-            log.info(
-                "chat done: provider=%s model=%s usage=%s",
-                response.provider,
-                response.model,
-                response.usage,
-            )
-            return response
-
-        finally:
-            try:
-                next(db_gen, None)
-            except StopIteration:
-                pass
+        log.info(
+            "chat done: provider=%s model=%s usage=%s",
+            response.provider,
+            response.model,
+            response.usage,
+        )
+        return response
 
     async def chat_stream(
-        self, request: ChatRequest, space_id: str
+        self, db: Session, request: ChatRequest, space_id: str
     ) -> AsyncIterator[StreamChunk]:
-        """Streaming version of chat()."""
-        from ..db import get_db
+        """Streaming version of :meth:`chat` using the same request-scoped ``db``."""
+        if request.provider_id:
+            config = self.get_config(db, request.provider_id, space_id)
+        else:
+            config = self.resolve_default_config(db, space_id)
 
-        db_gen = get_db()
-        db = next(db_gen)
-        try:
-            if request.provider_id:
-                config = self.get_config(db, request.provider_id, space_id)
-            else:
-                config = self.resolve_default_config(db, space_id)
+        adapter = registry.get(config.provider) or registry.get("litellm")
 
-            adapter = registry.get(config.provider) or registry.get("litellm")
+        log.info("stream: provider=%s model=%s space=%s", config.provider, request.model, space_id)
 
-            log.info("stream: provider=%s model=%s space=%s", config.provider, request.model, space_id)
-
-            async for chunk in adapter.stream(config.api_key, config.api_base, request):
-                yield chunk
-
-        finally:
-            try:
-                next(db_gen, None)
-            except StopIteration:
-                pass
+        async for chunk in adapter.stream(config.api_key, config.api_base, request):
+            yield chunk
 
     async def test_connection(
-        self, config_id: str, space_id: str
+        self, db: Session, config_id: str, space_id: str
     ) -> ConnectionTestResult:
         """Test a provider config by making a minimal chat completion."""
-        from ..db import get_db
-
-        db_gen = get_db()
-        db = next(db_gen)
         try:
             config = self.get_config(db, config_id, space_id)
 
@@ -299,7 +274,6 @@ class ModelService:
             if not model_name:
                 return ConnectionTestResult(success=False, message="No models configured")
 
-            # Prepend provider prefix if model doesn't already have one
             if "/" not in model_name:
                 model_name = f"{config.provider}/{model_name}"
 
@@ -317,11 +291,6 @@ class ModelService:
             )
         except Exception as exc:
             return ConnectionTestResult(success=False, message=str(exc))
-        finally:
-            try:
-                next(db_gen, None)
-            except StopIteration:
-                pass
 
     # -------------------------------------------------------------------------
     # Internal helpers

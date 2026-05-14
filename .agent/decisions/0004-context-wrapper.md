@@ -29,6 +29,6 @@ Generated files:
 - `CLAUDE.md` and `AGENTS.md` in the real workspace (if present) are stable, human-authored project docs — not run-specific context
 - Run-specific context (memories, preferences, policies, task goal) is always compiled fresh per run
 - Changes an agent makes to CLAUDE.md inside its sandbox do not auto-propagate to MemoryStore
-- Long-term memory updates still require: agent run → MemoryReflector → MemoryProposal → user approval
+- Long-term memory updates still require: agent run → MemoryReflector → `memory_update` proposal → user approval
 - ContextCompiler supports targets: `claude`, `codex`, `cursor`, `generic` — extensible for future tools
 - Context is concise: only title + content per memory item, capped per scope

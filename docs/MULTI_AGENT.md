@@ -133,7 +133,7 @@ This means a restricted agent literally cannot receive out-of-policy memory —
 no separate permission check layer is needed.
 
 Agents **never write memory directly**. All writes go through
-`MemoryProposalService`: propose → user reviews → accept/reject.
+proposal review: propose → user reviews → accept/reject.
 
 ## Design constraints
 
