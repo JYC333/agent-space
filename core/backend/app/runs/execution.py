@@ -25,6 +25,7 @@ from ..runtimes.base import RuntimeAdapterResult, RuntimeExecutionContext
 from ..runtimes.registry import instantiate_runtime_adapter
 from .adapter_resolution import AdapterResolutionError, resolve_runtime_adapter
 from .artifact_persistence import ArtifactPersistenceService
+from .context_snapshot_populator import ContextSnapshotPopulator
 from .produced_artifact_path_ingestion import ingest_produced_artifact_paths
 from .run_output_materialization import RunOutputMaterializer
 from .runtime_policy import compute_runtime_policy_decision
@@ -222,6 +223,21 @@ class RunExecutionService:
             content=user_prompt,
         )
         self.db.flush()
+
+        # Populate ContextSnapshot before execution.  Every executed Run must
+        # have an auditable snapshot; failure here is a hard pre-execution guard
+        # that blocks the adapter and marks the run failed.
+        try:
+            ContextSnapshotPopulator(self.db).populate(run, version)
+        except Exception as exc:  # noqa: BLE001
+            return self._fail_run_terminal(
+                run=run,
+                decision=decision,
+                error_code="context_snapshot_population_failed",
+                error_text=f"ContextSnapshot population failed: {exc}"[:2000],
+                stdout="",
+                stderr=str(exc)[:4000],
+            )
 
         adapter = instantiate_runtime_adapter(resolved.adapter_type)
 

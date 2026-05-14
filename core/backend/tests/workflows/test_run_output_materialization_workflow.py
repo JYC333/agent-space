@@ -145,7 +145,7 @@ def test_workflow_memory_update_from_run_materializer_then_accept(
     )
     assert after_run == before
     prop = db.query(Proposal).filter(Proposal.created_by_run_id == run.id).one()
-    assert prop.proposal_type == "memory_update"
+    assert prop.proposal_type == "memory_create"
 
     acc = api_client.post(
         f"/api/v1/proposals/{prop.id}/accept",

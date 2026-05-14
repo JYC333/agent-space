@@ -1,5 +1,5 @@
 import type {
-  Memory, MemoryProposal, Session, Message, Task,
+  Memory, Session, Message, Task,
   Capability, ContextPackage, Feature, Workspace, Page,
   CapabilitiesReloadResult, ReflectResult, ApiError,
   CLIAdapterConfig, CLIStatus, BuiltinAdapter,
@@ -345,8 +345,8 @@ export const activityApi = {
   get:    (id: string) => get<ActivityInboxRecord>(`/activity/${id}`),
   process:(id: string) => patch<ActivityInboxRecord>(`/activity/${id}/process`),
   archive:(id: string) => patch<ActivityInboxRecord>(`/activity/${id}/archive`),
-  createProposals: (id: string, proposals: { proposed_title: string; proposed_content: string; memory_type: string; target_scope: string; target_namespace: string; rationale: string }[]) =>
-    post<MemoryProposal[]>(`/activity/${id}/proposals`, { proposals }),
+  consolidate: (id: string) =>
+    post<Proposal[]>(`/activity/${id}/consolidate`),
 }
 
 // ── Workspace Console ─────────────────────────────────────────────────────

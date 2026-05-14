@@ -84,6 +84,9 @@ def cross_space_pair(db):
     factories.create_test_space(db, space_id=b, name="Iso B", space_type="team")
     ua = factories.create_test_user(db, space_id=a, display_name="User A")
     ub = factories.create_test_user(db, space_id=b, display_name="User B")
+    # Must commit: TestClient runs in another thread with its own DB connection.
+    # An open write transaction here would block inserts (sqlite "database is locked").
+    db.commit()
     return {
         "space_a_id": a,
         "space_b_id": b,

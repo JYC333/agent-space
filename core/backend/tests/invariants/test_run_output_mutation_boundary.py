@@ -67,7 +67,7 @@ def test_run_execute_materializes_memory_proposal_without_active_memory(
     assert after == before
     props = db.query(Proposal).filter(Proposal.created_by_run_id == run.id).all()
     assert len(props) == 1
-    assert props[0].proposal_type == "memory_update"
+    assert props[0].proposal_type == "memory_create"
     assert props[0].status == "pending"
 
 

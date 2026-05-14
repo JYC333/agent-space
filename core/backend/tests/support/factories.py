@@ -311,6 +311,10 @@ def create_test_activity(
     workspace_id: str | None = None,
     agent_id: str | None = None,
     payload_json: dict[str, Any] | None = None,
+    source_kind: str | None = None,
+    source_trust: str | None = None,
+    consolidation_status: str = "pending",
+    subject_user_id: str | None = None,
     commit: bool = False,
 ) -> ActivityRecord:
     now = _utcnow()
@@ -329,6 +333,10 @@ def create_test_activity(
         occurred_at=now,
         status="raw",
         updated_at=now,
+        source_kind=source_kind,
+        source_trust=source_trust,
+        consolidation_status=consolidation_status,
+        subject_user_id=subject_user_id,
     )
     db.add(row)
     return _finish(db, row, commit=commit)
@@ -364,7 +372,7 @@ def create_test_proposal(
     *,
     space_id: str,
     run_id: str | None = None,
-    proposal_type: str = "memory_update",
+    proposal_type: str = "memory_create",
     status: str = "pending",
     preview: bool = False,
     title: str = "Test proposal",
@@ -376,6 +384,7 @@ def create_test_proposal(
 ) -> Proposal:
     now = _utcnow()
     base_payload: dict[str, Any] = {
+        "operation": "create",
         "proposed_content": "proposed text",
         "memory_type": "semantic",
         "target_scope": "agent",
@@ -384,6 +393,27 @@ def create_test_proposal(
         "sensitivity_level": "normal",
     }
     merged = {**base_payload, **(payload_json or {})}
+    uid = created_by_user_id or ""
+    if proposal_type in ("memory_create", "memory_update", "memory_archive"):
+        if "provenance_entries" not in merged:
+            merged["provenance_entries"] = [
+                {
+                    "source_type": "user_confirmation",
+                    "source_id": uid,
+                    "source_trust": "user_confirmed",
+                    "evidence_json": {"origin": "test_factory"},
+                }
+            ]
+    if proposal_type == "policy_change":
+        if "provenance_entries" not in merged:
+            merged["provenance_entries"] = [
+                {
+                    "source_type": "user_confirmation",
+                    "source_id": uid,
+                    "source_trust": "user_confirmed",
+                    "evidence_json": {"origin": "test_factory"},
+                }
+            ]
     row = Proposal(
         id=_new_id(),
         space_id=space_id,

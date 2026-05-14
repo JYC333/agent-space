@@ -215,4 +215,4 @@ def test_produced_paths_and_proposed_changes(api_client, db, cross_space_pair, t
     assert art.title == "Run report"
     prop = db.query(Proposal).filter(Proposal.created_by_run_id == run.id).one()
     assert prop.status == "pending"
-    assert prop.proposal_type == "memory_update"
+    assert prop.proposal_type == "memory_create"

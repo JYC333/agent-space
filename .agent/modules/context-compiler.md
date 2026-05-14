@@ -53,16 +53,37 @@ ContextCompiler.compile(context, target, task_goal, sandbox_dir,
 {sandbox_dir}/.claude/settings.json + hooks/check-docs-sync.sh
 ```
 
+## ContextDigest cache layer
+
+`ContextSnapshotPopulator` tries to load active `ContextDigest` rows before rendering the stable prefix.
+
+- When active digests exist (policy_bundle / workspace / agent), their rendered content is injected as `[digest:<type>:v<N>]` blocks in `stable_prefix`, replacing direct policy/memory rendering for those sections.
+- If no active digest exists for a scope, the populator falls back to direct `MemoryRetriever` behaviour (MF5 path).
+- `ContextSnapshot.source_refs_json` always includes `context_digest` entries recording `source_memory_ids`, `source_policy_ids`, and `source_relation_ids` for full auditability — digest does not replace source traceability.
+- `ContextSnapshot.retrieval_trace_json` records `digest_used`, `digest_types`, `digest_versions`, `dirty_digest_used`, and `fallback_to_memory_retriever`.
+- Dirty digests are still used but flagged in `retrieval_trace_json.dirty_digest_used=true`. Execution is never blocked by a missing or dirty digest.
+
+### ContextDigest principles
+- `ContextDigest` is a derived cache — not Memory, not Policy, not a source of truth.
+- Digest does not create Proposal. Digest can be deleted and regenerated.
+- Digest summarises active approved Memory/Policy only (no unapproved proposal content).
+- Supported `digest_type` values: `policy_bundle`, `workspace`, `agent`.
+- Personal Radius / external sources are out of scope.
+
 ## Invariants
 - Vendor files are never written to the real workspace
 - Changes agents make to generated files do not propagate to MemoryStore
-- Compiled content is stored in `ContextSnapshot.compiled_content` for audit
+- Compiled content (prefix + tail) is stored in `ContextSnapshot` columns for audit
+- Snapshot population failure blocks adapter execution
+- Missing digest never blocks execution; populator falls back gracefully
 
 ## Related Files
 - `core/backend/app/memory/context_compiler.py`
 - `core/backend/app/memory/context_builder.py`
+- `core/backend/app/memory/digest_service.py` — `ContextDigestService`
 - `core/backend/app/memory/security.py`
-- `core/backend/app/models.py` — `ContextSnapshot`
+- `core/backend/app/models.py` — `ContextSnapshot`, `ContextDigest`
+- `core/backend/app/runs/context_snapshot_populator.py`
 - `.agent/context-bundles.yaml`
 
 ## Related Decisions

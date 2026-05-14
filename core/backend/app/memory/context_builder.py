@@ -1,21 +1,18 @@
 from __future__ import annotations
 """
-ContextBuilder — assembles a context package from active memories.
+ContextBuilder — assembles a ContextPackage from the MemoryRetriever pipeline.
 
-The package is injected at the start of an agent run.
 space_id and user_id are required — this builder is a hard security boundary.
 
-If agent_memory_policy is provided, only the scopes listed in
-readable_scopes are fetched; this enforces per-agent memory isolation.
+Memory retrieval is fully delegated to MemoryRetriever, which enforces hard
+filters (space/scope/visibility/status/deleted_at/agent permission) before any
+ranking or fallback.
 
-Memories are filtered with ``read_auth.can_read_memory``. System policy rows are
-only loaded in the explicit system branch (include_system_scope). Each memory
-included in the package is recorded in ``memory_access_logs`` with
-access_type ``context_injection``, and aggregate counters on ``MemoryEntry``
-are updated.
+Each memory injected into the package is recorded in memory_access_logs
+(access_type=context_injection) and last_retrieved_at is updated.
 
-Context attachments (file, git_diff, url, memory_entry, etc.) are resolved
-and security-scanned here before being handed off to ContextCompiler.
+Context attachments (file, git_diff, etc.) are resolved and security-scanned
+here before being handed to ContextCompiler.
 """
 
 import logging
@@ -30,11 +27,9 @@ from .serialization import memory_entry_to_out
 from .access_log import record_memory_access
 from .read_auth import can_read_memory, summary_only_redact_content
 from .security import scan_content, scan_attachment, scan_path
+from .retriever import MemoryRetriever, _assign_section
 
 log = logging.getLogger(__name__)
-
-# All scopes the system knows about — in priority order
-_ALL_SCOPES = ["system", "space", "user", "workspace", "capability", "agent"]
 
 
 # ---------------------------------------------------------------------------
@@ -47,16 +42,14 @@ def _resolve_file(ref: dict, workspace_path: str | None) -> tuple[str | None, st
     if not path_str:
         return None, "missing path"
 
-    # Security: reject sensitive paths before touching the filesystem
     if scan_path(path_str):
         return None, f"path blocked by security policy: {path_str}"
 
     base = Path(workspace_path) if workspace_path else Path.cwd()
-    # Resolve relative to workspace; reject any path that escapes
     try:
         target = (base / path_str).resolve()
         base_resolved = base.resolve()
-        target.relative_to(base_resolved)  # raises ValueError if outside base
+        target.relative_to(base_resolved)
     except ValueError:
         return None, f"path traversal rejected: {path_str}"
 
@@ -168,7 +161,7 @@ def _resolve_folder_tree(ref: dict, workspace_path: str | None) -> tuple[str | N
     except PermissionError as e:
         return None, str(e)
 
-    return "\n".join(lines[:200]), None  # cap at 200 entries
+    return "\n".join(lines[:200]), None
 
 
 # ---------------------------------------------------------------------------
@@ -200,11 +193,8 @@ def resolve_attachment(att: dict, workspace_path: str | None = None) -> dict:
     elif att_type == "recent_commits":
         content, error = _resolve_recent_commits(ref, workspace_path)
     elif att_type == "url":
-        # URL fetching is intentionally not implemented here — callers should
-        # pre-resolve URLs and pass resolved_content directly.
         error = "url attachments must be pre-resolved by the caller"
     elif att_type in ("memory_entry", "activity_record", "wiki_page", "proposal", "run_artifact"):
-        # These are resolved via DB lookups in ContextBuilder, not here
         pass
     else:
         error = f"unknown attachment_type: {att_type}"
@@ -224,9 +214,16 @@ def resolve_attachment(att: dict, workspace_path: str | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 class ContextBuilder:
+    """
+    Assembles a ContextPackage using MemoryRetriever for policy-aware retrieval.
+
+    Uses MemoryRetriever which enforces hard filters before any ranking.
+    """
+
     def __init__(self, db: Session):
         self.db = db
         self.store = MemoryStore(db)
+        self._retriever = MemoryRetriever(db)
 
     def _record_access(
         self,
@@ -361,98 +358,36 @@ class ContextBuilder:
         if not user_id:
             raise ValueError("user_id is required — context builder requires an explicit user")
 
-        readable_scopes: set[str] = set(_ALL_SCOPES)
-        if agent_memory_policy:
-            declared = agent_memory_policy.get("readable_scopes")
-            if declared is not None:
-                readable_scopes = set(declared)
+        _ = task_type  # reserved
+        _ = capability_id  # reserved
+        _ = session_id  # reserved
 
-        max_each = settings.context_max_memories
-
-        system_policy = []
-        if "system" in readable_scopes:
-            system_policy = self.store.get_by_scope(
-                space_id=space_id,
-                user_id=user_id,
-                scope="system",
-                limit=5,
-            )
-
-        user_memory = []
-        if "user" in readable_scopes:
-            user_memory = self.store.get_by_scope(
-                space_id=space_id,
-                user_id=user_id,
-                scope="user",
-                limit=max_each,
-            )
-
-        workspace_memory = []
-        if workspace_id and "workspace" in readable_scopes:
-            workspace_memory = self.store.get_by_scope(
-                space_id=space_id,
-                user_id=user_id,
-                scope="workspace",
-                workspace_id=workspace_id,
-                limit=max_each,
-            )
-
-        capability_memory = []
-        if capability_id and "capability" in readable_scopes:
-            capability_memory = self.store.get_by_scope(
-                space_id=space_id,
-                user_id=user_id,
-                scope="capability",
-                limit=10,
-            )
-
-        agent_memory = []
-        if "agent" in readable_scopes:
-            agent_memory = self.store.get_by_scope(
-                space_id=space_id,
-                user_id=user_id,
-                scope="agent",
-                limit=10,
-            )
-
-        relevant_episodes = []
-        if "user" in readable_scopes or "workspace" in readable_scopes:
-            relevant_episodes = self.store.list(
-                space_id=space_id,
-                user_id=user_id,
-                workspace_id=workspace_id,
-                memory_type="episodic",
-                limit=settings.context_max_episodes,
-            )
-
-        if query and ("user" in readable_scopes):
-            search_results = self.store.search(
-                query=query,
-                space_id=space_id,
-                user_id=user_id,
-                workspace_id=workspace_id,
-                limit=10,
-            )
-            existing_ids = {m.id for m in user_memory}
-            for m in search_results:
-                if m.id not in existing_ids:
-                    user_memory.append(m)
-                    existing_ids.add(m.id)
-            user_memory = sorted(
-                user_memory,
-                key=lambda m: (m.importance, m.confidence),
-                reverse=True,
-            )[:max_each]
-
-        _ = session_id  # reserved for future session-summary persistence (not in canonical schema yet)
-        recent_summaries: list[dict] = []
-
-        all_fetched = (
-            system_policy + user_memory + workspace_memory +
-            capability_memory + agent_memory + relevant_episodes
+        include_system_scope = (
+            agent_memory_policy is None
+            or "system" in (agent_memory_policy.get("readable_scopes") or [])
         )
+
+        # ── MemoryRetriever pipeline ─────────────────────────────────────
+        result = self._retriever.retrieve(
+            space_id=space_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            agent_id=agent_id,
+            query=query,
+            agent_memory_policy=agent_memory_policy,
+            max_memories=settings.context_max_memories,
+            include_system_scope=include_system_scope,
+        )
+
+        memories = result.memories
+        active_policies = result.active_policies
+        source_refs = list(result.source_refs)
+        retrieval_trace = result.retrieval_trace
+        token_budget = result.token_budget
+
+        # ── Log access for all injected memories ────────────────────────
         self._record_access(
-            all_fetched,
+            memories,
             user_id,
             space_id,
             workspace_id,
@@ -461,7 +396,8 @@ class ContextBuilder:
             context_reason,
         )
 
-        def _outs(rows: list, *, include_system: bool) -> list[MemoryOut]:
+        # ── Serialise memories into MemoryOut objects ────────────────────
+        def _to_out_list(rows, *, include_system: bool) -> list[MemoryOut]:
             out: list[MemoryOut] = []
             for m in rows:
                 mo = self._to_out(
@@ -475,32 +411,62 @@ class ContextBuilder:
                     out.append(mo)
             return out
 
-        # Resolve context attachments
+        # Partition memories by scope for ContextCompiler section rendering.
+        user_memory = [m for m in memories if m.scope_type == "user"]
+        workspace_memory = [m for m in memories if m.scope_type == "workspace"]
+        capability_memory = [m for m in memories if m.scope_type == "capability"]
+        agent_memory = [m for m in memories if m.scope_type == "agent"]
+        system_policy_mem = [m for m in memories if m.scope_type == "system"]
+        relevant_episodes = [
+            m for m in memories
+            if m.memory_layer == "episodic" and m.scope_type not in ("system",)
+        ]
+
+        # ── Resolve context attachments ──────────────────────────────────
         resolved_attachments: list[dict] = []
         if attachments:
-            # First pass: DB-backed types
             db_resolved = self._resolve_db_attachments(
-                attachments,
-                space_id,
-                user_id,
-                workspace_id,
-                agent_id,
-                run_id,
-                context_reason,
+                attachments, space_id, user_id, workspace_id, agent_id, run_id, context_reason,
             )
-            # Second pass: filesystem/git types
             for att in db_resolved:
                 if att.get("resolved_content") is None and att.get("approved", True):
                     att = resolve_attachment(att, workspace_path)
                 resolved_attachments.append(att)
 
+        # ── Stable prefix / dynamic tail split ──────────────────────────
+        stable_prefix_refs = [r for r in source_refs if r.get("section") == "stable_prefix"]
+        dynamic_tail_refs = [r for r in source_refs if r.get("section") == "dynamic_tail"]
+
+        # Include policy refs in stable prefix refs.
+        stable_prefix_refs += [r for r in source_refs if r.get("source_type") == "policy"]
+
+        # ── Active policies as serialisable dicts ────────────────────────
+        active_policy_dicts = [
+            {
+                "id": p.id,
+                "name": p.name,
+                "domain": p.domain,
+                "policy_key": p.policy_key,
+                "enforcement_mode": p.enforcement_mode,
+                "priority": p.priority,
+                "policy_json": p.policy_json,
+            }
+            for p in active_policies
+        ]
+
         return ContextPackage(
-            user_memory=_outs(user_memory, include_system=False),
-            workspace_memory=_outs(workspace_memory, include_system=False),
-            capability_memory=_outs(capability_memory, include_system=False),
-            agent_memory=_outs(agent_memory, include_system=False),
-            system_policy=_outs(system_policy, include_system=True),
-            recent_session_summary=recent_summaries,
-            relevant_episodes=_outs(relevant_episodes, include_system=False),
+            user_memory=_to_out_list(user_memory, include_system=False),
+            workspace_memory=_to_out_list(workspace_memory, include_system=False),
+            capability_memory=_to_out_list(capability_memory, include_system=False),
+            agent_memory=_to_out_list(agent_memory, include_system=False),
+            system_policy=_to_out_list(system_policy_mem, include_system=True),
+            recent_session_summary=[],
+            relevant_episodes=_to_out_list(relevant_episodes, include_system=False),
             attachments=resolved_attachments,
+            active_policies=active_policy_dicts,
+            stable_prefix_refs=stable_prefix_refs,
+            dynamic_tail_refs=dynamic_tail_refs,
+            source_refs=source_refs,
+            retrieval_trace=retrieval_trace,
+            token_budget=token_budget,
         )

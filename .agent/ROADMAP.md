@@ -40,3 +40,4 @@
 - [ARCHITECTURE.md](ARCHITECTURE.md) — layer map
 - [BOUNDARIES.md](BOUNDARIES.md) — invariants
 - [tasks/current-focus.md](tasks/current-focus.md) — short-term priorities
+- [docs/MEMORY_CONTEXT_ROADMAP.md](../docs/MEMORY_CONTEXT_ROADMAP.md) — future extension paths for the memory/context system

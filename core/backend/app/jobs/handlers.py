@@ -274,3 +274,17 @@ def handle_agent_run(job) -> dict | None:
     raise ValueError(
         "agent_run handler requires payload.run_id, payload.task_id, or payload.agent_id"
     )
+
+
+@register_handler("memory_consolidation")
+def handle_memory_consolidation(job) -> dict | None:
+    """Process pending ``ActivityRecord`` rows into reviewable proposals."""
+    from ..db import SessionLocal
+    from ..memory.consolidation.service import run_memory_consolidation_job_payload
+
+    payload = job.payload or {}
+    db = SessionLocal()
+    try:
+        return run_memory_consolidation_job_payload(db=db, payload=payload)
+    finally:
+        db.close()

@@ -123,7 +123,7 @@ def test_post_activity_rejects_body_user_id_impersonation(api_client, db, cross_
     assert r.status_code == 403
 
 
-def test_post_activity_proposals_returns_ids_without_active_memory(api_client, db, cross_space_pair):
+def test_post_activity_consolidate_returns_proposals_without_active_memory(api_client, db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
     act = factories.create_test_activity(
@@ -141,20 +141,8 @@ def test_post_activity_proposals_returns_ids_without_active_memory(api_client, d
         .scalar()
     )
     r = api_client.post(
-        f"/api/v1/activity/{act.id}/proposals",
+        f"/api/v1/activity/{act.id}/consolidate",
         params=_params(a, ua.id),
-        json={
-            "proposals": [
-                {
-                    "target_scope": "agent",
-                    "target_namespace": "ns.x",
-                    "memory_type": "semantic",
-                    "proposed_title": "t1",
-                    "proposed_content": "c1",
-                    "rationale": "r1",
-                }
-            ],
-        },
     )
     assert r.status_code == 200
     created = r.json()
@@ -222,7 +210,7 @@ def test_process_activity_cross_space_returns_404(api_client, db, cross_space_pa
     assert r.status_code == 404
 
 
-def test_create_proposals_cross_space_returns_404(api_client, db, cross_space_pair):
+def test_consolidate_activity_cross_space_returns_404(api_client, db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     b = cross_space_pair["space_b_id"]
     ua = cross_space_pair["user_a"]
@@ -235,19 +223,7 @@ def test_create_proposals_cross_space_returns_404(api_client, db, cross_space_pa
         commit=True,
     )
     r = api_client.post(
-        f"/api/v1/activity/{act.id}/proposals",
+        f"/api/v1/activity/{act.id}/consolidate",
         params=_params(b, ub.id),
-        json={
-            "proposals": [
-                {
-                    "target_scope": "agent",
-                    "target_namespace": "ns.x",
-                    "memory_type": "semantic",
-                    "proposed_title": "t1",
-                    "proposed_content": "c1",
-                    "rationale": "r1",
-                }
-            ],
-        },
     )
     assert r.status_code == 404

@@ -454,10 +454,32 @@ def test_list_proposals_invalid_status_returns_422(api_client, db, cross_space_p
 def test_get_proposal_detail_general_shape(api_client, db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
+    existing = factories.create_test_memory_entry(
+        db,
+        space_id=a,
+        content="seed",
+        scope_type="agent",
+        namespace="agent.test",
+        owner_user_id=ua.id,
+        commit=True,
+    )
+    existing.visibility = "space_shared"
+    db.commit()
     prop = factories.create_test_proposal(
         db,
         space_id=a,
         created_by_user_id=ua.id,
+        proposal_type="memory_update",
+        payload_json={
+            "operation": "update",
+            "target_memory_id": existing.id,
+            "proposed_content": "proposed text",
+            "memory_type": "semantic",
+            "target_scope": "agent",
+            "target_namespace": "agent.test",
+            "target_visibility": "private",
+            "sensitivity_level": "normal",
+        },
         commit=True,
     )
     r = api_client.get(f"/api/v1/proposals/{prop.id}", params=_params(a, ua.id))

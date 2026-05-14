@@ -43,24 +43,12 @@ def test_activity_to_memory_happy_path_provenance_and_idempotent_accept(
     assert row_act.status == "raw"
 
     r_prop = api_client.post(
-        f"/api/v1/activity/{act_id}/proposals",
+        f"/api/v1/activity/{act_id}/consolidate",
         params=_params(a, ua.id),
-        json={
-            "proposals": [
-                {
-                    "target_scope": "agent",
-                    "target_namespace": "wf.ns",
-                    "memory_type": "semantic",
-                    "proposed_title": "mem title",
-                    "proposed_content": "mem body",
-                    "rationale": "from activity",
-                }
-            ],
-        },
     )
     assert r_prop.status_code == 200
     created = r_prop.json()
-    assert len(created) == 1
+    assert len(created) >= 1
     pid = created[0]["id"]
     assert created[0].get("source_activity_id") == act_id
     assert created[0]["status"] == "pending"
@@ -75,8 +63,11 @@ def test_activity_to_memory_happy_path_provenance_and_idempotent_accept(
     )
 
     prop_orm = db.query(Proposal).filter(Proposal.id == pid).one()
-    assert prop_orm.proposal_type == "memory_update"
-    assert prop_orm.payload_json.get("source_activity_id") == act_id
+    assert prop_orm.proposal_type == "memory_create"
+    pc = prop_orm.payload_json.get("proposed_content") or ""
+    assert "workflow evidence" not in pc
+    entries = prop_orm.payload_json.get("provenance_entries") or []
+    assert any(e.get("source_type") == "activity" and e.get("source_id") == act_id for e in entries)
     assert_proposal_not_applied(db, proposal_id=pid, space_id=a)
     db.commit()
 
@@ -94,7 +85,7 @@ def test_activity_to_memory_happy_path_provenance_and_idempotent_accept(
     assert mem.space_id == a
     assert mem.status == "active"
     assert mem.source_proposal_id == pid
-    assert mem.content == "mem body"
+    assert act_id in (mem.content or "")
 
     prop_done = db.query(Proposal).filter(Proposal.id == pid).one()
     assert prop_done.status == "accepted"
@@ -136,20 +127,8 @@ def test_activity_memory_workflow_blocked_for_other_space(
     )
     pid = (
         api_client.post(
-            f"/api/v1/activity/{act}/proposals",
+            f"/api/v1/activity/{act}/consolidate",
             params=_params(a, ua.id),
-            json={
-                "proposals": [
-                    {
-                        "target_scope": "agent",
-                        "target_namespace": "ns",
-                        "memory_type": "semantic",
-                        "proposed_title": "x",
-                        "proposed_content": "y",
-                        "rationale": "z",
-                    }
-                ],
-            },
         )
         .json()[0]["id"]
     )
@@ -163,20 +142,8 @@ def test_activity_memory_workflow_blocked_for_other_space(
     )
     assert (
         api_client.post(
-            f"/api/v1/activity/{act}/proposals",
+            f"/api/v1/activity/{act}/consolidate",
             params=_params(b, ub.id),
-            json={
-                "proposals": [
-                    {
-                        "target_scope": "agent",
-                        "target_namespace": "ns",
-                        "memory_type": "semantic",
-                        "proposed_title": "x2",
-                        "proposed_content": "y2",
-                        "rationale": "z2",
-                    }
-                ],
-            },
         ).status_code
         == 404
     )

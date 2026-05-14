@@ -51,3 +51,6 @@ def record_memory_access(
     db.add(log)
     memory.access_count = (memory.access_count or 0) + 1
     memory.last_accessed_at = log.accessed_at
+    # last_retrieved_at tracks when memory was injected into a run context.
+    if access_type == "context_injection":
+        memory.last_retrieved_at = log.accessed_at

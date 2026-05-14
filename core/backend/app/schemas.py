@@ -320,7 +320,7 @@ class MemoryOut(BaseModel):
     owner_user_id: Optional[str] = None
     workspace_id: Optional[str]
     scope: str
-    namespace: str
+    namespace: Optional[str] = None
     type: str
     title: Optional[str] = None
     content: Optional[str] = None
@@ -338,6 +338,12 @@ class MemoryOut(BaseModel):
     deleted_at: Optional[datetime]
     version: int
     tags: Optional[list]
+    memory_layer: Optional[str] = None
+    memory_kind: Optional[str] = None
+    source_trust: Optional[str] = None
+    created_from_proposal_id: Optional[str] = None
+    root_memory_id: Optional[str] = None
+    supersedes_memory_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -366,13 +372,15 @@ class ProposalOut(BaseModel):
     source_task_id: Optional[str]
     source_run_id: Optional[str]
     created_by_run_id: Optional[str] = None
-    proposal_type: str = "memory_update"
-    target_scope: str
-    target_namespace: str
-    memory_type: str
-    proposed_title: str
-    proposed_content: str
-    rationale: str
+    proposal_type: str = "memory_create"
+    # target_scope / target_namespace / memory_type / proposed_title / proposed_content
+    # are populated from payload_json; they may be empty strings for non-memory proposal types.
+    target_scope: str = ""
+    target_namespace: str = ""
+    memory_type: str = ""
+    proposed_title: str = ""
+    proposed_content: str = ""
+    rationale: str = ""
     status: str
     risk_level: str = "low"
     urgency: str = "normal"
@@ -387,6 +395,8 @@ class ProposalOut(BaseModel):
     subject_user_id: Optional[str] = None
     sensitivity_level: Optional[str] = None
     selected_user_ids: Optional[list] = None
+    provenance_entries: Optional[list[dict]] = None
+    source_activity_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -395,7 +405,10 @@ class ProposalAcceptOut(BaseModel):
     """Body for ``POST /api/v1/proposals/{id}/accept`` — result varies by ``proposal_type``."""
 
     proposal: ProposalOut
-    result_type: Literal["memory_entry", "code_patch_apply"]
+    # memory_entry  — memory_create, memory_update, memory_archive accepted
+    # code_patch_apply — code_patch accepted
+    # policy_version   — policy_change accepted
+    result_type: Literal["memory_entry", "code_patch_apply", "policy_version"]
     result: dict[str, Any]
 
 
@@ -417,6 +430,11 @@ class ActivityRecordOut(BaseModel):
     created_at: datetime
     status: Optional[str] = None
     updated_at: Optional[datetime] = None
+    source_kind: Optional[str] = None
+    source_trust: Optional[str] = None
+    subject_user_id: Optional[str] = None
+    lifecycle_status: Optional[str] = None
+    consolidation_status: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -507,6 +525,7 @@ class ContextBuildRequest(BaseModel):
 
 
 class ContextPackage(BaseModel):
+    # Memory sections used by ContextCompiler for CLI file rendering.
     user_memory: list[MemoryOut] = []
     workspace_memory: list[MemoryOut] = []
     capability_memory: list[MemoryOut] = []
@@ -516,6 +535,19 @@ class ContextPackage(BaseModel):
     relevant_episodes: list[MemoryOut] = []
     # Resolved context attachments (file, git_diff, memory_entry, etc.)
     attachments: list[dict] = []
+
+    # Policy rows for stable prefix (raw dicts for serialisation).
+    active_policies: list[dict] = []
+
+    # Stable_prefix / dynamic_tail split (item lists, not rendered text).
+    # These are lists of source_ref dicts that belong to each section.
+    stable_prefix_refs: list[dict] = []
+    dynamic_tail_refs: list[dict] = []
+
+    # ContextSnapshot audit fields populated by ContextBuilder.
+    source_refs: list[dict] = []
+    retrieval_trace: dict = {}
+    token_budget: dict = {}
 
 
 # ---------------------------------------------------------------------------

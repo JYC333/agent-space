@@ -223,32 +223,6 @@ export interface Memory {
   deleted_at: string | null
 }
 
-export interface MemoryProposal {
-  id: string
-  space_id: string
-  user_id: string
-  workspace_id: string | null
-  proposed_title: string
-  proposed_content: string
-  memory_type: string
-  target_scope: string
-  target_namespace: string
-  target_visibility: string
-  rationale: string
-  source_evidence: string | null
-  risk_level: 'low' | 'medium' | 'high' | 'critical'
-  review_metadata: Record<string, unknown> | null
-  approved_by: string | null
-  status: ProposalStatus
-  source_session_id: string | null
-  source_task_id: string | null
-  source_run_id: string | null
-  source_activity_id: string | null
-  resulting_memory_id: string | null
-  created_at: string
-  decided_at: string | null
-}
-
 /** Activity inbox (`GET /activity`) — distinct from run-scoped activity records. */
 export interface ActivityInboxRecord {
   id: string
@@ -625,7 +599,7 @@ export interface CapabilitiesReloadResult {
 export interface ReflectResult {
   session_id: string
   proposals_created: number
-  proposals: MemoryProposal[]
+  proposals: Proposal[]
 }
 
 export interface ApiError {

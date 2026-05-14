@@ -1,4 +1,4 @@
-"""Unit checks for MemoryStore space-scoped lookup (Phase 5.1)."""
+"""Unit checks for MemoryStore space-scoped lookup."""
 
 from __future__ import annotations
 

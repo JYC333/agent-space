@@ -1,4 +1,4 @@
-"""Sanity checks for Phase 3 test support (not product invariants)."""
+"""Sanity checks for test support factories (not product invariants)."""
 
 from __future__ import annotations
 

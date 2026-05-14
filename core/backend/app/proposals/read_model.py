@@ -33,8 +33,12 @@ def compute_proposal_expired(proposal: Proposal, *, now: datetime | None = None)
 
 def proposal_to_out(proposal: Proposal, *, now: datetime | None = None) -> ProposalOut:
     """Build canonical ProposalOut including computed ``expired`` (not persisted)."""
+    from ..memory.proposal_payload import provenance_entries_from_payload
+
     now = now or datetime.now(UTC)
     expired = compute_proposal_expired(proposal, now=now)
+    payload = proposal.payload_json or {}
+    prov = provenance_entries_from_payload(payload)
     return ProposalOut(
         id=proposal.id,
         space_id=proposal.space_id,
@@ -65,6 +69,8 @@ def proposal_to_out(proposal: Proposal, *, now: datetime | None = None) -> Propo
         subject_user_id=proposal.subject_user_id,
         sensitivity_level=proposal.sensitivity_level,
         selected_user_ids=proposal.selected_user_ids,
+        provenance_entries=prov or None,
+        source_activity_id=proposal.source_activity_id,
     )
 
 

@@ -1,6 +1,13 @@
 from __future__ import annotations
 """
-General proposal review: list, accept, reject — dispatches ``memory_update`` and ``code_patch``.
+General proposal review: list, accept, reject — dispatches to ProposalApplyService.
+
+Supported proposal types for accept():
+  memory_create   — create a new active MemoryEntry
+  memory_update   — append-only versioned update (requires target_memory_id)
+  memory_archive  — status-based archive (requires target_memory_id)
+  policy_change   — create / supersede a Policy version
+  code_patch      — apply patch to workspace files
 """
 
 from dataclasses import dataclass
@@ -12,13 +19,26 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, case, func, not_, or_
 from sqlalchemy.orm.attributes import flag_modified
 
-from ..models import MemoryEntry, Proposal, Run, Workspace
+from ..models import MemoryEntry, Policy, Proposal, Run, Workspace
 from ..param_binding import duplicate_mapper
 from ..schemas import MemoryCreate
+from .proposal_payload import (
+    activity_provenance_entry,
+    strip_legacy_provenance_keys,
+)
 
 
 _ALLOWED_URGENCY = frozenset({"low", "normal", "high", "critical"})
-_SUPPORTED_ACCEPT_TYPES = frozenset({"memory_update", "code_patch"})
+
+# All proposal types whose accept() path is handled by ProposalApplyService.
+# Extend here when new types are added in future phases.
+_SUPPORTED_ACCEPT_TYPES = frozenset({
+    "memory_create",
+    "memory_update",
+    "memory_archive",
+    "policy_change",
+    "code_patch",
+})
 
 
 class UnsupportedProposalTypeError(Exception):
@@ -31,48 +51,32 @@ class UnsupportedProposalTypeError(Exception):
 
 @dataclass
 class ProposalAcceptResult:
-    """Result of ``ProposalService.accept`` — memory or code_patch branch."""
+    """Result of ``ProposalService.accept`` — varies by proposal type."""
 
     proposal: Proposal
-    memory: MemoryEntry | None = None
-    updated_paths: list[str] | None = None
+    memory: Optional[MemoryEntry] = None
+    policy: Optional[Policy] = None
+    updated_paths: Optional[list[str]] = None
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat appliers kept for import compatibility during transition.
+# New code must use ProposalApplyService (apply_service.py).
+# ---------------------------------------------------------------------------
 
 
 class MemoryUpdateProposalApplier:
-    """Apply a vetted ``memory_update`` proposal to active memory (caller commits proposal state)."""
+    """Legacy applier kept for import compatibility.  Delegates to ProposalApplyService."""
 
     def __init__(self, db: Session):
         self.db = db
 
     def apply(self, proposal: Proposal, *, user_id: str) -> MemoryEntry:
-        from .store import MemoryStore
+        from .apply_service import MemoryProposalApplier
 
-        store = MemoryStore(self.db)
-        payload = proposal.payload_json or {}
-        vis = (payload.get("target_visibility") or "private").lower()
-        sens = (payload.get("sensitivity_level") or "normal").lower()
-
-        mem_data = MemoryCreate(
-            title=proposal.title,
-            content=proposal.proposed_content,
-            type=proposal.memory_type,
-            scope=proposal.target_scope,
-            namespace=proposal.target_namespace,
-            space_id=proposal.space_id,
-            visibility=vis,
-            sensitivity_level=sens,
-            owner_user_id=payload.get("owner_user_id"),
-            subject_user_id=payload.get("subject_user_id"),
-            selected_user_ids=payload.get("selected_user_ids"),
-            workspace_id=proposal.workspace_id,
-            source_proposal_id=proposal.id,
-        )
-        return store.create(
-            mem_data,
-            acting_user_id=user_id,
-            created_by=str(proposal.created_by_user_id or user_id),
-            approved_by=str(user_id),
-        )
+        applier = MemoryProposalApplier(self.db)
+        result = applier.apply_update(proposal, user_id=user_id)
+        return result.memory
 
 
 class CodePatchProposalApplier:
@@ -159,7 +163,39 @@ def _new_id() -> str:
     return str(ULID())
 
 
-def build_memory_update_proposal(
+def _memory_provenance_entries(
+    *,
+    source_run_id: str | None,
+    source_activity_id: str | None,
+    source_evidence: str | None,
+    activity_source_trust: str | None = None,
+    activity_evidence_json: dict | None = None,
+) -> list[dict]:
+    entries: list[dict] = []
+    if source_run_id:
+        entries.append(
+            {
+                "source_type": "run_step",
+                "source_id": source_run_id,
+                "source_trust": "internal_system",
+                "evidence_json": {"correlation": "source_run_id"},
+            }
+        )
+    if source_activity_id:
+        ev = dict(activity_evidence_json or {})
+        if source_evidence is not None:
+            ev.setdefault("note", str(source_evidence))
+        entries.append(
+            activity_provenance_entry(
+                activity_id=source_activity_id,
+                source_trust=activity_source_trust,
+                evidence=ev,
+            )
+        )
+    return entries
+
+
+def build_memory_create_proposal(
     proposal_id: str,
     space_id: str,
     user_id: str,
@@ -176,6 +212,8 @@ def build_memory_update_proposal(
     source_run_id: str | None = None,
     source_activity_id: str | None = None,
     source_evidence: str | None = None,
+    activity_source_trust: str | None = None,
+    activity_evidence_json: dict | None = None,
     target_visibility: str = "private",
     risk_level: str = "low",
     owner_user_id: str | None = None,
@@ -186,9 +224,11 @@ def build_memory_update_proposal(
     review_deadline: datetime | None = None,
     expires_at: datetime | None = None,
     created_by_run_id: str | None = None,
+    extra_provenance_entries: list[dict] | None = None,
 ) -> Proposal:
-    """Construct a canonical Proposal row for a memory_update workflow."""
+    """Construct a canonical Proposal row for a memory_create workflow."""
     payload: dict = {
+        "operation": "create",
         "proposed_content": proposed_content,
         "memory_type": memory_type,
         "target_scope": target_scope,
@@ -200,18 +240,111 @@ def build_memory_update_proposal(
         payload["source_session_id"] = source_session_id
     if source_task_id is not None:
         payload["source_task_id"] = source_task_id
-    if source_run_id is not None:
-        payload["source_run_id"] = source_run_id
-    if source_activity_id is not None:
-        payload["source_activity_id"] = source_activity_id
-    if source_evidence is not None:
-        payload["source_evidence"] = source_evidence
     if owner_user_id is not None:
         payload["owner_user_id"] = owner_user_id
     if subject_user_id is not None:
         payload["subject_user_id"] = subject_user_id
     if selected_user_ids is not None:
         payload["selected_user_ids"] = selected_user_ids
+
+    prov = _memory_provenance_entries(
+        source_run_id=source_run_id,
+        source_activity_id=source_activity_id,
+        source_evidence=source_evidence,
+        activity_source_trust=activity_source_trust,
+        activity_evidence_json=activity_evidence_json,
+    )
+    if extra_provenance_entries:
+        prov.extend(extra_provenance_entries)
+    if prov:
+        payload["provenance_entries"] = prov
+    payload = strip_legacy_provenance_keys(payload)
+
+    return Proposal(
+        id=proposal_id,
+        space_id=space_id,
+        proposal_type="memory_create",
+        status="pending",
+        title=proposed_title,
+        summary=None,
+        payload_json=payload,
+        rationale=rationale,
+        workspace_id=workspace_id,
+        created_by_user_id=user_id,
+        created_by_run_id=created_by_run_id,
+        risk_level=risk_level,
+        urgency=urgency,
+        review_deadline=review_deadline,
+        expires_at=expires_at,
+    )
+
+
+def build_memory_update_proposal(
+    proposal_id: str,
+    space_id: str,
+    user_id: str,
+    *,
+    target_memory_id: str,
+    workspace_id: str | None,
+    proposed_title: str,
+    proposed_content: str,
+    rationale: str,
+    memory_type: str,
+    target_scope: str,
+    target_namespace: str,
+    source_session_id: str | None = None,
+    source_task_id: str | None = None,
+    source_run_id: str | None = None,
+    source_activity_id: str | None = None,
+    source_evidence: str | None = None,
+    activity_source_trust: str | None = None,
+    activity_evidence_json: dict | None = None,
+    target_visibility: str = "private",
+    risk_level: str = "low",
+    owner_user_id: str | None = None,
+    subject_user_id: str | None = None,
+    sensitivity_level: str = "normal",
+    selected_user_ids: list[str] | None = None,
+    urgency: str = "normal",
+    review_deadline: datetime | None = None,
+    expires_at: datetime | None = None,
+    created_by_run_id: str | None = None,
+    extra_provenance_entries: list[dict] | None = None,
+) -> Proposal:
+    """Construct a Proposal row for append-only memory_update (requires target_memory_id)."""
+    payload: dict = {
+        "operation": "update",
+        "target_memory_id": target_memory_id,
+        "proposed_content": proposed_content,
+        "memory_type": memory_type,
+        "target_scope": target_scope,
+        "target_namespace": target_namespace,
+        "target_visibility": target_visibility,
+        "sensitivity_level": sensitivity_level,
+    }
+    if source_session_id is not None:
+        payload["source_session_id"] = source_session_id
+    if source_task_id is not None:
+        payload["source_task_id"] = source_task_id
+    if owner_user_id is not None:
+        payload["owner_user_id"] = owner_user_id
+    if subject_user_id is not None:
+        payload["subject_user_id"] = subject_user_id
+    if selected_user_ids is not None:
+        payload["selected_user_ids"] = selected_user_ids
+
+    prov = _memory_provenance_entries(
+        source_run_id=source_run_id,
+        source_activity_id=source_activity_id,
+        source_evidence=source_evidence,
+        activity_source_trust=activity_source_trust,
+        activity_evidence_json=activity_evidence_json,
+    )
+    if extra_provenance_entries:
+        prov.extend(extra_provenance_entries)
+    if prov:
+        payload["provenance_entries"] = prov
+    payload = strip_legacy_provenance_keys(payload)
 
     return Proposal(
         id=proposal_id,
@@ -233,12 +366,14 @@ def build_memory_update_proposal(
 
 
 class ProposalService:
-    """List, count, accept, and reject proposals for a space (memory_update + code_patch apply paths)."""
+    """List, count, accept, and reject proposals for a space.
+
+    ``accept()`` delegates all durable writes to ``ProposalApplyService`` — the
+    single durable write boundary for accepted proposals.
+    """
 
     def __init__(self, db: Session):
         self.db = db
-        self._memory_applier = MemoryUpdateProposalApplier(db)
-        self._code_patch_applier = CodePatchProposalApplier(db)
 
     def create_proposal(
         self,
@@ -268,7 +403,7 @@ class ProposalService:
             review_deadline=review_deadline,
             expires_at=expires_at,
         )
-        proposal = build_memory_update_proposal(
+        proposal = build_memory_create_proposal(
             _new_id(),
             space_id,
             user_id,
@@ -567,6 +702,18 @@ class ProposalService:
         space_id: str,
         user_id: str,
     ) -> ProposalAcceptResult | None:
+        """Accept a pending proposal and apply it through ProposalApplyService.
+
+        Source monitoring uses ``accept_context="explicit_user_accept"`` (fixed here;
+        never taken from HTTP input — see ProposalApplyService for accept_context contract).
+
+        Returns None when:
+          - Proposal not found or already decided
+          - preview=True  (dry-run proposals must never be applied)
+          - Wrong space or wrong reviewer
+
+        Raises UnsupportedProposalTypeError when the proposal_type has no apply path.
+        """
         proposal = self.get(proposal_id)
         if not proposal or proposal.status != "pending":
             return None
@@ -578,28 +725,43 @@ class ProposalService:
         if proposal.proposal_type not in _SUPPORTED_ACCEPT_TYPES:
             raise UnsupportedProposalTypeError(proposal.proposal_type)
 
-        if proposal.proposal_type == "code_patch":
-            paths = self._code_patch_applier.apply(proposal, space_id=space_id, user_id=user_id)
-            proposal.status = "accepted"
-            proposal.decided_at = datetime.now(UTC)
-            payload = proposal.payload_json or {}
-            data = dict(payload)
-            data["applied_paths"] = paths
-            data["applied_at"] = datetime.now(UTC).isoformat()
-            proposal.payload_json = data
-            flag_modified(proposal, "payload_json")
-            self.db.commit()
-            self.db.refresh(proposal)
-            return ProposalAcceptResult(proposal=proposal, memory=None, updated_paths=paths)
+        from .apply_service import ProposalApplyService, ProposalApplyError
 
-        memory = self._memory_applier.apply(proposal, user_id=user_id)
+        apply_svc = ProposalApplyService(self.db)
+        try:
+            result = apply_svc.apply(
+                proposal,
+                user_id=user_id,
+                accept_context="explicit_user_accept",
+            )
+        except ProposalApplyError as exc:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         proposal.status = "accepted"
         proposal.decided_at = datetime.now(UTC)
-        proposal.resulting_memory_id = memory.id
+
+        if result.memory is not None:
+            proposal.resulting_memory_id = result.memory.id
+
+        if result.updated_paths is not None:
+            payload = proposal.payload_json or {}
+            data = dict(payload)
+            data["applied_paths"] = result.updated_paths
+            data["applied_at"] = datetime.now(UTC).isoformat()
+            proposal.payload_json = data
+            flag_modified(proposal, "payload_json")
+
         self.db.commit()
         self.db.refresh(proposal)
-        return ProposalAcceptResult(proposal=proposal, memory=memory, updated_paths=None)
+
+        return ProposalAcceptResult(
+            proposal=proposal,
+            memory=result.memory,
+            policy=result.policy,
+            updated_paths=result.updated_paths,
+        )
 
     def reject(
         self,

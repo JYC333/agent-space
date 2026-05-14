@@ -5,9 +5,12 @@ ActivityService — manages ActivityRecord lifecycle and proposal generation.
 ActivityRecords are the entry point for all incoming data. They may produce
 memory proposals, but they must never become active memory directly.
 
-source_type values:
+``activity_type`` (API field ``source_type``) examples in the wild include:
   user_input | imported_chat | web_capture | file_import |
   agent_run  | task_log      | manual
+
+Consolidation runs via ``ActivityConsolidationService`` from
+``POST /api/v1/activity/{id}/consolidate`` and ``POST /api/v1/memory/consolidation/run`` — not from ``ActivityService``.
 """
 
 from datetime import datetime, UTC
@@ -17,9 +20,8 @@ from ulid import ULID
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from ..models import ActivityRecord, Proposal, Run
+from ..models import ActivityRecord, Run
 from ..param_binding import duplicate_mapper
-from ..memory.proposals import build_memory_update_proposal
 
 
 def _new_id() -> str:
@@ -146,62 +148,6 @@ class ActivityService:
         self.db.commit()
         self.db.refresh(record)
         return record
-
-    # ------------------------------------------------------------------
-    # Proposal generation
-    # ------------------------------------------------------------------
-
-    def create_proposals_from(
-        self,
-        activity_id: str,
-        space_id: str,
-        proposals: list[dict],
-        user_id: str,
-    ) -> list[Proposal]:
-        """
-        Create memory proposals sourced from an activity record.
-        Marks the record as proposals_generated on success.
-
-        Each item in `proposals` must have:
-          target_scope, target_namespace, memory_type,
-          proposed_title, proposed_content, rationale
-
-        Optional per-item fields:
-          source_evidence, risk_level, target_visibility
-        """
-        record = self._require(activity_id, space_id)
-
-        created: list[Proposal] = []
-
-        for p in proposals:
-            proposal = build_memory_update_proposal(
-                _new_id(),
-                space_id,
-                user_id,
-                workspace_id=record.workspace_id,
-                proposed_title=p["proposed_title"],
-                proposed_content=p["proposed_content"],
-                rationale=p["rationale"],
-                memory_type=p["memory_type"],
-                target_scope=p["target_scope"],
-                target_namespace=p["target_namespace"],
-                source_session_id=record.source_session_id,
-                source_task_id=record.source_task_id,
-                source_run_id=record.source_run_id,
-                source_activity_id=activity_id,
-                source_evidence=p.get("source_evidence"),
-                target_visibility=p.get("target_visibility", "private"),
-                risk_level=p.get("risk_level", "low"),
-            )
-            self.db.add(proposal)
-            created.append(proposal)
-
-        record.status = "proposals_generated"
-        record.updated_at = datetime.now(UTC)
-        self.db.commit()
-        for p in created:
-            self.db.refresh(p)
-        return created
 
     # ------------------------------------------------------------------
     # Helpers

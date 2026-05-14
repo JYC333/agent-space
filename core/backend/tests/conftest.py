@@ -18,6 +18,19 @@ Override where ephemeral session dirs are created::
 
     PYTEST_AGENT_SPACE_PARENT=/path/to/parent pytest …
 
+**SQLite + FastAPI ``TestClient`` (sync routes run in a thread pool):**
+
+- ``db_engine`` is **session-scoped** (one Alembic upgrade per pytest session, path from
+  ``tmp_path_factory``). Connections set ``journal_mode=WAL`` and ``busy_timeout`` so the
+  test-thread ``db`` session and the worker-thread HTTP session can coexist.
+- ``db`` / ``client`` stay **function-scoped**; each opens its own connection from that engine.
+- Any fixture that **flushes** rows the HTTP layer must see, or that must not hold a write
+  lock across ``client`` calls, must **commit** (or use ``commit=True`` in factories) before
+  the request. Example: ``cross_space_pair`` commits before returning.
+- Heavy migration-only checks should share one DB like ``canonical_engine`` in
+  ``tests/unit/test_canonical_schema.py`` (module-scoped migrated engine), not re-run
+  Alembic per test.
+
 Host tree root (defaults to ``~/aspace`` — the directory that contains ``dev/``,
 ``test/``, ``prod/`` mode dirs; pytest uses ``<ASPACE_ROOT>/.cache/pytest-runs/``,
 not ``~/aspace/test``)::
@@ -107,18 +120,22 @@ def _migrate_test_database(database_url: str) -> None:
     command.upgrade(cfg, "head")
 
 
-@pytest.fixture(scope="function")
-def db_engine(tmp_path):
-    db_path = tmp_path / "test.sqlite"
+@pytest.fixture(scope="session")
+def db_engine(tmp_path_factory):
+    db_path = tmp_path_factory.mktemp("db") / "test.sqlite"
     database_url = f"sqlite:///{db_path}"
     _migrate_test_database(database_url)
     engine = create_engine(
         database_url,
         connect_args={"check_same_thread": False, "timeout": 30},
     )
+
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
+        # WAL mode lets readers and writers coexist — prevents "database is locked"
+        # when the db fixture (reader) and client fixture (writer) use separate connections.
+        cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA busy_timeout=60000")
         cursor.close()

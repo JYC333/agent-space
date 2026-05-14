@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 from ulid import ULID
 
-from ..memory.proposals import build_memory_update_proposal
+from ..memory.proposals import build_memory_create_proposal
 from ..models import Artifact, Proposal, Run, Workspace
 from .task_output_linkage import link_run_outputs_to_tasks
 
@@ -150,7 +150,7 @@ class RunOutputMaterializer:
             raise ValueError("payload must include proposed_content, memory_type, target_scope, target_namespace")
         rationale = str(spec.get("summary") or payload.get("rationale") or "Proposed from run output")[:8000]
         now = _utcnow()
-        prop = build_memory_update_proposal(
+        prop = build_memory_create_proposal(
             _new_id(),
             run.space_id,
             user_id,
@@ -173,7 +173,7 @@ class RunOutputMaterializer:
             created_by_run_id=run.id,
         )
         self.db.add(prop)
-        link_run_outputs_to_tasks(self.db, run=run, artifact=None, proposal=prop, proposal_role="memory_update")
+        link_run_outputs_to_tasks(self.db, run=run, artifact=None, proposal=prop, proposal_role="memory_create")
 
     def _code_patch_proposal(self, run: Run, spec: dict[str, Any], user_id: str) -> None:
         ws_id = spec.get("workspace_id")

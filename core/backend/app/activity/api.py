@@ -8,7 +8,7 @@ Routes:
   GET    /activity/{id}         — get a single activity record
   PATCH  /activity/{id}/process — mark a record as processed
   PATCH  /activity/{id}/archive — archive a record
-  POST   /activity/{id}/proposals — create memory proposals from this record
+  POST   /activity/{id}/consolidate — run consolidation for this activity only (no body)
 
 Space and authenticated user come from ``get_identity`` (same as Memory/Runs).
 Optional query ``for_user_id`` limits the list to that user and must equal the
@@ -23,6 +23,9 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_identity
 from ..db import get_db
+from ..memory.consolidation.service import ActivityConsolidationService
+from ..schemas import ProposalOut
+from ..proposals.read_model import proposal_to_out
 from .service import ActivityService
 
 router = APIRouter(prefix="/activity", tags=["activity"])
@@ -89,37 +92,6 @@ class ActivityOut(BaseModel):
             created_at=m.created_at.isoformat(),   # type: ignore[attr-defined]
             updated_at=m.updated_at.isoformat(),   # type: ignore[attr-defined]
         )
-
-
-class ProposalSpec(BaseModel):
-    target_scope: str
-    target_namespace: str
-    target_visibility: str = "private"
-    memory_type: str
-    proposed_title: str
-    proposed_content: str
-    rationale: str
-    source_evidence: Optional[str] = None
-    risk_level: str = "low"
-
-
-class CreateProposalsRequest(BaseModel):
-    """Proposals are created on behalf of the authenticated user (``get_identity``)."""
-
-    proposals: list[ProposalSpec]
-
-
-class ProposalOut(BaseModel):
-    id: str
-    space_id: str
-    user_id: str
-    status: str
-    proposed_title: str
-    proposed_content: str
-    rationale: str
-    risk_level: str
-    source_activity_id: Optional[str]
-    created_at: str
 
 
 # ---------------------------------------------------------------------------
@@ -233,36 +205,21 @@ def archive_activity(
     return ActivityOut.from_orm_model(record)
 
 
-@router.post("/{activity_id}/proposals", response_model=list[ProposalOut])
-def create_proposals(
+@router.post("/{activity_id}/consolidate", response_model=list[ProposalOut])
+def consolidate_activity(
     activity_id: str,
-    body: CreateProposalsRequest,
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ) -> list[ProposalOut]:
+    """Run consolidation for exactly one activity; same pipeline as ``POST /memory/consolidation/run``."""
     space_id, auth_user_id = ids
     svc = ActivityService(db)
-    try:
-        created = svc.create_proposals_from(
-            activity_id=activity_id,
-            space_id=space_id,
-            proposals=[p.model_dump() for p in body.proposals],
-            user_id=auth_user_id,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return [
-        ProposalOut(
-            id=p.id,
-            space_id=p.space_id,
-            user_id=p.user_id,
-            status=p.status,
-            proposed_title=p.proposed_title,
-            proposed_content=p.proposed_content,
-            rationale=p.rationale,
-            risk_level=p.risk_level,
-            source_activity_id=p.source_activity_id,
-            created_at=p.created_at.isoformat(),
-        )
-        for p in created
-    ]
+    if not svc.get(activity_id, space_id):
+        raise HTTPException(status_code=404, detail="Activity record not found")
+    cons = ActivityConsolidationService(db)
+    created = cons.run_for_activity_ids(
+        space_id,
+        [activity_id],
+        acting_user_id=auth_user_id,
+    )
+    return [proposal_to_out(p) for p in created]

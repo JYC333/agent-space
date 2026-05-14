@@ -2,11 +2,26 @@ from __future__ import annotations
 """
 MemoryProvider — abstract interface for memory storage backends.
 
-Only LocalMemoryProvider is enabled in the MVP. The interface exists so
+Only LocalMemoryProvider is enabled in the MVP.  The interface exists so
 future providers (vector databases, remote services, etc.) can be swapped
 in without changing callers.
 
-Usage:
+Write governance
+----------------
+LocalMemoryProvider.create / update / delete are INTERNAL-ONLY methods.
+They must NOT be called from:
+  - Public API routes (memory/api.py)    → those create Proposals
+  - Agent tools                          → must go through Proposal workflow
+  - Runtime adapters (runtimes/)         → no direct active-memory writes
+  - Normal run execution paths
+
+Allowed callers of the write methods:
+  - ProposalApplyService (accepted-proposal application)
+  - System seed / bootstrap
+  - Migration scripts
+  - Tests that need to pre-populate memory state
+
+Usage (reads — unchanged):
     provider = LocalMemoryProvider(db_session)
     memories = provider.list(space_id="personal", user_id="...", scope="user")
 """
@@ -17,6 +32,8 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
     from ..models import MemoryEntry
+
+_INTERNAL_WRITE_ALLOWED = True  # sentinel — future phases may gate this per caller
 
 
 # ---------------------------------------------------------------------------
@@ -68,17 +85,29 @@ class MemoryProvider(ABC):
 
     @abstractmethod
     def create(self, space_id: str, data: dict) -> dict:
-        """Persist a new memory entry. Returns the created record as a dict."""
+        """INTERNAL ONLY.  Persist a new memory entry. Returns the created record as a dict.
+
+        Must not be called from public API routes or agent/runtime-facing paths.
+        Use the Proposal workflow for public memory creation.
+        """
         ...
 
     @abstractmethod
     def update(self, memory_id: str, space_id: str, updates: dict) -> dict:
-        """Apply partial updates to an existing memory. Returns updated record."""
+        """INTERNAL ONLY.  Apply partial updates to an existing memory.
+
+        Must not be called from public API routes or agent/runtime-facing paths.
+        Use the Proposal workflow for public memory updates.
+        """
         ...
 
     @abstractmethod
     def delete(self, memory_id: str, space_id: str) -> bool:
-        """Soft-delete a memory. Returns True if deleted, False if not found."""
+        """INTERNAL ONLY.  Soft-delete a memory.
+
+        Must not be called from public API routes or agent/runtime-facing paths.
+        Use the Proposal workflow for public memory archives.
+        """
         ...
 
     @property
@@ -135,6 +164,9 @@ class LocalMemoryProvider(MemoryProvider):
 
     Wraps MemoryStore so callers can depend on the abstract interface without
     importing the concrete store directly.
+
+    Write methods (create / update / delete) are INTERNAL-ONLY — see module
+    docstring for the full list of allowed and forbidden callers.
     """
 
     def __init__(self, db: "Session") -> None:
@@ -199,7 +231,13 @@ class LocalMemoryProvider(MemoryProvider):
         )
         return [_row_to_dict(m) for m in rows]
 
+    # ------------------------------------------------------------------
+    # Write methods — INTERNAL ONLY
+    # See module docstring for allowed callers.
+    # ------------------------------------------------------------------
+
     def create(self, space_id: str, data: dict) -> dict:
+        """INTERNAL ONLY.  Direct MemoryEntry creation — not for public or agent use."""
         from ..schemas import MemoryCreate
 
         payload = dict(data)
@@ -210,6 +248,7 @@ class LocalMemoryProvider(MemoryProvider):
         return _row_to_dict(m)
 
     def update(self, memory_id: str, space_id: str, updates: dict) -> dict:
+        """INTERNAL ONLY.  Direct MemoryEntry mutation — not for public or agent use."""
         from ..schemas import MemoryUpdate
 
         m = self._store.get_for_space(space_id, memory_id)
@@ -222,6 +261,7 @@ class LocalMemoryProvider(MemoryProvider):
         return _row_to_dict(m2)
 
     def delete(self, memory_id: str, space_id: str) -> bool:
+        """INTERNAL ONLY.  Direct soft-delete — not for public or agent use."""
         m = self._store.get_for_space(space_id, memory_id)
         if not m:
             return False

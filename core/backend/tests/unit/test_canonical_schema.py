@@ -19,6 +19,25 @@ from app.db import Base
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI = BACKEND_ROOT / "alembic.ini"
 
+
+@pytest.fixture(scope="module")
+def canonical_engine(tmp_path_factory):
+    db_path = tmp_path_factory.mktemp("canonical") / "canonical.sqlite"
+    engine = _upgrade_empty_database(db_path)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture(scope="function")
+def canonical_conn(canonical_engine):
+    """Function-scoped connection with rollback — for tests that write data."""
+    connection = canonical_engine.connect()
+    transaction = connection.begin()
+    yield connection
+    transaction.rollback()
+    connection.close()
+
+
 REQUIRED_TABLES = {
     "spaces",
     "users",
@@ -48,6 +67,9 @@ REQUIRED_TABLES = {
     "job_events",
     "workspaces",
     "memory_entries",
+    "entity_refs",
+    "memory_relations",
+    "provenance_links",
 }
 
 
@@ -59,12 +81,17 @@ def _upgrade_empty_database(db_path: Path):
     cfg.set_main_option("prepend_sys_path", str(BACKEND_ROOT))
     cfg.set_main_option("sqlalchemy.url", url)
     command.upgrade(cfg, "head")
-    engine = create_engine(url, connect_args={"check_same_thread": False})
+    engine = create_engine(
+        url,
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
 
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=60000")
         cursor.close()
 
     return engine
@@ -80,9 +107,8 @@ def _foreign_keys(inspector, table_name: str) -> set[tuple[str, str, str]]:
     return found
 
 
-def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(tmp_path):
-    engine = _upgrade_empty_database(tmp_path / "baseline.sqlite")
-    inspector = inspect(engine)
+def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(canonical_engine):
+    inspector = inspect(canonical_engine)
 
     assert REQUIRED_TABLES.issubset(set(inspector.get_table_names()))
     assert "agent_runs" not in inspector.get_table_names()
@@ -130,9 +156,16 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
         "status",
         "updated_at",
         "created_at",
+        "source_kind",
+        "source_trust",
+        "subject_user_id",
+        "lifecycle_status",
+        "consolidation_status",
     }.issubset(activity_columns)
     ar_indexes = {tuple(i["column_names"]) for i in inspector.get_indexes("activity_records")}
     assert ("source_task_id",) in ar_indexes
+    assert ("lifecycle_status",) in ar_indexes
+    assert ("consolidation_status",) in ar_indexes
 
     artifact_columns = {column["name"] for column in inspector.get_columns("artifacts")}
     assert {
@@ -147,12 +180,45 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
         "metadata_json",
     }.issubset(artifact_columns)
     policy_columns = {column["name"] for column in inspector.get_columns("policies")}
-    assert {"id", "space_id", "name", "domain", "policy_json", "enabled", "created_at", "updated_at"}.issubset(policy_columns)
+    assert {
+        "id", "space_id", "name", "domain", "policy_json", "enabled", "created_at", "updated_at",
+        "policy_key", "policy_version", "status", "enforcement_mode", "priority",
+        "rule_json", "applies_to_json", "supersedes_policy_id", "created_from_proposal_id",
+    }.issubset(policy_columns)
+
+    memory_columns = {column["name"] for column in inspector.get_columns("memory_entries")}
+    assert {
+        "memory_layer",
+        "memory_kind",
+        "source_trust",
+        "created_from_proposal_id",
+        "root_memory_id",
+        "supersedes_memory_id",
+        "event_time",
+        "event_type",
+        "summary_json",
+        "salience_json",
+        "last_retrieved_at",
+        "reconsolidation_due",
+    }.issubset(memory_columns)
+
+    snapshot_columns = {column["name"] for column in inspector.get_columns("context_snapshots")}
+    assert {
+        "compiled_prefix_text",
+        "compiled_tail_text",
+        "prefix_hash",
+        "tail_hash",
+        "compiler_version",
+        "policy_bundle_version",
+        "memory_digest_version",
+        "workspace_digest_version",
+        "retrieval_trace_json",
+        "token_budget_json",
+    }.issubset(snapshot_columns)
 
 
-def test_canonical_relationships_can_be_persisted_after_migration(tmp_path):
-    engine = _upgrade_empty_database(tmp_path / "relationships.sqlite")
-    Session = sessionmaker(bind=engine)
+def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn):
+    Session = sessionmaker(bind=canonical_conn, join_transaction_mode="create_savepoint")
 
     db = Session()
     try:
@@ -323,19 +389,51 @@ def test_canonical_relationships_can_be_persisted_after_migration(tmp_path):
         db.add_all([job, memory, message])
         db.commit()
 
+        entity_ref = models.EntityRef(
+            id="entity-1",
+            space_id=space.id,
+            entity_type="person",
+            entity_id="ext-person-42",
+            canonical_key="person:ext-person-42",
+            display_name="Alice",
+        )
+        memory_relation = models.MemoryRelation(
+            id="relation-1",
+            space_id=space.id,
+            source_type="memory",
+            source_id=memory.id,
+            target_type="memory",
+            target_id=memory.id,
+            relation_type="related_to",
+            created_from_proposal_id=proposal.id,
+        )
+        provenance_link = models.ProvenanceLink(
+            id="provenance-1",
+            space_id=space.id,
+            target_type="memory",
+            target_id=memory.id,
+            source_type="activity",
+            source_id=activity.id,
+            source_trust="internal_system",
+        )
+        db.add_all([entity_ref, memory_relation, provenance_link])
+        db.commit()
+
         assert db.get(models.Agent, "agent-1").current_version_id == "version-1"
         assert db.get(models.Run, "run-1").agent_version_id == "version-1"
         assert db.get(models.Run, "run-1").context_snapshot_id == "snapshot-1"
         assert db.get(models.Artifact, "artifact-1").run_id == "run-1"
         assert db.get(models.Proposal, "proposal-1").created_by_run_id == "run-1"
         assert db.get(models.ActivityRecord, "activity-1").source_run_id == "run-1"
+        assert db.get(models.EntityRef, "entity-1").entity_type == "person"
+        assert db.get(models.MemoryRelation, "relation-1").relation_type == "related_to"
+        assert db.get(models.ProvenanceLink, "provenance-1").source_trust == "internal_system"
     finally:
         db.close()
 
 
-def test_key_canonical_foreign_keys_exist(tmp_path):
-    engine = _upgrade_empty_database(tmp_path / "foreign-keys.sqlite")
-    inspector = inspect(engine)
+def test_key_canonical_foreign_keys_exist(canonical_engine):
+    inspector = inspect(canonical_engine)
 
     # Intentionally omitted to avoid an Agent <-> AgentVersion DDL cycle in the
     # clean baseline. Run.agent_version_id is the immutable execution FK.
@@ -366,8 +464,15 @@ def test_key_canonical_foreign_keys_exist(tmp_path):
     assert ("agent_id", "agents", "id") in _foreign_keys(inspector, "memory_entries")
     assert ("source_activity_id", "activity_records", "id") in _foreign_keys(inspector, "memory_entries")
     assert ("source_artifact_id", "artifacts", "id") in _foreign_keys(inspector, "memory_entries")
+    assert ("created_from_proposal_id", "proposals", "id") in _foreign_keys(inspector, "memory_entries")
     assert "memory_access_logs" in inspector.get_table_names()
     assert ("memory_id", "memory_entries", "id") in _foreign_keys(inspector, "memory_access_logs")
+    assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "entity_refs")
+    assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "memory_relations")
+    assert ("created_from_proposal_id", "proposals", "id") in _foreign_keys(inspector, "memory_relations")
+    assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "provenance_links")
+    # policies.created_from_proposal_id is intentionally a soft reference (policies precedes proposals in migration order)
+    assert ("created_from_proposal_id", "proposals", "id") not in _foreign_keys(inspector, "policies")
 
 
 def test_initial_migration_has_no_forward_table_references():
@@ -401,8 +506,6 @@ def test_canonical_migration_has_no_removed_execution_symbols():
         "execute_pending_run",
         "create_pending",
         "Task = Job",
-        "Memory = MemoryEntry",
-        "MemoryProposal = Proposal",
     )
     for token in banned:
         assert token not in text, token

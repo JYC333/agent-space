@@ -28,14 +28,25 @@ def _build_proposal_accept_out(
 ) -> ProposalAcceptOut:
     now = datetime.now(UTC)
     prop_out = proposal_to_out(result.proposal, now=now)
+
     if result.updated_paths is not None:
         return ProposalAcceptOut(
             proposal=prop_out,
             result_type="code_patch_apply",
             result={"updated_paths": list(result.updated_paths)},
         )
+
+    if result.policy is not None:
+        return ProposalAcceptOut(
+            proposal=prop_out,
+            result_type="policy_version",
+            result={"policy_id": result.policy.id, "policy_version": result.policy.policy_version},
+        )
+
+    # memory_create, memory_update, memory_archive all surface the MemoryEntry.
     memory = result.memory
-    assert memory is not None
+    if memory is None:
+        raise HTTPException(status_code=500, detail="Accepted proposal produced no result")
     mem_out = memory_entry_to_out(
         memory,
         viewer_user_id=user_id,

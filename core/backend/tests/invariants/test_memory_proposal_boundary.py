@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy import func
 
 from app.activity.service import ActivityService
+from app.memory.consolidation.service import ActivityConsolidationService
 from app.memory.proposals import ProposalService
 from app.models import MemoryEntry, Proposal
 from tests.support import factories
@@ -42,25 +43,18 @@ def test_activity_proposals_from_does_not_activate_memory(db, cross_space_pair):
         user_id=ua.id,
         source_run_id=None,
     )
-    proposals = ActivityService(db).create_proposals_from(
-        act.id,
-        space_id=a,
-        user_id=ua.id,
-        proposals=[
-            {
-                "target_scope": "agent",
-                "target_namespace": "inv.ns",
-                "memory_type": "semantic",
-                "proposed_title": "t",
-                "proposed_content": "body",
-                "rationale": "from activity",
-            }
-        ],
+    proposals = ActivityConsolidationService(db).run_for_activity_ids(
+        a,
+        [act.id],
+        acting_user_id=ua.id,
     )
     assert len(proposals) == 1
-    assert proposals[0].proposal_type == "memory_update"
+    assert proposals[0].proposal_type == "memory_create"
     assert proposals[0].status == "pending"
-    assert (proposals[0].payload_json or {}).get("source_activity_id") == act.id
+    entries = (proposals[0].payload_json or {}).get("provenance_entries") or []
+    assert any(
+        e.get("source_type") == "activity" and e.get("source_id") == act.id for e in entries
+    )
     assert_memory_unchanged(db, space_id=a, baseline_ids=baseline, status="active")
     assert_proposal_not_applied(db, proposal_id=proposals[0].id, space_id=a)
 

@@ -1,7 +1,7 @@
 """canonical initial schema
 
 Revision ID: f1a06c8a5d75
-Revises: 
+Revises:
 Create Date: 2026-05-11 20:48:51.184046
 """
 from alembic import op
@@ -36,6 +36,18 @@ def upgrade() -> None:
     sa.Column('relevant_period_start', sa.DateTime(timezone=True), nullable=True),
     sa.Column('relevant_period_end', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('compiled_prefix_text', sa.Text(), nullable=True),
+    sa.Column('compiled_tail_text', sa.Text(), nullable=True),
+    sa.Column('compiled_prefix_ref', sa.String(length=1024), nullable=True),
+    sa.Column('compiled_tail_ref', sa.String(length=1024), nullable=True),
+    sa.Column('prefix_hash', sa.String(length=128), nullable=True),
+    sa.Column('tail_hash', sa.String(length=128), nullable=True),
+    sa.Column('compiler_version', sa.String(length=64), nullable=True),
+    sa.Column('retrieval_trace_json', sa.JSON(), nullable=True),
+    sa.Column('token_budget_json', sa.JSON(), nullable=True),
+    sa.Column('policy_bundle_version', sa.String(length=64), nullable=True),
+    sa.Column('memory_digest_version', sa.String(length=64), nullable=True),
+    sa.Column('workspace_digest_version', sa.String(length=64), nullable=True),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -77,11 +89,31 @@ def upgrade() -> None:
     sa.Column('enabled', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('policy_key', sa.String(length=256), nullable=True),
+    sa.Column('policy_version', sa.Integer(), nullable=False, server_default='1'),
+    sa.Column('status', sa.String(length=32), nullable=False, server_default='active'),
+    sa.Column('enforcement_mode', sa.String(length=32), nullable=True),
+    sa.Column('priority', sa.Integer(), nullable=False, server_default='0'),
+    sa.Column('rule_json', sa.JSON(), nullable=True),
+    sa.Column('applies_to_json', sa.JSON(), nullable=True),
+    # Soft self-reference: no DB FK to avoid DDL cycle with policy versioning bootstrap.
+    sa.Column('supersedes_policy_id', sa.String(length=36), nullable=True),
+    # Soft reference to proposals: policies is created before proposals in migration order.
+    sa.Column('created_from_proposal_id', sa.String(length=36), nullable=True),
+    sa.CheckConstraint("status in ('draft', 'active', 'superseded', 'disabled')", name='ck_policies_status'),
+    sa.CheckConstraint(
+        "enforcement_mode is null or enforcement_mode in ('allow', 'deny', 'require_approval', 'allow_with_log')",
+        name='ck_policies_enforcement_mode',
+    ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_policies_domain'), 'policies', ['domain'], unique=False)
     op.create_index(op.f('ix_policies_space_id'), 'policies', ['space_id'], unique=False)
+    op.create_index(op.f('ix_policies_policy_key'), 'policies', ['policy_key'], unique=False)
+    op.create_index(op.f('ix_policies_status'), 'policies', ['status'], unique=False)
+    op.create_index(op.f('ix_policies_supersedes_policy_id'), 'policies', ['supersedes_policy_id'], unique=False)
+    op.create_index(op.f('ix_policies_created_from_proposal_id'), 'policies', ['created_from_proposal_id'], unique=False)
     op.create_table('space_invitations',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -455,9 +487,38 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('status', sa.String(length=32), nullable=False, server_default='raw'),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('source_kind', sa.String(length=64), nullable=True),
+    sa.Column('source_trust', sa.String(length=32), nullable=True),
+    sa.Column('source_integrity_json', sa.JSON(), nullable=True),
+    sa.Column('entity_refs_json', sa.JSON(), nullable=True),
+    sa.Column('subject_user_id', sa.String(length=36), nullable=True),
+    sa.Column('lifecycle_status', sa.String(length=32), nullable=False, server_default='raw'),
+    sa.Column('consolidation_status', sa.String(length=32), nullable=False, server_default='pending'),
+    sa.Column('processed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('discarded_at', sa.DateTime(timezone=True), nullable=True),
     sa.CheckConstraint(
         "status in ('raw', 'processed', 'proposals_generated', 'archived')",
         name='ck_activity_records_status',
+    ),
+    sa.CheckConstraint(
+        "lifecycle_status in ('raw', 'active', 'archived', 'discarded')",
+        name='ck_activity_records_lifecycle_status',
+    ),
+    sa.CheckConstraint(
+        "consolidation_status in ('pending', 'skipped', 'proposals_generated', 'processed', 'failed')",
+        name='ck_activity_records_consolidation_status',
+    ),
+    sa.CheckConstraint(
+        "source_kind is null or source_kind in ("
+        "'user_capture', 'chat_message', 'external_chat', 'file_import', "
+        "'web_capture', 'run_event', 'workspace_event', 'system_event', 'external_source')",
+        name='ck_activity_records_source_kind',
+    ),
+    sa.CheckConstraint(
+        "source_trust is null or source_trust in ("
+        "'user_confirmed', 'internal_system', 'trusted_external', "
+        "'untrusted_external', 'agent_inferred')",
+        name='ck_activity_records_source_trust',
     ),
     sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], ),
     sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], ),
@@ -476,6 +537,11 @@ def upgrade() -> None:
     op.create_index(op.f('ix_activity_records_status'), 'activity_records', ['status'], unique=False)
     op.create_index(op.f('ix_activity_records_user_id'), 'activity_records', ['user_id'], unique=False)
     op.create_index(op.f('ix_activity_records_workspace_id'), 'activity_records', ['workspace_id'], unique=False)
+    op.create_index(op.f('ix_activity_records_source_kind'), 'activity_records', ['source_kind'], unique=False)
+    op.create_index(op.f('ix_activity_records_source_trust'), 'activity_records', ['source_trust'], unique=False)
+    op.create_index(op.f('ix_activity_records_subject_user_id'), 'activity_records', ['subject_user_id'], unique=False)
+    op.create_index(op.f('ix_activity_records_lifecycle_status'), 'activity_records', ['lifecycle_status'], unique=False)
+    op.create_index(op.f('ix_activity_records_consolidation_status'), 'activity_records', ['consolidation_status'], unique=False)
     op.create_table('proposals',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -785,6 +851,18 @@ def upgrade() -> None:
     sa.Column('last_accessed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('fitness_score', sa.Float(), nullable=True),
     sa.Column('tags', sa.JSON(), nullable=True),
+    sa.Column('memory_layer', sa.String(length=32), nullable=True),
+    sa.Column('memory_kind', sa.String(length=64), nullable=True),
+    sa.Column('event_time', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('event_type', sa.String(length=64), nullable=True),
+    sa.Column('summary_json', sa.JSON(), nullable=True),
+    sa.Column('salience_json', sa.JSON(), nullable=True),
+    sa.Column('last_retrieved_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('reconsolidation_due', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('root_memory_id', sa.String(length=36), nullable=True),
+    sa.Column('supersedes_memory_id', sa.String(length=36), nullable=True),
+    sa.Column('source_trust', sa.String(length=32), nullable=True),
+    sa.Column('created_from_proposal_id', sa.String(length=36), nullable=True),
     sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], ),
     sa.ForeignKeyConstraint(['subject_user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['owner_user_id'], ['users.id'], ),
@@ -792,6 +870,17 @@ def upgrade() -> None:
         "sensitivity_level in ('normal', 'sensitive', 'restricted', 'highly_restricted')",
         name='ck_memory_entries_sensitivity_level',
     ),
+    sa.CheckConstraint(
+        "memory_layer is null or memory_layer in ('episodic', 'semantic')",
+        name='ck_memory_entries_memory_layer',
+    ),
+    sa.CheckConstraint(
+        "source_trust is null or source_trust in ("
+        "'user_confirmed', 'internal_system', 'trusted_external', "
+        "'untrusted_external', 'agent_inferred')",
+        name='ck_memory_entries_source_trust',
+    ),
+    sa.ForeignKeyConstraint(['created_from_proposal_id'], ['proposals.id'], ),
     sa.ForeignKeyConstraint(['source_activity_id'], ['activity_records.id'], ),
     sa.ForeignKeyConstraint(['source_artifact_id'], ['artifacts.id'], ),
     sa.ForeignKeyConstraint(['source_proposal_id'], ['proposals.id'], ),
@@ -814,6 +903,11 @@ def upgrade() -> None:
     op.create_index(op.f('ix_memory_entries_space_id'), 'memory_entries', ['space_id'], unique=False)
     op.create_index(op.f('ix_memory_entries_status'), 'memory_entries', ['status'], unique=False)
     op.create_index(op.f('ix_memory_entries_workspace_id'), 'memory_entries', ['workspace_id'], unique=False)
+    op.create_index(op.f('ix_memory_entries_memory_layer'), 'memory_entries', ['memory_layer'], unique=False)
+    op.create_index(op.f('ix_memory_entries_memory_kind'), 'memory_entries', ['memory_kind'], unique=False)
+    op.create_index(op.f('ix_memory_entries_root_memory_id'), 'memory_entries', ['root_memory_id'], unique=False)
+    op.create_index(op.f('ix_memory_entries_supersedes_memory_id'), 'memory_entries', ['supersedes_memory_id'], unique=False)
+    op.create_index(op.f('ix_memory_entries_created_from_proposal_id'), 'memory_entries', ['created_from_proposal_id'], unique=False)
     op.create_table('memory_access_logs',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -837,11 +931,134 @@ def upgrade() -> None:
     op.create_index(op.f('ix_memory_access_logs_run_id'), 'memory_access_logs', ['run_id'], unique=False)
     op.create_index(op.f('ix_memory_access_logs_space_id'), 'memory_access_logs', ['space_id'], unique=False)
     op.create_index(op.f('ix_memory_access_logs_user_id'), 'memory_access_logs', ['user_id'], unique=False)
+    op.create_table('entity_refs',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('entity_origin', sa.String(length=64), nullable=True),
+    sa.Column('entity_type', sa.String(length=64), nullable=False),
+    sa.Column('entity_id', sa.String(length=256), nullable=True),
+    sa.Column('canonical_key', sa.String(length=512), nullable=True),
+    sa.Column('display_name', sa.String(length=256), nullable=True),
+    sa.Column('aliases_json', sa.JSON(), nullable=True),
+    sa.Column('scope_type', sa.String(length=32), nullable=True),
+    sa.Column('scope_id', sa.String(length=36), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_entity_refs_space_id'), 'entity_refs', ['space_id'], unique=False)
+    op.create_index(op.f('ix_entity_refs_entity_type'), 'entity_refs', ['entity_type'], unique=False)
+    op.create_index(op.f('ix_entity_refs_entity_id'), 'entity_refs', ['entity_id'], unique=False)
+    op.create_index(op.f('ix_entity_refs_canonical_key'), 'entity_refs', ['canonical_key'], unique=False)
+    op.create_index(op.f('ix_entity_refs_scope_id'), 'entity_refs', ['scope_id'], unique=False)
+    op.create_table('memory_relations',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('source_type', sa.String(length=64), nullable=False),
+    sa.Column('source_id', sa.String(length=36), nullable=False),
+    sa.Column('target_type', sa.String(length=64), nullable=False),
+    sa.Column('target_id', sa.String(length=36), nullable=False),
+    sa.Column('relation_type', sa.String(length=64), nullable=False),
+    sa.Column('confidence', sa.Float(), nullable=True),
+    sa.Column('evidence_json', sa.JSON(), nullable=True),
+    sa.Column('created_from_proposal_id', sa.String(length=36), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint(
+        "relation_type in ('derived_from', 'supersedes', 'contradicts', 'related_to', "
+        "'caused_by', 'supports', 'applies_to', 'mentions')",
+        name='ck_memory_relations_relation_type',
+    ),
+    sa.ForeignKeyConstraint(['created_from_proposal_id'], ['proposals.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_memory_relations_space_id'), 'memory_relations', ['space_id'], unique=False)
+    op.create_index(op.f('ix_memory_relations_relation_type'), 'memory_relations', ['relation_type'], unique=False)
+    op.create_index('ix_memory_relations_source', 'memory_relations', ['space_id', 'source_type', 'source_id'], unique=False)
+    op.create_index('ix_memory_relations_target', 'memory_relations', ['space_id', 'target_type', 'target_id'], unique=False)
+    op.create_index(op.f('ix_memory_relations_created_from_proposal_id'), 'memory_relations', ['created_from_proposal_id'], unique=False)
+    op.create_table('provenance_links',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('target_type', sa.String(length=64), nullable=False),
+    sa.Column('target_id', sa.String(length=36), nullable=False),
+    sa.Column('source_type', sa.String(length=64), nullable=False),
+    sa.Column('source_id', sa.String(length=36), nullable=False),
+    sa.Column('source_trust', sa.String(length=32), nullable=True),
+    sa.Column('evidence_json', sa.JSON(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint(
+        "source_type in ('activity', 'proposal', 'memory', 'artifact', "
+        "'run_step', 'external_source', 'user_confirmation')",
+        name='ck_provenance_links_source_type',
+    ),
+    sa.CheckConstraint(
+        "source_trust is null or source_trust in ("
+        "'user_confirmed', 'internal_system', 'trusted_external', "
+        "'untrusted_external', 'agent_inferred')",
+        name='ck_provenance_links_source_trust',
+    ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_provenance_links_space_id'), 'provenance_links', ['space_id'], unique=False)
+    op.create_index(op.f('ix_provenance_links_source_type'), 'provenance_links', ['source_type'], unique=False)
+    op.create_index('ix_provenance_links_target', 'provenance_links', ['space_id', 'target_type', 'target_id'], unique=False)
+    op.create_index('ix_provenance_links_source', 'provenance_links', ['space_id', 'source_type', 'source_id'], unique=False)
+    op.create_table('context_digests',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('scope_type', sa.String(length=32), nullable=False),
+    sa.Column('scope_id', sa.String(length=36), nullable=True),
+    sa.Column('digest_type', sa.String(length=32), nullable=False),
+    sa.Column('version', sa.Integer(), nullable=False, server_default=sa.text('1')),
+    sa.Column('status', sa.String(length=32), nullable=False, server_default=sa.text("'active'")),
+    sa.Column('content', sa.Text(), nullable=True),
+    sa.Column('source_memory_ids_json', sa.JSON(), nullable=True),
+    sa.Column('source_policy_ids_json', sa.JSON(), nullable=True),
+    sa.Column('source_relation_ids_json', sa.JSON(), nullable=True),
+    sa.Column('source_hash', sa.String(length=128), nullable=True),
+    sa.Column('content_hash', sa.String(length=128), nullable=True),
+    sa.Column('dirty_since', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('dirty_reason_json', sa.JSON(), nullable=True),
+    sa.Column('dirty_count', sa.Integer(), nullable=False, server_default=sa.text('0')),
+    sa.Column('generated_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_from_run_id', sa.String(length=36), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("digest_type in ('policy_bundle', 'workspace', 'agent')", name='ck_context_digests_digest_type'),
+    sa.CheckConstraint("status in ('active', 'dirty', 'superseded', 'disabled')", name='ck_context_digests_status'),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_context_digests_space_id', 'context_digests', ['space_id'], unique=False)
+    op.create_index('ix_context_digests_scope_type', 'context_digests', ['scope_type'], unique=False)
+    op.create_index('ix_context_digests_scope_id', 'context_digests', ['scope_id'], unique=False)
+    op.create_index('ix_context_digests_digest_type', 'context_digests', ['digest_type'], unique=False)
+    op.create_index('ix_context_digests_status', 'context_digests', ['status'], unique=False)
+    op.create_index('ix_context_digests_source_hash', 'context_digests', ['source_hash'], unique=False)
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_index('ix_provenance_links_source', table_name='provenance_links')
+    op.drop_index('ix_provenance_links_target', table_name='provenance_links')
+    op.drop_index(op.f('ix_provenance_links_source_type'), table_name='provenance_links')
+    op.drop_index(op.f('ix_provenance_links_space_id'), table_name='provenance_links')
+    op.drop_table('provenance_links')
+    op.drop_index(op.f('ix_memory_relations_created_from_proposal_id'), table_name='memory_relations')
+    op.drop_index('ix_memory_relations_target', table_name='memory_relations')
+    op.drop_index('ix_memory_relations_source', table_name='memory_relations')
+    op.drop_index(op.f('ix_memory_relations_relation_type'), table_name='memory_relations')
+    op.drop_index(op.f('ix_memory_relations_space_id'), table_name='memory_relations')
+    op.drop_table('memory_relations')
+    op.drop_index(op.f('ix_entity_refs_scope_id'), table_name='entity_refs')
+    op.drop_index(op.f('ix_entity_refs_canonical_key'), table_name='entity_refs')
+    op.drop_index(op.f('ix_entity_refs_entity_id'), table_name='entity_refs')
+    op.drop_index(op.f('ix_entity_refs_entity_type'), table_name='entity_refs')
+    op.drop_index(op.f('ix_entity_refs_space_id'), table_name='entity_refs')
+    op.drop_table('entity_refs')
     op.drop_index(op.f('ix_memory_access_logs_user_id'), table_name='memory_access_logs')
     op.drop_index(op.f('ix_memory_access_logs_space_id'), table_name='memory_access_logs')
     op.drop_index(op.f('ix_memory_access_logs_run_id'), table_name='memory_access_logs')
@@ -849,6 +1066,11 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_memory_access_logs_agent_id'), table_name='memory_access_logs')
     op.drop_index(op.f('ix_memory_access_logs_accessed_at'), table_name='memory_access_logs')
     op.drop_table('memory_access_logs')
+    op.drop_index(op.f('ix_memory_entries_created_from_proposal_id'), table_name='memory_entries')
+    op.drop_index(op.f('ix_memory_entries_supersedes_memory_id'), table_name='memory_entries')
+    op.drop_index(op.f('ix_memory_entries_root_memory_id'), table_name='memory_entries')
+    op.drop_index(op.f('ix_memory_entries_memory_kind'), table_name='memory_entries')
+    op.drop_index(op.f('ix_memory_entries_memory_layer'), table_name='memory_entries')
     op.drop_index(op.f('ix_memory_entries_workspace_id'), table_name='memory_entries')
     op.drop_index(op.f('ix_memory_entries_status'), table_name='memory_entries')
     op.drop_index(op.f('ix_memory_entries_space_id'), table_name='memory_entries')
@@ -910,6 +1132,11 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_proposals_proposal_type'), table_name='proposals')
     op.drop_index(op.f('ix_proposals_created_by_run_id'), table_name='proposals')
     op.drop_table('proposals')
+    op.drop_index(op.f('ix_activity_records_consolidation_status'), table_name='activity_records')
+    op.drop_index(op.f('ix_activity_records_lifecycle_status'), table_name='activity_records')
+    op.drop_index(op.f('ix_activity_records_subject_user_id'), table_name='activity_records')
+    op.drop_index(op.f('ix_activity_records_source_trust'), table_name='activity_records')
+    op.drop_index(op.f('ix_activity_records_source_kind'), table_name='activity_records')
     op.drop_index(op.f('ix_activity_records_workspace_id'), table_name='activity_records')
     op.drop_index(op.f('ix_activity_records_user_id'), table_name='activity_records')
     op.drop_index(op.f('ix_activity_records_status'), table_name='activity_records')
@@ -991,6 +1218,10 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_space_invitations_status'), table_name='space_invitations')
     op.drop_index(op.f('ix_space_invitations_space_id'), table_name='space_invitations')
     op.drop_table('space_invitations')
+    op.drop_index(op.f('ix_policies_created_from_proposal_id'), table_name='policies')
+    op.drop_index(op.f('ix_policies_supersedes_policy_id'), table_name='policies')
+    op.drop_index(op.f('ix_policies_status'), table_name='policies')
+    op.drop_index(op.f('ix_policies_policy_key'), table_name='policies')
     op.drop_index(op.f('ix_policies_space_id'), table_name='policies')
     op.drop_index(op.f('ix_policies_domain'), table_name='policies')
     op.drop_table('policies')
@@ -1001,5 +1232,12 @@ def downgrade() -> None:
     op.drop_table('context_sources')
     op.drop_index(op.f('ix_context_snapshots_space_id'), table_name='context_snapshots')
     op.drop_table('context_snapshots')
+    op.drop_index('ix_context_digests_source_hash', table_name='context_digests')
+    op.drop_index('ix_context_digests_status', table_name='context_digests')
+    op.drop_index('ix_context_digests_digest_type', table_name='context_digests')
+    op.drop_index('ix_context_digests_scope_id', table_name='context_digests')
+    op.drop_index('ix_context_digests_scope_type', table_name='context_digests')
+    op.drop_index('ix_context_digests_space_id', table_name='context_digests')
+    op.drop_table('context_digests')
     op.drop_table('spaces')
     # ### end Alembic commands ###

@@ -445,6 +445,30 @@ class Policy(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
+    policy_key: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, index=True)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", server_default=text("'active'"), index=True)
+    enforcement_mode: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    rule_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    applies_to_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # Soft self-reference: no DB FK to avoid DDL cycle with policy versioning bootstrap.
+    supersedes_policy_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    # Soft reference to proposals: policies is created before proposals in migration order.
+    # Service layer enforces referential validity (no DB FK to avoid DDL ordering cycle).
+    created_from_proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('draft', 'active', 'superseded', 'disabled')",
+            name="ck_policies_status",
+        ),
+        CheckConstraint(
+            "enforcement_mode is null or enforcement_mode in ('allow', 'deny', 'require_approval', 'allow_with_log')",
+            name="ck_policies_enforcement_mode",
+        ),
+    )
+
 
 class ContextSnapshot(Base):
     __tablename__ = "context_snapshots"
@@ -457,6 +481,84 @@ class ContextSnapshot(Base):
     relevant_period_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     relevant_period_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    # Compiled context fields: inline text + optional artifact-storage refs + content hashes.
+    # Offloading to artifact storage (replacing inline text with *_ref) is not yet implemented.
+    compiled_prefix_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    compiled_tail_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    compiled_prefix_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    compiled_tail_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    prefix_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    tail_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    compiler_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    retrieval_trace_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    token_budget_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    policy_bundle_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    memory_digest_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    workspace_digest_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# ContextDigest — derived cache of approved Memory/Policy context
+# ---------------------------------------------------------------------------
+
+
+class ContextDigest(Base):
+    """Versioned digest cache for approved Memory/Policy sources.
+
+    Digest is derived cache — not Memory, not Policy, not a source of truth.
+    Digest does not create Proposal. Digest can be deleted and regenerated.
+    Digests summarise active approved Memory/Policy content only.
+    """
+
+    __tablename__ = "context_digests"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+
+    # Scope: what this digest covers
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    scope_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+
+    # Digest classification
+    digest_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+
+    # Rendered digest text
+    content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Source traceability
+    source_memory_ids_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    source_policy_ids_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    source_relation_ids_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+
+    # Hashes for cache invalidation
+    source_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    # Dirty tracking
+    dirty_since: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    dirty_reason_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    dirty_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+
+    # Generation metadata
+    generated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_from_run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "digest_type in ('policy_bundle', 'workspace', 'agent')",
+            name="ck_context_digests_digest_type",
+        ),
+        CheckConstraint(
+            "status in ('active', 'dirty', 'superseded', 'disabled')",
+            name="ck_context_digests_status",
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +683,23 @@ class ActivityRecord(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="raw", index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
+    source_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # Default: internal_system — a conservative default that does not over-elevate trust.
+    # Callers that know the activity came directly from a user should set user_confirmed.
+    source_trust: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    source_integrity_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    entity_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    # subject_user_id: who the activity is *about* (distinct from user_id = who created it)
+    subject_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    lifecycle_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="raw", server_default=text("'raw'"), index=True
+    )
+    consolidation_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default=text("'pending'"), index=True
+    )
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    discarded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # ORM mirrors for historical activity field names.
     source_type = synonym("activity_type")
     source_session_id = synonym("session_id")
@@ -592,6 +711,26 @@ class ActivityRecord(Base):
         CheckConstraint(
             "status in ('raw', 'processed', 'proposals_generated', 'archived')",
             name="ck_activity_records_status",
+        ),
+        CheckConstraint(
+            "lifecycle_status in ('raw', 'active', 'archived', 'discarded')",
+            name="ck_activity_records_lifecycle_status",
+        ),
+        CheckConstraint(
+            "consolidation_status in ('pending', 'skipped', 'proposals_generated', 'processed', 'failed')",
+            name="ck_activity_records_consolidation_status",
+        ),
+        CheckConstraint(
+            "source_kind is null or source_kind in ("
+            "'user_capture', 'chat_message', 'external_chat', 'file_import', "
+            "'web_capture', 'run_event', 'workspace_event', 'system_event', 'external_source')",
+            name="ck_activity_records_source_kind",
+        ),
+        CheckConstraint(
+            "source_trust is null or source_trust in ("
+            "'user_confirmed', 'internal_system', 'trusted_external', "
+            "'untrusted_external', 'agent_inferred')",
+            name="ck_activity_records_source_trust",
         ),
     )
 
@@ -702,11 +841,27 @@ class Proposal(Base):
 
     @property
     def source_run_id(self) -> Optional[str]:
-        return (self.payload_json or {}).get("source_run_id")
+        from .memory.proposal_payload import provenance_entries_from_payload
+
+        p = self.payload_json or {}
+        v = p.get("source_run_id")
+        if v:
+            return str(v)
+        for e in provenance_entries_from_payload(p):
+            if e.get("source_type") == "run_step":
+                sid = e.get("source_id")
+                return str(sid) if sid else None
+        return None
 
     @property
     def source_activity_id(self) -> Optional[str]:
-        return (self.payload_json or {}).get("source_activity_id")
+        from .memory.proposal_payload import first_activity_id, provenance_entries_from_payload
+
+        p = self.payload_json or {}
+        legacy = p.get("source_activity_id")
+        if legacy:
+            return str(legacy)
+        return first_activity_id(provenance_entries_from_payload(p))
 
     @property
     def owner_user_id(self) -> Optional[str]:
@@ -1044,6 +1199,25 @@ class MemoryEntry(Base):
     last_accessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     fitness_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     tags: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+
+    memory_layer: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    memory_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    event_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    event_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    summary_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    salience_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    last_retrieved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reconsolidation_due: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Soft self-references: root_memory_id / supersedes_memory_id point to the
+    # lineage chain within a versioned semantic memory.  No DB FK to avoid DDL
+    # bootstrap ordering issues on first creation.
+    root_memory_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    supersedes_memory_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    source_trust: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    created_from_proposal_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True
+    )
+
     scope = synonym("scope_type")
     type = synonym("memory_type")
 
@@ -1051,6 +1225,16 @@ class MemoryEntry(Base):
         CheckConstraint(
             "sensitivity_level in ('normal', 'sensitive', 'restricted', 'highly_restricted')",
             name="ck_memory_entries_sensitivity_level",
+        ),
+        CheckConstraint(
+            "memory_layer is null or memory_layer in ('episodic', 'semantic')",
+            name="ck_memory_entries_memory_layer",
+        ),
+        CheckConstraint(
+            "source_trust is null or source_trust in ("
+            "'user_confirmed', 'internal_system', 'trusted_external', "
+            "'untrusted_external', 'agent_inferred')",
+            name="ck_memory_entries_source_trust",
         ),
     )
 
@@ -1067,3 +1251,84 @@ class MemoryReadTrace(Base):
     access_type: Mapped[str] = mapped_column(String(64), nullable=False)
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+# ---------------------------------------------------------------------------
+# Ontology / provenance tables
+# ---------------------------------------------------------------------------
+
+
+class EntityRef(Base):
+    """Named domain entity referenced by memories, activities, or proposals."""
+
+    __tablename__ = "entity_refs"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    entity_origin: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    entity_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, index=True)
+    canonical_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, index=True)
+    display_name: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    aliases_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    scope_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    scope_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class MemoryRelation(Base):
+    """Typed directed edge between two memory-system objects."""
+
+    __tablename__ = "memory_relations"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_id: Mapped[str] = mapped_column(UUID_COL, nullable=False)
+    target_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_id: Mapped[str] = mapped_column(UUID_COL, nullable=False)
+    relation_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    evidence_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_from_proposal_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "relation_type in ('derived_from', 'supersedes', 'contradicts', 'related_to', "
+            "'caused_by', 'supports', 'applies_to', 'mentions')",
+            name="ck_memory_relations_relation_type",
+        ),
+    )
+
+
+class ProvenanceLink(Base):
+    """Trace record linking a durable object (memory, policy) back to its evidence source."""
+
+    __tablename__ = "provenance_links"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_id: Mapped[str] = mapped_column(UUID_COL, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_id: Mapped[str] = mapped_column(UUID_COL, nullable=False)
+    source_trust: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    evidence_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "source_type in ('activity', 'proposal', 'memory', 'artifact', "
+            "'run_step', 'external_source', 'user_confirmation')",
+            name="ck_provenance_links_source_type",
+        ),
+        CheckConstraint(
+            "source_trust is null or source_trust in ("
+            "'user_confirmed', 'internal_system', 'trusted_external', "
+            "'untrusted_external', 'agent_inferred')",
+            name="ck_provenance_links_source_trust",
+        ),
+    )
