@@ -27,6 +27,7 @@ from ..schemas import (
     ProposalOut,
     RunOutV2,
     RunStatusOut,
+    RunStepOut,
 )
 from ..auth import get_identity
 from ..artifacts.service import artifact_to_out
@@ -35,6 +36,7 @@ from ..memory.proposals import ProposalService
 from .execution import RunExecutionService
 from .run_service import RunService
 from .removed_runtime_token import is_obsolete_runtime_override_token
+from .steps import list_run_steps
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -117,6 +119,21 @@ def list_run_proposals(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/{run_id}/steps", response_model=Page[RunStepOut])
+def list_run_steps_route(
+    run_id: str,
+    limit: int = Query(200, le=500),
+    offset: int = Query(0),
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, _ = ids
+    RunService(db).get_run(run_id, space_id)
+    steps = list_run_steps(db, run_id, space_id)
+    page = steps[offset : offset + limit]
+    return Page(items=page, total=len(steps), limit=limit, offset=offset)
 
 
 @router.get("/{run_id}", response_model=RunOutV2)

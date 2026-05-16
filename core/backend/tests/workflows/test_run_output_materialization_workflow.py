@@ -13,7 +13,8 @@ from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRunti
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def _patch_execute(monkeypatch, tmp_path: Path):
@@ -44,7 +45,7 @@ def test_workflow_output_text_only_no_proposals(
     db.query(Run).filter(Run.id == run.id).one()
     db.commit()
 
-    ex = api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    ex = cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     assert ex.status_code == 200
     assert ex.json().get("status") == "succeeded"
 
@@ -81,7 +82,7 @@ def test_workflow_structured_artifact_no_proposals(
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     db.commit()
 
-    api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     db.expire_all()
     arts = db.query(Artifact).filter(Artifact.run_id == run.id, Artifact.artifact_type == "report").all()
     assert len(arts) == 1
@@ -135,7 +136,7 @@ def test_workflow_memory_update_from_run_materializer_then_accept(
         .filter(MemoryEntry.space_id == a, MemoryEntry.status == "active")
         .scalar()
     )
-    api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     db.commit()
     db.expire_all()
     after_run = (
@@ -147,7 +148,7 @@ def test_workflow_memory_update_from_run_materializer_then_accept(
     prop = db.query(Proposal).filter(Proposal.created_by_run_id == run.id).one()
     assert prop.proposal_type == "memory_create"
 
-    acc = api_client.post(
+    acc = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, ua.id),
     )
@@ -195,12 +196,12 @@ def test_workflow_code_patch_from_run_then_accept_mutates_file(
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     db.commit()
 
-    api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     assert (disk / "note.txt").read_text(encoding="utf-8") == "V0"
     prop = db.query(Proposal).filter(Proposal.created_by_run_id == run.id).one()
     assert prop.proposal_type == "code_patch"
 
-    acc = api_client.post(
+    acc = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, ua.id),
     )
@@ -210,7 +211,7 @@ def test_workflow_code_patch_from_run_then_accept_mutates_file(
     assert body.get("result", {}).get("updated_paths") == ["note.txt"]
     assert (disk / "note.txt").read_text(encoding="utf-8") == "V1"
 
-    dup = api_client.post(
+    dup = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, ua.id),
     )
@@ -253,7 +254,7 @@ def test_workflow_materialization_rejects_traversal_patch_without_proposal(
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     db.commit()
 
-    api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     db.expire_all()
     run_row = db.query(Run).filter(Run.id == run.id).one()
     errs = (run_row.output_json or {}).get("materialization_errors") or []

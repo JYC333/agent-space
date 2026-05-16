@@ -4,18 +4,27 @@ from __future__ import annotations
 
 from ulid import ULID
 
+from app.auth.session import SESSION_COOKIE, UserSessionService
+from app.main import app as _app
+from starlette.testclient import TestClient
 from tests.support import factories
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def test_home_summary_empty_stable_shape(api_client, db):
     sid = str(ULID())
     factories.create_test_space(db, space_id=sid, name="Empty Home", space_type="team", commit=True)
     u = factories.create_test_user(db, space_id=sid, commit=True)
-    r = api_client.get("/api/v1/home/summary", params=_params(sid, u.id))
+    _, raw = UserSessionService(db).create(u.id)
+    authed = TestClient(_app, cookies={SESSION_COOKIE: raw}, raise_server_exceptions=True)
+    r = authed.get(
+        "/api/v1/home/summary",
+        params=_params(sid, u.id),
+    )
     assert r.status_code == 200
     data = r.json()
     for key in (
@@ -77,14 +86,14 @@ def test_home_summary_counts_scoped_and_consistent(api_client, db, cross_space_p
         commit=True,
     )
 
-    ra = api_client.get("/api/v1/home/summary", params=_params(a, ua.id))
+    ra = cross_space_pair["client_a"].get("/api/v1/home/summary", params=_params(a, ua.id))
     assert ra.status_code == 200
     ja = ra.json()
     assert ja["pending_proposals"]["count"] >= 1
     assert ja["activity_summary"]["raw_count"] >= 1
     assert len(ja["active_runs"]) >= 1
 
-    rb = api_client.get("/api/v1/home/summary", params=_params(b, ub.id))
+    rb = cross_space_pair["client_b"].get("/api/v1/home/summary", params=_params(b, ub.id))
     assert rb.status_code == 200
     jb = rb.json()
     assert jb["pending_proposals"]["count"] == 0
@@ -95,7 +104,7 @@ def test_home_summary_counts_scoped_and_consistent(api_client, db, cross_space_p
 def test_home_summary_runtime_suggested_when_no_enabled_adapters(api_client, db, cross_space_pair):
     b = cross_space_pair["space_b_id"]
     ub = cross_space_pair["user_b"]
-    r = api_client.get("/api/v1/home/summary", params=_params(b, ub.id))
+    r = cross_space_pair["client_b"].get("/api/v1/home/summary", params=_params(b, ub.id))
     assert r.status_code == 200
     data = r.json()
     if data["runtime_status"]["real_adapters_configured_count"] == 0:

@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useCallback } from 'react'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { CheckCircle, XCircle, Loader } from 'lucide-react'
 import { spacesApi } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
@@ -14,21 +14,14 @@ export default function AcceptInvitationPage() {
   const navigate = useNavigate()
   const { currentUser, isLoading: authLoading } = useAuth()
   const { setSpace, reloadSpaces } = useSpace()
+  const [searchParams] = useSearchParams()
+  const autoAccept = searchParams.get('auto') === '1'
 
   const [state, setState] = useState<State>('loading')
   const [result, setResult] = useState<{ space_id: string; space_name: string; role: string } | null>(null)
   const [errorText, setErrorText] = useState('')
 
-  // Redirect to login if not authenticated, passing the invite link back
-  useEffect(() => {
-    if (!authLoading && !currentUser) {
-      navigate(`/login?redirect=/invitations/${token}`, { replace: true })
-    } else if (!authLoading && currentUser) {
-      setState('confirm')
-    }
-  }, [authLoading, currentUser, token, navigate])
-
-  async function handleAccept() {
+  const handleAccept = useCallback(async () => {
     if (!token) return
     setState('accepting')
     try {
@@ -40,7 +33,21 @@ export default function AcceptInvitationPage() {
       setErrorText(errMsg(e))
       setState('error')
     }
-  }
+  }, [token, reloadSpaces])
+
+  useEffect(() => {
+    if (!authLoading && !currentUser) {
+      // Preserve the token and request auto-accept after login completes
+      const dest = encodeURIComponent(`/invitations/${token}?auto=1`)
+      navigate(`/login?redirect=${dest}`, { replace: true })
+    } else if (!authLoading && currentUser) {
+      if (autoAccept) {
+        handleAccept()
+      } else {
+        setState('confirm')
+      }
+    }
+  }, [authLoading, currentUser, token, navigate, autoAccept, handleAccept])
 
   function goToSpace() {
     if (result) {

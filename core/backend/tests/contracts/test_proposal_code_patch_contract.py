@@ -9,7 +9,8 @@ from tests.support import factories
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def test_accept_code_patch_returns_kind_and_paths(api_client, db, cross_space_pair, tmp_path, monkeypatch):
@@ -44,7 +45,7 @@ def test_accept_code_patch_returns_kind_and_paths(api_client, db, cross_space_pa
         commit=True,
     )
 
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, ua.id),
     )
@@ -82,7 +83,7 @@ def test_accept_code_patch_cross_space_returns_404(api_client, db, cross_space_p
         },
         commit=True,
     )
-    r = api_client.post(
+    r = cross_space_pair["client_b"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(b, ub.id),
     )

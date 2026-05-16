@@ -9,6 +9,9 @@ from ..base import BaseRuntimeAdapter, RuntimeAdapterResult, RuntimeExecutionCon
 
 class EchoRuntimeAdapter(BaseRuntimeAdapter):
     adapter_type = "echo"
+    requires_credentials = False
+    requires_file_access = False
+    supports_sandboxed_execution = False
 
     def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
         started = datetime.now(UTC)

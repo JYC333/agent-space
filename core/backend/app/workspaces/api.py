@@ -17,7 +17,7 @@ from ..auth.api_key import get_identity
 
 class ScanResult(BaseModel):
     created: list[WorkspaceOut]
-    deleted: list[str]  # display names of hard-deleted workspace records
+    marked_stale: list[str]  # display names of workspaces whose path disappeared (marked stale, not deleted)
 
 log = logging.getLogger(__name__)
 
@@ -139,7 +139,11 @@ def scan_workspaces(
     """
     Reconcile DB records with the workspace_root directory:
       - Directories on disk with no record → auto-register (created).
-      - Records whose path no longer exists on disk → hard-delete (deleted).
+      - Records whose path no longer exists on disk → marked stale (NOT hard-deleted).
+
+    Missing workspace paths are marked stale to preserve metadata (id, name, tasks,
+    runs, artifacts, proposals, audit references). Workspace data is never deleted
+    simply because a mount or directory is temporarily unavailable.
     Returns counts of both in a ScanResult.
     """
     space_id, user_id = ids
@@ -151,8 +155,8 @@ def scan_workspaces(
         Workspace.status == "active",
     ).all()
 
-    # ── Pass 1: hard-delete records whose directory is gone ─────────────────
-    deleted_names: list[str] = []
+    # ── Pass 1: mark stale when directory is gone; never hard-delete ─────────
+    stale_names: list[str] = []
     known_paths: set[Path] = set()
     for ws in existing:
         if not ws.root_path:
@@ -164,16 +168,21 @@ def scan_workspaces(
         if p.exists():
             known_paths.add(p)
         else:
-            deleted_names.append(ws.name)
-            db.delete(ws)
-            log.info("scan: hard-deleted stale workspace '%s' (path gone: %s)", ws.name, ws.root_path)
+            stale_names.append(ws.name)
+            ws.status = "stale"
+            ws.updated_at = datetime.now(UTC)
+            log.info(
+                "scan: marked workspace '%s' stale (path unavailable: %s); "
+                "metadata preserved",
+                ws.name, ws.root_path,
+            )
 
-    if deleted_names:
+    if stale_names:
         db.commit()
 
     # ── Pass 2: register directories not yet in DB ───────────────────────────
     if not space_workspace_root.exists():
-        return ScanResult(created=[], deleted=deleted_names)
+        return ScanResult(created=[], marked_stale=stale_names)
 
     created: list[Workspace] = []
     for entry in sorted(space_workspace_root.iterdir()):
@@ -208,7 +217,7 @@ def scan_workspaces(
         for ws in created:
             db.refresh(ws)
 
-    return ScanResult(created=created, deleted=deleted_names)
+    return ScanResult(created=created, marked_stale=stale_names)
 
 
 @router.get("/{workspace_id}", response_model=WorkspaceOut)

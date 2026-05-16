@@ -7,7 +7,8 @@ from tests.support import factories
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def test_workspace_console_list_read_and_traversal_denied_without_leakage(
@@ -35,7 +36,7 @@ def test_workspace_console_list_read_and_traversal_denied_without_leakage(
     (disk / "notes.txt").write_text("INNER_OK", encoding="utf-8")
     (ws_root / "outside.txt").write_text("OUTSIDE_SECRET", encoding="utf-8")
 
-    listed = api_client.get(
+    listed = cross_space_pair["client_b"].get(
         "/api/v1/workspace-console/workspaces",
         params=_params(b, ub.id),
     )
@@ -43,14 +44,14 @@ def test_workspace_console_list_read_and_traversal_denied_without_leakage(
     ids = {w["id"] for w in listed.json().get("items", [])}
     assert ws.id not in ids
 
-    ok = api_client.get(
+    ok = cross_space_pair["client_a"].get(
         f"/api/v1/workspace-console/workspaces/{ws.id}/file",
         params={**_params(a, ua.id), "path": "notes.txt"},
     )
     assert ok.status_code == 200
     assert ok.json()["content"] == "INNER_OK"
 
-    bad = api_client.get(
+    bad = cross_space_pair["client_a"].get(
         f"/api/v1/workspace-console/workspaces/{ws.id}/file",
         params={**_params(a, ua.id), "path": "../outside.txt"},
     )
@@ -59,7 +60,7 @@ def test_workspace_console_list_read_and_traversal_denied_without_leakage(
 
     outside = tmp_path / "abs_secret.txt"
     outside.write_text("ABS_SECRET", encoding="utf-8")
-    abs_try = api_client.get(
+    abs_try = cross_space_pair["client_a"].get(
         f"/api/v1/workspace-console/workspaces/{ws.id}/file",
         params={**_params(a, ua.id), "path": str(outside)},
     )

@@ -32,7 +32,7 @@ def _hash_token(raw: str) -> str:
 
 class SpaceCreate(BaseModel):
     name: str
-    type: Literal["family", "team"] = "team"
+    type: Literal["personal", "household", "team"] = "team"
 
 
 class InvitationCreate(BaseModel):
@@ -167,6 +167,9 @@ def accept_invitation(
         inv.status = "expired"
         db.commit()
         raise HTTPException(status_code=410, detail="Invitation has expired")
+
+    if user.email.lower() != inv.invited_email.lower():
+        raise HTTPException(status_code=403, detail="This invitation was sent to a different email address")
 
     # Check not already a member
     existing = db.query(SpaceMembership).filter(

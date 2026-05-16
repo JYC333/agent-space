@@ -5,9 +5,10 @@ ActivityService — manages ActivityRecord lifecycle and proposal generation.
 ActivityRecords are the entry point for all incoming data. They may produce
 memory proposals, but they must never become active memory directly.
 
-``activity_type`` (API field ``source_type``) examples in the wild include:
-  user_input | imported_chat | web_capture | file_import |
-  agent_run  | task_log      | manual
+``activity_type`` (API field ``source_type``) uses the same canonical vocabulary
+as ``ActivityRecord.source_kind``:
+  user_capture | chat_message | external_chat | file_import | web_capture |
+  run_event | workspace_event | system_event | external_source
 
 Consolidation runs via ``ActivityConsolidationService`` from
 ``POST /api/v1/activity/{id}/consolidate`` and ``POST /api/v1/memory/consolidation/run`` — not from ``ActivityService``.
@@ -26,6 +27,35 @@ from ..param_binding import duplicate_mapper
 
 def _new_id() -> str:
     return str(ULID())
+
+
+SOURCE_TYPE_ALIASES: dict[str, str] = {
+    "user_input": "user_capture",
+    "manual": "user_capture",
+    "imported_chat": "external_chat",
+    "agent_run": "run_event",
+    "task_log": "workspace_event",
+}
+
+CANONICAL_SOURCE_TYPES = frozenset({
+    "user_capture",
+    "chat_message",
+    "external_chat",
+    "file_import",
+    "web_capture",
+    "run_event",
+    "workspace_event",
+    "system_event",
+    "external_source",
+})
+
+
+def normalize_source_type(source_type: str) -> str:
+    value = source_type.lower().strip()
+    value = SOURCE_TYPE_ALIASES.get(value, value)
+    if value not in CANONICAL_SOURCE_TYPES:
+        raise ValueError(f"invalid source_type: {source_type!r}")
+    return value
 
 
 class ActivityService:
@@ -59,7 +89,8 @@ class ActivityService:
             user_id=user_id,
             workspace_id=workspace_id,
             agent_id=agent_id,
-            source_type=source_type,
+            source_type=normalize_source_type(source_type),
+            source_kind=normalize_source_type(source_type),
             title=title,
             content=content,
             source_run_id=source_run_id,
@@ -119,7 +150,7 @@ class ActivityService:
         if workspace_id:
             q = q.filter(ActivityRecord.workspace_id == workspace_id)
         if source_type:
-            q = q.filter(ActivityRecord.source_type == source_type)
+            q = q.filter(ActivityRecord.source_type == normalize_source_type(source_type))
         if status:
             q = q.filter(ActivityRecord.status == status)
         return (

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..models import MemoryEntry
 from ..schemas import MemoryCreate
-from .store import MemoryStore
+from .internal_writer import MemoryInternalWriter
 
 
 def _system_seeds_for_space(space_id: str) -> list[MemoryCreate]:
@@ -90,7 +90,7 @@ def _system_seeds_for_space(space_id: str) -> list[MemoryCreate]:
 
 def seed_system_memories_for_space(db: Session, space_id: str) -> int:
     """Insert the three system policy memories for ``space_id`` if missing. Idempotent per space."""
-    store = MemoryStore(db)
+    writer = MemoryInternalWriter(db)
     inserted = 0
     for seed in _system_seeds_for_space(space_id):
         exists = (
@@ -104,6 +104,6 @@ def seed_system_memories_for_space(db: Session, space_id: str) -> int:
             .first()
         )
         if not exists:
-            store.create(seed, created_by="system_seed")
+            writer.create(seed, created_by="system_seed")
             inserted += 1
     return inserted

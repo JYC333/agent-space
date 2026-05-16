@@ -34,6 +34,7 @@ class MemoryStore:
         acting_user_id: str | None = None,
         created_by: str | None = None,
         approved_by: str | None = None,
+        commit: bool = True,
     ) -> MemoryEntry:
         owner_user_id = data.owner_user_id
         if data.visibility == "private" and owner_user_id is None:
@@ -72,8 +73,10 @@ class MemoryStore:
             version=1,
         )
         self.db.add(mem)
-        self.db.commit()
-        self.db.refresh(mem)
+        self.db.flush()
+        if commit:
+            self.db.commit()
+            self.db.refresh(mem)
         return mem
 
     def get_for_space(self, space_id: str, memory_id: str) -> MemoryEntry | None:
@@ -113,6 +116,7 @@ class MemoryStore:
         data: MemoryUpdate,
         *,
         space_id: str,
+        commit: bool = True,
     ) -> MemoryEntry | None:
         mem = self.get_for_space(space_id, memory_id)
         if not mem:
@@ -127,16 +131,20 @@ class MemoryStore:
                 setattr(mem, field, value)
         mem.version += 1
         mem.updated_at = datetime.now(UTC)
-        self.db.commit()
-        self.db.refresh(mem)
+        self.db.flush()
+        if commit:
+            self.db.commit()
+            self.db.refresh(mem)
         return mem
 
-    def delete(self, memory_id: str, *, space_id: str) -> bool:
+    def delete(self, memory_id: str, *, space_id: str, commit: bool = True) -> bool:
         mem = self.get_for_space(space_id, memory_id)
         if not mem:
             return False
         mem.deleted_at = datetime.now(UTC)
-        self.db.commit()
+        self.db.flush()
+        if commit:
+            self.db.commit()
         return True
 
     def _filter_readable(

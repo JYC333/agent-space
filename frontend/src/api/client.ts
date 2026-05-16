@@ -1,6 +1,6 @@
 import type {
   Memory, Session, Message, Task,
-  Capability, ContextPackage, Feature, Workspace, Page,
+  Capability, ContextPackage, Feature, Workspace, WorkspaceCreateBody, WorkspaceUpdateBody, Page,
   CapabilitiesReloadResult, ReflectResult, ApiError,
   CLIAdapterConfig, CLIStatus, BuiltinAdapter,
   CredentialLoginMethod, CredentialStatus, LoginEvent,
@@ -8,7 +8,7 @@ import type {
   Job, JobEvent, ActivityInboxRecord,
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
   TaskArtifact, TaskProposal, Artifact, Proposal, ProposalAcceptOut, AgentOut, RunCreateBody,
-  ActivityRecord,
+  ActivityRecord, ActivitySourceType,
   FileNode, FileContent, GitStatus, RuntimeInfo, ConsoleSession, WorkspaceInfo,
   HomeSummaryOut,
 } from '../types/api'
@@ -87,11 +87,11 @@ export const memoryApi = {
   list:   (params: Record<string, string> = {}) =>
     get<Page<Memory>>('/memory?' + new URLSearchParams(params)),
   create: (data: Partial<Memory>) =>
-    post<Memory>('/memory', { space_id: _spaceId, owner_user_id: _userId, ...data }),
+    post<Proposal>('/memory', { space_id: _spaceId, owner_user_id: _userId, ...data }),
   update: (id: string, data: Partial<Memory>) =>
-    patch<Memory>(`/memory/${id}`, data),
+    patch<Proposal>(`/memory/${id}`, data),
   delete: (id: string) =>
-    del<null>(`/memory/${id}`),
+    del<Proposal>(`/memory/${id}`),
   search: (data: { query: string; scope?: string; type?: string }) =>
     post<Memory[]>('/memory/search', { space_id: _spaceId, user_id: _userId, ...data }),
 }
@@ -248,10 +248,10 @@ export const agentsApi = {
 export const workspacesApi = {
   list:   (params: Record<string, string> = {}) =>
     get<Page<Workspace>>('/workspaces?' + new URLSearchParams(params)),
-  create: (data: { name: string; description?: string; type?: string; path?: string }) =>
+  create: (data: WorkspaceCreateBody) =>
     post<Workspace>('/workspaces', data),
   get:    (id: string)                          => get<Workspace>(`/workspaces/${id}`),
-  update: (id: string, data: Partial<Workspace>) => patch<Workspace>(`/workspaces/${id}`, data),
+  update: (id: string, data: WorkspaceUpdateBody) => patch<Workspace>(`/workspaces/${id}`, data),
   archive:(id: string)                          => del<null>(`/workspaces/${id}`),
   scan:   ()                                    => post<{ created: Workspace[]; deleted: string[] }>('/workspaces/scan'),
 }
@@ -340,7 +340,7 @@ export const jobsApi = {
 export const activityApi = {
   list:   (params: Record<string, string> = {}) =>
     get<ActivityInboxRecord[]>('/activity?' + new URLSearchParams(params)),
-  create: (data: { source_type: string; content: string; title?: string; workspace_id?: string; metadata_json?: Record<string, unknown> }) =>
+  create: (data: { source_type: ActivitySourceType; content: string; title?: string; source_url?: string; workspace_id?: string; metadata_json?: Record<string, unknown> }) =>
     post<ActivityInboxRecord>('/activity', data),
   get:    (id: string) => get<ActivityInboxRecord>(`/activity/${id}`),
   process:(id: string) => patch<ActivityInboxRecord>(`/activity/${id}/process`),
@@ -400,12 +400,17 @@ export const authApi = {
   mySpaces:    ()                  => get<SpaceWithMembership[]>('/me/spaces'),
   googleConfigured: ()            => get<{google_auth_available: boolean}>('/auth/google-configured'),
   logout:      ()                  => post<null>('/auth/logout'),
-  googleLogin: ()                  => { window.location.href = '/api/v1/auth/google' },
+  googleLogin: (next?: string)     => {
+    const url = next
+      ? `/api/v1/auth/google?next=${encodeURIComponent(next)}`
+      : '/api/v1/auth/google'
+    window.location.href = url
+  },
 }
 
 // ── Spaces ────────────────────────────────────────────────────────────────
 export const spacesApi = {
-  create:         (data: { name: string; type: string })         => post<SpaceWithMembership>('/spaces', data),
+  create:         (data: { name: string; type: Exclude<SpaceWithMembership['type'], 'personal'> }) => post<SpaceWithMembership>('/spaces', data),
   get:            (spaceId: string)                              => get<SpaceWithMembership>(`/spaces/${spaceId}`),
   members:        (spaceId: string)                              => get<SpaceMember[]>(`/spaces/${spaceId}/members`),
   invite:         (spaceId: string, data: { email: string; role: string }) =>

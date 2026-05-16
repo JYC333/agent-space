@@ -10,7 +10,7 @@ This document describes the **agent-native task board** domain layer. It is back
 - **Job** — An **infrastructure queue row** (`jobs` table). Used for workers, retries, and dispatch plumbing. **Jobs are not product tasks** and must not be used as the source of truth for user-visible task state.
 - **Artifact** — Output attached to a run or task (files, reports, logs). Linked to tasks through `task_artifacts` when needed.
 - **Proposal** — A requested system change (for example memory updates). Linked to tasks through `task_proposals`. **Task done does not imply a proposal was applied** — approval is a separate workflow.
-- **Evaluation** — Future self/human/system review of a task or run. The `task_evaluations` table exists for later milestones; APIs are minimal today.
+- **Evaluation** — Future self/human/system review of a task or run. The `task_evaluations` table exists but APIs are minimal today.
 
 ## Relationships
 

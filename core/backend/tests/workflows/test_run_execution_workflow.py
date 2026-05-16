@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from sqlalchemy import func
 
-from app.models import ActivityRecord, Artifact, MemoryEntry, Proposal, Run
+from app.models import Artifact, MemoryEntry, Proposal, Run, RunStep
 from tests.support import factories
 from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRuntimeConfig
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def test_run_execute_success_leaves_audit_artifact_and_no_run_proposals(
@@ -51,7 +52,7 @@ def test_run_execute_success_leaves_audit_artifact_and_no_run_proposals(
     run_row0.prompt = "wf-prompt"
     db.commit()
 
-    ex = api_client.post(
+    ex = cross_space_pair["client_a"].post(
         f"/api/v1/runs/{run_row0.id}/execute",
         params=_params(a, ua.id),
     )
@@ -71,15 +72,10 @@ def test_run_execute_success_leaves_audit_artifact_and_no_run_proposals(
         assert art.space_id == a
         assert art.run_id == run.id
 
-    types = {
-        r.activity_type
-        for r in db.query(ActivityRecord).filter(
-            ActivityRecord.space_id == a,
-            ActivityRecord.source_run_id == run.id,
-        )
-    }
-    assert "run.execution.started" in types
-    assert "run.execution.succeeded" in types
+    steps = db.query(RunStep).filter(RunStep.run_id == run.id, RunStep.space_id == a).all()
+    step_types = {s.step_type for s in steps}
+    assert "queued" in step_types
+    assert "completed" in step_types
 
     assert (
         db.query(func.count(MemoryEntry.id))
@@ -119,7 +115,7 @@ def test_run_execute_cannot_be_triggered_from_foreign_space(
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
 
-    r = api_client.post(
+    r = cross_space_pair["client_b"].post(
         f"/api/v1/runs/{run.id}/execute",
         params=_params(b, ub.id),
     )

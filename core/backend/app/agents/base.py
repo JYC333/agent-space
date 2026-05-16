@@ -15,6 +15,10 @@ Adapter types built in:
 External frameworks (OpenAI Agents SDK, LangGraph, CrewAI, Letta, etc.) can
 be wired in as additional adapters without touching the kernel. An agent's
 `runtime_policy_json.allowed_adapter_types` controls which backends it may use.
+
+RuntimeExecutionResult is now defined in app.runs.types (M4 canonical location).
+It is re-exported here for backward compatibility with existing CLI adapter code.
+New code should import from app.runs.types directly.
 """
 
 from abc import ABC, abstractmethod
@@ -22,27 +26,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-
-@dataclass
-class RuntimeExecutionResult:
-    """
-    Result returned by an AgentAdapter after execution.
-
-    This is the adapter's execution output — NOT a Run record.
-    Named RuntimeExecutionResult to distinguish from the Run/Activity/Artifact product model.
-    """
-    success: bool
-    output: str
-    error: str | None = None
-    exit_code: int | None = None
-    artifacts: list[dict] = field(default_factory=list)
-    tool_calls: list[dict] = field(default_factory=list)
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
-    stdout: str | None = None
-    stderr: str | None = None
-    error_code: str | None = None
-    adapter_log_json: dict | None = None
+# Canonical definition lives in app.runs.types — re-exported here for
+# backward compatibility with app.agents.* CLI adapter code.
+from ..runs.types import RuntimeExecutionResult  # noqa: F401
 
 
 @dataclass

@@ -9,7 +9,8 @@ from tests.support import factories
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def test_get_activity_cross_space_returns_404(api_client, db, cross_space_pair):
@@ -25,7 +26,7 @@ def test_get_activity_cross_space_returns_404(api_client, db, cross_space_pair):
         title="A note",
         commit=True,
     )
-    r = api_client.get(
+    r = cross_space_pair["client_b"].get(
         f"/api/v1/activity/{act.id}",
         params=_params(b, ub.id),
     )
@@ -53,7 +54,7 @@ def test_list_activity_excludes_other_space(api_client, db, cross_space_pair):
         title="B-only",
         commit=True,
     )
-    r = api_client.get("/api/v1/activity", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].get("/api/v1/activity", params=_params(a, ua.id))
     assert r.status_code == 200
     rows = r.json()
     assert isinstance(rows, list)
@@ -66,7 +67,7 @@ def test_list_activity_for_user_id_must_match_identity(api_client, db, cross_spa
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
     ub = cross_space_pair["user_b"]
-    r = api_client.get(
+    r = cross_space_pair["client_a"].get(
         "/api/v1/activity",
         params={**_params(a, ua.id), "for_user_id": ub.id},
     )
@@ -82,7 +83,7 @@ def test_post_activity_stable_shape_and_no_memory(api_client, db, cross_space_pa
         .scalar()
     )
     db.commit()
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         "/api/v1/activity",
         params=_params(a, ua.id),
         json={
@@ -107,11 +108,49 @@ def test_post_activity_stable_shape_and_no_memory(api_client, db, cross_space_pa
     assert after == before
 
 
+def test_post_activity_accepts_canonical_source_types(api_client, cross_space_pair):
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+
+    for source_type in (
+        "user_capture",
+        "chat_message",
+        "external_chat",
+        "file_import",
+        "web_capture",
+        "run_event",
+        "workspace_event",
+        "system_event",
+        "external_source",
+    ):
+        r = cross_space_pair["client_a"].post(
+            "/api/v1/activity",
+            params=_params(a, ua.id),
+            json={"source_type": source_type, "content": "body", "title": source_type},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["source_type"] == source_type
+
+
+def test_post_activity_maps_legacy_user_input_to_user_capture(api_client, cross_space_pair):
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+
+    r = cross_space_pair["client_a"].post(
+        "/api/v1/activity",
+        params=_params(a, ua.id),
+        json={"source_type": "user_input", "content": "legacy", "title": "legacy"},
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["source_type"] == "user_capture"
+
+
 def test_post_activity_rejects_body_user_id_impersonation(api_client, db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
     ub = cross_space_pair["user_b"]
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         "/api/v1/activity",
         params=_params(a, ua.id),
         json={
@@ -140,7 +179,7 @@ def test_post_activity_consolidate_returns_proposals_without_active_memory(api_c
         .filter(MemoryEntry.space_id == a, MemoryEntry.status == "active")
         .scalar()
     )
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         f"/api/v1/activity/{act.id}/consolidate",
         params=_params(a, ua.id),
     )
@@ -176,7 +215,7 @@ def test_patch_process_does_not_create_active_memory(api_client, db, cross_space
         .filter(MemoryEntry.space_id == a, MemoryEntry.status == "active")
         .scalar()
     )
-    r = api_client.patch(
+    r = cross_space_pair["client_a"].patch(
         f"/api/v1/activity/{act.id}/process",
         params=_params(a, ua.id),
     )
@@ -203,7 +242,7 @@ def test_process_activity_cross_space_returns_404(api_client, db, cross_space_pa
         activity_type="user_input",
         commit=True,
     )
-    r = api_client.patch(
+    r = cross_space_pair["client_b"].patch(
         f"/api/v1/activity/{act.id}/process",
         params=_params(b, ub.id),
     )
@@ -222,7 +261,7 @@ def test_consolidate_activity_cross_space_returns_404(api_client, db, cross_spac
         activity_type="user_input",
         commit=True,
     )
-    r = api_client.post(
+    r = cross_space_pair["client_b"].post(
         f"/api/v1/activity/{act.id}/consolidate",
         params=_params(b, ub.id),
     )

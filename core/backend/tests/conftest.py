@@ -99,7 +99,7 @@ from alembic.config import Config
 
 from app.db import get_db
 from app.main import app
-from app.models import Space, User
+from app.models import Space, SpaceMembership, User
 from tests.support.ids import DEFAULT_USER_ID, PERSONAL_SPACE_ID
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -150,6 +150,15 @@ def db_engine(tmp_path_factory):
                 space_id=SPACE,
                 email="default@example.com",
                 display_name="Default User",
+            )
+        )
+        session.add(
+            SpaceMembership(
+                id="default_membership",
+                space_id=SPACE,
+                user_id=USER,
+                role="owner",
+                status="active",
             )
         )
         session.commit()

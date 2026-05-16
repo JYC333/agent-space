@@ -2,7 +2,7 @@ from __future__ import annotations
 import secrets
 import urllib.parse
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,19 @@ from .session import (
 )
 from ..config import settings
 from ..schemas import ApiKeyCreate, ApiKeyOut, ApiKeyCreatedOut
+
+POST_LOGIN_NEXT_COOKIE = "post_login_next"
+
+
+def _safe_next_url(raw: str) -> str:
+    """Return `raw` only if it is a safe relative redirect target.
+
+    Rejects absolute URLs and protocol-relative URLs (//...) to prevent
+    open-redirect attacks. Only paths starting with a single '/' are allowed.
+    """
+    if not raw or not raw.startswith("/") or raw.startswith("//"):
+        return ""
+    return raw
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 me_router = APIRouter(prefix="/me", tags=["me"])
@@ -79,7 +92,7 @@ def revoke_api_key(
 # ── Google OAuth flow ─────────────────────────────────────────────────────────
 
 @router.get("/google")
-def google_login():
+def google_login(next_url: str = Query(default="", alias="next")):
     if not is_configured():
         raise HTTPException(status_code=501, detail="Google OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.")
     state = secrets.token_hex(16)
@@ -93,6 +106,17 @@ def google_login():
         samesite="lax",
         secure=not settings.debug,
     )
+    safe = _safe_next_url(next_url)
+    if safe:
+        response.set_cookie(
+            key=POST_LOGIN_NEXT_COOKIE,
+            value=safe,
+            max_age=300,
+            httponly=True,
+            samesite="lax",
+            secure=not settings.debug,
+            path="/",
+        )
     return response
 
 
@@ -141,7 +165,11 @@ def google_callback(
     user = UserService(db).find_or_create_from_google(google_sub, email, display_name, avatar_url)
     _, raw_token = UserSessionService(db).create(user.id)
 
-    response = RedirectResponse(url=settings.frontend_url)
+    pending_next = request.cookies.get(POST_LOGIN_NEXT_COOKIE, "")
+    safe_next = _safe_next_url(pending_next)
+    redirect_to = f"{settings.frontend_url}{safe_next}" if safe_next else settings.frontend_url
+
+    response = RedirectResponse(url=redirect_to)
     response.set_cookie(
         key=SESSION_COOKIE,
         value=raw_token,
@@ -151,8 +179,8 @@ def google_callback(
         secure=not settings.debug,
         path="/",
     )
-    # Clear the OAuth state cookie
     response.delete_cookie(key=OAUTH_STATE_COOKIE)
+    response.delete_cookie(key=POST_LOGIN_NEXT_COOKIE, path="/")
     return response
 
 

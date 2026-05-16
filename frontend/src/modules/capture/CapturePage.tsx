@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Send } from 'lucide-react'
 import { toast } from 'sonner'
-import { sessionsApi } from '../../api/client'
+import { activityApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
 import { Button } from '../../components/ui/button'
@@ -19,10 +19,13 @@ export default function CapturePage() {
     if (!text.trim()) return
     setSubmitting(true)
     try {
-      const session = await sessionsApi.create({ title: text.slice(0, 80) })
-      await sessionsApi.addMessage(session.id, { role: 'user', content: text })
-      toast.success('Captured — opening session')
-      navigate('/sessions')
+      await activityApi.create({
+        source_type: 'user_capture',
+        content: text,
+        title: text.slice(0, 80),
+      })
+      toast.success('Saved to Activity Inbox')
+      navigate('/activity')
     } catch (err) {
       toast.error(errMsg(err))
     } finally {

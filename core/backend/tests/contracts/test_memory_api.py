@@ -7,7 +7,8 @@ from tests.support import factories
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 # ---------------------------------------------------------------------------
@@ -32,7 +33,7 @@ def test_get_memory_cross_space_returns_404(api_client, db, cross_space_pair):
     mem.visibility = "space_shared"
     db.commit()
 
-    r = api_client.get(
+    r = cross_space_pair["client_b"].get(
         f"/api/v1/memory/{mem.id}",
         params=_params(b, ub.id),
     )
@@ -59,7 +60,7 @@ def test_patch_memory_cross_space_returns_404(api_client, db, cross_space_pair):
     mem.visibility = "space_shared"
     db.commit()
 
-    r = api_client.patch(
+    r = cross_space_pair["client_b"].patch(
         f"/api/v1/memory/{mem.id}",
         params=_params(b, ub.id),
         json={"title": "hijack"},
@@ -84,7 +85,7 @@ def test_delete_memory_cross_space_returns_404(api_client, db, cross_space_pair)
     mem.visibility = "space_shared"
     db.commit()
 
-    r = api_client.delete(
+    r = cross_space_pair["client_b"].delete(
         f"/api/v1/memory/{mem.id}",
         params=_params(b, ub.id),
     )
@@ -121,7 +122,7 @@ def test_list_memory_only_current_space(api_client, db, cross_space_pair):
     m_a.visibility = "space_shared"
     db.commit()
 
-    r = api_client.get("/api/v1/memory", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].get("/api/v1/memory", params=_params(a, ua.id))
     assert r.status_code == 200
     data = r.json()
     assert set(data.keys()) >= {"items", "total", "limit", "offset"}
@@ -147,7 +148,7 @@ def test_memory_get_success_shape(api_client, db, cross_space_pair):
     mem.visibility = "space_shared"
     db.commit()
 
-    r = api_client.get(f"/api/v1/memory/{mem.id}", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].get(f"/api/v1/memory/{mem.id}", params=_params(a, ua.id))
     assert r.status_code == 200
     out = r.json()
     assert out["id"] == mem.id
@@ -169,7 +170,7 @@ def test_post_memory_returns_202_and_proposal(api_client, db, cross_space_pair):
         MemoryEntry.space_id == a, MemoryEntry.status == "active"
     ).count()
 
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         "/api/v1/memory",
         params=_params(a, ua.id),
         json={
@@ -215,7 +216,7 @@ def test_patch_memory_returns_202_and_proposal(api_client, db, cross_space_pair)
     db.commit()
     original_content = mem.content
 
-    r = api_client.patch(
+    r = cross_space_pair["client_a"].patch(
         f"/api/v1/memory/{mem.id}",
         params=_params(a, ua.id),
         json={"content": "updated content"},
@@ -248,7 +249,7 @@ def test_delete_memory_returns_202_and_proposal(api_client, db, cross_space_pair
     mem.visibility = "space_shared"
     db.commit()
 
-    r = api_client.delete(
+    r = cross_space_pair["client_a"].delete(
         f"/api/v1/memory/{mem.id}",
         params=_params(a, ua.id),
     )

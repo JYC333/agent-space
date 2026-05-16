@@ -111,20 +111,23 @@ def create_activity(
             detail="user_id in body must match the authenticated user",
         )
     svc = ActivityService(db)
-    record = svc.create(
-        space_id=space_id,
-        source_type=body.source_type,
-        content=body.content,
-        user_id=auth_user_id,
-        workspace_id=body.workspace_id,
-        agent_id=body.agent_id,
-        title=body.title,
-        source_run_id=body.source_run_id,
-        source_task_id=body.source_task_id,
-        source_session_id=body.source_session_id,
-        source_url=body.source_url,
-        metadata_json=body.metadata_json,
-    )
+    try:
+        record = svc.create(
+            space_id=space_id,
+            source_type=body.source_type,
+            content=body.content,
+            user_id=auth_user_id,
+            workspace_id=body.workspace_id,
+            agent_id=body.agent_id,
+            title=body.title,
+            source_run_id=body.source_run_id,
+            source_task_id=body.source_task_id,
+            source_session_id=body.source_session_id,
+            source_url=body.source_url,
+            metadata_json=body.metadata_json,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ActivityOut.from_orm_model(record)
 
 
@@ -149,15 +152,18 @@ def list_activities(
             detail="for_user_id must match the authenticated user",
         )
     svc = ActivityService(db)
-    records = svc.list(
-        space_id=space_id,
-        user_id=for_user_id,
-        workspace_id=workspace_id,
-        source_type=source_type,
-        status=status,
-        limit=limit,
-        offset=offset,
-    )
+    try:
+        records = svc.list(
+            space_id=space_id,
+            user_id=for_user_id,
+            workspace_id=workspace_id,
+            source_type=source_type,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return [ActivityOut.from_orm_model(r) for r in records]
 
 

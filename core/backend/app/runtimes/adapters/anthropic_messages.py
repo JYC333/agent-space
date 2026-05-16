@@ -1,4 +1,12 @@
-"""Anthropic Messages API runtime adapter (non-interactive, no PTY)."""
+"""Anthropic Messages API runtime adapter (non-interactive, no PTY).
+
+Credential rule (M4):
+  API key is read from ``ctx.resolved_credentials["api_key"]``.
+  Direct reads from ``ctx.adapter_config["api_key"]`` or the
+  ``ANTHROPIC_API_KEY`` environment variable are not performed.
+  Configure a ModelProvider row linked to the RuntimeAdapter or AgentVersion
+  to supply credentials through the canonical boundary.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +14,6 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from ...config import settings
 from ..base import BaseRuntimeAdapter, RuntimeAdapterResult, RuntimeExecutionContext
 
 log = logging.getLogger(__name__)
@@ -33,6 +40,9 @@ def _json_safe(value: Any) -> Any:
 
 class AnthropicMessagesRuntimeAdapter(BaseRuntimeAdapter):
     adapter_type = "anthropic_messages"
+    requires_credentials = True
+    requires_file_access = False
+    supports_sandboxed_execution = False
 
     def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
         started = datetime.now(UTC)
@@ -49,13 +59,19 @@ class AnthropicMessagesRuntimeAdapter(BaseRuntimeAdapter):
                 adapter_metadata={"adapter_type": self.adapter_type},
             )
 
-        cfg = dict(ctx.adapter_config or {})
-        api_key = (cfg.get("api_key") or "").strip() or (settings.anthropic_api_key or "").strip()
+        # Credentials come from ctx.resolved_credentials — never from adapter_config
+        # or environment variables.  The execution service calls the credential
+        # resolver before building this context.
+        api_key = (ctx.resolved_credentials.get("api_key") or "").strip()
         if not api_key:
             ended = datetime.now(UTC)
             return RuntimeAdapterResult(
                 success=False,
-                error_text="Anthropic API key is not configured (set ANTHROPIC_API_KEY or adapter config).",
+                error_text=(
+                    "Anthropic API key is not configured. "
+                    "Link a ModelProvider with an encrypted API key to the RuntimeAdapter "
+                    "or AgentVersion row to supply credentials through the canonical boundary."
+                ),
                 error_code="credentials_missing",
                 started_at=started,
                 completed_at=ended,
@@ -63,10 +79,13 @@ class AnthropicMessagesRuntimeAdapter(BaseRuntimeAdapter):
                 adapter_metadata={"adapter_type": self.adapter_type},
             )
 
+        # adapter_config holds non-secret settings (model, max_tokens, etc.).
+        # api_key is intentionally not present here after M4 sanitization.
+        cfg = dict(ctx.adapter_config or {})
         model = (
             (cfg.get("model") or "").strip()
             or (ctx.model_name or "").strip()
-            or settings.default_model
+            or "claude-haiku-4-5-20251001"
         )
         max_tokens = int(cfg.get("max_tokens") or 256)
         user_prompt = ctx.prompt or "Say OK."

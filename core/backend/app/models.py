@@ -636,6 +636,7 @@ class Run(Base):
     artifacts: Mapped[list["Artifact"]] = relationship("Artifact", back_populates="run")
     proposals: Mapped[list["Proposal"]] = relationship("Proposal", back_populates="created_by_run")
     activities: Mapped[list["ActivityRecord"]] = relationship("ActivityRecord", back_populates="source_run")
+    steps: Mapped[list["RunStep"]] = relationship("RunStep", back_populates="run", order_by="RunStep.step_index")
 
     __table_args__ = (
         CheckConstraint(
@@ -1300,6 +1301,115 @@ class MemoryRelation(Base):
             "relation_type in ('derived_from', 'supersedes', 'contradicts', 'related_to', "
             "'caused_by', 'supports', 'applies_to', 'mentions')",
             name="ck_memory_relations_relation_type",
+        ),
+    )
+
+
+class Actor(Base):
+    """Durable identity record for any principal that can act in the system.
+
+    Covers human users, agents, system/service/job actors, and reserved future
+    kinds (automation, connector, integration).  New audit/event/RunStep surfaces
+    must reference an Actor rather than raw nullable user_id/agent_id pairs.
+
+    Historical tables (Run, Proposal, ActivityRecord, …) keep their existing
+    user_id/agent_id fields during the compatibility window.  Do not migrate
+    them in bulk here.
+
+    Constraints enforced by ActorService (not all expressible as simple DB checks
+    with nullable columns in SQLite):
+      - actor_type = user    → user_id required, agent_id must be null
+      - actor_type = agent   → agent_id required, user_id must be null
+      - actor_type in (system, service, job, automation, connector, integration)
+                             → user_id and agent_id must both be null
+    """
+
+    __tablename__ = "actors"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=True, index=True)
+    actor_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True, index=True)
+    service_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    display_name: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    space: Mapped[Optional[Space]] = relationship("Space", foreign_keys=[space_id])
+    user: Mapped[Optional[User]] = relationship("User", foreign_keys=[user_id])
+    agent: Mapped[Optional[Agent]] = relationship("Agent", foreign_keys=[agent_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "actor_type in ('user', 'agent', 'system', 'automation', 'connector', "
+            "'integration', 'service', 'job')",
+            name="ck_actors_actor_type",
+        ),
+        CheckConstraint(
+            "status in ('active', 'disabled', 'archived')",
+            name="ck_actors_status",
+        ),
+    )
+
+
+class RunStep(Base):
+    """Coarse execution step for replay and failure diagnosis (M3).
+
+    Each RunStep captures one phase of a Run's lifecycle: creation, context
+    preparation, adapter invocation, artifact/proposal production, completion,
+    or failure.  All steps require actor identity — no nullable actor_id.
+
+    Step writes are best-effort during rollout: a failed step write must not
+    suppress the original run failure.  Secret/credential values must never
+    appear in error_message or metadata_json.
+    """
+
+    __tablename__ = "run_steps"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=False, index=True)
+    parent_step_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("run_steps.id"), nullable=True, index=True)
+    actor_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("actors.id"), nullable=False, index=True)
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    step_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    title: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
+    session_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("sessions.id"), nullable=True, index=True)
+    task_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("artifacts.id"), nullable=True, index=True)
+    proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    input_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    output_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_type: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    run: Mapped["Run"] = relationship("Run", back_populates="steps")
+    actor: Mapped["Actor"] = relationship("Actor", foreign_keys=[actor_id])
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "step_index", name="uq_run_steps_run_step_index"),
+        CheckConstraint(
+            "step_type in ("
+            "'run_created', 'queued', 'context_prepared', 'runtime_selected', "
+            "'adapter_started', 'adapter_completed', 'artifact_created', "
+            "'proposal_created', 'failed', 'completed', "
+            "'validation_started', 'validation_completed', 'cancelled')",
+            name="ck_run_steps_step_type",
+        ),
+        CheckConstraint(
+            "status in ('pending', 'running', 'succeeded', 'failed', 'skipped', 'cancelled')",
+            name="ck_run_steps_status",
         ),
     )
 

@@ -11,7 +11,8 @@ from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRunti
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def _patch_execute(monkeypatch, tmp_path: Path) -> None:
@@ -46,11 +47,11 @@ def test_run_artifacts_list_includes_produced_file_artifact(api_client, db, cros
     )
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     db.commit()
-    api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     db.expire_all()
     art = db.query(Artifact).filter(Artifact.run_id == run.id).one()
 
-    r = api_client.get(f"/api/v1/runs/{run.id}/artifacts", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].get(f"/api/v1/runs/{run.id}/artifacts", params=_params(a, ua.id))
     assert r.status_code == 200
     page = r.json()
     assert page.get("total") == 1
@@ -81,17 +82,17 @@ def test_artifact_detail_and_export_file(api_client, db, cross_space_pair, tmp_p
     )
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     db.commit()
-    api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     db.expire_all()
     art = db.query(Artifact).filter(Artifact.run_id == run.id).one()
 
-    d = api_client.get(f"/api/v1/artifacts/{art.id}", params=_params(a, ua.id))
+    d = cross_space_pair["client_a"].get(f"/api/v1/artifacts/{art.id}", params=_params(a, ua.id))
     assert d.status_code == 200
     dj = d.json()
     assert "metadata_json" in dj
     assert dj.get("has_inline_content") is False
 
-    ex = api_client.get(f"/api/v1/artifacts/{art.id}/export", params=_params(a, ua.id))
+    ex = cross_space_pair["client_a"].get(f"/api/v1/artifacts/{art.id}/export", params=_params(a, ua.id))
     assert ex.status_code == 200
     assert b"NOTE" in ex.content
 
@@ -117,9 +118,9 @@ def test_get_artifact_cross_space_denied(api_client, db, cross_space_pair, tmp_p
     )
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     db.commit()
-    api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     db.expire_all()
     art = db.query(Artifact).filter(Artifact.run_id == run.id).one()
 
-    r = api_client.get(f"/api/v1/artifacts/{art.id}", params=_params(b, ub.id))
+    r = cross_space_pair["client_b"].get(f"/api/v1/artifacts/{art.id}", params=_params(b, ub.id))
     assert r.status_code == 404

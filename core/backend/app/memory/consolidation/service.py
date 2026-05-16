@@ -3,11 +3,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
+from types import SimpleNamespace
 from typing import Sequence
 
 from ulid import ULID
 from sqlalchemy.orm import Session
 
+from ...db_uow import UnitOfWork
 from ...models import ActivityRecord, Proposal
 from .classifier import DefaultRuleBasedMemoryCandidateClassifier, MemoryCandidateClassifier
 from .constants import CONSOLIDATION_COMPILER_VERSION
@@ -63,11 +65,13 @@ class ActivityConsolidationService:
 
         keyfn = lambda r: (r.workspace_id or "", r.session_id or "", r.source_run_id or "")
         rows_sorted = sorted(rows, key=keyfn)
+        activity_snapshots = [self._activity_snapshot(row) for row in rows_sorted]
+        UnitOfWork(self._db).commit()
 
         validator = MemoryCandidateValidator(space_id=space_id, acting_user_id=acting_user_id)
         producer = MemoryProposalProducer(self._db)
 
-        for record in rows_sorted:
+        for record in activity_snapshots:
             aid = record.id
             try:
                 created_ids: list[str] = []
@@ -75,9 +79,7 @@ class ActivityConsolidationService:
                     record, compiler_version=CONSOLIDATION_COMPILER_VERSION
                 )
                 if not candidates:
-                    record.consolidation_status = "skipped"
-                    record.processed_at = datetime.now(UTC)
-                    self._db.commit()
+                    self._mark_activity_status(aid, "skipped")
                     result.activities_skipped.append(aid)
                     continue
 
@@ -98,33 +100,37 @@ class ActivityConsolidationService:
                         created_ids.append(prop.id)
 
                 if not created_ids:
-                    record.consolidation_status = "skipped"
-                    record.processed_at = datetime.now(UTC)
-                    self._db.commit()
+                    self._mark_activity_status(aid, "skipped")
                     result.activities_skipped.append(aid)
                     continue
 
-                self._db.flush()
-                record.consolidation_status = "proposals_generated"
-                self._db.commit()
-                record = self._db.query(ActivityRecord).filter(ActivityRecord.id == aid).one()
-                record.consolidation_status = "processed"
-                record.processed_at = datetime.now(UTC)
-                self._db.commit()
+                self._mark_activity_status(aid, "processed")
 
                 result.proposals_created.extend(created_ids)
                 result.activities_processed.append(aid)
             except Exception:
                 log.exception("activity consolidation failed for %s", aid)
-                self._db.rollback()
-                row = self._db.query(ActivityRecord).filter(ActivityRecord.id == aid).first()
-                if row:
-                    row.consolidation_status = "failed"
-                    row.processed_at = datetime.now(UTC)
-                    self._db.commit()
+                UnitOfWork(self._db).rollback()
+                self._mark_activity_status(aid, "failed")
                 result.activities_failed.append(aid)
 
         return result
+
+    def _mark_activity_status(self, activity_id: str, status: str) -> None:
+        row = self._db.query(ActivityRecord).filter(ActivityRecord.id == activity_id).first()
+        if row:
+            row.consolidation_status = status
+            row.processed_at = datetime.now(UTC)
+            UnitOfWork(self._db).commit()
+
+    @staticmethod
+    def _activity_snapshot(record: ActivityRecord) -> SimpleNamespace:
+        return SimpleNamespace(
+            **{
+                attr.key: getattr(record, attr.key)
+                for attr in ActivityRecord.__mapper__.column_attrs
+            }
+        )
 
     def run_for_activity_ids(
         self,
@@ -152,10 +158,12 @@ class ActivityConsolidationService:
 
 def run_memory_consolidation_job_payload(*, db: Session, payload: dict) -> dict:
     """Synchronous job body used by ``memory_consolidation`` queue handler."""
-    from ...config import settings
-
     space_id = str(payload.get("space_id") or "")
-    user_id = str(payload.get("user_id") or settings.default_user_id)
+    user_id = str(payload.get("user_id") or "")
+    if not space_id:
+        raise ValueError("memory_consolidation job payload is missing space_id")
+    if not user_id:
+        raise ValueError("memory_consolidation job payload is missing user_id")
     batch_limit = int(payload.get("batch_limit") or 50)
     raw_ids = payload.get("activity_ids")
     activity_ids: list[str] | None = None

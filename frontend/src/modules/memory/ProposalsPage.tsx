@@ -54,9 +54,7 @@ export default function ProposalsPage() {
     } catch (e) { toast.error(errMsg(e)) }
   }
 
-  const canDecide = (p: Proposal) =>
-    p.status === 'pending' &&
-    (p.proposal_type === 'memory_update' || p.proposal_type === 'code_patch')
+  const canDecide = (p: Proposal) => p.status === 'pending'
 
   return (
     <div className="p-6 space-y-6">

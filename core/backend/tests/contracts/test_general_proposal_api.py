@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from sqlalchemy import func
 
+from app.auth.session import SESSION_COOKIE, UserSessionService
 from app.config import settings
+from app.main import app as _app
+from starlette.testclient import TestClient
 from app.models import MemoryEntry, Proposal
 from tests.support import factories
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def _assert_error_envelope(body: dict, *, error: str) -> None:
@@ -29,7 +33,7 @@ def test_get_proposal_cross_space_returns_404(api_client, db, cross_space_pair):
         created_by_user_id=ua.id,
         commit=True,
     )
-    r = api_client.get(
+    r = cross_space_pair["client_b"].get(
         f"/api/v1/proposals/{prop.id}",
         params=_params(b, ub.id),
     )
@@ -48,7 +52,7 @@ def test_accept_proposal_cross_space_returns_404(api_client, db, cross_space_pai
         created_by_user_id=ua.id,
         commit=True,
     )
-    r = api_client.post(
+    r = cross_space_pair["client_b"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(b, ub.id),
     )
@@ -67,7 +71,7 @@ def test_reject_proposal_cross_space_returns_404(api_client, db, cross_space_pai
         created_by_user_id=ua.id,
         commit=True,
     )
-    r = api_client.post(
+    r = cross_space_pair["client_b"].post(
         f"/api/v1/proposals/{prop.id}/reject",
         params=_params(b, ub.id),
     )
@@ -85,7 +89,9 @@ def test_non_creator_cannot_accept_in_same_space(api_client, db, cross_space_pai
         created_by_user_id=ua.id,
         commit=True,
     )
-    r = api_client.post(
+    _, raw = UserSessionService(db).create(u_other.id)
+    other_client = TestClient(_app, cookies={SESSION_COOKIE: raw}, raise_server_exceptions=True)
+    r = other_client.post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, u_other.id),
     )
@@ -103,7 +109,9 @@ def test_non_creator_cannot_reject_in_same_space(api_client, db, cross_space_pai
         created_by_user_id=ua.id,
         commit=True,
     )
-    r = api_client.post(
+    _, raw = UserSessionService(db).create(u_other.id)
+    other_client = TestClient(_app, cookies={SESSION_COOKIE: raw}, raise_server_exceptions=True)
+    r = other_client.post(
         f"/api/v1/proposals/{prop.id}/reject",
         params=_params(a, u_other.id),
     )
@@ -126,7 +134,7 @@ def test_preview_proposal_accept_returns_404_no_memory(api_client, db, cross_spa
         .filter(MemoryEntry.space_id == a, MemoryEntry.status == "active")
         .scalar()
     )
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, ua.id),
     )
@@ -152,7 +160,7 @@ def test_rejected_proposal_cannot_be_accepted(api_client, db, cross_space_pair):
         created_by_user_id=ua.id,
         commit=True,
     )
-    r1 = api_client.post(
+    r1 = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{prop.id}/reject",
         params=_params(a, ua.id),
     )
@@ -160,7 +168,7 @@ def test_rejected_proposal_cannot_be_accepted(api_client, db, cross_space_pair):
     out = r1.json()
     assert out.get("status") == "rejected"
 
-    r2 = api_client.post(
+    r2 = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, ua.id),
     )
@@ -178,7 +186,7 @@ def test_memory_update_accept_returns_general_shape_and_creates_memory(api_clien
         preview=False,
         commit=True,
     )
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, ua.id),
     )
@@ -203,7 +211,7 @@ def test_double_accept_does_not_duplicate_memory(api_client, db, cross_space_pai
         preview=False,
         commit=True,
     )
-    r1 = api_client.post(
+    r1 = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, ua.id),
     )
@@ -211,7 +219,7 @@ def test_double_accept_does_not_duplicate_memory(api_client, db, cross_space_pai
     mem_id = r1.json().get("result", {}).get("memory", {}).get("id")
     assert mem_id
 
-    r2 = api_client.post(
+    r2 = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, ua.id),
     )
@@ -262,7 +270,7 @@ def test_code_patch_accept_returns_general_shape(api_client, db, cross_space_pai
         commit=True,
     )
 
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, ua.id),
     )
@@ -270,6 +278,38 @@ def test_code_patch_accept_returns_general_shape(api_client, db, cross_space_pai
     js = r.json()
     assert js.get("result_type") == "code_patch_apply"
     assert js.get("result", {}).get("updated_paths") == ["a.txt"]
+    assert js.get("proposal", {}).get("id") == prop.id
+
+
+def test_policy_change_accept_returns_policy_version_shape(api_client, db, cross_space_pair):
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    prop = factories.create_test_proposal(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        proposal_type="policy_change",
+        title="Require review",
+        payload_json={
+            "domain": "memory",
+            "policy_key": "memory.require_review",
+            "policy_version": 2,
+            "rule_json": {"requires_review": True},
+            "enforcement_mode": "require_approval",
+        },
+        commit=True,
+    )
+
+    r = cross_space_pair["client_a"].post(
+        f"/api/v1/proposals/{prop.id}/accept",
+        params=_params(a, ua.id),
+    )
+
+    assert r.status_code == 200, r.text
+    js = r.json()
+    assert js.get("result_type") == "policy_version"
+    assert js.get("result", {}).get("policy_id")
+    assert js.get("result", {}).get("policy_version") == 2
     assert js.get("proposal", {}).get("id") == prop.id
 
 
@@ -303,11 +343,11 @@ def test_double_accept_code_patch_does_not_reapply(api_client, db, cross_space_p
         },
         commit=True,
     )
-    r1 = api_client.post(f"/api/v1/proposals/{prop.id}/accept", params=_params(a, ua.id))
+    r1 = cross_space_pair["client_a"].post(f"/api/v1/proposals/{prop.id}/accept", params=_params(a, ua.id))
     assert r1.status_code == 200
     assert (disk / "b.txt").read_text(encoding="utf-8") == "y"
 
-    r2 = api_client.post(f"/api/v1/proposals/{prop.id}/accept", params=_params(a, ua.id))
+    r2 = cross_space_pair["client_a"].post(f"/api/v1/proposals/{prop.id}/accept", params=_params(a, ua.id))
     assert r2.status_code == 404
     _assert_error_envelope(r2.json(), error="not_found")
     assert (disk / "b.txt").read_text(encoding="utf-8") == "y"
@@ -328,7 +368,7 @@ def test_unsupported_proposal_type_accept_stable_error_no_mutation(api_client, d
         proposal_type="legacy_tool_call",
         commit=True,
     )
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, ua.id),
     )
@@ -358,7 +398,7 @@ def test_list_proposals_page_shape(api_client, db, cross_space_pair):
         created_by_user_id=ua.id,
         commit=True,
     )
-    r = api_client.get("/api/v1/proposals", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].get("/api/v1/proposals", params=_params(a, ua.id))
     assert r.status_code == 200
     data = r.json()
     assert set(data.keys()) >= {"items", "total", "limit", "offset"}
@@ -377,7 +417,7 @@ def test_list_proposals_default_returns_pending_only(api_client, db, cross_space
     p_rejected = factories.create_test_proposal(
         db, space_id=a, created_by_user_id=ua.id, status="rejected", title="rej", commit=True
     )
-    r = api_client.get("/api/v1/proposals", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].get("/api/v1/proposals", params=_params(a, ua.id))
     assert r.status_code == 200
     data = r.json()
     ids = {x["id"] for x in data["items"]}
@@ -399,15 +439,15 @@ def test_list_proposals_explicit_status_filters(api_client, db, cross_space_pair
     p_rejected = factories.create_test_proposal(
         db, space_id=a, created_by_user_id=ua.id, status="rejected", title="p3", commit=True
     )
-    rp = api_client.get("/api/v1/proposals", params={**_params(a, ua.id), "status": "pending"})
+    rp = cross_space_pair["client_a"].get("/api/v1/proposals", params={**_params(a, ua.id), "status": "pending"})
     assert rp.status_code == 200
     assert p_pending.id in {x["id"] for x in rp.json()["items"]}
 
-    ra = api_client.get("/api/v1/proposals", params={**_params(a, ua.id), "status": "accepted"})
+    ra = cross_space_pair["client_a"].get("/api/v1/proposals", params={**_params(a, ua.id), "status": "accepted"})
     assert ra.status_code == 200
     assert p_accepted.id in {x["id"] for x in ra.json()["items"]}
 
-    rr = api_client.get("/api/v1/proposals", params={**_params(a, ua.id), "status": "rejected"})
+    rr = cross_space_pair["client_a"].get("/api/v1/proposals", params={**_params(a, ua.id), "status": "rejected"})
     assert rr.status_code == 200
     assert p_rejected.id in {x["id"] for x in rr.json()["items"]}
 
@@ -421,7 +461,7 @@ def test_list_proposals_status_all_includes_decided(api_client, db, cross_space_
     p_accepted = factories.create_test_proposal(
         db, space_id=a, created_by_user_id=ua.id, status="accepted", title="b", commit=True
     )
-    r = api_client.get("/api/v1/proposals", params={**_params(a, ua.id), "status": "all"})
+    r = cross_space_pair["client_a"].get("/api/v1/proposals", params={**_params(a, ua.id), "status": "all"})
     assert r.status_code == 200
     ids = {x["id"] for x in r.json()["items"]}
     assert p_pending.id in ids and p_accepted.id in ids
@@ -434,7 +474,7 @@ def test_list_proposals_excludes_other_space(api_client, db, cross_space_pair):
     ub = cross_space_pair["user_b"]
     factories.create_test_proposal(db, space_id=b, created_by_user_id=ub.id, commit=True)
     p_a = factories.create_test_proposal(db, space_id=a, created_by_user_id=ua.id, commit=True)
-    r = api_client.get("/api/v1/proposals", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].get("/api/v1/proposals", params=_params(a, ua.id))
     assert r.status_code == 200
     ids = {x["id"] for x in r.json()["items"]}
     assert p_a.id in ids
@@ -444,7 +484,7 @@ def test_list_proposals_excludes_other_space(api_client, db, cross_space_pair):
 def test_list_proposals_invalid_status_returns_422(api_client, db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
-    r = api_client.get("/api/v1/proposals", params={**_params(a, ua.id), "status": "not_a_status"})
+    r = cross_space_pair["client_a"].get("/api/v1/proposals", params={**_params(a, ua.id), "status": "not_a_status"})
     assert r.status_code == 422
     body = r.json()
     assert body.get("error") == "validation_error"
@@ -482,7 +522,7 @@ def test_get_proposal_detail_general_shape(api_client, db, cross_space_pair):
         },
         commit=True,
     )
-    r = api_client.get(f"/api/v1/proposals/{prop.id}", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].get(f"/api/v1/proposals/{prop.id}", params=_params(a, ua.id))
     assert r.status_code == 200
     out = r.json()
     assert out.get("id") == prop.id

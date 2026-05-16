@@ -7,7 +7,8 @@ from app.models import AgentVersion
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def test_get_run_cross_space_returns_404(api_client, db, cross_space_pair):
@@ -19,7 +20,7 @@ def test_get_run_cross_space_returns_404(api_client, db, cross_space_pair):
     run = factories.create_test_run(
         db, space_id=a, user_id=ua.id, agent=agent, commit=True,
     )
-    r = api_client.get(
+    r = cross_space_pair["client_b"].get(
         f"/api/v1/runs/{run.id}",
         params=_params(b, ub.id),
     )
@@ -45,7 +46,7 @@ def test_list_run_activities_cross_space_returns_404(api_client, db, cross_space
         source_run_id=run.id,
         commit=True,
     )
-    r = api_client.get(
+    r = cross_space_pair["client_b"].get(
         f"/api/v1/runs/{run.id}/activities",
         params=_params(b, ub.id),
     )
@@ -62,7 +63,7 @@ def test_list_run_artifacts_cross_space_returns_404(api_client, db, cross_space_
         db, space_id=a, user_id=ua.id, agent=agent, commit=True,
     )
     factories.create_test_artifact(db, space_id=a, run_id=run.id, commit=True)
-    r = api_client.get(
+    r = cross_space_pair["client_b"].get(
         f"/api/v1/runs/{run.id}/artifacts",
         params=_params(b, ub.id),
     )
@@ -85,7 +86,7 @@ def test_list_run_proposals_cross_space_returns_404(api_client, db, cross_space_
         created_by_user_id=ua.id,
         commit=True,
     )
-    r = api_client.get(
+    r = cross_space_pair["client_b"].get(
         f"/api/v1/runs/{run.id}/proposals",
         params=_params(b, ub.id),
     )
@@ -99,7 +100,7 @@ def test_run_detail_success_has_stable_fields(api_client, db, cross_space_pair):
     run = factories.create_test_run(
         db, space_id=a, user_id=ua.id, agent=agent, commit=True,
     )
-    r = api_client.get(f"/api/v1/runs/{run.id}", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].get(f"/api/v1/runs/{run.id}", params=_params(a, ua.id))
     assert r.status_code == 200
     out = r.json()
     for key in (
@@ -124,14 +125,14 @@ def test_terminal_run_re_execute_returns_409(api_client, db, cross_space_pair):
     run = factories.create_test_run(
         db, space_id=a, user_id=ua.id, agent=agent, commit=True,
     )
-    ex1 = api_client.post(
+    ex1 = cross_space_pair["client_a"].post(
         f"/api/v1/runs/{run.id}/execute",
         params=_params(a, ua.id),
     )
     assert ex1.status_code == 200
     assert ex1.json().get("status") in ("succeeded", "failed")
 
-    ex2 = api_client.post(
+    ex2 = cross_space_pair["client_a"].post(
         f"/api/v1/runs/{run.id}/execute",
         params=_params(a, ua.id),
     )
@@ -139,29 +140,31 @@ def test_terminal_run_re_execute_returns_409(api_client, db, cross_space_pair):
     assert ex2.json().get("error") == "conflict"
 
 
-def test_run_execution_surfaces_audit_activity_types(api_client, db, cross_space_pair):
+def test_run_execution_surfaces_run_steps(api_client, db, cross_space_pair):
+    """Execution replay spine is now RunSteps, not ActivityRecord execution events."""
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(
         db, space_id=a, user_id=ua.id, agent=agent, commit=True,
     )
-    ex = api_client.post(
+    ex = cross_space_pair["client_a"].post(
         f"/api/v1/runs/{run.id}/execute",
         params=_params(a, ua.id),
     )
     assert ex.status_code == 200
 
-    r = api_client.get(
-        f"/api/v1/runs/{run.id}/activities",
+    r = cross_space_pair["client_a"].get(
+        f"/api/v1/runs/{run.id}/steps",
         params=_params(a, ua.id),
     )
     assert r.status_code == 200
     page = r.json()
     assert set(page.keys()) >= {"items", "total", "limit", "offset"}
-    types = {it.get("activity_type") for it in page["items"]}
-    assert "run.execution.started" in types
-    assert ("run.execution.succeeded" in types) or ("run.execution.failed" in types)
+    assert page["total"] >= 1
+    step_types = {it.get("step_type") for it in page["items"]}
+    assert "queued" in step_types
+    assert ("completed" in step_types) or ("failed" in step_types)
 
 
 def test_execute_with_disabled_runtime_adapter_marks_run_failed(api_client, db, cross_space_pair):
@@ -196,7 +199,7 @@ def test_execute_with_disabled_runtime_adapter_marks_run_failed(api_client, db, 
     run = factories.create_test_run(
         db, space_id=a, user_id=ua.id, agent=agent, commit=True,
     )
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         f"/api/v1/runs/{run.id}/execute",
         params=_params(a, ua.id),
     )

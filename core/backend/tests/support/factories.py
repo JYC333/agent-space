@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session as DBSession
 from ulid import ULID
 
 from app.models import (
+    Actor,
     ActivityRecord,
     Agent,
     AgentVersion,
@@ -34,8 +35,10 @@ from app.models import (
     Policy,
     Proposal,
     Run,
+    RunStep,
     RuntimeAdapter,
     Space,
+    SpaceMembership,
     User,
     Workspace,
 )
@@ -101,6 +104,13 @@ def create_test_user(
         display_name=display_name or uid,
     )
     db.add(row)
+    db.add(SpaceMembership(
+        id=_new_id(),
+        space_id=space_id,
+        user_id=uid,
+        role="owner",
+        status="active",
+    ))
     return _finish(db, row, commit=commit)
 
 
@@ -232,6 +242,12 @@ def create_test_policy(
     space_id: str,
     name: str = "test-policy",
     domain: str = "runtime",
+    policy_key: str | None = None,
+    status: str = "active",
+    enforcement_mode: str | None = None,
+    priority: int = 0,
+    rule_json: dict[str, Any] | None = None,
+    applies_to_json: dict[str, Any] | None = None,
     policy_json: dict[str, Any] | None = None,
     enabled: bool = True,
     commit: bool = False,
@@ -241,6 +257,12 @@ def create_test_policy(
         space_id=space_id,
         name=name,
         domain=domain,
+        policy_key=policy_key,
+        status=status,
+        enforcement_mode=enforcement_mode,
+        priority=priority,
+        rule_json=dict(rule_json) if rule_json is not None else None,
+        applies_to_json=dict(applies_to_json) if applies_to_json is not None else None,
         policy_json=dict(policy_json or {}),
         enabled=enabled,
     )
@@ -468,6 +490,85 @@ def create_test_memory_entry(
         agent_id=agent_id,
         workspace_id=workspace_id,
         namespace=namespace,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_actor(
+    db: DBSession,
+    *,
+    actor_type: str,
+    space_id: str | None = None,
+    user_id: str | None = None,
+    agent_id: str | None = None,
+    service_name: str | None = None,
+    display_name: str | None = None,
+    status: str = "active",
+    commit: bool = False,
+) -> Actor:
+    """Minimal Actor row.  Caller is responsible for satisfying actor_type invariants:
+    - actor_type='user'  → user_id required, agent_id None
+    - actor_type='agent' → agent_id required, user_id None
+    - actor_type in (system/service/job/…) → user_id None, agent_id None
+    """
+    row = Actor(
+        id=_new_id(),
+        actor_type=actor_type,
+        space_id=space_id,
+        user_id=user_id,
+        agent_id=agent_id,
+        service_name=service_name,
+        display_name=display_name or actor_type,
+        status=status,
+        metadata_json={},
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_run_step(
+    db: DBSession,
+    *,
+    run: Run,
+    actor_id: str,
+    step_type: str = "queued",
+    status: str = "succeeded",
+    title: str | None = None,
+    step_index: int | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    metadata_json: dict[str, Any] | None = None,
+    commit: bool = False,
+) -> RunStep:
+    """Minimal RunStep row for tests.  step_index auto-computed if omitted."""
+    from sqlalchemy import func as _func
+
+    if step_index is None:
+        current_max = (
+            db.query(_func.max(RunStep.step_index))
+            .filter(RunStep.run_id == run.id)
+            .scalar()
+        )
+        step_index = 0 if current_max is None else current_max + 1
+
+    now = _utcnow()
+    row = RunStep(
+        id=_new_id(),
+        space_id=run.space_id,
+        run_id=run.id,
+        actor_id=actor_id,
+        step_index=step_index,
+        step_type=step_type,
+        status=status,
+        title=title or step_type,
+        started_at=now,
+        ended_at=now if status in ("succeeded", "failed", "cancelled", "skipped") else None,
+        error_type=error_type,
+        error_message=error_message,
+        metadata_json=dict(metadata_json or {}),
+        created_at=now,
+        updated_at=now,
     )
     db.add(row)
     return _finish(db, row, commit=commit)

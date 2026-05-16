@@ -62,6 +62,8 @@ class ApplyResult:
     memory: Optional[MemoryEntry] = None
     policy: Optional[Policy] = None
     updated_paths: Optional[list[str]] = None
+    code_patch_files: Optional[list[dict[str, Any]]] = None
+    code_patch_transaction: Optional[Any] = None
 
 
 def _prov_row_key(pl: ProvenanceLink) -> tuple[str, str, str | None]:
@@ -131,12 +133,12 @@ class MemoryProposalApplier:
         )
 
         writer = MemoryInternalWriter(self._db)
-        mem = writer.create(
+        mem = writer.create_from_approved_proposal(
+            proposal,
             mem_data,
             acting_user_id=user_id,
             created_by=str(proposal.created_by_user_id or user_id),
             approved_by=str(user_id),
-            created_from_proposal_id=proposal.id,
             source_trust=dom_trust,
             source_activity_id=act_id,
         )
@@ -233,19 +235,19 @@ class MemoryProposalApplier:
         dom_trust = dominant_source_trust(entries) or old_mem.source_trust
         act_id = first_activity_id(entries) or old_mem.source_activity_id
 
-        new_mem = writer.create(
+        new_mem = writer.create_from_approved_proposal(
+            proposal,
             mem_data,
             acting_user_id=user_id,
             created_by=str(proposal.created_by_user_id or user_id),
             approved_by=str(user_id),
-            created_from_proposal_id=proposal.id,
             root_memory_id=root_id,
             supersedes_memory_id=old_mem.id,
             source_trust=dom_trust,
             source_activity_id=act_id,
         )
 
-        writer.mark_status(old_mem.id, proposal.space_id, "superseded")
+        writer.mark_status_from_approved_proposal(proposal, old_mem.id, "superseded")
 
         copy_provenance_to_memory(
             self._db,
@@ -317,7 +319,7 @@ class MemoryProposalApplier:
                 f"target memory {target_id!r} not found or not active in space {proposal.space_id!r}"
             )
 
-        writer.mark_status(mem.id, proposal.space_id, "archived")
+        writer.mark_status_from_approved_proposal(proposal, mem.id, "archived")
         self._db.refresh(mem)
 
         entries = merge_distinct_provenance_entries(
@@ -368,7 +370,7 @@ class PolicyProposalApplier:
 
         target_id = payload.get("target_policy_id")
         if target_id:
-            old = writer.mark_superseded(target_id, proposal.space_id)
+            old = writer.mark_superseded(target_id, proposal.space_id, commit=False)
             if old is not None:
                 superseded_id = old.id
 
@@ -392,6 +394,7 @@ class PolicyProposalApplier:
             applies_to_json=payload.get("applies_to_json"),
             supersedes_policy_id=superseded_id or payload.get("supersedes_policy_id"),
             created_from_proposal_id=proposal.id,
+            commit=False,
         )
 
         entries = merge_distinct_provenance_entries(
@@ -554,7 +557,7 @@ class ProposalApplyService:
                 raise ProposalApplyError("invalid patch payload")
 
             try:
-                paths = apply_code_patch_payload(
+                patch_result = apply_code_patch_payload(
                     self._db,
                     workspace=ws,
                     patch=patch,
@@ -568,7 +571,21 @@ class ProposalApplyService:
             except Exception as exc:  # noqa: BLE001
                 raise ProposalApplyError(str(exc)) from exc
 
-            return ApplyResult(proposal=proposal, updated_paths=paths)
+            files = [
+                {
+                    "path": f.path,
+                    "existed_before": f.existed_before,
+                    "preimage_sha256": f.preimage_sha256,
+                    "postimage_sha256": f.postimage_sha256,
+                }
+                for f in patch_result.files
+            ]
+            return ApplyResult(
+                proposal=proposal,
+                updated_paths=patch_result.paths,
+                code_patch_files=files,
+                code_patch_transaction=patch_result.transaction,
+            )
 
         raise ProposalApplyError(f"unhandled proposal type: {ptype!r}")
 

@@ -83,7 +83,7 @@ export default function LoginPage() {
         {/* Sign in button */}
         {googleAuthAvailable ? (
           <button
-            onClick={() => authApi.googleLogin()}
+            onClick={() => authApi.googleLogin(params.get('redirect') ?? undefined)}
             className="w-full flex items-center justify-center gap-3 h-10 px-4 rounded-lg border border-border bg-card text-foreground text-sm font-medium hover:bg-accent transition-colors"
           >
             <GoogleIcon />

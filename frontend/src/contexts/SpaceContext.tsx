@@ -65,6 +65,10 @@ export function SpaceProvider({ children }: { children: ReactNode }) {
   }, [spaceId, userId, ready])
 
   function setSpace(newSpaceId: string, newUserId?: string) {
+    const effectiveUserId = newUserId ?? userId
+    // Update the API client synchronously so child effects that fire in the same
+    // React commit (before the parent context effect) use the new space ID.
+    setSpaceContext(newSpaceId, effectiveUserId)
     setSpaceIdState(newSpaceId)
     if (newUserId) setUserIdState(newUserId)
   }

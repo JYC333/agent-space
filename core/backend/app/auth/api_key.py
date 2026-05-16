@@ -8,7 +8,8 @@ Header:      Authorization: Bearer ask_<...>
 
 Behaviour:
   - Token present → validate against api_keys table → return (space_id, user_id)
-  - Token absent → fall back to query params or configured defaults
+  - Token absent → validate the session cookie and selected space membership
+  - No valid token/session → 401
 
 Usage in route:
     ids: tuple[str, str] = Depends(get_identity)
@@ -24,9 +25,9 @@ from fastapi import Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from ulid import ULID
 
-from ..config import settings
 from ..db import get_db
 from ..feature_gates import API_KEYS_DB_PERSISTED, feature_not_implemented
+from ..models import SpaceMembership
 from ..param_binding import wire_header
 
 
@@ -45,6 +46,20 @@ def generate_key() -> str:
 
 def hash_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+def _require_active_membership(db: Session, *, space_id: str, user_id: str) -> None:
+    membership = (
+        db.query(SpaceMembership)
+        .filter(
+            SpaceMembership.space_id == space_id,
+            SpaceMembership.user_id == user_id,
+            SpaceMembership.status == "active",
+        )
+        .first()
+    )
+    if membership is None:
+        raise HTTPException(status_code=403, detail="Not a member of this space")
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +115,6 @@ def get_identity(
     request: Request,
     authorization: Optional[str] = wire_header(None, wire_name="Authorization"),
     space_id: Optional[str] = Query(None),
-    user_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ) -> tuple[str, str]:
     """
@@ -109,8 +123,8 @@ def get_identity(
     Priority:
       1. Valid Bearer token  → space_id/user_id from the API key record
       2. Valid session cookie → user_id from session; space_id from query param or user default
-      3. No auth, dev mode   → query params or configured defaults
-          """
+      3. No auth          → 401
+    """
     if authorization and authorization.startswith("Bearer "):
         raw = authorization[7:].strip()
         key = ApiKeyService(db).validate(raw)
@@ -123,10 +137,10 @@ def get_identity(
         if session:
             user = db.query(User).filter(User.id == session.user_id).first()
             if user:
-                effective_space = space_id or user.default_space_id or settings.default_space_id
+                effective_space = space_id or user.default_space_id
+                if not effective_space:
+                    raise HTTPException(status_code=403, detail="No active space selected")
+                _require_active_membership(db, space_id=effective_space, user_id=user.id)
                 return (effective_space, user.id)
 
-    return (
-        space_id or settings.default_space_id,
-        user_id or settings.default_user_id,
-    )
+    raise HTTPException(status_code=401, detail="Authentication required")

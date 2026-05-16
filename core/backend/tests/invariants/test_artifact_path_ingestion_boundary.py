@@ -128,8 +128,8 @@ def test_cross_space_run_access_unchanged(api_client, db, cross_space_pair, tmp_
     v.runtime_policy_json = {**dict(v.runtime_policy_json or {}), "risk_level": "high"}
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     db.commit()
-    r = api_client.get(
+    r = cross_space_pair["client_b"].get(
         f"/api/v1/runs/{run.id}/artifacts",
-        params={"space_id": b, "user_id": ub.id},
+        params={"space_id": b},
     )
     assert r.status_code == 404

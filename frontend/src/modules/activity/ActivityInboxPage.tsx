@@ -15,13 +15,15 @@ function fmt(dt: string) { return new Date(dt).toLocaleString() }
 const STATUS_FILTERS: ActivityStatus[] = ['raw', 'processed', 'proposals_generated', 'archived']
 
 const SOURCE_COLORS: Record<ActivitySourceType, string> = {
-  user_input:    'default',
-  imported_chat: 'secondary',
-  web_capture:   'secondary',
-  file_import:   'secondary',
-  agent_run:     'muted',
-  task_log:      'muted',
-  manual:        'muted',
+  user_capture:    'default',
+  chat_message:    'secondary',
+  external_chat:   'secondary',
+  web_capture:     'secondary',
+  file_import:     'secondary',
+  run_event:       'muted',
+  workspace_event: 'muted',
+  system_event:    'muted',
+  external_source: 'secondary',
 }
 
 export default function ActivityInboxPage() {

@@ -2,7 +2,25 @@ from __future__ import annotations
 """
 SandboxManager — multi-level isolated execution environments for agent runs.
 
-Sandbox levels (risk-based):
+COMPATIBILITY / MIGRATION TARGET ONLY (M4)
+===========================================
+This module (``app.workspace.sandbox_manager``) is the legacy CLI sandbox
+manager.  It is used only by ``app.agents`` (the legacy CLI runner stack) and
+Docker-based CLI adapter routes.
+
+Do NOT use this module as the sandbox/path boundary for new runtime adapters.
+The canonical sandbox and path policy for new runtime execution is:
+
+  Canonical sandbox manager: ``app.runs.sandbox_manager`` (execution_workspace)
+  Canonical worktree manager: ``app.runs.worktree_manager`` (isolated_run_workdir)
+  Canonical path policy: ``app.workspace.path_policy.PathPolicy``
+
+``RunExecutionService`` uses ``app.runs.sandbox_manager`` exclusively.
+New runtime adapters in ``app.runtimes`` must not call this module directly.
+
+---
+
+SandboxManager sandbox levels (risk-based):
   Level 0  dry_run          — no execution; read-only context assembly only
   Level 1  worktree         — git worktree + local executor (DEFAULT)
   Level 2  one_shot_docker  — git worktree + one-shot Docker container (high-risk only)

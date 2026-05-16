@@ -7,7 +7,8 @@ from tests.support import factories
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def _isolate_crypto_home(monkeypatch, tmp_path):
@@ -23,7 +24,7 @@ def test_providers_list_shape(api_client, db, cross_space_pair, tmp_path, monkey
     _isolate_crypto_home(monkeypatch, tmp_path)
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
-    r = api_client.get("/api/v1/providers", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].get("/api/v1/providers", params=_params(a, ua.id))
     assert r.status_code == 200
     assert isinstance(r.json(), list)
 
@@ -31,7 +32,7 @@ def test_providers_list_shape(api_client, db, cross_space_pair, tmp_path, monkey
 def test_cli_adapters_list_shape(api_client, db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
-    r = api_client.get("/api/v1/cli-adapters", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].get("/api/v1/cli-adapters", params=_params(a, ua.id))
     assert r.status_code == 200
     assert isinstance(r.json(), list)
 
@@ -47,7 +48,7 @@ def test_provider_update_does_not_mutate_runtime_adapter(api_client, db, cross_s
         adapter_type="echo",
         commit=True,
     )
-    create = api_client.post(
+    create = cross_space_pair["client_a"].post(
         "/api/v1/providers",
         params=_params(a, ua.id),
         json={
@@ -61,12 +62,12 @@ def test_provider_update_does_not_mutate_runtime_adapter(api_client, db, cross_s
     assert create.status_code == 201
     prov_id = create.json()["id"]
 
-    adapters_before = api_client.get("/api/v1/cli-adapters", params=_params(a, ua.id)).json()
+    adapters_before = cross_space_pair["client_a"].get("/api/v1/cli-adapters", params=_params(a, ua.id)).json()
     mine = [x for x in adapters_before if x["id"] == rt.id]
     assert len(mine) == 1
     assert mine[0]["display_name"] == "Adapter Original"
 
-    up = api_client.put(
+    up = cross_space_pair["client_a"].put(
         f"/api/v1/providers/{prov_id}",
         params=_params(a, ua.id),
         json={"name": "LLM Renamed"},
@@ -74,7 +75,7 @@ def test_provider_update_does_not_mutate_runtime_adapter(api_client, db, cross_s
     assert up.status_code == 200
     assert up.json()["name"] == "LLM Renamed"
 
-    adapters_after = api_client.get("/api/v1/cli-adapters", params=_params(a, ua.id)).json()
+    adapters_after = cross_space_pair["client_a"].get("/api/v1/cli-adapters", params=_params(a, ua.id)).json()
     mine2 = [x for x in adapters_after if x["id"] == rt.id][0]
     assert mine2["display_name"] == "Adapter Original"
 
@@ -84,7 +85,7 @@ def test_cli_adapter_update_does_not_mutate_provider(api_client, db, cross_space
     db.commit()
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
-    create = api_client.post(
+    create = cross_space_pair["client_a"].post(
         "/api/v1/providers",
         params=_params(a, ua.id),
         json={
@@ -105,14 +106,14 @@ def test_cli_adapter_update_does_not_mutate_provider(api_client, db, cross_space
         adapter_type="echo",
         commit=True,
     )
-    patch = api_client.patch(
+    patch = cross_space_pair["client_a"].patch(
         f"/api/v1/cli-adapters/{rt.id}",
         params=_params(a, ua.id),
         json={"display_name": "RT Renamed", "notes": "n1"},
     )
     assert patch.status_code == 200
 
-    prov_r = api_client.get(
+    prov_r = cross_space_pair["client_a"].get(
         f"/api/v1/providers/{prov['id']}",
         params=_params(a, ua.id),
     )
@@ -127,7 +128,7 @@ def test_get_provider_other_space_returns_404(api_client, db, cross_space_pair, 
     b = cross_space_pair["space_b_id"]
     ua = cross_space_pair["user_a"]
     ub = cross_space_pair["user_b"]
-    create = api_client.post(
+    create = cross_space_pair["client_a"].post(
         "/api/v1/providers",
         params=_params(a, ua.id),
         json={
@@ -140,7 +141,7 @@ def test_get_provider_other_space_returns_404(api_client, db, cross_space_pair, 
     )
     assert create.status_code == 201
     pid = create.json()["id"]
-    r = api_client.get(
+    r = cross_space_pair["client_b"].get(
         f"/api/v1/providers/{pid}",
         params=_params(b, ub.id),
     )

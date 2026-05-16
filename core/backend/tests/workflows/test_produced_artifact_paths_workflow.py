@@ -13,7 +13,8 @@ from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRunti
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def _patch_roots(monkeypatch, tmp_path: Path) -> None:
@@ -53,7 +54,7 @@ def test_valid_produced_file_path_creates_managed_artifact(
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     db.commit()
 
-    ex = api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    ex = cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     assert ex.status_code == 200
     assert ex.json().get("status") == "succeeded"
 
@@ -97,7 +98,7 @@ def test_multiple_valid_produced_paths(api_client, db, cross_space_pair, tmp_pat
     )
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     db.commit()
-    api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     db.expire_all()
     arts = db.query(Artifact).filter(Artifact.run_id == run.id).order_by(Artifact.title).all()
     assert len(arts) == 2
@@ -125,7 +126,7 @@ def test_invalid_traversal_records_error_no_artifact(api_client, db, cross_space
     )
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     db.commit()
-    ex = api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    ex = cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     assert ex.status_code == 200
     body = ex.json()
     assert body.get("status") == "succeeded"
@@ -159,7 +160,7 @@ def test_missing_file_records_error(api_client, db, cross_space_pair, tmp_path, 
     )
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     db.commit()
-    ex = api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    ex = cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     assert ex.status_code == 200
     errs = (ex.json().get("output_json") or {}).get("materialization_errors") or []
     assert any("missing" in e.lower() for e in errs)
@@ -206,7 +207,7 @@ def test_produced_paths_and_proposed_changes(api_client, db, cross_space_pair, t
     )
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     db.commit()
-    ex = api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    ex = cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
     assert ex.status_code == 200
 
     db.expire_all()

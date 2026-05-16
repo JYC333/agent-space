@@ -85,17 +85,28 @@ async def _worker_loop(queue: QueueService) -> None:
 
 async def _run_job(job, queue: QueueService, sem: asyncio.Semaphore) -> None:
     """Execute one job, update its status, then release the concurrency slot."""
+    async def _append_event_aux(event_type: str, message: str, data: dict | None = None) -> None:
+        """Write auxiliary JobEvent rows without poisoning terminal job state."""
+        try:
+            await queue.append_event(job.id, event_type, message, data)
+        except Exception:
+            log.exception(
+                "Auxiliary JobEvent write failed after job state update (job=%s event=%s)",
+                job.id,
+                event_type,
+            )
+
     try:
         handler = get_handler(job.job_type)
         if handler is None:
             log.error("No handler registered for job type %r (job=%s)", job.job_type, job.id)
             await queue.fail_job(job.id, f"No handler for job type: {job.job_type!r}")
-            await queue.append_event(job.id, "error", f"No handler registered for {job.job_type!r}")
+            await _append_event_aux("error", f"No handler registered for {job.job_type!r}")
             return
 
         await queue.start_job(job.id)
-        await queue.append_event(
-            job.id, "status_change",
+        await _append_event_aux(
+            "status_change",
             f"Job started by worker {WORKER_ID} (attempt {job.attempts + 1}/{job.max_attempts})",
         )
 
@@ -104,7 +115,7 @@ async def _run_job(job, queue: QueueService, sem: asyncio.Semaphore) -> None:
         result = await asyncio.get_running_loop().run_in_executor(None, handler, job)
 
         await queue.complete_job(job.id, result if isinstance(result, dict) else None)
-        await queue.append_event(job.id, "status_change", "Job completed successfully")
+        await _append_event_aux("status_change", "Job completed successfully")
         log.info("Job %s completed", job.id)
 
     except asyncio.CancelledError:
@@ -113,6 +124,6 @@ async def _run_job(job, queue: QueueService, sem: asyncio.Semaphore) -> None:
     except Exception as exc:
         log.exception("Job %s (%s) raised an exception", job.id, job.job_type)
         await queue.fail_job(job.id, str(exc))
-        await queue.append_event(job.id, "error", f"Job failed: {exc}")
+        await _append_event_aux("error", f"Job failed: {exc}")
     finally:
         sem.release()

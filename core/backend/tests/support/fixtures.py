@@ -76,22 +76,46 @@ def fake_provider():
 
 
 @pytest.fixture
-def cross_space_pair(db):
-    """Two distinct spaces each with a user — for isolation / ACL tests."""
+def cross_space_pair(db, client):
+    """Two distinct spaces each with a user — for isolation / ACL tests.
+
+    ``client_a`` and ``client_b`` are TestClient instances with session cookies
+    pre-set for each space so tests can call them directly without per-request
+    ``cookies=`` arguments (which starlette deprecated).
+    """
+    from app.auth.session import SESSION_COOKIE, UserSessionService
+    from app.main import app as _app
+    from starlette.testclient import TestClient
+
     a = str(ULID())
     b = str(ULID())
     factories.create_test_space(db, space_id=a, name="Iso A", space_type="team")
     factories.create_test_space(db, space_id=b, name="Iso B", space_type="team")
+    # create_test_user already inserts an active owner SpaceMembership for (space_id, user).
     ua = factories.create_test_user(db, space_id=a, display_name="User A")
     ub = factories.create_test_user(db, space_id=b, display_name="User B")
+    session_svc = UserSessionService(db)
+    _, raw_a = session_svc.create(ua.id)
+    _, raw_b = session_svc.create(ub.id)
     # Must commit: TestClient runs in another thread with its own DB connection.
     # An open write transaction here would block inserts (sqlite "database is locked").
     db.commit()
+
+    # Create per-identity clients with cookies set at construction time (no
+    # lifespan call — the main ``client`` fixture already ran startup).
+    # app.dependency_overrides is global so these clients use the test DB.
+    client_a = TestClient(_app, cookies={SESSION_COOKIE: raw_a}, raise_server_exceptions=True)
+    client_b = TestClient(_app, cookies={SESSION_COOKIE: raw_b}, raise_server_exceptions=True)
+
     return {
         "space_a_id": a,
         "space_b_id": b,
         "user_a": ua,
         "user_b": ub,
+        "cookies_a": {SESSION_COOKIE: raw_a},
+        "cookies_b": {SESSION_COOKIE: raw_b},
+        "client_a": client_a,
+        "client_b": client_b,
     }
 
 

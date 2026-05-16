@@ -66,14 +66,39 @@ async def lifespan(app: FastAPI):
     init_queue(queue)
     worker_task = await start_worker(queue)
 
+    # ── Backup scheduler ──────────────────────────────────────────────────────
+    _backup_scheduler = None
+    if settings.backup_enabled:
+        from .backups.service import BackupService
+        from .backups.scheduler import BackupScheduler, set_scheduler
+        _backup_svc = BackupService(
+            data_root=Path(settings.agent_space_home),
+            backup_root=Path(settings.backup_root),
+            interval_hours=settings.backup_interval_hours,
+            retention_count=settings.backup_retention_count,
+            include_logs=settings.backup_include_logs,
+        )
+        _backup_scheduler = BackupScheduler(
+            service=_backup_svc,
+            interval_hours=settings.backup_interval_hours,
+            run_on_start=settings.backup_on_startup,
+        )
+        set_scheduler(_backup_scheduler)
+        await _backup_scheduler.start()
+
     yield
 
-    # Graceful shutdown: cancel the worker and wait for it to stop
+    # ── Graceful shutdown ─────────────────────────────────────────────────────
     worker_task.cancel()
     try:
         await worker_task
     except asyncio.CancelledError:
         pass
+
+    if _backup_scheduler is not None:
+        from .backups.scheduler import set_scheduler
+        await _backup_scheduler.stop()
+        set_scheduler(None)
 
 
 app = FastAPI(

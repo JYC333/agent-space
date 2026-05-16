@@ -32,9 +32,13 @@ log = logging.getLogger("deployer")
 SCRIPT_DIR = Path(__file__).parent / "scripts"
 
 JOB_SCRIPTS: dict[str, Path] = {
-    # Self-evolution jobs
-    "init_agent_space_worktree":      SCRIPT_DIR / "init_agent_space_worktree.sh",
-    "create_system_worktree":          SCRIPT_DIR / "create_system_worktree.sh",
+    # Core deployment jobs (CoreJobType in protocol.py)
+    "rebuild_agent_space":          SCRIPT_DIR / "rebuild.sh",
+    "restart_agent_space":          SCRIPT_DIR / "restart.sh",
+    "health_check":                 SCRIPT_DIR / "health_check.sh",
+    # Self-evolution jobs (SelfEvolutionJobType in protocol.py)
+    "init_agent_space_worktree":    SCRIPT_DIR / "init_agent_space_worktree.sh",
+    "create_system_worktree":       SCRIPT_DIR / "create_system_worktree.sh",
     "collect_system_diff":          SCRIPT_DIR / "collect_system_diff.sh",
     "run_system_tests":             SCRIPT_DIR / "run_system_tests.sh",
     "run_test_deploy":              SCRIPT_DIR / "run_test_deploy.sh",

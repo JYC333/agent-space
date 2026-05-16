@@ -17,14 +17,14 @@ def test_memory_consolidation_handler_registered():
 def test_post_memory_consolidation_run_returns_run_summary(api_client, db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
-    api_client.post(
+    cross_space_pair["client_a"].post(
         "/api/v1/activity",
-        params={"space_id": a, "user_id": ua.id},
+        params={"space_id": a},
         json={"source_type": "chat_message", "content": "hello consolidation", "title": "t"},
     )
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         "/api/v1/memory/consolidation/run",
-        params={"space_id": a, "user_id": ua.id},
+        params={"space_id": a},
         json={"batch_limit": 20},
     )
     assert r.status_code == 200
@@ -37,14 +37,14 @@ def test_post_memory_consolidation_run_returns_run_summary(api_client, db, cross
 def test_post_activity_consolidate_returns_proposal_list(api_client, db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
-    aid = api_client.post(
+    aid = cross_space_pair["client_a"].post(
         "/api/v1/activity",
-        params={"space_id": a, "user_id": ua.id},
+        params={"space_id": a},
         json={"source_type": "user_input", "content": "x", "title": "y"},
     ).json()["id"]
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         f"/api/v1/activity/{aid}/consolidate",
-        params={"space_id": a, "user_id": ua.id},
+        params={"space_id": a},
     )
     assert r.status_code == 200
     data = r.json()

@@ -9,7 +9,8 @@ from app.providers.models import ChatResponse
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def _isolate_crypto_home(monkeypatch, tmp_path):
@@ -54,7 +55,7 @@ def test_provider_chat_uses_test_db_session(api_client, db, cross_space_pair, tm
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
     db.commit()
-    create = api_client.post(
+    create = cross_space_pair["client_a"].post(
         "/api/v1/providers",
         params=_params(a, ua.id),
         json={
@@ -70,7 +71,7 @@ def test_provider_chat_uses_test_db_session(api_client, db, cross_space_pair, tm
     db.commit()
 
     with patch("app.providers.service.registry.get", return_value=_StubAdapter()):
-        r = api_client.post(
+        r = cross_space_pair["client_a"].post(
             "/api/v1/providers/chat",
             params=_params(a, ua.id),
             json={
@@ -92,7 +93,7 @@ def test_provider_chat_cross_space_provider_id_returns_404(api_client, db, cross
     ua = cross_space_pair["user_a"]
     ub = cross_space_pair["user_b"]
     db.commit()
-    create = api_client.post(
+    create = cross_space_pair["client_a"].post(
         "/api/v1/providers",
         params=_params(a, ua.id),
         json={
@@ -108,7 +109,7 @@ def test_provider_chat_cross_space_provider_id_returns_404(api_client, db, cross
     db.commit()
 
     with patch("app.providers.service.registry.get", return_value=_StubAdapter()):
-        r = api_client.post(
+        r = cross_space_pair["client_b"].post(
             "/api/v1/providers/chat",
             params=_params(b, ub.id),
             json={
@@ -124,7 +125,7 @@ def test_provider_test_connection_uses_test_db_session(api_client, db, cross_spa
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
     db.commit()
-    create = api_client.post(
+    create = cross_space_pair["client_a"].post(
         "/api/v1/providers",
         params=_params(a, ua.id),
         json={
@@ -140,7 +141,7 @@ def test_provider_test_connection_uses_test_db_session(api_client, db, cross_spa
     db.commit()
 
     with patch("app.providers.service.registry.get", return_value=_StubAdapter()):
-        r = api_client.post(
+        r = cross_space_pair["client_a"].post(
             f"/api/v1/providers/{pid}/test",
             params=_params(a, ua.id),
         )
@@ -154,7 +155,7 @@ def test_provider_test_connection_failure_stable_shape(api_client, db, cross_spa
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
     db.commit()
-    create = api_client.post(
+    create = cross_space_pair["client_a"].post(
         "/api/v1/providers",
         params=_params(a, ua.id),
         json={
@@ -170,7 +171,7 @@ def test_provider_test_connection_failure_stable_shape(api_client, db, cross_spa
     db.commit()
 
     with patch("app.providers.service.registry.get", return_value=_FailingAdapter()):
-        r = api_client.post(
+        r = cross_space_pair["client_a"].post(
             f"/api/v1/providers/{pid}/test",
             params=_params(a, ua.id),
         )

@@ -1,6 +1,6 @@
 // API response shapes — mirroring the backend Pydantic schemas
 
-export type SpaceType      = 'personal' | 'family' | 'team'
+export type SpaceType      = 'personal' | 'household' | 'team'
 export type MemberRole     = 'owner' | 'admin' | 'member' | 'viewer'
 export type InviteStatus   = 'pending' | 'accepted' | 'revoked' | 'expired'
 
@@ -48,7 +48,16 @@ export type MemoryStatus     = 'active' | 'archived' | 'proposed' | 'rejected' |
 export type MemoryVisibility = 'private' | 'space_shared' | 'workspace_shared' | 'restricted' | 'public_template'
 export type ProposalStatus   = 'pending' | 'accepted' | 'rejected'
 export type ActivityStatus     = 'raw' | 'processed' | 'proposals_generated' | 'archived'
-export type ActivitySourceType = 'user_input' | 'imported_chat' | 'web_capture' | 'file_import' | 'agent_run' | 'task_log' | 'manual'
+export type ActivitySourceType =
+  | 'user_capture'
+  | 'chat_message'
+  | 'external_chat'
+  | 'file_import'
+  | 'web_capture'
+  | 'run_event'
+  | 'workspace_event'
+  | 'system_event'
+  | 'external_source'
 export type SessionStatus    = 'active' | 'closed'
 /** Canonical run lifecycle (Run API). */
 export type RunLifecycleStatus =
@@ -62,7 +71,8 @@ export type RunLifecycleStatus =
 
 export type MessageRole      = 'user' | 'assistant' | 'system' | 'tool'
 export type WorkspaceStatus  = 'active' | 'archived'
-export type WorkspaceType    = 'project' | 'repo' | 'knowledge_base' | 'personal' | 'team'
+export type WorkspaceType    = 'project' | 'repo' | 'knowledge_base' | 'personal' | 'team' | 'system_core'
+export type WorkspaceCreateType = Exclude<WorkspaceType, 'system_core'>
 
 // CLI Adapters
 export type CLIAdapterId =
@@ -515,11 +525,18 @@ export interface Proposal {
 }
 
 /** `POST /proposals/{id}/accept` — result depends on `proposal_type`. */
-export interface ProposalAcceptOut {
+export type ProposalAcceptOut = {
   proposal: Proposal
-  result_type: 'memory_entry' | 'code_patch_apply'
-  /** `memory` for memory_entry; `updated_paths` for code_patch_apply. */
-  result: { memory?: Memory; updated_paths?: string[] }
+  result_type: 'memory_entry'
+  result: { memory: Memory }
+} | {
+  proposal: Proposal
+  result_type: 'code_patch_apply'
+  result: { updated_paths: string[] }
+} | {
+  proposal: Proposal
+  result_type: 'policy_version'
+  result: { policy_id: string; policy_version: number }
 }
 
 export interface AgentOut {
@@ -549,16 +566,40 @@ export interface RunCreateBody {
 
 export interface Workspace {
   id: string
-  space_id: string
-  created_by: string
+  owner_space_id: string
+  created_by_user_id: string
   name: string
+  slug: string | null
   description: string | null
-  type: WorkspaceType
+  workspace_type: WorkspaceType
+  kind: string
+  repo_url: string | null
+  root_path: string | null
+  default_branch: string | null
+  visibility: string
   status: WorkspaceStatus
-  path: string | null
+  protected: boolean
+  system_managed: boolean
+  registered_from: string | null
   metadata_json: Record<string, unknown> | null
   created_at: string
   updated_at: string
+}
+
+export interface WorkspaceCreateBody {
+  name: string
+  description?: string
+  workspace_type?: WorkspaceCreateType
+  kind?: string
+  repo_url?: string | null
+  root_path?: string | null
+  default_branch?: string | null
+  metadata_json?: Record<string, unknown> | null
+}
+
+export type WorkspaceUpdateBody = Partial<Omit<WorkspaceCreateBody, 'workspace_type'>> & {
+  status?: WorkspaceStatus
+  visibility?: string
 }
 
 export interface Capability {

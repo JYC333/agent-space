@@ -74,6 +74,10 @@ def list_registered() -> list[str]:
 def _resolve_identity(job, payload: dict) -> tuple[str, str | None]:
     space_id = payload.get("space_id") or job.space_id
     user_id = payload.get("user_id") or job.user_id
+    if not space_id:
+        raise ValueError("job payload is missing space_id")
+    if not user_id:
+        raise ValueError("job payload is missing user_id")
     return space_id, user_id
 
 
@@ -137,10 +141,6 @@ def _create_and_execute_task_run(job, payload: dict, task_id: str) -> dict:
     from ..tasks.service import TaskService
 
     space_id, user_id = _resolve_identity(job, payload)
-    if user_id is None:
-        from ..config import settings as _settings
-
-        user_id = _settings.default_user_id
     db = SessionLocal()
     try:
         body = TaskRunCreateBody(
@@ -194,10 +194,6 @@ def _create_and_execute_agent_run(job, payload: dict, agent_id: str) -> dict:
     from ..schemas import RunCreate
 
     space_id, user_id = _resolve_identity(job, payload)
-    if user_id is None:
-        from ..config import settings as _settings
-
-        user_id = _settings.default_user_id
     db = SessionLocal()
     try:
         run = RunService(db).create_run(

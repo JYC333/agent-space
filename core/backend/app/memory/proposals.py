@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, case, func, not_, or_
 from sqlalchemy.orm.attributes import flag_modified
 
+from ..db_uow import UnitOfWork
 from ..models import MemoryEntry, Policy, Proposal, Run, Workspace
 from ..param_binding import duplicate_mapper
 from ..schemas import MemoryCreate
@@ -107,7 +108,7 @@ class CodePatchProposalApplier:
             raise CodePatchApplyError("invalid patch payload")
 
         try:
-            return apply_code_patch_payload(
+            result = apply_code_patch_payload(
                 self.db,
                 workspace=ws,
                 patch=patch,
@@ -116,6 +117,7 @@ class CodePatchProposalApplier:
                 source_run_id=payload.get("source_run_id") or proposal.created_by_run_id,
                 proposal_id=proposal.id,
             )
+            return result.paths
         except CodePatchApplyError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -734,26 +736,45 @@ class ProposalService:
                 user_id=user_id,
                 accept_context="explicit_user_accept",
             )
+            proposal.status = "accepted"
+            proposal.decided_at = datetime.now(UTC)
+
+            if result.memory is not None:
+                proposal.resulting_memory_id = result.memory.id
+
+            if result.updated_paths is not None:
+                payload = proposal.payload_json or {}
+                data = dict(payload)
+                data["applied_paths"] = result.updated_paths
+                if result.code_patch_files is not None:
+                    data["applied_files"] = result.code_patch_files
+                data["applied_at"] = datetime.now(UTC).isoformat()
+                proposal.payload_json = data
+                flag_modified(proposal, "payload_json")
+
+            try:
+                UnitOfWork(self.db).commit()
+            except Exception as exc:
+                if result.code_patch_transaction is not None:
+                    try:
+                        result.code_patch_transaction.rollback()
+                    except Exception as rollback_exc:
+                        from .code_patch_apply import CodePatchPartialApplyError
+
+                        UnitOfWork(self.db).rollback()
+                        raise CodePatchPartialApplyError(
+                            "code_patch DB update failed after file writes and file rollback failed; "
+                            "proposal was not marked accepted"
+                        ) from rollback_exc
+                raise exc
         except ProposalApplyError as exc:
+            UnitOfWork(self.db).rollback()
             from fastapi import HTTPException
 
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-        proposal.status = "accepted"
-        proposal.decided_at = datetime.now(UTC)
-
-        if result.memory is not None:
-            proposal.resulting_memory_id = result.memory.id
-
-        if result.updated_paths is not None:
-            payload = proposal.payload_json or {}
-            data = dict(payload)
-            data["applied_paths"] = result.updated_paths
-            data["applied_at"] = datetime.now(UTC).isoformat()
-            proposal.payload_json = data
-            flag_modified(proposal, "payload_json")
-
-        self.db.commit()
+        except Exception:
+            UnitOfWork(self.db).rollback()
+            raise
         self.db.refresh(proposal)
 
         return ProposalAcceptResult(

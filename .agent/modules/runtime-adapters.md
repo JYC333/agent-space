@@ -48,9 +48,9 @@ The agent-space core owns the Agent layer. CLI tools and providers are pluggable
 
 Runs carry a `model_selection_mode` field:
 
-| Mode | Meaning | Milestone |
+| Mode | Meaning | Status |
 |---|---|---|
-| `cli_default` | CLI uses its own configured model/account/subscription | **MVP** |
+| `cli_default` | CLI uses its own configured model/account/subscription | Active |
 | `cli_model_override` | Agent-space passes `--model` flag to the CLI | Future |
 | `agent_space_provider` | Agent-space calls model API directly | Future |
 

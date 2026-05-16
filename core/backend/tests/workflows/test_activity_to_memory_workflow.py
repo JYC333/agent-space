@@ -9,7 +9,8 @@ from tests.support.assertions import assert_proposal_not_applied
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def test_activity_to_memory_happy_path_provenance_and_idempotent_accept(
@@ -26,7 +27,7 @@ def test_activity_to_memory_happy_path_provenance_and_idempotent_accept(
     )
     db.commit()
 
-    r_act = api_client.post(
+    r_act = cross_space_pair["client_a"].post(
         "/api/v1/activity",
         params=_params(a, ua.id),
         json={
@@ -42,7 +43,7 @@ def test_activity_to_memory_happy_path_provenance_and_idempotent_accept(
     assert row_act.space_id == a
     assert row_act.status == "raw"
 
-    r_prop = api_client.post(
+    r_prop = cross_space_pair["client_a"].post(
         f"/api/v1/activity/{act_id}/consolidate",
         params=_params(a, ua.id),
     )
@@ -71,7 +72,7 @@ def test_activity_to_memory_happy_path_provenance_and_idempotent_accept(
     assert_proposal_not_applied(db, proposal_id=pid, space_id=a)
     db.commit()
 
-    r_acc = api_client.post(
+    r_acc = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{pid}/accept",
         params=_params(a, ua.id),
     )
@@ -91,7 +92,7 @@ def test_activity_to_memory_happy_path_provenance_and_idempotent_accept(
     assert prop_done.status == "accepted"
 
     db.commit()
-    r_dup = api_client.post(
+    r_dup = cross_space_pair["client_a"].post(
         f"/api/v1/proposals/{pid}/accept",
         params=_params(a, ua.id),
     )
@@ -118,7 +119,7 @@ def test_activity_memory_workflow_blocked_for_other_space(
     ub = cross_space_pair["user_b"]
 
     act = (
-        api_client.post(
+        cross_space_pair["client_a"].post(
             "/api/v1/activity",
             params=_params(a, ua.id),
             json={"source_type": "web_capture", "content": "secret-a", "title": "t"},
@@ -126,7 +127,7 @@ def test_activity_memory_workflow_blocked_for_other_space(
         .json()["id"]
     )
     pid = (
-        api_client.post(
+        cross_space_pair["client_a"].post(
             f"/api/v1/activity/{act}/consolidate",
             params=_params(a, ua.id),
         )
@@ -134,21 +135,21 @@ def test_activity_memory_workflow_blocked_for_other_space(
     )
 
     assert (
-        api_client.patch(
+        cross_space_pair["client_b"].patch(
             f"/api/v1/activity/{act}/process",
             params=_params(b, ub.id),
         ).status_code
         == 404
     )
     assert (
-        api_client.post(
+        cross_space_pair["client_b"].post(
             f"/api/v1/activity/{act}/consolidate",
             params=_params(b, ub.id),
         ).status_code
         == 404
     )
     assert (
-        api_client.post(
+        cross_space_pair["client_b"].post(
             f"/api/v1/proposals/{pid}/accept",
             params=_params(b, ub.id),
         ).status_code

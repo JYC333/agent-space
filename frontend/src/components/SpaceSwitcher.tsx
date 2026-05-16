@@ -7,7 +7,7 @@ import type { SpaceType } from '../types/api'
 
 const TYPE_ICON: Record<SpaceType, typeof Home> = {
   personal: Home,
-  family:   Heart,
+  household: Heart,
   team:     Users,
 }
 

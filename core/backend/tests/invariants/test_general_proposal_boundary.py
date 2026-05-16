@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from sqlalchemy import func
 
 from app.config import settings
@@ -126,9 +127,9 @@ def test_accept_links_memory_entry_to_proposal(db, cross_space_pair):
     assert out.proposal.resulting_memory_id == mem.id
 
 
-def test_accept_code_patch_links_applied_paths_on_proposal(db, cross_space_pair, tmp_path, monkeypatch):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_accept_code_patch_links_applied_paths_on_proposal(db, test_user, tmp_path, monkeypatch):
+    a = test_user.space_id
+    ua = test_user
     ws_root = tmp_path / "wsroot"
     ws_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(settings, "workspace_root", str(ws_root))
@@ -158,3 +159,171 @@ def test_accept_code_patch_links_applied_paths_on_proposal(db, cross_space_pair,
     row = db.query(Proposal).filter(Proposal.id == prop.id).one()
     assert row.status == "accepted"
     assert (row.payload_json or {}).get("applied_paths") == ["z.txt"]
+    files = (row.payload_json or {}).get("applied_files") or []
+    assert files[0]["path"] == "z.txt"
+    assert files[0]["preimage_sha256"]
+    assert files[0]["postimage_sha256"]
+
+
+def test_code_patch_rejects_path_traversal_before_write(db, test_user, tmp_path, monkeypatch):
+    from app.memory.proposals import ProposalService
+
+    a = test_user.space_id
+    ua = test_user
+    ws_root = tmp_path / "wsroot"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "workspace_root", str(ws_root))
+    monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
+    monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
+
+    ws = factories.create_test_workspace(db, space_id=a, created_by_user_id=ua.id, commit=True)
+    (ws_root / ws.id).mkdir(parents=True, exist_ok=True)
+
+    prop = factories.create_test_proposal(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        proposal_type="code_patch",
+        workspace_id=ws.id,
+        payload_json={
+            "patch": {"operations": [{"op": "replace_file", "path": "../escape.txt", "content": "x"}]},
+        },
+        commit=True,
+    )
+
+    with pytest.raises(Exception) as excinfo:
+        ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
+    assert "path traversal" in str(excinfo.value)
+    assert not (ws_root / "escape.txt").exists()
+    db.refresh(prop)
+    assert prop.status == "pending"
+
+
+def test_code_patch_file_write_failure_does_not_mark_success(db, test_user, tmp_path, monkeypatch):
+    from app.memory.proposals import ProposalService
+    import app.memory.code_patch_apply as patch_mod
+
+    a = test_user.space_id
+    ua = test_user
+    ws_root = tmp_path / "wsroot"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "workspace_root", str(ws_root))
+    monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
+    monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
+
+    ws = factories.create_test_workspace(db, space_id=a, created_by_user_id=ua.id, commit=True)
+    disk = ws_root / ws.id
+    disk.mkdir(parents=True, exist_ok=True)
+    target = disk / "a.txt"
+    target.write_text("before", encoding="utf-8")
+
+    prop = factories.create_test_proposal(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        proposal_type="code_patch",
+        workspace_id=ws.id,
+        payload_json={
+            "patch": {"operations": [{"op": "replace_file", "path": "a.txt", "content": "after"}]},
+        },
+        commit=True,
+    )
+
+    def fail_replace(*args, **kwargs):
+        raise OSError("disk full at /private/path")
+
+    monkeypatch.setattr(patch_mod.os, "replace", fail_replace)
+
+    with pytest.raises(Exception) as excinfo:
+        ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
+    assert "private/path" not in str(excinfo.value)
+    assert target.read_text(encoding="utf-8") == "before"
+    db.refresh(prop)
+    assert prop.status == "pending"
+
+
+def test_code_patch_db_failure_after_file_write_rolls_back_file(db, test_user, tmp_path, monkeypatch):
+    from app.memory.proposals import ProposalService
+
+    a = test_user.space_id
+    ua = test_user
+    ws_root = tmp_path / "wsroot"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "workspace_root", str(ws_root))
+    monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
+    monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
+
+    ws = factories.create_test_workspace(db, space_id=a, created_by_user_id=ua.id, commit=True)
+    disk = ws_root / ws.id
+    disk.mkdir(parents=True, exist_ok=True)
+    target = disk / "db-fail.txt"
+    target.write_text("before", encoding="utf-8")
+
+    prop = factories.create_test_proposal(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        proposal_type="code_patch",
+        workspace_id=ws.id,
+        payload_json={
+            "patch": {"operations": [{"op": "replace_file", "path": "db-fail.txt", "content": "after"}]},
+        },
+        commit=True,
+    )
+
+    real_commit = db.commit
+    calls = {"n": 0}
+
+    def fail_once():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("commit failed")
+        return real_commit()
+
+    monkeypatch.setattr(db, "commit", fail_once)
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
+    assert target.read_text(encoding="utf-8") == "before"
+
+
+def test_code_patch_rollback_failure_reports_partial_apply(db, test_user, tmp_path, monkeypatch):
+    from app.memory.code_patch_apply import CodePatchFileTransaction, CodePatchPartialApplyError
+    from app.memory.proposals import ProposalService
+
+    a = test_user.space_id
+    ua = test_user
+    ws_root = tmp_path / "wsroot"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "workspace_root", str(ws_root))
+    monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
+    monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
+
+    ws = factories.create_test_workspace(db, space_id=a, created_by_user_id=ua.id, commit=True)
+    disk = ws_root / ws.id
+    disk.mkdir(parents=True, exist_ok=True)
+    target = disk / "partial.txt"
+    target.write_text("before", encoding="utf-8")
+
+    prop = factories.create_test_proposal(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        proposal_type="code_patch",
+        workspace_id=ws.id,
+        payload_json={
+            "patch": {"operations": [{"op": "replace_file", "path": "partial.txt", "content": "after"}]},
+        },
+        commit=True,
+    )
+
+    monkeypatch.setattr(db, "commit", lambda: (_ for _ in ()).throw(RuntimeError("commit failed")))
+    monkeypatch.setattr(
+        CodePatchFileTransaction,
+        "rollback",
+        lambda self: (_ for _ in ()).throw(CodePatchPartialApplyError("rollback failed")),
+    )
+
+    with pytest.raises(CodePatchPartialApplyError, match="file rollback failed"):
+        ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
+    assert target.read_text(encoding="utf-8") == "after"

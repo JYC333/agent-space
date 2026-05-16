@@ -12,6 +12,7 @@ reject the payload before execution).
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Optional
 
@@ -19,19 +20,34 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..agents.base import RuntimeExecutionResult
-from ..models import ActivityRecord, AgentVersion, MemoryEntry, Run
+from ..db_uow import UnitOfWork
+from ..models import AgentVersion, MemoryEntry, Run
+from .types import RuntimeExecutionResult
 from ..runtimes.base import RuntimeAdapterResult, RuntimeExecutionContext
+from ..runtimes.credentials import (
+    CredentialResolutionError,
+    resolve_runtime_credentials,
+    sanitize_runtime_config,
+)
 from ..runtimes.registry import instantiate_runtime_adapter
 from .adapter_resolution import AdapterResolutionError, resolve_runtime_adapter
 from .artifact_persistence import ArtifactPersistenceService
 from .context_snapshot_populator import ContextSnapshotPopulator
 from .produced_artifact_path_ingestion import ingest_produced_artifact_paths
+from .redaction import (
+    redact_adapter_error,
+    redact_artifact_content,
+    redact_error,
+    redact_runtime_output,
+    sanitize_runtime_metadata,
+)
 from .run_output_materialization import RunOutputMaterializer
 from .runtime_policy import compute_runtime_policy_decision
 from .sandbox_manager import execution_workspace
 from .removed_runtime_token import is_obsolete_runtime_override_token
 from .task_output_linkage import link_run_outputs_to_tasks
+
+log = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -60,35 +76,6 @@ def _assert_run_executable(run: Run) -> None:
             status_code=409,
             detail=f"Run '{run.id}' is waiting for review and cannot be executed",
         )
-
-
-def _append_run_execution_activity(
-    db: Session,
-    run: Run,
-    *,
-    activity_type: str,
-    title: str,
-    content: str,
-) -> None:
-    """Minimal durable audit trail for run execution (no HTTP / TestClient)."""
-    from ulid import ULID
-
-    now = _utcnow()
-    db.add(
-        ActivityRecord(
-            id=str(ULID()),
-            space_id=run.space_id,
-            source_run_id=run.id,
-            user_id=run.instructed_by_user_id,
-            activity_type=activity_type,
-            title=title,
-            content=(content or "")[:8000],
-            payload_json={},
-            occurred_at=now,
-            status="processed",
-            updated_at=now,
-        )
-    )
 
 
 class RunExecutionService:
@@ -176,10 +163,43 @@ class RunExecutionService:
         decision,
         simulate_failure: bool,
     ) -> RuntimeExecutionResult:
+        from .steps import (
+            complete_step,
+            create_step,
+            fail_step,
+            record_artifact_step,
+            resolve_run_actor,
+        )
+
+        try:
+            actor = resolve_run_actor(self.db, run)
+            actor_id: str | None = actor.id
+        except Exception:
+            log.warning("resolve_run_actor failed for run %s; RunStep emission skipped", run.id)
+            actor_id = None
+
+        def _emit(step_type: str, status: str, **kwargs) -> None:
+            if actor_id is None:
+                return
+            try:
+                with UnitOfWork(self.db).savepoint():
+                    create_step(
+                        self.db, run=run, actor_id=actor_id,
+                        step_type=step_type, status=status, **kwargs,
+                    )
+            except Exception:
+                log.warning(
+                    "RunStep write failed (best-effort) run=%s step=%s",
+                    run.id, step_type, exc_info=True,
+                )
+
+        _emit("queued", "succeeded", title="Run picked up for execution")
+
         if decision.required_sandbox_level == "one_shot_docker":
             return self._fail_run_terminal(
                 run=run,
                 decision=decision,
+                actor_id=actor_id,
                 error_code="sandbox_one_shot_docker_not_implemented",
                 error_text="required_sandbox_level=one_shot_docker is not implemented in this build",
                 stdout="",
@@ -194,11 +214,40 @@ class RunExecutionService:
             return self._fail_run_terminal(
                 run=run,
                 decision=decision,
+                actor_id=actor_id,
                 error_code=exc.error_code,
                 error_text=exc.message,
                 stdout="",
                 stderr="",
             )
+
+        # Resolve credentials through the canonical boundary before execution.
+        # If the adapter requires credentials and none are configured, fail early
+        # with a sanitized error — never fall back to env vars.
+        try:
+            resolved_credentials = resolve_runtime_credentials(
+                self.db,
+                runtime_adapter_row=resolved.runtime_adapter_row,
+                version=version,
+            )
+        except CredentialResolutionError as exc:
+            return self._fail_run_terminal(
+                run=run,
+                decision=decision,
+                actor_id=actor_id,
+                error_code="credentials_missing",
+                error_text=str(exc),
+                stdout="",
+                stderr="",
+            )
+
+        _emit(
+            "runtime_selected", "succeeded",
+            title=f"Runtime adapter selected: {resolved.adapter_type}",
+            runtime_adapter_id=(
+                resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
+            ),
+        )
 
         mem_before = (
             self.db.query(func.count(MemoryEntry.id))
@@ -215,14 +264,6 @@ class RunExecutionService:
         self.db.flush()
 
         user_prompt = (run.prompt or "").strip() or "(empty prompt)"
-        _append_run_execution_activity(
-            self.db,
-            run,
-            activity_type="run.execution.started",
-            title=f"Run execution started ({resolved.adapter_type})",
-            content=user_prompt,
-        )
-        self.db.flush()
 
         # Populate ContextSnapshot before execution.  Every executed Run must
         # have an auditable snapshot; failure here is a hard pre-execution guard
@@ -233,38 +274,69 @@ class RunExecutionService:
             return self._fail_run_terminal(
                 run=run,
                 decision=decision,
+                actor_id=actor_id,
                 error_code="context_snapshot_population_failed",
                 error_text=f"ContextSnapshot population failed: {exc}"[:2000],
                 stdout="",
                 stderr=str(exc)[:4000],
             )
 
+        _emit("context_prepared", "succeeded", title="Execution context prepared")
+
         adapter = instantiate_runtime_adapter(resolved.adapter_type)
+
+        adapter_step = None
+        if actor_id is not None:
+            try:
+                with UnitOfWork(self.db).savepoint():
+                    adapter_step = create_step(
+                        self.db, run=run, actor_id=actor_id,
+                        step_type="adapter_started", status="running",
+                        title=f"Adapter executing: {resolved.adapter_type}",
+                        started_at=started_wall,
+                        runtime_adapter_id=(
+                            resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
+                        ),
+                    )
+            except Exception:
+                log.warning(
+                    "RunStep write failed (best-effort) run=%s step=adapter_started",
+                    run.id, exc_info=True,
+                )
 
         raw: RuntimeAdapterResult | None = None
         path_ingest_errors: list[str] = []
+        run_id = run.id
+        run_space_id = run.space_id
+        run_mode = run.mode
         try:
+            self.db.commit()
             with execution_workspace(
-                space_id=run.space_id,
-                run_id=run.id,
+                space_id=run_space_id,
+                run_id=run_id,
                 required_sandbox_level=decision.required_sandbox_level,
             ) as workdir:
                 if decision.required_sandbox_level == "worktree":
                     run.sandbox_path = workdir
                     self.db.add(run)
-                    self.db.flush()
+                    self.db.commit()
 
+                # Sanitize merged_config: strip raw secret fields so adapter_config
+                # is safe to log and inspect.  Credentials flow via resolved_credentials.
+                safe_config = sanitize_runtime_config(resolved.merged_config)
                 ctx = RuntimeExecutionContext(
-                    run_id=run.id,
-                    space_id=run.space_id,
+                    run_id=run_id,
+                    space_id=run_space_id,
                     prompt=user_prompt,
-                    mode=run.mode,
+                    mode=run_mode,
                     sandbox_cwd=workdir,
                     model_name=version.model_name,
                     system_prompt=version.system_prompt,
-                    adapter_config=resolved.merged_config,
+                    adapter_config=safe_config,
                     simulate_failure=simulate_failure,
+                    resolved_credentials=resolved_credentials,
                 )
+                self.db.commit()
                 raw = adapter.execute(ctx)
                 if (
                     raw is not None
@@ -281,13 +353,27 @@ class RunExecutionService:
             run.sandbox_path = None
             self.db.add(run)
             self.db.flush()
+            safe_exc = redact_adapter_error(str(exc)[:2000]) or ""
+            safe_exc_long = redact_adapter_error(str(exc)[:4000]) or ""
+            if adapter_step is not None:
+                try:
+                    with UnitOfWork(self.db).savepoint():
+                        fail_step(
+                            self.db, adapter_step,
+                            error_type="adapter_runtime_error",
+                            error_message=safe_exc,
+                            ended_at=_utcnow(),
+                        )
+                except Exception:
+                    log.warning("RunStep fail_step failed (best-effort)", exc_info=True)
             return self._fail_run_terminal(
                 run=run,
                 decision=decision,
+                actor_id=actor_id,
                 error_code="adapter_runtime_error",
-                error_text=str(exc)[:2000],
+                error_text=safe_exc,
                 stdout="",
-                stderr=str(exc)[:4000],
+                stderr=safe_exc_long,
             )
 
         run.sandbox_path = None
@@ -314,8 +400,21 @@ class RunExecutionService:
                 "runtime_policy_decision": decision.policy_snapshot,
                 "required_sandbox_level": run.required_sandbox_level,
             }
-            run.output_json = out
+            # Redact before persistence — catches any accidental secret exposure
+            # in adapter output, stderr, or log fields.
+            run.output_json = redact_runtime_output(out)
             self.db.flush()
+
+            if adapter_step is not None:
+                try:
+                    with UnitOfWork(self.db).savepoint():
+                        complete_step(
+                            self.db, adapter_step,
+                            ended_at=ended_wall,
+                            output_summary=(raw.output_text or "")[:4000] or None,
+                        )
+                except Exception:
+                    log.warning("RunStep complete_step failed (best-effort)", exc_info=True)
 
             mat_errors = RunOutputMaterializer(self.db).materialize(
                 run=run,
@@ -326,29 +425,37 @@ class RunExecutionService:
             if merged_errors:
                 merged = dict(run.output_json or {})
                 merged["materialization_errors"] = merged_errors
-                run.output_json = merged
+                # Re-apply redaction: materialization_errors strings are internal
+                # but output_json must always be fully sanitized before persistence.
+                run.output_json = redact_runtime_output(merged)
                 self.db.flush()
 
             if raw.output_text:
+                # Redact artifact content before persistence — adapter output text
+                # must not carry raw credentials into artifact storage.
+                safe_output_text = redact_artifact_content(raw.output_text) or ""
                 art = ArtifactPersistenceService(self.db).persist_text_file(
                     run=run,
-                    text=raw.output_text,
+                    text=safe_output_text,
                     title=f"Run output ({resolved.adapter_type})",
                     artifact_type="runtime_output",
                     preview=run.mode == "dry_run",
                 )
                 link_run_outputs_to_tasks(self.db, run=run, artifact=art, proposal=None)
                 artifacts_out = [{"id": art.id, "title": art.title, "storage_path": art.storage_path}]
+                if actor_id is not None:
+                    try:
+                        with UnitOfWork(self.db).savepoint():
+                            record_artifact_step(
+                                self.db, run=run, actor_id=actor_id,
+                                artifact_id=art.id, title=art.title,
+                            )
+                    except Exception:
+                        log.warning("RunStep record_artifact_step failed (best-effort)", exc_info=True)
             else:
                 artifacts_out = []
 
-            _append_run_execution_activity(
-                self.db,
-                run,
-                activity_type="run.execution.succeeded",
-                title=f"Run execution succeeded ({resolved.adapter_type})",
-                content=(raw.output_text or "")[:8000],
-            )
+            _emit("completed", "succeeded", title="Run completed successfully")
             self.db.commit()
             self._assert_no_memory_writes(run.id, run.space_id, mem_before)
 
@@ -366,17 +473,30 @@ class RunExecutionService:
                 adapter_log_json=raw.adapter_log_json,
             )
 
+        safe_error_text = redact_adapter_error(raw.error_text or "adapter failed") or "adapter failed"
+        if adapter_step is not None:
+            try:
+                with UnitOfWork(self.db).savepoint():
+                    fail_step(
+                        self.db, adapter_step,
+                        error_type=raw.error_code,
+                        error_message=safe_error_text,
+                        ended_at=ended_wall,
+                    )
+            except Exception:
+                log.warning("RunStep fail_step failed (best-effort)", exc_info=True)
+
         run.status = "failed"
-        run.error_message = (raw.error_text or "adapter failed")[:2000]
-        run.error_json = {
+        run.error_message = safe_error_text[:2000]
+        run.error_json = redact_runtime_output({
             "error_code": raw.error_code or "adapter_failed",
-            "error_text": raw.error_text,
+            "error_text": safe_error_text,
             "runtime_adapter_type": resolved.adapter_type,
-        }
+        })
         run.exit_code = raw.exit_code if raw.exit_code is not None else 1
         run.ended_at = ended_wall
         run.updated_at = ended_wall
-        run.output_json = {
+        run.output_json = redact_runtime_output({
             "runtime": "real",
             "runtime_adapter_type": resolved.adapter_type,
             "stdout": raw.stdout,
@@ -384,13 +504,12 @@ class RunExecutionService:
             "adapter_log_json": raw.adapter_log_json,
             "runtime_policy_decision": decision.policy_snapshot,
             "required_sandbox_level": run.required_sandbox_level,
-        }
-        _append_run_execution_activity(
-            self.db,
-            run,
-            activity_type="run.execution.failed",
-            title=f"Run execution failed ({resolved.adapter_type})",
-            content=run.error_message or "",
+        })
+        _emit(
+            "failed", "failed",
+            title=f"Run failed ({resolved.adapter_type})",
+            error_type=raw.error_code,
+            error_message=run.error_message,
         )
         self.db.commit()
         self._assert_no_memory_writes(run.id, run.space_id, mem_before)
@@ -413,39 +532,55 @@ class RunExecutionService:
         *,
         run: Run,
         decision,
+        actor_id: str | None = None,
         error_code: str,
         error_text: str,
         stdout: str,
         stderr: str,
     ) -> RuntimeExecutionResult:
+        from .steps import create_step
+
         now = _utcnow()
+        # Redact before all persistence — error_text may carry adapter exception
+        # messages that include raw credentials.
+        safe_error_text = redact_error(error_text) or error_text
         run.status = "failed"
-        run.error_message = error_text[:2000]
-        run.error_json = {"error_code": error_code, "error_text": error_text}
+        run.error_message = safe_error_text[:2000]
+        run.error_json = redact_runtime_output(
+            {"error_code": error_code, "error_text": safe_error_text}
+        )
         run.exit_code = 1
         run.started_at = run.started_at or now
         run.ended_at = now
         run.updated_at = now
-        run.output_json = {
+        run.output_json = redact_runtime_output({
             "runtime": "real",
             "stdout": stdout,
             "stderr": stderr,
             "runtime_policy_decision": decision.policy_snapshot,
             "required_sandbox_level": run.required_sandbox_level,
-        }
+        })
         self.db.add(run)
-        _append_run_execution_activity(
-            self.db,
-            run,
-            activity_type="run.execution.failed",
-            title="Run execution failed",
-            content=f"{error_code}: {error_text}",
-        )
+        if actor_id is not None:
+            try:
+                with UnitOfWork(self.db).savepoint():
+                    create_step(
+                        self.db, run=run, actor_id=actor_id,
+                        step_type="failed", status="failed",
+                        title="Run failed",
+                        error_type=error_code,
+                        error_message=safe_error_text[:2000],
+                    )
+            except Exception:
+                log.warning(
+                    "RunStep write failed (best-effort) run=%s step=failed",
+                    run.id, exc_info=True,
+                )
         self.db.commit()
         return RuntimeExecutionResult(
             success=False,
             output="",
-            error=error_text,
+            error=safe_error_text,
             exit_code=1,
             started_at=run.started_at,
             completed_at=run.ended_at,

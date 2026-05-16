@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { Send, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
-import { proposalsApi, sessionsApi, homeApi } from '../../api/client'
+import { proposalsApi, sessionsApi, activityApi, homeApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { useAuth } from '../../contexts/AuthContext'
 import { errMsg } from '../../lib/utils'
@@ -96,10 +96,20 @@ function QuickCapture() {
     if (!text.trim()) return
     setBusy(true)
     try {
-      const session = await sessionsApi.create({ title: text.slice(0, 80) })
-      await sessionsApi.addMessage(session.id, { role: 'user', content: text })
-      toast.success('Captured — opening sessions')
-      navigate('/sessions')
+      if (mode === 'ask') {
+        const session = await sessionsApi.create({ title: text.slice(0, 80) })
+        await sessionsApi.addMessage(session.id, { role: 'user', content: text })
+        toast.success('Session started')
+        navigate('/sessions')
+      } else {
+        await activityApi.create({
+          source_type: 'user_capture',
+          content: text,
+          title: text.slice(0, 80),
+        })
+        toast.success('Saved to Activity Inbox')
+        navigate('/activity')
+      }
     } catch (err) {
       toast.error(errMsg(err))
     } finally {

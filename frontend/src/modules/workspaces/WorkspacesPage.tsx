@@ -50,7 +50,7 @@ export default function WorkspacesPage() {
     if (!newName.trim()) return
     setCreating(true)
     try {
-      await workspacesApi.create({ name: newName.trim(), type: 'project' })
+      await workspacesApi.create({ name: newName.trim(), workspace_type: 'project', kind: 'project' })
       toast.success('Workspace created')
       setNewName('')
       await load()
@@ -112,13 +112,13 @@ export default function WorkspacesPage() {
                     <Badge variant={ws.status === 'active' ? 'default' : 'muted'} className="text-[10px] px-1.5 py-0">
                       {ws.status}
                     </Badge>
-                    <Badge variant="muted" className="text-[10px] px-1.5 py-0">{ws.type}</Badge>
+                    <Badge variant="muted" className="text-[10px] px-1.5 py-0">{ws.workspace_type}</Badge>
                   </div>
                   {ws.description && (
                     <p className="text-xs text-muted-foreground truncate mt-0.5">{ws.description}</p>
                   )}
                   <p className="text-[10px] text-muted-foreground mt-0.5" style={{ fontFamily: 'var(--font-mono)' }}>
-                    {ws.id} · created {fmt(ws.created_at)}
+                    {ws.id} · {ws.kind} · created {fmt(ws.created_at)}
                   </p>
                 </div>
               </div>

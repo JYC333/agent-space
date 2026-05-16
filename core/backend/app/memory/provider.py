@@ -238,31 +238,35 @@ class LocalMemoryProvider(MemoryProvider):
 
     def create(self, space_id: str, data: dict) -> dict:
         """INTERNAL ONLY.  Direct MemoryEntry creation — not for public or agent use."""
+        from .internal_writer import MemoryInternalWriter
         from ..schemas import MemoryCreate
 
         payload = dict(data)
         payload.setdefault("space_id", space_id)
         acting = payload.pop("acting_user_id", None) or payload.pop("user_id", None)
         mc = MemoryCreate.model_validate(payload)
-        m = self._store.create(mc, acting_user_id=acting)
+        m = MemoryInternalWriter(self._store.db).create(mc, acting_user_id=acting)
         return _row_to_dict(m)
 
     def update(self, memory_id: str, space_id: str, updates: dict) -> dict:
         """INTERNAL ONLY.  Direct MemoryEntry mutation — not for public or agent use."""
+        from .internal_writer import MemoryInternalWriter
         from ..schemas import MemoryUpdate
 
         m = self._store.get_for_space(space_id, memory_id)
         if not m:
             raise ValueError("memory not found")
         mu = MemoryUpdate.model_validate(updates)
-        m2 = self._store.update(memory_id, mu, space_id=space_id)
+        m2 = MemoryInternalWriter(self._store.db).update(memory_id, space_id, mu)
         if not m2:
             raise ValueError("memory not found")
         return _row_to_dict(m2)
 
     def delete(self, memory_id: str, space_id: str) -> bool:
         """INTERNAL ONLY.  Direct soft-delete — not for public or agent use."""
+        from .internal_writer import MemoryInternalWriter
+
         m = self._store.get_for_space(space_id, memory_id)
         if not m:
             return False
-        return self._store.delete(memory_id, space_id=space_id)
+        return MemoryInternalWriter(self._store.db).delete(memory_id, space_id)

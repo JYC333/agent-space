@@ -2,14 +2,30 @@ from __future__ import annotations
 """
 Runner — adapter registry and post-run hook infrastructure.
 
-This module no longer owns Run lifecycle or execution.
-Run lifecycle is owned by RunService (app.runs.run_service).
-Execution is owned by RunExecutionService and registered runtime adapters.
+COMPATIBILITY / MIGRATION TARGET ONLY (M4)
+===========================================
+``app.agents`` is the legacy CLI runner stack.  It exists for backward
+compatibility with existing CLI adapter routes and tests.  It is NOT the
+canonical location for new product runtime behavior.
 
-This module provides:
-  - Adapter registry (_ADAPTER_REGISTRY)
+Do NOT add new runtime adapters here.  New adapters belong in:
+  ``core/backend/app/runtimes/`` — canonical runtime adapter location
+  ``core/backend/app/runtimes/registry.py`` — canonical adapter registry
+  ``core/backend/app/runtimes/base.py`` — canonical adapter contract
+
+This module must NOT bypass:
+  - Canonical credential boundary (app.runtimes.credentials)
+  - Canonical redaction boundary (app.runs.redaction)
+  - Canonical sandbox/path policy (app.runs.sandbox_manager, app.runs.worktree_manager)
+  - RunStep execution replay (app.runs.steps)
+
+Current canonical execution path: RunExecutionService (app.runs.execution)
+uses app.runtimes.registry — NOT this module — for all new run execution.
+
+This module provides (legacy support only):
+  - Adapter registry (_ADAPTER_REGISTRY) for CLI adapter routes
   - Post-run hook registry (register_post_run_hook, PostRunHook type)
-  - Adapter resolution helpers (sandbox level, etc.) for execution services
+  - Adapter resolution helper (resolve_adapter) for old CLI agent routes
 """
 
 import logging

@@ -14,7 +14,8 @@ from tests.support import factories
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 # ---------------------------------------------------------------------------
@@ -30,7 +31,7 @@ def test_post_memory_creates_proposal_not_memory_entry(api_client, db, cross_spa
         MemoryEntry.space_id == a, MemoryEntry.status == "active"
     ).scalar()
 
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         "/api/v1/memory",
         params=_params(a, ua.id),
         json={
@@ -57,7 +58,7 @@ def test_post_memory_proposal_has_correct_payload(api_client, db, cross_space_pa
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
 
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         "/api/v1/memory",
         params=_params(a, ua.id),
         json={
@@ -101,7 +102,7 @@ def test_patch_memory_creates_proposal_not_mutation(api_client, db, cross_space_
     mem.visibility = "space_shared"
     db.commit()
 
-    r = api_client.patch(
+    r = cross_space_pair["client_a"].patch(
         f"/api/v1/memory/{mem.id}",
         params=_params(a, ua.id),
         json={"content": "proposed new content"},
@@ -126,7 +127,7 @@ def test_patch_memory_proposal_contains_target_id(api_client, db, cross_space_pa
     mem.visibility = "space_shared"
     db.commit()
 
-    r = api_client.patch(
+    r = cross_space_pair["client_a"].patch(
         f"/api/v1/memory/{mem.id}",
         params=_params(a, ua.id),
         json={"content": "y"},
@@ -155,7 +156,7 @@ def test_delete_memory_creates_archive_proposal_not_deletion(api_client, db, cro
     mem.visibility = "space_shared"
     db.commit()
 
-    r = api_client.delete(
+    r = cross_space_pair["client_a"].delete(
         f"/api/v1/memory/{mem.id}",
         params=_params(a, ua.id),
     )
@@ -181,7 +182,7 @@ def test_delete_memory_proposal_contains_target_id(api_client, db, cross_space_p
     mem.visibility = "space_shared"
     db.commit()
 
-    r = api_client.delete(f"/api/v1/memory/{mem.id}", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].delete(f"/api/v1/memory/{mem.id}", params=_params(a, ua.id))
     assert r.status_code == 202
     proposal_id = r.json()["id"]
 

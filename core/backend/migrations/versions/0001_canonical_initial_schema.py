@@ -1037,11 +1037,140 @@ def upgrade() -> None:
     op.create_index('ix_context_digests_digest_type', 'context_digests', ['digest_type'], unique=False)
     op.create_index('ix_context_digests_status', 'context_digests', ['status'], unique=False)
     op.create_index('ix_context_digests_source_hash', 'context_digests', ['source_hash'], unique=False)
+    # M2: Actor identity foundation.
+    # actors depends on spaces, users, and agents — all created above.
+    # space_id is nullable so deployment-level (system) actors can have no space.
+    # user_id / agent_id constraints enforced by ActorService (not at DB level:
+    # SQLite cannot express conditional NOT NULL checks across columns).
+    op.create_table('actors',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=True),
+    sa.Column('actor_type', sa.String(length=32), nullable=False),
+    sa.Column('user_id', sa.String(length=36), nullable=True),
+    sa.Column('agent_id', sa.String(length=36), nullable=True),
+    sa.Column('service_name', sa.String(length=128), nullable=True),
+    sa.Column('display_name', sa.String(length=256), nullable=True),
+    sa.Column('status', sa.String(length=32), nullable=False, server_default='active'),
+    sa.Column('metadata_json', sa.JSON(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint(
+        "actor_type in ('user', 'agent', 'system', 'automation', 'connector', "
+        "'integration', 'service', 'job')",
+        name='ck_actors_actor_type',
+    ),
+    sa.CheckConstraint(
+        "status in ('active', 'disabled', 'archived')",
+        name='ck_actors_status',
+    ),
+    sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_actors_space_id'), 'actors', ['space_id'], unique=False)
+    op.create_index(op.f('ix_actors_actor_type'), 'actors', ['actor_type'], unique=False)
+    op.create_index(op.f('ix_actors_user_id'), 'actors', ['user_id'], unique=False)
+    op.create_index(op.f('ix_actors_agent_id'), 'actors', ['agent_id'], unique=False)
+    op.create_index(op.f('ix_actors_service_name'), 'actors', ['service_name'], unique=False)
+    op.create_index(op.f('ix_actors_status'), 'actors', ['status'], unique=False)
+    # M3: RunStep execution replay.
+    # run_steps depends on spaces, runs, actors, runtime_adapters, workspaces,
+    # sessions, artifacts, and proposals — all created above.
+    # actor_id is NOT NULL: every RunStep must carry actor identity (M2 rule).
+    # task_id is a soft reference only (no DB FK: avoids DDL bootstrap cycle
+    # with tasks created before run_steps in migration order).
+    # Secret values must never appear in error_message or metadata_json.
+    op.create_table('run_steps',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('run_id', sa.String(length=36), nullable=False),
+    sa.Column('parent_step_id', sa.String(length=36), nullable=True),
+    sa.Column('actor_id', sa.String(length=36), nullable=False),
+    sa.Column('step_index', sa.Integer(), nullable=False),
+    sa.Column('step_type', sa.String(length=64), nullable=False),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('title', sa.String(length=512), nullable=True),
+    sa.Column('runtime_adapter_id', sa.String(length=36), nullable=True),
+    sa.Column('workspace_id', sa.String(length=36), nullable=True),
+    sa.Column('session_id', sa.String(length=36), nullable=True),
+    sa.Column('task_id', sa.String(length=36), nullable=True),
+    sa.Column('artifact_id', sa.String(length=36), nullable=True),
+    sa.Column('proposal_id', sa.String(length=36), nullable=True),
+    sa.Column('started_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('ended_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('input_summary', sa.Text(), nullable=True),
+    sa.Column('output_summary', sa.Text(), nullable=True),
+    sa.Column('error_type', sa.String(length=128), nullable=True),
+    sa.Column('error_message', sa.Text(), nullable=True),
+    sa.Column('metadata_json', sa.JSON(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint(
+        "step_type in ("
+        "'run_created', 'queued', 'context_prepared', 'runtime_selected', "
+        "'adapter_started', 'adapter_completed', 'artifact_created', "
+        "'proposal_created', 'failed', 'completed', "
+        "'validation_started', 'validation_completed', 'cancelled')",
+        name='ck_run_steps_step_type',
+    ),
+    sa.CheckConstraint(
+        "status in ('pending', 'running', 'succeeded', 'failed', 'skipped', 'cancelled')",
+        name='ck_run_steps_status',
+    ),
+    sa.ForeignKeyConstraint(['actor_id'], ['actors.id'], ),
+    sa.ForeignKeyConstraint(['artifact_id'], ['artifacts.id'], ),
+    sa.ForeignKeyConstraint(['parent_step_id'], ['run_steps.id'], ),
+    sa.ForeignKeyConstraint(['proposal_id'], ['proposals.id'], ),
+    sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),
+    sa.ForeignKeyConstraint(['runtime_adapter_id'], ['runtime_adapters.id'], ),
+    sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('run_id', 'step_index', name='uq_run_steps_run_step_index')
+    )
+    op.create_index(op.f('ix_run_steps_space_id'), 'run_steps', ['space_id'], unique=False)
+    op.create_index(op.f('ix_run_steps_run_id'), 'run_steps', ['run_id'], unique=False)
+    op.create_index(op.f('ix_run_steps_parent_step_id'), 'run_steps', ['parent_step_id'], unique=False)
+    op.create_index(op.f('ix_run_steps_actor_id'), 'run_steps', ['actor_id'], unique=False)
+    op.create_index(op.f('ix_run_steps_step_type'), 'run_steps', ['step_type'], unique=False)
+    op.create_index(op.f('ix_run_steps_status'), 'run_steps', ['status'], unique=False)
+    op.create_index(op.f('ix_run_steps_runtime_adapter_id'), 'run_steps', ['runtime_adapter_id'], unique=False)
+    op.create_index(op.f('ix_run_steps_workspace_id'), 'run_steps', ['workspace_id'], unique=False)
+    op.create_index(op.f('ix_run_steps_session_id'), 'run_steps', ['session_id'], unique=False)
+    op.create_index(op.f('ix_run_steps_task_id'), 'run_steps', ['task_id'], unique=False)
+    op.create_index(op.f('ix_run_steps_artifact_id'), 'run_steps', ['artifact_id'], unique=False)
+    op.create_index(op.f('ix_run_steps_proposal_id'), 'run_steps', ['proposal_id'], unique=False)
+    op.create_index('ix_run_steps_space_run_index', 'run_steps', ['space_id', 'run_id', 'step_index'], unique=False)
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
+    # M3: drop run_steps first (references actors, runs, spaces, and other tables)
+    op.drop_index('ix_run_steps_space_run_index', table_name='run_steps')
+    op.drop_index(op.f('ix_run_steps_proposal_id'), table_name='run_steps')
+    op.drop_index(op.f('ix_run_steps_artifact_id'), table_name='run_steps')
+    op.drop_index(op.f('ix_run_steps_task_id'), table_name='run_steps')
+    op.drop_index(op.f('ix_run_steps_session_id'), table_name='run_steps')
+    op.drop_index(op.f('ix_run_steps_workspace_id'), table_name='run_steps')
+    op.drop_index(op.f('ix_run_steps_runtime_adapter_id'), table_name='run_steps')
+    op.drop_index(op.f('ix_run_steps_status'), table_name='run_steps')
+    op.drop_index(op.f('ix_run_steps_step_type'), table_name='run_steps')
+    op.drop_index(op.f('ix_run_steps_actor_id'), table_name='run_steps')
+    op.drop_index(op.f('ix_run_steps_parent_step_id'), table_name='run_steps')
+    op.drop_index(op.f('ix_run_steps_run_id'), table_name='run_steps')
+    op.drop_index(op.f('ix_run_steps_space_id'), table_name='run_steps')
+    op.drop_table('run_steps')
+    # M2: drop actors first (references spaces, users, agents)
+    op.drop_index(op.f('ix_actors_status'), table_name='actors')
+    op.drop_index(op.f('ix_actors_service_name'), table_name='actors')
+    op.drop_index(op.f('ix_actors_agent_id'), table_name='actors')
+    op.drop_index(op.f('ix_actors_user_id'), table_name='actors')
+    op.drop_index(op.f('ix_actors_actor_type'), table_name='actors')
+    op.drop_index(op.f('ix_actors_space_id'), table_name='actors')
+    op.drop_table('actors')
     op.drop_index('ix_provenance_links_source', table_name='provenance_links')
     op.drop_index('ix_provenance_links_target', table_name='provenance_links')
     op.drop_index(op.f('ix_provenance_links_source_type'), table_name='provenance_links')

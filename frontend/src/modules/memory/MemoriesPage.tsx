@@ -54,7 +54,7 @@ export default function MemoriesPage() {
     try {
       await memoryApi.create(form)
       setForm(EMPTY_FORM)
-      toast.success('Memory added')
+      toast.success('Memory proposal submitted')
       await load()
     } catch (e) { toast.error(errMsg(e)) }
   }
@@ -62,7 +62,7 @@ export default function MemoriesPage() {
   async function deleteMemory(id: string) {
     try {
       await memoryApi.delete(id)
-      toast('Memory deleted')
+      toast('Archive proposal submitted')
       await load()
     } catch (e) { toast.error(errMsg(e)) }
   }
@@ -82,12 +82,12 @@ export default function MemoriesPage() {
         </div>
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Memories</h1>
-          <p className="text-sm text-muted-foreground">Store and manage long-term memories across scopes and namespaces.</p>
+          <p className="text-sm text-muted-foreground">Review-gated long-term memories across scopes and namespaces.</p>
         </div>
       </div>
 
       <Card>
-        <CardTitle>Add Memory</CardTitle>
+        <CardTitle>Propose memory</CardTitle>
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
             <Label>Title</Label>
@@ -118,7 +118,7 @@ export default function MemoriesPage() {
           <Label>Content</Label>
           <Textarea value={form.content} onChange={e => setField('content', e.target.value)} placeholder="Memory content…" />
         </div>
-        <Button onClick={addMemory}>Add Memory</Button>
+        <Button onClick={addMemory}>Submit proposal</Button>
       </Card>
 
       <Card>

@@ -1,0 +1,94 @@
+# Non-Goals and Disabled Surfaces
+
+## Currently Disabled or Not Implemented
+
+| Surface | Status |
+|---|---|
+| Broad Information Horizon ingestion | Not implemented |
+| External chat / media / file import pipelines | Not implemented |
+| Web crawler | Not implemented |
+| Vector index over external corpus | Not implemented |
+| Automation / Trigger engine | Not implemented (`Run.trigger_origin` reserves enum values only) |
+| Connectors / Integrations platform | Not implemented |
+| Full first-class Source / Evidence schema | Deferred — field mapping only (`ActivityRecord`, `ProvenanceLink`, proposal provenance entries) |
+| Capability marketplace or install/discovery UX | Not implemented (capabilities are file-defined, in-memory registry) |
+| Self-evolution behavior execution | Disabled (`ENABLE_SYSTEM_EVOLUTION=false` by default) |
+| App-container self-deployment | Blocked by deployer allowlist |
+| Deployment job persistence | 501-gated (`POST /deployments/jobs` → 501) |
+| Arbitrary deployer commands | Blocked; only `rebuild_agent_space`, `restart_agent_space`, `health_check` |
+| Automatic restore | Not implemented; restore is always manual |
+| Cloud / offsite backup sync | Not implemented |
+| Multi-device conflict resolution | Not implemented |
+| Public sharing | Not implemented |
+| Public SaaS / multi-tenant | Not in scope |
+| API key persistence UI | Feature-gated (501 in production) |
+| Workspace console persisted sessions | Feature-gated (501 in production) |
+| Runtime adapter bypassing credential resolver | Blocked by `RunExecutionService` design |
+| Runtime adapter bypassing sandbox/path policy | Blocked by `execution_workspace` contract |
+| File mutation without approved proposal + PathPolicy | Blocked by code patch apply |
+| Automatic memory promotion from horizon content | Blocked by absence of horizon implementation |
+
+**UI status of planned-but-not-built surfaces:**
+- `LLM Wiki` — registry entry with `planned: true`; "soon" badge; non-interactive.
+- `Cards` — registry entry with `planned: true`; "soon" badge; non-interactive.
+- `Time` — registry entry with `planned: true`; "soon" badge; non-interactive.
+
+No automation, connector, horizon, or self-evolution controls appear in the frontend.
+
+## What Is Allowed for Current Use
+
+- Personal spaces (`personal` space type) and household shared spaces (`household` space type).
+- Explicit two-user membership and space switching.
+- Auth via session cookies or API keys. No dev-identity fallback.
+- Activity Inbox for non-chat capture (thoughts, notes, snippets, links) via `POST /api/v1/activity`.
+- Explicit chat sessions for conversations with agents (`POST /api/v1/sessions`).
+- Memory proposal creation, review, acceptance, rejection, and archive.
+- Memory consolidation producing proposals from Activity.
+- Runs through canonical `app.runtimes` path (`echo`, `anthropic_messages` adapters).
+- RunStep replay and failure diagnosis.
+- Artifacts produced by runs; safe export within owned space.
+- Task boards and task-linked runs/artifacts/proposals.
+- Home summary as read-only command center.
+- Automatic local backups through `BackupService` (requires `BACKUP_ENABLED=true`).
+- Manual backup via API or `scripts/backup.sh`.
+- Manual restore via `scripts/restore.sh`.
+- Manual deployment or allowlisted deployer-only flow.
+
+## Non-Goals for Development
+
+These will not be built until their prerequisite foundations are stable:
+
+- Full enterprise RBAC/ABAC.
+- Generic `DomainObject` registry or schema editor.
+- Full plugin or provider marketplace.
+- Broad connector/integration platform.
+- Full vector search or external search index.
+- Full Information Horizon ingestion pipeline.
+- Unconstrained self-evolution.
+- Direct app-container self-deployment.
+- Cloud/multi-device sync.
+- Domain-specific integrations (health, finance, home automation) built into the kernel.
+- Publishing connectors or external CMS integrations.
+- Full wiki or cards as complete product surfaces with first-class backend domain models.
+- Complex enterprise admin console or billing.
+- Public SaaS/multi-tenant launch.
+
+## What Must Be True Before Building Disabled Surfaces
+
+**Before Information Horizon ingestion:**
+Activity-first capture, Source/Evidence trust vocabulary, and candidate-to-Memory proposal path must be fully tested. No auto-promotion of horizon content to trusted Memory.
+
+**Before Automation / Trigger:**
+Policy engine, ownership model, actor identity, and proposal-safe automation invariants must be documented and tested.
+
+**Before Connectors / Integrations:**
+Source/Evidence design must be stable. All connector data must enter Activity/Source first. No direct-to-Memory connector writes.
+
+**Before self-evolution execution:**
+Evaluation gates, sandboxed experiment runs, deployment job persistence, capability lifecycle persistence, and rollback path must all be tested.
+
+**Before full Source/Evidence schema:**
+Trust vocabulary and lifecycle must be stable for existing ActivityRecord/ProvenanceLink/Proposal provenance. Current field mapping must be tested.
+
+**Before any broad external ingestion:**
+Retention/deletion semantics, Information Horizon candidate-only boundary, and trust gate must be enforced and tested.

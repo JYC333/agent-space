@@ -3,29 +3,23 @@
 from __future__ import annotations
 
 import inspect as py_inspect
+import re
 from pathlib import Path
 
-from alembic import command
-from alembic.config import Config
-import re
-
 import pytest
-from sqlalchemy import create_engine, event, inspect
+from sqlalchemy import inspect
 from sqlalchemy.orm import sessionmaker
 
 from app import models, schemas
 from app.db import Base
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
-ALEMBIC_INI = BACKEND_ROOT / "alembic.ini"
 
 
 @pytest.fixture(scope="module")
-def canonical_engine(tmp_path_factory):
-    db_path = tmp_path_factory.mktemp("canonical") / "canonical.sqlite"
-    engine = _upgrade_empty_database(db_path)
-    yield engine
-    engine.dispose()
+def canonical_engine(db_engine):
+    """Reuse the session-scoped migrated engine — no second Alembic upgrade needed."""
+    yield db_engine
 
 
 @pytest.fixture(scope="function")
@@ -72,29 +66,6 @@ REQUIRED_TABLES = {
     "provenance_links",
 }
 
-
-def _upgrade_empty_database(db_path: Path):
-    url = f"sqlite:///{db_path}"
-    migrations_dir = BACKEND_ROOT / "migrations"
-    cfg = Config(str(ALEMBIC_INI))
-    cfg.set_main_option("script_location", str(migrations_dir))
-    cfg.set_main_option("prepend_sys_path", str(BACKEND_ROOT))
-    cfg.set_main_option("sqlalchemy.url", url)
-    command.upgrade(cfg, "head")
-    engine = create_engine(
-        url,
-        connect_args={"check_same_thread": False, "timeout": 30},
-    )
-
-    @event.listens_for(engine, "connect")
-    def set_sqlite_pragma(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute("PRAGMA busy_timeout=60000")
-        cursor.close()
-
-    return engine
 
 
 def _foreign_keys(inspector, table_name: str) -> set[tuple[str, str, str]]:

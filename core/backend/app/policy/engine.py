@@ -32,19 +32,149 @@ PolicyContext keys (all optional unless noted):
     can_delegate         (bool)           — from agent's runtime_policy
 """
 
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 from .decisions import PolicyDecision, Decision, RiskLevel
 from .rules import BUILTIN_RULES
 
 PolicyContext = dict
 RuleFunction = Callable[[PolicyContext], Optional[PolicyDecision]]
 
+_SELECTED_PERSISTED_POLICY_ACTION = "memory.write_direct"
+_SELECTED_PERSISTED_POLICY_RESOURCE_TYPE = "memory"
+
 _DEFAULT_ALLOW = PolicyDecision(
     decision=Decision.ALLOW,
     reason="No rule denied this action",
     risk_level=RiskLevel.LOW,
     policy_rule_id="default_allow",
+    policy_source="default",
 )
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _normalize_effect(value: Any) -> Decision | None:
+    raw = str(value or "").strip().lower()
+    if raw == Decision.DENY.value:
+        return Decision.DENY
+    if raw == Decision.REQUIRE_APPROVAL.value:
+        return Decision.REQUIRE_APPROVAL
+    if raw == Decision.ALLOW.value:
+        return Decision.ALLOW
+    return None
+
+
+def _normalize_risk(value: Any) -> RiskLevel:
+    raw = str(value or "").strip().lower()
+    for risk in RiskLevel:
+        if raw == risk.value:
+            return risk
+    return RiskLevel.MEDIUM
+
+
+def load_persisted_policies_for_action(
+    db: Any,
+    *,
+    space_id: str,
+    action: str,
+    resource_type: str,
+) -> list[Any]:
+    """Load active persisted policies for the single M5 enforced policy class."""
+    if action != _SELECTED_PERSISTED_POLICY_ACTION:
+        return []
+    if resource_type != _SELECTED_PERSISTED_POLICY_RESOURCE_TYPE:
+        return []
+    if db is None or not space_id:
+        return []
+
+    from ..models import Policy
+
+    rows = (
+        db.query(Policy)
+        .filter(
+            Policy.space_id == space_id,
+            Policy.enabled.is_(True),
+            Policy.status == "active",
+            Policy.domain == "memory",
+        )
+        .order_by(Policy.priority.desc(), Policy.created_at.desc(), Policy.id.desc())
+        .all()
+    )
+    selected: list[Any] = []
+    for row in rows:
+        policy_json = _as_dict(row.policy_json)
+        rule_json = _as_dict(row.rule_json)
+        applies_to = _as_dict(row.applies_to_json)
+        policy_type = (
+            rule_json.get("policy_type")
+            or policy_json.get("policy_type")
+            or applies_to.get("policy_type")
+            or row.policy_key
+        )
+        row_action = (
+            rule_json.get("action")
+            or policy_json.get("action")
+            or applies_to.get("action")
+        )
+        row_resource_type = (
+            rule_json.get("resource_type")
+            or policy_json.get("resource_type")
+            or applies_to.get("resource_type")
+        )
+        if policy_type not in ("memory_write", "memory_write_direct"):
+            continue
+        if row_action != action or row_resource_type != resource_type:
+            continue
+        selected.append(row)
+    return selected
+
+
+def persisted_policy_decision(ctx: PolicyContext) -> Optional[PolicyDecision]:
+    """Evaluate the deliberately narrow M5 persisted policy class."""
+    action = ctx.get("action")
+    resource_type = ctx.get("resource_type")
+    space_id = ctx.get("space_id")
+    if not isinstance(action, str) or not isinstance(resource_type, str) or not isinstance(space_id, str):
+        return None
+
+    for row in load_persisted_policies_for_action(
+        ctx.get("db"),
+        space_id=space_id,
+        action=action,
+        resource_type=resource_type,
+    ):
+        rule_json = _as_dict(row.rule_json)
+        policy_json = _as_dict(row.policy_json)
+        effect = _normalize_effect(
+            row.enforcement_mode
+            or rule_json.get("effect")
+            or policy_json.get("effect")
+        )
+        if effect is None:
+            continue
+        reason = (
+            rule_json.get("reason")
+            or policy_json.get("reason")
+            or f"Persisted policy {row.name!r} applied"
+        )
+        return PolicyDecision(
+            decision=effect,
+            reason=str(reason),
+            risk_level=_normalize_risk(rule_json.get("risk_level") or policy_json.get("risk_level")),
+            required_approver_role=rule_json.get("required_approver_role")
+            or policy_json.get("required_approver_role"),
+            policy_rule_id=row.policy_key or "persisted.memory_write_direct",
+            policy_source="persisted",
+            policy_id=row.id,
+            actor_id=ctx.get("actor_id"),
+            actor_ref=ctx.get("actor_ref") if isinstance(ctx.get("actor_ref"), dict) else None,
+            space_id=space_id,
+            action=action,
+            resource_type=resource_type,
+        )
+    return None
 
 
 class PolicyEngine:
@@ -67,7 +197,21 @@ class PolicyEngine:
             result = rule(ctx)
             if result is not None:
                 return result
-        return _DEFAULT_ALLOW
+        result = persisted_policy_decision(ctx)
+        if result is not None:
+            return result
+        return PolicyDecision(
+            decision=_DEFAULT_ALLOW.decision,
+            reason=_DEFAULT_ALLOW.reason,
+            risk_level=_DEFAULT_ALLOW.risk_level,
+            policy_rule_id=_DEFAULT_ALLOW.policy_rule_id,
+            policy_source=_DEFAULT_ALLOW.policy_source,
+            actor_id=ctx.get("actor_id"),
+            actor_ref=ctx.get("actor_ref") if isinstance(ctx.get("actor_ref"), dict) else None,
+            space_id=ctx.get("space_id"),
+            action=ctx.get("action"),
+            resource_type=ctx.get("resource_type"),
+        )
 
     def assert_allowed(self, ctx: PolicyContext) -> PolicyDecision:
         """

@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 
 class Decision(str, Enum):
@@ -25,6 +25,13 @@ class PolicyDecision:
     risk_level: RiskLevel = RiskLevel.LOW
     required_approver_role: Optional[str] = None
     policy_rule_id: Optional[str] = None
+    policy_source: str = "builtin"
+    policy_id: Optional[str] = None
+    actor_id: Optional[str] = None
+    actor_ref: Optional[dict[str, Any]] = None
+    space_id: Optional[str] = None
+    action: Optional[str] = None
+    resource_type: Optional[str] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property

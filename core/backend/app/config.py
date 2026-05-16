@@ -27,6 +27,7 @@ class AppPaths:
         self.workspaces_dir = self.home / "workspaces"
         self.sandboxes_dir  = self.home / "sandboxes"
         self.artifacts_dir  = self.home / "artifacts"
+        self.backups_dir    = self.home / "backups"
 
     @property
     def artifact_storage_root(self) -> Path:
@@ -98,6 +99,7 @@ class AppPaths:
             (self.sandboxes_dir,  0o700),
             (self.artifacts_dir,  0o700),
             (self.artifact_storage_root, 0o700),
+            (self.backups_dir,    0o700),
         ]
         for path, mode in entries:
             safe_mkdir(path, mode)
@@ -224,6 +226,19 @@ class Settings(BaseSettings):
 
     # Agent Space environment (dev, test, prod)
     agent_space_env: str = "dev"
+
+    # ── Backup ────────────────────────────────────────────────────────────────
+    # Primary backup is BackupService (automatic, scheduled).
+    # backup.sh / restore.sh are fallback operator tools only.
+    #
+    # Two-person dogfooding MUST set BACKUP_ENABLED=true.
+    # Default is False (safe for tests and unattended CI).
+    backup_enabled: bool = False
+    backup_interval_hours: int = 24
+    backup_retention_count: int = 7
+    backup_include_logs: bool = False
+    backup_on_startup: bool = True
+    backup_root: str = str(_ASPACE_HOME / "backups")
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

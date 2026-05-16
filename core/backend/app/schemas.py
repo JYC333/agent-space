@@ -1045,3 +1045,158 @@ class ApiKeyCreatedOut(ApiKeyOut):
     raw_key: str
 
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Actor identity (M2 foundation)
+# ---------------------------------------------------------------------------
+
+ACTOR_TYPES = frozenset(
+    {"user", "agent", "system", "automation", "connector", "integration", "service", "job"}
+)
+
+
+class ActorRef(BaseModel):
+    """Stable serialized identity reference for any principal that acts in the system.
+
+    Rules:
+    - actor_type = user   → user_id required
+    - actor_type = agent  → agent_id required
+    - actor_type in (system, service, job, automation, connector, integration)
+                          → user_id and agent_id must both be absent
+    - actor_id is the persisted Actor.id when the actor row exists; optional
+      for ad-hoc/ephemeral references (e.g. system events before actor row is created)
+    - Do not use default_user_id from Settings as an ActorRef source for
+      system/service/job actors — those must use actor_type=system/service/job
+
+    Serialized shape is stable for RunStep, policy-decision, audit, and event JSON.
+    """
+
+    actor_type: str
+    actor_id: Optional[str] = None
+    user_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    space_id: Optional[str] = None
+    service_name: Optional[str] = None
+    display_name: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_actor_identity(self) -> "ActorRef":
+        if self.actor_type not in ACTOR_TYPES:
+            raise ValueError(
+                f"invalid actor_type: {self.actor_type!r}; "
+                f"must be one of {sorted(ACTOR_TYPES)}"
+            )
+        if self.actor_type == "user":
+            if not self.user_id:
+                raise ValueError("user actor requires user_id")
+            if self.agent_id:
+                raise ValueError("user actor must not have agent_id")
+        elif self.actor_type == "agent":
+            if not self.agent_id:
+                raise ValueError("agent actor requires agent_id")
+            if self.user_id:
+                raise ValueError("agent actor must not have user_id")
+        else:
+            if self.user_id:
+                raise ValueError(
+                    f"{self.actor_type} actor must not have user_id; "
+                    "use actor_type=user for human actors"
+                )
+            if self.agent_id:
+                raise ValueError(
+                    f"{self.actor_type} actor must not have agent_id; "
+                    "use actor_type=agent for agent actors"
+                )
+            if self.actor_type == "system":
+                # system actors default service_name to "system" so that raw
+                # ActorRef(actor_type="system") is unambiguous and resolvable.
+                if not self.service_name:
+                    self.service_name = "system"
+            else:
+                # service/job/automation/connector/integration all require an
+                # explicit service_name per the actor kinds table.
+                if not self.service_name:
+                    raise ValueError(
+                        f"{self.actor_type} actor requires service_name"
+                    )
+        return self
+
+
+class ActorOut(BaseModel):
+    """Serialized output for a persisted Actor row."""
+
+    id: str
+    space_id: Optional[str]
+    actor_type: str
+    user_id: Optional[str]
+    agent_id: Optional[str]
+    service_name: Optional[str]
+    display_name: Optional[str]
+    status: str
+    metadata_json: dict
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# RunStep execution replay (M3)
+# ---------------------------------------------------------------------------
+
+RUN_STEP_TYPES = frozenset({
+    "run_created",
+    "queued",
+    "context_prepared",
+    "runtime_selected",
+    "adapter_started",
+    "adapter_completed",
+    "artifact_created",
+    "proposal_created",
+    "failed",
+    "completed",
+    "validation_started",
+    "validation_completed",
+    "cancelled",
+})
+
+RUN_STEP_STATUSES = frozenset({
+    "pending",
+    "running",
+    "succeeded",
+    "failed",
+    "skipped",
+    "cancelled",
+})
+
+
+class RunStepOut(BaseModel):
+    """Serialized output for a single RunStep row."""
+
+    id: str
+    space_id: str
+    run_id: str
+    parent_step_id: Optional[str] = None
+    actor_id: str
+    step_index: int
+    step_type: str
+    status: str
+    title: Optional[str] = None
+    runtime_adapter_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+    session_id: Optional[str] = None
+    task_id: Optional[str] = None
+    artifact_id: Optional[str] = None
+    proposal_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    input_summary: Optional[str] = None
+    output_summary: Optional[str] = None
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
+    metadata_json: dict = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}

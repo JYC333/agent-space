@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from sqlalchemy import func
 
-from app.models import ActivityRecord, AgentVersion, Artifact, Proposal, Run
+from app.models import AgentVersion, Artifact, Proposal, Run, RunStep
 from tests.support import factories
 from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRuntimeConfig
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 def test_fake_runtime_failure_is_audited_without_success_outputs(
@@ -45,7 +46,7 @@ def test_fake_runtime_failure_is_audited_without_success_outputs(
     run_row.prompt = "will-fail"
     db.commit()
 
-    ex = api_client.post(f"/api/v1/runs/{rid}/execute", params=_params(a, ua.id))
+    ex = cross_space_pair["client_a"].post(f"/api/v1/runs/{rid}/execute", params=_params(a, ua.id))
     assert ex.status_code == 200
     body = ex.json()
     assert body.get("status") == "failed"
@@ -54,15 +55,10 @@ def test_fake_runtime_failure_is_audited_without_success_outputs(
     assert "stable workflow failure" in (err.get("error_text") or "")
 
     db.expire_all()
-    types = {
-        r.activity_type
-        for r in db.query(ActivityRecord).filter(
-            ActivityRecord.space_id == a,
-            ActivityRecord.source_run_id == rid,
-        )
-    }
-    assert "run.execution.started" in types
-    assert "run.execution.failed" in types
+    steps = db.query(RunStep).filter(RunStep.run_id == rid, RunStep.space_id == a).all()
+    step_types = {s.step_type for s in steps}
+    assert "queued" in step_types
+    assert any(s.status == "failed" for s in steps)
 
     assert (
         db.query(func.count(Artifact.id)).filter(Artifact.run_id == rid).scalar() == 0
@@ -105,7 +101,7 @@ def test_disabled_runtime_adapter_execute_returns_failed_run_without_success_row
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     rid = run.id
 
-    r = api_client.post(f"/api/v1/runs/{rid}/execute", params=_params(a, ua.id))
+    r = cross_space_pair["client_a"].post(f"/api/v1/runs/{rid}/execute", params=_params(a, ua.id))
     assert r.status_code == 200
     out = r.json()
     assert out.get("status") == "failed"
@@ -147,7 +143,7 @@ def test_failed_run_surfaces_in_home_run_stats_today(
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
 
-    api_client.post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
+    cross_space_pair["client_a"].post(f"/api/v1/runs/{run.id}/execute", params=_params(a, ua.id))
 
-    summ = api_client.get("/api/v1/home/summary", params=_params(a, ua.id)).json()
+    summ = cross_space_pair["client_a"].get("/api/v1/home/summary", params=_params(a, ua.id)).json()
     assert summ["run_stats_today"]["failed"] >= 1

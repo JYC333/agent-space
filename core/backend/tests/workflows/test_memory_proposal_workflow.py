@@ -17,7 +17,8 @@ from tests.support import factories
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
-    return {"space_id": space_id, "user_id": user_id}
+    del user_id
+    return {"space_id": space_id}
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +32,7 @@ def test_create_memory_proposal_workflow(api_client, db, cross_space_pair):
     ua = cross_space_pair["user_a"]
 
     # Step 1: public write creates a pending proposal, NOT a MemoryEntry
-    r = api_client.post(
+    r = cross_space_pair["client_a"].post(
         "/api/v1/memory",
         params=_params(a, ua.id),
         json={
@@ -103,7 +104,7 @@ def test_update_memory_proposal_workflow(api_client, db, cross_space_pair):
     original_id = original.id
 
     # Step 1: PATCH creates a pending memory_update proposal, does not mutate in place
-    r = api_client.patch(
+    r = cross_space_pair["client_a"].patch(
         f"/api/v1/memory/{original_id}",
         params=_params(a, ua.id),
         json={"content": "updated content"},
@@ -161,7 +162,7 @@ def test_archive_memory_proposal_workflow(api_client, db, cross_space_pair):
     target_id = target.id
 
     # Step 1: DELETE creates a pending memory_archive proposal; MemoryEntry stays active
-    r = api_client.delete(
+    r = cross_space_pair["client_a"].delete(
         f"/api/v1/memory/{target_id}",
         params=_params(a, ua.id),
     )

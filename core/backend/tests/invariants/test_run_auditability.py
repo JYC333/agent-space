@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from app.models import ActivityRecord, Artifact, ContextSnapshot, Run
+from app.models import Artifact, ContextSnapshot, Run, RunStep
 from app.runs.execution import RunExecutionService
+from app.runs.steps import list_run_steps
 from tests.support import factories
 
 
@@ -17,12 +18,10 @@ def test_factory_run_has_context_snapshot(db, cross_space_pair):
     assert snap.space_id == a
 
 
-def test_successful_execution_writes_activity_trail_and_artifact(
+def test_successful_execution_writes_run_steps_and_artifact(
     monkeypatch, db, tmp_path, cross_space_pair
 ):
     from app.config import settings
-
-    from tests.support.assertions import assert_run_has_audit_trail
 
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
@@ -49,24 +48,19 @@ def test_successful_execution_writes_activity_trail_and_artifact(
         assert art.space_id == a
         assert art.run_id == run.id
 
-    assert_run_has_audit_trail(db, space_id=a, run_id=run.id, min_activities=2)
-    types = {
-        r.activity_type
-        for r in db.query(ActivityRecord).filter(
-            ActivityRecord.space_id == a,
-            ActivityRecord.source_run_id == run.id,
-        )
-    }
-    assert "run.execution.started" in types
-    assert "run.execution.succeeded" in types
+    steps = list_run_steps(db, run.id, a)
+    assert len(steps) >= 2, "Successful run must emit at least 2 RunSteps"
+    step_types = {s.step_type for s in steps}
+    assert "queued" in step_types
+    assert "completed" in step_types
+    for s in steps:
+        assert s.actor_id is not None
 
 
-def test_failed_adapter_execution_writes_started_and_failed_activities(
+def test_failed_adapter_execution_writes_run_steps_with_failed_step(
     monkeypatch, db, tmp_path, cross_space_pair
 ):
     from app.config import settings
-
-    from tests.support.assertions import assert_run_has_audit_trail
 
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
@@ -85,16 +79,11 @@ def test_failed_adapter_execution_writes_started_and_failed_activities(
     assert run.status == "failed"
     assert run.error_message or (run.error_json or {})
 
-    assert_run_has_audit_trail(db, space_id=a, run_id=run.id, min_activities=2)
-    types = {
-        r.activity_type
-        for r in db.query(ActivityRecord).filter(
-            ActivityRecord.space_id == a,
-            ActivityRecord.source_run_id == run.id,
-        )
-    }
-    assert "run.execution.started" in types
-    assert "run.execution.failed" in types
+    steps = list_run_steps(db, run.id, a)
+    assert len(steps) >= 1, "Failed run must emit at least 1 RunStep"
+    assert any(s.status == "failed" for s in steps), "At least one step must be failed"
+    for s in steps:
+        assert s.actor_id is not None
 
 
 def test_snapshot_population_failure_blocks_adapter_and_marks_run_failed(
