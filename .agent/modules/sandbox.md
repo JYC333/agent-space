@@ -29,7 +29,7 @@ Required when you need hard resource limits or stricter filesystem boundaries.
 
 ## Owns
 - `SandboxManager` — creates sandbox environments per run
-- `SandboxContext` — per-run state (level, path, is_git_worktree, executor_type)
+- `SandboxContext` — per-run state (level, path, is_git_worktree, execution_mode)
 - `DockerExecutor` — runs commands inside one-shot Docker containers
 - Host path translation (`_resolve_host_path()` via /proc/self/mountinfo)
 - Docker concurrency limiter (`get_docker_semaphore()`)

@@ -2,10 +2,10 @@ from __future__ import annotations
 """
 SandboxManager — multi-level isolated execution environments for agent runs.
 
-COMPATIBILITY / MIGRATION TARGET ONLY (M4)
-===========================================
-This module (``app.workspace.sandbox_manager``) is the legacy CLI sandbox
-manager.  It is used only by ``app.agents`` (the legacy CLI runner stack) and
+CLI ADAPTER RUNTIME PATH ONLY
+==============================
+This module (``app.workspace.sandbox_manager``) is the CLI adapter sandbox
+manager.  It is used only by ``app.agents`` (the CLI adapter runtime path) and
 Docker-based CLI adapter routes.
 
 Do NOT use this module as the sandbox/path boundary for new runtime adapters.
@@ -99,7 +99,7 @@ class SandboxContext:
     level: SandboxLevel
     sandbox_dir: Path
     is_git_worktree: bool = False
-    executor_type: str = "local"
+    execution_mode: str = "local"
 
     def cleanup(self) -> bool:
         """Remove the sandbox directory. Call after artifact collection."""
@@ -254,7 +254,7 @@ class SandboxManager:
             level=SandboxLevel.WORKTREE,
             sandbox_dir=sandbox_dir,
             is_git_worktree=is_worktree,
-            executor_type="local",
+            execution_mode="local",
         )
 
     def is_docker_available(self) -> bool:

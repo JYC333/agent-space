@@ -299,7 +299,58 @@ class RunService:
         )
         self.db.add(snapshot)
 
-        # 8. Create Run with status=queued, mode from request, agent_version from current
+        # 8. Validate and resolve execution plane; snapshot its observability/exposure/trust metadata.
+        # Priority: runtime_adapter_id → execution_plane_id → adapter_type lookup.
+        execution_plane_id = getattr(data, "execution_plane_id", None)
+        runtime_adapter_id = getattr(data, "runtime_adapter_id", None)
+        model_provider_id = getattr(data, "model_provider_id", None)
+
+        # Validate FK references belong to this space (prevent cross-space injection).
+        if runtime_adapter_id:
+            from ..models import RuntimeAdapter as _RA
+            if not self.db.query(_RA).filter(
+                _RA.id == runtime_adapter_id, _RA.space_id == space_id
+            ).first():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"RuntimeAdapter '{runtime_adapter_id}' not found in this space",
+                )
+        if model_provider_id:
+            from ..models import ModelProvider as _MP
+            if not self.db.query(_MP).filter(
+                _MP.id == model_provider_id, _MP.space_id == space_id
+            ).first():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"ModelProvider '{model_provider_id}' not found in this space",
+                )
+
+        observability_level = None
+        data_exposure_level = None
+        trust_level = None
+        externality_level = None
+
+        resolved_plane = None
+        if runtime_adapter_id or execution_plane_id or data.adapter_type:
+            from ..execution_planes.service import ExecutionPlaneService
+            ep_svc = ExecutionPlaneService(self.db)
+            if runtime_adapter_id:
+                resolved_plane = ep_svc.resolve_execution_plane_for_runtime(
+                    runtime_adapter_id, space_id
+                )
+            if not resolved_plane and execution_plane_id:
+                resolved_plane = ep_svc.get_execution_plane(execution_plane_id, space_id)
+            if not resolved_plane and data.adapter_type:
+                resolved_plane = ep_svc.get_default_execution_plane(space_id, data.adapter_type)
+
+            if resolved_plane:
+                execution_plane_id = resolved_plane.id
+                observability_level = resolved_plane.observability_level
+                data_exposure_level = resolved_plane.data_exposure_level
+                trust_level = resolved_plane.trust_level
+                externality_level = ep_svc.externality_level_for_plane(resolved_plane)
+
+        # 9. Create Run with status=queued, mode from request, agent_version from current
         run = Run(
             id=_new_id(),
             space_id=space_id,
@@ -321,6 +372,14 @@ class RunService:
             scheduled_at=data.scheduled_at,
             adapter_type=data.adapter_type,
             required_sandbox_level="none",
+            source="managed",
+            execution_plane_id=execution_plane_id,
+            runtime_adapter_id=runtime_adapter_id,
+            model_provider_id=model_provider_id,
+            observability_level=observability_level,
+            data_exposure_level=data_exposure_level,
+            trust_level=trust_level,
+            externality_level=externality_level,
         )
         self.db.add(run)
         self.db.commit()

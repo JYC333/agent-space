@@ -872,7 +872,7 @@ Backup manifest inspected: <yes / no>
 | Risk | Status |
 |---|---|
 | `Credential.secret_ref` full decryption deferred | Only `ModelProvider` encrypted keys decryptable; full secret_ref deferred |
-| `app.agents` CLI stack still used by legacy CLI routes | Compatibility-only; new adapters must use `app.runtimes` |
+| `app.agents` CLI adapter runtime path | CLI adapters only; new adapters must use `app.runtimes` |
 | Most PolicyEngine enforcement points not yet wired to persisted policy | One class (`memory.write_direct`) is wired; rest documented in `PRODUCT_AND_BOUNDARIES.md` |
 | Artifact archive/delete API not yet implemented | Artifacts accumulate; deferred |
 | Activity archive/delete not yet implemented | Deferred |

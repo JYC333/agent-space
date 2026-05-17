@@ -14,7 +14,7 @@ Internal paths that need a non-human actor identity MUST call the appropriate
 get_or_create_* helper instead of passing Settings.default_user_id.
 
 Historical authorship fields (Run.instructed_by_user_id, Proposal.created_by_user_id, …)
-remain readable during the M2 compatibility window.  Do not remove them here.
+are not migrated in bulk. New records use actor_ref. Do not remove these fields here.
 """
 
 from __future__ import annotations

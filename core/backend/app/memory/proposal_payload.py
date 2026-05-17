@@ -205,7 +205,7 @@ def _normalize_one(raw: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def provenance_entries_from_payload(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Return normalized provenance entries merged from canonical + legacy keys."""
+    """Return normalized provenance entries merged from canonical and old payload-format keys."""
     p = dict(payload or {})
     merged: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str | None]] = set()
@@ -355,7 +355,7 @@ def merge_distinct_provenance_entries(
 
 
 def strip_legacy_provenance_keys(payload: dict[str, Any]) -> dict[str, Any]:
-    """Remove legacy provenance-only keys after migration into provenance_entries."""
+    """Remove old provenance-only keys after normalization into provenance_entries."""
     p = dict(payload)
     for k in (
         "source_activity_id",

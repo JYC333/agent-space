@@ -16,8 +16,8 @@ External frameworks (OpenAI Agents SDK, LangGraph, CrewAI, Letta, etc.) can
 be wired in as additional adapters without touching the kernel. An agent's
 `runtime_policy_json.allowed_adapter_types` controls which backends it may use.
 
-RuntimeExecutionResult is now defined in app.runs.types (M4 canonical location).
-It is re-exported here for backward compatibility with existing CLI adapter code.
+RuntimeExecutionResult is defined in app.runs.types (canonical location).
+Re-exported here for stable CLI adapter imports.
 New code should import from app.runs.types directly.
 """
 
@@ -27,7 +27,7 @@ from datetime import datetime
 from typing import Optional
 
 # Canonical definition lives in app.runs.types — re-exported here for
-# backward compatibility with app.agents.* CLI adapter code.
+# stable CLI adapter imports.
 from ..runs.types import RuntimeExecutionResult  # noqa: F401
 
 

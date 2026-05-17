@@ -48,6 +48,19 @@ def upgrade() -> None:
     sa.Column('policy_bundle_version', sa.String(length=64), nullable=True),
     sa.Column('memory_digest_version', sa.String(length=64), nullable=True),
     sa.Column('workspace_digest_version', sa.String(length=64), nullable=True),
+    # Runtime-facing context bundle. target_runtime_adapter_id and execution_plane_id are
+    # soft references (no FK constraints) to avoid a forward DDL reference since
+    # context_snapshots is created before runtime_adapters and execution_planes.
+    sa.Column('target_runtime_adapter_id', sa.String(length=36), nullable=True),
+    sa.Column('execution_plane_id', sa.String(length=36), nullable=True),
+    sa.Column('included_memory_refs_json', sa.JSON(), nullable=True),
+    sa.Column('included_file_refs_json', sa.JSON(), nullable=True),
+    sa.Column('included_doc_refs_json', sa.JSON(), nullable=True),
+    sa.Column('redactions_json', sa.JSON(), nullable=True),
+    sa.Column('data_exposure_level', sa.String(length=64), nullable=True),
+    sa.Column('rendered_context_uri', sa.String(length=1024), nullable=True),
+    sa.Column('rendered_context_text', sa.Text(), nullable=True),
+    sa.CheckConstraint("data_exposure_level is null or data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')", name='ck_context_snapshots_data_exposure_level'),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -240,6 +253,62 @@ def upgrade() -> None:
     op.create_index(op.f('ix_workspaces_slug'), 'workspaces', ['slug'], unique=False)
     op.create_index(op.f('ix_workspaces_space_id'), 'workspaces', ['space_id'], unique=False)
     op.create_index(op.f('ix_workspaces_status'), 'workspaces', ['status'], unique=False)
+    # execution_planes: where runs execute. Must precede runtime_adapters (FK reference).
+    op.create_table('execution_planes',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('name', sa.String(length=256), nullable=False),
+    sa.Column('type', sa.String(length=32), nullable=False),
+    sa.Column('provider', sa.String(length=64), nullable=False),
+    sa.Column('execution_location', sa.String(length=32), nullable=False),
+    sa.Column('runtime_origin', sa.String(length=64), nullable=False),
+    sa.Column('trust_level', sa.String(length=32), nullable=False, server_default='unknown'),
+    sa.Column('observability_level', sa.String(length=64), nullable=False, server_default='black_box'),
+    sa.Column('data_exposure_level', sa.String(length=64), nullable=False, server_default='unknown'),
+    sa.Column('credential_mode', sa.String(length=32), nullable=False, server_default='unknown'),
+    sa.Column('config_json', sa.JSON(), nullable=False),
+    sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.text('1')),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("type in ('native', 'local', 'remote_vendor', 'hybrid', 'manual')", name='ck_execution_planes_type'),
+    sa.CheckConstraint("provider in ('agent_space', 'openai', 'anthropic', 'opencode', 'cursor', 'other')", name='ck_execution_planes_provider'),
+    sa.CheckConstraint("execution_location in ('local', 'remote', 'hybrid', 'manual')", name='ck_execution_planes_execution_location'),
+    sa.CheckConstraint("runtime_origin in ('native', 'external_vendor', 'open_source_external', 'manual')", name='ck_execution_planes_runtime_origin'),
+    sa.CheckConstraint("trust_level in ('high', 'medium', 'low', 'unknown')", name='ck_execution_planes_trust_level'),
+    sa.CheckConstraint("observability_level in ('full_trace', 'structured_events', 'artifacts_only', 'final_output_only', 'black_box')", name='ck_execution_planes_observability_level'),
+    sa.CheckConstraint("data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')", name='ck_execution_planes_data_exposure_level'),
+    sa.CheckConstraint("credential_mode in ('agent_space_vault', 'vendor_account', 'user_local', 'none', 'unknown')", name='ck_execution_planes_credential_mode'),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('space_id', 'name', name='uq_execution_planes_space_name')
+    )
+    op.create_index(op.f('ix_execution_planes_space_id'), 'execution_planes', ['space_id'], unique=False)
+    op.create_index(op.f('ix_execution_planes_enabled'), 'execution_planes', ['enabled'], unique=False)
+    # validation_recipes: reusable validation definitions. Precedes workspace_profiles (FK reference).
+    op.create_table('validation_recipes',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('workspace_id', sa.String(length=36), nullable=True),
+    sa.Column('name', sa.String(length=256), nullable=False),
+    sa.Column('task_type', sa.String(length=64), nullable=True),
+    sa.Column('risk_level', sa.String(length=32), nullable=False, server_default='low'),
+    sa.Column('commands_json', sa.JSON(), nullable=False),
+    sa.Column('required_checks_json', sa.JSON(), nullable=False),
+    sa.Column('artifact_expectations_json', sa.JSON(), nullable=True),
+    sa.Column('timeout_seconds', sa.Integer(), nullable=True),
+    sa.Column('requires_clean_git_state', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+    sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.text('1')),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("risk_level in ('low', 'medium', 'high')", name='ck_validation_recipes_risk_level'),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_validation_recipes_space_id'), 'validation_recipes', ['space_id'], unique=False)
+    op.create_index(op.f('ix_validation_recipes_workspace_id'), 'validation_recipes', ['workspace_id'], unique=False)
+    op.create_index(op.f('ix_validation_recipes_task_type'), 'validation_recipes', ['task_type'], unique=False)
+    op.create_index(op.f('ix_validation_recipes_enabled'), 'validation_recipes', ['enabled'], unique=False)
     op.create_table('jobs',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -283,16 +352,52 @@ def upgrade() -> None:
     sa.Column('credential_id', sa.String(length=36), nullable=True),
     sa.Column('config_json', sa.JSON(), nullable=False),
     sa.Column('health_status', sa.String(length=32), nullable=False),
+    sa.Column('execution_plane_id', sa.String(length=36), nullable=True),
+    sa.Column('capability_support_json', sa.JSON(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['credential_id'], ['credentials.id'], ),
+    sa.ForeignKeyConstraint(['execution_plane_id'], ['execution_planes.id'], ),
     sa.ForeignKeyConstraint(['provider_id'], ['model_providers.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_runtime_adapters_credential_id'), 'runtime_adapters', ['credential_id'], unique=False)
+    op.create_index(op.f('ix_runtime_adapters_execution_plane_id'), 'runtime_adapters', ['execution_plane_id'], unique=False)
     op.create_index(op.f('ix_runtime_adapters_provider_id'), 'runtime_adapters', ['provider_id'], unique=False)
     op.create_index(op.f('ix_runtime_adapters_space_id'), 'runtime_adapters', ['space_id'], unique=False)
+    # workspace_profiles: structured operational knowledge per workspace.
+    op.create_table('workspace_profiles',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('workspace_id', sa.String(length=36), nullable=False),
+    sa.Column('repo_type', sa.String(length=64), nullable=True),
+    sa.Column('tech_stack_json', sa.JSON(), nullable=True),
+    sa.Column('important_paths_json', sa.JSON(), nullable=True),
+    sa.Column('forbidden_paths_json', sa.JSON(), nullable=True),
+    sa.Column('test_commands_json', sa.JSON(), nullable=True),
+    sa.Column('build_commands_json', sa.JSON(), nullable=True),
+    sa.Column('architecture_boundaries_json', sa.JSON(), nullable=True),
+    sa.Column('current_focus', sa.Text(), nullable=True),
+    sa.Column('known_failures_json', sa.JSON(), nullable=True),
+    sa.Column('validation_recipe_id', sa.String(length=36), nullable=True),
+    sa.Column('preferred_runtime_adapter_id', sa.String(length=36), nullable=True),
+    sa.Column('cloud_allowed', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+    sa.Column('max_data_exposure_level', sa.String(length=64), nullable=True),
+    sa.Column('min_observability_level', sa.String(length=64), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("max_data_exposure_level is null or max_data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')", name='ck_workspace_profiles_max_data_exposure_level'),
+    sa.CheckConstraint("min_observability_level is null or min_observability_level in ('full_trace', 'structured_events', 'artifacts_only', 'final_output_only', 'black_box')", name='ck_workspace_profiles_min_observability_level'),
+    sa.ForeignKeyConstraint(['preferred_runtime_adapter_id'], ['runtime_adapters.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['validation_recipe_id'], ['validation_recipes.id'], ),
+    sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('workspace_id', name='uq_workspace_profiles_workspace')
+    )
+    op.create_index(op.f('ix_workspace_profiles_space_id'), 'workspace_profiles', ['space_id'], unique=False)
+    op.create_index(op.f('ix_workspace_profiles_workspace_id'), 'workspace_profiles', ['workspace_id'], unique=False)
     op.create_table('sessions',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -410,10 +515,8 @@ def upgrade() -> None:
     sa.Column('model_selection_mode', sa.String(length=32), nullable=False),
     sa.Column('model_override_json', sa.JSON(), nullable=True),
     sa.Column('permission_snapshot_json', sa.JSON(), nullable=True),
-    sa.Column('sandbox_level', sa.String(length=32), nullable=True),
     sa.Column('required_sandbox_level', sa.String(length=32), nullable=False, server_default='none'),
     sa.Column('sandbox_path', sa.Text(), nullable=True),
-    sa.Column('executor_type', sa.String(length=32), nullable=True),
     sa.Column('runtime_seconds', sa.Float(), nullable=True),
     sa.Column('usage_accuracy', sa.String(length=32), nullable=False),
     sa.Column('estimated_input_tokens', sa.Integer(), nullable=True),
@@ -421,17 +524,29 @@ def upgrade() -> None:
     sa.Column('estimated_cost', sa.Float(), nullable=True),
     sa.Column('exit_code', sa.Integer(), nullable=True),
     sa.Column('visibility', sa.String(length=32), nullable=False, server_default='space_shared'),
-    # Phase D: safe marker for runs that consumed a PersonalMemoryGrant during context build.
+    # Safe marker for runs that consumed a PersonalMemoryGrant during context build.
     sa.Column('has_personal_grant_context', sa.Boolean(), nullable=False, server_default='false'),
     sa.Column('personal_grant_context_json', sa.JSON(), nullable=True),
+    sa.Column('execution_plane_id', sa.String(length=36), nullable=True),
+    sa.Column('source', sa.String(length=32), nullable=True),
+    sa.Column('observability_level', sa.String(length=64), nullable=True),
+    sa.Column('data_exposure_level', sa.String(length=64), nullable=True),
+    sa.Column('trust_level', sa.String(length=32), nullable=True),
+    sa.Column('externality_level', sa.String(length=32), nullable=True),
     sa.CheckConstraint("mode in ('live', 'dry_run')", name='ck_runs_mode'),
     sa.CheckConstraint("run_type in ('agent', 'system', 'workflow', 'validation', 'reflection', 'export')", name='ck_runs_run_type'),
     sa.CheckConstraint("status in ('queued', 'running', 'succeeded', 'degraded', 'failed', 'cancelled', 'waiting_for_review')", name='ck_runs_status'),
     sa.CheckConstraint("trigger_origin in ('manual', 'automation', 'job', 'parent_run', 'system')", name='ck_runs_trigger_origin'),
     sa.CheckConstraint("required_sandbox_level in ('none', 'dry_run', 'worktree', 'one_shot_docker')", name='ck_runs_required_sandbox_level'),
+    sa.CheckConstraint("source is null or source in ('managed', 'ide_assist', 'manual_import', 'remote_import', 'scheduled', 'webhook')", name='ck_runs_source'),
+    sa.CheckConstraint("externality_level is null or externality_level in ('native', 'local_external', 'remote_external', 'hybrid', 'manual')", name='ck_runs_externality_level'),
+    sa.CheckConstraint("observability_level is null or observability_level in ('full_trace', 'structured_events', 'artifacts_only', 'final_output_only', 'black_box')", name='ck_runs_observability_level'),
+    sa.CheckConstraint("data_exposure_level is null or data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')", name='ck_runs_data_exposure_level'),
+    sa.CheckConstraint("trust_level is null or trust_level in ('high', 'medium', 'low', 'unknown')", name='ck_runs_trust_level'),
     sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], ),
     sa.ForeignKeyConstraint(['agent_version_id'], ['agent_versions.id'], ),
     sa.ForeignKeyConstraint(['context_snapshot_id'], ['context_snapshots.id'], ),
+    sa.ForeignKeyConstraint(['execution_plane_id'], ['execution_planes.id'], ),
     sa.ForeignKeyConstraint(['instructed_by_agent_id'], ['agents.id'], ),
     sa.ForeignKeyConstraint(['instructed_by_user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['model_provider_id'], ['model_providers.id'], ),
@@ -455,6 +570,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_runs_session_id'), 'runs', ['session_id'], unique=False)
     op.create_index(op.f('ix_runs_space_id'), 'runs', ['space_id'], unique=False)
     op.create_index(op.f('ix_runs_status'), 'runs', ['status'], unique=False)
+    op.create_index(op.f('ix_runs_execution_plane_id'), 'runs', ['execution_plane_id'], unique=False)
     op.create_index(op.f('ix_runs_task_id'), 'runs', ['task_id'], unique=False)
     op.create_index(op.f('ix_runs_trigger_origin'), 'runs', ['trigger_origin'], unique=False)
     op.create_index(op.f('ix_runs_workspace_id'), 'runs', ['workspace_id'], unique=False)
@@ -598,10 +714,16 @@ def upgrade() -> None:
     sa.Column('metadata_json', sa.JSON(), nullable=True),
     sa.Column('visibility', sa.String(length=32), nullable=False, server_default='space_shared'),
     sa.Column('owner_user_id', sa.String(length=36), nullable=True),
+    sa.Column('source_runtime_adapter_id', sa.String(length=36), nullable=True),
+    sa.Column('source_execution_plane_id', sa.String(length=36), nullable=True),
+    sa.Column('trust_level', sa.String(length=32), nullable=True),
     sa.CheckConstraint("storage_path is null or storage_path not like '/%'", name='ck_artifacts_storage_path_relative'),
+    sa.CheckConstraint("trust_level is null or trust_level in ('high', 'medium', 'low', 'unknown')", name='ck_artifacts_trust_level'),
     sa.ForeignKeyConstraint(['owner_user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['proposal_id'], ['proposals.id'], ),
     sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),
+    sa.ForeignKeyConstraint(['source_execution_plane_id'], ['execution_planes.id'], ),
+    sa.ForeignKeyConstraint(['source_runtime_adapter_id'], ['runtime_adapters.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -609,6 +731,8 @@ def upgrade() -> None:
     op.create_index(op.f('ix_artifacts_owner_user_id'), 'artifacts', ['owner_user_id'], unique=False)
     op.create_index(op.f('ix_artifacts_proposal_id'), 'artifacts', ['proposal_id'], unique=False)
     op.create_index(op.f('ix_artifacts_run_id'), 'artifacts', ['run_id'], unique=False)
+    op.create_index(op.f('ix_artifacts_source_runtime_adapter_id'), 'artifacts', ['source_runtime_adapter_id'], unique=False)
+    op.create_index(op.f('ix_artifacts_source_execution_plane_id'), 'artifacts', ['source_execution_plane_id'], unique=False)
     op.create_index(op.f('ix_artifacts_space_id'), 'artifacts', ['space_id'], unique=False)
     op.create_table('boards',
     sa.Column('id', sa.String(length=36), nullable=False),
@@ -1036,7 +1160,7 @@ def upgrade() -> None:
     op.create_index('ix_context_digests_digest_type', 'context_digests', ['digest_type'], unique=False)
     op.create_index('ix_context_digests_status', 'context_digests', ['status'], unique=False)
     op.create_index('ix_context_digests_source_hash', 'context_digests', ['source_hash'], unique=False)
-    # M2: Actor identity foundation.
+    # actors — actor identity foundation.
     # actors depends on spaces, users, and agents — all created above.
     # space_id is nullable so deployment-level (system) actors can have no space.
     # user_id / agent_id constraints enforced by ActorService (not at DB level:
@@ -1073,7 +1197,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_actors_agent_id'), 'actors', ['agent_id'], unique=False)
     op.create_index(op.f('ix_actors_service_name'), 'actors', ['service_name'], unique=False)
     op.create_index(op.f('ix_actors_status'), 'actors', ['status'], unique=False)
-    # M3: RunStep execution replay.
+    # run_steps — execution replay spine.
     # run_steps depends on spaces, runs, actors, runtime_adapters, workspaces,
     # sessions, artifacts, and proposals — all created above.
     # actor_id is NOT NULL: every RunStep must carry actor identity (M2 rule).
@@ -1142,7 +1266,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_run_steps_artifact_id'), 'run_steps', ['artifact_id'], unique=False)
     op.create_index(op.f('ix_run_steps_proposal_id'), 'run_steps', ['proposal_id'], unique=False)
     op.create_index('ix_run_steps_space_run_index', 'run_steps', ['space_id', 'run_id', 'step_index'], unique=False)
-    # Phase 7A: source_pointers provenance ledger (metadata only; no content columns).
+    # source_pointers — provenance pointer ledger (metadata only; no content columns).
     op.create_table('source_pointers',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('owner_space_id', sa.String(length=36), nullable=False),
@@ -1164,7 +1288,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_source_pointers_granted_by_user_id'), 'source_pointers', ['granted_by_user_id'], unique=False)
     op.create_index(op.f('ix_source_pointers_expires_at'), 'source_pointers', ['expires_at'], unique=False)
     op.create_index('ix_source_pointers_source', 'source_pointers', ['source_space_id', 'source_object_type', 'source_object_id'], unique=False)
-    # Phase 3: participation_records ledger.
+    # participation_records — user participation ledger.
     # References spaces and users — both created above. Pointer-only: no content columns.
     op.create_table('participation_records',
     sa.Column('id', sa.String(length=36), nullable=False),
@@ -1184,7 +1308,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_participation_records_user_id'), 'participation_records', ['user_id'], unique=False)
     op.create_index(op.f('ix_participation_records_personal_space_id'), 'participation_records', ['personal_space_id'], unique=False)
     op.create_index('ix_participation_records_source', 'participation_records', ['source_space_id', 'source_object_type', 'source_object_id'], unique=False)
-    # Phase 8A: PersonalMemoryGrant schema skeleton.
+    # personal_memory_grants — per-run personal memory grant tracking.
     # Depends on: users, spaces, runs, agents — all created above. No content columns.
     op.create_table('personal_memory_grants',
     sa.Column('id', sa.String(length=36), nullable=False),
@@ -1228,13 +1352,13 @@ def upgrade() -> None:
     op.create_index(op.f('ix_personal_memory_grants_read_expires_at'), 'personal_memory_grants', ['read_expires_at'], unique=False)
     # Partial unique index: at most one active/consuming grant per (granting_user_id, target_run_id).
     # SQLite supports partial indexes with WHERE clause. Service layer must enforce atomicity
-    # for concurrent grant transitions not caught at the SQL level (Phase B).
+    # for concurrent grant transitions not caught at the SQL level.
     op.execute(
         "CREATE UNIQUE INDEX ix_personal_memory_grants_unique_active_consuming "
         "ON personal_memory_grants (granting_user_id, target_run_id) "
         "WHERE status IN ('active', 'consuming')"
     )
-    # Phase E: first-class proposal approval gate. Metadata-only; no content columns.
+    # proposal_approvals — first-class proposal approval gate. Metadata-only; no content columns.
     op.create_table('proposal_approvals',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('proposal_id', sa.String(length=36), nullable=False),
@@ -1293,12 +1417,136 @@ def upgrade() -> None:
     op.create_index(op.f('ix_personal_memory_grant_events_actor_user_id'), 'personal_memory_grant_events', ['actor_user_id'], unique=False)
     op.create_index(op.f('ix_personal_memory_grant_events_run_id'), 'personal_memory_grant_events', ['run_id'], unique=False)
     op.create_index('ix_personal_memory_grant_events_created_at', 'personal_memory_grant_events', ['created_at'], unique=False)
+    # external_run_records: evidence for externally executed or imported runs.
+    op.create_table('external_run_records',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('run_id', sa.String(length=36), nullable=False),
+    sa.Column('vendor', sa.String(length=64), nullable=False),
+    sa.Column('vendor_run_id', sa.String(length=256), nullable=True),
+    sa.Column('runtime_adapter_id', sa.String(length=36), nullable=True),
+    sa.Column('execution_plane_id', sa.String(length=36), nullable=True),
+    sa.Column('external_url', sa.Text(), nullable=True),
+    sa.Column('observability_level', sa.String(length=64), nullable=False, server_default='black_box'),
+    sa.Column('data_exposure_level', sa.String(length=64), nullable=False, server_default='unknown'),
+    sa.Column('trace_available', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+    sa.Column('raw_summary', sa.Text(), nullable=True),
+    sa.Column('raw_output_uri', sa.String(length=1024), nullable=True),
+    sa.Column('imported_diff_uri', sa.String(length=1024), nullable=True),
+    sa.Column('imported_artifacts_json', sa.JSON(), nullable=True),
+    sa.Column('imported_logs_uri', sa.String(length=1024), nullable=True),
+    sa.Column('status', sa.String(length=32), nullable=False, server_default='imported'),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("vendor in ('openai', 'anthropic', 'cursor', 'opencode', 'manual', 'other')", name='ck_external_run_records_vendor'),
+    sa.CheckConstraint("observability_level in ('full_trace', 'structured_events', 'artifacts_only', 'final_output_only', 'black_box')", name='ck_external_run_records_observability_level'),
+    sa.CheckConstraint("data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')", name='ck_external_run_records_data_exposure_level'),
+    sa.ForeignKeyConstraint(['execution_plane_id'], ['execution_planes.id'], ),
+    sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),
+    sa.ForeignKeyConstraint(['runtime_adapter_id'], ['runtime_adapters.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_external_run_records_space_id'), 'external_run_records', ['space_id'], unique=False)
+    op.create_index(op.f('ix_external_run_records_run_id'), 'external_run_records', ['run_id'], unique=False)
+    op.create_index(op.f('ix_external_run_records_runtime_adapter_id'), 'external_run_records', ['runtime_adapter_id'], unique=False)
+    op.create_index(op.f('ix_external_run_records_execution_plane_id'), 'external_run_records', ['execution_plane_id'], unique=False)
+    # run_reflections: self-learning candidates from a run (never directly mutates long-term state).
+    op.create_table('run_reflections',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('run_id', sa.String(length=36), nullable=False),
+    sa.Column('source', sa.String(length=32), nullable=False, server_default='native'),
+    sa.Column('what_changed', sa.Text(), nullable=True),
+    sa.Column('what_worked', sa.Text(), nullable=True),
+    sa.Column('what_failed', sa.Text(), nullable=True),
+    sa.Column('reusable_rules_json', sa.JSON(), nullable=True),
+    sa.Column('reusable_commands_json', sa.JSON(), nullable=True),
+    sa.Column('workspace_facts_json', sa.JSON(), nullable=True),
+    sa.Column('memory_candidates_json', sa.JSON(), nullable=True),
+    sa.Column('capability_candidates_json', sa.JSON(), nullable=True),
+    sa.Column('policy_candidates_json', sa.JSON(), nullable=True),
+    sa.Column('validation_candidates_json', sa.JSON(), nullable=True),
+    sa.Column('follow_up_tasks_json', sa.JSON(), nullable=True),
+    sa.Column('confidence', sa.Float(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("source in ('native', 'external_import', 'manual', 'evaluator')", name='ck_run_reflections_source'),
+    sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_run_reflections_space_id'), 'run_reflections', ['space_id'], unique=False)
+    op.create_index(op.f('ix_run_reflections_run_id'), 'run_reflections', ['run_id'], unique=False)
+    # runtime_tool_bindings: explicit authorisation for external tools/plugins/skills/MCP per scope.
+    op.create_table('runtime_tool_bindings',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('workspace_id', sa.String(length=36), nullable=True),
+    sa.Column('agent_id', sa.String(length=36), nullable=True),
+    sa.Column('capability_id', sa.String(length=128), nullable=True),
+    sa.Column('runtime_adapter_id', sa.String(length=36), nullable=False),
+    sa.Column('execution_plane_id', sa.String(length=36), nullable=True),
+    sa.Column('external_type', sa.String(length=64), nullable=False),
+    sa.Column('external_ref', sa.String(length=512), nullable=False),
+    sa.Column('display_name', sa.String(length=256), nullable=False),
+    sa.Column('required_scopes_json', sa.JSON(), nullable=True),
+    sa.Column('credential_ref', sa.String(length=256), nullable=True),
+    sa.Column('data_exposure_level', sa.String(length=64), nullable=False, server_default='unknown'),
+    sa.Column('observability_level', sa.String(length=64), nullable=False, server_default='black_box'),
+    sa.Column('side_effect_level', sa.String(length=32), nullable=False, server_default='none'),
+    sa.Column('approval_required', sa.Boolean(), nullable=False, server_default=sa.text('1')),
+    sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("external_type in ('codex_plugin', 'claude_skill', 'claude_hook', 'mcp_server', 'app_integration', 'cli_tool')", name='ck_runtime_tool_bindings_external_type'),
+    sa.CheckConstraint("side_effect_level in ('none', 'local_files', 'external_read', 'external_write', 'sensitive')", name='ck_runtime_tool_bindings_side_effect_level'),
+    sa.CheckConstraint("data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')", name='ck_runtime_tool_bindings_data_exposure_level'),
+    sa.CheckConstraint("observability_level in ('full_trace', 'structured_events', 'artifacts_only', 'final_output_only', 'black_box')", name='ck_runtime_tool_bindings_observability_level'),
+    sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], ),
+    sa.ForeignKeyConstraint(['execution_plane_id'], ['execution_planes.id'], ),
+    sa.ForeignKeyConstraint(['runtime_adapter_id'], ['runtime_adapters.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_runtime_tool_bindings_space_id'), 'runtime_tool_bindings', ['space_id'], unique=False)
+    op.create_index(op.f('ix_runtime_tool_bindings_workspace_id'), 'runtime_tool_bindings', ['workspace_id'], unique=False)
+    op.create_index(op.f('ix_runtime_tool_bindings_agent_id'), 'runtime_tool_bindings', ['agent_id'], unique=False)
+    op.create_index(op.f('ix_runtime_tool_bindings_capability_id'), 'runtime_tool_bindings', ['capability_id'], unique=False)
+    op.create_index(op.f('ix_runtime_tool_bindings_runtime_adapter_id'), 'runtime_tool_bindings', ['runtime_adapter_id'], unique=False)
+    op.create_index(op.f('ix_runtime_tool_bindings_execution_plane_id'), 'runtime_tool_bindings', ['execution_plane_id'], unique=False)
+    op.create_index(op.f('ix_runtime_tool_bindings_enabled'), 'runtime_tool_bindings', ['enabled'], unique=False)
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
-    # Phase E/8A: drop approval and grant tables first.
+    # Control plane: drop leaf tables first (no other table references these).
+    op.drop_index(op.f('ix_runtime_tool_bindings_enabled'), table_name='runtime_tool_bindings')
+    op.drop_index(op.f('ix_runtime_tool_bindings_execution_plane_id'), table_name='runtime_tool_bindings')
+    op.drop_index(op.f('ix_runtime_tool_bindings_runtime_adapter_id'), table_name='runtime_tool_bindings')
+    op.drop_index(op.f('ix_runtime_tool_bindings_capability_id'), table_name='runtime_tool_bindings')
+    op.drop_index(op.f('ix_runtime_tool_bindings_agent_id'), table_name='runtime_tool_bindings')
+    op.drop_index(op.f('ix_runtime_tool_bindings_workspace_id'), table_name='runtime_tool_bindings')
+    op.drop_index(op.f('ix_runtime_tool_bindings_space_id'), table_name='runtime_tool_bindings')
+    op.drop_table('runtime_tool_bindings')
+    op.drop_index(op.f('ix_run_reflections_run_id'), table_name='run_reflections')
+    op.drop_index(op.f('ix_run_reflections_space_id'), table_name='run_reflections')
+    op.drop_table('run_reflections')
+    op.drop_index(op.f('ix_external_run_records_execution_plane_id'), table_name='external_run_records')
+    op.drop_index(op.f('ix_external_run_records_runtime_adapter_id'), table_name='external_run_records')
+    op.drop_index(op.f('ix_external_run_records_run_id'), table_name='external_run_records')
+    op.drop_index(op.f('ix_external_run_records_space_id'), table_name='external_run_records')
+    op.drop_table('external_run_records')
+    op.drop_index(op.f('ix_workspace_profiles_workspace_id'), table_name='workspace_profiles')
+    op.drop_index(op.f('ix_workspace_profiles_space_id'), table_name='workspace_profiles')
+    op.drop_table('workspace_profiles')
+    op.drop_index(op.f('ix_validation_recipes_enabled'), table_name='validation_recipes')
+    op.drop_index(op.f('ix_validation_recipes_task_type'), table_name='validation_recipes')
+    op.drop_index(op.f('ix_validation_recipes_workspace_id'), table_name='validation_recipes')
+    op.drop_index(op.f('ix_validation_recipes_space_id'), table_name='validation_recipes')
+    op.drop_table('validation_recipes')
+    # Drop approval and grant tables first (they reference runs, users, spaces).
     op.drop_index('ix_personal_memory_grant_events_created_at', table_name='personal_memory_grant_events')
     op.drop_index(op.f('ix_personal_memory_grant_events_run_id'), table_name='personal_memory_grant_events')
     op.drop_index(op.f('ix_personal_memory_grant_events_actor_user_id'), table_name='personal_memory_grant_events')
@@ -1320,7 +1568,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_personal_memory_grants_personal_space_id'), table_name='personal_memory_grants')
     op.drop_index(op.f('ix_personal_memory_grants_granting_user_id'), table_name='personal_memory_grants')
     op.drop_table('personal_memory_grants')
-    # Phase 7A / Phase 3: drop pointer ledgers (no downstream dependents)
+    # Drop pointer ledgers — source_pointers and participation_records (no downstream dependents).
     op.drop_index('ix_participation_records_source', table_name='participation_records')
     op.drop_index(op.f('ix_participation_records_personal_space_id'), table_name='participation_records')
     op.drop_index(op.f('ix_participation_records_user_id'), table_name='participation_records')
@@ -1330,10 +1578,10 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_source_pointers_granted_by_user_id'), table_name='source_pointers')
     op.drop_index(op.f('ix_source_pointers_owner_space_id'), table_name='source_pointers')
     op.drop_table('source_pointers')
-    # Phase 3: visibility/owner_user_id columns on existing tables are NOT dropped here.
+    # visibility/owner_user_id columns on existing tables are NOT dropped here.
     # SQLite <3.35 does not support DROP COLUMN. Since this is a baseline migration with
     # no historical data, the downgrade path is to recreate from scratch.
-    # M3: drop run_steps first (references actors, runs, spaces, and other tables)
+    # Drop run_steps first (references actors, runs, spaces, and other tables).
     op.drop_index('ix_run_steps_space_run_index', table_name='run_steps')
     op.drop_index(op.f('ix_run_steps_proposal_id'), table_name='run_steps')
     op.drop_index(op.f('ix_run_steps_artifact_id'), table_name='run_steps')
@@ -1348,7 +1596,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_run_steps_run_id'), table_name='run_steps')
     op.drop_index(op.f('ix_run_steps_space_id'), table_name='run_steps')
     op.drop_table('run_steps')
-    # M2: drop actors first (references spaces, users, agents)
+    # Drop actors (references spaces, users, agents).
     op.drop_index(op.f('ix_actors_status'), table_name='actors')
     op.drop_index(op.f('ix_actors_service_name'), table_name='actors')
     op.drop_index(op.f('ix_actors_agent_id'), table_name='actors')
@@ -1433,6 +1681,9 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_boards_workspace_id'), table_name='boards')
     op.drop_index(op.f('ix_boards_space_id'), table_name='boards')
     op.drop_table('boards')
+    op.drop_index(op.f('ix_artifacts_source_execution_plane_id'), table_name='artifacts')
+    op.drop_index(op.f('ix_artifacts_source_runtime_adapter_id'), table_name='artifacts')
+    op.drop_index(op.f('ix_artifacts_owner_user_id'), table_name='artifacts')
     op.drop_index(op.f('ix_artifacts_space_id'), table_name='artifacts')
     op.drop_index(op.f('ix_artifacts_run_id'), table_name='artifacts')
     op.drop_index(op.f('ix_artifacts_proposal_id'), table_name='artifacts')
@@ -1461,6 +1712,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_activity_records_agent_id'), table_name='activity_records')
     op.drop_index(op.f('ix_activity_records_activity_type'), table_name='activity_records')
     op.drop_table('activity_records')
+    op.drop_index(op.f('ix_runs_execution_plane_id'), table_name='runs')
     op.drop_index(op.f('ix_runs_workspace_id'), table_name='runs')
     op.drop_index(op.f('ix_runs_trigger_origin'), table_name='runs')
     op.drop_index(op.f('ix_runs_task_id'), table_name='runs')
@@ -1495,10 +1747,14 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_sessions_space_id'), table_name='sessions')
     op.drop_index(op.f('ix_sessions_agent_id'), table_name='sessions')
     op.drop_table('sessions')
+    op.drop_index(op.f('ix_runtime_adapters_execution_plane_id'), table_name='runtime_adapters')
     op.drop_index(op.f('ix_runtime_adapters_space_id'), table_name='runtime_adapters')
     op.drop_index(op.f('ix_runtime_adapters_provider_id'), table_name='runtime_adapters')
     op.drop_index(op.f('ix_runtime_adapters_credential_id'), table_name='runtime_adapters')
     op.drop_table('runtime_adapters')
+    op.drop_index(op.f('ix_execution_planes_enabled'), table_name='execution_planes')
+    op.drop_index(op.f('ix_execution_planes_space_id'), table_name='execution_planes')
+    op.drop_table('execution_planes')
     op.drop_index(op.f('ix_jobs_workspace_id'), table_name='jobs')
     op.drop_index(op.f('ix_jobs_user_id'), table_name='jobs')
     op.drop_index(op.f('ix_jobs_status'), table_name='jobs')

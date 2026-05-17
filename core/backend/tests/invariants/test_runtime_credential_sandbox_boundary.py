@@ -51,7 +51,7 @@ class TestRunExecutionUsesCanonicalRuntimeRegistry:
         """app.agents.runner._ADAPTER_REGISTRY must not be the source of new adapters."""
         from app.agents.runner import _ADAPTER_REGISTRY
         from app.runtimes.registry import _RUNTIME_ADAPTER_CLASSES  # type: ignore[attr-defined]
-        # The legacy registry may have overlapping names for old CLI adapters,
+        # The CLI adapter registry may have overlapping names with canonical adapters,
         # but new execution resolves through app.runtimes, not app.agents.
         # Verify the canonical registry is a separate object.
         assert _ADAPTER_REGISTRY is not _RUNTIME_ADAPTER_CLASSES
@@ -136,11 +136,11 @@ class TestCanonicalSandboxManagerSource:
         assert "worktree_manager" in source
 
     def test_workspace_sandbox_manager_is_not_imported_by_execution(self):
-        """app.runs.execution must not import the legacy workspace.sandbox_manager."""
+        """app.runs.execution must not import the CLI-only workspace.sandbox_manager."""
         import app.runs.execution as svc
         source = inspect.getsource(svc)
         assert "workspace.sandbox_manager" not in source
-        assert "SandboxManager" not in source  # SandboxManager is the legacy class
+        assert "SandboxManager" not in source  # SandboxManager is CLI adapter only
 
 
 # ---------------------------------------------------------------------------

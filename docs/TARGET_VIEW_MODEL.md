@@ -141,7 +141,7 @@ Deferred until PersonalView concept is stabilized. See `docs/FUTURE_ROADMAP.md`.
 ## 7. SourcePointer / Federated Pointer
 
 **Definition:** A lightweight cross-space reference that points to content in another space
-without copying it. The old `context_sources` table was removed from the schema.
+without copying it. `context_sources` is not in the canonical schema.
 
 **Responsible for:**
 - Recording provenance metadata: which object in `owner_space` references which object in

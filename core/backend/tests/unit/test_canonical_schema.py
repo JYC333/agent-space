@@ -68,6 +68,13 @@ REQUIRED_TABLES = {
     "personal_memory_grants",
     "proposal_approvals",
     "personal_memory_grant_events",
+    # Control plane tables
+    "execution_planes",
+    "validation_recipes",
+    "workspace_profiles",
+    "external_run_records",
+    "run_reflections",
+    "runtime_tool_bindings",
 }
 
 
@@ -982,3 +989,531 @@ def test_personal_memory_grant_constraints_reject_null_run_id(canonical_engine):
                 assert "AssertionError" not in type(exc).__name__, (
                     "DB did not enforce NOT NULL on target_run_id"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Control plane schema: execution_planes, new table columns, FKs, and seeding
+# ---------------------------------------------------------------------------
+
+
+def test_execution_planes_required_columns_exist(canonical_engine):
+    """execution_planes has all required control-plane columns."""
+    inspector = inspect(canonical_engine)
+    col_defs = {c["name"]: c for c in inspector.get_columns("execution_planes")}
+    required = {
+        "id", "space_id", "name", "type", "provider",
+        "execution_location", "runtime_origin", "trust_level",
+        "observability_level", "data_exposure_level", "credential_mode",
+        "config_json", "enabled", "created_at", "updated_at",
+    }
+    assert required.issubset(col_defs), f"Missing columns: {required - col_defs.keys()}"
+    assert col_defs["space_id"]["nullable"] is False
+    assert col_defs["name"]["nullable"] is False
+    assert col_defs["type"]["nullable"] is False
+    assert col_defs["enabled"]["nullable"] is False
+
+
+def test_execution_planes_fks_exist(canonical_engine):
+    """execution_planes has FK to spaces.id."""
+    inspector = inspect(canonical_engine)
+    fks = _foreign_keys(inspector, "execution_planes")
+    assert ("space_id", "spaces", "id") in fks
+
+
+def test_execution_planes_unique_space_name_constraint_exists(canonical_engine):
+    """execution_planes enforces (space_id, name) uniqueness."""
+    from sqlalchemy import text as sa_text
+
+    with canonical_engine.connect() as conn:
+        rows = conn.execute(
+            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='execution_planes'")
+        ).fetchall()
+    ddl = rows[0][0] if rows else ""
+    assert "uq_execution_planes_space_name" in ddl
+
+
+def test_execution_planes_check_constraints_exist(canonical_engine):
+    """execution_planes has CHECK constraints for all enum fields."""
+    from sqlalchemy import text as sa_text
+
+    with canonical_engine.connect() as conn:
+        rows = conn.execute(
+            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='execution_planes'")
+        ).fetchall()
+    ddl = rows[0][0] if rows else ""
+    assert "ck_execution_planes_type" in ddl
+    assert "ck_execution_planes_trust_level" in ddl
+    assert "ck_execution_planes_observability_level" in ddl
+    assert "ck_execution_planes_data_exposure_level" in ddl
+    assert "ck_execution_planes_credential_mode" in ddl
+
+
+def test_runtime_adapters_extended_with_execution_plane(canonical_engine):
+    """runtime_adapters has execution_plane_id FK to execution_planes and capability_support_json column."""
+    inspector = inspect(canonical_engine)
+    col_names = {c["name"] for c in inspector.get_columns("runtime_adapters")}
+    assert "execution_plane_id" in col_names, "runtime_adapters.execution_plane_id missing"
+    assert "capability_support_json" in col_names, "runtime_adapters.capability_support_json missing"
+    fks = _foreign_keys(inspector, "runtime_adapters")
+    assert ("execution_plane_id", "execution_planes", "id") in fks
+
+
+def test_runs_extended_with_execution_plane_and_externality_fields(canonical_engine):
+    """runs has execution_plane_id FK and all externality/observability snapshot fields."""
+    inspector = inspect(canonical_engine)
+    col_names = {c["name"] for c in inspector.get_columns("runs")}
+    required = {
+        "execution_plane_id",
+        "source",
+        "observability_level",
+        "data_exposure_level",
+        "trust_level",
+        "externality_level",
+    }
+    assert required.issubset(col_names), f"Missing run columns: {required - col_names}"
+    fks = _foreign_keys(inspector, "runs")
+    assert ("execution_plane_id", "execution_planes", "id") in fks
+
+
+def test_runs_source_and_externality_check_constraints_exist(canonical_engine):
+    """runs.source and runs.externality_level have CHECK constraints."""
+    from sqlalchemy import text as sa_text
+
+    with canonical_engine.connect() as conn:
+        rows = conn.execute(
+            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='runs'")
+        ).fetchall()
+    ddl = rows[0][0] if rows else ""
+    assert "ck_runs_source" in ddl, "ck_runs_source CHECK constraint missing"
+    assert "ck_runs_externality_level" in ddl, "ck_runs_externality_level CHECK constraint missing"
+    assert "manual_import" in ddl, "source CHECK must include 'manual_import'"
+    assert "local_external" in ddl, "externality_level CHECK must include 'local_external'"
+
+
+def test_context_snapshots_has_runtime_facing_fields(canonical_engine):
+    """context_snapshots has runtime-facing rendered context columns (soft references, no FKs)."""
+    inspector = inspect(canonical_engine)
+    col_names = {c["name"] for c in inspector.get_columns("context_snapshots")}
+    required = {
+        "target_runtime_adapter_id",
+        "execution_plane_id",
+        "included_memory_refs_json",
+        "included_file_refs_json",
+        "included_doc_refs_json",
+        "redactions_json",
+        "data_exposure_level",
+        "rendered_context_uri",
+        "rendered_context_text",
+    }
+    assert required.issubset(col_names), f"Missing context_snapshot columns: {required - col_names}"
+    # These are deliberately soft references (no FK constraints) — enforce that here
+    fks = _foreign_keys(inspector, "context_snapshots")
+    assert ("target_runtime_adapter_id", "runtime_adapters", "id") not in fks, (
+        "context_snapshots.target_runtime_adapter_id must be a soft reference (no FK) "
+        "because context_snapshots is created before runtime_adapters in migration DDL order"
+    )
+    assert ("execution_plane_id", "execution_planes", "id") not in fks, (
+        "context_snapshots.execution_plane_id must be a soft reference (no FK)"
+    )
+
+
+def test_artifacts_extended_with_source_plane_fields(canonical_engine):
+    """artifacts has source_runtime_adapter_id and source_execution_plane_id with FKs, plus trust_level."""
+    inspector = inspect(canonical_engine)
+    col_names = {c["name"] for c in inspector.get_columns("artifacts")}
+    assert "source_runtime_adapter_id" in col_names, "artifacts.source_runtime_adapter_id missing"
+    assert "source_execution_plane_id" in col_names, "artifacts.source_execution_plane_id missing"
+    assert "trust_level" in col_names, "artifacts.trust_level missing"
+    fks = _foreign_keys(inspector, "artifacts")
+    assert ("source_runtime_adapter_id", "runtime_adapters", "id") in fks
+    assert ("source_execution_plane_id", "execution_planes", "id") in fks
+
+
+def test_validation_recipes_required_columns_exist(canonical_engine):
+    """validation_recipes has all required columns."""
+    inspector = inspect(canonical_engine)
+    col_names = {c["name"] for c in inspector.get_columns("validation_recipes")}
+    required = {
+        "id", "space_id", "workspace_id", "name", "task_type", "risk_level",
+        "commands_json", "required_checks_json", "timeout_seconds",
+        "requires_clean_git_state", "enabled", "created_at", "updated_at",
+    }
+    assert required.issubset(col_names), f"Missing: {required - col_names}"
+
+
+def test_validation_recipes_fks_exist(canonical_engine):
+    """validation_recipes has FKs to spaces and workspaces."""
+    inspector = inspect(canonical_engine)
+    fks = _foreign_keys(inspector, "validation_recipes")
+    assert ("space_id", "spaces", "id") in fks
+    assert ("workspace_id", "workspaces", "id") in fks
+
+
+def test_workspace_profiles_required_columns_exist(canonical_engine):
+    """workspace_profiles has all required operational knowledge columns."""
+    inspector = inspect(canonical_engine)
+    col_names = {c["name"] for c in inspector.get_columns("workspace_profiles")}
+    required = {
+        "id", "space_id", "workspace_id",
+        "validation_recipe_id", "preferred_runtime_adapter_id",
+        "cloud_allowed", "max_data_exposure_level", "min_observability_level",
+        "created_at", "updated_at",
+    }
+    assert required.issubset(col_names), f"Missing: {required - col_names}"
+
+
+def test_workspace_profiles_fks_exist(canonical_engine):
+    """workspace_profiles has FKs to spaces, workspaces, validation_recipes, and runtime_adapters."""
+    inspector = inspect(canonical_engine)
+    fks = _foreign_keys(inspector, "workspace_profiles")
+    assert ("space_id", "spaces", "id") in fks
+    assert ("workspace_id", "workspaces", "id") in fks
+    assert ("validation_recipe_id", "validation_recipes", "id") in fks
+    assert ("preferred_runtime_adapter_id", "runtime_adapters", "id") in fks
+
+
+def test_workspace_profiles_unique_workspace_constraint_exists(canonical_engine):
+    """workspace_profiles enforces one-profile-per-workspace uniqueness."""
+    from sqlalchemy import text as sa_text
+
+    with canonical_engine.connect() as conn:
+        rows = conn.execute(
+            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='workspace_profiles'")
+        ).fetchall()
+    ddl = rows[0][0] if rows else ""
+    assert "uq_workspace_profiles_workspace" in ddl
+
+
+def test_external_run_records_required_columns_and_fks_exist(canonical_engine):
+    """external_run_records has required columns and FKs to runs, runtime_adapters, and execution_planes."""
+    inspector = inspect(canonical_engine)
+    col_names = {c["name"] for c in inspector.get_columns("external_run_records")}
+    required = {
+        "id", "space_id", "run_id", "vendor", "runtime_adapter_id",
+        "execution_plane_id", "observability_level", "data_exposure_level",
+        "status", "created_at",
+    }
+    assert required.issubset(col_names), f"Missing: {required - col_names}"
+    fks = _foreign_keys(inspector, "external_run_records")
+    assert ("space_id", "spaces", "id") in fks
+    assert ("run_id", "runs", "id") in fks
+    assert ("runtime_adapter_id", "runtime_adapters", "id") in fks
+    assert ("execution_plane_id", "execution_planes", "id") in fks
+
+
+def test_run_reflections_required_columns_and_fks_exist(canonical_engine):
+    """run_reflections has required columns and FKs to spaces and runs."""
+    inspector = inspect(canonical_engine)
+    col_names = {c["name"] for c in inspector.get_columns("run_reflections")}
+    required = {
+        "id", "space_id", "run_id", "source",
+        "memory_candidates_json", "policy_candidates_json",
+        "capability_candidates_json", "created_at",
+    }
+    assert required.issubset(col_names), f"Missing: {required - col_names}"
+    fks = _foreign_keys(inspector, "run_reflections")
+    assert ("space_id", "spaces", "id") in fks
+    assert ("run_id", "runs", "id") in fks
+
+
+def test_run_reflections_source_check_constraint_exists(canonical_engine):
+    """run_reflections.source has a CHECK constraint."""
+    from sqlalchemy import text as sa_text
+
+    with canonical_engine.connect() as conn:
+        rows = conn.execute(
+            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_reflections'")
+        ).fetchall()
+    ddl = rows[0][0] if rows else ""
+    assert "ck_run_reflections_source" in ddl
+
+
+def test_run_reflections_does_not_have_mutation_columns(canonical_engine):
+    """run_reflections must only store candidates — not direct policy/memory mutations."""
+    inspector = inspect(canonical_engine)
+    col_names = {c["name"] for c in inspector.get_columns("run_reflections")}
+    forbidden = {"applied_policy_id", "applied_memory_id", "state_mutation_json", "direct_write_json"}
+    found = forbidden & col_names
+    assert not found, f"run_reflections must not have mutation columns: {found}"
+
+
+def test_runtime_tool_bindings_required_columns_and_fks_exist(canonical_engine):
+    """runtime_tool_bindings has required columns and FKs to spaces, runtime_adapters, and execution_planes."""
+    inspector = inspect(canonical_engine)
+    col_names = {c["name"] for c in inspector.get_columns("runtime_tool_bindings")}
+    required = {
+        "id", "space_id", "workspace_id", "agent_id", "runtime_adapter_id",
+        "execution_plane_id", "external_type", "external_ref", "display_name",
+        "data_exposure_level", "observability_level", "side_effect_level",
+        "approval_required", "enabled", "created_at", "updated_at",
+    }
+    assert required.issubset(col_names), f"Missing: {required - col_names}"
+    fks = _foreign_keys(inspector, "runtime_tool_bindings")
+    assert ("space_id", "spaces", "id") in fks
+    assert ("workspace_id", "workspaces", "id") in fks
+    assert ("agent_id", "agents", "id") in fks
+    assert ("runtime_adapter_id", "runtime_adapters", "id") in fks
+    assert ("execution_plane_id", "execution_planes", "id") in fks
+
+
+def test_runtime_tool_bindings_check_constraints_exist(canonical_engine):
+    """runtime_tool_bindings has CHECK constraints for external_type and side_effect_level."""
+    from sqlalchemy import text as sa_text
+
+    with canonical_engine.connect() as conn:
+        rows = conn.execute(
+            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='runtime_tool_bindings'")
+        ).fetchall()
+    ddl = rows[0][0] if rows else ""
+    assert "ck_runtime_tool_bindings_external_type" in ddl
+    assert "ck_runtime_tool_bindings_side_effect_level" in ddl
+    assert "mcp_server" in ddl, "external_type CHECK must include 'mcp_server'"
+    assert "sensitive" in ddl, "side_effect_level CHECK must include 'sensitive'"
+
+
+def test_runtime_tool_bindings_approval_required_defaults_true(canonical_engine):
+    """runtime_tool_bindings.approval_required must default to TRUE (gate by default)."""
+    inspector = inspect(canonical_engine)
+    col_defs = {c["name"]: c for c in inspector.get_columns("runtime_tool_bindings")}
+    assert col_defs["approval_required"]["nullable"] is False
+    # Default is 1 (true) in SQLite
+    raw = str(col_defs["approval_required"].get("default") or "").strip("'\" ")
+    assert raw in ("1", "True", "true", ""), f"approval_required default must be true, got {raw!r}"
+
+
+def test_default_execution_planes_are_seeded(canonical_conn):
+    """seed_default_execution_planes creates all 7 canonical planes idempotently."""
+    from app.execution_planes.seeder import seed_default_execution_planes
+
+    Session = sessionmaker(bind=canonical_conn, join_transaction_mode="create_savepoint")
+    db = Session()
+    try:
+        space = models.Space(id="seed-space-1", name="Seed Space")
+        db.add(space)
+        db.commit()
+
+        seed_default_execution_planes(db, "seed-space-1")
+
+        planes = db.query(models.ExecutionPlane).filter_by(space_id="seed-space-1").all()
+        names = {p.name for p in planes}
+        expected = {
+            "agent_space_native_local",
+            "local_codex_cli",
+            "local_claude_code_cli",
+            "local_opencode",
+            "remote_codex",
+            "remote_claude",
+            "manual_import",
+        }
+        assert expected == names, f"Missing planes: {expected - names}"
+
+        # Remote vendor planes must be disabled by default (data exposure risk)
+        for plane in planes:
+            if plane.name in ("remote_codex", "remote_claude"):
+                assert plane.enabled is False, f"{plane.name} must be disabled by default"
+
+        # Native local plane must have high trust and full observability
+        native = next(p for p in planes if p.name == "agent_space_native_local")
+        assert native.trust_level == "high"
+        assert native.observability_level == "full_trace"
+        assert native.data_exposure_level == "local_only"
+
+        # local_opencode must use provider='opencode', not 'other'
+        opencode = next(p for p in planes if p.name == "local_opencode")
+        assert opencode.provider == "opencode", (
+            f"local_opencode.provider must be 'opencode', got {opencode.provider!r}"
+        )
+
+        # Re-seeding must be idempotent
+        seed_default_execution_planes(db, "seed-space-1")
+        count_after = db.query(models.ExecutionPlane).filter_by(space_id="seed-space-1").count()
+        assert count_after == 7, "Re-seeding must not create duplicate planes"
+    finally:
+        db.close()
+
+
+def test_control_plane_orm_relationships_navigate_correctly(canonical_conn):
+    """ORM relationships for Space→ExecutionPlane, RuntimeAdapter→ExecutionPlane, Run→ExecutionPlane,
+    Workspace→WorkspaceProfile, Run→ExternalRunRecord, and Run→RunReflection are wired correctly."""
+    Session = sessionmaker(bind=canonical_conn, join_transaction_mode="create_savepoint")
+    db = Session()
+    try:
+        space = models.Space(id="cp-space-1", name="CP Space")
+        user = models.User(id="cp-user-1", space_id=space.id, email="cp@example.com", display_name="CP User")
+        db.add_all([space, user])
+        db.commit()
+
+        plane = models.ExecutionPlane(
+            id="plane-1",
+            space_id=space.id,
+            name="test_plane",
+            type="native",
+            provider="agent_space",
+            execution_location="local",
+            runtime_origin="native",
+            trust_level="high",
+            observability_level="full_trace",
+            data_exposure_level="local_only",
+            credential_mode="agent_space_vault",
+            config_json={},
+            enabled=True,
+        )
+        db.add(plane)
+        db.commit()
+
+        # Space → ExecutionPlane
+        loaded_space = db.get(models.Space, space.id)
+        assert any(p.id == plane.id for p in loaded_space.execution_planes)
+
+        credential = models.Credential(
+            id="cp-cred-1", space_id=space.id, name="cred",
+            credential_type="api_key", secret_ref="secret://x",
+        )
+        provider = models.ModelProvider(
+            id="cp-prov-1", space_id=space.id, name="P",
+            provider_type="test", credential_id=credential.id,
+        )
+        adapter = models.RuntimeAdapter(
+            id="cp-adapter-1", space_id=space.id, name="Adapter",
+            adapter_type="echo", provider_id=provider.id,
+            execution_plane_id=plane.id,
+        )
+        db.add_all([credential, provider, adapter])
+        db.commit()
+
+        # RuntimeAdapter → ExecutionPlane
+        loaded_adapter = db.get(models.RuntimeAdapter, adapter.id)
+        assert loaded_adapter.execution_plane.id == plane.id
+
+        agent = models.Agent(id="cp-agent-1", space_id=space.id, owner_user_id=user.id, name="A")
+        version = models.AgentVersion(
+            id="cp-ver-1", agent_id=agent.id, space_id=space.id, version_label="v1",
+            model_provider_id=provider.id, runtime_adapter_id=adapter.id,
+            system_prompt="test",
+        )
+        agent.current_version_id = version.id
+        workspace = models.Workspace(id="cp-ws-1", space_id=space.id, name="WS", created_by_user_id=user.id)
+        snapshot = models.ContextSnapshot(id="cp-snap-1", space_id=space.id, source_refs_json=[])
+        db.add_all([agent, version, workspace, snapshot])
+        db.commit()
+
+        run = models.Run(
+            id="cp-run-1", space_id=space.id, agent_id=agent.id,
+            agent_version_id=version.id, context_snapshot_id=snapshot.id,
+            workspace_id=workspace.id, instructed_by_user_id=user.id,
+            model_provider_id=provider.id, runtime_adapter_id=adapter.id,
+            execution_plane_id=plane.id,
+            run_type="agent", trigger_origin="manual", prompt="test",
+            mode="dry_run", status="queued",
+        )
+        db.add(run)
+        db.commit()
+
+        # Run → ExecutionPlane
+        loaded_run = db.get(models.Run, run.id)
+        assert loaded_run.execution_plane.id == plane.id
+
+        # Workspace → WorkspaceProfile (one-to-one via back_populates)
+        profile = models.WorkspaceProfile(
+            id="cp-prof-1", space_id=space.id, workspace_id=workspace.id,
+            cloud_allowed=False,
+        )
+        db.add(profile)
+        db.commit()
+        loaded_ws = db.get(models.Workspace, workspace.id)
+        assert loaded_ws.profile is not None
+        assert loaded_ws.profile.id == profile.id
+
+        # Run → ExternalRunRecord
+        ext = models.ExternalRunRecord(
+            id="cp-ext-1", space_id=space.id, run_id=run.id,
+            vendor="manual", execution_plane_id=plane.id,
+        )
+        db.add(ext)
+        db.commit()
+        loaded_run = db.get(models.Run, run.id)
+        assert any(e.id == ext.id for e in loaded_run.external_run_records)
+
+        # Run → RunReflection
+        reflection = models.RunReflection(
+            id="cp-refl-1", space_id=space.id, run_id=run.id, source="native",
+        )
+        db.add(reflection)
+        db.commit()
+        loaded_run = db.get(models.Run, run.id)
+        assert any(r.id == reflection.id for r in loaded_run.run_reflections)
+    finally:
+        db.close()
+
+
+def test_on_space_created_seeds_execution_planes(canonical_conn):
+    """on_space_created seeds all 7 default execution planes for every new space, idempotently."""
+    from app.spaces.hooks import on_space_created
+
+    Session = sessionmaker(bind=canonical_conn, join_transaction_mode="create_savepoint")
+    db = Session()
+    try:
+        space = models.Space(id="hook-space-1", name="Hook Space")
+        user = models.User(id="hook-user-1", space_id=space.id, email="hook@example.com", display_name="Hook User")
+        db.add_all([space, user])
+        db.commit()
+
+        on_space_created(db, space.id, seeded_by_user_id=user.id)
+
+        count = db.query(models.ExecutionPlane).filter_by(space_id=space.id).count()
+        assert count == 7, f"on_space_created must seed 7 execution planes, got {count}"
+
+        # Second call must not create duplicates
+        on_space_created(db, space.id, seeded_by_user_id=user.id)
+        count_after = db.query(models.ExecutionPlane).filter_by(space_id=space.id).count()
+        assert count_after == 7, "on_space_created seeding must be idempotent"
+    finally:
+        db.close()
+
+
+def test_runs_does_not_have_orphaned_columns(canonical_engine):
+    """runs.executor_type and runs.sandbox_level are removed; current semantic fields remain."""
+    inspector = inspect(canonical_engine)
+    col_names = {c["name"] for c in inspector.get_columns("runs")}
+    assert "executor_type" not in col_names, "runs.executor_type must be removed"
+    assert "sandbox_level" not in col_names, "runs.sandbox_level must be removed"
+    # Current semantic fields must remain
+    assert "required_sandbox_level" in col_names
+    assert "execution_plane_id" in col_names
+    assert "externality_level" in col_names
+
+
+def test_copied_enum_check_constraints_exist(canonical_engine):
+    """Copied enum fields on runs, artifacts, external_run_records, runtime_tool_bindings,
+    workspace_profiles, and context_snapshots have matching CHECK constraints."""
+    from sqlalchemy import text as sa_text
+
+    def get_ddl(conn, table):
+        rows = conn.execute(
+            sa_text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table}'")
+        ).fetchall()
+        return rows[0][0] if rows else ""
+
+    with canonical_engine.connect() as conn:
+        runs_ddl = get_ddl(conn, "runs")
+        assert "ck_runs_observability_level" in runs_ddl, "ck_runs_observability_level missing"
+        assert "ck_runs_data_exposure_level" in runs_ddl, "ck_runs_data_exposure_level missing"
+        assert "ck_runs_trust_level" in runs_ddl, "ck_runs_trust_level missing"
+
+        artifacts_ddl = get_ddl(conn, "artifacts")
+        assert "ck_artifacts_trust_level" in artifacts_ddl, "ck_artifacts_trust_level missing"
+
+        ext_ddl = get_ddl(conn, "external_run_records")
+        assert "ck_external_run_records_observability_level" in ext_ddl
+        assert "ck_external_run_records_data_exposure_level" in ext_ddl
+
+        rtb_ddl = get_ddl(conn, "runtime_tool_bindings")
+        assert "ck_runtime_tool_bindings_data_exposure_level" in rtb_ddl
+        assert "ck_runtime_tool_bindings_observability_level" in rtb_ddl
+
+        wp_ddl = get_ddl(conn, "workspace_profiles")
+        assert "ck_workspace_profiles_max_data_exposure_level" in wp_ddl
+        assert "ck_workspace_profiles_min_observability_level" in wp_ddl
+
+        cs_ddl = get_ddl(conn, "context_snapshots")
+        assert "ck_context_snapshots_data_exposure_level" in cs_ddl

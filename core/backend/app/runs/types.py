@@ -1,9 +1,8 @@
 """Canonical return types for the run execution service.
 
-``RuntimeExecutionResult`` was previously defined in ``app.agents.base``.
-It is now defined here so that ``app.runs.execution`` has no dependency on
-the legacy ``app.agents`` stack.  ``app.agents.base`` re-exports it for
-backward compatibility with existing CLI adapter code.
+``RuntimeExecutionResult`` is the execution adapter contract.
+``app.agents.base`` re-exports it for stable CLI adapter imports.
+New code should import from here directly.
 """
 from __future__ import annotations
 

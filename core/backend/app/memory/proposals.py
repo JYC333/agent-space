@@ -64,13 +64,12 @@ class ProposalAcceptResult:
 
 
 # ---------------------------------------------------------------------------
-# Backward-compat appliers kept for import compatibility during transition.
-# New code must use ProposalApplyService (apply_service.py).
+# Public re-exports. New code must use ProposalApplyService (apply_service.py).
 # ---------------------------------------------------------------------------
 
 
 class MemoryUpdateProposalApplier:
-    """Legacy applier kept for import compatibility.  Delegates to ProposalApplyService."""
+    """Public re-export. Delegates to ProposalApplyService."""
 
     def __init__(self, db: Session):
         self.db = db

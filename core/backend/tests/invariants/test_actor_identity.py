@@ -215,7 +215,7 @@ def test_policy_context_actor_ref_field_is_stable_json():
 
 
 # ---------------------------------------------------------------------------
-# Auth: HTTP query/default identity fallback must remain absent after M2
+# Auth: HTTP query/default identity fallback must remain absent
 # ---------------------------------------------------------------------------
 
 def test_no_default_user_fallback_in_get_identity(client):

@@ -18,6 +18,8 @@ def on_space_created(db: Session, space_id: str, *, seeded_by_user_id: str) -> N
     """
     from ..memory.seeder import seed_system_memories_for_space
     from ..agents.seeder import seed_builtin_agents
+    from ..execution_planes.seeder import seed_default_execution_planes
 
     seed_system_memories_for_space(db, space_id)
     seed_builtin_agents(db, space_id=space_id, owner_user_id=seeded_by_user_id)
+    seed_default_execution_planes(db, space_id)

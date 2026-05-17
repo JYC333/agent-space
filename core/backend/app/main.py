@@ -38,6 +38,12 @@ async def lifespan(app: FastAPI):
         from .workspaces.system_core import register_system_core_workspace
         register_system_core_workspace(db)
 
+        # Seed default execution planes only when the default space already exists
+        _default_space = db.query(Space).filter(Space.id == settings.default_space_id).first()
+        if _default_space:
+            from .execution_planes.seeder import seed_default_execution_planes
+            seed_default_execution_planes(db, settings.default_space_id)
+
         if settings.debug:
             dev_space = db.query(Space).filter(Space.id == settings.default_space_id).first()
             owner_ms = (

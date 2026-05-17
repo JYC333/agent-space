@@ -878,9 +878,7 @@ class RunOut(BaseModel):
     output: Optional[str]
     error: Optional[str]
     exit_code: Optional[int]
-    sandbox_level: Optional[str]
     sandbox_path: Optional[str]
-    executor_type: Optional[str]
     runtime_seconds: Optional[float]
     usage_accuracy: str
     estimated_input_tokens: Optional[int]
@@ -912,6 +910,11 @@ class RunCreate(BaseModel):
     parent_run_id: Optional[str] = None
     instructed_by_agent_id: Optional[str] = None
     adapter_type: Optional[str] = None
+    # Execution plane hints — used by the service to resolve and snapshot plane metadata.
+    # source is NOT accepted from the client; it is always set to "managed" by the service.
+    execution_plane_id: Optional[str] = None
+    runtime_adapter_id: Optional[str] = None
+    model_provider_id: Optional[str] = None
 
 
 class RunOutV2(BaseModel):

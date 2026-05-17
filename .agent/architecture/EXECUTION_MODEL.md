@@ -34,7 +34,7 @@ RunStep error/metadata is filtered by `app/runs/redaction.py` before persisting.
 
 New audit, event, and RunStep surfaces carry actor identity via `actor_ref` (structured reference). Actor kinds: `user`, `agent`, `system`, `automation`, `connector`, `service_account`.
 
-Historical Run and Proposal rows use separate nullable `*_user_id` and `*_agent_id` fields. New surfaces use `actor_ref`. Old nullable fields remain readable during compatibility.
+Historical Run and Proposal rows use separate nullable `*_user_id` and `*_agent_id` fields. New surfaces use `actor_ref`. These fields are not migrated in bulk; new records use actor_ref.
 
 ## Canonical Runtime Path
 

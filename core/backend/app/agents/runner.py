@@ -2,10 +2,10 @@ from __future__ import annotations
 """
 Runner — adapter registry and post-run hook infrastructure.
 
-COMPATIBILITY / MIGRATION TARGET ONLY (M4)
-===========================================
-``app.agents`` is the legacy CLI runner stack.  It exists for backward
-compatibility with existing CLI adapter routes and tests.  It is NOT the
+CLI ADAPTER RUNTIME PATH ONLY
+==============================
+``app.agents`` is the CLI adapter runtime path.  It provides the registry
+and hook infrastructure for existing CLI adapter routes.  It is NOT the
 canonical location for new product runtime behavior.
 
 Do NOT add new runtime adapters here.  New adapters belong in:
@@ -22,10 +22,10 @@ This module must NOT bypass:
 Current canonical execution path: RunExecutionService (app.runs.execution)
 uses app.runtimes.registry — NOT this module — for all new run execution.
 
-This module provides (legacy support only):
+This module provides (CLI adapter runtime only):
   - Adapter registry (_ADAPTER_REGISTRY) for CLI adapter routes
   - Post-run hook registry (register_post_run_hook, PostRunHook type)
-  - Adapter resolution helper (resolve_adapter) for old CLI agent routes
+  - Adapter resolution helper (resolve_adapter) for CLI adapter routes
 """
 
 import logging
@@ -99,7 +99,7 @@ def resolve_adapter(
     risk_level: str = "medium",
 ) -> tuple[AgentAdapter, str, str | None, str]:
     """
-    Return (adapter, sandbox_level, sandbox_path, executor_type) for this run.
+    Return (adapter, sandbox_level, sandbox_path, execution_mode) for this run.
 
     Routing:
       - Non-sandboxed adapters (echo, …): run directly on the host.

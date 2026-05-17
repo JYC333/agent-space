@@ -84,7 +84,7 @@ This document describes current capability lines and known future risks. It is o
 
 ### 6. Memory / Provenance / Source-Evidence Maturation
 
-**Current state:** `ActivityRecord`, `ProvenanceLink`, `Proposal.payload_json` provenance entries, and `MemoryEntry.source_*` fields form the current provenance chain. The old `context_sources` table was removed from the schema. No first-class `Source` or `Evidence` table exists yet.
+**Current state:** `ActivityRecord`, `ProvenanceLink`, `Proposal.payload_json` provenance entries, and `MemoryEntry.source_*` fields form the current provenance chain. `context_sources` is not in the canonical schema. No first-class `Source` or `Evidence` table exists yet.
 
 **Why it matters:** Trustworthy memory depends on a complete provenance chain. Future external ingestion depends on knowing where data came from and whether it was reviewed.
 
@@ -190,6 +190,66 @@ This document describes current capability lines and known future risks. It is o
 
 ---
 
+### 13. Control Plane and Learning Loop
+
+**Current state:** The data model is sufficient for the MVP control-plane loop. Core model supports:
+
+- `ExecutionPlane` — registered execution environments and their capability envelope
+- `ModelProvider` — provider credential and config binding
+- `RuntimeAdapter` — adapter registration per plane
+- Run execution metadata snapshots — per-run plane/adapter/model resolution record
+- `WorkspaceProfile` — per-workspace runtime preferences and context hints
+- `ValidationRecipe` — evaluation criteria and success signals for a workspace/task type
+- `ExternalRunRecord` — ingested output from externally-managed runs
+- `RunReflection` — structured analysis of a run's outcome against validation criteria
+- `RuntimeToolBinding` — declared tool bindings per adapter/plane
+- `ContextSnapshot` runtime-facing metadata — rendered context state at run time
+- Artifact runtime/execution-plane provenance — artifacts carry producing plane and adapter
+
+**Design principle:** External runtime output is evidence, not truth. Long-term changes (memory, WorkspaceProfile, Capability, Policy) must go through proposals and require human approval. `ReflectionProposalBuilder` creates learning proposal candidates from `RunReflection` results. Apply handlers for these proposal types are not yet wired — accepting them raises `UnsupportedProposalTypeError`.
+
+**Current target loop:**
+```
+User request
+→ WorkspaceProfile
+→ ContextSnapshot / rendered context
+→ ExecutionPlane + RuntimeAdapter
+→ Run
+→ Artifact / ExternalRunRecord
+→ ValidationRecipe
+→ RunReflection
+→ Proposal
+→ approved Memory / WorkspaceProfile / Capability / Policy update
+```
+
+**Next work:**
+1. Run a manual-managed dogfood flow using a real workspace.
+2. Generate a runtime task spec from WorkspaceProfile + ContextSnapshot.
+3. Execute through local Codex / Claude Code / OpenCode manually or semi-manually.
+4. Import diff/log/summary as ExternalRunRecord and Artifacts.
+5. Generate RunReflection and proposal candidates.
+6. Evaluate whether proposal payloads are reviewable and useful.
+7. Only after 2–3 successful dogfood runs, automate the most stable parts.
+
+**Deferred intentionally:**
+- `RunStep` / `SubRun` until deeper trace or delegation is needed.
+- `RunRoutingPolicy` until routing rules outgrow service-level logic.
+- Separate `ContextBundle` table until one snapshot needs multiple rendered runtime bundles.
+- `ExternalCapability` / `CapabilityExport` until vendor plugin/skill export becomes real.
+- `Automation` / `Trigger` until managed run flow is stable.
+- Full native coding agent loop is not a current priority.
+- Cloud Codex / Claude managed integrations are not current priority.
+- Plugin marketplace is not current priority.
+
+**Risk watch:**
+- Proposal apply handlers are not wired yet; the learning loop does not close.
+- Runtime-facing context quality is unvalidated in real tasks.
+- RunReflection quality is unvalidated in real tasks.
+- WorkspaceProfile and ValidationRecipe usefulness must be validated through dogfooding.
+- API writes that affect `cloud_allowed`, preferred runtime, policy, or capability must remain proposal-gated or tightly permissioned.
+
+---
+
 ## Known Future Risks
 
 | Risk | Why it matters | Current status |
@@ -207,5 +267,5 @@ This document describes current capability lines and known future risks. It is o
 | Code patch operational risk | Partial apply with rollback failure leaves filesystem inconsistent | Explicit compensation logic; partial-apply errors surfaced |
 | Frontend exposing disabled surfaces | Planned-but-not-built modules appearing interactive | Registry `planned: true` pattern; "soon" badges enforced |
 | External connector privacy risk | External data ingested without lifecycle/trust bounds | No connector model; Source/Evidence design required first |
-| Actor identity migration cost | Many historical nullable user/agent fields across core tables | New surfaces use `actor_ref`; historical fields readable during compatibility |
+| Actor identity migration cost | Many historical nullable user/agent fields across core tables | New surfaces use `actor_ref`; fields not migrated in bulk; actor_ref used for new records |
 | Workspace console sessions / API keys | Feature-gated; operators cannot manage them through UI | 501-gated; manual operator action required |

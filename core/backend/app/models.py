@@ -73,6 +73,9 @@ class Space(Base):
     memberships: Mapped[list["SpaceMembership"]] = relationship("SpaceMembership", back_populates="space")
     agents: Mapped[list["Agent"]] = relationship("Agent", back_populates="space")
     workspaces: Mapped[list["Workspace"]] = relationship("Workspace", back_populates="space")
+    execution_planes: Mapped[list["ExecutionPlane"]] = relationship(
+        "ExecutionPlane", back_populates="space", foreign_keys="ExecutionPlane.space_id"
+    )
 
     __table_args__ = (
         CheckConstraint("type in ('personal', 'household', 'team')", name="ck_spaces_type"),
@@ -194,6 +197,9 @@ class Workspace(Base):
     owner_space_id = synonym("space_id")
 
     space: Mapped[Space] = relationship("Space", back_populates="workspaces")
+    profile: Mapped[Optional["WorkspaceProfile"]] = relationship(
+        "WorkspaceProfile", back_populates="workspace", uselist=False, foreign_keys="WorkspaceProfile.workspace_id"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +249,70 @@ class ModelProvider(Base):
     status = synonym("enabled")
 
 
+class ExecutionPlane(Base):
+    """Where a run executes: native, local CLI, remote vendor, or manual import.
+
+    Captures trust, observability, data-exposure, and credential semantics
+    for each execution environment. Runtime adapters are attached to a plane.
+    """
+
+    __tablename__ = "execution_planes"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    type: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    execution_location: Mapped[str] = mapped_column(String(32), nullable=False)
+    runtime_origin: Mapped[str] = mapped_column(String(64), nullable=False)
+    trust_level: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    observability_level: Mapped[str] = mapped_column(String(64), nullable=False, default="black_box")
+    data_exposure_level: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    credential_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    space: Mapped["Space"] = relationship("Space", back_populates="execution_planes", foreign_keys=[space_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "type in ('native', 'local', 'remote_vendor', 'hybrid', 'manual')",
+            name="ck_execution_planes_type",
+        ),
+        CheckConstraint(
+            "provider in ('agent_space', 'openai', 'anthropic', 'opencode', 'cursor', 'other')",
+            name="ck_execution_planes_provider",
+        ),
+        CheckConstraint(
+            "execution_location in ('local', 'remote', 'hybrid', 'manual')",
+            name="ck_execution_planes_execution_location",
+        ),
+        CheckConstraint(
+            "runtime_origin in ('native', 'external_vendor', 'open_source_external', 'manual')",
+            name="ck_execution_planes_runtime_origin",
+        ),
+        CheckConstraint(
+            "trust_level in ('high', 'medium', 'low', 'unknown')",
+            name="ck_execution_planes_trust_level",
+        ),
+        CheckConstraint(
+            "observability_level in ('full_trace', 'structured_events', 'artifacts_only', 'final_output_only', 'black_box')",
+            name="ck_execution_planes_observability_level",
+        ),
+        CheckConstraint(
+            "data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')",
+            name="ck_execution_planes_data_exposure_level",
+        ),
+        CheckConstraint(
+            "credential_mode in ('agent_space_vault', 'vendor_account', 'user_local', 'none', 'unknown')",
+            name="ck_execution_planes_credential_mode",
+        ),
+        UniqueConstraint("space_id", "name", name="uq_execution_planes_space_name"),
+    )
+
+
 class RuntimeAdapter(Base):
     __tablename__ = "runtime_adapters"
 
@@ -255,11 +325,14 @@ class RuntimeAdapter(Base):
     credential_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("credentials.id"), nullable=True, index=True)
     config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     health_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
+    capability_support_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
     provider: Mapped[Optional[ModelProvider]] = relationship("ModelProvider")
     credential: Mapped[Optional[Credential]] = relationship("Credential")
+    execution_plane: Mapped[Optional[ExecutionPlane]] = relationship("ExecutionPlane")
 
     # ORM mirrors for historical CLI adapter config field names.
     adapter_id = synonym("adapter_type")
@@ -536,6 +609,30 @@ class ContextSnapshot(Base):
     memory_digest_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     workspace_digest_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
+    # Runtime-facing context bundle fields. These represent the rendered context
+    # sent to an external runtime (Codex, Claude Code, OpenCode, etc.).
+    # target_runtime_adapter_id and execution_plane_id are soft references (no FK
+    # constraint) because context_snapshots is seeded before runtime_adapters and
+    # execution_planes in the migration order.
+    target_runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+    execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+    included_memory_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    included_file_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    included_doc_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    redactions_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    data_exposure_level: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    rendered_context_uri: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    # Prefer rendered_context_uri for large rendered contexts. Use rendered_context_text
+    # only for small inline contexts or fallback/debug — large payloads bloat the row.
+    rendered_context_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "data_exposure_level is null or data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')",
+            name="ck_context_snapshots_data_exposure_level",
+        ),
+    )
+
 
 # ---------------------------------------------------------------------------
 # ContextDigest — derived cache of approved Memory/Policy context
@@ -658,13 +755,11 @@ class Run(Base):
     model_selection_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="agent_space_provider")
     model_override_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     permission_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    sandbox_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     # Policy-derived minimum sandbox class for future real runtimes (no sandbox created here).
     required_sandbox_level: Mapped[str] = mapped_column(
         String(32), nullable=False, default="none", server_default=text("'none'")
     )
     sandbox_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    executor_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     runtime_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     usage_accuracy: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
     estimated_input_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -681,6 +776,17 @@ class Run(Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
     personal_grant_context_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    # Execution plane fields: where the run executed and at what trust/observability/exposure level.
+    # observability_level, data_exposure_level, and trust_level are snapshots copied from the
+    # execution plane at run creation time; they do not auto-update when the plane changes.
+    execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
+    source: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    observability_level: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    data_exposure_level: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    trust_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    externality_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
     completed_at = synonym("ended_at")
     output = synonym("output_json")
     error = synonym("error_message")
@@ -694,6 +800,9 @@ class Run(Base):
     proposals: Mapped[list["Proposal"]] = relationship("Proposal", back_populates="created_by_run")
     activities: Mapped[list["ActivityRecord"]] = relationship("ActivityRecord", back_populates="source_run")
     steps: Mapped[list["RunStep"]] = relationship("RunStep", back_populates="run", order_by="RunStep.step_index")
+    execution_plane: Mapped[Optional[ExecutionPlane]] = relationship("ExecutionPlane", foreign_keys=[execution_plane_id])
+    external_run_records: Mapped[list["ExternalRunRecord"]] = relationship("ExternalRunRecord", back_populates="run")
+    run_reflections: Mapped[list["RunReflection"]] = relationship("RunReflection", back_populates="run")
 
     __table_args__ = (
         CheckConstraint(
@@ -712,6 +821,26 @@ class Run(Base):
         CheckConstraint(
             "required_sandbox_level in ('none', 'dry_run', 'worktree', 'one_shot_docker')",
             name="ck_runs_required_sandbox_level",
+        ),
+        CheckConstraint(
+            "source is null or source in ('managed', 'ide_assist', 'manual_import', 'remote_import', 'scheduled', 'webhook')",
+            name="ck_runs_source",
+        ),
+        CheckConstraint(
+            "externality_level is null or externality_level in ('native', 'local_external', 'remote_external', 'hybrid', 'manual')",
+            name="ck_runs_externality_level",
+        ),
+        CheckConstraint(
+            "observability_level is null or observability_level in ('full_trace', 'structured_events', 'artifacts_only', 'final_output_only', 'black_box')",
+            name="ck_runs_observability_level",
+        ),
+        CheckConstraint(
+            "data_exposure_level is null or data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')",
+            name="ck_runs_data_exposure_level",
+        ),
+        CheckConstraint(
+            "trust_level is null or trust_level in ('high', 'medium', 'low', 'unknown')",
+            name="ck_runs_trust_level",
         ),
     )
 
@@ -823,6 +952,10 @@ class Artifact(Base):
         String(32), nullable=False, default="space_shared", server_default=text("'space_shared'")
     )
     owner_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    # Source provenance: which runtime adapter and execution plane produced this artifact.
+    source_runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
+    source_execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
+    trust_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
     # ORM mirrors for historical artifact field names.
     path = synonym("storage_path")
@@ -833,6 +966,10 @@ class Artifact(Base):
         CheckConstraint(
             "storage_path is null or storage_path not like '/%'",
             name="ck_artifacts_storage_path_relative",
+        ),
+        CheckConstraint(
+            "trust_level is null or trust_level in ('high', 'medium', 'low', 'unknown')",
+            name="ck_artifacts_trust_level",
         ),
     )
 
@@ -1428,8 +1565,8 @@ class Actor(Base):
     must reference an Actor rather than raw nullable user_id/agent_id pairs.
 
     Historical tables (Run, Proposal, ActivityRecord, …) keep their existing
-    user_id/agent_id fields during the compatibility window.  Do not migrate
-    them in bulk here.
+    user_id/agent_id fields.  New records use actor_ref.  Do not migrate
+    the old fields in bulk here.
 
     Constraints enforced by ActorService (not all expressible as simple DB checks
     with nullable columns in SQLite):
@@ -1688,4 +1825,231 @@ class PersonalMemoryGrantEvent(Base):
             name="ck_personal_memory_grant_events_event_type",
         ),
         Index("ix_personal_memory_grant_events_created_at", "created_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Execution control plane: validation, workspace profiles, external records
+# ---------------------------------------------------------------------------
+
+
+class ValidationRecipe(Base):
+    """Reusable validation definition for workspace/task types.
+
+    Validation is always controlled by agent-space even when coding execution is
+    delegated to Codex, Claude Code, OpenCode, Cursor, or another runtime.
+    """
+
+    __tablename__ = "validation_recipes"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    task_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    risk_level: Mapped[str] = mapped_column(String(32), nullable=False, default="low")
+    commands_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    required_checks_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    artifact_expectations_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    timeout_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    requires_clean_git_state: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "risk_level in ('low', 'medium', 'high')",
+            name="ck_validation_recipes_risk_level",
+        ),
+    )
+
+
+class WorkspaceProfile(Base):
+    """Structured operational knowledge for a workspace/repo.
+
+    Stores durable agent-facing config: paths, commands, allowed runtimes,
+    and data-exposure limits. Workspace.metadata_json is for ad-hoc annotations;
+    WorkspaceProfile holds structured operational rules.
+    """
+
+    __tablename__ = "workspace_profiles"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=False, index=True)
+    repo_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    tech_stack_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    important_paths_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    forbidden_paths_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    test_commands_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    build_commands_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    architecture_boundaries_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    current_focus: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    known_failures_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    validation_recipe_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("validation_recipes.id"), nullable=True)
+    preferred_runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True)
+    cloud_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    max_data_exposure_level: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    min_observability_level: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="profile", foreign_keys=[workspace_id])
+    validation_recipe: Mapped[Optional[ValidationRecipe]] = relationship("ValidationRecipe")
+    preferred_runtime_adapter: Mapped[Optional[RuntimeAdapter]] = relationship(
+        "RuntimeAdapter", foreign_keys=[preferred_runtime_adapter_id]
+    )
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", name="uq_workspace_profiles_workspace"),
+        CheckConstraint(
+            "max_data_exposure_level is null or max_data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')",
+            name="ck_workspace_profiles_max_data_exposure_level",
+        ),
+        CheckConstraint(
+            "min_observability_level is null or min_observability_level in ('full_trace', 'structured_events', 'artifacts_only', 'final_output_only', 'black_box')",
+            name="ck_workspace_profiles_min_observability_level",
+        ),
+    )
+
+
+class ExternalRunRecord(Base):
+    """Evidence record for an externally executed or manually imported run.
+
+    External output (Codex, Claude Code, Cursor, OpenCode, manual) is evidence,
+    not internal truth. This table attaches external evidence to an internal Run.
+    """
+
+    __tablename__ = "external_run_records"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=False, index=True)
+    vendor: Mapped[str] = mapped_column(String(64), nullable=False)
+    vendor_run_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
+    execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
+    external_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    observability_level: Mapped[str] = mapped_column(String(64), nullable=False, default="black_box")
+    data_exposure_level: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    trace_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    raw_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    raw_output_uri: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    imported_diff_uri: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    imported_artifacts_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    imported_logs_uri: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="imported")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    run: Mapped["Run"] = relationship("Run", back_populates="external_run_records", foreign_keys=[run_id])
+    runtime_adapter: Mapped[Optional[RuntimeAdapter]] = relationship("RuntimeAdapter", foreign_keys=[runtime_adapter_id])
+    execution_plane: Mapped[Optional[ExecutionPlane]] = relationship("ExecutionPlane", foreign_keys=[execution_plane_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "vendor in ('openai', 'anthropic', 'cursor', 'opencode', 'manual', 'other')",
+            name="ck_external_run_records_vendor",
+        ),
+        CheckConstraint(
+            "observability_level in ('full_trace', 'structured_events', 'artifacts_only', 'final_output_only', 'black_box')",
+            name="ck_external_run_records_observability_level",
+        ),
+        CheckConstraint(
+            "data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')",
+            name="ck_external_run_records_data_exposure_level",
+        ),
+    )
+
+
+class RunReflection(Base):
+    """Self-learning record extracted from a run.
+
+    Never directly mutates memory, policy, capability, workspace profile, or
+    validation recipes. Only stores learning candidates that flow into proposals.
+    Do not use TaskEvaluation for this — TaskEvaluation evaluates task success;
+    RunReflection captures reusable learning from the run.
+    """
+
+    __tablename__ = "run_reflections"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="native")
+    what_changed: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    what_worked: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    what_failed: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reusable_rules_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    reusable_commands_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    workspace_facts_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    memory_candidates_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    capability_candidates_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    policy_candidates_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    validation_candidates_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    follow_up_tasks_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    run: Mapped["Run"] = relationship("Run", back_populates="run_reflections", foreign_keys=[run_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "source in ('native', 'external_import', 'manual', 'evaluator')",
+            name="ck_run_reflections_source",
+        ),
+    )
+
+
+class RuntimeToolBinding(Base):
+    """Explicit binding allowing an external tool/plugin/skill/MCP server for a scope.
+
+    This is NOT a plugin marketplace. It records only external capabilities that
+    agent-space explicitly authorises for a space/workspace/agent/runtime combination.
+    """
+
+    __tablename__ = "runtime_tool_bindings"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
+    agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True, index=True)
+    # capability_id is a soft reference to capabilities (string ID from capability.yaml).
+    capability_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    runtime_adapter_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=False, index=True)
+    execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
+    external_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    external_ref: Mapped[str] = mapped_column(String(512), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    required_scopes_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    credential_ref: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    data_exposure_level: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    observability_level: Mapped[str] = mapped_column(String(64), nullable=False, default="black_box")
+    side_effect_level: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
+    approval_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    runtime_adapter: Mapped[RuntimeAdapter] = relationship("RuntimeAdapter", foreign_keys=[runtime_adapter_id])
+    execution_plane: Mapped[Optional[ExecutionPlane]] = relationship("ExecutionPlane", foreign_keys=[execution_plane_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "external_type in ('codex_plugin', 'claude_skill', 'claude_hook', 'mcp_server', 'app_integration', 'cli_tool')",
+            name="ck_runtime_tool_bindings_external_type",
+        ),
+        CheckConstraint(
+            "side_effect_level in ('none', 'local_files', 'external_read', 'external_write', 'sensitive')",
+            name="ck_runtime_tool_bindings_side_effect_level",
+        ),
+        CheckConstraint(
+            "data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')",
+            name="ck_runtime_tool_bindings_data_exposure_level",
+        ),
+        CheckConstraint(
+            "observability_level in ('full_trace', 'structured_events', 'artifacts_only', 'final_output_only', 'black_box')",
+            name="ck_runtime_tool_bindings_observability_level",
+        ),
     )

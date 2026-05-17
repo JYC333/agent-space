@@ -67,7 +67,7 @@ DEFAULT_USER_ID=default_user
 2. Implement `adapter_type`, `is_available()`, and `run()`
 3. Register in `_ADAPTER_REGISTRY` in `runner.py`
 
-## Run execution (Phase 11)
+## Run execution
 
 - `RunExecutionService` (`backend/app/runs/execution.py`) drives queued Runs through **real** runtime adapters resolved from `AgentVersion` / `RuntimeAdapter` rows / `runtime_policy_json` (`default_adapter_type`, `allowed_adapter_types`, `allowed_model_providers`).
 - Built-in runtime adapter implementations live under `backend/app/runtimes/` (`echo` for zero-dependency tests, `anthropic_messages` for the Messages API — configure `ANTHROPIC_API_KEY` or adapter `config_json`; secrets are never written to logs).
