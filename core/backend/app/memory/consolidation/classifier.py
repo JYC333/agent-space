@@ -211,7 +211,7 @@ class DefaultRuleBasedMemoryCandidateClassifier:
                     event_time=record.occurred_at,
                     event_type=record.activity_type,
                     subject_user_id=record.subject_user_id or record.user_id,
-                    visibility="private",
+                    visibility="space_shared",
                     entity_refs=_entity_refs_from_activity(record),
                     provenance_entries=[
                         activity_provenance_entry(
@@ -267,7 +267,7 @@ class DefaultRuleBasedMemoryCandidateClassifier:
                 event_time=record.occurred_at,
                 event_type=record.activity_type,
                 subject_user_id=record.subject_user_id or record.user_id,
-                visibility="private",
+                visibility="space_shared",
                 entity_refs=_entity_refs_from_activity(record),
                 provenance_entries=[
                     activity_provenance_entry(

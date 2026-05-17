@@ -25,6 +25,7 @@ from fastapi import HTTPException
 
 from ..models import Run, ContextSnapshot, ActivityRecord, Artifact, Agent, AgentVersion
 from ..schemas import RunCreate
+from ..visibility.auth import can_read_scoped_object
 
 
 _VALID_MODES = {"live", "dry_run"}
@@ -330,7 +331,7 @@ class RunService:
     # Run inspection
     # ------------------------------------------------------------------
 
-    def get_run(self, run_id: str, space_id: str) -> Run:
+    def get_run(self, run_id: str, space_id: str, *, user_id: str | None = None) -> Run:
         """Get a Run by id, scoped to space_id."""
         run = (
             self.db.query(Run)
@@ -338,6 +339,13 @@ class RunService:
             .first()
         )
         if not run:
+            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found in this space")
+        if user_id is not None and not can_read_scoped_object(
+            visibility=run.visibility,
+            owner_user_id=run.instructed_by_user_id,
+            current_user_id=user_id,
+            is_space_member=True,
+        ):
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found in this space")
         return run
 
@@ -350,6 +358,8 @@ class RunService:
         workspace_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        *,
+        user_id: str | None = None,
     ) -> list[Run]:
         """List runs scoped to space, with optional filters."""
         q = self.db.query(Run).filter(Run.space_id == space_id)
@@ -361,7 +371,18 @@ class RunService:
             q = q.filter(Run.agent_id == agent_id)
         if workspace_id:
             q = q.filter(Run.workspace_id == workspace_id)
-        return q.order_by(Run.created_at.desc()).offset(offset).limit(limit).all()
+        rows = q.order_by(Run.created_at.desc()).all()
+        if user_id is not None:
+            rows = [
+                r for r in rows
+                if can_read_scoped_object(
+                    visibility=r.visibility,
+                    owner_user_id=r.instructed_by_user_id,
+                    current_user_id=user_id,
+                    is_space_member=True,
+                )
+            ]
+        return rows[offset : offset + limit]
 
     def list_run_activities(
         self,

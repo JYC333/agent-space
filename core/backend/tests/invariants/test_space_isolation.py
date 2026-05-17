@@ -169,6 +169,78 @@ def test_artifact_and_proposal_counts_other_space_empty(db, cross_space_pair):
     )
 
 
+def test_cross_space_memory_not_included_in_context_retrieval(db, cross_space_pair):
+    """MemoryRetriever for space A cannot include space_shared memories from space B.
+
+    Even when space B has space_shared memories (maximum visibility), the cross-space
+    hard-filter prevents them from entering the context for a run in space A.
+    """
+    from app.memory.retriever import MemoryRetriever
+
+    a = cross_space_pair["space_a_id"]
+    b = cross_space_pair["space_b_id"]
+    ua = cross_space_pair["user_a"]
+    ub = cross_space_pair["user_b"]
+
+    # Memory in space B with maximum visibility — deliberately matches keyword
+    b_mem = factories.create_test_memory_entry(
+        db,
+        space_id=b,
+        content="cross-space-shared-context-sentinel",
+        scope_type="space",
+        owner_user_id=ub.id,
+        commit=False,
+    )
+    b_mem.visibility = "space_shared"
+    db.commit()
+
+    result = MemoryRetriever(db).retrieve(
+        space_id=a,
+        user_id=ua.id,
+        query="cross-space-shared-context-sentinel",
+    )
+    ids = {m.id for m in result.memories}
+    assert b_mem.id not in ids, (
+        "space_shared memory from space B must not appear in context retrieval for space A "
+        "even via keyword fallback"
+    )
+    source_ids = {r["source_id"] for r in result.source_refs if r.get("source_type") == "memory"}
+    assert b_mem.id not in source_ids, (
+        "Cross-space memory must not appear in source_refs"
+    )
+
+
+def test_context_space_boundary_preserves_same_space_memories(db, cross_space_pair):
+    """Context retrieval for space A includes same-space memories and excludes other-space ones."""
+    from app.memory.retriever import MemoryRetriever
+
+    a = cross_space_pair["space_a_id"]
+    b = cross_space_pair["space_b_id"]
+    ua = cross_space_pair["user_a"]
+    ub = cross_space_pair["user_b"]
+
+    sentinel = "isolation-context-sentinel-zq9"
+    a_mem = factories.create_test_memory_entry(
+        db, space_id=a, content=sentinel, scope_type="space", owner_user_id=ua.id, commit=False
+    )
+    a_mem.visibility = "space_shared"
+    b_mem = factories.create_test_memory_entry(
+        db, space_id=b, content=sentinel, scope_type="space", owner_user_id=ub.id, commit=False
+    )
+    b_mem.visibility = "space_shared"
+    db.commit()
+
+    result_a = MemoryRetriever(db).retrieve(space_id=a, user_id=ua.id, query=sentinel)
+    ids_a = {m.id for m in result_a.memories}
+    assert a_mem.id in ids_a, "Same-space memory must be included in context retrieval"
+    assert b_mem.id not in ids_a, "Cross-space memory must be excluded"
+
+    result_b = MemoryRetriever(db).retrieve(space_id=b, user_id=ub.id, query=sentinel)
+    ids_b = {m.id for m in result_b.memories}
+    assert b_mem.id in ids_b, "Same-space memory must be included for space B retrieval"
+    assert a_mem.id not in ids_b, "Space A memory must not appear in space B retrieval"
+
+
 def test_run_list_only_returns_same_space(db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     b = cross_space_pair["space_b_id"]

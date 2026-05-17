@@ -30,10 +30,10 @@ def list_artifacts(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _ = ids
+    space_id, user_id = ids
     svc = ArtifactReadService(db)
     total, rows = svc.list_artifacts(
-        space_id, artifact_type=artifact_type, limit=limit, offset=offset
+        space_id, user_id=user_id, artifact_type=artifact_type, limit=limit, offset=offset
     )
     return Page(
         items=[artifact_to_out(a) for a in rows],
@@ -50,9 +50,9 @@ def get_artifact(
     db: Session = Depends(get_db),
 ):
     """Single artifact in the current space (JSON; distinct from ``…/export``)."""
-    space_id, _ = ids
+    space_id, user_id = ids
     svc = ArtifactReadService(db)
-    art = svc.get(artifact_id, space_id)
+    art = svc.get(artifact_id, space_id, user_id=user_id)
     if not art:
         raise HTTPException(status_code=404, detail="Artifact not found")
     return artifact_to_out(art, include_content=True)
@@ -69,9 +69,9 @@ def export_artifact(
 
     Does not mutate the Artifact row. Space-scoped.
     """
-    space_id, _ = ids
+    space_id, user_id = ids
     svc = ArtifactReadService(db)
-    art = svc.get(artifact_id, space_id)
+    art = svc.get(artifact_id, space_id, user_id=user_id)
     if not art:
         raise HTTPException(status_code=404, detail="Artifact not found")
     filename = _export_filename(art)

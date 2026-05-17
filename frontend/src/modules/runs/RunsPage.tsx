@@ -13,6 +13,7 @@ import { Label } from '../../components/ui/label'
 import { Select } from '../../components/ui/select'
 import { Skeleton } from '../../components/ui/skeleton'
 import { PreviewBadge } from '../../components/PreviewBadge'
+import { ScopeBadge } from '../../components/ScopeBadge'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -27,6 +28,7 @@ function RunRow({ r, onRefresh }: { r: Run; onRefresh: () => void }) {
           <Badge variant="secondary">{r.mode}</Badge>
           {r.run_type && <Badge variant="outline">{r.run_type}</Badge>}
           {r.mode === 'dry_run' && <PreviewBadge />}
+          <ScopeBadge visibility={r.visibility} omitShared />
           <span className="font-mono text-xs text-muted-foreground truncate max-w-[200px]">{r.id}</span>
         </div>
         <p className="text-xs text-muted-foreground">
@@ -79,7 +81,7 @@ function StopRunButton({ runId, onDone }: { runId: string; onDone: () => void })
 }
 
 export default function RunsPage() {
-  const { spaceId } = useSpace()
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [runs, setRuns] = useState<Run[]>([])
   const [loading, setLoading] = useState(true)
   const [fStatus, setFStatus] = useState('')
@@ -88,6 +90,11 @@ export default function RunsPage() {
   const [fWs, setFWs] = useState('')
 
   const load = useCallback(async () => {
+    if (!activeOperationalSpaceId) {
+      setRuns([])
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       const q: Record<string, string> = { limit: '100' }
@@ -103,7 +110,7 @@ export default function RunsPage() {
     } finally {
       setLoading(false)
     }
-  }, [fStatus, fMode, fAgent, fWs, spaceId])
+  }, [fStatus, fMode, fAgent, fWs, activeOperationalSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -128,6 +135,7 @@ export default function RunsPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Runs</h1>
           <p className="text-sm text-muted-foreground">Canonical runs: queue, status, and links to activity and artifacts.</p>
+          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
         </div>
       </div>
 
@@ -187,7 +195,9 @@ export default function RunsPage() {
           <Skeleton className="h-24 w-full" />
         </Card>
       ) : runs.length === 0 ? (
-        <Card className="p-10 text-center text-sm text-muted-foreground">No runs in this space.</Card>
+        <Card className="p-10 text-center text-sm text-muted-foreground">
+          {activeOperationalSpaceId ? 'No runs in this operational space.' : 'Select an operational space to browse runs.'}
+        </Card>
       ) : (
         <div className="space-y-3">
           {runs.map(r => <RunRow key={r.id} r={r} onRefresh={load} />)}

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { providersApi } from '../../api/client'
+import { useSpace } from '../../contexts/SpaceContext'
 
 interface ProviderOption {
   id: string
@@ -16,13 +17,20 @@ interface ProviderSelectorProps {
 }
 
 export function ProviderSelector({ value, onChange, className }: ProviderSelectorProps) {
+  const { activeOperationalSpaceId } = useSpace()
   const [providers, setProviders] = useState<ProviderOption[]>([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
+    if (!activeOperationalSpaceId) {
+      setProviders([])
+      setLoading(false)
+      return
+    }
+    setLoading(true)
     providersApi.list().then(setProviders).catch(() => setProviders([])).finally(() => setLoading(false))
-  }, [])
+  }, [activeOperationalSpaceId])
 
   const selected = providers.find(p => p.id === value?.provider_id)
 
@@ -42,7 +50,9 @@ export function ProviderSelector({ value, onChange, className }: ProviderSelecto
             <span className="font-mono text-[11px] text-muted-foreground">{value?.model}</span>
           </>
         ) : (
-          <span className="text-muted-foreground">Select provider…</span>
+          <span className="text-muted-foreground">
+            {activeOperationalSpaceId ? 'Select provider…' : 'No operational space'}
+          </span>
         )}
         <ChevronDown className="size-3.5 ml-auto text-muted-foreground" />
       </button>
@@ -51,8 +61,14 @@ export function ProviderSelector({ value, onChange, className }: ProviderSelecto
         <div className="absolute top-[calc(100%+4px)] left-0 w-64 bg-card border border-border rounded-lg shadow-lg z-50 py-1 max-h-64 overflow-y-auto">
           {providers.length === 0 ? (
             <div className="px-3 py-2 text-xs text-muted-foreground">
-              No providers configured.{' '}
-              <a href="/providers" className="text-primary hover:underline">Add one</a>
+              {activeOperationalSpaceId ? (
+                <>
+                  No providers configured.{' '}
+                  <a href="/providers" className="text-primary hover:underline">Add one</a>
+                </>
+              ) : (
+                'Select an operational space to choose providers.'
+              )}
             </div>
           ) : (
             providers.map(p => (

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import Artifact
 from ..schemas import ArtifactOut
+from ..visibility.auth import can_read_scoped_object
 
 
 def artifact_to_out(row: Artifact, *, include_content: bool = False) -> ArtifactOut:
@@ -26,6 +27,8 @@ def artifact_to_out(row: Artifact, *, include_content: bool = False) -> Artifact
         storage_path=row.storage_path,
         metadata_json=dict(row.metadata_json) if row.metadata_json else None,
         has_inline_content=bool(row.content),
+        visibility=row.visibility,
+        owner_user_id=row.owner_user_id,
         content=(row.content if include_content else None),
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -40,6 +43,7 @@ class ArtifactReadService:
         self,
         space_id: str,
         *,
+        user_id: str | None = None,
         artifact_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -47,16 +51,36 @@ class ArtifactReadService:
         q = self.db.query(Artifact).filter(Artifact.space_id == space_id)
         if artifact_type:
             q = q.filter(Artifact.artifact_type == artifact_type)
-        total = q.count()
-        rows = q.order_by(Artifact.created_at.desc()).offset(offset).limit(limit).all()
-        return total, rows
+        rows = q.order_by(Artifact.created_at.desc()).all()
+        if user_id is not None:
+            rows = [
+                a for a in rows
+                if can_read_scoped_object(
+                    visibility=a.visibility,
+                    owner_user_id=a.owner_user_id,
+                    current_user_id=user_id,
+                    is_space_member=True,
+                )
+            ]
+        total = len(rows)
+        return total, rows[offset : offset + limit]
 
-    def get(self, artifact_id: str, space_id: str) -> Artifact | None:
-        return (
+    def get(self, artifact_id: str, space_id: str, *, user_id: str | None = None) -> Artifact | None:
+        row = (
             self.db.query(Artifact)
             .filter(Artifact.id == artifact_id, Artifact.space_id == space_id)
             .first()
         )
+        if row is None:
+            return None
+        if user_id is not None and not can_read_scoped_object(
+            visibility=row.visibility,
+            owner_user_id=row.owner_user_id,
+            current_user_id=user_id,
+            is_space_member=True,
+        ):
+            return None
+        return row
 
     def resolve_stored_file(self, artifact: Artifact) -> Path | None:
         """

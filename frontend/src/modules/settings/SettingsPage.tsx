@@ -1,5 +1,5 @@
 import { useState, useEffect, useId } from 'react'
-import { Settings, User, Sun, Moon, Users, Plus, Mail, Send } from 'lucide-react'
+import { Settings, Sun, Moon, Users, Plus, Mail, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../contexts/AuthContext'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -26,12 +26,8 @@ const SPACE_TYPES: { value: Exclude<SpaceType, 'personal'>; label: string; descr
 
 export default function SettingsPage() {
   const { currentUser } = useAuth()
-  const { spaceId, userId, spaces, setSpace, reloadSpaces } = useSpace()
+  const { spaces, setSpace, reloadSpaces, activeOperationalSpaceId } = useSpace()
   const { theme, setTheme } = useTheme()
-
-  // Legacy dev-mode context
-  const [draftSpace, setDraftSpace]   = useState(spaceId)
-  const [draftUser, setDraftUser]     = useState(userId)
 
   // Create space
   const [newSpaceName, setNewSpaceName] = useState('')
@@ -48,21 +44,19 @@ export default function SettingsPage() {
   const [loadingMembers, setLoadingMembers] = useState(false)
 
   const headingId = useId()
+  const effectiveSpaceId = activeOperationalSpaceId
 
   useEffect(() => {
-    if (!currentUser) return
+    if (!currentUser || !effectiveSpaceId) {
+      setMembers([])
+      return
+    }
     setLoadingMembers(true)
-    spacesApi.members(spaceId)
+    spacesApi.members(effectiveSpaceId)
       .then(setMembers)
       .catch(() => setMembers([]))
       .finally(() => setLoadingMembers(false))
-  }, [spaceId, currentUser])
-
-  function handleSaveSpace(e: React.FormEvent) {
-    e.preventDefault()
-    setSpace(draftSpace.trim() || 'personal', draftUser.trim() || 'default_user')
-    toast.success('Space context updated')
-  }
+  }, [effectiveSpaceId, currentUser])
 
   async function handleCreateSpace(e: React.FormEvent) {
     e.preventDefault()
@@ -86,7 +80,11 @@ export default function SettingsPage() {
     if (!inviteEmail.trim()) return
     setInviting(true)
     try {
-      const inv = await spacesApi.invite(spaceId, { email: inviteEmail.trim(), role: inviteRole })
+      if (!effectiveSpaceId) {
+        toast.error('Select a space before inviting members')
+        return
+      }
+      const inv = await spacesApi.invite(effectiveSpaceId, { email: inviteEmail.trim(), role: inviteRole })
       toast.success(`Invitation sent to ${inv.invited_email}`)
       const link = `${window.location.origin}/invitations/${inv.token}`
       await navigator.clipboard.writeText(link).catch(() => null)
@@ -190,10 +188,10 @@ export default function SettingsPage() {
             </form>
           </Card>
 
-          {/* Members of current space */}
+          {/* Members of selected operational space */}
           <Card>
             <CardTitle className="flex items-center gap-2">
-              <Users className="size-3.5" /> Members · {spaces.find(s => s.id === spaceId)?.name ?? spaceId}
+              <Users className="size-3.5" /> Members · {spaces.find(s => s.id === effectiveSpaceId)?.name ?? effectiveSpaceId ?? 'No space selected'}
             </CardTitle>
 
             {loadingMembers ? (
@@ -263,32 +261,7 @@ export default function SettingsPage() {
             </form>
           </Card>
         </>
-      ) : (
-        /* Dev-mode space context override */
-        <Card>
-          <CardTitle className="flex items-center gap-2">
-            <User className="size-3.5" /> Space context <Badge variant="muted" className="text-[9px]">dev</Badge>
-          </CardTitle>
-          <form onSubmit={handleSaveSpace} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="space-id">Space ID</Label>
-                <Input id="space-id" value={draftSpace} onChange={e => setDraftSpace(e.target.value)}
-                  placeholder="personal" className="font-mono text-sm" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="user-id">User ID</Label>
-                <Input id="user-id" value={draftUser} onChange={e => setDraftUser(e.target.value)}
-                  placeholder="default_user" className="font-mono text-sm" />
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Dev mode only. Sign in with Google to manage real spaces.
-            </p>
-            <Button type="submit" size="sm">Update context</Button>
-          </form>
-        </Card>
-      )}
+      ) : null}
     </div>
   )
 }

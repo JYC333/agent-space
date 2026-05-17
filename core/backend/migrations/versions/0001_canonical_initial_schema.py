@@ -52,21 +52,6 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_context_snapshots_space_id'), 'context_snapshots', ['space_id'], unique=False)
-    op.create_table('context_sources',
-    sa.Column('id', sa.String(length=36), nullable=False),
-    sa.Column('space_id', sa.String(length=36), nullable=False),
-    sa.Column('name', sa.String(length=256), nullable=False),
-    sa.Column('source_type', sa.String(length=64), nullable=False),
-    sa.Column('scope_json', sa.JSON(), nullable=False),
-    sa.Column('trust_level', sa.String(length=32), nullable=False),
-    sa.Column('enabled', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_context_sources_source_type'), 'context_sources', ['source_type'], unique=False)
-    op.create_index(op.f('ix_context_sources_space_id'), 'context_sources', ['space_id'], unique=False)
     op.create_table('credentials',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -435,6 +420,10 @@ def upgrade() -> None:
     sa.Column('estimated_output_tokens', sa.Integer(), nullable=True),
     sa.Column('estimated_cost', sa.Float(), nullable=True),
     sa.Column('exit_code', sa.Integer(), nullable=True),
+    sa.Column('visibility', sa.String(length=32), nullable=False, server_default='space_shared'),
+    # Phase D: safe marker for runs that consumed a PersonalMemoryGrant during context build.
+    sa.Column('has_personal_grant_context', sa.Boolean(), nullable=False, server_default='false'),
+    sa.Column('personal_grant_context_json', sa.JSON(), nullable=True),
     sa.CheckConstraint("mode in ('live', 'dry_run')", name='ck_runs_mode'),
     sa.CheckConstraint("run_type in ('agent', 'system', 'workflow', 'validation', 'reflection', 'export')", name='ck_runs_run_type'),
     sa.CheckConstraint("status in ('queued', 'running', 'succeeded', 'degraded', 'failed', 'cancelled', 'waiting_for_review')", name='ck_runs_status'),
@@ -496,6 +485,8 @@ def upgrade() -> None:
     sa.Column('consolidation_status', sa.String(length=32), nullable=False, server_default='pending'),
     sa.Column('processed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('discarded_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('visibility', sa.String(length=32), nullable=False, server_default='space_shared'),
+    sa.Column('owner_user_id', sa.String(length=36), nullable=True),
     sa.CheckConstraint(
         "status in ('raw', 'processed', 'proposals_generated', 'archived')",
         name='ck_activity_records_status',
@@ -521,6 +512,7 @@ def upgrade() -> None:
         name='ck_activity_records_source_trust',
     ),
     sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], ),
+    sa.ForeignKeyConstraint(['owner_user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], ),
     sa.ForeignKeyConstraint(['source_run_id'], ['runs.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
@@ -542,6 +534,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_activity_records_subject_user_id'), 'activity_records', ['subject_user_id'], unique=False)
     op.create_index(op.f('ix_activity_records_lifecycle_status'), 'activity_records', ['lifecycle_status'], unique=False)
     op.create_index(op.f('ix_activity_records_consolidation_status'), 'activity_records', ['consolidation_status'], unique=False)
+    op.create_index(op.f('ix_activity_records_owner_user_id'), 'activity_records', ['owner_user_id'], unique=False)
     op.create_table('proposals',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -565,6 +558,7 @@ def upgrade() -> None:
     sa.Column('created_by_agent_id', sa.String(length=36), nullable=True),
     sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
     sa.Column('required_approver_role', sa.String(length=64), nullable=True),
+    sa.Column('visibility', sa.String(length=32), nullable=False, server_default='space_shared'),
     sa.CheckConstraint("risk_level in ('low', 'medium', 'high', 'critical')", name='ck_proposals_risk_level'),
     sa.CheckConstraint("urgency in ('low', 'normal', 'high', 'critical')", name='ck_proposals_urgency'),
     sa.ForeignKeyConstraint(['created_by_agent_id'], ['agents.id'], ),
@@ -602,13 +596,17 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('visibility', sa.String(length=32), nullable=False, server_default='space_shared'),
+    sa.Column('owner_user_id', sa.String(length=36), nullable=True),
     sa.CheckConstraint("storage_path is null or storage_path not like '/%'", name='ck_artifacts_storage_path_relative'),
+    sa.ForeignKeyConstraint(['owner_user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['proposal_id'], ['proposals.id'], ),
     sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_artifacts_artifact_type'), 'artifacts', ['artifact_type'], unique=False)
+    op.create_index(op.f('ix_artifacts_owner_user_id'), 'artifacts', ['owner_user_id'], unique=False)
     op.create_index(op.f('ix_artifacts_proposal_id'), 'artifacts', ['proposal_id'], unique=False)
     op.create_index(op.f('ix_artifacts_run_id'), 'artifacts', ['run_id'], unique=False)
     op.create_index(op.f('ix_artifacts_space_id'), 'artifacts', ['space_id'], unique=False)
@@ -699,6 +697,7 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('visibility', sa.String(length=32), nullable=False, server_default='space_shared'),
     sa.ForeignKeyConstraint(['assigned_agent_id'], ['agents.id'], ),
     sa.ForeignKeyConstraint(['assigned_user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['board_id'], ['boards.id'], ),
@@ -1143,11 +1142,197 @@ def upgrade() -> None:
     op.create_index(op.f('ix_run_steps_artifact_id'), 'run_steps', ['artifact_id'], unique=False)
     op.create_index(op.f('ix_run_steps_proposal_id'), 'run_steps', ['proposal_id'], unique=False)
     op.create_index('ix_run_steps_space_run_index', 'run_steps', ['space_id', 'run_id', 'step_index'], unique=False)
+    # Phase 7A: source_pointers provenance ledger (metadata only; no content columns).
+    op.create_table('source_pointers',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('owner_space_id', sa.String(length=36), nullable=False),
+    sa.Column('source_space_id', sa.String(length=36), nullable=False),
+    sa.Column('source_object_type', sa.String(length=64), nullable=False),
+    sa.Column('source_object_id', sa.String(length=36), nullable=False),
+    sa.Column('access_mode', sa.String(length=32), nullable=False),
+    sa.Column('granted_by_user_id', sa.String(length=36), nullable=True),
+    sa.Column('expires_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("access_mode in ('read', 'subscribe', 'federated')", name='ck_source_pointers_access_mode'),
+    sa.ForeignKeyConstraint(['granted_by_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['owner_space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['source_space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_source_pointers_owner_space_id'), 'source_pointers', ['owner_space_id'], unique=False)
+    op.create_index(op.f('ix_source_pointers_granted_by_user_id'), 'source_pointers', ['granted_by_user_id'], unique=False)
+    op.create_index(op.f('ix_source_pointers_expires_at'), 'source_pointers', ['expires_at'], unique=False)
+    op.create_index('ix_source_pointers_source', 'source_pointers', ['source_space_id', 'source_object_type', 'source_object_id'], unique=False)
+    # Phase 3: participation_records ledger.
+    # References spaces and users — both created above. Pointer-only: no content columns.
+    op.create_table('participation_records',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('user_id', sa.String(length=36), nullable=False),
+    sa.Column('personal_space_id', sa.String(length=36), nullable=False),
+    sa.Column('source_space_id', sa.String(length=36), nullable=False),
+    sa.Column('source_object_type', sa.String(length=64), nullable=False),
+    sa.Column('source_object_id', sa.String(length=36), nullable=False),
+    sa.Column('role', sa.String(length=64), nullable=False),
+    sa.Column('occurred_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['personal_space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['source_space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_participation_records_user_id'), 'participation_records', ['user_id'], unique=False)
+    op.create_index(op.f('ix_participation_records_personal_space_id'), 'participation_records', ['personal_space_id'], unique=False)
+    op.create_index('ix_participation_records_source', 'participation_records', ['source_space_id', 'source_object_type', 'source_object_id'], unique=False)
+    # Phase 8A: PersonalMemoryGrant schema skeleton.
+    # Depends on: users, spaces, runs, agents — all created above. No content columns.
+    op.create_table('personal_memory_grants',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('granting_user_id', sa.String(length=36), nullable=False),
+    sa.Column('personal_space_id', sa.String(length=36), nullable=False),
+    sa.Column('target_space_id', sa.String(length=36), nullable=False),
+    sa.Column('target_run_id', sa.String(length=36), nullable=False),
+    sa.Column('target_agent_id', sa.String(length=36), nullable=True),
+    sa.Column('grant_scope', sa.String(length=32), nullable=False),
+    sa.Column('access_mode', sa.String(length=32), nullable=False),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('memory_filter_json', sa.JSON(), nullable=True),
+    sa.Column('read_expires_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('egress_review_expires_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('consume_started_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('revoked_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('used_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('failed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('failure_stage', sa.String(length=64), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("grant_scope in ('run')", name='ck_personal_memory_grants_grant_scope'),
+    sa.CheckConstraint("access_mode in ('summary_only')", name='ck_personal_memory_grants_access_mode'),
+    sa.CheckConstraint(
+        "status in ('active', 'consuming', 'used', 'revoked', 'expired', 'failed')",
+        name='ck_personal_memory_grants_status',
+    ),
+    sa.CheckConstraint("target_agent_id is null", name='ck_personal_memory_grants_target_agent_id_null'),
+    sa.ForeignKeyConstraint(['granting_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['personal_space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['target_space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['target_run_id'], ['runs.id'], ),
+    sa.ForeignKeyConstraint(['target_agent_id'], ['agents.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_personal_memory_grants_granting_user_id'), 'personal_memory_grants', ['granting_user_id'], unique=False)
+    op.create_index(op.f('ix_personal_memory_grants_personal_space_id'), 'personal_memory_grants', ['personal_space_id'], unique=False)
+    op.create_index(op.f('ix_personal_memory_grants_target_space_id'), 'personal_memory_grants', ['target_space_id'], unique=False)
+    op.create_index(op.f('ix_personal_memory_grants_target_run_id'), 'personal_memory_grants', ['target_run_id'], unique=False)
+    op.create_index(op.f('ix_personal_memory_grants_status'), 'personal_memory_grants', ['status'], unique=False)
+    op.create_index(op.f('ix_personal_memory_grants_read_expires_at'), 'personal_memory_grants', ['read_expires_at'], unique=False)
+    # Partial unique index: at most one active/consuming grant per (granting_user_id, target_run_id).
+    # SQLite supports partial indexes with WHERE clause. Service layer must enforce atomicity
+    # for concurrent grant transitions not caught at the SQL level (Phase B).
+    op.execute(
+        "CREATE UNIQUE INDEX ix_personal_memory_grants_unique_active_consuming "
+        "ON personal_memory_grants (granting_user_id, target_run_id) "
+        "WHERE status IN ('active', 'consuming')"
+    )
+    # Phase E: first-class proposal approval gate. Metadata-only; no content columns.
+    op.create_table('proposal_approvals',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('proposal_id', sa.String(length=36), nullable=False),
+    sa.Column('approval_type', sa.String(length=64), nullable=False),
+    sa.Column('approver_user_id', sa.String(length=36), nullable=False),
+    sa.Column('grant_id', sa.String(length=36), nullable=True),
+    sa.Column('target_space_id', sa.String(length=36), nullable=True),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('revoked_at', sa.DateTime(timezone=True), nullable=True),
+    sa.CheckConstraint("approval_type in ('egress_granting_user')", name='ck_proposal_approvals_approval_type'),
+    sa.CheckConstraint("status in ('approved', 'revoked')", name='ck_proposal_approvals_status'),
+    sa.ForeignKeyConstraint(['proposal_id'], ['proposals.id'], ),
+    sa.ForeignKeyConstraint(['approver_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['grant_id'], ['personal_memory_grants.id'], ),
+    sa.ForeignKeyConstraint(['target_space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_proposal_approvals_proposal_id'), 'proposal_approvals', ['proposal_id'], unique=False)
+    op.create_index(op.f('ix_proposal_approvals_approval_type'), 'proposal_approvals', ['approval_type'], unique=False)
+    op.create_index(op.f('ix_proposal_approvals_approver_user_id'), 'proposal_approvals', ['approver_user_id'], unique=False)
+    op.create_index(op.f('ix_proposal_approvals_grant_id'), 'proposal_approvals', ['grant_id'], unique=False)
+    op.create_index(op.f('ix_proposal_approvals_target_space_id'), 'proposal_approvals', ['target_space_id'], unique=False)
+    op.create_index('ix_proposal_approvals_created_at', 'proposal_approvals', ['created_at'], unique=False)
+    op.execute(
+        "CREATE UNIQUE INDEX ix_proposal_approvals_unique_active "
+        "ON proposal_approvals (proposal_id, approval_type, approver_user_id, grant_id) "
+        "WHERE status = 'approved'"
+    )
+    # personal_memory_grant_events: audit trail. Depends on personal_memory_grants (created above).
+    op.create_table('personal_memory_grant_events',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('grant_id', sa.String(length=36), nullable=False),
+    sa.Column('event_type', sa.String(length=64), nullable=False),
+    sa.Column('actor_user_id', sa.String(length=36), nullable=True),
+    sa.Column('run_id', sa.String(length=36), nullable=True),
+    sa.Column('proposal_id', sa.String(length=36), nullable=True),
+    sa.Column('source_space_id', sa.String(length=36), nullable=True),
+    sa.Column('target_space_id', sa.String(length=36), nullable=True),
+    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint(
+        "event_type in ('created', 'previewed', 'consuming', 'used', 'revoked', 'expired', 'failed', 'denied', 'egress_proposal_created', 'egress_approved')",
+        name='ck_personal_memory_grant_events_event_type',
+    ),
+    sa.ForeignKeyConstraint(['grant_id'], ['personal_memory_grants.id'], ),
+    sa.ForeignKeyConstraint(['actor_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),
+    sa.ForeignKeyConstraint(['proposal_id'], ['proposals.id'], ),
+    sa.ForeignKeyConstraint(['source_space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['target_space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_personal_memory_grant_events_grant_id'), 'personal_memory_grant_events', ['grant_id'], unique=False)
+    op.create_index(op.f('ix_personal_memory_grant_events_actor_user_id'), 'personal_memory_grant_events', ['actor_user_id'], unique=False)
+    op.create_index(op.f('ix_personal_memory_grant_events_run_id'), 'personal_memory_grant_events', ['run_id'], unique=False)
+    op.create_index('ix_personal_memory_grant_events_created_at', 'personal_memory_grant_events', ['created_at'], unique=False)
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
+    # Phase E/8A: drop approval and grant tables first.
+    op.drop_index('ix_personal_memory_grant_events_created_at', table_name='personal_memory_grant_events')
+    op.drop_index(op.f('ix_personal_memory_grant_events_run_id'), table_name='personal_memory_grant_events')
+    op.drop_index(op.f('ix_personal_memory_grant_events_actor_user_id'), table_name='personal_memory_grant_events')
+    op.drop_index(op.f('ix_personal_memory_grant_events_grant_id'), table_name='personal_memory_grant_events')
+    op.drop_table('personal_memory_grant_events')
+    op.drop_index('ix_proposal_approvals_unique_active', table_name='proposal_approvals')
+    op.drop_index('ix_proposal_approvals_created_at', table_name='proposal_approvals')
+    op.drop_index(op.f('ix_proposal_approvals_target_space_id'), table_name='proposal_approvals')
+    op.drop_index(op.f('ix_proposal_approvals_grant_id'), table_name='proposal_approvals')
+    op.drop_index(op.f('ix_proposal_approvals_approver_user_id'), table_name='proposal_approvals')
+    op.drop_index(op.f('ix_proposal_approvals_approval_type'), table_name='proposal_approvals')
+    op.drop_index(op.f('ix_proposal_approvals_proposal_id'), table_name='proposal_approvals')
+    op.drop_table('proposal_approvals')
+    op.drop_index('ix_personal_memory_grants_unique_active_consuming', table_name='personal_memory_grants')
+    op.drop_index(op.f('ix_personal_memory_grants_read_expires_at'), table_name='personal_memory_grants')
+    op.drop_index(op.f('ix_personal_memory_grants_status'), table_name='personal_memory_grants')
+    op.drop_index(op.f('ix_personal_memory_grants_target_run_id'), table_name='personal_memory_grants')
+    op.drop_index(op.f('ix_personal_memory_grants_target_space_id'), table_name='personal_memory_grants')
+    op.drop_index(op.f('ix_personal_memory_grants_personal_space_id'), table_name='personal_memory_grants')
+    op.drop_index(op.f('ix_personal_memory_grants_granting_user_id'), table_name='personal_memory_grants')
+    op.drop_table('personal_memory_grants')
+    # Phase 7A / Phase 3: drop pointer ledgers (no downstream dependents)
+    op.drop_index('ix_participation_records_source', table_name='participation_records')
+    op.drop_index(op.f('ix_participation_records_personal_space_id'), table_name='participation_records')
+    op.drop_index(op.f('ix_participation_records_user_id'), table_name='participation_records')
+    op.drop_table('participation_records')
+    op.drop_index('ix_source_pointers_source', table_name='source_pointers')
+    op.drop_index(op.f('ix_source_pointers_expires_at'), table_name='source_pointers')
+    op.drop_index(op.f('ix_source_pointers_granted_by_user_id'), table_name='source_pointers')
+    op.drop_index(op.f('ix_source_pointers_owner_space_id'), table_name='source_pointers')
+    op.drop_table('source_pointers')
+    # Phase 3: visibility/owner_user_id columns on existing tables are NOT dropped here.
+    # SQLite <3.35 does not support DROP COLUMN. Since this is a baseline migration with
+    # no historical data, the downgrade path is to recreate from scratch.
     # M3: drop run_steps first (references actors, runs, spaces, and other tables)
     op.drop_index('ix_run_steps_space_run_index', table_name='run_steps')
     op.drop_index(op.f('ix_run_steps_proposal_id'), table_name='run_steps')
@@ -1356,9 +1541,6 @@ def downgrade() -> None:
     op.drop_table('policies')
     op.drop_index(op.f('ix_credentials_space_id'), table_name='credentials')
     op.drop_table('credentials')
-    op.drop_index(op.f('ix_context_sources_space_id'), table_name='context_sources')
-    op.drop_index(op.f('ix_context_sources_source_type'), table_name='context_sources')
-    op.drop_table('context_sources')
     op.drop_index(op.f('ix_context_snapshots_space_id'), table_name='context_snapshots')
     op.drop_table('context_snapshots')
     op.drop_index('ix_context_digests_source_hash', table_name='context_digests')

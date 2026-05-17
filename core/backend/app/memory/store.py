@@ -42,6 +42,15 @@ class MemoryStore:
         if data.visibility == "private" and owner_user_id is None:
             raise ValueError("owner_user_id is required for private visibility (or provide acting_user_id)")
 
+        from ..policy.enforcement import check_private_memory_placement
+
+        check_private_memory_placement(
+            self.db,
+            space_id=data.space_id or settings.default_space_id,
+            visibility=data.visibility,
+            acting_user_id=acting_user_id,
+        )
+
         if created_by is not None:
             audit = created_by
         else:

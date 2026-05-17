@@ -31,7 +31,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..models import MemoryEntry, MemoryRelation, Policy
-from .read_auth import can_read_memory
+from ..policy.enforcement import can_read_memory_in_run_context
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +73,7 @@ def _hard_filter_row(
     user_id: str,
     workspace_id: str | None,
     include_system_scope: bool,
+    db: Session | None = None,
 ) -> bool:
     """Return True if the row passes all hard-filter checks."""
     if m.space_id != space_id:
@@ -81,11 +82,22 @@ def _hard_filter_row(
         return False
     if m.status not in _ALLOWED_STATUSES:
         return False
-    return can_read_memory(
+    if db is None:
+        from .read_auth import can_read_memory
+
+        return can_read_memory(
+            m,
+            user_id=user_id,
+            space_id=space_id,
+            workspace_id=workspace_id,
+            include_system_scope=include_system_scope,
+        )
+    return can_read_memory_in_run_context(
         m,
         user_id=user_id,
         space_id=space_id,
         workspace_id=workspace_id,
+        db=db,
         include_system_scope=include_system_scope,
     )
 
@@ -97,6 +109,7 @@ def _hard_filter_list(
     user_id: str,
     workspace_id: str | None,
     include_system_scope: bool,
+    db: Session | None = None,
 ) -> list[MemoryEntry]:
     return [
         m
@@ -107,6 +120,7 @@ def _hard_filter_list(
             user_id=user_id,
             workspace_id=workspace_id,
             include_system_scope=include_system_scope,
+            db=db,
         )
     ]
 
@@ -238,7 +252,7 @@ class MemoryRetriever:
             agent_id=agent_id,
             readable_scopes=readable_scopes,
         )
-        symbol_rows = _hard_filter_list(symbol_rows, **hard_filter_kwargs)
+        symbol_rows = _hard_filter_list(symbol_rows, db=self.db, **hard_filter_kwargs)
         for m in symbol_rows:
             if m.id not in seen_ids:
                 seen_ids.add(m.id)
@@ -471,7 +485,7 @@ class MemoryRetriever:
                 .all()
             )
             # Re-apply hard filter after graph traversal.
-            rows = _hard_filter_list(rows, **hard_filter_kwargs)
+            rows = _hard_filter_list(rows, db=self.db, **hard_filter_kwargs)
             # Scope boundary: target must be in readable_scopes.
             rows = [m for m in rows if m.scope_type in readable_scopes]
 
@@ -509,7 +523,7 @@ class MemoryRetriever:
             .limit(20)
         )
         rows = q.all()
-        rows = _hard_filter_list(rows, **hard_filter_kwargs)
+        rows = _hard_filter_list(rows, db=self.db, **hard_filter_kwargs)
         return [m for m in rows if m.scope_type in readable_scopes]
 
     def _embedding_fallback(
@@ -578,7 +592,7 @@ class MemoryRetriever:
             .all()
         )
         # Belt-and-suspenders: re-apply hard filter on every row.
-        rows = _hard_filter_list(rows, **hard_filter_kwargs)
+        rows = _hard_filter_list(rows, db=self.db, **hard_filter_kwargs)
         # Rank: symbol-match ids first (by importance/confidence), then rest.
         rows.sort(
             key=lambda m: (m.importance or 0.0, m.confidence or 0.0),

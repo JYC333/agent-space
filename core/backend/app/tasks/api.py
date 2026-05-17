@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.api_key import get_identity
 from app.db import get_db
+from app.participation.service import try_record_participation
 from app.proposals.read_model import proposal_to_summary_out
 from app.schemas import (
     Page,
@@ -36,7 +37,16 @@ def create_task(
     db: Session = Depends(get_db),
 ):
     space_id, user_id = ids
-    return TaskService(db).create(data, space_id, user_id)
+    task = TaskService(db).create(data, space_id, user_id)
+    try_record_participation(
+        db,
+        user_id=user_id,
+        source_space_id=space_id,
+        source_object_type="task",
+        source_object_id=task.id,
+        role="created",
+    )
+    return task
 
 
 @router.get("", response_model=Page[TaskOut])
@@ -47,8 +57,10 @@ def list_tasks(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _user_id = ids
-    total, items = TaskService(db).list_tasks(space_id, board_id=board_id, limit=limit, offset=offset)
+    space_id, user_id = ids
+    total, items = TaskService(db).list_tasks(
+        space_id, board_id=board_id, limit=limit, offset=offset, user_id=user_id
+    )
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -58,8 +70,8 @@ def get_task(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _user_id = ids
-    return TaskService(db).get(task_id, space_id)
+    space_id, user_id = ids
+    return TaskService(db).get(task_id, space_id, user_id=user_id)
 
 
 @router.patch("/{task_id}", response_model=TaskOut)

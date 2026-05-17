@@ -13,6 +13,8 @@ import { Label } from '../../components/ui/label'
 import { Input } from '../../components/ui/input'
 import { Select } from '../../components/ui/select'
 import { Skeleton } from '../../components/ui/skeleton'
+import { ScopeBadge } from '../../components/ScopeBadge'
+import { WriteTargetPicker, useWriteTarget } from '../../components/WriteTargetPicker'
 import {
   Dialog,
   DialogContent,
@@ -40,7 +42,8 @@ function acPreview(task: Task): string | null {
 
 export default function TasksPage() {
   const navigate = useNavigate()
-  const { spaceId } = useSpace()
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { writeTargetSpaceId, hasWriteTarget } = useWriteTarget()
   const [boards, setBoards] = useState<Board[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
@@ -54,15 +57,24 @@ export default function TasksPage() {
   const [creating, setCreating] = useState(false)
 
   const loadBoards = useCallback(async () => {
+    if (!activeOperationalSpaceId) {
+      setBoards([])
+      return
+    }
     try {
       const p = await boardsApi.list({ limit: '100' })
       setBoards(p.items)
     } catch {
       setBoards([])
     }
-  }, [spaceId])
+  }, [activeOperationalSpaceId])
 
   const loadTasks = useCallback(async () => {
+    if (!activeOperationalSpaceId) {
+      setTasks([])
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       const params: Record<string, string> = { limit: '200' }
@@ -75,7 +87,7 @@ export default function TasksPage() {
     } finally {
       setLoading(false)
     }
-  }, [boardId, spaceId])
+  }, [boardId, activeOperationalSpaceId])
 
   useEffect(() => { loadBoards() }, [loadBoards])
   useEffect(() => { loadTasks() }, [loadTasks])
@@ -120,7 +132,7 @@ export default function TasksPage() {
     try {
       const body: Record<string, unknown> = { title: newTitle.trim() }
       if (boardId) body.board_id = boardId
-      const t = await tasksApi.create(body)
+      const t = await tasksApi.create(body, { spaceId: writeTargetSpaceId ?? undefined })
       toast.success('Task created')
       setCreateOpen(false)
       setNewTitle('')
@@ -171,6 +183,7 @@ export default function TasksPage() {
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Tasks</h1>
             <p className="text-sm text-muted-foreground">Board work items, runs, and downstream artifacts.</p>
+            <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
           </div>
         </div>
         <Button onClick={() => setCreateOpen(true)} className="gap-1.5">
@@ -197,7 +210,7 @@ export default function TasksPage() {
         </Card>
       ) : filtered.length === 0 ? (
         <Card className="p-10 text-center text-sm text-muted-foreground">
-          No tasks match these filters. Create a task or adjust filters.
+          {activeOperationalSpaceId ? 'No tasks match these filters. Create a task or adjust filters.' : 'Select an operational space to browse tasks.'}
         </Card>
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
@@ -218,6 +231,7 @@ export default function TasksPage() {
                   <Badge variant="secondary">{task.task_type}</Badge>
                   <Badge variant="outline">{task.priority}</Badge>
                   <Badge variant="muted">{task.risk_level} risk</Badge>
+                  <ScopeBadge visibility={task.visibility} omitShared />
                 </div>
                 {(task.assigned_agent_id || task.assigned_user_id) && (
                   <p className="text-xs text-muted-foreground mb-1">
@@ -260,12 +274,13 @@ export default function TasksPage() {
             <DialogTitle>New task</DialogTitle>
           </DialogHeader>
           <div className="space-y-2 py-2">
+            <WriteTargetPicker />
             <Label>Title</Label>
             <Input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="What needs to be done?" />
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button onClick={createTask} disabled={creating}>{creating ? 'Creating…' : 'Create'}</Button>
+            <Button onClick={createTask} disabled={creating || !hasWriteTarget}>{creating ? 'Creating…' : 'Create'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

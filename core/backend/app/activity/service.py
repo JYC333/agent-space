@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..models import ActivityRecord, Run
 from ..param_binding import duplicate_mapper
+from ..visibility.auth import can_read_scoped_object
 
 
 def _new_id() -> str:
@@ -81,6 +82,7 @@ class ActivityService:
         source_session_id: str | None = None,
         source_url: str | None = None,
         metadata_json: dict | None = None,
+        owner_user_id: str | None = None,
     ) -> ActivityRecord:
         now = datetime.now(UTC)
         record = ActivityRecord(
@@ -100,6 +102,7 @@ class ActivityService:
             status="raw",
             metadata_json=metadata_json,
             updated_at=now,
+            owner_user_id=owner_user_id if owner_user_id is not None else user_id,
         )
         self.db.add(record)
         self.db.commit()
@@ -110,8 +113,14 @@ class ActivityService:
     # Read
     # ------------------------------------------------------------------
 
-    def get(self, activity_id: str, space_id: str) -> Optional[ActivityRecord]:
-        return (
+    def get(
+        self,
+        activity_id: str,
+        space_id: str,
+        *,
+        viewer_user_id: str | None = None,
+    ) -> Optional[ActivityRecord]:
+        row = (
             self.db.query(ActivityRecord)
             .filter(
                 ActivityRecord.id == activity_id,
@@ -119,6 +128,16 @@ class ActivityService:
             )
             .first()
         )
+        if row is None:
+            return None
+        if viewer_user_id is not None and not can_read_scoped_object(
+            visibility=row.visibility,
+            owner_user_id=row.owner_user_id,
+            current_user_id=viewer_user_id,
+            is_space_member=True,
+        ):
+            return None
+        return row
 
     def list(
         self,
@@ -130,6 +149,7 @@ class ActivityService:
         status: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        viewer_user_id: str | None = None,
     ) -> list[ActivityRecord]:
         q = self.db.query(ActivityRecord).filter(ActivityRecord.space_id == space_id)
         if user_id:
@@ -153,12 +173,18 @@ class ActivityService:
             q = q.filter(ActivityRecord.source_type == normalize_source_type(source_type))
         if status:
             q = q.filter(ActivityRecord.status == status)
-        return (
-            q.order_by(ActivityRecord.created_at.desc())
-            .limit(limit)
-            .offset(offset)
-            .all()
-        )
+        rows = q.order_by(ActivityRecord.created_at.desc()).all()
+        if viewer_user_id is not None:
+            rows = [
+                r for r in rows
+                if can_read_scoped_object(
+                    visibility=r.visibility,
+                    owner_user_id=r.owner_user_id,
+                    current_user_id=viewer_user_id,
+                    is_space_member=True,
+                )
+            ]
+        return rows[offset : offset + limit]
 
     # ------------------------------------------------------------------
     # Status transitions

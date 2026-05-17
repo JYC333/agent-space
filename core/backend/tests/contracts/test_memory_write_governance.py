@@ -7,9 +7,16 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
+import pytest
 from sqlalchemy import func
 
 from app.models import MemoryEntry, Proposal
+from app.memory.proposals import ProposalService
+from app.memory.store import MemoryStore
+from app.policy.domains import MEMORY_PRIVATE_PLACEMENT
+from app.schemas import MemoryCreate
 from tests.support import factories
 
 
@@ -85,6 +92,167 @@ def test_post_memory_proposal_has_correct_payload(api_client, db, cross_space_pa
     assert payload["memory_type"] == "preference"
     entries = payload.get("provenance_entries") or []
     assert any(e.get("source_type") == "user_confirmation" for e in entries)
+
+
+def test_accepting_private_memory_proposal_in_team_space_is_rejected(db, cross_space_pair):
+    """Proposal apply path enforces private placement — clear error for callers."""
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    prop = factories.create_test_proposal(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        proposal_type="memory_create",
+        title="Private in team",
+        payload_json={
+            "operation": "create",
+            "proposed_content": "must not land",
+            "target_scope": "user",
+            "memory_type": "semantic",
+            "target_visibility": "private",
+            "owner_user_id": ua.id,
+        },
+        commit=True,
+    )
+
+    with pytest.raises(ValueError, match="personal"):
+        ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
+
+
+def test_accepting_private_memory_proposal_in_personal_space_allowed(db, test_space, test_user):
+    a = test_space.id
+    ua = test_user
+    prop = factories.create_test_proposal(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        proposal_type="memory_create",
+        title="Private in personal",
+        payload_json={
+            "operation": "create",
+            "proposed_content": "personal ok",
+            "target_scope": "user",
+            "memory_type": "semantic",
+            "target_visibility": "private",
+            "owner_user_id": ua.id,
+        },
+        commit=True,
+    )
+
+    result = ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
+    assert result is not None
+    assert result.memory is not None
+    assert result.memory.visibility == "private"
+
+
+def test_allow_with_log_space_shared_store_write_traces_and_succeeds(db, cross_space_pair):
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    factories.create_test_policy(
+        db,
+        space_id=a,
+        domain="memory",
+        policy_key=MEMORY_PRIVATE_PLACEMENT,
+        enforcement_mode="allow_with_log",
+        rule_json={"policy_domain": MEMORY_PRIVATE_PLACEMENT, "effect": "allow_with_log"},
+        commit=True,
+    )
+    with patch("app.policy.enforcement.record_policy_decision_trace") as trace:
+        mem = MemoryStore(db).create(
+            MemoryCreate(
+                title="Shared traced",
+                space_id=a,
+                scope="agent",
+                type="semantic",
+                content="ok",
+                visibility="space_shared",
+            ),
+            acting_user_id=ua.id,
+        )
+    assert mem.visibility == "space_shared"
+    assert trace.called
+    assert any(
+        c.kwargs.get("domain") == MEMORY_PRIVATE_PLACEMENT and c.kwargs.get("outcome") == "allowed"
+        for c in trace.call_args_list
+    )
+
+
+def test_deny_policy_rejects_private_placement_in_personal_space(db, test_space, test_user):
+    factories.create_test_policy(
+        db,
+        space_id=test_space.id,
+        domain="memory",
+        policy_key=MEMORY_PRIVATE_PLACEMENT,
+        enforcement_mode="deny",
+        rule_json={"policy_domain": MEMORY_PRIVATE_PLACEMENT},
+        commit=True,
+    )
+    with pytest.raises(ValueError, match="denied by active policy"):
+        MemoryStore(db).create(
+            MemoryCreate(
+                title="Denied",
+                space_id=test_space.id,
+                scope="user",
+                type="semantic",
+                content="nope",
+                visibility="private",
+                owner_user_id=test_user.id,
+            ),
+            acting_user_id=test_user.id,
+        )
+
+
+def test_allow_policy_cannot_override_private_placement_in_team_space(db, cross_space_pair):
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    factories.create_test_policy(
+        db,
+        space_id=a,
+        domain="memory",
+        policy_key=MEMORY_PRIVATE_PLACEMENT,
+        enforcement_mode="allow",
+        rule_json={"policy_domain": MEMORY_PRIVATE_PLACEMENT},
+        commit=True,
+    )
+    with pytest.raises(ValueError, match="personal"):
+        MemoryStore(db).create(
+            MemoryCreate(
+                title="Blocked",
+                space_id=a,
+                scope="user",
+                type="semantic",
+                content="nope",
+                visibility="private",
+                owner_user_id=ua.id,
+            ),
+            acting_user_id=ua.id,
+        )
+
+
+def test_accepting_space_shared_proposal_in_team_space_allowed(db, cross_space_pair):
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    prop = factories.create_test_proposal(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        proposal_type="memory_create",
+        title="Shared in team",
+        payload_json={
+            "operation": "create",
+            "proposed_content": "team shared ok",
+            "target_scope": "agent",
+            "memory_type": "semantic",
+            "target_visibility": "space_shared",
+            "owner_user_id": ua.id,
+        },
+        commit=True,
+    )
+
+    result = ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
+    assert result is not None
+    assert result.memory is not None
+    assert result.memory.visibility == "space_shared"
 
 
 # ---------------------------------------------------------------------------

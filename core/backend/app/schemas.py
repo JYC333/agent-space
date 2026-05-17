@@ -384,6 +384,7 @@ class ProposalOut(BaseModel):
     status: str
     risk_level: str = "low"
     urgency: str = "normal"
+    visibility: str = "space_shared"
     preview: bool = False
     review_deadline: Optional[datetime] = None
     expires_at: Optional[datetime] = None
@@ -397,6 +398,14 @@ class ProposalOut(BaseModel):
     selected_user_ids: Optional[list] = None
     provenance_entries: Optional[list[dict]] = None
     source_activity_id: Optional[str] = None
+    # Safe PersonalMemoryGrant egress metadata. These fields contain IDs/status
+    # only; raw memory, generated summaries, and proposal payload content are
+    # intentionally not exposed here.
+    grant_id: Optional[str] = None
+    required_approver_user_id: Optional[str] = None
+    requires_approval_type: Optional[str] = None
+    egress_approval_status: Optional[str] = None
+    egress_approval_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -408,7 +417,8 @@ class ProposalAcceptOut(BaseModel):
     # memory_entry  — memory_create, memory_update, memory_archive accepted
     # code_patch_apply — code_patch accepted
     # policy_version   — policy_change accepted
-    result_type: Literal["memory_entry", "code_patch_apply", "policy_version"]
+    # egress_review    — metadata-only grant egress review accepted
+    result_type: Literal["memory_entry", "code_patch_apply", "policy_version", "egress_review"]
     result: dict[str, Any]
 
 
@@ -435,6 +445,7 @@ class ActivityRecordOut(BaseModel):
     subject_user_id: Optional[str] = None
     lifecycle_status: Optional[str] = None
     consolidation_status: Optional[str] = None
+    visibility: str = "space_shared"
 
     model_config = {"from_attributes": True}
 
@@ -453,6 +464,8 @@ class ArtifactOut(BaseModel):
     storage_path: Optional[str] = None
     metadata_json: Optional[dict] = None
     has_inline_content: bool = False
+    visibility: str = "space_shared"
+    owner_user_id: Optional[str] = None
     content: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -548,6 +561,12 @@ class ContextPackage(BaseModel):
     source_refs: list[dict] = []
     retrieval_trace: dict = {}
     token_budget: dict = {}
+
+    # Ephemeral personal summary from a valid PersonalMemoryGrant.
+    # MUST NOT be persisted to compiled_prefix_text, compiled_tail_text,
+    # source_refs_json, or any shared artifact.  Present only in the in-memory
+    # ContextPackage returned to the caller; never written to the DB snapshot.
+    personal_context_block: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -715,6 +734,7 @@ class TaskOut(BaseModel):
     status: str
     priority: str
     risk_level: str
+    visibility: str
     created_by_user_id: Optional[str]
     created_by_agent_id: Optional[str]
     assigned_user_id: Optional[str]
@@ -773,6 +793,7 @@ class ArtifactSummaryOut(BaseModel):
     artifact_type: str
     title: str
     mime_type: Optional[str]
+    visibility: str = "space_shared"
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -784,6 +805,7 @@ class ProposalSummaryOut(BaseModel):
     proposal_type: str
     status: str
     title: str
+    visibility: str = "space_shared"
     created_at: datetime
     preview: bool = False
     urgency: str = "normal"
@@ -903,6 +925,7 @@ class RunOutV2(BaseModel):
     session_id: Optional[str]
     parent_run_id: Optional[str]
     delegation_depth: int = 0
+    instructed_by_user_id: Optional[str] = None
     instructed_by_agent_id: Optional[str] = None
     run_type: str
     trigger_origin: str
@@ -922,6 +945,7 @@ class RunOutV2(BaseModel):
     adapter_type: Optional[str] = None
     model_provider_id: Optional[str] = None
     required_sandbox_level: str = "none"
+    visibility: str = "space_shared"
 
     model_config = {"from_attributes": True}
 

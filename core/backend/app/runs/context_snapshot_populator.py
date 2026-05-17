@@ -352,6 +352,50 @@ class ContextSnapshotPopulator:
         retrieval_trace["token_budget"] = token_budget
         retrieval_trace.update(digest_trace)
 
+        # ── PersonalMemoryGrant resolution ───────────────────────────────
+        # Resolve any valid grant for this run.  The returned personal_context_block
+        # is ephemeral — it is attached to the in-memory pkg only and MUST NOT be
+        # written to compiled_prefix_text, compiled_tail_text, source_refs_json,
+        # or any shared artifact.  Only safe grant metadata is added to source_refs.
+        from ..personal_memory_grants.resolver import resolve_personal_memory_context_for_run
+
+        grant_result = resolve_personal_memory_context_for_run(self.db, run=run)
+
+        if grant_result.has_personal_context:
+            pkg.personal_context_block = grant_result.personal_context_block
+            # Add ONLY safe metadata to source_refs (no raw content, no memory IDs,
+            # no generated summary text).
+            source_refs.append({
+                "source_type": "personal_memory_grant",
+                "grant_id": grant_result.grant_metadata["grant_id"],
+                "granting_user_id": grant_result.grant_metadata["granting_user_id"],
+                "personal_space_id": grant_result.grant_metadata["personal_space_id"],
+                "target_space_id": grant_result.grant_metadata["target_space_id"],
+                "access_mode": grant_result.grant_metadata["access_mode"],
+                "memory_count": grant_result.grant_metadata["memory_count"],
+                "raw_memory_included": False,
+                "personal_summary_persisted": False,
+                "section": "ephemeral",
+            })
+            retrieval_trace["personal_memory_grant"] = {
+                "grant_id": grant_result.grant_metadata["grant_id"],
+                "access_mode": grant_result.grant_metadata["access_mode"],
+                "memory_count": grant_result.grant_metadata["memory_count"],
+                "raw_memory_included": False,
+                "personal_summary_persisted": False,
+            }
+
+            # Persist safe run-level marker so egress guard can detect grant-derived
+            # output without re-reading personal memory.  Only safe metadata (no raw content,
+            # no generated summary, no memory IDs) is stored.
+            from sqlalchemy.orm.attributes import flag_modified
+            run.has_personal_grant_context = True
+            run.personal_grant_context_json = grant_result.grant_metadata
+            flag_modified(run, "personal_grant_context_json")
+            self.db.flush()
+        else:
+            retrieval_trace["personal_memory_grant"] = None
+
         # ── Populate ContextSnapshot ─────────────────────────────────────
         snap = (
             self.db.query(ContextSnapshot)

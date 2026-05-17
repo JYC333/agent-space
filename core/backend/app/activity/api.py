@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from ..auth import get_identity
 from ..db import get_db
 from ..memory.consolidation.service import ActivityConsolidationService
+from ..participation.service import try_record_participation
 from ..schemas import ProposalOut
 from ..proposals.read_model import proposal_to_out
 from .service import ActivityService
@@ -67,6 +68,7 @@ class ActivityOut(BaseModel):
     source_url: Optional[str]
     status: str
     metadata_json: Optional[dict]
+    visibility: str = "space_shared"
     created_at: str
     updated_at: str
 
@@ -89,6 +91,7 @@ class ActivityOut(BaseModel):
             source_url=m.source_url,          # type: ignore[attr-defined]
             status=m.status,                  # type: ignore[attr-defined]
             metadata_json=m.metadata_json,    # type: ignore[attr-defined]
+            visibility=m.visibility,          # type: ignore[attr-defined]
             created_at=m.created_at.isoformat(),   # type: ignore[attr-defined]
             updated_at=m.updated_at.isoformat(),   # type: ignore[attr-defined]
         )
@@ -128,6 +131,14 @@ def create_activity(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try_record_participation(
+        db,
+        user_id=auth_user_id,
+        source_space_id=space_id,
+        source_object_type="activity",
+        source_object_id=record.id,
+        role="created",
+    )
     return ActivityOut.from_orm_model(record)
 
 
@@ -161,6 +172,7 @@ def list_activities(
             status=status,
             limit=limit,
             offset=offset,
+            viewer_user_id=auth_user_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -173,9 +185,9 @@ def get_activity(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ) -> ActivityOut:
-    space_id, _ = ids
+    space_id, user_id = ids
     svc = ActivityService(db)
-    record = svc.get(activity_id, space_id)
+    record = svc.get(activity_id, space_id, viewer_user_id=user_id)
     if not record:
         raise HTTPException(status_code=404, detail="Activity record not found")
     return ActivityOut.from_orm_model(record)

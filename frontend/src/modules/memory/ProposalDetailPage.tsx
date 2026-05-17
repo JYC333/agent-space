@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { proposalsApi } from '../../api/client'
+import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
 import type { Proposal } from '../../types/api'
 import { Card } from '../../components/ui/card'
@@ -10,6 +11,7 @@ import { Button } from '../../components/ui/button'
 import { Badge, StatusBadge } from '../../components/ui/badge'
 import { Skeleton } from '../../components/ui/skeleton'
 import { PreviewBadge, UrgencyBadge } from '../../components/PreviewBadge'
+import { EgressReviewNotice, isGrantDerivedProposal } from './EgressReviewNotice'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -17,12 +19,18 @@ function fmt(dt: string | null | undefined) {
 
 export default function ProposalDetailPage() {
   const { proposalId = '' } = useParams()
+  const { activeOperationalSpaceId, activeOperationalSpaceName, userId } = useSpace()
   const [p, setP] = useState<Proposal | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     if (!proposalId) return
+    if (!activeOperationalSpaceId) {
+      setP(null)
+      setLoading(false)
+      return
+    }
     let cancelled = false
     ;(async () => {
       setLoading(true)
@@ -39,12 +47,12 @@ export default function ProposalDetailPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [proposalId])
+  }, [proposalId, activeOperationalSpaceId])
 
   const canDecide =
     p &&
     p.status === 'pending' &&
-    (p.proposal_type === 'memory_update' || p.proposal_type === 'code_patch')
+    (p.proposal_type === 'memory_update' || p.proposal_type === 'code_patch' || p.proposal_type === 'egress_review')
 
   async function decide(action: 'accept' | 'reject') {
     if (!p) return
@@ -55,6 +63,23 @@ export default function ProposalDetailPage() {
       toast.success(`Proposal ${action}ed`)
       const r = await proposalsApi.get(p.id)
       setP(r)
+    } catch (e) {
+      const message = errMsg(e)
+      toast.error(message.includes('GrantingUserApprovalRequired') || message.includes('egress_granting_user')
+        ? 'Granting-user approval is required before this can be applied.'
+        : message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function approveEgress() {
+    if (!p) return
+    setBusy(true)
+    try {
+      await proposalsApi.approveEgressGrantingUserProposal(p.id, { grant_id: p.grant_id ?? undefined })
+      toast.success('Egress review approval recorded')
+      setP(await proposalsApi.get(p.id))
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
@@ -71,13 +96,20 @@ export default function ProposalDetailPage() {
       {loading && <Skeleton className="h-40 w-full" />}
 
       {!loading && !p && (
-        <Card className="p-8 text-center text-sm text-muted-foreground">Proposal not found.</Card>
+        <Card className="p-8 text-center text-sm text-muted-foreground">
+          {activeOperationalSpaceId ? 'Proposal not found.' : 'Select an operational space to view this proposal.'}
+        </Card>
       )}
 
       {!loading && p && (
         <Card className="p-5 space-y-4">
           <div className="flex flex-wrap justify-between gap-3 items-start">
-            <h1 className="text-lg font-semibold tracking-tight">{p.proposed_title}</h1>
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight">{p.proposed_title}</h1>
+              <p className="text-xs text-muted-foreground">
+                Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
+              </p>
+            </div>
             {canDecide && (
               <div className="flex gap-1.5 shrink-0">
                 <Button size="sm" variant="success" disabled={busy} onClick={() => decide('accept')}>Accept</Button>
@@ -89,6 +121,11 @@ export default function ProposalDetailPage() {
             <Badge variant="secondary">{p.proposal_type}</Badge>
             <StatusBadge status={p.status} />
             <UrgencyBadge urgency={p.urgency} />
+            {isGrantDerivedProposal(p) && (
+              <Badge variant={p.egress_approval_status === 'approved' ? 'success' : 'warning'}>
+                {p.egress_approval_status === 'approved' ? 'egress approved' : 'egress gated'}
+              </Badge>
+            )}
             {p.preview && <PreviewBadge />}
             {p.created_by_run_id && (
               <Link to={`/runs/${p.created_by_run_id}`} className="text-xs text-accent-foreground hover:underline">
@@ -96,6 +133,13 @@ export default function ProposalDetailPage() {
               </Link>
             )}
           </div>
+          <EgressReviewNotice
+            proposal={p}
+            currentUserId={userId}
+            targetSpaceName={activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'this space'}
+            approving={busy}
+            onApprove={approveEgress}
+          />
           <p className="text-xs text-muted-foreground">
             review_deadline {fmt(p.review_deadline)} · expires {fmt(p.expires_at)}
           </p>

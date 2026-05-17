@@ -13,18 +13,24 @@ import { Label } from '../../components/ui/label'
 import { Select } from '../../components/ui/select'
 import { Skeleton } from '../../components/ui/skeleton'
 import { PreviewBadge } from '../../components/PreviewBadge'
+import { ScopeBadge } from '../../components/ScopeBadge'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
 }
 
 export default function ArtifactsPage() {
-  const { spaceId } = useSpace()
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [items, setItems] = useState<Artifact[]>([])
   const [loading, setLoading] = useState(true)
   const [fType, setFType] = useState('')
 
   const load = useCallback(async () => {
+    if (!activeOperationalSpaceId) {
+      setItems([])
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       const q: Record<string, string> = { limit: '100' }
@@ -37,7 +43,7 @@ export default function ArtifactsPage() {
     } finally {
       setLoading(false)
     }
-  }, [fType, spaceId])
+  }, [fType, activeOperationalSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -67,6 +73,7 @@ export default function ArtifactsPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Artifacts</h1>
           <p className="text-sm text-muted-foreground">Browse and export space-scoped artifacts.</p>
+          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
         </div>
       </div>
 
@@ -88,7 +95,9 @@ export default function ArtifactsPage() {
       {loading ? (
         <Card className="p-6"><Skeleton className="h-24 w-full" /></Card>
       ) : items.length === 0 ? (
-        <Card className="p-10 text-center text-sm text-muted-foreground">No artifacts.</Card>
+        <Card className="p-10 text-center text-sm text-muted-foreground">
+          {activeOperationalSpaceId ? 'No artifacts.' : 'Select an operational space to browse artifacts.'}
+        </Card>
       ) : (
         <div className="space-y-3">
           {items.map(a => (
@@ -101,6 +110,7 @@ export default function ArtifactsPage() {
                 </div>
                 <div className="flex flex-wrap gap-1.5 mt-1 items-center">
                   <Badge variant="secondary">{a.artifact_type}</Badge>
+                  <ScopeBadge visibility={a.visibility} omitShared />
                   {a.preview && <PreviewBadge />}
                   <span className="text-xs text-muted-foreground">{fmt(a.created_at)}</span>
                 </div>

@@ -290,7 +290,7 @@ type CenterView =
   | { mode: 'session'; session: ConsoleSession }
 
 export default function WorkspaceConsolePage() {
-  const { spaceId } = useSpace()
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
 
   // ── Workspace state ──────────────────────────────────────────────────────
   const [workspaces, setWorkspaces]               = useState<WorkspaceInfo[]>([])
@@ -320,18 +320,26 @@ export default function WorkspaceConsolePage() {
 
   // ── Load workspaces + runtimes on mount ──────────────────────────────────
   useEffect(() => {
-    workspaceConsoleApi.listWorkspaces()
-      .then(r => {
-        setWorkspaces(r.items)
-        if (r.items.length > 0 && !selectedWs) setSelectedWs(r.items[0])
-      })
-      .catch(e => toast.error(errMsg(e)))
+    if (!activeOperationalSpaceId) {
+      setWorkspaces([])
+      setSelectedWs(null)
+      setFileTree(null)
+      setGitStatus(null)
+      setSessions([])
+    } else {
+      workspaceConsoleApi.listWorkspaces()
+        .then(r => {
+          setWorkspaces(r.items)
+          if (r.items.length > 0 && !selectedWs) setSelectedWs(r.items[0])
+        })
+        .catch(e => toast.error(errMsg(e)))
+    }
 
     workspaceConsoleApi.runtimes()
       .then(r => setRuntimes(r.runtimes))
       .catch(() => {/* non-fatal */})
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spaceId])
+  }, [activeOperationalSpaceId])
 
   // ── Load file tree + git status when workspace changes ───────────────────
   const loadTree = useCallback(async (ws: WorkspaceInfo) => {
@@ -413,6 +421,10 @@ export default function WorkspaceConsolePage() {
   // ── Run / continue session ────────────────────────────────────────────────
   async function handleRun() {
     if (!prompt.trim()) return
+    if (!activeOperationalSpaceId) {
+      toast.error('Select an operational space before running a console session')
+      return
+    }
     setRunning(true)
     // For a new session clear the board; for a continuation keep prior events
     const isContinuation = activeSessionId !== null
@@ -492,6 +504,9 @@ export default function WorkspaceConsolePage() {
           <Terminal className="size-4 text-primary" />
         </div>
         <h1 className="text-sm font-semibold">Workspace Console</h1>
+        <span className="text-[10px] text-muted-foreground hidden md:inline">
+          Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
+        </span>
 
         {/* Workspace selector */}
         {workspaces.length > 0 && (
@@ -721,7 +736,7 @@ export default function WorkspaceConsolePage() {
               onChange={e => setPrompt(e.target.value)}
               placeholder={selectedWs ? "Describe what you want the agent to do…" : "Select or create a workspace first…"}
               rows={4}
-              disabled={!selectedWs}
+              disabled={!selectedWs || !activeOperationalSpaceId}
               className="w-full text-xs bg-background border border-border rounded px-2.5 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 disabled:opacity-50 disabled:cursor-not-allowed"
               onKeyDown={e => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !running && selectedWs) {
@@ -734,7 +749,7 @@ export default function WorkspaceConsolePage() {
               <Button
                 size="sm"
                 className="flex-1 h-7 text-xs"
-                disabled={!selectedWs || !prompt.trim() || running}
+                disabled={!selectedWs || !activeOperationalSpaceId || !prompt.trim() || running}
                 onClick={handleRun}
               >
                 {running ? (

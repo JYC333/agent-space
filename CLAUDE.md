@@ -65,12 +65,25 @@ cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants
 
 ## Key concepts
 
-- **Space** — top-level container (personal / family / team). All data is scoped by `space_id`.
+- **Space** — permission and collaboration boundary (personal / family / team). All data is scoped
+  by `space_id`. A space is not the complete user worldview — a user may belong to many spaces.
+  See `docs/SPACE_MODEL.md`.
 - **User** — a person; may belong to multiple spaces.
 - **Workspace** — a project or knowledge area within a space.
 - **Memory** — scoped long-term information; written only through the proposal → approval workflow.
+  Private memory (`visibility=private`) must live in the user's personal space only.
 - **Capability** — code-defined skill registered via `capability.yaml` manifest.
 - **Sandbox** — ephemeral isolated execution environment for agent runs.
+- **PersonalView** — future: cross-space aggregation from a user's perspective (not yet built).
+- **ExecutionContext** — per-run scope controlling which memories and tools an agent may access;
+  wired today via `Run.instructed_by_user_id` → `ContextBuilder`.
+
+## Space and memory model docs
+
+- `docs/SPACE_MODEL.md` — space types, personal space convention, private memory definition,
+  and the anti-pattern of private memory in shared spaces.
+- `docs/TARGET_VIEW_MODEL.md` — target concepts: Space, Owner, Visibility, PersonalView,
+  ExecutionContext, ParticipationRecord, SourcePointer, PublishProjection.
 
 ## Key files
 

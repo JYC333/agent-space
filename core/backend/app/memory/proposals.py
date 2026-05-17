@@ -8,6 +8,7 @@ Supported proposal types for accept():
   memory_archive  — status-based archive (requires target_memory_id)
   policy_change   — create / supersede a Policy version
   code_patch      — apply patch to workspace files
+  egress_review   — metadata-only grant egress review marker
 """
 
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ _SUPPORTED_ACCEPT_TYPES = frozenset({
     "memory_archive",
     "policy_change",
     "code_patch",
+    "egress_review",
 })
 
 
@@ -58,6 +60,7 @@ class ProposalAcceptResult:
     memory: Optional[MemoryEntry] = None
     policy: Optional[Policy] = None
     updated_paths: Optional[list[str]] = None
+    egress_review: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +219,7 @@ def build_memory_create_proposal(
     source_evidence: str | None = None,
     activity_source_trust: str | None = None,
     activity_evidence_json: dict | None = None,
-    target_visibility: str = "private",
+    target_visibility: str = "space_shared",
     risk_level: str = "low",
     owner_user_id: str | None = None,
     subject_user_id: str | None = None,
@@ -301,7 +304,7 @@ def build_memory_update_proposal(
     source_evidence: str | None = None,
     activity_source_trust: str | None = None,
     activity_evidence_json: dict | None = None,
-    target_visibility: str = "private",
+    target_visibility: str = "space_shared",
     risk_level: str = "low",
     owner_user_id: str | None = None,
     subject_user_id: str | None = None,
@@ -367,6 +370,62 @@ def build_memory_update_proposal(
     )
 
 
+def build_egress_review_proposal(
+    proposal_id: str,
+    space_id: str,
+    user_id: str,
+    *,
+    source_run_id: str,
+    grant_id: str,
+    granting_user_id: str,
+    target_object_type: str,
+    target_visibility: str = "space_shared",
+    target_space_id: str | None = None,
+    review_deadline: datetime | None = None,
+    expires_at: datetime | None = None,
+) -> Proposal:
+    """Construct a metadata-only egress_review proposal.
+
+    This representation carries only safe grant/run metadata. It does not embed
+    output text, personal_context_block, generated summaries, memory IDs, or raw
+    personal memory.
+    """
+    target_space_id = target_space_id or space_id
+    payload = {
+        "target_space_id": target_space_id,
+        "source_run_id": source_run_id,
+        "grant_id": grant_id,
+        "granting_user_id": granting_user_id,
+        "target_object_type": target_object_type,
+        "target_visibility": target_visibility,
+        "raw_private_memory_included": False,
+        "personal_summary_persisted": False,
+        "requires_approval_type": "egress_granting_user",
+        "required_approver_user_id": granting_user_id,
+        "personal_context_derived": True,
+        "egress_guard_required": True,
+    }
+    if expires_at is not None:
+        payload["egress_review_expires_at"] = expires_at.isoformat()
+
+    return Proposal(
+        id=proposal_id,
+        space_id=space_id,
+        proposal_type="egress_review",
+        status="pending",
+        title="Grant-derived egress review",
+        summary=None,
+        payload_json=payload,
+        rationale="Grant-derived output requires granting-user approval before apply.",
+        created_by_user_id=user_id,
+        created_by_run_id=source_run_id,
+        risk_level="high",
+        urgency="normal",
+        review_deadline=review_deadline,
+        expires_at=expires_at,
+    )
+
+
 class ProposalService:
     """List, count, accept, and reject proposals for a space.
 
@@ -391,7 +450,7 @@ class ProposalService:
         source_session_id: str | None = None,
         source_task_id: str | None = None,
         source_run_id: str | None = None,
-        target_visibility: str = "private",
+        target_visibility: str = "space_shared",
         owner_user_id: str | None = None,
         subject_user_id: str | None = None,
         sensitivity_level: str = "normal",
@@ -450,7 +509,10 @@ class ProposalService:
 
             raise HTTPException(status_code=422, detail=f"Invalid urgency {urgency!r}")
         run_for_instructed = duplicate_mapper(Run)
+        # space_shared proposals are visible to any space user; private/restricted ones
+        # are restricted to the creator or the user whose run created them.
         visible = or_(
+            Proposal.visibility == "space_shared",
             Proposal.created_by_user_id == user_id,
             run_for_instructed.instructed_by_user_id == user_id,
         )
@@ -497,7 +559,10 @@ class ProposalService:
 
             raise HTTPException(status_code=422, detail=f"Invalid urgency {urgency!r}")
         run_for_instructed = duplicate_mapper(Run)
+        # space_shared proposals are visible to any space user; private/restricted ones
+        # are restricted to the creator or the user whose run created them.
         visible = or_(
+            Proposal.visibility == "space_shared",
             Proposal.created_by_user_id == user_id,
             run_for_instructed.instructed_by_user_id == user_id,
         )
@@ -603,7 +668,9 @@ class ProposalService:
     ) -> Proposal | None:
         """Return a proposal if it exists in ``space_id`` and matches global list visibility."""
         run_for_instructed = duplicate_mapper(Run)
+        # space_shared proposals visible to any space user; private/restricted to creator/run-instructor.
         visible = or_(
+            Proposal.visibility == "space_shared",
             Proposal.created_by_user_id == user_id,
             run_for_instructed.instructed_by_user_id == user_id,
         )
@@ -752,6 +819,14 @@ class ProposalService:
                 proposal.payload_json = data
                 flag_modified(proposal, "payload_json")
 
+            if result.egress_review:
+                payload = proposal.payload_json or {}
+                data = dict(payload)
+                data["egress_review_applied"] = True
+                data["applied_at"] = datetime.now(UTC).isoformat()
+                proposal.payload_json = data
+                flag_modified(proposal, "payload_json")
+
             try:
                 UnitOfWork(self.db).commit()
             except Exception as exc:
@@ -782,6 +857,7 @@ class ProposalService:
             memory=result.memory,
             policy=result.policy,
             updated_paths=result.updated_paths,
+            egress_review=result.egress_review,
         )
 
     def reject(

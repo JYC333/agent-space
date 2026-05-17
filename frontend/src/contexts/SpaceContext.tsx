@@ -1,29 +1,48 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, type ReactNode } from 'react'
 import { setSpaceContext } from '../api/client'
 import { authApi } from '../api/client'
 import { useAuth } from './AuthContext'
 import type { SpaceWithMembership } from '../types/api'
 
+export type Perspective = 'personal' | 'space'
+
 interface SpaceContextValue {
-  spaceId: string
+  perspective: Perspective
+  spaceId: string | null
   userId: string
   spaces: SpaceWithMembership[]
-  setSpace: (spaceId: string, userId?: string) => void
+  personalSpaceId: string | null
+  activeWriteTargetSpaceId: string | null
+  activeOperationalSpaceId: string | null
+  activeOperationalSpaceName: string | null
+  setPerspective: (perspective: Perspective, optionalSpaceId?: string) => void
+  setSpace: (spaceId: string) => void
+  setWriteTarget: (spaceId: string | null) => void
   reloadSpaces: () => Promise<void>
 }
 
 const SpaceContext = createContext<SpaceContextValue | null>(null)
 
-const DEFAULT_SPACE_ID = 'personal'
 const DEFAULT_USER_ID  = 'default_user'
 const STORAGE_KEY = 'agent-space:space-context'
 
-function readStored(): { spaceId: string; userId: string } {
+function readStored(): {
+  perspective: Perspective
+  spaceId: string | null
+  userId: string
+  activeWriteTargetSpaceId: string | null
+} {
   try {
     const s = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}')
-    return { spaceId: s.spaceId ?? DEFAULT_SPACE_ID, userId: s.userId ?? DEFAULT_USER_ID }
+    const perspective: Perspective = s.perspective === 'space' ? 'space' : 'personal'
+    return {
+      perspective,
+      spaceId: typeof s.spaceId === 'string' ? s.spaceId : null,
+      userId: typeof s.userId === 'string' ? s.userId : DEFAULT_USER_ID,
+      activeWriteTargetSpaceId: typeof s.activeWriteTargetSpaceId === 'string' ? s.activeWriteTargetSpaceId : null,
+    }
   } catch {
-    return { spaceId: DEFAULT_SPACE_ID, userId: DEFAULT_USER_ID }
+    return { perspective: 'personal', spaceId: null, userId: DEFAULT_USER_ID, activeWriteTargetSpaceId: null }
   }
 }
 
@@ -31,20 +50,32 @@ export function SpaceProvider({ children }: { children: ReactNode }) {
   const { currentUser } = useAuth()
   const stored = readStored()
 
-  const [spaceId, setSpaceIdState] = useState(stored.spaceId)
+  const [perspective, setPerspectiveState] = useState<Perspective>(stored.perspective)
+  const [spaceId, setSpaceIdState] = useState<string | null>(stored.perspective === 'space' ? stored.spaceId : null)
   const [userId,  setUserIdState]  = useState(stored.userId)
   const [spaces,  setSpaces]       = useState<SpaceWithMembership[]>([])
+  const [activeWriteTargetSpaceId, setWriteTargetState] = useState<string | null>(stored.activeWriteTargetSpaceId)
   const [ready,   setReady]         = useState(false)
 
-  // When a real user logs in, adopt their identity and default space
+  const personalSpaceId = useMemo(
+    () => spaces.find(s => s.type === 'personal')?.id ?? null,
+    [spaces],
+  )
+  const activeOperationalSpaceId = useMemo(
+    () => perspective === 'space' ? spaceId : (activeWriteTargetSpaceId ?? personalSpaceId),
+    [perspective, spaceId, activeWriteTargetSpaceId, personalSpaceId],
+  )
+  const activeOperationalSpaceName = useMemo(
+    () => spaces.find(s => s.id === activeOperationalSpaceId)?.name ?? null,
+    [spaces, activeOperationalSpaceId],
+  )
+
   useEffect(() => {
     if (currentUser) {
       setUserIdState(currentUser.id)
-      const activeSpace = currentUser.default_space_id ?? stored.spaceId
-      setSpaceIdState(activeSpace)
     }
     setReady(true)
-  }, [currentUser?.id, stored.spaceId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentUser?.id])
 
   const reloadSpaces = useCallback(async () => {
     if (!currentUser) { setSpaces([]); return }
@@ -59,24 +90,91 @@ export function SpaceProvider({ children }: { children: ReactNode }) {
   useEffect(() => { reloadSpaces() }, [reloadSpaces])
 
   useEffect(() => {
-    if (!ready) return
-    setSpaceContext(spaceId, userId)
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ spaceId, userId }))
-  }, [spaceId, userId, ready])
+    if (!currentUser || spaces.length === 0) return
+    const hasStoredSpace = stored.spaceId && spaces.some(s => s.id === stored.spaceId)
+    const hasCurrentSpace = spaceId && spaces.some(s => s.id === spaceId)
+    const hasWriteTarget = activeWriteTargetSpaceId && spaces.some(s => s.id === activeWriteTargetSpaceId)
 
-  function setSpace(newSpaceId: string, newUserId?: string) {
-    const effectiveUserId = newUserId ?? userId
-    // Update the API client synchronously so child effects that fire in the same
-    // React commit (before the parent context effect) use the new space ID.
-    setSpaceContext(newSpaceId, effectiveUserId)
+    if (perspective === 'space' && !hasCurrentSpace) {
+      const fallback = (hasStoredSpace ? stored.spaceId : currentUser.default_space_id) ?? spaces.find(s => s.type !== 'personal')?.id ?? null
+      if (fallback && spaces.some(s => s.id === fallback)) setSpaceIdState(fallback)
+      else setPerspectiveState('personal')
+    }
+
+    if (!hasWriteTarget) {
+      setWriteTargetState(perspective === 'personal' ? personalSpaceId : (spaceId ?? null))
+    }
+  }, [
+    currentUser,
+    spaces,
+    perspective,
+    spaceId,
+    activeWriteTargetSpaceId,
+    personalSpaceId,
+    stored.spaceId,
+  ])
+
+  useEffect(() => {
+    if (perspective === 'personal') {
+      setSpaceIdState(null)
+      setWriteTargetState(prev => prev ?? personalSpaceId)
+    } else {
+      setWriteTargetState(prev => prev ?? spaceId)
+    }
+  }, [perspective, personalSpaceId, spaceId])
+
+  useEffect(() => {
+    if (!ready) return
+    if (activeOperationalSpaceId) setSpaceContext(activeOperationalSpaceId, userId)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      perspective,
+      spaceId: perspective === 'space' ? spaceId : null,
+      userId,
+      activeWriteTargetSpaceId,
+    }))
+  }, [perspective, spaceId, activeWriteTargetSpaceId, activeOperationalSpaceId, userId, ready])
+
+  function setPerspective(nextPerspective: Perspective, optionalSpaceId?: string) {
+    setPerspectiveState(nextPerspective)
+    if (nextPerspective === 'personal') {
+      setSpaceIdState(null)
+      setWriteTargetState(personalSpaceId)
+      if (personalSpaceId) setSpaceContext(personalSpaceId, userId)
+      return
+    }
+    if (optionalSpaceId) setSpace(optionalSpaceId)
+  }
+
+  function setSpace(newSpaceId: string) {
+    setPerspectiveState('space')
+    setSpaceContext(newSpaceId, userId)
     setSpaceIdState(newSpaceId)
-    if (newUserId) setUserIdState(newUserId)
+    setWriteTargetState(newSpaceId)
+  }
+
+  function setWriteTarget(newSpaceId: string | null) {
+    const valid = newSpaceId && spaces.some(s => s.id === newSpaceId) ? newSpaceId : null
+    setWriteTargetState(valid)
+    if (valid && perspective === 'personal') setSpaceContext(valid, userId)
   }
 
   if (!ready) return null
 
   return (
-    <SpaceContext.Provider value={{ spaceId, userId, spaces, setSpace, reloadSpaces }}>
+    <SpaceContext.Provider value={{
+      perspective,
+      spaceId,
+      userId,
+      spaces,
+      personalSpaceId,
+      activeWriteTargetSpaceId,
+      activeOperationalSpaceId,
+      activeOperationalSpaceName,
+      setPerspective,
+      setSpace,
+      setWriteTarget,
+      reloadSpaces,
+    }}>
       {children}
     </SpaceContext.Provider>
   )

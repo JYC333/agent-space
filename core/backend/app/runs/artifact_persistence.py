@@ -12,6 +12,11 @@ from ulid import ULID
 
 from ..config import settings
 from ..models import Artifact, Run
+from ..personal_memory_grants.egress_guard import (
+    EgressDecision,
+    PersonalMemoryEgressError,
+    check_personal_memory_egress,
+)
 
 
 def _new_id() -> str:
@@ -41,6 +46,17 @@ class ArtifactPersistenceService:
         preview: bool = False,
     ) -> Artifact:
         """Write UTF-8 text to persisted storage and create an ``Artifact`` row."""
+        # Egress guard: block grant-derived artifacts targeting non-personal spaces.
+        egress = check_personal_memory_egress(
+            self.db,
+            run=run,
+            target_space_id=run.space_id,
+            target_object_type="artifact",
+            operation="persist_text_file",
+        )
+        if egress.decision == EgressDecision.BLOCK:
+            raise PersonalMemoryEgressError(egress.reason, grant_id=egress.grant_id)
+
         art_id = _new_id()
         rel = f"{run.space_id}/runs/{run.id}/{art_id}.txt"
         root = Path(settings.artifact_storage_root).resolve()
@@ -61,6 +77,7 @@ class ArtifactPersistenceService:
             preview=preview,
             storage_path=rel.replace("\\", "/"),
             storage_ref=None,
+            owner_user_id=run.instructed_by_user_id,
         )
         self.db.add(artifact)
         self.db.flush()
@@ -79,6 +96,17 @@ class ArtifactPersistenceService:
         metadata_json: dict[str, Any] | None = None,
     ) -> Artifact:
         """Copy a regular file from an adapter sandbox into persisted storage."""
+        # Egress guard: block grant-derived artifacts targeting non-personal spaces.
+        egress = check_personal_memory_egress(
+            self.db,
+            run=run,
+            target_space_id=run.space_id,
+            target_object_type="artifact",
+            operation="persist_copied_file",
+        )
+        if egress.decision == EgressDecision.BLOCK:
+            raise PersonalMemoryEgressError(egress.reason, grant_id=egress.grant_id)
+
         src = source_file.resolve()
         if not src.is_file():
             raise ValueError("source must be an existing regular file")
@@ -110,6 +138,7 @@ class ArtifactPersistenceService:
             storage_path=rel.replace("\\", "/"),
             storage_ref=None,
             metadata_json=meta,
+            owner_user_id=run.instructed_by_user_id,
         )
         self.db.add(artifact)
         self.db.flush()

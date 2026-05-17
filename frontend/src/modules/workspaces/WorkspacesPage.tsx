@@ -16,21 +16,26 @@ function fmt(dt: string) {
 }
 
 export default function WorkspacesPage() {
-  const { spaceId } = useSpace()
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [newName, setNewName]       = useState('')
   const [creating, setCreating]     = useState(false)
 
   const load = useCallback(async () => {
+    if (!activeOperationalSpaceId) {
+      setWorkspaces([])
+      return
+    }
     try { setWorkspaces((await workspacesApi.list()).items) }
     catch (e) { toast.error(errMsg(e)) }
-  }, [spaceId])
+  }, [activeOperationalSpaceId])
 
   // scanned ref persists across React StrictMode's intentional double-mount so
   // the scan endpoint is only called once per real page visit, not twice.
   const scanned = useRef(false)
 
   useEffect(() => {
+    if (!activeOperationalSpaceId) { load(); return }
     if (scanned.current) { load(); return }
     scanned.current = true
 
@@ -43,11 +48,15 @@ export default function WorkspacesPage() {
       })
       .catch(() => {/* non-fatal */})
       .finally(() => load())
-  }, [load])
+  }, [load, activeOperationalSpaceId])
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault()
     if (!newName.trim()) return
+    if (!activeOperationalSpaceId) {
+      toast.error('Select an operational space before creating a workspace')
+      return
+    }
     setCreating(true)
     try {
       await workspacesApi.create({ name: newName.trim(), workspace_type: 'project', kind: 'project' })
@@ -77,6 +86,7 @@ export default function WorkspacesPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Workspaces</h1>
           <p className="text-sm text-muted-foreground">Projects and knowledge areas within this space.</p>
+          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
         </div>
       </div>
 
@@ -90,7 +100,7 @@ export default function WorkspacesPage() {
             placeholder="Workspace name…"
             className="flex-1"
           />
-          <Button type="submit" size="sm" disabled={!newName.trim() || creating}>
+          <Button type="submit" size="sm" disabled={!newName.trim() || creating || !activeOperationalSpaceId}>
             <Plus className="size-3.5 mr-1" />
             {creating ? 'Creating…' : 'Create'}
           </Button>
@@ -101,7 +111,10 @@ export default function WorkspacesPage() {
       <Card>
         <CardTitle>Workspaces · {workspaces.length}</CardTitle>
         {workspaces.length === 0 ? (
-          <EmptyState title="No workspaces yet" description="Create one above." />
+          <EmptyState
+            title={activeOperationalSpaceId ? 'No workspaces yet' : 'No operational space selected'}
+            description={activeOperationalSpaceId ? 'Create one above.' : 'Select an operational space to browse workspaces.'}
+          />
         ) : (
           <div className="divide-y divide-border">
             {workspaces.map(ws => (

@@ -118,7 +118,7 @@ def test_untrusted_external_only_requires_explicit_accept(db, cross_space_pair):
             "memory_type": "semantic",
             "target_scope": "agent",
             "target_namespace": "ns",
-            "target_visibility": "private",
+            "target_visibility": "space_shared",
             "sensitivity_level": "normal",
             "provenance_entries": [
                 {
@@ -210,7 +210,7 @@ def test_trusted_external_preserves_identity_on_memory(db, cross_space_pair):
             "memory_type": "semantic",
             "target_scope": "agent",
             "target_namespace": "ns",
-            "target_visibility": "private",
+            "target_visibility": "space_shared",
             "sensitivity_level": "normal",
             "provenance_entries": [
                 {

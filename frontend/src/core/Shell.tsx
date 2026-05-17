@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Settings, Sun, Moon, LogOut } from 'lucide-react'
 import { Toaster } from 'sonner'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
 import { SpaceSwitcher } from '../components/SpaceSwitcher'
+import { PerspectiveGuardBanner } from '../components/PerspectiveGuardBanner'
 import { UserAvatar } from '../components/UserAvatar'
 import { cn } from '../lib/utils'
+import { perspectiveTypeForPath } from '../modules/registry'
 
 /* ── Aperture A brand mark ─────────────────────────────────────────────────── */
 function ApertureMark({ size = 22 }: { size?: number }) {
@@ -164,11 +166,14 @@ function TopBar() {
 /* ── Shell ─────────────────────────────────────────────────────────────────── */
 export default function Shell() {
   const { theme } = useTheme()
+  const location = useLocation()
+  const isSpaceScopedPage = perspectiveTypeForPath(location.pathname) === 'space-scoped'
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground">
       <TopBar />
 
       <main className="flex-1 overflow-y-auto">
+        <PerspectiveGuardBanner isSpaceScopedPage={isSpaceScopedPage} />
         <Outlet />
       </main>
 

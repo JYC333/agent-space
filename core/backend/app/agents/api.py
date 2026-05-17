@@ -14,6 +14,7 @@ from .version_service import AgentVersionService
 from app.runs.run_service import RunService
 from ..auth import get_identity
 from ..jobs.queue import get_queue
+from ..participation.service import try_record_participation
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -281,12 +282,21 @@ def create_agent_run(
     """
     space_id, user_id = ids
     svc = RunService(db)
-    return svc.create_run(
+    run = svc.create_run(
         agent_id=agent_id,
         data=data,
         space_id=space_id,
         user_id=user_id,
     )
+    try_record_participation(
+        db,
+        user_id=run.instructed_by_user_id,
+        source_space_id=space_id,
+        source_object_type="run",
+        source_object_id=run.id,
+        role="instructed",
+    )
+    return run
 
 
 # ---------------------------------------------------------------------------

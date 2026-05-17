@@ -411,7 +411,7 @@ def create_test_proposal(
         "memory_type": "semantic",
         "target_scope": "agent",
         "target_namespace": "agent.test",
-        "target_visibility": "private",
+        "target_visibility": "space_shared",
         "sensitivity_level": "normal",
     }
     merged = {**base_payload, **(payload_json or {})}

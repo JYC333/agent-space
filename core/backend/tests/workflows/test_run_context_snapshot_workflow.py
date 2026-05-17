@@ -324,7 +324,7 @@ def test_proposal_write_governance_enforced(db, cross_space_pair):
             scope="user",
             type="semantic",
             content="mf2 regression check",
-            visibility="private",
+            visibility="space_shared",
             owner_user_id=ua.id,
         ),
         acting_user_id=ua.id,

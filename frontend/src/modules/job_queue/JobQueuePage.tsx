@@ -164,7 +164,7 @@ function JobRow({
 // Page
 // ---------------------------------------------------------------------------
 export default function JobQueuePage() {
-  const { spaceId } = useSpace()
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [jobs, setJobs]               = useState<Job[]>([])
   const [total, setTotal]             = useState(0)
   const [loading, setLoading]         = useState(true)
@@ -174,6 +174,13 @@ export default function JobQueuePage() {
   const hasActive = jobs.some(j => ACTIVE.has(j.status))
 
   const load = useCallback(async (quiet = false) => {
+    if (!activeOperationalSpaceId) {
+      setJobs([])
+      setTotal(0)
+      setLoading(false)
+      setRefreshing(false)
+      return
+    }
     if (!quiet) setLoading(true)
     else setRefreshing(true)
     try {
@@ -188,9 +195,9 @@ export default function JobQueuePage() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [statusFilter])
+  }, [statusFilter, activeOperationalSpaceId])
 
-  useEffect(() => { load() }, [load, spaceId])
+  useEffect(() => { load() }, [load])
 
   // Auto-refresh every 3 s while any job is active
   useEffect(() => {
@@ -232,12 +239,15 @@ export default function JobQueuePage() {
               <span className="ml-2 text-warning font-medium">{activeCount} active</span>
             )}
           </p>
+          <p className="text-xs text-muted-foreground">
+            Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
+          </p>
         </div>
         <Button
           variant="ghost"
           size="icon"
           onClick={() => load(true)}
-          disabled={refreshing}
+          disabled={refreshing || !activeOperationalSpaceId}
           title="Refresh"
         >
           <RefreshCw className={`size-4 ${refreshing ? 'animate-spin' : ''}`} />
@@ -275,7 +285,9 @@ export default function JobQueuePage() {
           </div>
         ) : jobs.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-10">
-            {statusFilter ? `No ${statusFilter} jobs.` : 'No jobs yet. Submit an agent run to see it here.'}
+            {!activeOperationalSpaceId
+              ? 'Select an operational space to browse jobs.'
+              : statusFilter ? `No ${statusFilter} jobs.` : 'No jobs yet. Submit an agent run to see it here.'}
           </p>
         ) : (
           <div className="mt-1">

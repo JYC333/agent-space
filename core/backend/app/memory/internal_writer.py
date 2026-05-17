@@ -162,12 +162,13 @@ class MemoryInternalWriter:
         acting_user_id: Optional[str],
         actor_ref: Optional[dict[str, Any]],
     ) -> None:
+        from ..policy.domains import MEMORY_WRITE_DIRECT
         from ..policy.engine import PolicyEngine
 
         PolicyEngine().assert_allowed(
             {
                 "db": self._db,
-                "action": "memory.write_direct",
+                "action": MEMORY_WRITE_DIRECT,
                 "resource_type": "memory",
                 "resource_id": resource_id,
                 "space_id": space_id,

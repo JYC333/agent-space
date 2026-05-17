@@ -880,7 +880,7 @@ Backup manifest inspected: <yes / no>
 | Deployment job persistence absent | 501-gated; manual deployment only |
 | Local advisory lock only (single-host) | Distributed locking is future scope |
 | Cloud/offsite backup absent | Manual GPG + offsite upload if required |
-| `ContextSource` table unused in provenance pipeline | May become first-class Source in future |
+| `context_sources` table removed from schema | A future first-class Source model would be a new table |
 | QuickCapture `ask` mode still routes to `/sessions` | Correct for real conversations; UX deferred |
 | QuickCapture `process` mode creates new Activity | Acceptable; product refinement deferred |
 | First-class Source/Evidence tables deferred | Pre-external-ingestion gate; not needed for dogfooding |

@@ -2,6 +2,7 @@ import { useState, useEffect, useId, useRef } from 'react'
 import { KeyRound, CheckCircle, AlertCircle, Loader2, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { providersApi } from '../../api/client'
+import { useSpace } from '../../contexts/SpaceContext'
 import { Card, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
@@ -174,7 +175,7 @@ function Check({ size, className }: { size: number; className?: string }) {
 // Add Provider Form
 // ---------------------------------------------------------------------------
 
-function AddProviderForm({ onAdded }: { onAdded: () => void }) {
+function AddProviderForm({ onAdded, canCreate }: { onAdded: () => void; canCreate: boolean }) {
   const [name, setName] = useState('')
   const [provider, setProvider] = useState('')
   const [apiKey, setApiKey] = useState('')
@@ -215,6 +216,10 @@ function AddProviderForm({ onAdded }: { onAdded: () => void }) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!provider.trim() || !apiKey.trim()) return
+    if (!canCreate) {
+      toast.error('Select an operational space before adding a provider')
+      return
+    }
 
     setSaving(true)
     try {
@@ -241,7 +246,7 @@ function AddProviderForm({ onAdded }: { onAdded: () => void }) {
 
   if (!expanded) {
     return (
-      <Button variant="outline" size="sm" onClick={() => setExpanded(true)}>
+      <Button variant="outline" size="sm" onClick={() => setExpanded(true)} disabled={!canCreate}>
         <Plus className="size-3.5 mr-1.5" />
         Add provider
       </Button>
@@ -318,7 +323,7 @@ function AddProviderForm({ onAdded }: { onAdded: () => void }) {
       </div>
 
       <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={!provider.trim() || !apiKey.trim() || saving}>
+        <Button type="submit" size="sm" disabled={!canCreate || !provider.trim() || !apiKey.trim() || saving}>
           {saving ? <Loader2 className="size-3.5 animate-spin" /> : 'Add provider'}
         </Button>
         <Button type="button" size="sm" variant="outline" onClick={reset}>Cancel</Button>
@@ -495,6 +500,7 @@ function ProviderCard({
 // ---------------------------------------------------------------------------
 
 export default function ModelProvidersPage() {
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [configs, setConfigs] = useState<ProviderConfig[]>([])
   const [catalog, setCatalog] = useState<CatalogInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -504,11 +510,17 @@ export default function ModelProvidersPage() {
 
   useEffect(() => {
     loadAll()
-  }, [])
+  }, [activeOperationalSpaceId])
 
   async function loadAll() {
     setLoading(true)
     try {
+      if (!activeOperationalSpaceId) {
+        const cat = await providersApi.catalog()
+        setConfigs([])
+        setCatalog(cat as CatalogInfo)
+        return
+      }
       const [cfg, cat] = await Promise.all([
         providersApi.list(),
         providersApi.catalog(),
@@ -560,6 +572,9 @@ export default function ModelProvidersPage() {
           <p className="text-sm text-muted-foreground">
             Configure LLM providers via LiteLLM — any model name LiteLLM supports works.
           </p>
+          <p className="text-xs text-muted-foreground">
+            Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
+          </p>
         </div>
       </div>
 
@@ -587,12 +602,14 @@ export default function ModelProvidersPage() {
         </div>
       ) : tab === 'configured' ? (
         <div className="space-y-4">
-          <AddProviderForm onAdded={loadAll} />
+          <AddProviderForm onAdded={loadAll} canCreate={Boolean(activeOperationalSpaceId)} />
 
           {configs.length === 0 ? (
             <Card>
               <p className="text-sm text-muted-foreground">
-                No providers configured yet. Add one to get started.
+                {activeOperationalSpaceId
+                  ? 'No providers configured yet. Add one to get started.'
+                  : 'Select an operational space to configure providers.'}
               </p>
             </Card>
           ) : (

@@ -2,6 +2,7 @@ import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
 
 export type NavSection = 'capture' | 'knowledge' | 'agents' | 'dev'
 export type AppGroup   = 'daily' | 'work' | 'knowledge' | 'agents' | 'workspace' | 'system'
+export type PerspectiveType = 'space-scoped' | 'personal' | 'neutral'
 
 /**
  * Where an app entry originates.
@@ -82,6 +83,8 @@ export interface Module {
   // ── Router ────────────────────────────────────────────────────────────────
   /** When true, route is registered as `path/*` to allow nested <Routes>. */
   hasSubRoutes?: boolean
+  /** Whether this route operates against personal aggregation, a concrete space, or no perspective. */
+  perspectiveType: PerspectiveType
   component: LazyExoticComponent<ComponentType>
 }
 
@@ -124,6 +127,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Daily overview, active items, and suggested actions.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'neutral',
     component: lazy(() => import('./today/TodayPage')),
   },
   {
@@ -132,6 +136,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Quickly save thoughts, ideas, notes, and external content.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     component: lazy(() => import('./capture/CapturePage')),
   },
   {
@@ -140,6 +145,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Review raw captured records before they become proposals.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     hasSubRoutes: true,
     component: lazy(() => import('./activity/ActivityModule')),
   },
@@ -149,6 +155,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Manage and continue agent sessions and conversations.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     component: lazy(() => import('./sessions/SessionsPage')),
   },
   {
@@ -157,6 +164,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Track time records and convert them into activity summaries.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: true,
+    perspectiveType: 'neutral',
     component: lazy(() => import('./time/TimePage')),
   },
 
@@ -167,6 +175,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Plan work, start runs, and review linked outputs.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     order: 10,
     hasSubRoutes: true,
     component: lazy(() => import('./tasks/TasksModule')),
@@ -177,6 +186,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Inspect agent runs, status, activities, artifacts, and proposals.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     order: 20,
     hasSubRoutes: true,
     component: lazy(() => import('./runs/RunsModule')),
@@ -187,6 +197,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Review memory, wiki, card, code, and system proposals.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     order: 30,
     hasSubRoutes: true,
     component: lazy(() => import('./memory/ProposalsModule')),
@@ -197,6 +208,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Browse and export outputs produced by runs.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     order: 40,
     hasSubRoutes: true,
     component: lazy(() => import('./artifacts/ArtifactsModule')),
@@ -209,6 +221,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Structured knowledge — concepts, claims, sources, questions.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: true,
+    perspectiveType: 'neutral',
     component: lazy(() => import('./wiki/WikiPage')),
   },
   {
@@ -217,6 +230,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Review and manage spaced-repetition flashcards.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: true,
+    perspectiveType: 'neutral',
     component: lazy(() => import('./cards/CardReviewPage')),
   },
   {
@@ -225,6 +239,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Review scoped memories, visibility, and long-term context.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     component: lazy(() => import('./memory/MemoriesPage')),
   },
 
@@ -235,6 +250,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Monitor runtime adapters, queues, and execution health.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     component: lazy(() => import('./cli_adapters/CLIStatusPage')),
   },
   {
@@ -243,6 +259,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Inspect infrastructure jobs, retries, and worker status.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     component: lazy(() => import('./job_queue/JobQueuePage')),
   },
 
@@ -253,6 +270,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Browse files, diffs, runs, artifacts, and workspace status.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     component: lazy(() => import('./workspaces/WorkspacesPage')),
   },
   {
@@ -261,6 +279,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Browse project files, inspect git changes, and run agent sessions.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     component: lazy(() => import('./workspace_console/WorkspaceConsolePage')),
   },
 
@@ -271,6 +290,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Configure spaces, users, capabilities, memory, and policies.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'neutral',
     component: lazy(() => import('./settings/SettingsPage')),
   },
   {
@@ -279,6 +299,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Browse registered capability manifests and permissions.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     component: lazy(() => import('./capabilities/CapabilitiesPage')),
   },
   {
@@ -287,6 +308,7 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Configure API keys for LLM model providers.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     component: lazy(() => import('./providers/ModelProvidersPage')),
   },
   {
@@ -295,9 +317,19 @@ export const MODULE_REGISTRY: Module[] = [
     description: 'Preview the assembled context package for a space.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     component: lazy(() => import('./memory/ContextPreviewPage')),
   },
 ]
+
+export function perspectiveTypeForPath(pathname: string): PerspectiveType {
+  if (pathname === '/personal' || pathname.startsWith('/personal/')) return 'personal'
+  const match = MODULE_REGISTRY.find(module => {
+    if (pathname === module.path) return true
+    return module.hasSubRoutes && pathname.startsWith(`${module.path}/`)
+  })
+  return match?.perspectiveType ?? 'neutral'
+}
 
 export const APP_GROUPS: { label: string; key: AppGroup }[] = [
   { label: 'Daily',     key: 'daily'     },

@@ -157,3 +157,76 @@ def assert_run_has_audit_trail(
     assert n is not None and n >= min_activities, (
         f"expected at least {min_activities} ActivityRecord(s) for run {run_id!r} in space {space_id!r}, got {n!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# PersonalMemoryGrant egress_review proposal payload safety assertions
+# ---------------------------------------------------------------------------
+
+_FORBIDDEN_CONTENT_KEYS = frozenset({
+    "content",
+    "body",
+    "raw_content",
+    "payload",
+    "summary",
+    "generated_summary",
+    "personal_context_block",
+    "memory_text",
+    "personal_memory_text",
+    "artifact_payload",
+    "output_text",
+    "adapter_output",
+    "source_snapshot",
+    "memory_ids",
+    "personal_memory_ids",
+})
+
+
+def assert_no_personal_content_fields(payload_json: dict[str, Any], *, msg: str | None = None) -> None:
+    """Assert an egress_review proposal payload contains no forbidden content keys.
+
+    Also verifies the serialized payload doesn't contain raw content sentinel strings
+    if provided via known_raw_text.
+    """
+    if not isinstance(payload_json, dict):
+        raise AssertionError(msg or f"payload_json must be a dict, got {type(payload_json).__name__}")
+    found = [k for k in _FORBIDDEN_CONTENT_KEYS if k in payload_json]
+    assert not found, (
+        msg or f"egress_review proposal payload contains forbidden content keys: {found!r}"
+    )
+
+
+def assert_egress_review_proposal_is_content_free(
+    proposal: Proposal,
+    *,
+    known_raw_text: str | None = None,
+    known_summary_text: str | None = None,
+    msg: str | None = None,
+) -> None:
+    """Assert an egress_review proposal's payload is free of personal content."""
+    payload = proposal.payload_json or {}
+    assert_no_personal_content_fields(payload, msg=msg)
+
+    payload_str = str(payload)
+    if known_raw_text:
+        assert known_raw_text not in payload_str, (
+            msg or f"egress_review payload contains raw personal memory text: {known_raw_text!r}"
+        )
+    if known_summary_text:
+        assert known_summary_text not in payload_str, (
+            msg or f"egress_review payload contains generated summary text: {known_summary_text!r}"
+        )
+    assert "personal_context_block" not in payload_str, (
+        msg or "egress_review payload must not contain personal_context_block"
+    )
+    assert proposal.proposal_type == "egress_review", (
+        msg or f"expected proposal_type='egress_review', got {proposal.proposal_type!r}"
+    )
+    assert proposal.risk_level == "high", (
+        msg or f"egress_review proposal must have risk_level='high', got {proposal.risk_level!r}"
+    )
+    assert payload.get("raw_private_memory_included") is False
+    assert payload.get("personal_summary_persisted") is False
+    assert payload.get("derived_from_personal_memory") is True
+    assert payload.get("egress_guard_required") is True
+    assert payload.get("requires_approval_type") == "egress_granting_user"

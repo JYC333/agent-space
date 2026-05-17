@@ -84,7 +84,7 @@ This document describes current capability lines and known future risks. It is o
 
 ### 6. Memory / Provenance / Source-Evidence Maturation
 
-**Current state:** `ActivityRecord`, `ProvenanceLink`, `Proposal.payload_json` provenance entries, and `MemoryEntry.source_*` fields form the current provenance chain. `ContextSource` is in the schema but unused in the current pipeline (dormant, candidate for future first-class Source model). No first-class `Source` or `Evidence` table.
+**Current state:** `ActivityRecord`, `ProvenanceLink`, `Proposal.payload_json` provenance entries, and `MemoryEntry.source_*` fields form the current provenance chain. The old `context_sources` table was removed from the schema. No first-class `Source` or `Evidence` table exists yet.
 
 **Why it matters:** Trustworthy memory depends on a complete provenance chain. Future external ingestion depends on knowing where data came from and whether it was reviewed.
 
@@ -94,7 +94,7 @@ This document describes current capability lines and known future risks. It is o
 
 **Risks if built too early:** First-class Source/Evidence schema without lifecycle definitions creates premature ingestion risk.
 
-**Not now:** Broad Source/Evidence ontology, ContextSource as primary pipeline, vector retrieval over external corpus.
+**Not now:** Broad Source/Evidence ontology, vector retrieval over external corpus.
 
 ---
 

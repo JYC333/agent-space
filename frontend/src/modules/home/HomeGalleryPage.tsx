@@ -18,6 +18,8 @@ import type {
 import { PreviewBadge, UrgencyBadge } from '../../components/PreviewBadge'
 import { MODULE_REGISTRY, APP_GROUPS, type AppGroup } from '../registry'
 import { AppCard } from '../../components/AppCard'
+import { WriteTargetPicker, useWriteTarget } from '../../components/WriteTargetPicker'
+import { ScopeBadge } from '../../components/ScopeBadge'
 
 /* ── Greeting ──────────────────────────────────────────────────────────────── */
 function Greeting({ name }: { name: string }) {
@@ -81,6 +83,7 @@ type CaptureMode = 'capture' | 'ask' | 'process'
 
 function QuickCapture() {
   const navigate = useNavigate()
+  const { writeTargetSpaceId, hasWriteTarget } = useWriteTarget()
   const [text, setText] = useState('')
   const [mode, setMode] = useState<CaptureMode>('capture')
   const [busy, setBusy] = useState(false)
@@ -106,7 +109,7 @@ function QuickCapture() {
           source_type: 'user_capture',
           content: text,
           title: text.slice(0, 80),
-        })
+        }, { spaceId: writeTargetSpaceId ?? undefined })
         toast.success('Saved to Activity Inbox')
         navigate('/activity')
       }
@@ -155,6 +158,8 @@ function QuickCapture() {
         </span>
       </div>
 
+      <WriteTargetPicker compact />
+
       {/* Text area */}
       <textarea
         value={text}
@@ -183,7 +188,7 @@ function QuickCapture() {
         </span>
         <button
           type="submit"
-          disabled={!text.trim() || busy}
+          disabled={!text.trim() || busy || !hasWriteTarget}
           className="flex items-center gap-1.5 h-7 px-3 rounded-md text-[12px] font-medium transition-opacity disabled:opacity-40 disabled:pointer-events-none"
           style={{ background: 'var(--primary)', border: '1px solid var(--primary)', color: 'var(--primary-foreground)' }}
         >
@@ -254,6 +259,7 @@ function ProductLoopStrip({
                   <div className="flex flex-wrap gap-1 items-center">
                     <span className="text-[11px] font-mono text-muted-foreground">{r.status}</span>
                     <span className="text-[11px]">{r.mode}</span>
+                    <ScopeBadge visibility={r.visibility} omitShared className="text-[9px] px-1 py-0" />
                     {r.mode === 'dry_run' && <PreviewBadge className="text-[9px] px-1 py-0" />}
                   </div>
                   <div className="text-[11px] text-muted-foreground truncate font-mono">{r.agent_id.slice(0, 10)}…</div>
@@ -280,6 +286,7 @@ function ProductLoopStrip({
                   <div className="text-[12px] text-foreground truncate">{t.title}</div>
                   <div className="text-[10px] text-muted-foreground flex gap-1 flex-wrap">
                     <span>{t.status}</span>
+                    <ScopeBadge visibility={t.visibility} omitShared className="text-[9px] px-1 py-0" />
                     <span>· {t.priority}</span>
                     <span>· {t.risk_level}</span>
                   </div>
@@ -305,6 +312,7 @@ function ProductLoopStrip({
                   <div className="text-[12px] text-foreground truncate">{p.title}</div>
                   <div className="flex flex-wrap gap-1 items-center mt-0.5">
                     <UrgencyBadge urgency={p.urgency} />
+                    <ScopeBadge visibility={p.visibility} omitShared className="text-[9px] px-1 py-0" />
                     {p.preview && <PreviewBadge className="text-[9px] px-1 py-0" />}
                     {p.expired && <span className="text-[10px] text-destructive">EXPIRED</span>}
                   </div>
@@ -570,12 +578,17 @@ function emptyHomeSummary(): HomeSummaryOut {
 
 /* ── Main page ────────────────────────────────────────────────────────────────── */
 export default function HomeGalleryPage() {
-  const { spaceId, userId } = useSpace()
+  const { userId, activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const { currentUser } = useAuth()
   const [summary, setSummary] = useState<HomeSummaryOut | null>(null)
   const [sessions, setSessions] = useState<Session[]>([])
 
   const loadSummary = useCallback(async () => {
+    if (!activeOperationalSpaceId) {
+      setSummary(emptyHomeSummary())
+      setSessions([])
+      return
+    }
     try {
       const s = await homeApi.summary({
         recent_runs_limit: '5',
@@ -586,12 +599,12 @@ export default function HomeGalleryPage() {
     } catch {
       setSummary(emptyHomeSummary())
     }
-  }, [spaceId])
+  }, [activeOperationalSpaceId])
 
   useEffect(() => {
     loadSummary()
-    sessionsApi.list().then(r => setSessions(r.items)).catch(() => {})
-  }, [loadSummary])
+    if (activeOperationalSpaceId) sessionsApi.list().then(r => setSessions(r.items)).catch(() => {})
+  }, [loadSummary, activeOperationalSpaceId])
 
   async function decide(id: string, action: 'accept' | 'reject') {
     try {
@@ -650,6 +663,9 @@ export default function HomeGalleryPage() {
         >
           <Greeting name={displayName} />
           <TodaySummaryCard stats={todayStats} />
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
         </div>
 
         {/* Quick capture */}

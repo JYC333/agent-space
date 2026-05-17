@@ -9,6 +9,7 @@ import type { ActivityInboxRecord, ActivityStatus, ActivitySourceType } from '..
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
+import { ScopeBadge } from '../../components/ScopeBadge'
 
 function fmt(dt: string) { return new Date(dt).toLocaleString() }
 
@@ -27,13 +28,18 @@ const SOURCE_COLORS: Record<ActivitySourceType, string> = {
 }
 
 export default function ActivityInboxPage() {
-  const { spaceId } = useSpace()
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [records, setRecords]   = useState<ActivityInboxRecord[]>([])
   const [filter, setFilter]     = useState<ActivityStatus>('raw')
   const [loading, setLoading]   = useState(false)
   const [busy, setBusy]         = useState<string | null>(null)
 
   const load = useCallback(async () => {
+    if (!activeOperationalSpaceId) {
+      setRecords([])
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       const items = await activityApi.list({ status: filter })
@@ -43,9 +49,9 @@ export default function ActivityInboxPage() {
     } finally {
       setLoading(false)
     }
-  }, [filter])
+  }, [filter, activeOperationalSpaceId])
 
-  useEffect(() => { load() }, [load, spaceId])
+  useEffect(() => { load() }, [load])
 
   async function doProcess(id: string) {
     setBusy(id)
@@ -83,6 +89,7 @@ export default function ActivityInboxPage() {
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Activity Inbox</h1>
             <p className="text-sm text-muted-foreground">Raw input records before they become memory proposals.</p>
+            <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
           </div>
         </div>
         <div className="flex gap-1.5">
@@ -99,7 +106,9 @@ export default function ActivityInboxPage() {
       )}
 
       {!loading && records.length === 0 && (
-        <Card><p className="text-muted-foreground text-center py-10 text-sm">No {filter.replace('_', ' ')} records.</p></Card>
+        <Card><p className="text-muted-foreground text-center py-10 text-sm">
+          {activeOperationalSpaceId ? `No ${filter.replace('_', ' ')} records.` : 'Select an operational space to browse activity.'}
+        </p></Card>
       )}
 
       {!loading && records.map(r => (
@@ -140,6 +149,7 @@ export default function ActivityInboxPage() {
               {r.source_type.replace('_', ' ')}
             </Badge>
             <Badge variant="outline">{r.status.replace('_', ' ')}</Badge>
+            <ScopeBadge visibility={r.visibility} omitShared />
             {r.workspace_id && <Badge variant="muted">ws: {r.workspace_id.slice(0, 8)}…</Badge>}
             {r.source_run_id && <Badge variant="muted">run: {r.source_run_id.slice(0, 8)}…</Badge>}
           </div>

@@ -4,6 +4,12 @@ ContextBuilder — assembles a ContextPackage from the MemoryRetriever pipeline.
 
 space_id and user_id are required — this builder is a hard security boundary.
 
+Memory boundary: ContextBuilder uses space_id as a hard memory boundary. Cross-space
+reads are not allowed — all memory retrieval is scoped to the provided space_id. User-private
+memory inclusion is controlled by user_id: private memories are included only when
+user_id matches MemoryEntry.owner_user_id. Do not add cross-space memory reads in this
+module. Cross-space authorization requires PersonalMemoryGrant — see docs/PERSONAL_MEMORY_GRANT.md.
+
 Memory retrieval is fully delegated to MemoryRetriever, which enforces hard
 filters (space/scope/visibility/status/deleted_at/agent permission) before any
 ranking or fallback.

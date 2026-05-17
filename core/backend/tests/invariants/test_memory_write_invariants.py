@@ -294,7 +294,7 @@ def _direct_memory_create(space_id: str, owner_user_id: str, *, content: str = "
         scope="agent",
         namespace="agent.direct",
         space_id=space_id,
-        visibility="private",
+        visibility="space_shared",
         owner_user_id=owner_user_id,
     )
 

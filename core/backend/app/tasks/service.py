@@ -29,6 +29,24 @@ def _new_id() -> str:
     return str(ULID())
 
 
+def _can_read_task(task: Task, current_user_id: str) -> bool:
+    """Visibility rule for tasks.
+
+    space_shared: any space member can read (space-scoped API enforces space boundary).
+    private / restricted: readable by created_by_user_id, assigned_user_id, or claimed_by_user_id.
+    unknown: fail closed.
+    """
+    vis = (task.visibility or "space_shared").lower()
+    if vis == "space_shared":
+        return True
+    if vis in ("private", "restricted"):
+        return any(
+            uid and uid == current_user_id
+            for uid in (task.created_by_user_id, task.assigned_user_id, task.claimed_by_user_id)
+        )
+    return False
+
+
 class TaskService:
     """Product-level Task board CRUD and Run linkage (not infrastructure Job rows).
 
@@ -112,13 +130,15 @@ class TaskService:
         self.db.refresh(task)
         return task
 
-    def get(self, task_id: str, space_id: str) -> Task:
+    def get(self, task_id: str, space_id: str, *, user_id: str | None = None) -> Task:
         task = (
             self.db.query(Task)
             .filter(Task.id == task_id, Task.space_id == space_id, Task.deleted_at.is_(None))
             .first()
         )
         if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if user_id is not None and not _can_read_task(task, user_id):
             raise HTTPException(status_code=404, detail="Task not found")
         return task
 
@@ -129,13 +149,16 @@ class TaskService:
         board_id: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
+        user_id: str | None = None,
     ) -> tuple[int, list[Task]]:
         q = self.db.query(Task).filter(Task.space_id == space_id, Task.deleted_at.is_(None))
         if board_id:
             q = q.filter(Task.board_id == board_id)
-        total = q.count()
-        items = q.order_by(Task.updated_at.desc()).offset(offset).limit(limit).all()
-        return total, items
+        rows = q.order_by(Task.updated_at.desc()).all()
+        if user_id is not None:
+            rows = [t for t in rows if _can_read_task(t, user_id)]
+        total = len(rows)
+        return total, rows[offset : offset + limit]
 
     def update(self, task_id: str, space_id: str, data: TaskUpdate) -> Task:
         task = self.get(task_id, space_id)

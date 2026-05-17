@@ -9,6 +9,10 @@ Contract (adapter ``output_json`` after success):
   ``workspace_id`` + ``patch.operations`` with ``replace_file`` only). Invalid entries are
   recorded on ``run.output_json["materialization_errors"]`` and skipped without aborting
   the run.
+
+When grant-derived artifact or memory-proposal materialization is blocked by the egress guard,
+a sanitized metadata-only egress_review proposal is created for the granting user. Direct
+persistence remains blocked. The error message includes the proposal ID.
 """
 
 from __future__ import annotations
@@ -21,6 +25,12 @@ from ulid import ULID
 
 from ..memory.proposals import build_memory_create_proposal
 from ..models import Artifact, Proposal, Run, Workspace
+from ..personal_memory_grants.egress_guard import (
+    EgressDecision,
+    PersonalMemoryEgressError,
+    check_personal_memory_egress,
+)
+from ..personal_memory_grants.egress_review import create_egress_review_proposal
 from .task_output_linkage import link_run_outputs_to_tasks
 
 
@@ -99,6 +109,36 @@ class RunOutputMaterializer:
     def _artifact_from_spec(self, run: Run, spec: Any, adapter_type: str, label: str) -> None:
         if not isinstance(spec, dict):
             raise TypeError("artifact spec must be an object")
+
+        # Egress guard: block grant-derived artifacts targeting non-personal spaces.
+        # When blocked with requires_proposal=True, create a sanitized egress_review
+        # proposal so the granting user can review the blocked output.
+        egress = check_personal_memory_egress(
+            self.db,
+            run=run,
+            target_space_id=run.space_id,
+            target_object_type="artifact",
+            operation="artifact_materialization",
+        )
+        if egress.decision == EgressDecision.BLOCK:
+            if egress.requires_proposal:
+                review_proposal = create_egress_review_proposal(
+                    self.db,
+                    source_run=run,
+                    target_space_id=run.space_id,
+                    target_object_type="artifact",
+                    operation="artifact_materialization",
+                    egress_result=egress,
+                    materialization_kind="adapter_artifact",
+                )
+                proposal_id = review_proposal.id if review_proposal is not None else None
+                suffix = f"; egress_review_proposal_id={proposal_id}" if proposal_id else ""
+                raise PersonalMemoryEgressError(
+                    f"egress_review_required: direct artifact persistence blocked{suffix}",
+                    grant_id=egress.grant_id,
+                )
+            raise PersonalMemoryEgressError(egress.reason, grant_id=egress.grant_id)
+
         artifact_type = str(spec.get("artifact_type") or "report")[:64]
         title = str(spec.get("title") or f"Run artifact ({artifact_type})")[:512]
         content = spec.get("content")
@@ -118,6 +158,7 @@ class RunOutputMaterializer:
             mime_type=mime,
             exportable=True,
             preview=preview,
+            owner_user_id=run.instructed_by_user_id,
         )
         self.db.add(art)
         link_run_outputs_to_tasks(self.db, run=run, artifact=art, proposal=None)
@@ -141,6 +182,35 @@ class RunOutputMaterializer:
         payload = spec.get("payload")
         if not isinstance(payload, dict):
             raise ValueError("memory_update requires payload object")
+
+        # Egress guard: block grant-derived memory proposals targeting non-personal spaces.
+        # When blocked with requires_proposal=True, create a sanitized egress_review
+        # proposal so the granting user can review the blocked output.
+        egress = check_personal_memory_egress(
+            self.db,
+            run=run,
+            target_space_id=run.space_id,
+            target_object_type="memory_proposal",
+            operation="memory_proposal_create",
+        )
+        if egress.decision == EgressDecision.BLOCK:
+            if egress.requires_proposal:
+                review_proposal = create_egress_review_proposal(
+                    self.db,
+                    source_run=run,
+                    target_space_id=run.space_id,
+                    target_object_type="memory_proposal",
+                    operation="memory_proposal_create",
+                    egress_result=egress,
+                    materialization_kind="adapter_memory_proposal",
+                )
+                proposal_id = review_proposal.id if review_proposal is not None else None
+                suffix = f"; egress_review_proposal_id={proposal_id}" if proposal_id else ""
+                raise PersonalMemoryEgressError(
+                    f"egress_review_required: direct memory proposal creation blocked{suffix}",
+                    grant_id=egress.grant_id,
+                )
+            raise PersonalMemoryEgressError(egress.reason, grant_id=egress.grant_id)
         title = str(spec.get("summary") or payload.get("proposed_title") or "Memory update")[:512]
         proposed_content = payload.get("proposed_content")
         memory_type = payload.get("memory_type")
@@ -162,7 +232,7 @@ class RunOutputMaterializer:
             target_scope=str(target_scope),
             target_namespace=str(target_namespace),
             source_run_id=run.id,
-            target_visibility=str(payload.get("target_visibility") or "private"),
+            target_visibility=str(payload.get("target_visibility") or "space_shared"),
             risk_level=str(payload.get("risk_level") or spec.get("risk_level") or "low"),
             owner_user_id=payload.get("owner_user_id"),
             subject_user_id=payload.get("subject_user_id"),
@@ -193,6 +263,30 @@ class RunOutputMaterializer:
         title = str(spec.get("summary") or "Code patch")[:512]
         rationale = str(spec.get("summary") or "Proposed workspace changes from run output")[:8000]
         now = _utcnow()
+
+        patch_payload: dict[str, Any] = {
+            "patch": patch,
+            "source_run_id": run.id,
+            "materialized_from_adapter": True,
+        }
+        risk_level = "low"
+
+        # Code patch proposals from grant-derived runs carry explicit risk metadata.
+        # They are not blocked (human approval is required regardless), but they must be
+        # visibly marked so reviewers understand the personal-context provenance.
+        if getattr(run, "has_personal_grant_context", False):
+            grant_ctx = getattr(run, "personal_grant_context_json", None) or {}
+            risk_level = "high"
+            patch_payload["personal_context_derived"] = True
+            patch_payload["egress_guard_required"] = True
+            patch_payload["requires_extra_review"] = True
+            patch_payload["raw_private_memory_included"] = False
+            patch_payload["personal_summary_persisted"] = False
+            if grant_ctx.get("grant_id"):
+                patch_payload["grant_id"] = grant_ctx["grant_id"]
+            if grant_ctx.get("granting_user_id"):
+                patch_payload["granting_user_id"] = grant_ctx["granting_user_id"]
+
         prop = Proposal(
             id=_new_id(),
             space_id=run.space_id,
@@ -200,16 +294,12 @@ class RunOutputMaterializer:
             status="pending",
             title=title,
             summary=str(spec.get("summary") or "")[:8000] or None,
-            payload_json={
-                "patch": patch,
-                "source_run_id": run.id,
-                "materialized_from_adapter": True,
-            },
+            payload_json=patch_payload,
             rationale=rationale,
             workspace_id=ws.id,
             created_by_user_id=user_id,
             created_by_run_id=run.id,
-            risk_level="low",
+            risk_level=risk_level,
             urgency="normal",
             review_deadline=now + timedelta(hours=48),
             expires_at=now + timedelta(days=14),

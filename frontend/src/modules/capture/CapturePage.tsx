@@ -3,14 +3,14 @@ import { useNavigate } from 'react-router-dom'
 import { Plus, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import { activityApi } from '../../api/client'
-import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
 import { Button } from '../../components/ui/button'
 import { Textarea } from '../../components/ui/textarea'
+import { WriteTargetPicker, useWriteTarget } from '../../components/WriteTargetPicker'
 
 export default function CapturePage() {
-  const { spaceId } = useSpace()
   const navigate = useNavigate()
+  const { writeTargetSpaceId, hasWriteTarget, label } = useWriteTarget()
   const [text, setText] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -23,7 +23,7 @@ export default function CapturePage() {
         source_type: 'user_capture',
         content: text,
         title: text.slice(0, 80),
-      })
+      }, { spaceId: writeTargetSpaceId ?? undefined })
       toast.success('Saved to Activity Inbox')
       navigate('/activity')
     } catch (err) {
@@ -52,6 +52,7 @@ export default function CapturePage() {
       </div>
 
       <form onSubmit={handleCapture} className="space-y-3">
+        <WriteTargetPicker />
         <Textarea
           value={text}
           onChange={e => setText(e.target.value)}
@@ -62,9 +63,9 @@ export default function CapturePage() {
         />
         <div className="flex items-center justify-between">
           <span className="text-[11px] text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
-            {text.length} chars · space: {spaceId}
+            {text.length} chars · write target: {label ?? 'none'}
           </span>
-          <Button type="submit" size="sm" disabled={!text.trim() || submitting}>
+          <Button type="submit" size="sm" disabled={!text.trim() || submitting || !hasWriteTarget}>
             <Send className="size-3.5 mr-1.5" />
             {submitting ? 'Capturing…' : 'Capture'}
           </Button>

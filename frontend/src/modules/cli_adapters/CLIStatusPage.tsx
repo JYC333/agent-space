@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Terminal } from 'lucide-react'
 import { cliAdaptersApi } from '../../api/client'
+import { useSpace } from '../../contexts/SpaceContext'
 import type { CLIStatus, CLIAdapterConfig } from '../../types/api'
 import { Card, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
@@ -132,7 +133,7 @@ function ConfigRow({
 
 // ── Add config form ───────────────────────────────────────────────────────
 
-function AddConfigForm({ onAdded }: { onAdded: () => void }) {
+function AddConfigForm({ onAdded, canCreate }: { onAdded: () => void; canCreate: boolean }) {
   const [adapterId, setAdapterId] = useState('claude_code')
   const [displayName, setDisplayName] = useState('')
   const [notes, setNotes] = useState('')
@@ -149,6 +150,7 @@ function AddConfigForm({ onAdded }: { onAdded: () => void }) {
 
   async function save() {
     if (!displayName.trim()) { toast.error('Display name required'); return }
+    if (!canCreate) { toast.error('Select an operational space before adding a CLI tool'); return }
     setSaving(true)
     try {
       await cliAdaptersApi.createConfig({
@@ -193,7 +195,7 @@ function AddConfigForm({ onAdded }: { onAdded: () => void }) {
         value={notes}
         onChange={e => setNotes(e.target.value)}
       />
-      <Button size="sm" onClick={save} disabled={saving || !displayName.trim()}>
+      <Button size="sm" onClick={save} disabled={saving || !displayName.trim() || !canCreate}>
         {saving ? 'Saving…' : 'Add'}
       </Button>
     </div>
@@ -203,6 +205,7 @@ function AddConfigForm({ onAdded }: { onAdded: () => void }) {
 // ── Main page ─────────────────────────────────────────────────────────────
 
 export default function CLIStatusPage() {
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [detection, setDetection] = useState<CLIStatus[]>([])
   const [configs, setConfigs]     = useState<CLIAdapterConfig[]>([])
   const [detecting, setDetecting] = useState(false)
@@ -210,6 +213,12 @@ export default function CLIStatusPage() {
   const usageCardRef = useRef<ClaudeUsageCardHandle>(null)
 
   async function loadConfigs() {
+    if (!activeOperationalSpaceId) {
+      setConfigs([])
+      setLoadingConfigs(false)
+      return
+    }
+    setLoadingConfigs(true)
     try {
       const data = await cliAdaptersApi.listConfigs()
       setConfigs(data)
@@ -232,9 +241,13 @@ export default function CLIStatusPage() {
     }
   }
 
-  useEffect(() => { loadConfigs() }, [])
+  useEffect(() => { loadConfigs() }, [activeOperationalSpaceId])
 
   async function handleQuotaChange(id: string, status: string) {
+    if (!activeOperationalSpaceId) {
+      toast.error('Select an operational space before updating quota')
+      return
+    }
     try {
       const updated = await cliAdaptersApi.updateConfig(id, { quota_status: status as any })
       setConfigs(prev => prev.map(c => c.id === id ? updated : c))
@@ -244,6 +257,10 @@ export default function CLIStatusPage() {
   }
 
   async function handleToggle(id: string, enabled: boolean) {
+    if (!activeOperationalSpaceId) {
+      toast.error('Select an operational space before updating CLI tools')
+      return
+    }
     try {
       const updated = await cliAdaptersApi.updateConfig(id, { enabled })
       setConfigs(prev => prev.map(c => c.id === id ? updated : c))
@@ -253,6 +270,10 @@ export default function CLIStatusPage() {
   }
 
   async function handleDelete(id: string) {
+    if (!activeOperationalSpaceId) {
+      toast.error('Select an operational space before removing CLI tools')
+      return
+    }
     try {
       await cliAdaptersApi.deleteConfig(id)
       setConfigs(prev => prev.filter(c => c.id !== id))
@@ -278,14 +299,30 @@ export default function CLIStatusPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">CLI Tools</h1>
           <p className="text-sm text-muted-foreground">Detect installed CLI adapters and manage monthly quota.</p>
+          <p className="text-xs text-muted-foreground">
+            Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
+          </p>
         </div>
       </div>
 
       {/* Claude Code usage stats */}
-      <ClaudeUsageCard ref={usageCardRef} />
+      {activeOperationalSpaceId ? (
+        <ClaudeUsageCard key={activeOperationalSpaceId} ref={usageCardRef} />
+      ) : (
+        <Card>
+          <p className="text-sm text-muted-foreground">Select an operational space to inspect CLI usage.</p>
+        </Card>
+      )}
 
       {/* Credential login panel — refreshes quota after successful login */}
-      <CLILoginSection onLoginSuccess={() => usageCardRef.current?.refreshQuota()} />
+      {activeOperationalSpaceId ? (
+        <CLILoginSection key={activeOperationalSpaceId} onLoginSuccess={() => usageCardRef.current?.refreshQuota()} />
+      ) : (
+        <Card>
+          <CardTitle>CLI Credentials</CardTitle>
+          <p className="text-sm text-muted-foreground mt-2">Select an operational space to manage CLI credentials.</p>
+        </Card>
+      )}
 
       {/* Detection panel */}
       <Card>
@@ -318,7 +355,9 @@ export default function CLIStatusPage() {
           </div>
         ) : configs.length === 0 ? (
           <p className="text-sm text-muted-foreground mb-4">
-            No CLI tools configured yet. Add one below.
+            {activeOperationalSpaceId
+              ? 'No CLI tools configured yet. Add one below.'
+              : 'Select an operational space to manage configured CLI tools.'}
           </p>
         ) : (
           <div className="mb-4">
@@ -334,7 +373,7 @@ export default function CLIStatusPage() {
           </div>
         )}
 
-        <AddConfigForm onAdded={loadConfigs} />
+        <AddConfigForm onAdded={loadConfigs} canCreate={Boolean(activeOperationalSpaceId)} />
       </Card>
     </div>
   )

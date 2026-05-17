@@ -221,7 +221,7 @@ def list_runs(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _ = ids
+    space_id, user_id = ids
     svc = RunService(db)
     runs = svc.list_runs(
         space_id=space_id,
@@ -231,5 +231,6 @@ def list_runs(
         workspace_id=workspace_id,
         limit=limit,
         offset=offset,
+        user_id=user_id,
     )
     return runs

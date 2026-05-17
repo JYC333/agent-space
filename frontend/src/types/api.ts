@@ -46,6 +46,7 @@ export type MemoryType       = 'preference' | 'semantic' | 'episodic' | 'procedu
 export type MemoryScope      = 'user' | 'workspace' | 'capability' | 'agent' | 'system' | 'space'
 export type MemoryStatus     = 'active' | 'archived' | 'proposed' | 'rejected' | 'superseded'
 export type MemoryVisibility = 'private' | 'space_shared' | 'workspace_shared' | 'restricted' | 'public_template'
+export type ObjectVisibility = 'private' | 'space_shared' | 'restricted' | string
 export type ProposalStatus   = 'pending' | 'accepted' | 'rejected'
 export type ActivityStatus     = 'raw' | 'processed' | 'proposals_generated' | 'archived'
 export type ActivitySourceType =
@@ -249,6 +250,7 @@ export interface ActivityInboxRecord {
   source_url: string | null
   status: ActivityStatus
   metadata_json: Record<string, unknown> | null
+  visibility?: ObjectVisibility
   created_at: string
   updated_at: string
 }
@@ -264,6 +266,7 @@ export interface ActivityRecord {
   title: string | null
   content: string | null
   payload_json: Record<string, unknown>
+  visibility?: ObjectVisibility
   occurred_at: string
   created_at: string
 }
@@ -304,6 +307,7 @@ export interface Task {
   status: string
   priority: string
   risk_level: string
+  visibility: ObjectVisibility
   created_by_user_id: string | null
   created_by_agent_id: string | null
   assigned_user_id: string | null
@@ -395,6 +399,8 @@ export interface Run {
   workspace_id: string | null
   session_id: string | null
   parent_run_id: string | null
+  instructed_by_user_id?: string | null
+  instructed_by_agent_id?: string | null
   run_type: string
   trigger_origin: string
   status: string
@@ -410,6 +416,7 @@ export interface Run {
   error_json: Record<string, unknown> | null
   output_json: Record<string, unknown> | null
   usage_json: Record<string, unknown> | null
+  visibility?: ObjectVisibility
   task_id?: string | null
 }
 
@@ -432,6 +439,7 @@ export interface ArtifactSummary {
   artifact_type: string
   title: string
   mime_type: string | null
+  visibility?: ObjectVisibility
   created_at: string
 }
 
@@ -441,6 +449,7 @@ export interface ProposalSummary {
   proposal_type: string
   status: string
   title: string
+  visibility?: ObjectVisibility
   created_at: string
 }
 
@@ -486,6 +495,8 @@ export interface Artifact {
   storage_ref: string | null
   storage_path: string | null
   has_inline_content: boolean
+  visibility?: ObjectVisibility
+  owner_user_id?: string | null
   content?: string | null
   created_at: string
   updated_at: string
@@ -511,6 +522,7 @@ export interface Proposal {
   status: string
   risk_level: string
   urgency: string
+  visibility?: ObjectVisibility
   preview: boolean
   review_deadline: string | null
   expires_at: string | null
@@ -522,6 +534,11 @@ export interface Proposal {
   subject_user_id?: string | null
   sensitivity_level?: string | null
   selected_user_ids?: string[] | null
+  grant_id?: string | null
+  required_approver_user_id?: string | null
+  requires_approval_type?: string | null
+  egress_approval_status?: string | null
+  egress_approval_id?: string | null
 }
 
 /** `POST /proposals/{id}/accept` — result depends on `proposal_type`. */
@@ -537,6 +554,99 @@ export type ProposalAcceptOut = {
   proposal: Proposal
   result_type: 'policy_version'
   result: { policy_id: string; policy_version: number }
+} | {
+  proposal: Proposal
+  result_type: 'egress_review'
+  result: { approved_egress_review: boolean }
+}
+
+export interface PersonalMemoryGrantSafeMemoryFilter {
+  max_items?: number
+}
+
+export interface PersonalMemoryGrantPreviewRequest {
+  target_space_id: string
+  target_run_id: string
+  access_mode: 'summary_only'
+  read_expires_in_seconds?: number
+  memory_filter?: PersonalMemoryGrantSafeMemoryFilter | null
+}
+
+export interface PersonalMemoryGrantPreviewResponse {
+  eligible: boolean
+  target_space_id: string
+  target_run_id: string
+  access_mode: 'summary_only'
+  proposed_read_expires_at: string | null
+  warnings: string[]
+  excluded_sensitivity_levels: string[]
+  max_items: number | null
+}
+
+export interface PersonalMemoryGrantCreateRequest {
+  target_space_id: string
+  target_run_id: string
+  access_mode: 'summary_only'
+  read_expires_in_seconds: number
+  memory_filter?: PersonalMemoryGrantSafeMemoryFilter | null
+}
+
+export type PersonalMemoryGrantStatus =
+  | 'active'
+  | 'consuming'
+  | 'used'
+  | 'revoked'
+  | 'expired'
+  | 'failed'
+
+export interface PersonalMemoryGrantResponse {
+  id: string
+  granting_user_id: string
+  personal_space_id: string
+  target_space_id: string
+  target_run_id: string
+  target_agent_id: string | null
+  grant_scope: 'run' | string
+  access_mode: 'summary_only' | string
+  status: PersonalMemoryGrantStatus | string
+  memory_filter_json: PersonalMemoryGrantSafeMemoryFilter | Record<string, unknown> | null
+  read_expires_at: string
+  revoked_at: string | null
+  used_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PersonalMemoryGrantEvent {
+  id: string
+  grant_id: string
+  event_type: string
+  actor_user_id: string | null
+  run_id: string | null
+  metadata_json: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface PersonalMemoryGrantAuditResponse {
+  grant: PersonalMemoryGrantResponse
+  events: PersonalMemoryGrantEvent[]
+}
+
+export interface EgressApprovalRequest {
+  grant_id?: string | null
+}
+
+export interface ProposalApprovalResponse {
+  id: string
+  proposal_id: string
+  approval_type: 'egress_granting_user' | string
+  approver_user_id: string
+  grant_id: string | null
+  target_space_id: string | null
+  status: 'approved' | 'revoked' | string
+  metadata_json: Record<string, unknown> | null
+  created_at: string
+  revoked_at: string | null
 }
 
 export interface AgentOut {
@@ -733,7 +843,7 @@ export interface WorkspaceInfo {
   description: string | null
 }
 
-// ── Home summary (`GET /api/v1/home/summary`, Phase 9) ─────────────────────
+// ── Home summary (`GET /api/v1/home/summary`) ──────────────────────────────
 
 export type HomeSuggestedActionPriority = 'high' | 'normal' | 'low'
 
@@ -748,6 +858,7 @@ export interface HomeRunSummaryItem {
   started_at: string | null
   completed_at: string | null
   error_text: string | null
+  visibility?: ObjectVisibility
 }
 
 export interface HomePendingProposalItem {
@@ -762,6 +873,7 @@ export interface HomePendingProposalItem {
   expired: boolean
   preview: boolean
   created_by_run_id: string | null
+  visibility?: ObjectVisibility
 }
 
 export interface HomePendingProposalsSection {
@@ -776,6 +888,7 @@ export interface HomeArtifactSummaryItem {
   preview: boolean
   run_id: string | null
   created_at: string
+  visibility?: ObjectVisibility
 }
 
 export interface HomeTaskSummarySection {
@@ -797,6 +910,7 @@ export interface HomeActiveTaskItem {
   assigned_agent_id: string | null
   due_at: string | null
   updated_at: string
+  visibility?: ObjectVisibility
 }
 
 export interface HomeActivitySummarySection {
@@ -849,4 +963,74 @@ export interface HomeSummaryOut {
   job_queue_status: HomeJobQueueStatusSection
   runtime_status: HomeRuntimeStatusSection
   suggested_actions: HomeSuggestedActionItem[]
+}
+
+// ── Personal perspective (`GET /api/v1/me/*`) ─────────────────────────────
+
+export interface MeRecentRunItem {
+  id: string
+  space_id: string
+  agent_id: string
+  status: string
+  mode: string
+  run_type: string
+  created_at: string
+  updated_at: string
+}
+
+export interface MeRecentParticipationItem {
+  id: string
+  user_id: string
+  personal_space_id: string
+  source_space_id: string
+  source_object_type: string
+  source_object_id: string
+  role: string
+  occurred_at: string
+  created_at: string
+}
+
+export interface MeSummaryOut {
+  pending_proposals_count: number
+  assigned_tasks_count: number
+  recent_runs: MeRecentRunItem[]
+  recent_participation: MeRecentParticipationItem[]
+  accessible_spaces_count: number
+}
+
+export interface MeTimelineEntry {
+  id: string
+  entry_type: 'participation' | string
+  source_space_id: string | null
+  source_object_type: string | null
+  source_object_id: string | null
+  role: string | null
+  occurred_at: string
+  created_at: string
+}
+
+export interface MeTaskItem {
+  id: string
+  space_id: string
+  title: string
+  status: string
+  priority: string
+  visibility: ObjectVisibility
+  created_by_user_id: string | null
+  assigned_user_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface MePendingProposalItem {
+  id: string
+  space_id: string
+  proposal_type: string
+  status: string
+  urgency: string
+  title: string
+  visibility: ObjectVisibility
+  created_by_user_id: string | null
+  created_at: string
+  updated_at: string
 }

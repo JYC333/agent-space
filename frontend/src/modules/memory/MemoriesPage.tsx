@@ -13,6 +13,7 @@ import { Textarea } from '../../components/ui/textarea'
 import { Select } from '../../components/ui/select'
 import { Badge } from '../../components/ui/badge'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table'
+import { ScopeBadge } from '../../components/ScopeBadge'
 
 const TYPES:  MemoryType[]  = ['preference', 'semantic', 'episodic', 'procedural', 'project']
 const SCOPES: MemoryScope[] = ['user', 'workspace', 'capability', 'agent', 'system']
@@ -32,22 +33,30 @@ const EMPTY_FORM: MemoryForm = {
 }
 
 export default function MemoriesPage() {
-  const { spaceId } = useSpace()
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [memories, setMemories] = useState<Memory[]>([])
   const [form, setForm]         = useState<MemoryForm>(EMPTY_FORM)
 
   const load = useCallback(async () => {
+    if (!activeOperationalSpaceId) {
+      setMemories([])
+      return
+    }
     try { setMemories((await memoryApi.list({ status: 'active' })).items) }
     catch (e) { toast.error(errMsg(e)) }
-  }, [])
+  }, [activeOperationalSpaceId])
 
-  useEffect(() => { load() }, [load, spaceId])
+  useEffect(() => { load() }, [load])
 
   function setField<K extends keyof MemoryForm>(k: K, v: MemoryForm[K]) {
     setForm(f => ({ ...f, [k]: v }))
   }
 
   async function addMemory() {
+    if (!activeOperationalSpaceId) {
+      toast.error('Select an operational space before proposing memory')
+      return
+    }
     if (!form.title.trim() || !form.content.trim()) {
       toast.error('Title and content required'); return
     }
@@ -83,6 +92,7 @@ export default function MemoriesPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Memories</h1>
           <p className="text-sm text-muted-foreground">Review-gated long-term memories across scopes and namespaces.</p>
+          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
         </div>
       </div>
 
@@ -118,19 +128,21 @@ export default function MemoriesPage() {
           <Label>Content</Label>
           <Textarea value={form.content} onChange={e => setField('content', e.target.value)} placeholder="Memory content…" />
         </div>
-        <Button onClick={addMemory}>Submit proposal</Button>
+        <Button onClick={addMemory} disabled={!activeOperationalSpaceId}>Submit proposal</Button>
       </Card>
 
       <Card>
         <CardTitle>Active Memories ({memories.length})</CardTitle>
         {memories.length === 0
-          ? <p className="text-muted-foreground text-center py-10 text-sm">No active memories.</p>
+          ? <p className="text-muted-foreground text-center py-10 text-sm">
+              {activeOperationalSpaceId ? 'No active memories.' : 'Select an operational space to browse memories.'}
+            </p>
           : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Title</TableHead><TableHead>Type</TableHead>
-                  <TableHead>Scope</TableHead><TableHead>Namespace</TableHead>
+                  <TableHead>Scope</TableHead><TableHead>Visibility</TableHead><TableHead>Namespace</TableHead>
                   <TableHead>Imp.</TableHead><TableHead>Created</TableHead>
                   <TableHead />
                 </TableRow>
@@ -141,6 +153,7 @@ export default function MemoriesPage() {
                     <TableCell className="max-w-[200px] truncate">{m.title}</TableCell>
                     <TableCell><Badge variant="secondary">{m.type}</Badge></TableCell>
                     <TableCell className="text-muted-foreground">{m.scope}</TableCell>
+                    <TableCell><ScopeBadge visibility={m.visibility} /></TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{m.namespace}</TableCell>
                     <TableCell className="text-muted-foreground">{m.importance.toFixed(1)}</TableCell>
                     <TableCell className="text-muted-foreground text-xs">{fmt(m.created_at)}</TableCell>

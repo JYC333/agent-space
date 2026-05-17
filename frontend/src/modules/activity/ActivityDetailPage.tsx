@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { activityApi } from '../../api/client'
+import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
 import type { ActivityInboxRecord } from '../../types/api'
 import { Card } from '../../components/ui/card'
@@ -16,11 +17,17 @@ function fmt(dt: string) {
 
 export default function ActivityDetailPage() {
   const { activityId = '' } = useParams()
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [row, setRow] = useState<ActivityInboxRecord | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!activityId) return
+    if (!activeOperationalSpaceId) {
+      setRow(null)
+      setLoading(false)
+      return
+    }
     let cancelled = false
     ;(async () => {
       setLoading(true)
@@ -37,7 +44,7 @@ export default function ActivityDetailPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [activityId])
+  }, [activityId, activeOperationalSpaceId])
 
   return (
     <div className="p-6 space-y-6 max-w-3xl">
@@ -48,7 +55,9 @@ export default function ActivityDetailPage() {
       {loading && <Skeleton className="h-40 w-full" />}
 
       {!loading && !row && (
-        <Card className="p-8 text-center text-sm text-muted-foreground">Record not found.</Card>
+        <Card className="p-8 text-center text-sm text-muted-foreground">
+          {activeOperationalSpaceId ? 'Record not found.' : 'Select an operational space to inspect this activity.'}
+        </Card>
       )}
 
       {!loading && row && (
@@ -57,6 +66,7 @@ export default function ActivityDetailPage() {
             <h1 className="text-lg font-semibold tracking-tight">{row.title ?? row.source_type}</h1>
             <span className="text-xs text-muted-foreground">{fmt(row.created_at)}</span>
           </div>
+          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
           <div className="flex flex-wrap gap-1.5">
             <Badge variant="secondary">{row.source_type.replace('_', ' ')}</Badge>
             <Badge variant="outline">{row.status.replace('_', ' ')}</Badge>

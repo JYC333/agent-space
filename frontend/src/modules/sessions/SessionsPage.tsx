@@ -16,7 +16,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '.
 function fmt(dt: string | null | undefined) { return dt ? new Date(dt).toLocaleString() : '—' }
 
 export default function SessionsPage() {
-  const { spaceId } = useSpace()
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [sessions, setSessions]           = useState<Session[]>([])
   const [activeSession, setActiveSession] = useState<Session | null>(null)
   const [messages, setMessages]           = useState<Message[]>([])
@@ -26,13 +26,21 @@ export default function SessionsPage() {
   const [loading, setLoading]             = useState(false)
 
   const loadSessions = useCallback(async () => {
+    if (!activeOperationalSpaceId) {
+      setSessions([])
+      return
+    }
     try { setSessions((await sessionsApi.list()).items) }
     catch (e) { toast.error(errMsg(e)) }
-  }, [])
+  }, [activeOperationalSpaceId])
 
-  useEffect(() => { loadSessions() }, [loadSessions, spaceId])
+  useEffect(() => { loadSessions() }, [loadSessions])
 
   async function createSession() {
+    if (!activeOperationalSpaceId) {
+      toast.error('Select an operational space before creating a session')
+      return
+    }
     try {
       await sessionsApi.create({ title: title || undefined, workspace_id: workspace || undefined })
       setTitle(''); setWorkspace('')
@@ -89,6 +97,9 @@ export default function SessionsPage() {
 
       <Card>
         <CardTitle>New Session</CardTitle>
+        <p className="text-xs text-muted-foreground mb-3">
+          Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
+        </p>
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
             <Label>Title (optional)</Label>
@@ -104,13 +115,15 @@ export default function SessionsPage() {
             <Input value={workspace} onChange={e => setWorkspace(e.target.value)} placeholder="e.g. agent-core" />
           </div>
         </div>
-        <Button onClick={createSession}>Create Session</Button>
+        <Button onClick={createSession} disabled={!activeOperationalSpaceId}>Create Session</Button>
       </Card>
 
       <Card>
         <CardTitle>Sessions</CardTitle>
         {sessions.length === 0
-          ? <p className="text-muted-foreground text-center py-10 text-sm">No sessions yet.</p>
+          ? <p className="text-muted-foreground text-center py-10 text-sm">
+              {activeOperationalSpaceId ? 'No sessions yet.' : 'Select an operational space to browse sessions.'}
+            </p>
           : (
             <Table>
               <TableHeader>

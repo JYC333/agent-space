@@ -43,7 +43,10 @@ Memory writes are **proposal-first**. The public memory write API returns `Propo
 
 ### ContextSource
 
-`ContextSource` exists in the schema but is not used in the current provenance pipeline. Provenance uses `ActivityRecord` + `ProvenanceLink` instead. `ContextSource` remains dormant as a candidate basis for a future first-class Source model.
+The `context_sources` table was removed from the schema. It is not present in the current
+migration and `test_canonical_schema.py` asserts it does not exist. Provenance uses
+`ActivityRecord` + `ProvenanceLink` instead. A future first-class Source model would be
+a new table, not a revival of this removed table.
 
 ### ProvenanceLink — Provenance Chain
 

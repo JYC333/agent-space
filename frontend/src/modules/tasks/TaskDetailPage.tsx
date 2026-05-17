@@ -14,6 +14,7 @@ import { Select } from '../../components/ui/select'
 import { Skeleton } from '../../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs'
 import { PreviewBadge, DryRunBanner } from '../../components/PreviewBadge'
+import { ScopeBadge } from '../../components/ScopeBadge'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -30,7 +31,7 @@ function JsonBlock({ value }: { value: unknown }) {
 
 export default function TaskDetailPage() {
   const { taskId = '' } = useParams()
-  const { spaceId } = useSpace()
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [task, setTask] = useState<Task | null>(null)
   const [runs, setRuns] = useState<TaskRunListItem[]>([])
   const [arts, setArts] = useState<TaskArtifact[]>([])
@@ -43,6 +44,15 @@ export default function TaskDetailPage() {
 
   const load = useCallback(async () => {
     if (!taskId) return
+    if (!activeOperationalSpaceId) {
+      setTask(null)
+      setRuns([])
+      setArts([])
+      setProps([])
+      setAgents([])
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       const [t, r, a, p, ag] = await Promise.all([
@@ -63,7 +73,7 @@ export default function TaskDetailPage() {
     } finally {
       setLoading(false)
     }
-  }, [taskId, spaceId])
+  }, [taskId, activeOperationalSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -108,7 +118,9 @@ export default function TaskDetailPage() {
         <Button variant="ghost" asChild>
           <Link to="/tasks"><ArrowLeft className="size-4 mr-1" />Back</Link>
         </Button>
-        <p className="text-muted-foreground mt-4">Task not found.</p>
+        <p className="text-muted-foreground mt-4">
+          {activeOperationalSpaceId ? 'Task not found.' : 'Select an operational space to inspect this task.'}
+        </p>
       </div>
     )
   }
@@ -126,11 +138,13 @@ export default function TaskDetailPage() {
 
       <div className="border-b border-border pb-4 space-y-3">
         <h1 className="text-xl font-semibold tracking-tight">{task.title}</h1>
+        <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
         <div className="flex flex-wrap gap-1.5 items-center">
           <StatusBadge status={task.status} />
           <Badge variant="outline">{task.priority}</Badge>
           <Badge variant="muted">{task.risk_level} risk</Badge>
           <Badge variant="secondary">{task.task_type}</Badge>
+          <ScopeBadge visibility={task.visibility} />
           {task.assigned_agent_id && (
             <Badge variant="outline">agent {task.assigned_agent_id.slice(0, 8)}…</Badge>
           )}
@@ -219,6 +233,7 @@ export default function TaskDetailPage() {
                 <div className="flex flex-wrap gap-1.5 items-center">
                   <StatusBadge status={run.status} />
                   <Badge variant="secondary">{run.mode}</Badge>
+                  <ScopeBadge visibility={run.visibility} omitShared />
                   <span className="font-mono text-xs text-muted-foreground">{run.id}</span>
                   {run.mode === 'dry_run' && <PreviewBadge />}
                 </div>
@@ -247,6 +262,7 @@ export default function TaskDetailPage() {
                 </Link>
                 <div className="flex gap-1.5 mt-1 flex-wrap">
                   <Badge variant="secondary">{row.artifact.artifact_type}</Badge>
+                  <ScopeBadge visibility={row.artifact.visibility} omitShared />
                   {row.artifact.preview && <PreviewBadge />}
                   <span className="text-xs text-muted-foreground">{fmt(row.created_at)}</span>
                 </div>
@@ -270,6 +286,7 @@ export default function TaskDetailPage() {
                 </Link>
                 <Badge variant="outline">{row.proposal.proposal_type}</Badge>
                 <StatusBadge status={row.proposal.status} />
+                <ScopeBadge visibility={row.proposal.visibility} omitShared />
                 {row.proposal.preview && <PreviewBadge />}
                 {row.proposal.expired && <Badge variant="destructive">EXPIRED</Badge>}
               </div>

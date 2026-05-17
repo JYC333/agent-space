@@ -64,6 +64,32 @@ class ApplyResult:
     updated_paths: Optional[list[str]] = None
     code_patch_files: Optional[list[dict[str, Any]]] = None
     code_patch_transaction: Optional[Any] = None
+    egress_review: bool = False
+
+
+def _validate_grant_egress_approval_or_raise(db: Session, proposal: Proposal) -> None:
+    from ..proposals.approvals import (
+        PersonalMemoryEgressApprovalError,
+        validate_egress_granting_user_approval,
+    )
+
+    try:
+        validate_egress_granting_user_approval(db, proposal=proposal)
+    except PersonalMemoryEgressApprovalError as exc:
+        raise ProposalApplyError(str(exc)) from exc
+
+
+def _has_grant_egress_approval(db: Session, proposal: Proposal) -> bool:
+    from ..proposals.approvals import (
+        PersonalMemoryEgressApprovalError,
+        validate_egress_granting_user_approval,
+    )
+
+    try:
+        validate_egress_granting_user_approval(db, proposal=proposal)
+    except PersonalMemoryEgressApprovalError:
+        return False
+    return True
 
 
 def _prov_row_key(pl: ProvenanceLink) -> tuple[str, str, str | None]:
@@ -104,8 +130,30 @@ class MemoryProposalApplier:
         )
         from .provenance_apply import TARGET_MEMORY, write_provenance_links
 
+        # Defense-in-depth: if the source run has personal grant context,
+        # block direct apply of memory proposals targeting non-personal spaces.
+        source_run_id = (proposal.payload_json or {}).get("source_run_id") or proposal.created_by_run_id
+        if source_run_id:
+            from ..models import Run
+            from ..personal_memory_grants.egress_guard import (
+                EgressDecision,
+                PersonalMemoryEgressError,
+                check_personal_memory_egress,
+            )
+            source_run = self._db.query(Run).filter(Run.id == source_run_id).first()
+            if source_run is not None:
+                egress = check_personal_memory_egress(
+                    self._db,
+                    run=source_run,
+                    target_space_id=proposal.space_id,
+                    target_object_type="memory",
+                    operation="proposal_apply_create",
+                )
+                if egress.decision == EgressDecision.BLOCK and not _has_grant_egress_approval(self._db, proposal):
+                    raise PersonalMemoryEgressError(egress.reason, grant_id=egress.grant_id)
+
         payload = proposal.payload_json or {}
-        vis = (payload.get("target_visibility") or payload.get("visibility") or "private").lower()
+        vis = (payload.get("target_visibility") or payload.get("visibility") or "space_shared").lower()
         sens = (payload.get("sensitivity_level") or "normal").lower()
         content = payload.get("proposed_content") or payload.get("content") or ""
         mem_type = payload.get("memory_type") or "semantic"
@@ -176,6 +224,28 @@ class MemoryProposalApplier:
             record_memory_supersedes_relation,
             write_provenance_links,
         )
+
+        # Defense-in-depth: if the source run has personal grant context,
+        # block direct apply of memory update proposals targeting non-personal spaces.
+        source_run_id = (proposal.payload_json or {}).get("source_run_id") or proposal.created_by_run_id
+        if source_run_id:
+            from ..models import Run
+            from ..personal_memory_grants.egress_guard import (
+                EgressDecision,
+                PersonalMemoryEgressError,
+                check_personal_memory_egress,
+            )
+            source_run = self._db.query(Run).filter(Run.id == source_run_id).first()
+            if source_run is not None:
+                egress = check_personal_memory_egress(
+                    self._db,
+                    run=source_run,
+                    target_space_id=proposal.space_id,
+                    target_object_type="memory",
+                    operation="proposal_apply_update",
+                )
+                if egress.decision == EgressDecision.BLOCK and not _has_grant_egress_approval(self._db, proposal):
+                    raise PersonalMemoryEgressError(egress.reason, grant_id=egress.grant_id)
 
         payload = proposal.payload_json or {}
         target_id = payload.get("target_memory_id")
@@ -422,7 +492,14 @@ class PolicyProposalApplier:
 # ---------------------------------------------------------------------------
 
 
-_SUPPORTED_TYPES = frozenset({"memory_create", "memory_update", "memory_archive", "policy_change", "code_patch"})
+_SUPPORTED_TYPES = frozenset({
+    "memory_create",
+    "memory_update",
+    "memory_archive",
+    "policy_change",
+    "code_patch",
+    "egress_review",
+})
 
 
 class ProposalApplyService:
@@ -489,6 +566,27 @@ class ProposalApplyService:
             flag_modified(proposal, "payload_json")
             self._db.flush()
 
+    def _enforce_personal_memory_egress_approval(self, proposal: Proposal) -> None:
+        from ..models import Space
+        from ..proposals.approvals import (
+            PersonalMemoryEgressApprovalError,
+            is_grant_derived_proposal,
+            validate_egress_granting_user_approval,
+        )
+
+        if not is_grant_derived_proposal(self._db, proposal):
+            return
+
+        target = self._db.query(Space).filter(Space.id == proposal.space_id).first()
+        target_is_non_personal = target is None or target.type != "personal"
+        if proposal.proposal_type != "egress_review" and not target_is_non_personal:
+            return
+
+        try:
+            validate_egress_granting_user_approval(self._db, proposal=proposal)
+        except PersonalMemoryEgressApprovalError as exc:
+            raise ProposalApplyError(str(exc)) from exc
+
     def apply(
         self,
         proposal: Proposal,
@@ -503,12 +601,17 @@ class ProposalApplyService:
         if ptype not in _SUPPORTED_TYPES:
             raise ProposalApplyError(f"unsupported proposal type: {ptype!r}")
 
+        self._enforce_personal_memory_egress_approval(proposal)
+
         if ptype != "code_patch":
             self._enforce_source_monitoring(
                 proposal,
                 accept_context=accept_context,
                 bypass_source_monitoring=bypass_source_monitoring,
             )
+
+        if ptype == "egress_review":
+            return ApplyResult(proposal=proposal, egress_review=True)
 
         if ptype == "memory_create":
             r = self._memory_applier.apply_create(proposal, user_id=user_id)

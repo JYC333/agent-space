@@ -10,7 +10,11 @@ import type {
   TaskArtifact, TaskProposal, Artifact, Proposal, ProposalAcceptOut, AgentOut, RunCreateBody,
   ActivityRecord, ActivitySourceType,
   FileNode, FileContent, GitStatus, RuntimeInfo, ConsoleSession, WorkspaceInfo,
-  HomeSummaryOut,
+  HomeSummaryOut, MeSummaryOut, MeTimelineEntry, MeTaskItem, MePendingProposalItem,
+  PersonalMemoryGrantPreviewRequest, PersonalMemoryGrantPreviewResponse,
+  PersonalMemoryGrantCreateRequest, PersonalMemoryGrantResponse,
+  PersonalMemoryGrantAuditResponse,
+  EgressApprovalRequest, ProposalApprovalResponse,
 } from '../types/api'
 
 const BASE = '/api/v1'
@@ -28,8 +32,8 @@ export function setAuth(key: string | null): void {
   _apiKey = key
 }
 
-function spaceParams(): string {
-  return `space_id=${encodeURIComponent(_spaceId)}&user_id=${encodeURIComponent(_userId)}`
+function spaceParams(spaceId = _spaceId, userId = _userId): string {
+  return `space_id=${encodeURIComponent(spaceId)}&user_id=${encodeURIComponent(userId)}`
 }
 
 function formatApiErrorMessage(err: ApiError, fallback: string): string {
@@ -44,12 +48,19 @@ function formatApiErrorMessage(err: ApiError, fallback: string): string {
   return fallback
 }
 
-async function request<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+interface RequestOptions {
+  includeSpaceParams?: boolean
+  spaceId?: string
+}
+
+async function request<T = unknown>(method: string, path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (_apiKey) headers['Authorization'] = `Bearer ${_apiKey}`
 
-  const sep = path.includes('?') ? '&' : '?'
-  const url  = BASE + path + sep + spaceParams()
+  const includeSpaceParams = options.includeSpaceParams ?? true
+  const url = includeSpaceParams
+    ? BASE + path + (path.includes('?') ? '&' : '?') + spaceParams(options.spaceId)
+    : BASE + path
 
   const opts: RequestInit = { method, headers }
   if (body !== undefined) opts.body = JSON.stringify(body)
@@ -76,11 +87,11 @@ async function request<T = unknown>(method: string, path: string, body?: unknown
   return r.json() as Promise<T>
 }
 
-const get   = <T>(path: string)                => request<T>('GET',    path)
-const post  = <T>(path: string, body?: unknown) => request<T>('POST',   path, body)
-const patch = <T>(path: string, body?: unknown) => request<T>('PATCH',  path, body)
-const put   = <T>(path: string, body?: unknown) => request<T>('PUT',    path, body)
-const del   = <T>(path: string)                => request<T>('DELETE', path)
+const get   = <T>(path: string, options?: RequestOptions)                => request<T>('GET',    path, undefined, options)
+const post  = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('POST',   path, body, options)
+const patch = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PATCH',  path, body, options)
+const put   = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PUT',    path, body, options)
+const del   = <T>(path: string, options?: RequestOptions)                => request<T>('DELETE', path, undefined, options)
 
 // ── Memory ────────────────────────────────────────────────────────────────
 export const memoryApi = {
@@ -125,8 +136,8 @@ export const boardsApi = {
 export const tasksApi = {
   list:   (params: Record<string, string> = {}) =>
     get<Page<Task>>('/tasks?' + new URLSearchParams(params)),
-  create: (data: Record<string, unknown>) =>
-    post<Task>('/tasks', data),
+  create: (data: Record<string, unknown>, options: { spaceId?: string } = {}) =>
+    post<Task>('/tasks', data, { spaceId: options.spaceId }),
   get:    (id: string) => get<Task>(`/tasks/${id}`),
   update: (id: string, data: Record<string, unknown>) =>
     patch<Task>(`/tasks/${id}`, data),
@@ -146,6 +157,18 @@ export const homeApi = {
     get<HomeSummaryOut>('/home/summary?' + new URLSearchParams(params)),
 }
 
+// ── Personal perspective (/me aggregation) ─────────────────────────────────
+export const meApi = {
+  summary: (params: Record<string, string> = {}) =>
+    get<MeSummaryOut>('/me/summary?' + new URLSearchParams(params), { includeSpaceParams: false }),
+  timeline: (params: Record<string, string> = {}) =>
+    get<MeTimelineEntry[]>('/me/timeline?' + new URLSearchParams(params), { includeSpaceParams: false }),
+  tasks: (params: Record<string, string> = {}) =>
+    get<MeTaskItem[]>('/me/tasks?' + new URLSearchParams(params), { includeSpaceParams: false }),
+  pending: (params: Record<string, string> = {}) =>
+    get<MePendingProposalItem[]>('/me/pending?' + new URLSearchParams(params), { includeSpaceParams: false }),
+}
+
 // ── Runs (canonical API) ──────────────────────────────────────────────────
 export const runsApi = {
   list: (params: Record<string, string> = {}) =>
@@ -160,6 +183,24 @@ export const runsApi = {
     get<Page<Artifact>>(`/runs/${id}/artifacts?` + new URLSearchParams(params)),
   proposals: (id: string, params: Record<string, string> = {}) =>
     get<Page<Proposal>>(`/runs/${id}/proposals?` + new URLSearchParams(params)),
+}
+
+// ── Personal Memory Grants ─────────────────────────────────────────────────
+export const personalMemoryGrantsApi = {
+  previewPersonalMemoryGrant: (input: PersonalMemoryGrantPreviewRequest) =>
+    post<PersonalMemoryGrantPreviewResponse>('/personal-memory-grants/preview', input),
+  createPersonalMemoryGrant: (input: PersonalMemoryGrantCreateRequest) =>
+    post<PersonalMemoryGrantResponse>('/personal-memory-grants', input),
+  listPersonalMemoryGrants: (filters: { status?: string; target_space_id?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (filters.status !== undefined) q.status = filters.status
+    if (filters.target_space_id !== undefined) q.target_space_id = filters.target_space_id
+    return get<PersonalMemoryGrantResponse[]>('/personal-memory-grants?' + new URLSearchParams(q))
+  },
+  revokePersonalMemoryGrant: (grantId: string) =>
+    post<PersonalMemoryGrantResponse>(`/personal-memory-grants/${grantId}/revoke`),
+  getPersonalMemoryGrantAudit: (grantId: string) =>
+    get<PersonalMemoryGrantAuditResponse>(`/personal-memory-grants/${grantId}/audit`),
 }
 
 // ── Artifacts ─────────────────────────────────────────────────────────────
@@ -231,6 +272,8 @@ export const proposalsApi = {
   get: (id: string) => get<Proposal>(`/proposals/${id}`),
   accept: (id: string) => post<ProposalAcceptOut>(`/proposals/${id}/accept`),
   reject: (id: string) => post<Proposal>(`/proposals/${id}/reject`),
+  approveEgressGrantingUserProposal: (id: string, input: EgressApprovalRequest = {}) =>
+    post<ProposalApprovalResponse>(`/proposals/${id}/approvals/egress-granting-user`, input),
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────
@@ -340,8 +383,11 @@ export const jobsApi = {
 export const activityApi = {
   list:   (params: Record<string, string> = {}) =>
     get<ActivityInboxRecord[]>('/activity?' + new URLSearchParams(params)),
-  create: (data: { source_type: ActivitySourceType; content: string; title?: string; source_url?: string; workspace_id?: string; metadata_json?: Record<string, unknown> }) =>
-    post<ActivityInboxRecord>('/activity', data),
+  create: (
+    data: { source_type: ActivitySourceType; content: string; title?: string; source_url?: string; workspace_id?: string; metadata_json?: Record<string, unknown> },
+    options: { spaceId?: string } = {},
+  ) =>
+    post<ActivityInboxRecord>('/activity', data, { spaceId: options.spaceId }),
   get:    (id: string) => get<ActivityInboxRecord>(`/activity/${id}`),
   process:(id: string) => patch<ActivityInboxRecord>(`/activity/${id}/process`),
   archive:(id: string) => patch<ActivityInboxRecord>(`/activity/${id}/archive`),

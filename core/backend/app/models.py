@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Float,
+    Index,
     Integer,
     JSON,
     String,
@@ -45,6 +46,19 @@ SPACE_COL = String(36)
 
 
 class Space(Base):
+    """Top-level permission and collaboration boundary.
+
+    space_id currently serves four roles across the system:
+      1. Ownership anchor  — every object (Memory, Run, Session, Task, …) belongs to one space.
+      2. Access filter     — MemoryRetriever and MemoryStore enforce space_id as a hard filter.
+      3. UI scope          — the frontend renders one active space at a time via SpaceContext.
+      4. Execution boundary — ContextBuilder reads memory only from the run's space_id.
+
+    Target model: keep Space as the permission/collaboration boundary while making view and
+    execution semantics explicit over time (PersonalView, ExecutionContext — see
+    docs/TARGET_VIEW_MODEL.md). A personal space has exactly one member: the owner.
+    """
+
     __tablename__ = "spaces"
 
     id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
@@ -415,22 +429,47 @@ class Message(Base):
 
 
 # ---------------------------------------------------------------------------
-# Context sources and immutable snapshots
+# Source pointers and immutable snapshots
 # ---------------------------------------------------------------------------
 
 
-class ContextSource(Base):
-    __tablename__ = "context_sources"
+class SourcePointer(Base):
+    """Cross-space provenance pointer (metadata only).
+
+    Records that an object in owner_space is derived from or references an object in
+    source_space. This table must never store raw source content, summaries, or snapshots.
+    access_mode values (read, subscribe, federated) describe future intent only — they do
+    not grant read access. All source object reads remain subject to source-space membership,
+    visibility, and policy checks (memory.cross_space_read stays deny-by-default).
+
+    See docs/TARGET_VIEW_MODEL.md and docs/FEDERATED_ACCESS_MODEL.md.
+    """
+
+    __tablename__ = "source_pointers"
 
     id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
-    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(256), nullable=False)
-    source_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    scope_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    trust_level: Mapped[str] = mapped_column(String(32), nullable=False, default="normal")
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    owner_space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    source_space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False)
+    source_object_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_object_id: Mapped[str] = mapped_column(UUID_COL, nullable=False)
+    access_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    granted_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "access_mode in ('read', 'subscribe', 'federated')",
+            name="ck_source_pointers_access_mode",
+        ),
+        Index(
+            "ix_source_pointers_source",
+            "source_space_id",
+            "source_object_type",
+            "source_object_id",
+        ),
+    )
 
 
 class Policy(Base):
@@ -567,6 +606,14 @@ class ContextDigest(Base):
 
 
 class Run(Base):
+    """A single agent execution. space_id is the execution boundary — the run reads memory only
+    from this space. instructed_by_user_id flows into ContextBuilder as user_id, controlling
+    which private memories are included (owner must match). A run in a shared space cannot
+    access personal-space private memories even when the same user instructed both (Gap 6a;
+    intentional — see docs/TARGET_VIEW_MODEL.md § ExecutionContext). Cross-space authorization
+    requires PersonalMemoryGrant — see docs/PERSONAL_MEMORY_GRANT.md.
+    """
+
     __tablename__ = "runs"
 
     id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
@@ -624,6 +671,16 @@ class Run(Base):
     estimated_output_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     estimated_cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    visibility: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="space_shared", server_default=text("'space_shared'")
+    )
+    # Safe marker set when ContextSnapshotPopulator resolves a PersonalMemoryGrant.
+    # personal_grant_context_json stores only non-sensitive grant metadata (grant_id, access_mode,
+    # memory_count, etc.) — never raw memory text, generated summary, or memory IDs.
+    has_personal_grant_context: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    personal_grant_context_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     completed_at = synonym("ended_at")
     output = synonym("output_json")
     error = synonym("error_message")
@@ -700,6 +757,10 @@ class ActivityRecord(Base):
     )
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     discarded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    visibility: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="space_shared", server_default=text("'space_shared'")
+    )
+    owner_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
 
     # ORM mirrors for historical activity field names.
     source_type = synonym("activity_type")
@@ -758,6 +819,10 @@ class Artifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    visibility: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="space_shared", server_default=text("'space_shared'")
+    )
+    owner_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
 
     # ORM mirrors for historical artifact field names.
     path = synonym("storage_path")
@@ -801,10 +866,14 @@ class Proposal(Base):
     created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)
     created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
     required_approver_role: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    visibility: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="space_shared", server_default=text("'space_shared'")
+    )
     type = synonym("proposal_type")
     decided_at = synonym("reviewed_at")
 
     created_by_run: Mapped[Optional[Run]] = relationship("Run", back_populates="proposals")
+    approvals: Mapped[list["ProposalApproval"]] = relationship("ProposalApproval", back_populates="proposal")
 
     user_id = synonym("created_by_user_id")
 
@@ -904,6 +973,49 @@ class Proposal(Base):
     )
 
 
+class ProposalApproval(Base):
+    """First-class approval row for proposal gates that cannot be represented by status alone.
+
+    MVP supports egress_granting_user approvals. Rows store approval metadata only:
+    no raw personal memory, generated summaries, memory IDs, or artifact/proposal payload content.
+    """
+
+    __tablename__ = "proposal_approvals"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    proposal_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=False, index=True)
+    approval_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    approver_user_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=False, index=True)
+    grant_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL, ForeignKey("personal_memory_grants.id"), nullable=True, index=True
+    )
+    target_space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    proposal: Mapped["Proposal"] = relationship("Proposal", back_populates="approvals")
+    approver_user: Mapped["User"] = relationship("User", foreign_keys=[approver_user_id])
+    grant: Mapped[Optional["PersonalMemoryGrant"]] = relationship("PersonalMemoryGrant", foreign_keys=[grant_id])
+    target_space: Mapped[Optional["Space"]] = relationship("Space", foreign_keys=[target_space_id])
+
+    __table_args__ = (
+        CheckConstraint("approval_type in ('egress_granting_user')", name="ck_proposal_approvals_approval_type"),
+        CheckConstraint("status in ('approved', 'revoked')", name="ck_proposal_approvals_status"),
+        Index(
+            "ix_proposal_approvals_unique_active",
+            "proposal_id",
+            "approval_type",
+            "approver_user_id",
+            "grant_id",
+            unique=True,
+            sqlite_where=text("status = 'approved'"),
+        ),
+        Index("ix_proposal_approvals_created_at", "created_at"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Task board (product-level work items; not infrastructure jobs)
 # ---------------------------------------------------------------------------
@@ -978,6 +1090,9 @@ class Task(Base):
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="inbox")
     priority: Mapped[str] = mapped_column(String(32), nullable=False, default="normal")
     risk_level: Mapped[str] = mapped_column(String(32), nullable=False, default="low")
+    visibility: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="space_shared", server_default=text("'space_shared'")
+    )
 
     created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
     created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)
@@ -1441,4 +1556,136 @@ class ProvenanceLink(Base):
             "'untrusted_external', 'agent_inferred')",
             name="ck_provenance_links_source_trust",
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Participation ledger (pointer-only, no content)
+# ---------------------------------------------------------------------------
+
+
+class ParticipationRecord(Base):
+    """Cross-space participation ledger entry.
+
+    Records that a user participated in a source object that belongs to a
+    source_space, and links it back to the user's personal_space for
+    PersonalView assembly (future). This table is a pointer ledger only:
+    it must never contain raw content, payload, or summary fields.
+    Population hooks are deferred — see docs/FUTURE_ROADMAP.md.
+    """
+
+    __tablename__ = "participation_records"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=False, index=True)
+    personal_space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    source_space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False)
+    source_object_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_object_id: Mapped[str] = mapped_column(UUID_COL, nullable=False)
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    __table_args__ = (
+        Index(
+            "ix_participation_records_source",
+            "source_space_id",
+            "source_object_type",
+            "source_object_id",
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# PersonalMemoryGrant
+# ---------------------------------------------------------------------------
+
+
+class PersonalMemoryGrant(Base):
+    """Explicit user-authorized exception allowing one shared-space run to use a generated
+    summary of selected personal-space private memories.
+
+    Security invariants:
+    - No grant → no cross-space personal memory read (enforced by MemoryRetriever space_id filter).
+    - grant_scope must be 'run' (MVP); target_run_id is NOT NULL; target_agent_id is NULL.
+    - access_mode must be 'summary_only' (MVP).
+    - read_expires_at is required; grants deny access after expiry.
+    - At most one active/consuming grant per (granting_user_id, target_run_id) — enforced by
+      partial unique index in migration + service layer.
+    - No raw memory content, generated summaries, or personal memory IDs stored here.
+    """
+
+    __tablename__ = "personal_memory_grants"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    granting_user_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=False, index=True)
+    personal_space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    target_space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    target_run_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=False, index=True)
+    target_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)
+    grant_scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    access_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    memory_filter_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    read_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    egress_review_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    consume_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    failure_stage: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    granting_user: Mapped["User"] = relationship("User", foreign_keys=[granting_user_id])
+    personal_space: Mapped["Space"] = relationship("Space", foreign_keys=[personal_space_id])
+    target_space: Mapped["Space"] = relationship("Space", foreign_keys=[target_space_id])
+    target_run: Mapped["Run"] = relationship("Run", foreign_keys=[target_run_id])
+    target_agent: Mapped[Optional["Agent"]] = relationship("Agent", foreign_keys=[target_agent_id])
+    events: Mapped[list["PersonalMemoryGrantEvent"]] = relationship(
+        "PersonalMemoryGrantEvent", back_populates="grant"
+    )
+
+    __table_args__ = (
+        CheckConstraint("grant_scope in ('run')", name="ck_personal_memory_grants_grant_scope"),
+        CheckConstraint("access_mode in ('summary_only')", name="ck_personal_memory_grants_access_mode"),
+        CheckConstraint(
+            "status in ('active', 'consuming', 'used', 'revoked', 'expired', 'failed')",
+            name="ck_personal_memory_grants_status",
+        ),
+        # MVP invariant: agent-level grants deferred; target_agent_id must be NULL.
+        CheckConstraint("target_agent_id is null", name="ck_personal_memory_grants_target_agent_id_null"),
+    )
+
+
+class PersonalMemoryGrantEvent(Base):
+    """Audit trail entry for PersonalMemoryGrant lifecycle events.
+
+    Metadata-only: metadata_json must not contain raw memory content, generated summaries,
+    or personal MemoryEntry IDs. Safe fields: IDs, counts, boolean decisions, timestamps.
+    """
+
+    __tablename__ = "personal_memory_grant_events"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    grant_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("personal_memory_grants.id"), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=True, index=True)
+    proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True)
+    source_space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=True)
+    target_space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    grant: Mapped["PersonalMemoryGrant"] = relationship("PersonalMemoryGrant", back_populates="events")
+    actor_user: Mapped[Optional["User"]] = relationship("User", foreign_keys=[actor_user_id])
+    run: Mapped[Optional["Run"]] = relationship("Run", foreign_keys=[run_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "event_type in ('created', 'previewed', 'consuming', 'used', 'revoked', 'expired', 'failed', 'denied', 'egress_proposal_created', 'egress_approved')",
+            name="ck_personal_memory_grant_events_event_type",
+        ),
+        Index("ix_personal_memory_grant_events_created_at", "created_at"),
     )

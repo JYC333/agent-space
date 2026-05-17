@@ -33,14 +33,15 @@ PolicyContext keys (all optional unless noted):
 """
 
 from typing import Any, Callable, Optional
+from .access import load_active_policies_for_write_direct
 from .decisions import PolicyDecision, Decision, RiskLevel
+from .domains import MEMORY_WRITE_DIRECT
 from .rules import BUILTIN_RULES
 
 PolicyContext = dict
 RuleFunction = Callable[[PolicyContext], Optional[PolicyDecision]]
 
-_SELECTED_PERSISTED_POLICY_ACTION = "memory.write_direct"
-_SELECTED_PERSISTED_POLICY_RESOURCE_TYPE = "memory"
+_WRITE_DIRECT_RESOURCE_TYPE = "memory"
 
 _DEFAULT_ALLOW = PolicyDecision(
     decision=Decision.ALLOW,
@@ -81,54 +82,10 @@ def load_persisted_policies_for_action(
     action: str,
     resource_type: str,
 ) -> list[Any]:
-    """Load active persisted policies for the single M5 enforced policy class."""
-    if action != _SELECTED_PERSISTED_POLICY_ACTION:
-        return []
-    if resource_type != _SELECTED_PERSISTED_POLICY_RESOURCE_TYPE:
-        return []
-    if db is None or not space_id:
-        return []
-
-    from ..models import Policy
-
-    rows = (
-        db.query(Policy)
-        .filter(
-            Policy.space_id == space_id,
-            Policy.enabled.is_(True),
-            Policy.status == "active",
-            Policy.domain == "memory",
-        )
-        .order_by(Policy.priority.desc(), Policy.created_at.desc(), Policy.id.desc())
-        .all()
+    """Load active persisted policies for ``memory.write_direct`` via canonical loader."""
+    return load_active_policies_for_write_direct(
+        db, space_id=space_id, action=action, resource_type=resource_type
     )
-    selected: list[Any] = []
-    for row in rows:
-        policy_json = _as_dict(row.policy_json)
-        rule_json = _as_dict(row.rule_json)
-        applies_to = _as_dict(row.applies_to_json)
-        policy_type = (
-            rule_json.get("policy_type")
-            or policy_json.get("policy_type")
-            or applies_to.get("policy_type")
-            or row.policy_key
-        )
-        row_action = (
-            rule_json.get("action")
-            or policy_json.get("action")
-            or applies_to.get("action")
-        )
-        row_resource_type = (
-            rule_json.get("resource_type")
-            or policy_json.get("resource_type")
-            or applies_to.get("resource_type")
-        )
-        if policy_type not in ("memory_write", "memory_write_direct"):
-            continue
-        if row_action != action or row_resource_type != resource_type:
-            continue
-        selected.append(row)
-    return selected
 
 
 def persisted_policy_decision(ctx: PolicyContext) -> Optional[PolicyDecision]:
@@ -165,7 +122,7 @@ def persisted_policy_decision(ctx: PolicyContext) -> Optional[PolicyDecision]:
             risk_level=_normalize_risk(rule_json.get("risk_level") or policy_json.get("risk_level")),
             required_approver_role=rule_json.get("required_approver_role")
             or policy_json.get("required_approver_role"),
-            policy_rule_id=row.policy_key or "persisted.memory_write_direct",
+            policy_rule_id=row.policy_key or f"persisted.{MEMORY_WRITE_DIRECT}",
             policy_source="persisted",
             policy_id=row.id,
             actor_id=ctx.get("actor_id"),

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -30,6 +30,7 @@ from ..runtimes.credentials import (
     sanitize_runtime_config,
 )
 from ..runtimes.registry import instantiate_runtime_adapter
+from ..personal_memory_grants.egress_guard import PersonalMemoryEgressError
 from .adapter_resolution import AdapterResolutionError, resolve_runtime_adapter
 from .artifact_persistence import ArtifactPersistenceService
 from .context_snapshot_populator import ContextSnapshotPopulator
@@ -48,6 +49,13 @@ from .removed_runtime_token import is_obsolete_runtime_override_token
 from .task_output_linkage import link_run_outputs_to_tasks
 
 log = logging.getLogger(__name__)
+
+_PERSONAL_CONTEXT_HEADER = "[Personal context granted for this run - reasoning only]"
+_PERSONAL_CONTEXT_FOOTER = "[End personal context]"
+_PERSONAL_CONTEXT_WARNING = (
+    "This personal context is granted for reasoning only. "
+    "Do not quote or persist it directly."
+)
 
 
 def _utcnow() -> datetime:
@@ -76,6 +84,52 @@ def _assert_run_executable(run: Run) -> None:
             status_code=409,
             detail=f"Run '{run.id}' is waiting for review and cannot be executed",
         )
+
+
+def _build_runtime_prompt(*, user_prompt: str, personal_context_block: str | None) -> str:
+    """Render the adapter prompt. Personal context is runtime-only."""
+    block = (personal_context_block or "").strip()
+    if not block:
+        return user_prompt
+    return "\n\n".join([
+        user_prompt,
+        _PERSONAL_CONTEXT_HEADER,
+        _PERSONAL_CONTEXT_WARNING,
+        block,
+        _PERSONAL_CONTEXT_FOOTER,
+    ])
+
+
+def _personal_context_output_metadata(run: Run) -> dict:
+    if not getattr(run, "has_personal_grant_context", False):
+        return {}
+    grant_ctx = getattr(run, "personal_grant_context_json", None) or {}
+    grant_id = grant_ctx.get("grant_id") if isinstance(grant_ctx, dict) else None
+    grant_ids = [grant_id] if grant_id else []
+    return {
+        "derived_from_personal_memory": True,
+        "personal_memory_grant_ids": grant_ids,
+        "raw_private_memory_included": False,
+        "personal_summary_persisted": False,
+    }
+
+
+def _redact_personal_context_block(value: Any, personal_context_block: str | None) -> Any:
+    block = (personal_context_block or "").strip()
+    if not block:
+        return value
+    if isinstance(value, str):
+        return value.replace(block, "[REDACTED_PERSONAL_CONTEXT_BLOCK]")
+    if isinstance(value, list):
+        return [_redact_personal_context_block(item, block) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_personal_context_block(item, block) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): _redact_personal_context_block(item, block)
+            for key, item in value.items()
+        }
+    return value
 
 
 class RunExecutionService:
@@ -269,7 +323,7 @@ class RunExecutionService:
         # have an auditable snapshot; failure here is a hard pre-execution guard
         # that blocks the adapter and marks the run failed.
         try:
-            ContextSnapshotPopulator(self.db).populate(run, version)
+            context_pkg = ContextSnapshotPopulator(self.db).populate(run, version)
         except Exception as exc:  # noqa: BLE001
             return self._fail_run_terminal(
                 run=run,
@@ -324,10 +378,14 @@ class RunExecutionService:
                 # Sanitize merged_config: strip raw secret fields so adapter_config
                 # is safe to log and inspect.  Credentials flow via resolved_credentials.
                 safe_config = sanitize_runtime_config(resolved.merged_config)
+                runtime_prompt = _build_runtime_prompt(
+                    user_prompt=user_prompt,
+                    personal_context_block=context_pkg.personal_context_block,
+                )
                 ctx = RuntimeExecutionContext(
                     run_id=run_id,
                     space_id=run_space_id,
-                    prompt=user_prompt,
+                    prompt=runtime_prompt,
                     mode=run_mode,
                     sandbox_cwd=workdir,
                     model_name=version.model_name,
@@ -382,6 +440,31 @@ class RunExecutionService:
 
         ended_wall = _utcnow()
         if raw.success:
+            output_provenance = _personal_context_output_metadata(run)
+            safe_adapter_output = _redact_personal_context_block(
+                raw.output_json,
+                context_pkg.personal_context_block,
+            )
+            safe_stdout = _redact_personal_context_block(
+                raw.stdout,
+                context_pkg.personal_context_block,
+            )
+            safe_stderr = _redact_personal_context_block(
+                raw.stderr,
+                context_pkg.personal_context_block,
+            )
+            safe_output_text_for_run = _redact_personal_context_block(
+                raw.output_text,
+                context_pkg.personal_context_block,
+            )
+            safe_adapter_log = _redact_personal_context_block(
+                raw.adapter_log_json,
+                context_pkg.personal_context_block,
+            )
+            safe_adapter_metadata = _redact_personal_context_block(
+                raw.adapter_metadata,
+                context_pkg.personal_context_block,
+            )
             run.status = "succeeded"
             run.error_message = None
             run.error_json = None
@@ -391,15 +474,17 @@ class RunExecutionService:
             out = {
                 "runtime": "real",
                 "runtime_adapter_type": resolved.adapter_type,
-                "stdout": raw.stdout,
-                "stderr": raw.stderr,
-                "output_text": raw.output_text,
-                "output_json": raw.output_json,
-                "adapter_log_json": raw.adapter_log_json,
-                "adapter_metadata": raw.adapter_metadata,
+                "stdout": safe_stdout,
+                "stderr": safe_stderr,
+                "output_text": safe_output_text_for_run,
+                "output_json": safe_adapter_output,
+                "adapter_log_json": safe_adapter_log,
+                "adapter_metadata": safe_adapter_metadata,
                 "runtime_policy_decision": decision.policy_snapshot,
                 "required_sandbox_level": run.required_sandbox_level,
             }
+            if output_provenance:
+                out["output_provenance"] = output_provenance
             # Redact before persistence — catches any accidental secret exposure
             # in adapter output, stderr, or log fields.
             run.output_json = redact_runtime_output(out)
@@ -411,14 +496,14 @@ class RunExecutionService:
                         complete_step(
                             self.db, adapter_step,
                             ended_at=ended_wall,
-                            output_summary=(raw.output_text or "")[:4000] or None,
+                            output_summary=(safe_output_text_for_run or "")[:4000] or None,
                         )
                 except Exception:
                     log.warning("RunStep complete_step failed (best-effort)", exc_info=True)
 
             mat_errors = RunOutputMaterializer(self.db).materialize(
                 run=run,
-                adapter_output=raw.output_json,
+                adapter_output=safe_adapter_output,
                 adapter_type=resolved.adapter_type,
             )
             merged_errors = [*path_ingest_errors, *mat_errors]
@@ -433,25 +518,35 @@ class RunExecutionService:
             if raw.output_text:
                 # Redact artifact content before persistence — adapter output text
                 # must not carry raw credentials into artifact storage.
-                safe_output_text = redact_artifact_content(raw.output_text) or ""
-                art = ArtifactPersistenceService(self.db).persist_text_file(
-                    run=run,
-                    text=safe_output_text,
-                    title=f"Run output ({resolved.adapter_type})",
-                    artifact_type="runtime_output",
-                    preview=run.mode == "dry_run",
-                )
-                link_run_outputs_to_tasks(self.db, run=run, artifact=art, proposal=None)
-                artifacts_out = [{"id": art.id, "title": art.title, "storage_path": art.storage_path}]
-                if actor_id is not None:
-                    try:
-                        with UnitOfWork(self.db).savepoint():
-                            record_artifact_step(
-                                self.db, run=run, actor_id=actor_id,
-                                artifact_id=art.id, title=art.title,
-                            )
-                    except Exception:
-                        log.warning("RunStep record_artifact_step failed (best-effort)", exc_info=True)
+                safe_output_text = redact_artifact_content(safe_output_text_for_run) or ""
+                try:
+                    art = ArtifactPersistenceService(self.db).persist_text_file(
+                        run=run,
+                        text=safe_output_text,
+                        title=f"Run output ({resolved.adapter_type})",
+                        artifact_type="runtime_output",
+                        preview=run.mode == "dry_run",
+                    )
+                except PersonalMemoryEgressError as exc:
+                    merged = dict(run.output_json or {})
+                    existing_errors = list(merged.get("materialization_errors") or [])
+                    existing_errors.append(f"runtime_output_artifact: {exc}")
+                    merged["materialization_errors"] = existing_errors
+                    run.output_json = redact_runtime_output(merged)
+                    self.db.flush()
+                    artifacts_out = []
+                else:
+                    link_run_outputs_to_tasks(self.db, run=run, artifact=art, proposal=None)
+                    artifacts_out = [{"id": art.id, "title": art.title, "storage_path": art.storage_path}]
+                    if actor_id is not None:
+                        try:
+                            with UnitOfWork(self.db).savepoint():
+                                record_artifact_step(
+                                    self.db, run=run, actor_id=actor_id,
+                                    artifact_id=art.id, title=art.title,
+                                )
+                        except Exception:
+                            log.warning("RunStep record_artifact_step failed (best-effort)", exc_info=True)
             else:
                 artifacts_out = []
 

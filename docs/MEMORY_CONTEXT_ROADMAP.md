@@ -87,6 +87,10 @@ A future Personal Radius layer for tracking external information sources:
 - `RadiusSearchService` — ranked retrieval over the radius index
 - `ContextSourceAdapter` — pluggable source for ContextSnapshot assembly
 
+> **Note:** "ContextSource adapter" here is a future design-pattern name for a pluggable
+> retrieval adapter. It is unrelated to the historical `context_sources` database table,
+> which was removed from the schema.
+
 ---
 
 ## Extension Path C — Wiki / Knowledge Synthesis

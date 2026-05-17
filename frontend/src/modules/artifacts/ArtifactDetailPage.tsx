@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { artifactsApi } from '../../api/client'
+import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
 import type { Artifact } from '../../types/api'
 import { Card } from '../../components/ui/card'
@@ -10,6 +11,7 @@ import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Skeleton } from '../../components/ui/skeleton'
 import { PreviewBadge } from '../../components/PreviewBadge'
+import { ScopeBadge } from '../../components/ScopeBadge'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -17,11 +19,17 @@ function fmt(dt: string | null | undefined) {
 
 export default function ArtifactDetailPage() {
   const { artifactId = '' } = useParams()
+  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [a, setA] = useState<Artifact | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!artifactId) return
+    if (!activeOperationalSpaceId) {
+      setA(null)
+      setLoading(false)
+      return
+    }
     let cancelled = false
     ;(async () => {
       setLoading(true)
@@ -38,7 +46,7 @@ export default function ArtifactDetailPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [artifactId])
+  }, [artifactId, activeOperationalSpaceId])
 
   async function exportArt() {
     if (!a) return
@@ -59,7 +67,9 @@ export default function ArtifactDetailPage() {
       {loading && <Skeleton className="h-40 w-full" />}
 
       {!loading && !a && (
-        <Card className="p-8 text-center text-sm text-muted-foreground">Artifact not found.</Card>
+        <Card className="p-8 text-center text-sm text-muted-foreground">
+          {activeOperationalSpaceId ? 'Artifact not found.' : 'Select an operational space to inspect this artifact.'}
+        </Card>
       )}
 
       {!loading && a && (
@@ -68,8 +78,10 @@ export default function ArtifactDetailPage() {
             <h1 className="text-lg font-semibold tracking-tight">{a.title}</h1>
             <Button size="sm" variant="outline" onClick={exportArt}>Export</Button>
           </div>
+          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
           <div className="flex flex-wrap gap-1.5 items-center text-xs text-muted-foreground">
             <Badge variant="secondary">{a.artifact_type}</Badge>
+            <ScopeBadge visibility={a.visibility} />
             {a.preview && <PreviewBadge />}
             <span>{fmt(a.created_at)}</span>
             {a.run_id && (

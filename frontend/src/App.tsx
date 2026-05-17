@@ -11,8 +11,10 @@ import { Skeleton } from './components/ui/skeleton'
 import LoginPage from './pages/LoginPage'
 import AcceptInvitationPage from './pages/AcceptInvitationPage'
 import { useAuth } from './contexts/AuthContext'
+import { useSpace } from './contexts/SpaceContext'
 
 const HomeGalleryPage = lazy(() => import('./modules/home/HomeGalleryPage'))
+const PersonalViewPage = lazy(() => import('./modules/personal/PersonalViewPage'))
 
 function PageLoader() {
   return (
@@ -47,6 +49,11 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function PerspectiveIndex() {
+  const { perspective } = useSpace()
+  return perspective === 'personal' ? <PersonalViewPage /> : <HomeGalleryPage />
+}
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -65,7 +72,15 @@ export default function App() {
                   index
                   element={
                     <SuspensePage>
-                      <HomeGalleryPage />
+                      <PerspectiveIndex />
+                    </SuspensePage>
+                  }
+                />
+                <Route
+                  path="personal"
+                  element={
+                    <SuspensePage>
+                      <PersonalViewPage />
                     </SuspensePage>
                   }
                 />

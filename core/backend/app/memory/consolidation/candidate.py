@@ -44,7 +44,7 @@ class MemoryCandidate:
     event_type: str | None = None
     scope_id: str | None = None
     subject_user_id: str | None = None
-    visibility: str = "private"
+    visibility: str = "space_shared"
     entity_refs: list[dict[str, Any]] = field(default_factory=list)
     relation_refs: list[dict[str, Any]] = field(default_factory=list)
     provenance_entries: list[dict[str, Any]] = field(default_factory=list)

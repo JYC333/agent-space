@@ -12,6 +12,10 @@ import { Skeleton } from '../../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs'
 import { PreviewBadge, DryRunBanner, UrgencyBadge } from '../../components/PreviewBadge'
 import { useRun, RUN_TERMINAL_STATUSES } from '../../hooks/useRun'
+import { ScopeBadge } from '../../components/ScopeBadge'
+import { useSpace } from '../../contexts/SpaceContext'
+import { PersonalContextPanel } from './PersonalContextPanel'
+import { isGrantDerivedProposal } from '../memory/EgressReviewNotice'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -19,9 +23,10 @@ function fmt(dt: string | null | undefined) {
 
 export default function RunDetailPage() {
   const { runId = '' } = useParams()
+  const { spaces, activeOperationalSpaceId, activeOperationalSpaceName, personalSpaceId, userId } = useSpace()
   const [reloadKey, setReloadKey] = useState(0)
   const [executingRun, setExecutingRun] = useState(false)
-  const { run: polled, loading, error } = useRun(runId || null, reloadKey)
+  const { run: polled, loading, error } = useRun(runId && activeOperationalSpaceId ? runId : null, reloadKey)
   const [activities, setActivities] = useState<ActivityRecord[]>([])
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
@@ -29,6 +34,13 @@ export default function RunDetailPage() {
 
   const loadSubs = useCallback(async () => {
     if (!runId) return
+    if (!activeOperationalSpaceId) {
+      setActivities([])
+      setArtifacts([])
+      setProposals([])
+      setTabLoading(false)
+      return
+    }
     setTabLoading(true)
     try {
       const [a, ar, pr] = await Promise.all([
@@ -44,11 +56,15 @@ export default function RunDetailPage() {
     } finally {
       setTabLoading(false)
     }
-  }, [runId])
+  }, [runId, activeOperationalSpaceId])
 
   useEffect(() => {
     void loadSubs()
   }, [loadSubs])
+
+  useEffect(() => {
+    setReloadKey(k => k + 1)
+  }, [activeOperationalSpaceId])
 
   // Sub-resources are created when the run finishes; refetch when polling reaches a terminal status
   // (mount-only loadSubs() would leave tabs empty after queued → succeeded without leaving the page).
@@ -97,12 +113,20 @@ export default function RunDetailPage() {
         <Button variant="ghost" asChild>
           <Link to="/runs"><ArrowLeft className="size-4 mr-1" />Runs</Link>
         </Button>
-        <p className="text-destructive mt-4 text-sm">{error ?? 'Run not found.'}</p>
+        <p className="text-destructive mt-4 text-sm">
+          {activeOperationalSpaceId ? error ?? 'Run not found.' : 'Select an operational space to inspect this run.'}
+        </p>
       </div>
     )
   }
 
   const r: Run = polled
+  const executionSpace = spaces.find(s => s.id === r.space_id)
+  const instructedBy = r.instructed_by_user_id
+    ? `User ${r.instructed_by_user_id}`
+    : r.instructed_by_agent_id
+      ? `Agent ${r.instructed_by_agent_id}`
+      : '—'
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">
@@ -112,11 +136,13 @@ export default function RunDetailPage() {
 
       <div className="space-y-3 border-b border-border pb-4">
         <h1 className="text-xl font-semibold tracking-tight font-mono">{r.id}</h1>
+        <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
         <div className="flex flex-wrap gap-1.5 items-center">
           <StatusBadge status={r.status} />
           <Badge variant="secondary">{r.mode}</Badge>
           {r.mode === 'dry_run' && <PreviewBadge />}
           <Badge variant="outline">{r.run_type}</Badge>
+          <ScopeBadge visibility={r.visibility} />
         </div>
         {r.mode === 'dry_run' && <DryRunBanner />}
         <div className="grid gap-2 text-sm sm:grid-cols-2">
@@ -127,6 +153,29 @@ export default function RunDetailPage() {
             <span className="text-xs">created {fmt(r.created_at)} · started {fmt(r.started_at)} · ended {fmt(r.ended_at)}</span>
           </p>
         </div>
+        <Card className="p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <h2 className="text-sm font-semibold">Run Context</h2>
+            <ScopeBadge visibility={r.visibility} />
+          </div>
+          <div className="grid gap-2 text-sm sm:grid-cols-2">
+            <p><span className="text-muted-foreground">Execution space</span><br /><span>{executionSpace?.name ?? r.space_id}</span></p>
+            <p><span className="text-muted-foreground">Workspace</span><br /><span className="font-mono text-xs">{r.workspace_id ?? '—'}</span></p>
+            <p><span className="text-muted-foreground">Instructed by</span><br /><span className="font-mono text-xs">{instructedBy}</span></p>
+            <p><span className="text-muted-foreground">Context snapshot</span><br /><span className="font-mono text-xs">{r.context_snapshot_id ?? '—'}</span></p>
+          </div>
+          <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+            <div>Memory scope: Space-scoped memory.</div>
+            <div>Personal context grants can be used for reasoning only.</div>
+            <div>Separate approval is required before anything is written to a shared space.</div>
+          </div>
+        </Card>
+        <PersonalContextPanel
+          run={r}
+          currentUserId={userId}
+          personalSpaceId={personalSpaceId}
+          spaces={spaces}
+        />
         {r.status === 'failed' && r.error_message && (
           <Card className="p-3 border-destructive/30 bg-destructive/5 text-sm text-destructive">
             {r.error_message}
@@ -181,6 +230,7 @@ export default function RunDetailPage() {
                   <span className="text-xs text-muted-foreground">{fmt(act.occurred_at)}</span>
                 </div>
                 <Badge variant="outline" className="mt-2">{act.activity_type}</Badge>
+                <ScopeBadge visibility={act.visibility} className="mt-2 ml-1" omitShared />
                 {act.content && <p className="text-xs text-muted-foreground mt-2 whitespace-pre-wrap">{act.content}</p>}
               </Card>
             ))
@@ -202,6 +252,7 @@ export default function RunDetailPage() {
                   </Link>
                   <div className="flex gap-1.5 mt-1 flex-wrap">
                     <Badge variant="secondary">{a.artifact_type}</Badge>
+                    <ScopeBadge visibility={a.visibility} omitShared />
                     {a.preview && <PreviewBadge />}
                     <span className="text-xs text-muted-foreground">{fmt(a.created_at)}</span>
                   </div>
@@ -228,6 +279,12 @@ export default function RunDetailPage() {
                   <Badge variant="outline">{p.proposal_type}</Badge>
                   <StatusBadge status={p.status} />
                   <UrgencyBadge urgency={p.urgency} />
+                  {isGrantDerivedProposal(p) && (
+                    <Badge variant={p.egress_approval_status === 'approved' ? 'success' : 'warning'}>
+                      {p.egress_approval_status === 'approved' ? 'egress approved' : 'egress gated'}
+                    </Badge>
+                  )}
+                  <ScopeBadge visibility={p.visibility} omitShared />
                   {p.preview && <PreviewBadge />}
                   {p.expired && <Badge variant="destructive">EXPIRED</Badge>}
                 </div>
