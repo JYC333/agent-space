@@ -11,10 +11,10 @@ Key invariants asserted here:
 - Keyword fallback cannot re-introduce blocked private memory through ILIKE matching.
 - Space-shared memories (legitimate shared content) are still accessible to all members.
 
-Gap 2b (documented, not fixed here):
-    Private memories can currently be written to any space (no placement enforcement).
+Private placement defense-in-depth:
     The correctness of access control does NOT depend on placement enforcement, but
-    placement enforcement is still needed as defense-in-depth (Phase 4.5).
+    placement enforcement is still needed as defense-in-depth for historical or direct
+    database rows.
 
 See: .agent/reports/space-ownership-visibility-gap-analysis.md § Gap 2c, Gap 10b
 """

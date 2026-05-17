@@ -1,16 +1,15 @@
 """Security invariants: PersonalMemoryGrant boundary enforcement.
 
-Phase B (API + service layer) is implemented.  Tests that verify granting_user_id
-ownership enforcement and extra=forbid schema behavior pass as normal tests.
+Grant API and service tests verify granting_user_id ownership enforcement and
+extra=forbid schema behavior.
 
-Phase C (grant resolver) is implemented.  Tests that verify grant lifecycle,
-ownership, expiry, run-scoping, and sensitivity filtering pass as normal tests.
+Runtime context tests verify grant lifecycle, ownership, expiry, run-scoping,
+and sensitivity filtering.
 
-Phase D (egress guard) is implemented.  Tests that verify grant-derived
-output cannot be written to shared targets pass as normal tests.
+Egress guard tests verify grant-derived output cannot be written to shared targets.
 
-Phase D.5 (defense-in-depth cleanup): apply_update guard + code patch risk labels
-are verified in test_personal_memory_egress_guard.py.
+Defense-in-depth apply_update guards and code patch risk labels are verified in
+test_personal_memory_egress_guard_invariants.py.
 """
 
 from __future__ import annotations
@@ -189,14 +188,8 @@ def test_cross_space_read_policy_allow_without_grant_does_not_enable_access(db):
     )
 
 
-def test_personal_memory_grant_models_importable():
-    """Phase 8A: PersonalMemoryGrant and PersonalMemoryGrantEvent models are defined and importable."""
-    assert PersonalMemoryGrant.__tablename__ == "personal_memory_grants"
-    assert PersonalMemoryGrantEvent.__tablename__ == "personal_memory_grant_events"
-
-
 def test_personal_memory_grant_model_has_required_fields():
-    """Phase 8A: PersonalMemoryGrant ORM columns exist with correct nullability."""
+    """PersonalMemoryGrant ORM columns exist with correct nullability."""
     from sqlalchemy import inspect as sa_inspect
     mapper = sa_inspect(PersonalMemoryGrant)
     col_names = {col.key for col in mapper.columns}
@@ -215,7 +208,7 @@ def test_personal_memory_grant_model_has_required_fields():
 
 
 def test_personal_memory_grant_model_has_no_raw_content_fields():
-    """Phase 8A: PersonalMemoryGrant ORM model must not have raw content fields."""
+    """PersonalMemoryGrant ORM model must not have raw content fields."""
     from sqlalchemy import inspect as sa_inspect
     mapper = sa_inspect(PersonalMemoryGrant)
     col_names = {col.key for col in mapper.columns}
@@ -228,14 +221,14 @@ def test_personal_memory_grant_model_has_no_raw_content_fields():
 
 
 # ---------------------------------------------------------------------------
-# Phase B: service-layer enforcement (Phase B complete)
+# Service-layer grant lifecycle enforcement
 # ---------------------------------------------------------------------------
 
 
 def test_user_cannot_create_grant_for_another_users_personal_memory(db):
     """Invariant 2: a user cannot create a grant for a run instructed by another user.
 
-    Phase B service layer enforces this via TargetRunOwnershipError:
+    The service layer enforces this via TargetRunOwnershipError:
     create_personal_memory_grant() checks run.instructed_by_user_id == calling user_id.
     The API layer also enforces this at extra=forbid on GrantCreate (no client-supplied
     granting_user_id) and via TargetRunOwnershipError → HTTP 400/403.
@@ -272,7 +265,7 @@ def test_user_cannot_create_grant_for_another_users_personal_memory(db):
 
 
 # ---------------------------------------------------------------------------
-# Phase C: grant resolver boundary invariants (now implemented)
+# Grant resolver boundary invariants
 # ---------------------------------------------------------------------------
 
 
@@ -470,14 +463,14 @@ def test_highly_restricted_memory_excluded_even_with_grant(db):
 
 
 # ---------------------------------------------------------------------------
-# Phase D: egress guard (now implemented)
+# Egress guard
 # ---------------------------------------------------------------------------
 
 
 def test_grant_does_not_enable_team_memory_write_of_private_content(db):
     """Invariant 7: grant-derived context must not be silently written into team memory.
 
-    Phase D egress guard intercepts and blocks direct persistence of grant-derived
+    The egress guard intercepts and blocks direct persistence of grant-derived
     output into non-personal spaces via RunOutputMaterializer.
     """
     personal_id, user = _personal_space(db)
@@ -530,7 +523,7 @@ def test_grant_does_not_enable_team_memory_write_of_private_content(db):
 
     assert len(errors) > 0, "Egress guard must block grant-derived memory proposal creation"
 
-    # Invariant: no team memory proposal must exist (Phase F2: egress_review proposals are allowed)
+    # Invariant: no team memory proposal must exist; egress_review proposals are allowed.
     proposals = db.query(Proposal).filter(Proposal.space_id == team_id).all()
     memory_proposals = [p for p in proposals if p.proposal_type != "egress_review"]
     assert len(memory_proposals) == 0, (
@@ -552,7 +545,7 @@ def test_multi_user_grant_rejected_in_mvp(db):
     is rejected at the service layer via TargetRunOwnershipError.
 
     This documents the deferral explicitly: multi-user grants require a safe per-user
-    isolation model and are deferred to a future phase.
+    isolation model and are deferred to future product design.
     """
     from app.personal_memory_grants.service import (
         TargetRunOwnershipError,

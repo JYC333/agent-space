@@ -497,15 +497,15 @@ def test_product_orm_uses_run_naming():
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 schema additions
+# Visibility and participation-record schema
 # ---------------------------------------------------------------------------
 
 _VISIBILITY_TABLES = ["tasks", "runs", "artifacts", "activity_records", "proposals"]
 _VISIBILITY_DEFAULT = "space_shared"
 
 
-def test_phase3_visibility_columns_exist_with_correct_default(canonical_engine):
-    """Phase 3: visibility NOT NULL with server_default=space_shared on all target tables."""
+def test_visibility_columns_exist_with_correct_default(canonical_engine):
+    """Visibility columns are NOT NULL with server_default=space_shared on all target tables."""
     inspector = inspect(canonical_engine)
     for table in _VISIBILITY_TABLES:
         col_defs = {c["name"]: c for c in inspector.get_columns(table)}
@@ -519,23 +519,23 @@ def test_phase3_visibility_columns_exist_with_correct_default(canonical_engine):
         )
 
 
-def test_phase3_owner_user_id_columns_exist(canonical_engine):
-    """Phase 3: artifacts and activity_records have owner_user_id nullable column."""
+def test_owner_user_id_columns_exist(canonical_engine):
+    """Artifacts and activity_records have owner_user_id nullable column."""
     inspector = inspect(canonical_engine)
     for table in ("artifacts", "activity_records"):
         col_names = {c["name"] for c in inspector.get_columns(table)}
         assert "owner_user_id" in col_names, f"{table}.owner_user_id column missing"
 
 
-def test_phase3_owner_user_id_fk_exists(canonical_engine):
-    """Phase 3: owner_user_id on artifacts and activity_records has FK to users.id."""
+def test_owner_user_id_fk_exists(canonical_engine):
+    """owner_user_id on artifacts and activity_records has FK to users.id."""
     inspector = inspect(canonical_engine)
     assert ("owner_user_id", "users", "id") in _foreign_keys(inspector, "artifacts")
     assert ("owner_user_id", "users", "id") in _foreign_keys(inspector, "activity_records")
 
 
-def test_phase3_participation_records_table_exists(canonical_engine):
-    """Phase 3: participation_records table exists with required pointer columns."""
+def test_participation_records_table_exists(canonical_engine):
+    """Participation records table exists with required pointer columns."""
     inspector = inspect(canonical_engine)
     assert "participation_records" in inspector.get_table_names()
     col_names = {c["name"] for c in inspector.get_columns("participation_records")}
@@ -546,8 +546,8 @@ def test_phase3_participation_records_table_exists(canonical_engine):
     assert required.issubset(col_names), f"Missing columns: {required - col_names}"
 
 
-def test_phase3_participation_records_has_no_content_columns(canonical_engine):
-    """Phase 3: participation_records must not contain raw content or payload fields."""
+def test_participation_records_has_no_content_columns(canonical_engine):
+    """Participation records must not contain raw content or payload fields."""
     inspector = inspect(canonical_engine)
     col_names = {c["name"] for c in inspector.get_columns("participation_records")}
     forbidden = {"content", "body", "summary", "payload", "payload_json", "raw_content", "title"}
@@ -557,8 +557,8 @@ def test_phase3_participation_records_has_no_content_columns(canonical_engine):
     )
 
 
-def test_phase3_participation_records_indexes_exist(canonical_engine):
-    """Phase 3: participation_records has the three required indexes."""
+def test_participation_records_indexes_exist(canonical_engine):
+    """Participation records has the three required indexes."""
     inspector = inspect(canonical_engine)
     indexes = inspector.get_indexes("participation_records")
     indexed_cols = {tuple(i["column_names"]) for i in indexes}
@@ -569,8 +569,8 @@ def test_phase3_participation_records_indexes_exist(canonical_engine):
     assert source_cols in indexed_cols, f"ix_participation_records_source missing: found {indexed_cols}"
 
 
-def test_phase3_participation_records_fks_exist(canonical_engine):
-    """Phase 3: participation_records has FK to users.id and spaces.id (both personal and source)."""
+def test_participation_records_fks_exist(canonical_engine):
+    """Participation records has FK to users.id and spaces.id (both personal and source)."""
     inspector = inspect(canonical_engine)
     fks = _foreign_keys(inspector, "participation_records")
     assert ("user_id", "users", "id") in fks
@@ -578,15 +578,15 @@ def test_phase3_participation_records_fks_exist(canonical_engine):
     assert ("source_space_id", "spaces", "id") in fks
 
 
-def test_phase3_visibility_not_on_memory_entries(canonical_engine):
-    """Memory already had visibility before Phase 3; ensure the column still exists."""
+def test_memory_entries_visibility_column_still_exists(canonical_engine):
+    """Memory entries retain their visibility column."""
     inspector = inspect(canonical_engine)
     col_names = {c["name"] for c in inspector.get_columns("memory_entries")}
     assert "visibility" in col_names, "memory_entries.visibility must still exist"
 
 
-def test_phase7a_source_pointers_table_exists(canonical_engine):
-    """Phase 7A: source_pointers table exists with required provenance columns."""
+def test_source_pointers_table_exists(canonical_engine):
+    """source_pointers table exists with required provenance columns."""
     inspector = inspect(canonical_engine)
     assert "source_pointers" in inspector.get_table_names()
     assert "context_sources" not in inspector.get_table_names()
@@ -607,8 +607,8 @@ def test_phase7a_source_pointers_table_exists(canonical_engine):
     assert "access_mode" in col_names
 
 
-def test_phase7a_source_pointers_has_no_content_columns(canonical_engine):
-    """Phase 7A: source_pointers must not store raw source content."""
+def test_source_pointers_has_no_content_columns(canonical_engine):
+    """source_pointers must not store raw source content."""
     inspector = inspect(canonical_engine)
     col_names = {c["name"] for c in inspector.get_columns("source_pointers")}
     forbidden = {
@@ -625,8 +625,8 @@ def test_phase7a_source_pointers_has_no_content_columns(canonical_engine):
     assert not found, f"source_pointers must be metadata-only — found: {found}"
 
 
-def test_phase7a_source_pointers_indexes_exist(canonical_engine):
-    """Phase 7A: source_pointers has owner, source composite, granted_by, and expires indexes."""
+def test_source_pointers_indexes_exist(canonical_engine):
+    """source_pointers has owner, source composite, granted_by, and expires indexes."""
     inspector = inspect(canonical_engine)
     indexes = inspector.get_indexes("source_pointers")
     indexed_cols = {tuple(i["column_names"]) for i in indexes}
@@ -637,8 +637,8 @@ def test_phase7a_source_pointers_indexes_exist(canonical_engine):
     assert source_cols in indexed_cols
 
 
-def test_phase7a_source_pointers_fks_exist(canonical_engine):
-    """Phase 7A: source_pointers FKs to spaces and users."""
+def test_source_pointers_fks_exist(canonical_engine):
+    """source_pointers FKs to spaces and users."""
     inspector = inspect(canonical_engine)
     fks = _foreign_keys(inspector, "source_pointers")
     assert ("owner_space_id", "spaces", "id") in fks
@@ -647,20 +647,20 @@ def test_phase7a_source_pointers_fks_exist(canonical_engine):
 
 
 # ---------------------------------------------------------------------------
-# Phase 8A: PersonalMemoryGrant schema skeleton
+# PersonalMemoryGrant schema
 # ---------------------------------------------------------------------------
 
 
-def test_phase8a_grant_tables_exist(canonical_engine):
-    """Phase 8A: personal_memory_grants and personal_memory_grant_events tables exist."""
+def test_personal_memory_grant_tables_exist(canonical_engine):
+    """personal_memory_grants and personal_memory_grant_events tables exist."""
     inspector = inspect(canonical_engine)
     tables = inspector.get_table_names()
     assert "personal_memory_grants" in tables
     assert "personal_memory_grant_events" in tables
 
 
-def test_phase8a_grant_required_columns_exist(canonical_engine):
-    """Phase 8A: personal_memory_grants has all required columns."""
+def test_personal_memory_grant_required_columns_exist(canonical_engine):
+    """personal_memory_grants has all required columns."""
     inspector = inspect(canonical_engine)
     col_defs = {c["name"]: c for c in inspector.get_columns("personal_memory_grants")}
     required = {
@@ -680,8 +680,8 @@ def test_phase8a_grant_required_columns_exist(canonical_engine):
     assert col_defs["target_agent_id"]["nullable"] is True
 
 
-def test_phase8a_grant_has_no_raw_content_columns(canonical_engine):
-    """Phase 8A: personal_memory_grants must not store raw memory content."""
+def test_personal_memory_grant_has_no_raw_content_columns(canonical_engine):
+    """personal_memory_grants must not store raw memory content."""
     inspector = inspect(canonical_engine)
     col_names = {c["name"] for c in inspector.get_columns("personal_memory_grants")}
     forbidden = {
@@ -692,8 +692,8 @@ def test_phase8a_grant_has_no_raw_content_columns(canonical_engine):
     assert not found, f"personal_memory_grants must not have content columns: {found}"
 
 
-def test_phase8a_grant_events_required_columns_exist(canonical_engine):
-    """Phase 8A: personal_memory_grant_events has all required columns."""
+def test_personal_memory_grant_events_required_columns_exist(canonical_engine):
+    """personal_memory_grant_events has all required columns."""
     inspector = inspect(canonical_engine)
     col_names = {c["name"] for c in inspector.get_columns("personal_memory_grant_events")}
     required = {
@@ -703,8 +703,8 @@ def test_phase8a_grant_events_required_columns_exist(canonical_engine):
     assert required.issubset(col_names), f"Missing: {required - col_names}"
 
 
-def test_phase8a_grant_events_has_no_raw_content_columns(canonical_engine):
-    """Phase 8A: personal_memory_grant_events must not store raw memory content."""
+def test_personal_memory_grant_events_has_no_raw_content_columns(canonical_engine):
+    """personal_memory_grant_events must not store raw memory content."""
     inspector = inspect(canonical_engine)
     col_names = {c["name"] for c in inspector.get_columns("personal_memory_grant_events")}
     forbidden = {
@@ -715,8 +715,8 @@ def test_phase8a_grant_events_has_no_raw_content_columns(canonical_engine):
     assert not found, f"personal_memory_grant_events must not have content columns: {found}"
 
 
-def test_phase8a_grant_fks_exist(canonical_engine):
-    """Phase 8A: personal_memory_grants has all required foreign keys."""
+def test_personal_memory_grant_fks_exist(canonical_engine):
+    """personal_memory_grants has all required foreign keys."""
     inspector = inspect(canonical_engine)
     fks = _foreign_keys(inspector, "personal_memory_grants")
     assert ("granting_user_id", "users", "id") in fks
@@ -726,8 +726,8 @@ def test_phase8a_grant_fks_exist(canonical_engine):
     assert ("target_agent_id", "agents", "id") in fks
 
 
-def test_phase8a_grant_events_fks_exist(canonical_engine):
-    """Phase 8A: personal_memory_grant_events has required foreign keys."""
+def test_personal_memory_grant_events_fks_exist(canonical_engine):
+    """personal_memory_grant_events has required foreign keys."""
     inspector = inspect(canonical_engine)
     fks = _foreign_keys(inspector, "personal_memory_grant_events")
     assert ("grant_id", "personal_memory_grants", "id") in fks
@@ -736,8 +736,8 @@ def test_phase8a_grant_events_fks_exist(canonical_engine):
     assert ("proposal_id", "proposals", "id") in fks
 
 
-def test_phase8a_grant_indexes_exist(canonical_engine):
-    """Phase 8A: personal_memory_grants has required indexes."""
+def test_personal_memory_grant_indexes_exist(canonical_engine):
+    """personal_memory_grants has required indexes."""
     inspector = inspect(canonical_engine)
     indexed = {tuple(i["column_names"]) for i in inspector.get_indexes("personal_memory_grants")}
     assert ("granting_user_id",) in indexed
@@ -748,8 +748,8 @@ def test_phase8a_grant_indexes_exist(canonical_engine):
     assert ("read_expires_at",) in indexed
 
 
-def test_phase8a_grant_events_indexes_exist(canonical_engine):
-    """Phase 8A: personal_memory_grant_events has required indexes."""
+def test_personal_memory_grant_events_indexes_exist(canonical_engine):
+    """personal_memory_grant_events has required indexes."""
     inspector = inspect(canonical_engine)
     indexed = {tuple(i["column_names"]) for i in inspector.get_indexes("personal_memory_grant_events")}
     assert ("grant_id",) in indexed
@@ -758,8 +758,8 @@ def test_phase8a_grant_events_indexes_exist(canonical_engine):
     assert ("created_at",) in indexed
 
 
-def test_phase8a_grant_check_constraints_exist(canonical_engine):
-    """Phase 8A: personal_memory_grants has grant_scope, access_mode, status, and target_agent_id constraints."""
+def test_personal_memory_grant_check_constraints_exist(canonical_engine):
+    """personal_memory_grants has grant_scope, access_mode, status, and target_agent_id constraints."""
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
@@ -773,8 +773,8 @@ def test_phase8a_grant_check_constraints_exist(canonical_engine):
     assert "ck_personal_memory_grants_target_agent_id_null" in ddl, "target_agent_id NULL CHECK constraint missing"
 
 
-def test_phase8a_grant_events_check_constraint_exists(canonical_engine):
-    """Phase 8A: personal_memory_grant_events has event_type CHECK constraint."""
+def test_personal_memory_grant_events_check_constraint_exists(canonical_engine):
+    """personal_memory_grant_events has event_type CHECK constraint."""
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
@@ -786,7 +786,7 @@ def test_phase8a_grant_events_check_constraint_exists(canonical_engine):
 
 
 def test_grant_events_event_type_constraint_includes_new_types(canonical_engine):
-    """Final Consistency Patch (M2): event_type DDL includes egress_proposal_created and egress_approved."""
+    """event_type DDL includes egress_proposal_created and egress_approved."""
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
@@ -798,14 +798,14 @@ def test_grant_events_event_type_constraint_includes_new_types(canonical_engine)
     assert "egress_approved" in ddl, "egress_approved must be in event_type CHECK constraint"
 
 
-def test_phase_e_proposal_approvals_table_exists(canonical_engine):
-    """Phase E: proposal_approvals table exists."""
+def test_proposal_approvals_table_exists(canonical_engine):
+    """proposal_approvals table exists."""
     inspector = inspect(canonical_engine)
     assert "proposal_approvals" in inspector.get_table_names()
 
 
-def test_phase_e_proposal_approvals_required_columns_exist(canonical_engine):
-    """Phase E: proposal_approvals has all required metadata-only columns."""
+def test_proposal_approvals_required_columns_exist(canonical_engine):
+    """proposal_approvals has all required metadata-only columns."""
     inspector = inspect(canonical_engine)
     col_defs = {c["name"]: c for c in inspector.get_columns("proposal_approvals")}
     required = {
@@ -828,8 +828,8 @@ def test_phase_e_proposal_approvals_required_columns_exist(canonical_engine):
     assert col_defs["grant_id"]["nullable"] is True
 
 
-def test_phase_e_proposal_approvals_has_no_raw_content_columns(canonical_engine):
-    """Phase E: proposal_approvals must not store raw memory, summary, IDs, or payload content."""
+def test_proposal_approvals_has_no_raw_content_columns(canonical_engine):
+    """proposal_approvals must not store raw memory, summary, IDs, or payload content."""
     inspector = inspect(canonical_engine)
     col_names = {c["name"] for c in inspector.get_columns("proposal_approvals")}
     forbidden = {
@@ -850,8 +850,8 @@ def test_phase_e_proposal_approvals_has_no_raw_content_columns(canonical_engine)
     assert not found, f"proposal_approvals must not have content columns: {found}"
 
 
-def test_phase_e_proposal_approvals_fks_exist(canonical_engine):
-    """Phase E: proposal_approvals has required foreign keys."""
+def test_proposal_approvals_fks_exist(canonical_engine):
+    """proposal_approvals has required foreign keys."""
     inspector = inspect(canonical_engine)
     fks = _foreign_keys(inspector, "proposal_approvals")
     assert ("proposal_id", "proposals", "id") in fks
@@ -860,8 +860,8 @@ def test_phase_e_proposal_approvals_fks_exist(canonical_engine):
     assert ("target_space_id", "spaces", "id") in fks
 
 
-def test_phase_e_proposal_approvals_indexes_exist(canonical_engine):
-    """Phase E: proposal_approvals has lookup and active-approval uniqueness indexes."""
+def test_proposal_approvals_indexes_exist(canonical_engine):
+    """proposal_approvals has lookup and active-approval uniqueness indexes."""
     inspector = inspect(canonical_engine)
     indexed = {tuple(i["column_names"]) for i in inspector.get_indexes("proposal_approvals")}
     assert ("proposal_id",) in indexed
@@ -873,8 +873,8 @@ def test_phase_e_proposal_approvals_indexes_exist(canonical_engine):
     assert ("proposal_id", "approval_type", "approver_user_id", "grant_id") in indexed
 
 
-def test_phase_e_proposal_approvals_check_constraints_exist(canonical_engine):
-    """Phase E: proposal_approvals constrains approval_type and status."""
+def test_proposal_approvals_check_constraints_exist(canonical_engine):
+    """proposal_approvals constrains approval_type and status."""
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
@@ -889,8 +889,8 @@ def test_phase_e_proposal_approvals_check_constraints_exist(canonical_engine):
     assert "revoked" in ddl
 
 
-def test_phase_e_proposal_approvals_partial_unique_index_exists(canonical_engine):
-    """Phase E: at most one active approval per proposal/type/approver/grant."""
+def test_proposal_approvals_partial_unique_index_exists(canonical_engine):
+    """At most one active approval per proposal/type/approver/grant."""
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
@@ -910,8 +910,8 @@ def test_phase_e_proposal_approvals_partial_unique_index_exists(canonical_engine
     assert "approved" in idx_sql
 
 
-def test_phase8a_grant_partial_unique_index_exists(canonical_engine):
-    """Phase 8A: partial unique index exists on personal_memory_grants (granting_user_id, target_run_id) WHERE active/consuming."""
+def test_personal_memory_grant_partial_unique_index_exists(canonical_engine):
+    """PersonalMemoryGrant partial unique index exists on personal_memory_grants (granting_user_id, target_run_id) WHERE active/consuming."""
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
@@ -928,8 +928,8 @@ def test_phase8a_grant_partial_unique_index_exists(canonical_engine):
     assert "target_run_id" in idx_sql
 
 
-def test_phase8a_grant_constraints_reject_invalid_scope(canonical_engine):
-    """Phase 8A: inserting grant_scope != 'run' is rejected by DB constraint."""
+def test_personal_memory_grant_constraints_reject_invalid_scope(canonical_engine):
+    """PersonalMemoryGrant grant_scope != 'run' is rejected by DB constraint."""
     import sqlite3
     from sqlalchemy import text as sa_text
     from datetime import UTC, datetime, timedelta
@@ -957,8 +957,8 @@ def test_phase8a_grant_constraints_reject_invalid_scope(canonical_engine):
                 assert "SQLITE_CONSTRAINT" in type(exc).__name__ or "IntegrityError" in type(exc).__name__ or isinstance(exc, AssertionError) is False or "CHECK" in str(exc).upper() or "constraint" in str(exc).lower(), f"Unexpected exception type: {type(exc)} {exc}"
 
 
-def test_phase8a_grant_constraints_reject_null_run_id(canonical_engine):
-    """Phase 8A: target_run_id NOT NULL is enforced at DB level."""
+def test_personal_memory_grant_constraints_reject_null_run_id(canonical_engine):
+    """PersonalMemoryGrant target_run_id NOT NULL is enforced at DB level."""
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
@@ -982,11 +982,3 @@ def test_phase8a_grant_constraints_reject_null_run_id(canonical_engine):
                 assert "AssertionError" not in type(exc).__name__, (
                     "DB did not enforce NOT NULL on target_run_id"
                 )
-
-
-def test_phase8a_grant_tables_in_required_set(canonical_engine):
-    """Phase 8A: both grant tables appear in REQUIRED_TABLES when updated."""
-    inspector = inspect(canonical_engine)
-    all_tables = set(inspector.get_table_names())
-    assert "personal_memory_grants" in all_tables
-    assert "personal_memory_grant_events" in all_tables

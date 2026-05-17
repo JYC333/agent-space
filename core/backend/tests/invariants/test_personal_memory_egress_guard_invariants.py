@@ -1,9 +1,7 @@
-"""Phase D invariant tests: PersonalMemoryGrant egress guard.
+"""PersonalMemoryGrant egress guard invariants.
 
 Verifies that grant-derived run output cannot be directly persisted into shared
 artifacts, team memory, SourcePointer content, or public targets.
-
-All tests here are normal (non-xfail) Phase D tests.
 """
 
 from __future__ import annotations
@@ -145,7 +143,7 @@ def _build_grant_derived_run(db, *, personal_id: str, team_id: str, user):
 def test_grant_derived_run_cannot_materialize_shared_artifact_directly(db):
     """Grant-derived run cannot create artifacts in a non-personal (team) space.
 
-    Phase F2: RunOutputMaterializer blocks direct artifact creation and creates
+    RunOutputMaterializer blocks direct artifact creation and creates
     a sanitized egress_review proposal for the granting user to review.
     """
     from tests.support.assertions import assert_egress_review_proposal_is_content_free
@@ -178,7 +176,7 @@ def test_grant_derived_run_cannot_materialize_shared_artifact_directly(db):
     team_artifacts = db.query(Artifact).filter(Artifact.space_id == team_id).all()
     assert len(team_artifacts) == 0, "No artifacts must be created in team space for grant-derived run"
 
-    # Phase F2: a sanitized egress_review proposal must have been created
+    # A sanitized egress_review proposal must have been created
     db.commit()
     egress_proposals = (
         db.query(Proposal)
@@ -230,7 +228,7 @@ def test_non_grant_run_shared_artifact_behavior_unchanged(db):
 def test_grant_derived_run_cannot_create_shared_memory_directly(db):
     """Grant-derived run cannot create memory proposals in a non-personal (team) space.
 
-    Phase F2: RunOutputMaterializer blocks direct memory proposal creation and
+    RunOutputMaterializer blocks direct memory proposal creation and
     creates a sanitized egress_review proposal for the granting user to review.
     """
     from tests.support.assertions import assert_egress_review_proposal_is_content_free
@@ -271,7 +269,7 @@ def test_grant_derived_run_cannot_create_shared_memory_directly(db):
         "No memory proposals must be created in team space for grant-derived run"
     )
 
-    # Phase F2: a sanitized egress_review proposal must have been created
+    # A sanitized egress_review proposal must have been created
     egress_proposals = [p for p in all_proposals if p.proposal_type == "egress_review"]
     assert len(egress_proposals) >= 1, (
         "An egress_review proposal must be created for blocked grant-derived memory proposal"
@@ -474,7 +472,6 @@ def test_egress_denied_event_contains_no_private_content(db):
             assert "reason" in meta
             assert "operation" in meta
             assert meta.get("raw_private_memory_included") is False
-            assert meta.get("phase") == "D"
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +480,7 @@ def test_egress_denied_event_contains_no_private_content(db):
 
 
 def test_personal_context_block_remains_out_of_persisted_snapshot_fields(db):
-    """Runtime injection preserves Phase C persistence boundaries.
+    """Runtime injection preserves runtime context persistence boundaries.
 
     The ContextSnapshot compiled fields must not contain the personal_context_block
     even when a valid run-scoped grant produces one.
@@ -587,7 +584,7 @@ def test_check_personal_memory_egress_blocks_grant_derived_non_personal_target(d
 
     assert result.decision == EgressDecision.BLOCK
     assert result.grant_id is not None
-    assert "egress_review_required" in result.reason or "non_personal" in result.reason or "phase_e" in result.reason.lower()
+    assert "egress_review_required" in result.reason or "non_personal" in result.reason or "egress_review_required" in result.reason.lower()
 
 
 def test_check_personal_memory_egress_allows_personal_target(db):
@@ -651,7 +648,7 @@ def test_check_source_pointer_metadata_egress_allows_indicator_keys_in_personal_
 
 
 # ---------------------------------------------------------------------------
-# H. apply_update defense-in-depth guard (Phase D.5)
+# H. apply_update defense-in-depth guard
 # ---------------------------------------------------------------------------
 
 
@@ -674,7 +671,7 @@ def _create_team_memory(db, *, space_id: str, user_id: str) -> MemoryEntry:
 
 
 def test_grant_derived_run_cannot_apply_memory_update_to_shared_space(db):
-    """Phase D.5: MemoryProposalApplier.apply_update() blocks grant-derived proposals.
+    """MemoryProposalApplier.apply_update() blocks grant-derived proposals.
 
     Defense-in-depth: even if a memory_update proposal for a team space arrives at
     apply_update(), it must be blocked when created_by_run_id points to a
@@ -733,7 +730,7 @@ def test_grant_derived_run_cannot_apply_memory_update_to_shared_space(db):
 
 
 def test_non_grant_memory_update_apply_update_unchanged(db):
-    """Phase D.5: apply_update() still works normally for non-grant-derived proposals."""
+    """apply_update() still works normally for non-grant-derived proposals."""
     from app.memory.apply_service import MemoryProposalApplier
 
     _, user = _personal_space(db)
@@ -776,7 +773,7 @@ def test_non_grant_memory_update_apply_update_unchanged(db):
 
 
 def test_grant_derived_update_to_personal_space_is_allowed(db):
-    """Phase D.5: apply_update() allows grant-derived proposals targeting personal spaces.
+    """apply_update() allows grant-derived proposals targeting personal spaces.
 
     Egress guard ALLOWs personal-space targets for grant-derived runs.
     """
@@ -820,12 +817,12 @@ def test_grant_derived_update_to_personal_space_is_allowed(db):
 
 
 # ---------------------------------------------------------------------------
-# I. Code patch proposal risk labeling (Phase D.5)
+# I. Code patch proposal risk labeling
 # ---------------------------------------------------------------------------
 
 
 def test_grant_derived_code_patch_proposal_carries_risk_metadata(db):
-    """Phase D.5: code patch proposal from grant-derived run carries personal_context_derived metadata.
+    """code patch proposal from grant-derived run carries personal_context_derived metadata.
 
     RunOutputMaterializer._code_patch_proposal must add explicit risk markers
     and elevate risk_level to 'high' for grant-derived runs.
@@ -882,7 +879,7 @@ def test_grant_derived_code_patch_proposal_carries_risk_metadata(db):
 
 
 def test_non_grant_code_patch_proposal_risk_metadata_unchanged(db):
-    """Phase D.5: code patch proposal from non-grant run is unaffected by risk labeling logic."""
+    """code patch proposal from non-grant run is unaffected by risk labeling logic."""
     _, user = _personal_space(db)
     team_id, _ = _team_space(db)
     _add_member(db, space_id=team_id, user_id=user.id)
@@ -930,7 +927,7 @@ def test_non_grant_code_patch_proposal_risk_metadata_unchanged(db):
 
 
 def test_grant_derived_code_patch_payload_contains_no_raw_memory_or_summary(db):
-    """Phase D.5: grant-derived code patch payload contains no raw memory text or summary.
+    """grant-derived code patch payload contains no raw memory text or summary.
 
     The risk metadata added to payload_json must only contain safe fields —
     no personal memory content, no generated summary, no memory IDs.

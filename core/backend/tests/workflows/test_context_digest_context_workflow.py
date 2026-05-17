@@ -6,12 +6,12 @@ Tests verify:
 - ContextSnapshot source_refs_json includes context_digest entries.
 - Digest source_refs include source_memory_ids and source_policy_ids.
 - retrieval_trace_json records digest_used=True when digest is present.
-- Missing digest falls back to MF5 MemoryRetriever behaviour (fallback_to_memory_retriever=True).
+- Missing digest falls back to MemoryRetriever behaviour (fallback_to_memory_retriever=True).
 - Dirty digest is recorded in retrieval_trace.
 - Digest load failure records digest_load_error / digest_fallback_reason in trace.
 - compiler_version is "context_digest.v1" (format changed with digest injection).
-- MF2 memory write governance regression: public write creates Proposal, not MemoryEntry.
-- MF5 context snapshot audit regression: prefix_hash / tail_hash populated.
+- Memory write governance regression: public write creates Proposal, not MemoryEntry.
+- Context snapshot audit regression: prefix_hash / tail_hash populated.
 """
 
 from __future__ import annotations
@@ -274,12 +274,12 @@ def test_dirty_digest_recorded_in_retrieval_trace(monkeypatch, db, tmp_path, cro
 
 
 # ---------------------------------------------------------------------------
-# Regression: MF2 memory write governance
+# Regression: memory write governance
 # ---------------------------------------------------------------------------
 
 
-def test_mf2_public_memory_write_creates_proposal_not_memory_entry(db, cross_space_pair):
-    """MF2 regression: public memory write creates a pending Proposal, not an active MemoryEntry."""
+def test_public_memory_write_creates_proposal_not_memory_entry(db, cross_space_pair):
+    """Public memory write creates a pending Proposal, not an active MemoryEntry."""
     space_id = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
 
@@ -312,19 +312,19 @@ def test_mf2_public_memory_write_creates_proposal_not_memory_entry(db, cross_spa
 
 
 # ---------------------------------------------------------------------------
-# Regression: MF5 context snapshot audit fields
+# Regression: context snapshot audit fields
 # ---------------------------------------------------------------------------
 
 
-def test_mf5_executed_run_has_prefix_and_tail_hash(monkeypatch, db, tmp_path, cross_space_pair):
-    """MF5 regression: executed run still has prefix_hash and tail_hash."""
+def test_executed_run_has_prefix_and_tail_hash(monkeypatch, db, tmp_path, cross_space_pair):
+    """Executed run still has prefix_hash and tail_hash."""
     space_id = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=space_id, user_id=ua.id)
 
     agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=ua.id)
     run = factories.create_test_run(db, space_id=space_id, user_id=ua.id, agent=agent, commit=False)
-    run.prompt = "mf5 regression"
+    run.prompt = "context snapshot hash regression"
     db.flush()
     db.commit()
 

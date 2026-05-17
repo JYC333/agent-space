@@ -101,11 +101,9 @@ begins.
 
 ## Test Suite
 
-- **Test suite consolidation by product boundary.** Current test files use implementation
-  phase names (e.g., `test_personal_memory_egress_guard.py`, `test_canonical_schema.py`
-  with phase-labeled functions). Future consolidation should organize by product boundary
-  rather than implementation sequence. No renaming or deletion should be done until
-  the consolidation design is clear.
+- **Frontend component tests for PersonalMemoryGrant flow.** Backend tests are organized
+  around product boundaries after the test consolidation cleanup. Automated frontend
+  coverage for the grant/egress/approval UI remains future work.
 
 ---
 

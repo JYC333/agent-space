@@ -1,4 +1,4 @@
-"""Phase F2 workflow tests: PersonalMemoryGrant sanitized egress_review proposal creation.
+"""Workflow tests for PersonalMemoryGrant egress review proposal creation.
 
 Verifies:
 - Blocked grant-derived artifact materialization creates a sanitized egress_review proposal.
@@ -10,7 +10,7 @@ Verifies:
 - Revoked grant blocks egress_review apply.
 - Non-grant-derived output does not create egress_review proposals.
 - Personal-space targets do not create egress_review proposals.
-- SourcePointer grant-derived metadata remains hard-blocked (not auto-proposed in F2).
+- SourcePointer grant-derived metadata remains hard-blocked without auto-proposal.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from ulid import ULID
 
 from app.models import (
     AgentVersion,
+    Artifact,
     MemoryEntry,
     PersonalMemoryGrant,
     PersonalMemoryGrantEvent,
@@ -70,7 +71,7 @@ def _add_member(db, *, space_id: str, user_id: str, role: str = "member") -> Non
     db.flush()
 
 
-def _private_memory(db, *, space_id: str, owner_user_id: str, content: str = "PRIVATE_F2_SENTINEL") -> MemoryEntry:
+def _private_memory(db, *, space_id: str, owner_user_id: str, content: str = "PRIVATE_EGRESS_SENTINEL") -> MemoryEntry:
     m = MemoryEntry(
         id=_new_id(),
         space_id=space_id,
@@ -115,7 +116,7 @@ def _active_grant(
     return grant
 
 
-def _build_grant_derived_run(db, *, personal_id: str, team_id: str, user, raw_memory_content: str = "PRIVATE_F2_SENTINEL"):
+def _build_grant_derived_run(db, *, personal_id: str, team_id: str, user, raw_memory_content: str = "PRIVATE_EGRESS_SENTINEL"):
     """Create a run with has_personal_grant_context=True via ContextSnapshotPopulator."""
     _private_memory(db, space_id=personal_id, owner_user_id=user.id, content=raw_memory_content)
     db.commit()
@@ -142,16 +143,45 @@ def _build_grant_derived_run(db, *, personal_id: str, team_id: str, user, raw_me
 
 
 # ---------------------------------------------------------------------------
-# A. Artifact materialization → egress_review proposal
+# A. Blocked materialization creates egress_review proposal
 # ---------------------------------------------------------------------------
 
 
-def test_grant_derived_shared_artifact_block_creates_sanitized_egress_review_proposal(db):
-    """Blocked grant-derived artifact materialization creates a sanitized egress_review proposal.
-
-    Phase F2 core invariant: direct artifact persistence is blocked AND a metadata-only
-    egress_review proposal is created in the target space.
-    """
+@pytest.mark.parametrize(
+    "target_object_type,adapter_output",
+    [
+        (
+            "artifact",
+            {
+                "artifacts": [{
+                    "artifact_type": "report",
+                    "title": "Blocked Report",
+                    "content": "agent output derived from personal context",
+                }]
+            },
+        ),
+        (
+            "memory_proposal",
+            {
+                "proposed_changes": [{
+                    "proposal_type": "memory_update",
+                    "summary": "Team knowledge update from personal context",
+                    "payload": {
+                        "proposed_content": "inferred from personal preferences",
+                        "memory_type": "semantic",
+                        "target_scope": "space",
+                        "target_namespace": "space.knowledge",
+                        "target_visibility": "space_shared",
+                    },
+                }]
+            },
+        ),
+    ],
+)
+def test_grant_derived_shared_output_block_creates_sanitized_egress_review_proposal(
+    db, target_object_type, adapter_output
+):
+    """Blocked grant-derived artifact and memory output create sanitized egress_review proposals."""
     personal_id, user = _personal_space(db)
     team_id, _ = _team_space(db)
     _add_member(db, space_id=team_id, user_id=user.id)
@@ -161,72 +191,7 @@ def test_grant_derived_shared_artifact_block_creates_sanitized_egress_review_pro
     materializer = RunOutputMaterializer(db)
     errors = materializer.materialize(
         run=run,
-        adapter_output={
-            "artifacts": [{
-                "artifact_type": "report",
-                "title": "Blocked Report",
-                "content": "agent output derived from personal context",
-            }]
-        },
-        adapter_type="test",
-    )
-    db.commit()
-
-    # Direct persistence blocked
-    assert len(errors) > 0
-    assert any("egress" in e.lower() for e in errors), f"Expected egress mention in errors: {errors}"
-
-    # No artifact created
-    from app.models import Artifact
-    assert db.query(Artifact).filter(Artifact.space_id == team_id).count() == 0
-
-    # egress_review proposal created
-    proposals = (
-        db.query(Proposal)
-        .filter(Proposal.space_id == team_id, Proposal.proposal_type == "egress_review")
-        .all()
-    )
-    assert len(proposals) >= 1, "egress_review proposal must be created for blocked artifact"
-
-    proposal = proposals[0]
-    assert_egress_review_proposal_is_content_free(proposal)
-
-    payload = proposal.payload_json
-    assert payload["target_object_type"] == "artifact"
-    assert payload["source_run_id"] == run.id
-    assert payload["grant_id"] == grant.id
-    assert payload["granting_user_id"] == user.id
-    assert payload["phase"] == "F2"
-
-
-def test_grant_derived_shared_memory_block_creates_sanitized_egress_review_proposal(db):
-    """Blocked grant-derived memory proposal creation creates a sanitized egress_review proposal.
-
-    Phase F2 core invariant: direct memory proposal is blocked AND a metadata-only
-    egress_review proposal is created in the target space.
-    """
-    personal_id, user = _personal_space(db)
-    team_id, _ = _team_space(db)
-    _add_member(db, space_id=team_id, user_id=user.id)
-
-    run, grant = _build_grant_derived_run(db, personal_id=personal_id, team_id=team_id, user=user)
-
-    materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
-        run=run,
-        adapter_output={
-            "proposed_changes": [{
-                "proposal_type": "memory_update",
-                "summary": "Team knowledge update from personal context",
-                "payload": {
-                    "proposed_content": "inferred from personal preferences",
-                    "memory_type": "semantic",
-                    "target_scope": "space",
-                    "target_namespace": "space.knowledge",
-                    "target_visibility": "space_shared",
-                },
-            }]
-        },
+        adapter_output=adapter_output,
         adapter_type="test",
     )
     db.commit()
@@ -237,23 +202,24 @@ def test_grant_derived_shared_memory_block_creates_sanitized_egress_review_propo
 
     all_proposals = db.query(Proposal).filter(Proposal.space_id == team_id).all()
 
-    # No memory proposals
-    memory_proposals = [p for p in all_proposals if p.proposal_type != "egress_review"]
-    assert len(memory_proposals) == 0
+    if target_object_type == "artifact":
+        assert db.query(Artifact).filter(Artifact.space_id == team_id).count() == 0
+    else:
+        memory_proposals = [p for p in all_proposals if p.proposal_type != "egress_review"]
+        assert len(memory_proposals) == 0
 
     # egress_review proposal created
     egress_proposals = [p for p in all_proposals if p.proposal_type == "egress_review"]
-    assert len(egress_proposals) >= 1, "egress_review proposal must be created for blocked memory proposal"
+    assert len(egress_proposals) >= 1, "egress_review proposal must be created for blocked output"
 
     proposal = egress_proposals[0]
     assert_egress_review_proposal_is_content_free(proposal)
 
     payload = proposal.payload_json
-    assert payload["target_object_type"] == "memory_proposal"
+    assert payload["target_object_type"] == target_object_type
     assert payload["source_run_id"] == run.id
     assert payload["grant_id"] == grant.id
     assert payload["granting_user_id"] == user.id
-    assert payload["phase"] == "F2"
 
 
 # ---------------------------------------------------------------------------
@@ -264,10 +230,10 @@ def test_grant_derived_shared_memory_block_creates_sanitized_egress_review_propo
 def test_egress_review_proposal_payload_contains_no_output_text_or_personal_context(db):
     """egress_review proposal payload must contain no output text, raw memory, or personal context.
 
-    This is the core safety assertion for F2: nothing from the adapter output,
+    This is the core egress safety assertion: nothing from the adapter output,
     raw personal memory, or personal_context_block may appear in the proposal payload.
     """
-    RAW_MEMORY_TEXT = "SECRET_PERSONAL_DATA_F2_WORKFLOW"
+    RAW_MEMORY_TEXT = "SECRET_PERSONAL_DATA_EGRESS_WORKFLOW"
     personal_id, user = _personal_space(db)
     team_id, _ = _team_space(db)
     _add_member(db, space_id=team_id, user_id=user.id)
@@ -308,22 +274,14 @@ def test_egress_review_proposal_payload_contains_no_output_text_or_personal_cont
         known_summary_text="output derived from",
     )
 
-    # Verify full serialized payload doesn't contain forbidden markers
-    payload_str = str(proposal.payload_json or {})
-    assert RAW_MEMORY_TEXT not in payload_str
-    assert "personal_context_block" not in payload_str
-    assert "memory_ids" not in payload_str.lower()
-
 
 # ---------------------------------------------------------------------------
-# C. Approval gate still required after F2 proposal creation
+# C. Approval gate still required after egress proposal creation
 # ---------------------------------------------------------------------------
 
 
 def test_egress_review_proposal_requires_granting_user_approval_before_apply(db):
-    """Applying an egress_review proposal created by F2 still requires granting-user approval.
-
-    Phase F2 does NOT bypass the Phase E approval gate.
+    """Applying an egress_review proposal created by the egress guard still requires granting-user approval.
     """
     from app.memory.apply_service import ProposalApplyError, ProposalApplyService
 
@@ -371,7 +329,7 @@ def test_egress_review_proposal_requires_granting_user_approval_before_apply(db)
 
 
 def test_space_admin_still_cannot_apply_egress_review_without_granting_user_approval(db):
-    """Space admin approval cannot substitute for the granting-user approval on F2 proposals."""
+    """Space admin approval cannot substitute for the granting-user approval on egress_review proposals."""
     from app.memory.apply_service import ProposalApplyError, ProposalApplyService
 
     personal_id, user = _personal_space(db)
@@ -545,15 +503,15 @@ def test_personal_target_does_not_create_egress_review_proposal(db):
 
 
 # ---------------------------------------------------------------------------
-# E. SourcePointer remains hard-blocked (not auto-proposed in F2)
+# E. SourcePointer remains hard-blocked without auto-proposal
 # ---------------------------------------------------------------------------
 
 
 def test_source_pointer_grant_derived_metadata_remains_blocked_not_auto_proposed(db):
-    """Phase F2 does NOT create egress_review proposals for SourcePointer grant-derived metadata.
+    """The egress guard does not create egress_review proposals for SourcePointer grant-derived metadata.
 
     SourcePointer with grant-derived indicator keys targeting non-personal spaces
-    must still be hard-rejected. F2 only covers artifact and memory-proposal paths.
+    must still be hard-rejected. Egress review creation only covers artifact and memory-proposal paths.
     """
     _, user = _personal_space(db)
     team_id, _ = _team_space(db)
@@ -587,7 +545,7 @@ def test_source_pointer_grant_derived_metadata_remains_blocked_not_auto_proposed
         .all()
     )
     assert len(egress_proposals) == 0, (
-        "F2 must NOT auto-create egress_review proposals for SourcePointer rejection"
+        "SourcePointer rejection must NOT auto-create egress_review proposals for SourcePointer rejection"
     )
 
 
@@ -643,7 +601,6 @@ def test_egress_review_proposal_has_all_required_safe_metadata_fields(db):
         "review_status",
         "semantic_review_status",
         "content_attached",
-        "phase",
     ]
     for field in required_fields:
         assert field in payload, f"Required field {field!r} missing from egress_review payload"
@@ -657,14 +614,13 @@ def test_egress_review_proposal_has_all_required_safe_metadata_fields(db):
     assert payload["review_status"] == "manual_required"
     assert payload["semantic_review_status"] == "not_performed"
     assert payload["content_attached"] is False
-    assert payload["phase"] == "F2"
 
     # No forbidden content keys
     assert_no_personal_content_fields(payload)
 
 
 def test_error_message_includes_egress_review_proposal_id(db):
-    """Materialization error message for F2-blocked output must include egress_review_proposal_id."""
+    """Materialization error message for egress-blocked output must include egress_review_proposal_id."""
     personal_id, user = _personal_space(db)
     team_id, _ = _team_space(db)
     _add_member(db, space_id=team_id, user_id=user.id)
@@ -693,14 +649,14 @@ def test_error_message_includes_egress_review_proposal_id(db):
 
 
 # ---------------------------------------------------------------------------
-# G. Dedupe stability (F2.1) — no SQLite JSON path dependency
+# G. Dedupe stability: no SQLite JSON path dependency
 # ---------------------------------------------------------------------------
 
 
 def test_repeated_blocked_artifact_materialization_reuses_existing_egress_review_proposal(db):
     """Calling materialize twice for the same blocked artifact must reuse the same egress_review proposal.
 
-    F2.1: dedupe is stable and does not depend on SQLite JSON path support.
+    Dedupe is stable and does not depend on SQLite JSON path support.
     """
     personal_id, user = _personal_space(db)
     team_id, _ = _team_space(db)
@@ -957,7 +913,7 @@ def test_distinct_target_object_type_gets_distinct_egress_review_proposal(db):
 
 
 # ---------------------------------------------------------------------------
-# F2 Final Consistency Patch: egress_proposal_created event audit
+# egress_proposal_created event audit
 # ---------------------------------------------------------------------------
 
 
@@ -983,7 +939,7 @@ def test_egress_proposal_created_event_is_written_when_proposal_created(db):
             "artifacts": [{
                 "artifact_type": "report",
                 "title": "Blocked Report",
-                "content": "PRIVATE_F2_SENTINEL shared artifact",
+                "content": "PRIVATE_EGRESS_SENTINEL shared artifact",
             }]
         },
         adapter_type="test",

@@ -159,7 +159,7 @@ regardless). Instead, the proposal payload carries explicit risk metadata:
 - `ProposalApplyService` requires a valid `proposal_approvals` row before applying
   `egress_review` proposals or grant-derived proposals to non-personal targets.
 - Payload flags (`approved_by_granting_user`, etc.) are never treated as proof of approval.
-- Tests: `tests/invariants/test_personal_memory_egress_approval_gate.py`
+- Tests: `tests/invariants/test_personal_memory_egress_approval_invariants.py`
 
 ### Egress Review Proposal Creation (`app.personal_memory_grants.egress_review`)
 
@@ -167,7 +167,7 @@ When artifact or memory-proposal materialization is blocked:
 - A sanitized metadata-only `egress_review` proposal is created for the granting user.
 - Payload contains no output text, raw memory, generated summary, memory IDs, or personal context.
 - Dedupe prevents duplicate proposals for the same run + target + type + operation + grant.
-- Tests: `tests/workflows/test_personal_memory_grant_egress_review_workflow.py`
+- Tests: `tests/workflows/test_personal_memory_egress_review_workflow.py`
 
 ### Runtime Adapter Injection (`RunExecutionService._execute_real_adapter_path`)
 
@@ -175,7 +175,7 @@ When artifact or memory-proposal materialization is blocked:
 - Does not mutate `Run.prompt`, `AgentVersion.system_prompt`, `ContextSnapshot.*`, or `source_refs_json`.
 - Exact `personal_context_block` echoes are redacted from persisted run output before storage.
 - Output provenance metadata added: `derived_from_personal_memory=true`, boolean safety flags.
-- Tests: `tests/workflows/test_personal_memory_grant_runtime_injection_workflow.py`
+- Tests: `tests/workflows/test_personal_memory_runtime_prompt_workflow.py`
 
 ### Frontend UI
 

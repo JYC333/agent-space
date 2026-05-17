@@ -271,6 +271,6 @@ See `docs/FUTURE_ROADMAP.md` for deferred items including:
 - `core/backend/app/proposals/approvals.py` — approval gate
 - `core/backend/app/personal_memory_grants/egress_guard.py` — egress guard
 - `core/backend/app/personal_memory_grants/egress_review.py` — egress review proposal creation
-- `core/backend/tests/invariants/test_personal_memory_egress_guard.py`
-- `core/backend/tests/invariants/test_personal_memory_egress_approval_gate.py`
-- `core/backend/tests/invariants/test_personal_memory_grant_boundary.py`
+- `core/backend/tests/invariants/test_personal_memory_egress_guard_invariants.py`
+- `core/backend/tests/invariants/test_personal_memory_egress_approval_invariants.py`
+- `core/backend/tests/invariants/test_personal_memory_grant_security_boundary.py`

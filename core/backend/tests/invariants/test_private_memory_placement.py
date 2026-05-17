@@ -97,48 +97,23 @@ def test_space_shared_memory_write_to_team_space_is_allowed(db):
     assert mem.visibility == "space_shared"
 
 
-def test_private_memory_write_to_team_space_is_rejected(db):
-    """MemoryStore.create() rejects visibility=private writes to team spaces.
-
-    Phase 4.5 enforcement: private memories may only be stored in personal spaces.
-    """
+@pytest.mark.parametrize("space_type", ["team", "household"])
+def test_private_memory_write_to_non_personal_space_is_rejected(db, space_type):
+    """MemoryStore.create() rejects visibility=private writes to non-personal spaces."""
     from app.schemas import MemoryCreate
 
-    setup = _make_space(db, space_type="team")
+    setup = _make_space(db, space_type=space_type)
     space = db.query(Space).filter(Space.id == setup["space_id"]).first()
-    assert space.type == "team", "Precondition: space must be non-personal"
+    assert space.type == space_type, "Precondition: space must be non-personal"
 
     with pytest.raises(ValueError, match="personal"):
         MemoryStore(db).create(
             MemoryCreate(
-                title="Private in team",
+                title=f"Private in {space_type}",
                 space_id=setup["space_id"],
                 scope="user",
                 type="semantic",
-                content="private-in-team",
-                visibility="private",
-                owner_user_id=setup["user"].id,
-            ),
-            acting_user_id=setup["user"].id,
-        )
-
-
-def test_private_memory_write_to_household_space_is_rejected(db):
-    """MemoryStore.create() rejects visibility=private writes to household spaces."""
-    from app.schemas import MemoryCreate
-
-    setup = _make_space(db, space_type="household")
-    space = db.query(Space).filter(Space.id == setup["space_id"]).first()
-    assert space.type == "household", "Precondition: space must be non-personal"
-
-    with pytest.raises(ValueError, match="personal"):
-        MemoryStore(db).create(
-            MemoryCreate(
-                title="Private in household",
-                space_id=setup["space_id"],
-                scope="user",
-                type="semantic",
-                content="private-in-household",
+                content=f"private-in-{space_type}",
                 visibility="private",
                 owner_user_id=setup["user"].id,
             ),
@@ -154,9 +129,9 @@ def test_private_memory_write_to_household_space_is_rejected(db):
 def test_private_memory_in_shared_space_blocked_at_read_time_for_non_owner(db):
     """Access control blocks non-owner reads of misplaced private memory.
 
-    Even when Gap 2b allows a private memory to be stored in a shared space,
-    can_read_memory() correctly blocks non-owner reads.  The read-time access
-    control is the safety net until write-layer enforcement is added.
+    Even if a historical or direct DB row places private memory in a shared space,
+    can_read_memory() correctly blocks non-owner reads. The read-time access
+    control remains a defense-in-depth safety net.
     """
     setup = _make_space(db, space_type="household")
     other = _add_member(db, space_id=setup["space_id"])
@@ -246,8 +221,7 @@ def test_memory_store_requires_owner_user_id_for_private_visibility(db):
 def test_private_memory_in_personal_space_is_accessible_to_owner(db):
     """Private memory in a personal space (correct pattern) is accessible to its owner.
 
-    This test verifies the intended workflow that Phase 4.5 will enforce as
-    the only permitted placement for private memories.
+    This verifies the only permitted placement for private memories.
     """
     personal_id = _new_id()
     factories.create_test_space(db, space_id=personal_id, name="Personal", space_type="personal")

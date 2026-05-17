@@ -1,4 +1,4 @@
-"""Phase E invariant tests: PersonalMemoryGrant proposal approval gate."""
+"""PersonalMemoryGrant egress approval invariants."""
 
 from __future__ import annotations
 

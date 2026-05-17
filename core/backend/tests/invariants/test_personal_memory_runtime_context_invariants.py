@@ -1,4 +1,4 @@
-"""Phase C security invariant tests: concurrency, failure paths, and snapshot leak prevention.
+"""PersonalMemoryGrant runtime context invariants.
 
 These tests verify:
 1. Concurrency: at most one resolver can consume an active grant (atomic transition).
@@ -104,7 +104,7 @@ def _active_grant(
 
 
 # ---------------------------------------------------------------------------
-# C1: Concurrency — at most one caller can consume a grant
+# Concurrency: at most one caller can consume a grant
 # ---------------------------------------------------------------------------
 
 
@@ -182,7 +182,7 @@ def test_two_resolve_calls_at_most_one_produces_personal_context(db):
 
 
 # ---------------------------------------------------------------------------
-# C2: Failure path — grant must not return to 'active' after cross-space read
+# Failure path: grant must not return to 'active' after cross-space read
 # ---------------------------------------------------------------------------
 
 
@@ -287,19 +287,18 @@ def test_resolve_returns_no_context_on_memory_retrieval_failure(db, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# C3: Snapshot leak — personal content must not appear in shared ContextSnapshot
+# Snapshot leak prevention: personal content must not appear in shared ContextSnapshot
 # ---------------------------------------------------------------------------
 
 
-def test_snapshot_compiled_prefix_does_not_contain_personal_memory_content(db):
-    """After a valid grant context build, compiled_prefix_text must not contain personal memory."""
+def _populate_snapshot_with_personal_grant(db, *, raw_content: str):
     personal_id, user = _personal_space(db)
     team_id, _team_user = _team_space(db)
     _add_member(db, space_id=team_id, user_id=user.id)
 
-    _private_memory(
+    private_mem = _private_memory(
         db, space_id=personal_id, owner_user_id=user.id,
-        content="UNIQUE_PERSONAL_SECRET_ALPHA_12345",
+        content=raw_content,
     )
     db.commit()
 
@@ -323,56 +322,33 @@ def test_snapshot_compiled_prefix_does_not_contain_personal_memory_content(db):
 
     snap = db.query(ContextSnapshot).filter(ContextSnapshot.id == run.context_snapshot_id).first()
     assert snap is not None
+    return snap, pkg, private_mem
 
+
+def test_snapshot_fields_do_not_contain_personal_memory_content_or_ids(db):
+    """A valid grant context build stores only safe grant metadata in shared snapshot fields."""
     secret = "UNIQUE_PERSONAL_SECRET_ALPHA_12345"
-    assert secret not in (snap.compiled_prefix_text or ""), (
-        "compiled_prefix_text must not contain personal memory raw content"
-    )
-    assert secret not in (snap.compiled_tail_text or ""), (
-        "compiled_tail_text must not contain personal memory raw content"
-    )
+    snap, pkg, private_mem = _populate_snapshot_with_personal_grant(db, raw_content=secret)
 
-    # Also verify personal_context_block is in the ephemeral pkg but NOT in snapshot
+    field_values = {
+        "compiled_prefix_text": snap.compiled_prefix_text or "",
+        "compiled_tail_text": snap.compiled_tail_text or "",
+        "source_refs_json": str(snap.source_refs_json or []),
+        "retrieval_trace_json": str(snap.retrieval_trace_json or []),
+    }
+    forbidden_markers = {
+        "raw personal memory": secret,
+        "personal memory id": private_mem.id,
+        "personal context block": pkg.personal_context_block or "",
+        "generated summary": "The user has 1 relevant personal memory entry available",
+    }
+    for field_name, field_value in field_values.items():
+        for marker_name, marker in forbidden_markers.items():
+            if marker:
+                assert marker not in field_value, f"{field_name} leaked {marker_name}"
+
     assert pkg.personal_context_block, "pkg should have a non-empty personal_context_block"
-    assert pkg.personal_context_block not in (snap.compiled_prefix_text or "")
-    assert pkg.personal_context_block not in (snap.compiled_tail_text or "")
 
-
-def test_snapshot_source_refs_do_not_contain_personal_memory_ids(db):
-    """After a valid grant context build, source_refs_json must not contain personal memory IDs."""
-    personal_id, user = _personal_space(db)
-    team_id, _team_user = _team_space(db)
-    _add_member(db, space_id=team_id, user_id=user.id)
-
-    private_mem = _private_memory(
-        db, space_id=personal_id, owner_user_id=user.id,
-    )
-    db.commit()
-
-    run = factories.create_test_run(db, space_id=team_id, user_id=user.id, commit=True)
-    _active_grant(
-        db,
-        granting_user_id=user.id,
-        personal_space_id=personal_id,
-        target_space_id=team_id,
-        target_run_id=run.id,
-    )
-    db.commit()
-
-    from app.models import AgentVersion
-    from app.runs.context_snapshot_populator import ContextSnapshotPopulator
-    version = db.query(AgentVersion).filter(AgentVersion.id == run.agent_version_id).first()
-    ContextSnapshotPopulator(db).populate(run, version)
-    db.commit()
-
-    snap = db.query(ContextSnapshot).filter(ContextSnapshot.id == run.context_snapshot_id).first()
-    source_refs_str = str(snap.source_refs_json or [])
-
-    assert private_mem.id not in source_refs_str, (
-        "source_refs_json must not contain personal memory IDs"
-    )
-
-    # Safe grant metadata should be present
     grant_refs = [
         r for r in (snap.source_refs_json or [])
         if r.get("source_type") == "personal_memory_grant"
@@ -382,42 +358,6 @@ def test_snapshot_source_refs_do_not_contain_personal_memory_ids(db):
     assert ref["raw_memory_included"] is False
     assert ref["personal_summary_persisted"] is False
 
-
-def test_snapshot_retrieval_trace_does_not_contain_personal_summary(db):
-    """After a valid grant context build, retrieval_trace_json contains only safe grant metadata."""
-    personal_id, user = _personal_space(db)
-    team_id, _team_user = _team_space(db)
-    _add_member(db, space_id=team_id, user_id=user.id)
-    _private_memory(
-        db, space_id=personal_id, owner_user_id=user.id,
-        content="TRACE_LEAK_CHECK_SENTINEL_XYZ",
-    )
-    db.commit()
-
-    run = factories.create_test_run(db, space_id=team_id, user_id=user.id, commit=True)
-    _active_grant(
-        db,
-        granting_user_id=user.id,
-        personal_space_id=personal_id,
-        target_space_id=team_id,
-        target_run_id=run.id,
-    )
-    db.commit()
-
-    from app.models import AgentVersion
-    from app.runs.context_snapshot_populator import ContextSnapshotPopulator
-    version = db.query(AgentVersion).filter(AgentVersion.id == run.agent_version_id).first()
-    ContextSnapshotPopulator(db).populate(run, version)
-    db.commit()
-
-    snap = db.query(ContextSnapshot).filter(ContextSnapshot.id == run.context_snapshot_id).first()
-    trace_str = str(snap.retrieval_trace_json or [])
-
-    assert "TRACE_LEAK_CHECK_SENTINEL_XYZ" not in trace_str, (
-        "retrieval_trace_json must not contain personal memory raw content"
-    )
-
-    # Grant trace should be present with safe fields
     traces = snap.retrieval_trace_json or []
     assert len(traces) >= 1
     trace = traces[0]

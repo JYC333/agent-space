@@ -198,11 +198,11 @@ Malformed effects on security-sensitive domains fail safe → **deny** (`get_act
   - SourcePointer remains hard-blocked without egress_review proposal (not changed).
   - Applying an egress_review proposal is metadata-only in current MVP; no shared artifact/memory created automatically.
 - **Concurrency safety**: atomic conditional UPDATE ensures at most one caller claims a grant.
-- **Tests**: `tests/invariants/test_personal_memory_egress_guard.py` (22 tests),
-  `tests/invariants/test_personal_memory_egress_approval_gate.py` (11 tests),
-  `tests/invariants/test_personal_memory_grant_boundary.py` (10 tests, 0 xfail),
-  `tests/workflows/test_personal_memory_grant_run_context_workflow.py`,
-  `tests/workflows/test_personal_memory_grant_egress_review_workflow.py`,
+- **Tests**: `tests/invariants/test_personal_memory_egress_guard_invariants.py` (22 tests),
+  `tests/invariants/test_personal_memory_egress_approval_invariants.py` (11 tests),
+  `tests/invariants/test_personal_memory_grant_security_boundary.py` (10 tests, 0 xfail),
+  `tests/workflows/test_personal_memory_runtime_context_workflow.py`,
+  `tests/workflows/test_personal_memory_egress_review_workflow.py`,
   `tests/contracts/test_personal_memory_grant_api.py`.
 
 ---

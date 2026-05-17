@@ -1,13 +1,13 @@
 """Workflow tests: PersonalMemoryGrant integration with run context building.
 
-Phase C (ContextBuilder integration) is now implemented.  Tests that verify the
+The runtime context integration tests verify the
 baseline security boundary (no grant → no cross-space read) and the grant
 resolver/context integration pass as normal tests.
 
-Phase D (egress guard) is now implemented.  Tests that verify grant-derived output
+The egress guard tests verify grant-derived output
 cannot be written to non-personal targets now pass as normal tests.
 
-Phase E (proposal approval gate) is implemented: grant-derived shared apply
+The proposal approval gate requires grant-derived shared apply
 requires first-class granting-user approval.
 """
 
@@ -114,7 +114,7 @@ def test_no_grant_shared_run_still_cannot_read_personal_private_memory(db):
     """Without any grant, a shared-space run cannot read personal-space private memory.
 
     This is the baseline security invariant enforced by the space_id hard filter
-    in MemoryRetriever.  Phase C does not weaken this.
+    in MemoryRetriever.  PersonalMemoryGrant does not weaken this.
     """
     personal_id, user = _personal_space(db)
     team_id, _team_user = _team_space(db)
@@ -129,12 +129,12 @@ def test_no_grant_shared_run_still_cannot_read_personal_private_memory(db):
 
 
 # ---------------------------------------------------------------------------
-# Phase C: grant resolver and context integration
+# Grant resolver and runtime context integration
 # ---------------------------------------------------------------------------
 
 
 def test_shared_run_with_valid_grant_receives_summary_only_personal_context(db):
-    """Phase C: resolver returns a personal memory summary when a valid grant exists.
+    """Runtime context: resolver returns a personal memory summary when a valid grant exists.
 
     When a user creates a PersonalMemoryGrant with status=active for the run,
     the resolver produces an ephemeral personal_context_block (a structured summary
@@ -175,7 +175,7 @@ def test_shared_run_with_valid_grant_receives_summary_only_personal_context(db):
 
 
 def test_context_snapshot_records_grant_metadata_without_raw_memory(db):
-    """Phase C: shared ContextSnapshot records only grant metadata, never raw memory or summary.
+    """Runtime context: shared ContextSnapshot records only grant metadata, never raw memory or summary.
 
     compiled_prefix_text, compiled_tail_text, and source_refs_json must not contain:
     raw personal memory text, the generated personal summary, or personal memory IDs.
@@ -249,7 +249,7 @@ def test_context_snapshot_records_grant_metadata_without_raw_memory(db):
 
 
 def test_run_marks_one_time_grant_used_after_context_build(db):
-    """Phase C: grant transitions active→consuming→used atomically; used grant cannot be reused.
+    """Runtime context: grant transitions active→consuming→used atomically; used grant cannot be reused.
 
     After successful resolution, the grant is used and a second resolution attempt
     returns no personal context.
@@ -287,12 +287,12 @@ def test_run_marks_one_time_grant_used_after_context_build(db):
 
 
 # ---------------------------------------------------------------------------
-# Phase D: egress guard (now implemented)
+# Egress guard
 # ---------------------------------------------------------------------------
 
 
 def test_personal_memory_summary_does_not_create_team_memory(db):
-    """Phase D: grant-derived run cannot materialize a memory proposal into team space.
+    """Egress guard: grant-derived run cannot materialize a memory proposal into team space.
 
     The Egress Guard blocks RunOutputMaterializer from creating a memory proposal
     for a run that has personal grant context targeting a non-personal space.
@@ -350,7 +350,7 @@ def test_personal_memory_summary_does_not_create_team_memory(db):
         f"Error must mention egress or grant context; got: {errors}"
     )
 
-    # Phase F2: only egress_review proposals may exist (no memory proposals)
+    # Only egress_review proposals may exist (no memory proposals)
     all_proposals = db.query(Proposal).filter(Proposal.space_id == team_id).all()
     memory_proposals = [p for p in all_proposals if p.proposal_type != "egress_review"]
     assert len(memory_proposals) == 0, (
@@ -359,7 +359,7 @@ def test_personal_memory_summary_does_not_create_team_memory(db):
 
 
 def test_run_output_requires_proposal_before_persisting_private_personal_context(db):
-    """Phase E: persisting grant-derived output into shared space requires proposal + granting-user approval.
+    """Egress approval: persisting grant-derived output into shared space requires proposal + granting-user approval.
 
     The ProposalApplyService must verify a proposal_approvals row with approval_type=egress_granting_user
     before allowing any grant-derived output to be applied to a shared space.

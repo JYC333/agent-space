@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from ulid import ULID
 
 from app.models import MemoryEntry, SourcePointer, SpaceMembership
 from app.source_pointers.service import create_source_pointer
+from app.source_pointers.validation import (
+    MAX_METADATA_DEPTH,
+    MAX_METADATA_STRING_LENGTH,
+    MAX_METADATA_TOTAL_ITEMS,
+)
 from tests.support import factories
 
 _FORBIDDEN_FIELDS = frozenset({
@@ -28,8 +34,7 @@ def _new_id() -> str:
     return str(ULID())
 
 
-def _params(space_id: str, user_id: str) -> dict[str, str]:
-    del user_id
+def _params(space_id: str) -> dict[str, str]:
     return {"space_id": space_id}
 
 
@@ -57,6 +62,31 @@ def _three_space_setup(db, cross_space_pair):
     return a, b, c, ua, ub
 
 
+def _post_source_pointer(client, *, owner_space_id: str, source_space_id: str, auth_space_id: str, user_id: str, **body):
+    payload = {
+        "owner_space_id": owner_space_id,
+        "source_space_id": source_space_id,
+        "source_object_type": "memory",
+        "source_object_id": _new_id(),
+        "access_mode": "read",
+    }
+    payload.update(body)
+    return client.post(
+        "/api/v1/source-pointers",
+        params=_params(auth_space_id),
+        json=payload,
+    )
+
+
+def _deep_metadata() -> dict:
+    nested: dict = {}
+    cursor = nested
+    for _ in range(MAX_METADATA_DEPTH + 2):
+        cursor["n"] = {}
+        cursor = cursor["n"]
+    return nested
+
+
 def test_create_pointer_member_of_owner_and_source_succeeds(db, cross_space_pair):
     a, b, _c, ua, _ub = _three_space_setup(db, cross_space_pair)
     _add_member(db, space_id=b, user_id=ua.id)
@@ -64,7 +94,7 @@ def test_create_pointer_member_of_owner_and_source_succeeds(db, cross_space_pair
     mem_id = _new_id()
     r = cross_space_pair["client_a"].post(
         "/api/v1/source-pointers",
-        params=_params(a, ua.id),
+        params=_params(a),
         json={
             "owner_space_id": a,
             "source_space_id": b,
@@ -88,7 +118,7 @@ def test_create_pointer_non_member_of_owner_forbidden(db, cross_space_pair):
     a, b, _c, _ua, ub = _three_space_setup(db, cross_space_pair)
     r = cross_space_pair["client_b"].post(
         "/api/v1/source-pointers",
-        params=_params(b, ub.id),
+        params=_params(b),
         json={
             "owner_space_id": a,
             "source_space_id": b,
@@ -104,7 +134,7 @@ def test_create_pointer_non_member_of_source_forbidden(db, cross_space_pair):
     a, _b, c, ua, _ub = _three_space_setup(db, cross_space_pair)
     r = cross_space_pair["client_a"].post(
         "/api/v1/source-pointers",
-        params=_params(a, ua.id),
+        params=_params(a),
         json={
             "owner_space_id": a,
             "source_space_id": c,
@@ -122,7 +152,7 @@ def test_create_invalid_access_mode_rejected(db, cross_space_pair):
     db.commit()
     r = cross_space_pair["client_a"].post(
         "/api/v1/source-pointers",
-        params=_params(a, ua.id),
+        params=_params(a),
         json={
             "owner_space_id": a,
             "source_space_id": b,
@@ -140,7 +170,7 @@ def test_create_unsafe_metadata_json_rejected(db, cross_space_pair):
     db.commit()
     r = cross_space_pair["client_a"].post(
         "/api/v1/source-pointers",
-        params=_params(a, ua.id),
+        params=_params(a),
         json={
             "owner_space_id": a,
             "source_space_id": b,
@@ -168,7 +198,7 @@ def test_list_returns_pointers_for_member_owner_spaces(db, cross_space_pair):
     db.commit()
     r = cross_space_pair["client_a"].get(
         "/api/v1/source-pointers",
-        params=_params(a, ua.id),
+        params=_params(a),
     )
     assert r.status_code == 200
     items = r.json()["items"]
@@ -182,7 +212,7 @@ def test_list_filter_non_member_owner_space_forbidden(db, cross_space_pair):
     a, _b, _c, _ua, ub = _three_space_setup(db, cross_space_pair)
     r = cross_space_pair["client_b"].get(
         "/api/v1/source-pointers",
-        params={**_params(cross_space_pair["space_b_id"], ub.id), "owner_space_id": a},
+        params={**_params(cross_space_pair["space_b_id"]), "owner_space_id": a},
     )
     assert r.status_code == 403
 
@@ -202,7 +232,7 @@ def test_list_excludes_non_member_owner_spaces(db, cross_space_pair):
     db.commit()
     r = cross_space_pair["client_b"].get(
         "/api/v1/source-pointers",
-        params=_params(b, ub.id),
+        params=_params(b),
     )
     assert r.status_code == 200
     ids = {i["id"] for i in r.json()["items"]}
@@ -226,7 +256,7 @@ def test_detail_returns_metadata_only(db, cross_space_pair):
     db.commit()
     r = cross_space_pair["client_a"].get(
         f"/api/v1/source-pointers/{ptr.id}",
-        params=_params(a, ua.id),
+        params=_params(a),
     )
     assert r.status_code == 200
     body = r.json()
@@ -250,7 +280,7 @@ def test_detail_non_member_of_owner_returns_404(db, cross_space_pair):
     db.commit()
     r = cross_space_pair["client_b"].get(
         f"/api/v1/source-pointers/{ptr.id}",
-        params=_params(b, ub.id),
+        params=_params(b),
     )
     assert r.status_code == 404
 
@@ -270,7 +300,7 @@ def test_delete_requires_admin_of_owner_space(db, cross_space_pair):
     db.commit()
     denied = cross_space_pair["client_b"].delete(
         f"/api/v1/source-pointers/{ptr.id}",
-        params=_params(a, ub.id),
+        params=_params(a),
     )
     assert denied.status_code == 403
 
@@ -296,7 +326,7 @@ def test_delete_admin_removes_pointer_not_source_object(db, cross_space_pair):
     db.commit()
     ok = cross_space_pair["client_a"].delete(
         f"/api/v1/source-pointers/{ptr.id}",
-        params=_params(a, ua.id),
+        params=_params(a),
     )
     assert ok.status_code == 204
     assert db.query(SourcePointer).filter(SourcePointer.id == ptr.id).first() is None
@@ -310,7 +340,7 @@ def test_create_expires_at_in_past_rejected(db, cross_space_pair):
     past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     r = cross_space_pair["client_a"].post(
         "/api/v1/source-pointers",
-        params=_params(a, ua.id),
+        params=_params(a),
         json={
             "owner_space_id": a,
             "source_space_id": b,
@@ -329,7 +359,7 @@ def test_create_sets_granted_by_from_authenticated_user(db, cross_space_pair):
     db.commit()
     r = cross_space_pair["client_a"].post(
         "/api/v1/source-pointers",
-        params=_params(a, ua.id),
+        params=_params(a),
         json={
             "owner_space_id": a,
             "source_space_id": b,
@@ -348,7 +378,7 @@ def test_create_rejects_client_supplied_granted_by_user_id(db, cross_space_pair)
     db.commit()
     r = cross_space_pair["client_a"].post(
         "/api/v1/source-pointers",
-        params=_params(a, ua.id),
+        params=_params(a),
         json={
             "owner_space_id": a,
             "source_space_id": b,
@@ -367,40 +397,28 @@ def test_create_rejects_client_supplied_granted_by_user_id(db, cross_space_pair)
     assert row is None
 
 
-def test_create_rejects_nested_forbidden_metadata_key(db, cross_space_pair):
+@pytest.mark.parametrize(
+    "metadata_json",
+    [
+        {"safe": {"content": "nested secret"}},
+        {"items": [{"payload": "hidden"}]},
+        {f"k{i:04d}": "x" * 100 for i in range(200)},
+        _deep_metadata(),
+        {f"k{i}": i for i in range(MAX_METADATA_TOTAL_ITEMS + 1)},
+        {"note": "x" * (MAX_METADATA_STRING_LENGTH + 1)},
+    ],
+)
+def test_create_rejects_unsafe_or_unbounded_metadata_json(db, cross_space_pair, metadata_json):
     a, b, _c, ua, _ub = _three_space_setup(db, cross_space_pair)
     _add_member(db, space_id=b, user_id=ua.id)
     db.commit()
-    r = cross_space_pair["client_a"].post(
-        "/api/v1/source-pointers",
-        params=_params(a, ua.id),
-        json={
-            "owner_space_id": a,
-            "source_space_id": b,
-            "source_object_type": "memory",
-            "source_object_id": _new_id(),
-            "access_mode": "read",
-            "metadata_json": {"safe": {"content": "nested secret"}},
-        },
-    )
-    assert r.status_code == 400
-
-
-def test_create_rejects_forbidden_metadata_key_inside_list(db, cross_space_pair):
-    a, b, _c, ua, _ub = _three_space_setup(db, cross_space_pair)
-    _add_member(db, space_id=b, user_id=ua.id)
-    db.commit()
-    r = cross_space_pair["client_a"].post(
-        "/api/v1/source-pointers",
-        params=_params(a, ua.id),
-        json={
-            "owner_space_id": a,
-            "source_space_id": b,
-            "source_object_type": "memory",
-            "source_object_id": _new_id(),
-            "access_mode": "read",
-            "metadata_json": {"items": [{"payload": "hidden"}]},
-        },
+    r = _post_source_pointer(
+        cross_space_pair["client_a"],
+        owner_space_id=a,
+        source_space_id=b,
+        auth_space_id=a,
+        user_id=ua.id,
+        metadata_json=metadata_json,
     )
     assert r.status_code == 400
 
@@ -411,7 +429,7 @@ def test_create_accepts_safe_nested_metadata(db, cross_space_pair):
     db.commit()
     r = cross_space_pair["client_a"].post(
         "/api/v1/source-pointers",
-        params=_params(a, ua.id),
+        params=_params(a),
         json={
             "owner_space_id": a,
             "source_space_id": b,
@@ -429,94 +447,6 @@ def test_create_accepts_safe_nested_metadata(db, cross_space_pair):
     assert r.json()["metadata_json"]["refs"]
 
 
-def test_create_rejects_oversized_metadata_json(db, cross_space_pair):
-    a, b, _c, ua, _ub = _three_space_setup(db, cross_space_pair)
-    _add_member(db, space_id=b, user_id=ua.id)
-    db.commit()
-    metadata = {f"k{i:04d}": "x" * 100 for i in range(200)}
-    r = cross_space_pair["client_a"].post(
-        "/api/v1/source-pointers",
-        params=_params(a, ua.id),
-        json={
-            "owner_space_id": a,
-            "source_space_id": b,
-            "source_object_type": "memory",
-            "source_object_id": _new_id(),
-            "access_mode": "read",
-            "metadata_json": metadata,
-        },
-    )
-    assert r.status_code == 400
-
-
-def test_create_rejects_deeply_nested_metadata(db, cross_space_pair):
-    from app.source_pointers.validation import MAX_METADATA_DEPTH
-
-    a, b, _c, ua, _ub = _three_space_setup(db, cross_space_pair)
-    _add_member(db, space_id=b, user_id=ua.id)
-    db.commit()
-    nested: dict = {}
-    cursor = nested
-    for _ in range(MAX_METADATA_DEPTH + 2):
-        cursor["n"] = {}
-        cursor = cursor["n"]
-    r = cross_space_pair["client_a"].post(
-        "/api/v1/source-pointers",
-        params=_params(a, ua.id),
-        json={
-            "owner_space_id": a,
-            "source_space_id": b,
-            "source_object_type": "memory",
-            "source_object_id": _new_id(),
-            "access_mode": "read",
-            "metadata_json": nested,
-        },
-    )
-    assert r.status_code == 400
-
-
-def test_create_rejects_too_many_metadata_items(db, cross_space_pair):
-    from app.source_pointers.validation import MAX_METADATA_TOTAL_ITEMS
-
-    a, b, _c, ua, _ub = _three_space_setup(db, cross_space_pair)
-    _add_member(db, space_id=b, user_id=ua.id)
-    db.commit()
-    r = cross_space_pair["client_a"].post(
-        "/api/v1/source-pointers",
-        params=_params(a, ua.id),
-        json={
-            "owner_space_id": a,
-            "source_space_id": b,
-            "source_object_type": "memory",
-            "source_object_id": _new_id(),
-            "access_mode": "read",
-            "metadata_json": {f"k{i}": i for i in range(MAX_METADATA_TOTAL_ITEMS + 1)},
-        },
-    )
-    assert r.status_code == 400
-
-
-def test_create_rejects_long_metadata_string(db, cross_space_pair):
-    from app.source_pointers.validation import MAX_METADATA_STRING_LENGTH
-
-    a, b, _c, ua, _ub = _three_space_setup(db, cross_space_pair)
-    _add_member(db, space_id=b, user_id=ua.id)
-    db.commit()
-    r = cross_space_pair["client_a"].post(
-        "/api/v1/source-pointers",
-        params=_params(a, ua.id),
-        json={
-            "owner_space_id": a,
-            "source_space_id": b,
-            "source_object_type": "memory",
-            "source_object_id": _new_id(),
-            "access_mode": "read",
-            "metadata_json": {"note": "x" * (MAX_METADATA_STRING_LENGTH + 1)},
-        },
-    )
-    assert r.status_code == 400
-
-
 def test_responses_never_include_source_content_fields(db, cross_space_pair):
     a, b, _c, ua, _ub = _three_space_setup(db, cross_space_pair)
     _add_member(db, space_id=b, user_id=ua.id)
@@ -530,7 +460,7 @@ def test_responses_never_include_source_content_fields(db, cross_space_pair):
     db.commit()
     create_r = cross_space_pair["client_a"].post(
         "/api/v1/source-pointers",
-        params=_params(a, ua.id),
+        params=_params(a),
         json={
             "owner_space_id": a,
             "source_space_id": b,
@@ -545,13 +475,13 @@ def test_responses_never_include_source_content_fields(db, cross_space_pair):
     ptr_id = create_r.json()["id"]
     detail = cross_space_pair["client_a"].get(
         f"/api/v1/source-pointers/{ptr_id}",
-        params=_params(a, ua.id),
+        params=_params(a),
     )
     assert detail.status_code == 200
     assert "SECRET_MEMORY_BODY" not in detail.text
     listed = cross_space_pair["client_a"].get(
         "/api/v1/source-pointers",
-        params=_params(a, ua.id),
+        params=_params(a),
     )
     assert listed.status_code == 200
     assert "SECRET_MEMORY_BODY" not in listed.text

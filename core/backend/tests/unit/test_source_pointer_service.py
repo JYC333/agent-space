@@ -1,4 +1,4 @@
-"""Unit tests for SourcePointer metadata service (Phase 7A)."""
+"""Unit tests for SourcePointer metadata service."""
 
 from __future__ import annotations
 
@@ -6,7 +6,13 @@ import pytest
 from ulid import ULID
 
 from app.models import SourcePointer
-from app.source_pointers.validation import InvalidSourcePointerMetadataError
+from app.source_pointers.validation import (
+    InvalidSourcePointerMetadataError,
+    MAX_METADATA_DEPTH,
+    MAX_METADATA_KEY_LENGTH,
+    MAX_METADATA_STRING_LENGTH,
+    MAX_METADATA_TOTAL_ITEMS,
+)
 from app.source_pointers.service import (
     InvalidSourcePointerAccessModeError,
     InvalidSourcePointerExpiresAtError,
@@ -31,6 +37,15 @@ def _two_spaces(db):
     user = factories.create_test_user(db, space_id=owner_id, display_name="Owner User")
     db.commit()
     return owner_id, source_id, user
+
+
+def _deep_metadata() -> dict:
+    nested: dict = {}
+    cursor = nested
+    for _ in range(MAX_METADATA_DEPTH + 2):
+        cursor["n"] = {}
+        cursor = cursor["n"]
+    return nested
 
 
 def test_create_valid_pointer_succeeds(db):
@@ -161,11 +176,19 @@ def test_unsafe_metadata_json_rejected_recursively(db, metadata_json):
         )
 
 
-def test_metadata_json_exceeds_byte_limit_rejected(db):
+@pytest.mark.parametrize(
+    "metadata_json,match",
+    [
+        ({f"k{i:04d}": "x" * 100 for i in range(200)}, "bytes"),
+        (_deep_metadata(), "depth"),
+        ({f"k{i}": i for i in range(MAX_METADATA_TOTAL_ITEMS + 1)}, "total items"),
+        ({"k" * (MAX_METADATA_KEY_LENGTH + 1): "ok"}, "key exceeds"),
+        ({"note": "v" * (MAX_METADATA_STRING_LENGTH + 1)}, "string exceeds"),
+    ],
+)
+def test_metadata_json_bounds_rejected(db, metadata_json, match):
     owner_id, source_id, _user = _two_spaces(db)
-    # Many bounded strings: under per-string cap but serialized JSON exceeds byte cap.
-    metadata = {f"k{i:04d}": "x" * 100 for i in range(200)}
-    with pytest.raises(InvalidSourcePointerMetadataError, match="bytes"):
+    with pytest.raises(InvalidSourcePointerMetadataError, match=match):
         create_source_pointer(
             db,
             owner_space_id=owner_id,
@@ -173,79 +196,7 @@ def test_metadata_json_exceeds_byte_limit_rejected(db):
             source_object_type="memory",
             source_object_id=_new_id(),
             access_mode="read",
-            metadata_json=metadata,
-        )
-
-
-def test_metadata_json_exceeds_depth_rejected(db):
-    from app.source_pointers.validation import MAX_METADATA_DEPTH
-
-    owner_id, source_id, _user = _two_spaces(db)
-    nested: dict = {}
-    cursor = nested
-    for i in range(MAX_METADATA_DEPTH + 2):
-        cursor["n"] = {}
-        cursor = cursor["n"]
-    with pytest.raises(InvalidSourcePointerMetadataError, match="depth"):
-        create_source_pointer(
-            db,
-            owner_space_id=owner_id,
-            source_space_id=source_id,
-            source_object_type="memory",
-            source_object_id=_new_id(),
-            access_mode="read",
-            metadata_json=nested,
-        )
-
-
-def test_metadata_json_exceeds_total_items_rejected(db):
-    from app.source_pointers.validation import MAX_METADATA_TOTAL_ITEMS
-
-    owner_id, source_id, _user = _two_spaces(db)
-    too_many = {f"k{i}": i for i in range(MAX_METADATA_TOTAL_ITEMS + 1)}
-    with pytest.raises(InvalidSourcePointerMetadataError, match="total items"):
-        create_source_pointer(
-            db,
-            owner_space_id=owner_id,
-            source_space_id=source_id,
-            source_object_type="memory",
-            source_object_id=_new_id(),
-            access_mode="read",
-            metadata_json=too_many,
-        )
-
-
-def test_metadata_json_key_exceeds_max_length_rejected(db):
-    from app.source_pointers.validation import MAX_METADATA_KEY_LENGTH
-
-    owner_id, source_id, _user = _two_spaces(db)
-    long_key = "k" * (MAX_METADATA_KEY_LENGTH + 1)
-    with pytest.raises(InvalidSourcePointerMetadataError, match="key exceeds"):
-        create_source_pointer(
-            db,
-            owner_space_id=owner_id,
-            source_space_id=source_id,
-            source_object_type="memory",
-            source_object_id=_new_id(),
-            access_mode="read",
-            metadata_json={long_key: "ok"},
-        )
-
-
-def test_metadata_json_string_exceeds_max_length_rejected(db):
-    from app.source_pointers.validation import MAX_METADATA_STRING_LENGTH
-
-    owner_id, source_id, _user = _two_spaces(db)
-    long_val = "v" * (MAX_METADATA_STRING_LENGTH + 1)
-    with pytest.raises(InvalidSourcePointerMetadataError, match="string exceeds"):
-        create_source_pointer(
-            db,
-            owner_space_id=owner_id,
-            source_space_id=source_id,
-            source_object_type="memory",
-            source_object_id=_new_id(),
-            access_mode="read",
-            metadata_json={"note": long_val},
+            metadata_json=metadata_json,
         )
 
 

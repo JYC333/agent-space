@@ -341,7 +341,7 @@ def test_runtime_injection_does_not_enable_direct_shared_memory_persistence(
     run_row = db.query(Run).filter(Run.id == run.id).one()
     errors = (run_row.output_json or {}).get("materialization_errors") or []
     assert any("proposed_changes[0]" in e and "egress" in e.lower() for e in errors)
-    # Phase F2: only egress_review proposals may exist (no memory proposals)
+    # Only egress_review proposals may exist (no memory proposals)
     all_proposals = db.query(Proposal).filter(Proposal.space_id == team_id).all()
     memory_proposals = [p for p in all_proposals if p.proposal_type != "egress_review"]
     assert len(memory_proposals) == 0, (

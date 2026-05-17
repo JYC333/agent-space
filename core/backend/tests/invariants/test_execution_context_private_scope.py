@@ -9,11 +9,11 @@ These tests verify:
 3. No instructed_by_user_id (→ "system"): private memories ARE excluded.
 4. ContextSnapshotPopulator wires instructed_by_user_id into ContextBuilder correctly.
 
-Gap 6a (documented, not fixed here):
+Cross-space personal private scope:
     A run in a shared space cannot access private memories from a personal space even
     if the same user instructed both runs.  There is no "include my personal memories
     in this shared-space run" mechanism.  The cross-space block is correct behavior;
-    an explicit authorization mechanism (Phase 4.1) is required for the feature.
+    PersonalMemoryGrant is the explicit authorization mechanism for that feature.
 
 See: .agent/reports/space-ownership-visibility-gap-analysis.md § Gap 6a
 """
@@ -219,8 +219,8 @@ def test_populator_no_instructed_by_excludes_private_memory(db):
 # ---------------------------------------------------------------------------
 
 
-def test_gap_6a_run_in_shared_space_cannot_access_personal_private_memory(db):
-    """GAP 6a: A run in a shared space cannot read the instructing user's personal-space private memories.
+def test_shared_space_run_without_grant_cannot_access_personal_private_memory(db):
+    """A run in a shared space cannot read the instructing user's personal-space private memories.
 
     Even when run.instructed_by_user_id == owner_user_id of a personal-space memory,
     the cross-space boundary in MemoryRetriever prevents inclusion.  The run reads
@@ -228,9 +228,8 @@ def test_gap_6a_run_in_shared_space_cannot_access_personal_private_memory(db):
     structurally inaccessible.
 
     This is the CORRECT behavior under the current model — it documents an intended
-    constraint rather than a bug.  Phase 4.1 will add an explicit authorization
-    mechanism if user-private memory from a personal space must be accessible in a
-    shared-space run.
+    constraint rather than a bug. PersonalMemoryGrant is the explicit authorization
+    mechanism when personal-space private memory must be accessible in a shared-space run.
 
     See: space-ownership-visibility-gap-analysis.md § Gap 6a
     """
@@ -258,9 +257,9 @@ def test_gap_6a_run_in_shared_space_cannot_access_personal_private_memory(db):
         user_id=user_a.id,   # same user who owns the personal-space private memory
     )
     assert personal_private.id not in {m.id for m in result.memories}, (
-        "GAP 6a (expected boundary): a run in the shared space cannot read User A's "
+        "Expected boundary: a run in the shared space cannot read User A's "
         "personal-space private memory — cross-space boundary is enforced. "
-        "This is intentional; Phase 4.1 will add explicit cross-space authorization."
+        "This is intentional; PersonalMemoryGrant is the explicit cross-space authorization path."
     )
 
 

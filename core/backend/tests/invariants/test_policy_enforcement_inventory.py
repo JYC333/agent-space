@@ -1,4 +1,4 @@
-"""Behavior tests: Phase 6 memory-access policy domains are registered and enforced."""
+"""Behavior tests: memory-access policy domains are registered and enforced."""
 
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ def _private_memory(db, *, space_id: str, owner_user_id: str, content: str = "se
 # ---------------------------------------------------------------------------
 
 
-def test_phase6_domain_constants_registered():
+def test_policy_domain_constants_registered():
     for domain in (
         MEMORY_WRITE_DIRECT,
         MEMORY_PRIVATE_PLACEMENT,

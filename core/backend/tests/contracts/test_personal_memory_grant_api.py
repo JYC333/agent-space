@@ -1,9 +1,5 @@
 """API contract tests: PersonalMemoryGrant endpoints.
 
-Phase 8B implemented. Phase B tests pass.
-Phase C/D/E tests pass: context integration, egress guard, and the granting-user
-proposal approval gate are implemented.
-
 Endpoint contracts verified:
   POST /api/v1/personal-memory-grants/preview
   POST /api/v1/personal-memory-grants
@@ -72,7 +68,7 @@ def _setup_grant_scenario(db):
 
 
 # ---------------------------------------------------------------------------
-# Phase B passing tests
+# Grant API lifecycle contracts
 # ---------------------------------------------------------------------------
 
 
@@ -320,7 +316,7 @@ def test_list_grants_returns_only_current_users_grants(db, client):
 
 
 # ---------------------------------------------------------------------------
-# Additional Phase B tests
+# Additional grant API lifecycle contracts
 # ---------------------------------------------------------------------------
 
 
@@ -566,11 +562,11 @@ def test_revoked_grants_do_not_count_toward_active_limit(db, client):
 
 
 # ---------------------------------------------------------------------------
-# Phase C — now passing; Phase D — now passing; Phase E — now passing
+# Runtime context, egress guard, and approval contracts
 # ---------------------------------------------------------------------------
 
 def test_shared_run_with_valid_grant_receives_personal_context(db, client):
-    """Phase C: resolver returns a personal memory summary when a valid grant exists.
+    """Runtime context: resolver returns a personal memory summary when a valid grant exists.
 
     Verifies the service-level contract: a valid active grant causes
     resolve_personal_memory_context_for_run to return a non-empty
@@ -625,7 +621,7 @@ def test_shared_run_with_valid_grant_receives_personal_context(db, client):
 
 
 def test_grant_consumed_after_context_build(db, client):
-    """Phase C: grant transitions active→consuming→used atomically; reuse is blocked.
+    """Runtime context: grant transitions active→consuming→used atomically; reuse is blocked.
 
     After resolve_personal_memory_context_for_run succeeds, the grant is marked
     'used' and a subsequent call returns no personal context.
@@ -682,7 +678,7 @@ def test_grant_consumed_after_context_build(db, client):
 
 
 def test_grant_derived_context_does_not_create_team_memory(db, client):
-    """Phase D: grant-derived context must not be written into team memory.
+    """Egress guard: grant-derived context must not be written into team memory.
 
     RunOutputMaterializer must refuse to create memory proposals when the source
     run has personal grant context and the target space is non-personal.
@@ -758,12 +754,12 @@ def test_grant_derived_context_does_not_create_team_memory(db, client):
 
     assert len(errors) > 0, "Egress guard must block grant-derived memory proposal"
 
-    # No memory proposals may exist in team space; only egress_review proposals (Phase F2)
+    # No memory proposals may exist in team space; only egress_review proposals 
     all_proposals = db.query(Proposal).filter(Proposal.space_id == team_id).all()
     memory_proposals = [p for p in all_proposals if p.proposal_type != "egress_review"]
     assert len(memory_proposals) == 0, "No memory proposals must exist for grant-derived run"
 
-    # Phase F2: sanitized egress_review proposal must have been created
+    # Sanitized egress_review proposal must have been created
     from tests.support.assertions import assert_egress_review_proposal_is_content_free
     db.commit()
     egress_proposals = [p for p in all_proposals if p.proposal_type == "egress_review"]
@@ -772,7 +768,7 @@ def test_grant_derived_context_does_not_create_team_memory(db, client):
 
 
 def test_run_output_requires_proposal_before_persisting_personal_context(db, client):
-    """Phase E: persisting grant-derived output requires proposal + granting-user approval."""
+    """Egress approval: persisting grant-derived output requires proposal + granting-user approval."""
     from datetime import UTC, datetime, timedelta
     from app.memory.apply_service import ProposalApplyError, ProposalApplyService
     from app.models import AgentVersion, MemoryEntry, PersonalMemoryGrant, Proposal
@@ -787,7 +783,7 @@ def test_run_output_requires_proposal_before_persisting_personal_context(db, cli
         space_id=personal_id,
         scope_type="user",
         memory_type="semantic",
-        content="PRIVATE_CONTRACT_PHASE_E",
+        content="PRIVATE_CONTRACT_EGRESS_APPROVAL",
         status="active",
         visibility="private",
         owner_user_id=user.id,
@@ -867,7 +863,7 @@ def test_run_output_requires_proposal_before_persisting_personal_context(db, cli
 
 
 def test_proposal_read_model_exposes_safe_egress_approval_state(db, client):
-    """Phase F1 UI contract: ProposalOut exposes safe egress metadata and real approval state."""
+    """Egress review API contract: ProposalOut exposes safe egress metadata and real approval state."""
     from datetime import UTC, datetime, timedelta
     from app.models import PersonalMemoryGrant, Proposal
     from app.proposals.approvals import record_egress_granting_user_approval
