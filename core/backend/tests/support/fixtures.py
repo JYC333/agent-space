@@ -126,6 +126,39 @@ def two_spaces(cross_space_pair):
 
 
 @pytest.fixture
+def same_space_pair(db, client):
+    """Two users in the same space — for intra-space visibility / mutation tests.
+
+    Both users are active members of the same space. ``client_a`` is authenticated
+    as user_a (typically the creator/owner), ``client_b`` as user_b (a second member
+    who does not own objects created by user_a).
+    """
+    from app.auth.session import SESSION_COOKIE, UserSessionService
+    from app.main import app as _app
+    from starlette.testclient import TestClient
+
+    space = str(ULID())
+    factories.create_test_space(db, space_id=space, name="Shared Space", space_type="team")
+    ua = factories.create_test_user(db, space_id=space, display_name="Owner A")
+    ub = factories.create_test_user(db, space_id=space, display_name="Member B")
+    session_svc = UserSessionService(db)
+    _, raw_a = session_svc.create(ua.id)
+    _, raw_b = session_svc.create(ub.id)
+    db.commit()
+
+    client_a = TestClient(_app, cookies={SESSION_COOKIE: raw_a}, raise_server_exceptions=True)
+    client_b = TestClient(_app, cookies={SESSION_COOKIE: raw_b}, raise_server_exceptions=True)
+
+    return {
+        "space_id": space,
+        "user_a": ua,
+        "user_b": ub,
+        "client_a": client_a,
+        "client_b": client_b,
+    }
+
+
+@pytest.fixture
 def api_client(client):
     """Alias for the FastAPI ``TestClient`` from root ``conftest``."""
     return client

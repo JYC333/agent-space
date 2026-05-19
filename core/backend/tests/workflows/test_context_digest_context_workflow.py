@@ -312,7 +312,7 @@ def test_public_memory_write_creates_proposal_not_memory_entry(db, cross_space_p
 
 
 # ---------------------------------------------------------------------------
-# Regression: context snapshot audit fields
+# Context snapshot audit fields
 # ---------------------------------------------------------------------------
 
 

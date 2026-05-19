@@ -1,10 +1,13 @@
-"""HTTP contract: activity inbox uses get_identity; space-scoped; ingest does not create active memory."""
+"""HTTP contract: activity inbox uses get_identity; space-scoped; visibility enforced for mutations."""
 
 from __future__ import annotations
 
-from sqlalchemy import func
+from datetime import UTC, datetime
 
-from app.models import MemoryEntry
+from sqlalchemy import func
+from ulid import ULID
+
+from app.models import ActivityRecord, MemoryEntry
 from tests.support import factories
 
 
@@ -132,7 +135,7 @@ def test_post_activity_accepts_canonical_source_types(api_client, cross_space_pa
         assert r.json()["source_type"] == source_type
 
 
-def test_post_activity_maps_legacy_user_input_to_user_capture(api_client, cross_space_pair):
+def test_post_activity_normalizes_user_input_source_type_to_user_capture(api_client, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
 
@@ -266,3 +269,237 @@ def test_consolidate_activity_cross_space_returns_404(api_client, db, cross_spac
         params=_params(b, ub.id),
     )
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# occurred_at field
+# ---------------------------------------------------------------------------
+
+def test_post_activity_accepts_occurred_at_and_stores_it(api_client, db, cross_space_pair):
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    explicit_time = "2024-03-15T09:00:00Z"
+    r = cross_space_pair["client_a"].post(
+        "/api/v1/activity",
+        params=_params(a, ua.id),
+        json={
+            "source_type": "file_import",
+            "content": "historical import",
+            "occurred_at": explicit_time,
+        },
+    )
+    assert r.status_code == 200
+    out = r.json()
+    assert "occurred_at" in out
+    assert out["occurred_at"] is not None
+    # Strip TZ info for comparison — SQLite may return naive datetimes.
+    from datetime import datetime
+    stored_str = out["occurred_at"].replace("Z", "").replace("+00:00", "")
+    stored = datetime.fromisoformat(stored_str)
+    expected = datetime(2024, 3, 15, 9, 0, 0)
+    assert abs((stored - expected).total_seconds()) < 1
+
+
+def test_post_activity_without_occurred_at_uses_server_time(api_client, db, cross_space_pair):
+    from datetime import datetime, UTC
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    before = datetime.now(UTC).replace(tzinfo=None)
+    r = cross_space_pair["client_a"].post(
+        "/api/v1/activity",
+        params=_params(a, ua.id),
+        json={
+            "source_type": "user_capture",
+            "content": "no explicit time",
+        },
+    )
+    after = datetime.now(UTC).replace(tzinfo=None)
+    assert r.status_code == 200
+    out = r.json()
+    assert "occurred_at" in out
+    assert out["occurred_at"] is not None
+    stored_str = out["occurred_at"].replace("Z", "").replace("+00:00", "")
+    stored = datetime.fromisoformat(stored_str)
+    assert before <= stored <= after
+
+
+# ---------------------------------------------------------------------------
+# Helpers for activity mutation visibility tests
+# ---------------------------------------------------------------------------
+
+def _nid() -> str:
+    return str(ULID())
+
+
+def _make_private_activity(db, *, space_id: str, owner_user_id: str) -> ActivityRecord:
+    now = datetime.now(UTC)
+    record = ActivityRecord(
+        id=_nid(),
+        space_id=space_id,
+        user_id=owner_user_id,
+        owner_user_id=owner_user_id,
+        visibility="private",
+        activity_type="user_capture",
+        source_kind="user_capture",
+        content="private activity content",
+        status="raw",
+        occurred_at=now,
+        updated_at=now,
+    )
+    db.add(record)
+    db.commit()
+    return record
+
+
+# ---------------------------------------------------------------------------
+# PATCH /activity/{id}/process — visibility enforcement
+# ---------------------------------------------------------------------------
+
+def test_process_private_activity_non_owner_returns_404(api_client, db, same_space_pair):
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    act = _make_private_activity(db, space_id=space, owner_user_id=ua.id)
+
+    r = same_space_pair["client_b"].patch(
+        f"/api/v1/activity/{act.id}/process",
+        params={"space_id": space},
+    )
+    assert r.status_code == 404
+
+
+def test_process_private_activity_non_owner_db_unchanged(api_client, db, same_space_pair):
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    act = _make_private_activity(db, space_id=space, owner_user_id=ua.id)
+
+    same_space_pair["client_b"].patch(
+        f"/api/v1/activity/{act.id}/process",
+        params={"space_id": space},
+    )
+
+    db.expire_all()
+    record_after = db.query(ActivityRecord).filter(ActivityRecord.id == act.id).first()
+    assert record_after.status == "raw"
+
+
+def test_process_private_activity_owner_succeeds(api_client, db, same_space_pair):
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    act = _make_private_activity(db, space_id=space, owner_user_id=ua.id)
+
+    r = same_space_pair["client_a"].patch(
+        f"/api/v1/activity/{act.id}/process",
+        params={"space_id": space},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "processed"
+
+
+def test_process_space_shared_activity_any_member_succeeds(api_client, db, same_space_pair):
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    act = factories.create_test_activity(
+        db,
+        space_id=space,
+        actor_user_id=ua.id,
+        activity_type="user_capture",
+        commit=True,
+    )
+
+    r = same_space_pair["client_b"].patch(
+        f"/api/v1/activity/{act.id}/process",
+        params={"space_id": space},
+    )
+    assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# PATCH /activity/{id}/archive — visibility enforcement
+# ---------------------------------------------------------------------------
+
+def test_archive_private_activity_non_owner_returns_404(api_client, db, same_space_pair):
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    act = _make_private_activity(db, space_id=space, owner_user_id=ua.id)
+
+    r = same_space_pair["client_b"].patch(
+        f"/api/v1/activity/{act.id}/archive",
+        params={"space_id": space},
+    )
+    assert r.status_code == 404
+
+
+def test_archive_private_activity_non_owner_db_unchanged(api_client, db, same_space_pair):
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    act = _make_private_activity(db, space_id=space, owner_user_id=ua.id)
+
+    same_space_pair["client_b"].patch(
+        f"/api/v1/activity/{act.id}/archive",
+        params={"space_id": space},
+    )
+
+    db.expire_all()
+    record_after = db.query(ActivityRecord).filter(ActivityRecord.id == act.id).first()
+    assert record_after.status == "raw"
+
+
+def test_archive_private_activity_owner_succeeds(api_client, db, same_space_pair):
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    act = _make_private_activity(db, space_id=space, owner_user_id=ua.id)
+
+    r = same_space_pair["client_a"].patch(
+        f"/api/v1/activity/{act.id}/archive",
+        params={"space_id": space},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "archived"
+
+
+# ---------------------------------------------------------------------------
+# POST /activity/{id}/consolidate — visibility enforcement
+# ---------------------------------------------------------------------------
+
+def test_consolidate_private_activity_non_owner_returns_404(api_client, db, same_space_pair):
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    act = _make_private_activity(db, space_id=space, owner_user_id=ua.id)
+
+    r = same_space_pair["client_b"].post(
+        f"/api/v1/activity/{act.id}/consolidate",
+        params={"space_id": space},
+    )
+    assert r.status_code == 404
+
+
+def test_consolidate_private_activity_non_owner_creates_no_proposals(api_client, db, same_space_pair):
+    from app.models import Proposal
+
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    act = _make_private_activity(db, space_id=space, owner_user_id=ua.id)
+
+    before = db.query(func.count(Proposal.id)).filter(Proposal.space_id == space).scalar()
+
+    same_space_pair["client_b"].post(
+        f"/api/v1/activity/{act.id}/consolidate",
+        params={"space_id": space},
+    )
+
+    db.expire_all()
+    after = db.query(func.count(Proposal.id)).filter(Proposal.space_id == space).scalar()
+    assert after == before
+
+
+def test_consolidate_private_activity_owner_succeeds(api_client, db, same_space_pair):
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    act = _make_private_activity(db, space_id=space, owner_user_id=ua.id)
+
+    r = same_space_pair["client_a"].post(
+        f"/api/v1/activity/{act.id}/consolidate",
+        params={"space_id": space},
+    )
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)

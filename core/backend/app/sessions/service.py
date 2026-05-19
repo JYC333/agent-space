@@ -35,12 +35,22 @@ class SessionService:
         self.db.refresh(session)
         return session
 
-    def get_session(self, session_id: str) -> Session | None:
-        return (
-            self.db.query(Session)
-            .filter(Session.id == session_id, Session.status == "active")
-            .first()
+    def get_session(
+        self,
+        session_id: str,
+        *,
+        space_id: str | None = None,
+        user_id: str | None = None,
+    ) -> Session | None:
+        q = self.db.query(Session).filter(
+            Session.id == session_id,
+            Session.status == "active",
         )
+        if space_id is not None:
+            q = q.filter(Session.space_id == space_id)
+        if user_id is not None:
+            q = q.filter(Session.user_id == user_id)
+        return q.first()
 
     def count_sessions(self, space_id: str, user_id: str) -> int:
         from sqlalchemy import func as _func

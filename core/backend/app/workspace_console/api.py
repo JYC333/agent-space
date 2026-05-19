@@ -369,7 +369,7 @@ def get_git_diff(
 # ── Routes: runtimes ──────────────────────────────────────────────────────────
 
 @router.get("/runtimes")
-def list_runtimes():
+def list_runtimes(_: tuple[str, str] = Depends(get_identity)):
     """Return all supported runtimes with live availability status."""
     result = []
     for spec in _RUNTIME_SPECS:

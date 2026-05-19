@@ -47,7 +47,7 @@ class TestRunExecutionUsesCanonicalRuntimeRegistry:
         from app.runtimes.registry import is_adapter_type_implemented
         assert is_adapter_type_implemented("anthropic_messages")
 
-    def test_legacy_runner_adapter_registry_is_not_used_for_new_execution(self):
+    def test_new_execution_uses_runtimes_registry_not_agent_runner_registry(self):
         """app.agents.runner._ADAPTER_REGISTRY must not be the source of new adapters."""
         from app.agents.runner import _ADAPTER_REGISTRY
         from app.runtimes.registry import _RUNTIME_ADAPTER_CLASSES  # type: ignore[attr-defined]

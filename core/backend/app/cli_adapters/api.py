@@ -14,19 +14,29 @@ router = APIRouter(prefix="/cli-adapters", tags=["cli-adapters"])
 # ---------------------------------------------------------------------------
 
 @router.get("/catalog", response_model=list[dict])
-def list_builtin_adapters(db: Session = Depends(get_db)):
+def list_builtin_adapters(
+    _: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
     """List all known built-in CLI adapter types."""
     return CLIAdapterService(db).list_builtin_adapters()
 
 
 @router.get("/detect", response_model=list[CLIStatusOut])
-def detect_all_adapters(db: Session = Depends(get_db)):
+def detect_all_adapters(
+    _: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
     """Probe all built-in CLI adapters and return their detection status."""
     return CLIAdapterService(db).detect_all()
 
 
 @router.get("/detect/{adapter_id}", response_model=CLIStatusOut)
-def detect_adapter(adapter_id: str, db: Session = Depends(get_db)):
+def detect_adapter(
+    adapter_id: str,
+    _: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
     """Probe a single CLI adapter by adapter_id."""
     return CLIAdapterService(db).detect_one(adapter_id)
 

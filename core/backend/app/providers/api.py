@@ -25,7 +25,7 @@ service = ModelService()
 
 
 @router.get("/litellm-providers")
-def get_litellm_providers():
+def get_litellm_providers(_: tuple[str, str] = Depends(get_identity)):
     """Return the list of provider IDs supported by litellm."""
     return litellm.LITELLM_CHAT_PROVIDERS
 
@@ -47,7 +47,7 @@ CATALOG_INFO = {
 
 
 @router.get("/catalog")
-def get_catalog():
+def get_catalog(_: tuple[str, str] = Depends(get_identity)):
     """Return catalog metadata — describes litellm open format, not a fixed list."""
     return CATALOG_INFO
 

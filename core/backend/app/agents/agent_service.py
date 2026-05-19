@@ -384,7 +384,7 @@ class AgentService:
             user_id=user_id,
         )
 
-        # Legacy fields already set on Run via RunCreate; keep explicit user id for callers.
+        # instructed_by_user_id must be set explicitly; RunCreate.user_id is the canonical source.
         run.instructed_by_user_id = user_id
         self.db.commit()
         return run

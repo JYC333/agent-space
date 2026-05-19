@@ -57,21 +57,48 @@ def list_agents(
 
 
 @router.get("/{agent_id}", response_model=AgentOut)
-def get_agent(agent_id: str, db: Session = Depends(get_db)):
-    return AgentService(db).get_or_404(agent_id)
-
-
-@router.patch("/{agent_id}", response_model=AgentOut)
-def update_agent(agent_id: str, data: AgentUpdate, db: Session = Depends(get_db)):
-    agent = AgentService(db).update(agent_id, data)
-    if not agent:
+def get_agent(
+    agent_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, _ = ids
+    agent = AgentService(db).get_or_404(agent_id)
+    if agent.space_id != space_id:
         raise HTTPException(status_code=404, detail="Agent not found")
     return agent
 
 
+@router.patch("/{agent_id}", response_model=AgentOut)
+def update_agent(
+    agent_id: str,
+    data: AgentUpdate,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, _ = ids
+    svc = AgentService(db)
+    agent = svc.get_or_404(agent_id)
+    if agent.space_id != space_id:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    updated = svc.update(agent_id, data)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return updated
+
+
 @router.delete("/{agent_id}", status_code=204)
-def delete_agent(agent_id: str, db: Session = Depends(get_db)):
-    if not AgentService(db).delete(agent_id):
+def delete_agent(
+    agent_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, _ = ids
+    svc = AgentService(db)
+    agent = svc.get_or_404(agent_id)
+    if agent.space_id != space_id:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not svc.delete(agent_id):
         raise HTTPException(status_code=404, detail="Agent not found")
 
 
@@ -94,28 +121,35 @@ def list_all_runs(
 
 
 @router.get("/runs/{run_id}", response_model=RunOutV2)
-def get_run(run_id: str, db: Session = Depends(get_db)):
-    """Get a Run by ID."""
-    from fastapi import HTTPException
-    # Look up by run_id directly (not constrained by space_id on this convenience helper)
-    run = db.query(Run).filter(Run.id == run_id).first()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
-    return run
+def get_run(
+    run_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    """Get a Run by ID, scoped to the request space."""
+    space_id, _ = ids
+    return RunService(db).get_run(run_id, space_id)
 
 
 @router.get("/runs/{run_id}/chain", response_model=list[RunOutV2])
-def get_run_delegation_chain(run_id: str, db: Session = Depends(get_db)):
-    """Walk parent_run_id links to return the full delegation ancestry."""
-    from fastapi import HTTPException
-    from ..models import Run
+def get_run_delegation_chain(
+    run_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    """Walk parent_run_id links to return the full delegation ancestry, space-scoped."""
+    space_id, _ = ids
 
     chain: list[Run] = []
-    current = db.query(Run).filter(Run.id == run_id).first()
+    current = (
+        db.query(Run).filter(Run.id == run_id, Run.space_id == space_id).first()
+    )
     while current:
         chain.append(current)
         if current.parent_run_id:
-            current = db.query(Run).filter(Run.id == current.parent_run_id).first()
+            current = db.query(Run).filter(
+                Run.id == current.parent_run_id, Run.space_id == space_id
+            ).first()
         else:
             break
     chain.reverse()
@@ -339,10 +373,13 @@ def list_agent_versions(
 def get_agent_version(
     agent_id: str,
     version_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
     """Return an immutable version snapshot."""
+    space_id, _ = ids
     svc = AgentService(db)
     agent = svc.get_or_404(agent_id)
-    # Validate both agent_id and space_id match
+    if agent.space_id != space_id:
+        raise HTTPException(status_code=404, detail="Agent not found")
     return AgentVersionService(db).get_version_for_agent(version_id, agent.id, agent.space_id)

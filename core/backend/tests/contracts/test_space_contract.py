@@ -41,7 +41,7 @@ def test_create_space_uses_household_as_canonical_type(api_client, db, cross_spa
     assert row.type == "household"
 
 
-def test_create_space_rejects_legacy_family_type(api_client, db, cross_space_pair):
+def test_create_space_rejects_family_type_string(api_client, db, cross_space_pair):
     ua = cross_space_pair["user_a"]
 
     r = _authed_client(db, ua.id).post(

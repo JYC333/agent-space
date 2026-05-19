@@ -706,8 +706,8 @@ class Run(Base):
     """A single agent execution. space_id is the execution boundary — the run reads memory only
     from this space. instructed_by_user_id flows into ContextBuilder as user_id, controlling
     which private memories are included (owner must match). A run in a shared space cannot
-    access personal-space private memories even when the same user instructed both (Gap 6a;
-    intentional — see docs/TARGET_VIEW_MODEL.md § ExecutionContext). Cross-space authorization
+    access personal-space private memories even when the same user instructed both
+    (intentional — see docs/TARGET_VIEW_MODEL.md § ExecutionContext). Cross-space authorization
     requires PersonalMemoryGrant — see docs/PERSONAL_MEMORY_GRANT.md.
     """
 

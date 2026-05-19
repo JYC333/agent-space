@@ -41,7 +41,7 @@ async def list_jobs(
 
 
 @router.get("/handlers", response_model=list[str])
-def list_handlers():
+def list_handlers(_: tuple[str, str] = Depends(get_identity)):
     """Return registered job type names (useful for introspection / debugging)."""
     return list_registered()
 

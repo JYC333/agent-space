@@ -97,6 +97,39 @@ Rules:
 - `output_text` alone does not create a proposal.
 - Structured run output may create artifacts and proposals only through current materialization rules.
 
+## Security Boundary Test Naming
+
+Security boundary tests should be named after the **product invariant they protect**, not
+after the history of how a bug was found or fixed.
+
+**Good names:**
+- `test_session_messages_require_authenticated_owner`
+- `test_private_task_subresources_are_hidden_from_non_owner`
+- `test_activity_consolidation_requires_visible_activity`
+- `test_capability_reload_requires_authentication`
+- `test_cross_space_run_returns_404`
+
+**Avoid:**
+- `test_gap_s1_fixed`
+- `test_previous_bug_regression`
+- `test_foundation_patch`
+- `test_post_audit_case`
+- `test_cross_space_bug_123`
+- `test_high_gap_verification`
+
+Tests should protect these durable behaviors:
+
+- auth required
+- cross-space denied (404, not 403)
+- same-space private/restricted denied for non-owner (404)
+- owner allowed
+- failed mutation leaves DB unchanged
+- failed consolidation creates no proposals
+- secrets not exposed in API responses
+- path traversal blocked
+- intentional cross-space exceptions preserved (personal memory egress approval, /me routes,
+  source-pointers, personal-memory-grants)
+
 ## Canonical Command
 
 Pytest configures an isolated `AGENT_SPACE_HOME` in `tests/conftest.py` before importing the app. Use the canonical layered suite command:

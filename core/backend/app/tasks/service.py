@@ -23,28 +23,11 @@ from app.runs.run_service import RunService
 from app.schemas import RunCreate, TaskCreate, TaskRunCreateBody, TaskUpdate
 
 from .board_service import BoardService
+from .visibility import can_read_task
 
 
 def _new_id() -> str:
     return str(ULID())
-
-
-def _can_read_task(task: Task, current_user_id: str) -> bool:
-    """Visibility rule for tasks.
-
-    space_shared: any space member can read (space-scoped API enforces space boundary).
-    private / restricted: readable by created_by_user_id, assigned_user_id, or claimed_by_user_id.
-    unknown: fail closed.
-    """
-    vis = (task.visibility or "space_shared").lower()
-    if vis == "space_shared":
-        return True
-    if vis in ("private", "restricted"):
-        return any(
-            uid and uid == current_user_id
-            for uid in (task.created_by_user_id, task.assigned_user_id, task.claimed_by_user_id)
-        )
-    return False
 
 
 class TaskService:
@@ -138,7 +121,7 @@ class TaskService:
         )
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        if user_id is not None and not _can_read_task(task, user_id):
+        if user_id is not None and not can_read_task(task, user_id):
             raise HTTPException(status_code=404, detail="Task not found")
         return task
 
@@ -156,12 +139,12 @@ class TaskService:
             q = q.filter(Task.board_id == board_id)
         rows = q.order_by(Task.updated_at.desc()).all()
         if user_id is not None:
-            rows = [t for t in rows if _can_read_task(t, user_id)]
+            rows = [t for t in rows if can_read_task(t, user_id)]
         total = len(rows)
         return total, rows[offset : offset + limit]
 
-    def update(self, task_id: str, space_id: str, data: TaskUpdate) -> Task:
-        task = self.get(task_id, space_id)
+    def update(self, task_id: str, space_id: str, data: TaskUpdate, *, user_id: str | None = None) -> Task:
+        task = self.get(task_id, space_id, user_id=user_id)
         payload = data.model_dump(exclude_unset=True)
         if "workspace_id" in payload and payload["workspace_id"]:
             self._validate_workspace(payload["workspace_id"], space_id)
@@ -188,7 +171,7 @@ class TaskService:
         body: TaskRunCreateBody,
     ) -> tuple[TaskRun, Run]:
         """Create a queued Run plus a ``TaskRun`` row. Sets ``Run.task_id`` only as a denormalized primary-task shortcut; ``TaskRun`` is authoritative."""
-        task = self.get(task_id, space_id)
+        task = self.get(task_id, space_id, user_id=user_id)
         agent_id = body.agent_id or task.assigned_agent_id
         if not agent_id:
             raise HTTPException(
@@ -272,9 +255,10 @@ class TaskService:
         *,
         limit: int = 50,
         offset: int = 0,
+        user_id: str | None = None,
     ) -> tuple[int, list[TaskRun], list[Run]]:
         """List runs for a task via ``task_runs`` only (never ``Run.task_id`` filter)."""
-        self.get(task_id, space_id)
+        self.get(task_id, space_id, user_id=user_id)
         q = self.db.query(TaskRun).filter(TaskRun.task_id == task_id, TaskRun.space_id == space_id)
         total = q.count()
         links = q.order_by(TaskRun.created_at.desc()).offset(offset).limit(limit).all()
@@ -294,8 +278,9 @@ class TaskService:
         *,
         limit: int = 50,
         offset: int = 0,
+        user_id: str | None = None,
     ) -> tuple[int, list[TaskArtifact]]:
-        self.get(task_id, space_id)
+        self.get(task_id, space_id, user_id=user_id)
         q = (
             self.db.query(TaskArtifact)
             .options(joinedload(TaskArtifact.artifact))
@@ -315,8 +300,9 @@ class TaskService:
         *,
         limit: int = 50,
         offset: int = 0,
+        user_id: str | None = None,
     ) -> tuple[int, list[TaskProposal]]:
-        self.get(task_id, space_id)
+        self.get(task_id, space_id, user_id=user_id)
         q = (
             self.db.query(TaskProposal)
             .options(joinedload(TaskProposal.proposal))

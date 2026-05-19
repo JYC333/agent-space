@@ -89,6 +89,6 @@ def list_board_tasks(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _user_id = ids
-    total, items = BoardService(db).list_tasks_on_board(board_id, space_id, limit=limit, offset=offset)
+    space_id, user_id = ids
+    total, items = BoardService(db).list_tasks_on_board(board_id, space_id, user_id=user_id, limit=limit, offset=offset)
     return Page(items=items, total=total, limit=limit, offset=offset)

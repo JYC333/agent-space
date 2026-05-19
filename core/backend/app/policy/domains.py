@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Registered policy domains for memory access hardening."""
+"""Registered policy domains for memory access control."""
 
 from dataclasses import dataclass
 from typing import Literal

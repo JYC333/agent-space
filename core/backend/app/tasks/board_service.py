@@ -9,6 +9,8 @@ from ulid import ULID
 
 from app.models import Board, BoardColumn, Task, Workspace
 
+from .visibility import can_read_task
+
 
 def _new_id() -> str:
     return str(ULID())
@@ -164,16 +166,19 @@ class BoardService:
         *,
         limit: int = 50,
         offset: int = 0,
+        user_id: str | None = None,
     ) -> tuple[int, list[Task]]:
         self.get(board_id, space_id)
-        q = self.db.query(Task).filter(
-            Task.board_id == board_id,
-            Task.space_id == space_id,
-            Task.deleted_at.is_(None),
+        rows = (
+            self.db.query(Task)
+            .filter(Task.board_id == board_id, Task.space_id == space_id, Task.deleted_at.is_(None))
+            .order_by(Task.updated_at.desc())
+            .all()
         )
-        total = q.count()
-        items = q.order_by(Task.updated_at.desc()).offset(offset).limit(limit).all()
-        return total, items
+        if user_id is not None:
+            rows = [t for t in rows if can_read_task(t, user_id)]
+        total = len(rows)
+        return total, rows[offset : offset + limit]
 
     def resolve_column(self, column_id: str, board_id: str, space_id: str) -> BoardColumn:
         col = (

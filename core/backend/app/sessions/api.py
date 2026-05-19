@@ -45,9 +45,14 @@ def list_sessions(
 
 
 @router.get("/{session_id}", response_model=SessionOut)
-def get_session(session_id: str, db: Session = Depends(get_db)):
+def get_session(
+    session_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, user_id = ids
     svc = SessionService(db)
-    session = svc.get_session(session_id)
+    session = svc.get_session(session_id, space_id=space_id, user_id=user_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
@@ -73,10 +78,12 @@ def get_messages(
     session_id: str,
     limit: int = Query(100, le=500),
     offset: int = Query(0),
+    ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
+    space_id, user_id = ids
     svc = SessionService(db)
-    session = svc.get_session(session_id)
+    session = svc.get_session(session_id, space_id=space_id, user_id=user_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return svc.get_messages(session_id, limit=limit, offset=offset)

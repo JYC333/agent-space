@@ -1,10 +1,14 @@
 # Current Focus
 
-The system has a hardened two-person dogfooding foundation: space isolation, actor identity, RunStep replay, runtime/credential boundaries, persisted policy enforcement, activity provenance, backup/restore, and deployment control are all active and tested.
+The system is ready for personal, family/shared-space, and team/workspace dogfooding.
+All durable-data API routes are authenticated and space-scoped. Session, task, activity,
+and agent boundaries have full test coverage (1127 tests passing). See
+[architecture/SECURITY_AND_ACCESS_BOUNDARIES.md](architecture/SECURITY_AND_ACCESS_BOUNDARIES.md)
+for the current security boundary reference.
 
 ## Priorities
 
-- Incident collection and gap analysis from real dogfooding use
+- Incident collection and feedback from real dogfooding use
 - Frontend/backend type contract alignment (memory proposals, workspace fields, space type)
 - Artifact archive/delete API
 - Activity archive/delete

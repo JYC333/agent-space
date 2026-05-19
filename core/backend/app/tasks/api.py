@@ -81,8 +81,8 @@ def patch_task(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _user_id = ids
-    return TaskService(db).update(task_id, space_id, data)
+    space_id, user_id = ids
+    return TaskService(db).update(task_id, space_id, data, user_id=user_id)
 
 
 @router.post("/{task_id}/runs", response_model=RunOutV2, status_code=201)
@@ -105,9 +105,9 @@ def list_task_runs(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _user_id = ids
+    space_id, user_id = ids
     svc = TaskService(db)
-    total, links, runs = svc.list_task_runs(task_id, space_id, limit=limit, offset=offset)
+    total, links, runs = svc.list_task_runs(task_id, space_id, user_id=user_id, limit=limit, offset=offset)
     run_by_id = {r.id: r for r in runs}
     items: list[TaskRunListItem] = []
     for link in links:
@@ -125,8 +125,8 @@ def list_task_artifacts(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _user_id = ids
-    total, rows = TaskService(db).list_task_artifacts(task_id, space_id, limit=limit, offset=offset)
+    space_id, user_id = ids
+    total, rows = TaskService(db).list_task_artifacts(task_id, space_id, user_id=user_id, limit=limit, offset=offset)
     out: list[TaskArtifactOut] = []
     for row in rows:
         out.append(TaskArtifactOut.model_validate(row))
@@ -141,9 +141,9 @@ def list_task_proposals(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _user_id = ids
+    space_id, user_id = ids
     now = datetime.now(UTC)
-    total, rows = TaskService(db).list_task_proposals(task_id, space_id, limit=limit, offset=offset)
+    total, rows = TaskService(db).list_task_proposals(task_id, space_id, user_id=user_id, limit=limit, offset=offset)
     out: list[TaskProposalOut] = []
     for r in rows:
         out.append(

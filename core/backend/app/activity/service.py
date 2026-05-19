@@ -83,6 +83,7 @@ class ActivityService:
         source_url: str | None = None,
         metadata_json: dict | None = None,
         owner_user_id: str | None = None,
+        occurred_at: datetime | None = None,
     ) -> ActivityRecord:
         now = datetime.now(UTC)
         record = ActivityRecord(
@@ -101,6 +102,7 @@ class ActivityService:
             source_url=source_url,
             status="raw",
             metadata_json=metadata_json,
+            occurred_at=occurred_at if occurred_at is not None else now,
             updated_at=now,
             owner_user_id=owner_user_id if owner_user_id is not None else user_id,
         )
@@ -190,16 +192,20 @@ class ActivityService:
     # Status transitions
     # ------------------------------------------------------------------
 
-    def mark_processed(self, activity_id: str, space_id: str) -> ActivityRecord:
-        record = self._require(activity_id, space_id)
+    def mark_processed(
+        self, activity_id: str, space_id: str, *, viewer_user_id: str | None = None
+    ) -> ActivityRecord:
+        record = self._require(activity_id, space_id, viewer_user_id=viewer_user_id)
         record.status = "processed"
         record.updated_at = datetime.now(UTC)
         self.db.commit()
         self.db.refresh(record)
         return record
 
-    def mark_archived(self, activity_id: str, space_id: str) -> ActivityRecord:
-        record = self._require(activity_id, space_id)
+    def mark_archived(
+        self, activity_id: str, space_id: str, *, viewer_user_id: str | None = None
+    ) -> ActivityRecord:
+        record = self._require(activity_id, space_id, viewer_user_id=viewer_user_id)
         record.status = "archived"
         record.updated_at = datetime.now(UTC)
         self.db.commit()
@@ -210,8 +216,10 @@ class ActivityService:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _require(self, activity_id: str, space_id: str) -> ActivityRecord:
-        record = self.get(activity_id, space_id)
+    def _require(
+        self, activity_id: str, space_id: str, *, viewer_user_id: str | None = None
+    ) -> ActivityRecord:
+        record = self.get(activity_id, space_id, viewer_user_id=viewer_user_id)
         if not record:
             raise ValueError(f"ActivityRecord {activity_id!r} not found in space {space_id!r}")
         return record

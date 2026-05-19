@@ -15,6 +15,7 @@ Optional query ``for_user_id`` limits the list to that user and must equal the
 current user (cannot enumerate another user's inbox via query).
 """
 
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -51,6 +52,10 @@ class ActivityCreate(BaseModel):
     source_session_id: Optional[str] = None
     source_url: Optional[str] = None
     metadata_json: Optional[dict] = None
+    occurred_at: Optional[datetime] = Field(
+        default=None,
+        description="Real-world occurrence time. If omitted, defaults to server insertion time.",
+    )
 
 
 class ActivityOut(BaseModel):
@@ -69,6 +74,7 @@ class ActivityOut(BaseModel):
     status: str
     metadata_json: Optional[dict]
     visibility: str = "space_shared"
+    occurred_at: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -76,6 +82,7 @@ class ActivityOut(BaseModel):
 
     @classmethod
     def from_orm_model(cls, m: object) -> "ActivityOut":
+        occ = getattr(m, "occurred_at", None)  # type: ignore[attr-defined]
         return cls(
             id=m.id,                          # type: ignore[attr-defined]
             space_id=m.space_id,              # type: ignore[attr-defined]
@@ -92,6 +99,7 @@ class ActivityOut(BaseModel):
             status=m.status,                  # type: ignore[attr-defined]
             metadata_json=m.metadata_json,    # type: ignore[attr-defined]
             visibility=m.visibility,          # type: ignore[attr-defined]
+            occurred_at=occ.isoformat() if occ is not None else None,
             created_at=m.created_at.isoformat(),   # type: ignore[attr-defined]
             updated_at=m.updated_at.isoformat(),   # type: ignore[attr-defined]
         )
@@ -128,6 +136,7 @@ def create_activity(
             source_session_id=body.source_session_id,
             source_url=body.source_url,
             metadata_json=body.metadata_json,
+            occurred_at=body.occurred_at,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -199,10 +208,10 @@ def mark_processed(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ) -> ActivityOut:
-    space_id, _ = ids
+    space_id, user_id = ids
     svc = ActivityService(db)
     try:
-        record = svc.mark_processed(activity_id, space_id)
+        record = svc.mark_processed(activity_id, space_id, viewer_user_id=user_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return ActivityOut.from_orm_model(record)
@@ -214,10 +223,10 @@ def archive_activity(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ) -> ActivityOut:
-    space_id, _ = ids
+    space_id, user_id = ids
     svc = ActivityService(db)
     try:
-        record = svc.mark_archived(activity_id, space_id)
+        record = svc.mark_archived(activity_id, space_id, viewer_user_id=user_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return ActivityOut.from_orm_model(record)
@@ -232,7 +241,7 @@ def consolidate_activity(
     """Run consolidation for exactly one activity; same pipeline as ``POST /memory/consolidation/run``."""
     space_id, auth_user_id = ids
     svc = ActivityService(db)
-    if not svc.get(activity_id, space_id):
+    if not svc.get(activity_id, space_id, viewer_user_id=auth_user_id):
         raise HTTPException(status_code=404, detail="Activity record not found")
     cons = ActivityConsolidationService(db)
     created = cons.run_for_activity_ids(

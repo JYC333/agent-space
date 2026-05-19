@@ -346,7 +346,7 @@ def test_approval_metadata_contains_no_private_memory_content(db):
 
 
 # ---------------------------------------------------------------------------
-# Final Consistency Patch: egress_approved event audit
+# egress_approved event audit
 # ---------------------------------------------------------------------------
 
 
