@@ -9,6 +9,7 @@ import type { ActivityInboxRecord, ActivityStatus, ActivitySourceType } from '..
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
+import { EmptyState } from '../../components/ui/empty-state'
 import { ScopeBadge } from '../../components/ScopeBadge'
 
 function fmt(dt: string) { return new Date(dt).toLocaleString() }
@@ -106,9 +107,29 @@ export default function ActivityInboxPage() {
       )}
 
       {!loading && records.length === 0 && (
-        <Card><p className="text-muted-foreground text-center py-10 text-sm">
-          {activeOperationalSpaceId ? `No ${filter.replace('_', ' ')} records.` : 'Select an operational space to browse activity.'}
-        </p></Card>
+        !activeOperationalSpaceId ? (
+          <EmptyState
+            title="No space selected"
+            description="Select an operational space to browse activity."
+          />
+        ) : filter === 'raw' ? (
+          <EmptyState
+            title="Nothing to process"
+            description="Capture a thought, paste a link, or save a snippet to get started."
+            action={
+              <Button variant="outline" asChild>
+                <Link to="/capture">Open Capture</Link>
+              </Button>
+            }
+          />
+        ) : (
+          <EmptyState
+            title={`No ${filter.replace(/_/g, ' ')} activity`}
+            description={filter === 'archived'
+              ? 'Archived records appear here after you dismiss them.'
+              : 'Records that have been processed appear here.'}
+          />
+        )
       )}
 
       {!loading && records.map(r => (

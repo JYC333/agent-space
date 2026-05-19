@@ -90,8 +90,8 @@ function QuickCapture() {
 
   const modeMap: { id: CaptureMode; label: string; route: string }[] = [
     { id: 'capture', label: 'capture',   route: 'Activity Inbox' },
-    { id: 'ask',     label: 'ask agent', route: 'Agents'         },
-    { id: 'process', label: 'process',   route: 'Capture · auto-classify' },
+    { id: 'ask',     label: 'ask agent', route: 'Sessions'        },
+    { id: 'process', label: 'process',   route: 'Activity Inbox · save for later processing' },
   ]
 
   async function handleSubmit(e: React.FormEvent) {
@@ -169,7 +169,7 @@ function QuickCapture() {
             ? 'Capture a thought, paste a link, or drop a snippet…'
             : mode === 'ask'
               ? 'Ask an agent. Mention @space, @workspace, or @capability to scope.'
-              : 'Paste content for the system to classify and route…'
+              : 'Paste content to save for later processing…'
         }
         rows={2}
         className="w-full resize-none bg-transparent border-none outline-none text-[14px] leading-relaxed text-foreground placeholder:text-muted-foreground"
@@ -193,7 +193,7 @@ function QuickCapture() {
           style={{ background: 'var(--primary)', border: '1px solid var(--primary)', color: 'var(--primary-foreground)' }}
         >
           <Send className="size-3" />
-          {mode === 'capture' ? 'Capture' : mode === 'ask' ? 'Ask' : 'Process'}
+          {mode === 'capture' ? 'Capture' : mode === 'ask' ? 'Ask' : 'Save'}
         </button>
       </div>
     </form>
@@ -522,7 +522,7 @@ function RecentCard({ sessions }: { sessions: Session[] }) {
           {sessions.slice(0, 5).map((s, i) => (
             <button
               key={s.id}
-              onClick={() => navigate('/sessions')}
+              onClick={() => navigate('/sessions', { state: { openSessionId: s.id } })}
               className="flex items-center gap-2.5 py-2 text-left w-full hover:bg-accent rounded transition-colors -mx-1 px-1"
               style={{ borderTop: i === 0 ? 'none' : '1px solid color-mix(in oklch, var(--border) 50%, transparent)' }}
             >

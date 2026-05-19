@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { proposalsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
-import type { Proposal } from '../../types/api'
+import type { Proposal, ProposalAcceptOut } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
@@ -54,15 +54,35 @@ export default function ProposalsPage() {
 
   async function decide(id: string, action: 'accept' | 'reject') {
     try {
-      if (action === 'accept') await proposalsApi.accept(id)
-      else await proposalsApi.reject(id)
-      toast.success(`Proposal ${action}ed`)
+      if (action === 'accept') {
+        const out: ProposalAcceptOut = await proposalsApi.accept(id)
+        if (out.result_type === 'memory_entry') {
+          toast.success('Accepted — memory entry created.')
+        } else if (out.result_type === 'code_patch_apply') {
+          const n = out.result.updated_paths.length
+          toast.success(`Accepted — ${n} file${n === 1 ? '' : 's'} updated.`)
+        } else {
+          toast.success('Proposal accepted.')
+        }
+      } else {
+        await proposalsApi.reject(id)
+        toast.success('Proposal rejected.')
+      }
       await load()
     } catch (e) {
       const message = errMsg(e)
-      toast.error(message.includes('GrantingUserApprovalRequired') || message.includes('egress_granting_user')
-        ? 'Granting-user approval is required before this can be applied.'
-        : message)
+      if (message.includes('GrantingUserApprovalRequired') || message.includes('egress_granting_user')) {
+        toast.error('Granting-user approval is required before this can be applied.')
+      } else if (
+        message.includes('not_implemented') ||
+        message.includes('not implemented') ||
+        message.includes('unsupported') ||
+        message.includes('422')
+      ) {
+        toast.error('This proposal type cannot be applied yet. Reject it to dismiss, or leave it pending.')
+      } else {
+        toast.error(message)
+      }
     }
   }
 

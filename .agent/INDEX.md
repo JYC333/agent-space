@@ -100,6 +100,7 @@ are source of truth for active nav and routes. For UI decisions, see the module 
 
 | Doc | What it covers |
 |---|---|
+| [architecture/FRONTEND_INFORMATION_ARCHITECTURE.md](architecture/FRONTEND_INFORMATION_ARCHITECTURE.md) | Frontend role, dogfooding loop, home direction, module visibility, empty-state policy |
 | [modules/product-shell.md](modules/product-shell.md) | Shell, NavRail, CommandPalette, PanelLayout |
 | [modules/frontend-layout.md](modules/frontend-layout.md) | Responsive layout, mobile variants |
 | [modules/client-server-protocol.md](modules/client-server-protocol.md) | REST, WebSocket, SSE, offline queue protocol |

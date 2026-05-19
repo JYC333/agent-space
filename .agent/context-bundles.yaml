@@ -53,6 +53,7 @@ backend-domain:
 
 frontend-product:
   docs:
+    - .agent/architecture/FRONTEND_INFORMATION_ARCHITECTURE.md
     - .agent/modules/product-shell.md
     - .agent/modules/frontend-layout.md
     - .agent/modules/client-server-protocol.md

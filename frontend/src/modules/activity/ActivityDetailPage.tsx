@@ -4,12 +4,13 @@ import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { activityApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
-import { errMsg } from '../../lib/utils'
-import type { ActivityInboxRecord } from '../../types/api'
+import { errMsg, isNotFoundError } from '../../lib/utils'
+import type { ActivityInboxRecord, Proposal } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Skeleton } from '../../components/ui/skeleton'
+import { EmptyState } from '../../components/ui/empty-state'
 
 function fmt(dt: string) {
   return new Date(dt).toLocaleString()
@@ -20,6 +21,8 @@ export default function ActivityDetailPage() {
   const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
   const [row, setRow] = useState<ActivityInboxRecord | null>(null)
   const [loading, setLoading] = useState(true)
+  const [consolidating, setConsolidating] = useState(false)
+  const [generatedProposals, setGeneratedProposals] = useState<Proposal[] | null>(null)
 
   useEffect(() => {
     if (!activityId) return
@@ -36,7 +39,7 @@ export default function ActivityDetailPage() {
         if (!cancelled) setRow(r)
       } catch (e) {
         if (!cancelled) {
-          toast.error(errMsg(e))
+          if (!isNotFoundError(e)) toast.error(errMsg(e))
           setRow(null)
         }
       } finally {
@@ -45,6 +48,28 @@ export default function ActivityDetailPage() {
     })()
     return () => { cancelled = true }
   }, [activityId, activeOperationalSpaceId])
+
+  async function doConsolidate() {
+    if (!activityId) return
+    setConsolidating(true)
+    setGeneratedProposals(null)
+    try {
+      const proposals = await activityApi.consolidate(activityId)
+      setGeneratedProposals(proposals)
+      if (proposals.length > 0) {
+        toast.success(`${proposals.length} proposal${proposals.length === 1 ? '' : 's'} generated`)
+        // Refresh the record so its status updates to proposals_generated
+        const updated = await activityApi.get(activityId).catch(() => null)
+        if (updated) setRow(updated)
+      } else {
+        toast.info('No proposals could be generated from this activity.')
+      }
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setConsolidating(false)
+    }
+  }
 
   return (
     <div className="p-6 space-y-6 max-w-3xl">
@@ -55,23 +80,32 @@ export default function ActivityDetailPage() {
       {loading && <Skeleton className="h-40 w-full" />}
 
       {!loading && !row && (
-        <Card className="p-8 text-center text-sm text-muted-foreground">
-          {activeOperationalSpaceId ? 'Record not found.' : 'Select an operational space to inspect this activity.'}
-        </Card>
+        <EmptyState
+          title={activeOperationalSpaceId ? 'Activity not found or not accessible' : 'No space selected'}
+          description={activeOperationalSpaceId
+            ? 'This activity may not exist, or it may not be visible in your current space.'
+            : 'Select an operational space to inspect this activity.'}
+          action={
+            <Button variant="ghost" asChild>
+              <Link to="/activity">Back to Activity Inbox</Link>
+            </Button>
+          }
+        />
       )}
 
       {!loading && row && (
+        <>
         <Card className="p-5 space-y-4">
           <div className="flex flex-wrap justify-between gap-2">
             <h1 className="text-lg font-semibold tracking-tight">{row.title ?? row.source_type}</h1>
             <span className="text-xs text-muted-foreground">{fmt(row.created_at)}</span>
           </div>
           <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-1.5 items-center">
             <Badge variant="secondary">{row.source_type.replace('_', ' ')}</Badge>
             <Badge variant="outline">{row.status.replace('_', ' ')}</Badge>
             {row.source_run_id && (
-              <Link to={`/runs/${row.source_run_id}`} className="text-xs text-accent-foreground hover:underline self-center">
+              <Link to={`/runs/${row.source_run_id}`} className="text-xs text-accent-foreground hover:underline">
                 Open run
               </Link>
             )}
@@ -82,7 +116,49 @@ export default function ActivityDetailPage() {
               {JSON.stringify(row.metadata_json, null, 2)}
             </pre>
           )}
+          {(row.status === 'raw' || row.status === 'processed') && (
+            <div className="pt-2 border-t border-border">
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={consolidating}
+                onClick={doConsolidate}
+              >
+                {consolidating ? 'Generating…' : 'Generate proposals'}
+              </Button>
+              <p className="text-xs text-muted-foreground mt-1">
+                Analyse this activity and create memory proposals for review.
+              </p>
+            </div>
+          )}
         </Card>
+
+        {generatedProposals !== null && (
+          generatedProposals.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No proposals were generated. The content may be too sparse or already captured in memory.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Generated proposals</p>
+              {generatedProposals.map(p => (
+                <div key={p.id} className="flex items-center gap-2 text-sm">
+                  <Badge variant="secondary" className="shrink-0">{p.proposal_type}</Badge>
+                  <Link to={`/proposals/${p.id}`} className="text-accent-foreground hover:underline truncate">
+                    {p.proposed_title}
+                  </Link>
+                </div>
+              ))}
+              <Link
+                to="/proposals?status=pending"
+                className="text-xs text-accent-foreground hover:underline block mt-1"
+              >
+                View all pending proposals →
+              </Link>
+            </div>
+          )
+        )}
+        </>
       )}
     </div>
   )

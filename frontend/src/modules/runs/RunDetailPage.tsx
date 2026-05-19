@@ -10,6 +10,7 @@ import { Button } from '../../components/ui/button'
 import { Badge, StatusBadge } from '../../components/ui/badge'
 import { Skeleton } from '../../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs'
+import { EmptyState } from '../../components/ui/empty-state'
 import { PreviewBadge, DryRunBanner, UrgencyBadge } from '../../components/PreviewBadge'
 import { useRun, RUN_TERMINAL_STATUSES } from '../../hooks/useRun'
 import { ScopeBadge } from '../../components/ScopeBadge'
@@ -108,14 +109,34 @@ export default function RunDetailPage() {
   }
 
   if (error || !polled) {
+    const isNotFound = !activeOperationalSpaceId
+      || (error?.includes('404') ?? false)
+      || (error?.toLowerCase().includes('not found') ?? false)
     return (
       <div className="p-6">
         <Button variant="ghost" asChild>
           <Link to="/runs"><ArrowLeft className="size-4 mr-1" />Runs</Link>
         </Button>
-        <p className="text-destructive mt-4 text-sm">
-          {activeOperationalSpaceId ? error ?? 'Run not found.' : 'Select an operational space to inspect this run.'}
-        </p>
+        {!activeOperationalSpaceId ? (
+          <EmptyState
+            className="mt-6"
+            title="No space selected"
+            description="Select an operational space to inspect this run."
+          />
+        ) : isNotFound ? (
+          <EmptyState
+            className="mt-6"
+            title="Run not found or not in this space"
+            description="This run may not exist, or it may not be visible in your current space."
+            action={
+              <Button variant="ghost" asChild>
+                <Link to="/runs">Back to Runs</Link>
+              </Button>
+            }
+          />
+        ) : (
+          <p className="text-destructive mt-4 text-sm">{error}</p>
+        )}
       </div>
     )
   }

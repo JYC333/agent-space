@@ -4,7 +4,7 @@ import { ArrowLeft, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
 import { agentsApi, artifactsApi, tasksApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
-import { errMsg } from '../../lib/utils'
+import { errMsg, isNotFoundError } from '../../lib/utils'
 import type { AgentOut, Task, TaskArtifact, TaskProposal, TaskRunListItem } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
@@ -13,6 +13,7 @@ import { Label } from '../../components/ui/label'
 import { Select } from '../../components/ui/select'
 import { Skeleton } from '../../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs'
+import { EmptyState } from '../../components/ui/empty-state'
 import { PreviewBadge, DryRunBanner } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
 
@@ -68,7 +69,7 @@ export default function TaskDetailPage() {
       setProps(p.items)
       setAgents(ag)
     } catch (e) {
-      toast.error(errMsg(e))
+      if (!isNotFoundError(e)) toast.error(errMsg(e))
       setTask(null)
     } finally {
       setLoading(false)
@@ -118,9 +119,18 @@ export default function TaskDetailPage() {
         <Button variant="ghost" asChild>
           <Link to="/tasks"><ArrowLeft className="size-4 mr-1" />Back</Link>
         </Button>
-        <p className="text-muted-foreground mt-4">
-          {activeOperationalSpaceId ? 'Task not found.' : 'Select an operational space to inspect this task.'}
-        </p>
+        <EmptyState
+          className="mt-6"
+          title={activeOperationalSpaceId ? 'Task not found or not accessible' : 'No space selected'}
+          description={activeOperationalSpaceId
+            ? 'This task may not exist, or it may not be visible in your current space.'
+            : 'Select an operational space to inspect this task.'}
+          action={
+            <Button variant="ghost" asChild>
+              <Link to="/tasks">Back to Tasks</Link>
+            </Button>
+          }
+        />
       </div>
     )
   }

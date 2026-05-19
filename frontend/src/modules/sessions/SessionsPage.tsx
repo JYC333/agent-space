@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { MessageSquare } from 'lucide-react'
 import { toast } from 'sonner'
+import { useLocation } from 'react-router-dom'
 import { sessionsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
-import { errMsg } from '../../lib/utils'
+import { errMsg, isNotFoundError } from '../../lib/utils'
 import type { Session, Message } from '../../types/api'
 import { Card, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
@@ -11,19 +12,23 @@ import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { Textarea } from '../../components/ui/textarea'
 import { StatusBadge } from '../../components/ui/badge'
+import { EmptyState } from '../../components/ui/empty-state'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table'
 
 function fmt(dt: string | null | undefined) { return dt ? new Date(dt).toLocaleString() : '—' }
 
 export default function SessionsPage() {
   const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
-  const [sessions, setSessions]           = useState<Session[]>([])
-  const [activeSession, setActiveSession] = useState<Session | null>(null)
-  const [messages, setMessages]           = useState<Message[]>([])
-  const [title, setTitle]                 = useState('')
-  const [workspace, setWorkspace]         = useState('')
-  const [msgInput, setMsgInput]           = useState('')
-  const [loading, setLoading]             = useState(false)
+  const location = useLocation()
+  const [sessions, setSessions]             = useState<Session[]>([])
+  const [activeSession, setActiveSession]   = useState<Session | null>(null)
+  const [sessionNotFound, setSessionNotFound] = useState(false)
+  const [messages, setMessages]             = useState<Message[]>([])
+  const [title, setTitle]                   = useState('')
+  const [workspace, setWorkspace]           = useState('')
+  const [msgInput, setMsgInput]             = useState('')
+  const [loading, setLoading]               = useState(false)
+  const autoOpenRef = useRef(false)
 
   const loadSessions = useCallback(async () => {
     if (!activeOperationalSpaceId) {
@@ -35,6 +40,16 @@ export default function SessionsPage() {
   }, [activeOperationalSpaceId])
 
   useEffect(() => { loadSessions() }, [loadSessions])
+
+  // Auto-open a specific session when navigated here with state (e.g. from RecentCard)
+  useEffect(() => {
+    if (autoOpenRef.current) return
+    const openId = (location.state as { openSessionId?: string } | null)?.openSessionId
+    if (!openId) return
+    autoOpenRef.current = true
+    openSession(openId)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function createSession() {
     if (!activeOperationalSpaceId) {
@@ -50,11 +65,20 @@ export default function SessionsPage() {
   }
 
   async function openSession(id: string) {
+    setSessionNotFound(false)
     try {
       const [sess, msgs] = await Promise.all([sessionsApi.get(id), sessionsApi.messages(id)])
       setActiveSession(sess)
       setMessages(msgs)
-    } catch (e) { toast.error(errMsg(e)) }
+    } catch (e) {
+      if (isNotFoundError(e)) {
+        setActiveSession(null)
+        setMessages([])
+        setSessionNotFound(true)
+      } else {
+        toast.error(errMsg(e))
+      }
+    }
   }
 
   async function sendMessage() {
@@ -150,7 +174,16 @@ export default function SessionsPage() {
           )}
       </Card>
 
-      {activeSession && (
+      {sessionNotFound && (
+        <Card>
+          <EmptyState
+            title="Session not found or not accessible"
+            description="This session may not exist, may belong to another user, or may not be visible in your current space."
+          />
+        </Card>
+      )}
+
+      {!sessionNotFound && activeSession && (
         <Card>
           <CardTitle>Session: {activeSession.title ?? activeSession.id.slice(0, 16)}</CardTitle>
           <div className="flex flex-col gap-2.5 max-h-72 overflow-y-auto mb-4 pr-1">
