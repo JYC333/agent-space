@@ -7,7 +7,7 @@
 Define the sync strategy for a future where agent-space can run on multiple devices or have a cloud-backed instance. Sync is not active now, but every data model decision must remain aligned with the sync model described here to avoid a painful migration later.
 
 ## Owns
-- Sync protocol design (offline-first, CRDT-friendly merges)
+- Sync protocol design (local-first captures and drafts; CRDT-friendly merges for syncable objects)
 - Conflict detection and resolution rules
 - Sync status UI indicators
 - Merge policy per model type
@@ -19,7 +19,7 @@ Define the sync strategy for a future where agent-space can run on multiple devi
 
 ## Core Design Principles
 
-**Offline-first:** All user actions write locally first. Sync is a background operation, not a prerequisite.
+**Local-first for syncable objects:** Captures, drafts, tasks, card reviews, and user preferences write locally first. Sync is a background operation, not a prerequisite. Agent execution, proposal apply, and active memory writes remain server-authoritative and do not follow this principle — see [architecture/LOCAL_FIRST_COMPATIBILITY.md](../architecture/LOCAL_FIRST_COMPATIBILITY.md) for the full data classification.
 
 **Append-bias:** Prefer creating new records over in-place mutation. New Memory versions are new records (version field increments). Agent runs are immutable once complete.
 

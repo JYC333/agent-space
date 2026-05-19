@@ -1,5 +1,9 @@
 # agent-space — Claude Code Guide
 
+> **AI agents:** Start from [`.agent/INDEX.md`](.agent/INDEX.md) and load the smallest relevant
+> context bundle from [`.agent/context-bundles.yaml`](.agent/context-bundles.yaml).
+> This file is a quick-start adapter for Claude Code — `.agent/architecture/` is source of truth.
+
 ## Project summary
 
 Space-based, multi-user, agent-first memory system. Supports personal, family, and team spaces

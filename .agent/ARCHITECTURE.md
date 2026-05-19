@@ -86,7 +86,7 @@
 - **MemoryProvider** — abstract interface for memory backends; `LocalMemoryProvider` is the only enabled provider in MVP
 - **Module registry** — `app/modules/registry.py` (backend) and `src/modules/registry.js` (frontend) are the single sources of truth for which features are active; see [ADR 0007](decisions/0007-plugin-module-architecture.md)
 - **Client-server protocol** — REST (current) + WebSocket events + SSE streaming (planned)
-- **Offline-first** — mobile captures and card reviews work without connection; sync on reconnect
+- **Partial offline support** — mobile captures and card reviews can queue offline and sync on reconnect; agent execution, memory writes, and proposal apply remain server-authoritative; see [architecture/LOCAL_FIRST_COMPATIBILITY.md](architecture/LOCAL_FIRST_COMPATIBILITY.md)
 - **Run resilience fields** — status includes `degraded`; mode includes `live|dry_run`; temporal fields are explicit; artifacts are exportable; proposals have urgency/deadline
 - **Home summary API** — Home UI consumes lightweight summaries only; no full ContextPackage
 

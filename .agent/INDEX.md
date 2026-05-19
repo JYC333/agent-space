@@ -1,66 +1,131 @@
 # Agent Context Index
 
-## What This Project Is
+## 1. Repository Context
 
-Agent-Space is a local-first personal/household agent operating system and human-agent collaboration control plane. It manages personal, family, and team spaces in a single deployment. Agents run tasks, generate proposals, and surface context — humans approve what becomes permanent.
+agent-space is a space-based, multi-user, agent-first system for personal, family, and small-team
+use within a single deployment instance. It has a FastAPI backend (SQLite), a React/Vite frontend
+(PWA), and a server-authoritative agent execution model: agents run server-side inside isolated
+sandboxes, memory is written only through a proposal → approval workflow, and policy and
+credentials are enforced centrally. The system is **not** local-first; it supports offline capture
+and draft queuing for personal convenience but agent execution, active memory, proposals,
+credentials, workspace operations, and deployment remain server-authoritative. See
+[architecture/LOCAL_FIRST_COMPATIBILITY.md](architecture/LOCAL_FIRST_COMPATIBILITY.md) for the
+durable position on this boundary.
 
-## Source of Truth Hierarchy
+**Source of truth hierarchy:**
 
-1. **Code** — implementation truth; always wins over docs.
-2. **`models.py`** — canonical data model (`core/backend/app/models.py`).
-3. **`schemas.py`** — API contracts (`core/backend/app/schemas.py`).
-4. **`app/modules/registry.py`** — which backend modules and routes are active.
-5. **`src/modules/registry.js`** — which frontend modules and nav items are active.
-6. **`.agent/BOUNDARIES.md`** — architectural invariants (load for any structural change).
-7. **`.agent/decisions/`** — accepted architectural decisions.
+1. **Code** — implementation truth; always wins over docs
+2. `core/backend/app/models.py` — canonical data model
+3. `core/backend/app/schemas.py` — API contracts
+4. `core/backend/app/modules/registry.py` — active backend modules and routes
+5. `frontend/src/modules/registry.js` — active frontend modules and nav items
+6. `.agent/BOUNDARIES.md` — architectural invariants; load for any structural change
+7. `.agent/decisions/` — accepted architectural decisions
 
-Docs in `.agent/architecture/` are **current-state architecture references**, not target-state speculation. Do not treat them as implementation specs without a separate scoped implementation task.
+Docs in `.agent/architecture/` describe **current state**, not target-state speculation. Temporary
+reports in `.agent/reports/` are not source of truth and should be deleted after consolidation.
 
-## Read First
+---
 
-1. [BOUNDARIES.md](BOUNDARIES.md) — rules that must not be violated
-2. [ARCHITECTURE.md](ARCHITECTURE.md) — layer map; know where a feature belongs
-3. [COMMANDS.md](COMMANDS.md) — how to run, test, and build
-4. [tasks/current-focus.md](tasks/current-focus.md) — current priorities
-5. [WORKING_TIPS.md](WORKING_TIPS.md) — practical gotchas
+## 2. Start Here
 
-## Architecture References
+| What you need | Link |
+|---|---|
+| Current active focus and short-term priorities | [tasks/current-focus.md](tasks/current-focus.md) |
+| Security and access boundary reference | [architecture/SECURITY_AND_ACCESS_BOUNDARIES.md](architecture/SECURITY_AND_ACCESS_BOUNDARIES.md) |
+| Test layer and product invariant philosophy | [architecture/TESTING_STRATEGY.md](architecture/TESTING_STRATEGY.md) |
+| Local-first compatibility position | [architecture/LOCAL_FIRST_COMPATIBILITY.md](architecture/LOCAL_FIRST_COMPATIBILITY.md) |
+| Architectural invariants (load before structural changes) | [BOUNDARIES.md](BOUNDARIES.md) |
+| Layer map and cross-cutting concerns | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| How to run, test, and build | [COMMANDS.md](COMMANDS.md) |
+| Practical gotchas | [WORKING_TIPS.md](WORKING_TIPS.md) |
+
+---
+
+## 3. Architecture Map
+
+### Product Model
 
 | Doc | What it covers |
 |---|---|
 | [architecture/PRODUCT_AND_BOUNDARIES.md](architecture/PRODUCT_AND_BOUNDARIES.md) | Product identity, current enforcement points, architecture fitness checks |
-| [architecture/EXECUTION_MODEL.md](architecture/EXECUTION_MODEL.md) | Run, RunStep, Job, Artifact, Proposal, actor identity, credential resolver |
-| [architecture/MEMORY_ACTIVITY_PROVENANCE.md](architecture/MEMORY_ACTIVITY_PROVENANCE.md) | Activity-first capture, provenance chain, trust gate, memory write boundaries |
-| [architecture/DATABASE_AND_TRANSACTIONS.md](architecture/DATABASE_AND_TRANSACTIONS.md) | UnitOfWork, transaction ownership, external call boundary, SQLite/Postgres rules |
-| [architecture/OPERATIONS_AND_SAFETY.md](architecture/OPERATIONS_AND_SAFETY.md) | Backup, restore, lifecycle states, deployment boundary, stop conditions |
-| [architecture/NON_GOALS_AND_DISABLED_SURFACES.md](architecture/NON_GOALS_AND_DISABLED_SURFACES.md) | Disabled surfaces, current allowed surfaces, non-goals |
+| [architecture/NON_GOALS_AND_DISABLED_SURFACES.md](architecture/NON_GOALS_AND_DISABLED_SURFACES.md) | Disabled surfaces, allowed surfaces, non-goals |
 | [architecture/ROADMAP_AND_FUTURE_RISKS.md](architecture/ROADMAP_AND_FUTURE_RISKS.md) | Capability line roadmap, future risks |
-| [architecture/MEMORY_MODEL.md](architecture/MEMORY_MODEL.md) | Memory scopes, visibility, access control |
-| [architecture/PROPOSALS.md](architecture/PROPOSALS.md) | Proposal types, lifecycle, apply flow |
-| [architecture/TASK_BOARD_MODEL.md](architecture/TASK_BOARD_MODEL.md) | Tasks, runs, jobs |
-| [architecture/RUNS_AND_OUTPUTS.md](architecture/RUNS_AND_OUTPUTS.md) | Run outputs, materialization, boundaries |
-| [architecture/ARTIFACTS.md](architecture/ARTIFACTS.md) | Artifact lifecycle and export |
-| [architecture/TESTING_STRATEGY.md](architecture/TESTING_STRATEGY.md) | Test layers and product invariant philosophy |
+| [architecture/LOCAL_FIRST_COMPATIBILITY.md](architecture/LOCAL_FIRST_COMPATIBILITY.md) | Data classification, offline write rules, sync schema guidelines |
 
-## Operational Docs
+### Security and Access Boundaries
 
 | Doc | What it covers |
 |---|---|
-| [docs/BACKUP_AND_RESTORE.md](../docs/BACKUP_AND_RESTORE.md) | BackupService, backup.sh, restore.sh, verification |
-| [docs/TWO_PERSON_DOGFOODING_RC.md](../docs/TWO_PERSON_DOGFOODING_RC.md) | RC runbook: allowed surfaces, config, smoke tests, rollback |
+| [architecture/SECURITY_AND_ACCESS_BOUNDARIES.md](architecture/SECURITY_AND_ACCESS_BOUNDARIES.md) | Auth boundary, space isolation, object visibility, session/task/activity policy, cross-space exceptions, credential secrecy, dogfooding readiness |
+| [architecture/POLICY_ENFORCEMENT_INVENTORY.md](architecture/POLICY_ENFORCEMENT_INVENTORY.md) | All current policy enforcement points; enforcement status per class |
 
-## Module Docs
+### Backend Domains
 
-Load only the modules relevant to your task.
+| Doc | What it covers |
+|---|---|
+| [architecture/DATABASE_AND_TRANSACTIONS.md](architecture/DATABASE_AND_TRANSACTIONS.md) | UnitOfWork, transaction ownership, external call boundary, SQLite/Postgres rules |
+| [architecture/MEMORY_MODEL.md](architecture/MEMORY_MODEL.md) | Memory scopes, visibility, access control |
+| [architecture/PROPOSALS.md](architecture/PROPOSALS.md) | Proposal types, lifecycle, apply flow |
+| [architecture/TASK_BOARD_MODEL.md](architecture/TASK_BOARD_MODEL.md) | Task, Board, TaskRun, TaskArtifact, TaskProposal ORM |
+| [architecture/ARTIFACTS.md](architecture/ARTIFACTS.md) | Artifact lifecycle, storage paths, export |
+| [architecture/OPERATIONS_AND_SAFETY.md](architecture/OPERATIONS_AND_SAFETY.md) | Backup, restore, lifecycle states, deployment boundary, stop conditions |
+
+### Runtime / Agents / Runs
+
+| Doc | What it covers |
+|---|---|
+| [architecture/EXECUTION_MODEL.md](architecture/EXECUTION_MODEL.md) | Run, RunStep, Job, Artifact, Proposal, actor identity, credential resolver |
+| [architecture/RUNS_AND_OUTPUTS.md](architecture/RUNS_AND_OUTPUTS.md) | Run outputs, materialization, boundaries |
+
+### Memory / Activity / Proposal
+
+| Doc | What it covers |
+|---|---|
+| [architecture/MEMORY_ACTIVITY_PROVENANCE.md](architecture/MEMORY_ACTIVITY_PROVENANCE.md) | Activity-first capture, provenance chain, trust gate, memory write boundaries |
+| [architecture/MEMORY_MODEL.md](architecture/MEMORY_MODEL.md) | Memory scopes, visibility, access control |
+| [architecture/PROPOSALS.md](architecture/PROPOSALS.md) | Proposal types, lifecycle, apply flow |
+
+### Workspace / Sandbox / Artifact
+
+| Doc | What it covers |
+|---|---|
+| [architecture/ARTIFACTS.md](architecture/ARTIFACTS.md) | Artifact lifecycle, storage paths, export |
+| [architecture/EXECUTION_MODEL.md](architecture/EXECUTION_MODEL.md) | Sandbox selection, worktree vs Docker, PathPolicy |
+
+### Frontend Information Architecture
+
+The frontend module registry (`frontend/src/modules/registry.js`) and shell (`frontend/src/core/Shell.jsx`)
+are source of truth for active nav and routes. For UI decisions, see the module docs below:
+
+| Doc | What it covers |
+|---|---|
+| [modules/product-shell.md](modules/product-shell.md) | Shell, NavRail, CommandPalette, PanelLayout |
+| [modules/frontend-layout.md](modules/frontend-layout.md) | Responsive layout, mobile variants |
+| [modules/client-server-protocol.md](modules/client-server-protocol.md) | REST, WebSocket, SSE, offline queue protocol |
+| [modules/activity-inbox.md](modules/activity-inbox.md) | Activity inbox UI and quick capture |
+
+### Testing Strategy
+
+| Doc | What it covers |
+|---|---|
+| [architecture/TESTING_STRATEGY.md](architecture/TESTING_STRATEGY.md) | Test layers, product invariant philosophy, what each layer covers |
+
+---
+
+## 4. Module Map
+
+Load only the module docs relevant to your task.
 
 | Task area | Module doc |
 |---|---|
 | Space / user / workspace data model | [modules/space.md](modules/space.md) |
 | Agent profiles, runs, adapters | [modules/agents.md](modules/agents.md) |
-| Activities, artifacts, proposals | [modules/proposals.md](modules/proposals.md) |
 | Long-term memory | [modules/memory.md](modules/memory.md) |
 | Raw input and event capture | [modules/activity.md](modules/activity.md) |
 | Activity inbox UI and quick capture | [modules/activity-inbox.md](modules/activity-inbox.md) |
+| Personal assistant and capture | [modules/assistant-capture.md](modules/assistant-capture.md) |
+| Memory review UI | [modules/memory-review.md](modules/memory-review.md) |
 | Policy and permission engine | [modules/policy.md](modules/policy.md) |
 | Proposal / approval system | [modules/proposals.md](modules/proposals.md) |
 | Capability lifecycle | [modules/capability.md](modules/capability.md) |
@@ -70,9 +135,19 @@ Load only the modules relevant to your task.
 | Runtime adapters | [modules/runtime-adapters.md](modules/runtime-adapters.md) |
 | Credentials | [modules/credentials.md](modules/credentials.md) |
 | Deployment | [modules/deployment.md](modules/deployment.md) |
-| Personal assistant and capture | [modules/assistant-capture.md](modules/assistant-capture.md) |
+| Wiki / knowledge items | [modules/llm-wiki.md](modules/llm-wiki.md) |
+| Spaced repetition / cards | [modules/spaced-repetition.md](modules/spaced-repetition.md) |
+| Media cards | [modules/media-cards.md](modules/media-cards.md) |
+| Sync and conflict model | [modules/sync-and-conflicts.md](modules/sync-and-conflicts.md) |
+| Mobile client | [modules/mobile-client.md](modules/mobile-client.md) |
+| Server status bar | [modules/server-status.md](modules/server-status.md) |
+| Git diff review | [modules/git-diff-review.md](modules/git-diff-review.md) |
+| Provider / LLM policy | [modules/provider-policy.md](modules/provider-policy.md) |
+| Commercialization | [modules/commercialization.md](modules/commercialization.md) |
 
-## Decision Records
+---
+
+## 5. Decision Records
 
 | ADR | Summary |
 |---|---|
@@ -85,15 +160,78 @@ Load only the modules relevant to your task.
 | [0007](decisions/0007-plugin-module-architecture.md) | Plugin module structure for per-deployment feature control |
 | [0008](decisions/0008-multi-cli-mvp.md) | Multi-CLI MVP |
 
-## Rules for AI Agents
+---
 
-- Do not load all docs for every task. Use the smallest relevant bundle.
-- Check [context-bundles.yaml](context-bundles.yaml) for task-type → doc mappings.
+## 6. Current Work
+
+The single source of active task context is:
+
+**[tasks/current-focus.md](tasks/current-focus.md)**
+
+Do not create competing task files under `.agent/tasks/` or `.agent/`. Multiple task docs
+cause context conflicts for both humans and AI agents. If the focus changes, update
+`current-focus.md` in place.
+
+---
+
+## 7. Reports Policy
+
+`.agent/reports/` is for temporary audits and one-off investigations only.
+
+Rules:
+- Reports are not source of truth for architecture, policy, or design.
+- Once the durable content of a report is consolidated into `.agent/architecture/` or a
+  decision record, the report should be deleted.
+- AI agents must not load reports as authoritative context.
+- Do not reference temporary reports from architecture docs or `context-bundles.yaml`.
+
+Long-term architecture information must live in `.agent/architecture/` or `.agent/decisions/`.
+
+---
+
+## 8. Context Loading Guidance for Agents
+
+Use the smallest relevant bundle from [context-bundles.yaml](context-bundles.yaml). Do not
+load all docs for every task.
+
+| Task type | Load |
+|---|---|
+| Security / access change | `security-access` bundle: `SECURITY_AND_ACCESS_BOUNDARIES.md`, `POLICY_ENFORCEMENT_INVENTORY.md`, `TESTING_STRATEGY.md`, `BOUNDARIES.md` |
+| Backend domain change | `backend-domain` bundle: relevant domain doc + `DATABASE_AND_TRANSACTIONS.md` + `BOUNDARIES.md` |
+| Frontend / home / UI change | `frontend-product` bundle: `product-shell.md`, `frontend-layout.md`, `client-server-protocol.md`, module doc |
+| Testing change | `TESTING_STRATEGY.md` + the specific test file's domain doc |
+| Runtime / agent / run change | `runtime-agent` bundle: `EXECUTION_MODEL.md`, `RUNS_AND_OUTPUTS.md`, `agents.md`, `BOUNDARIES.md` |
+| Memory / activity / proposal change | `memory-activity-proposal` bundle: `MEMORY_ACTIVITY_PROVENANCE.md`, `MEMORY_MODEL.md`, `PROPOSALS.md` |
+| Workspace / artifact / path change | `workspace-artifact` bundle: `ARTIFACTS.md`, `EXECUTION_MODEL.md`, `sandbox.md`, `workspace-console.md` |
+| Dogfooding / product slice | `current-focus.md` + `PRODUCT_AND_BOUNDARIES.md` + `NON_GOALS_AND_DISABLED_SURFACES.md` |
+| Sync / offline / local-first compatibility | `local-first-compatibility` bundle: `LOCAL_FIRST_COMPATIBILITY.md`, `sync-and-conflicts.md`, `mobile-client.md` |
+
+Additional agent rules:
 - Never write to `instance/` from code in `core/`.
 - Never write active memory directly — use proposals.
 - Never write vendor context files to the real workspace — write to sandbox only.
-- Read BOUNDARIES.md before making structural changes.
-- New module routes go in `app/<module>/api.py`. Register in `app/modules/registry.py`.
-- New frontend pages go in `src/modules/<module>/`. Register in `src/modules/registry.js`.
-- **Do not reintroduce temporary task docs, milestone files, or audit reports into `.agent/tasks/` or `.agent/reports/`.**
-- The `.agent/architecture/` docs describe **current state**. Do not add target-state aspirations without a scoped implementation task.
+- Read `BOUNDARIES.md` before making structural changes.
+- New module routes go in `app/<module>/api.py`, registered in `app/modules/registry.py`.
+- New frontend pages go in `src/modules/<module>/`, registered in `src/modules/registry.js`.
+- Do not treat `.agent/reports/` content as durable source of truth.
+- `.agent/architecture/` docs describe **current state**. Do not add target-state aspirations
+  without a scoped implementation task.
+
+---
+
+## 9. Vendor Context and Conversion Plan
+
+**Current state:** `CLAUDE.md` and `AGENTS.md` are hand-maintained adapter files that point
+AI coding assistants toward the right entry points. They are not canonical architecture docs.
+
+**Intended future model:**
+
+| Source (canonical) | Generated output |
+|---|---|
+| `.agent/INDEX.md` | Section headers in `CLAUDE.md` / `AGENTS.md` |
+| `.agent/context-bundles.yaml` | Task-type context directives in vendor files |
+| `.agent/architecture/*.md` | Summarized constraints injected by ContextCompiler |
+
+Generated files (`CLAUDE.md`, `AGENTS.md`, sandbox prompt files, runtime-specific context
+files) are **disposable adapter outputs**, not canonical docs. When they conflict with
+`.agent/architecture/`, the architecture docs win. See [ADR 0004](decisions/0004-context-wrapper.md).
