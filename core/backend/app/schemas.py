@@ -38,6 +38,7 @@ DEFAULT_RUNTIME_POLICY: dict = {
     # adapter_ids this agent may use; matches RuntimeAdapter.adapter_id or adapter_type
     "allowed_adapter_types": [
         "echo",
+        "capability",
         "anthropic_messages",
         "claude_code",
         "codex_cli",
@@ -344,6 +345,7 @@ class MemoryOut(BaseModel):
     created_from_proposal_id: Optional[str] = None
     root_memory_id: Optional[str] = None
     supersedes_memory_id: Optional[str] = None
+    project_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -406,6 +408,7 @@ class ProposalOut(BaseModel):
     requires_approval_type: Optional[str] = None
     egress_approval_status: Optional[str] = None
     egress_approval_id: Optional[str] = None
+    project_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -446,6 +449,7 @@ class ActivityRecordOut(BaseModel):
     lifecycle_status: Optional[str] = None
     consolidation_status: Optional[str] = None
     visibility: str = "space_shared"
+    project_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -469,6 +473,7 @@ class ArtifactOut(BaseModel):
     content: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    project_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -578,7 +583,11 @@ class CapabilityOut(BaseModel):
     name: str
     version: str
     description: Optional[str]
-    entrypoint: Optional[str]
+    entrypoint: Optional[Any]
+    source: str = "builtin"
+    workspace_id: Optional[str] = None
+    root_path: Optional[str] = None
+    manifest_path: Optional[str] = None
     manifest_json: dict
     enabled: bool
     created_at: datetime
@@ -902,6 +911,7 @@ class RunCreate(BaseModel):
     trigger_origin: str = Field(default="manual")
     session_id: Optional[str] = None
     workspace_id: Optional[str] = None
+    project_id: Optional[str] = None
     prompt: Optional[str] = None
     instruction: Optional[str] = None
     scheduled_at: Optional[datetime] = None
@@ -910,6 +920,7 @@ class RunCreate(BaseModel):
     parent_run_id: Optional[str] = None
     instructed_by_agent_id: Optional[str] = None
     adapter_type: Optional[str] = None
+    capability_id: Optional[str] = None
     # Execution plane hints — used by the service to resolve and snapshot plane metadata.
     # source is NOT accepted from the client; it is always set to "managed" by the service.
     execution_plane_id: Optional[str] = None
@@ -946,9 +957,11 @@ class RunOutV2(BaseModel):
     output_json: Optional[dict]
     usage_json: Optional[dict]
     adapter_type: Optional[str] = None
+    capability_id: Optional[str] = None
     model_provider_id: Optional[str] = None
     required_sandbox_level: str = "none"
     visibility: str = "space_shared"
+    project_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -1227,3 +1240,66 @@ class RunStepOut(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Project
+# ---------------------------------------------------------------------------
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    owner_user_id: Optional[str] = None
+    current_focus: Optional[str] = None
+    settings_json: Optional[dict] = None
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    current_focus: Optional[str] = None
+    settings_json: Optional[dict] = None
+    status: Optional[str] = None
+
+
+class ProjectOut(BaseModel):
+    id: str
+    space_id: str
+    owner_user_id: Optional[str]
+    name: str
+    description: Optional[str]
+    status: str
+    current_focus: Optional[str]
+    settings_json: Optional[dict]
+    created_at: datetime
+    updated_at: datetime
+    archived_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
+class ProjectWorkspaceLinkCreate(BaseModel):
+    workspace_id: str
+    role: str = "reference"
+
+
+class ProjectWorkspaceLinkOut(BaseModel):
+    id: str
+    project_id: str
+    workspace_id: str
+    role: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ProjectSummaryOut(BaseModel):
+    project_id: str
+    activity_count: int
+    artifact_count: int
+    pending_proposal_count: int
+    workspace_count: int
+    active_run_count: int
+    memory_entry_count: int

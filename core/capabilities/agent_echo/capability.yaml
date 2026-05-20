@@ -5,7 +5,12 @@ description: >
   Development and testing capability. Echoes the prompt and context keys
   back as output. Useful for verifying context injection and run logging.
 
-entrypoint: null
+enabled: true
+
+entrypoint:
+  type: python_module
+  module: capabilities.agent_echo.main
+  function: execute
 
 memory_access:
   read:
@@ -16,9 +21,17 @@ memory_access:
 tools: []
 
 permissions:
-  network: false
-  filesystem: false
-  subprocess: false
+  network:
+    allow: []
+  filesystem:
+    read: []
+    write: []
+  subprocess:
+    allow: false
+
+outputs:
+  artifact_types:
+    - agent.echo.result.v1
 
 validation:
   max_prompt_length: 10000

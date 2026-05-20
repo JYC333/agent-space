@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from typing import Type
 
-from .adapters import AnthropicMessagesRuntimeAdapter, EchoRuntimeAdapter
+from .adapters import (
+    AnthropicMessagesRuntimeAdapter,
+    CapabilityRuntimeAdapter,
+    EchoRuntimeAdapter,
+)
 from .base import BaseRuntimeAdapter
 
 _RUNTIME_ADAPTER_CLASSES: dict[str, Type[BaseRuntimeAdapter]] = {
     EchoRuntimeAdapter.adapter_type: EchoRuntimeAdapter,
     AnthropicMessagesRuntimeAdapter.adapter_type: AnthropicMessagesRuntimeAdapter,
+    CapabilityRuntimeAdapter.adapter_type: CapabilityRuntimeAdapter,
 }
 
 

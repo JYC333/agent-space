@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from fastapi import HTTPException
@@ -101,6 +101,15 @@ def resolve_runtime_adapter(
             "adapter_not_implemented",
             f"Runtime adapter type '{adapter_type}' is not implemented",
         )
+
+    if adapter_type == "capability" and run.capability_id:
+        from ..capabilities.registry import CapabilityRegistry
+
+        registry = CapabilityRegistry(db)
+        registry.reload(space_id=run.space_id)
+        cap = registry.get(run.capability_id)
+        if cap is not None:
+            merged = {**merged, "capability": asdict(cap)}
 
     return ResolvedRuntimeAdapter(
         adapter_type=adapter_type,

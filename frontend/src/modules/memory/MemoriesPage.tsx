@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Brain } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { Brain, FolderKanban, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { memoryApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -34,6 +35,9 @@ const EMPTY_FORM: MemoryForm = {
 
 export default function MemoriesPage() {
   const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const projectFilter = searchParams.get('project_id') ?? ''
+
   const [memories, setMemories] = useState<Memory[]>([])
   const [form, setForm]         = useState<MemoryForm>(EMPTY_FORM)
 
@@ -42,9 +46,14 @@ export default function MemoriesPage() {
       setMemories([])
       return
     }
-    try { setMemories((await memoryApi.list({ status: 'active' })).items) }
+    try {
+      setMemories((await memoryApi.list({
+        status: 'active',
+        project_id: projectFilter || undefined,
+      })).items)
+    }
     catch (e) { toast.error(errMsg(e)) }
-  }, [activeOperationalSpaceId])
+  }, [projectFilter, activeOperationalSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -93,6 +102,15 @@ export default function MemoriesPage() {
           <h1 className="text-xl font-semibold tracking-tight">Memories</h1>
           <p className="text-sm text-muted-foreground">Review-gated long-term memories across scopes and namespaces.</p>
           <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+          {projectFilter && (
+            <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-accent/40 text-xs text-accent-foreground">
+              <FolderKanban className="size-3" />
+              Filtered by project
+              <button onClick={() => setSearchParams(p => { p.delete('project_id'); return p })} className="ml-0.5 hover:text-foreground" aria-label="Clear project filter">
+                <X className="size-3" />
+              </button>
+            </span>
+          )}
         </div>
       </div>
 

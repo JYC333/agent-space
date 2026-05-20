@@ -8,51 +8,89 @@ It is not just a prompt — it is a folder containing:
 ```
 capabilities/<capability-id>/
 ├── capability.yaml     Manifest (required)
-├── README.md           Human docs
-├── prompts/            Prompt templates
-├── src/                Optional code
-└── tests/              Capability tests
+├── README.md           Human docs (optional)
+├── main.py             Entry module (when using python_module entrypoint)
+└── tests/              Capability tests (optional)
 ```
 
 ## capability.yaml fields
 
 ```yaml
-id: memory.reflect          # Unique dot-separated ID
-name: Memory Reflector      # Human name
-version: "0.1.0"            # Semver
-description: >              # Short description
-  Analyzes sessions and proposes memories.
+id: agent.echo
+name: Echo Agent
+version: 0.1.0
+description: Minimal echo capability
+enabled: true
 
-entrypoint: null            # Optional: path to entry script
+entrypoint:
+  type: python_module
+  module: capabilities.agent_echo.main
+  function: execute
 
-memory_access:
-  read:
-    - scope: user
-      types: [preference, semantic]
-  write:
-    - scope: user
-      types: [preference, semantic]
-      requires_proposal: true   # true = must go through proposal workflow
-
-tools: []                   # Future: declared tool access
 permissions:
-  network: false
-  filesystem: false
-  subprocess: false
+  network:
+    allow: []
+  filesystem:
+    read: []
+    write: []
+  subprocess:
+    allow: false
 
-validation:
-  min_messages: 1           # Capability-specific validation rules
+outputs:
+  artifact_types:
+    - agent.echo.result.v1
 ```
+
+Only `entrypoint.type: python_module` is executable in the current backend. Shell commands, remote code loading, network/filesystem permissions beyond empty allowlists, and subprocess execution are rejected by the capability runtime.
 
 ## Capability Registry
 
-The `CapabilityRegistry` scans `capabilities/` on startup and on `POST /api/v1/capabilities/reload`.
+The `CapabilityRegistry` loads capabilities from two sources:
 
-It:
-1. Reads every `capability.yaml` in the directory
-2. Validates required fields (`id`, `name`, `version`, `description`)
-3. Upserts records into the `capabilities` database table
-4. Reports loaded / failed counts
+1. **Builtin** — manifests under `core/capabilities/` (bundled with the backend).
+2. **External workspace** — manifests under local roots registered on a `capability_library` workspace.
+
+Reload happens on backend startup and on `POST /api/v1/capabilities/reload`.
+
+### External workspace discovery
+
+Register a workspace with:
+
+- `workspace_type = "capability_library"` — real `Workspace.workspace_type` column
+- `metadata_json.capability_roots` — list of relative local paths, e.g. `["capabilities"]`
+
+Example workspace create payload fields:
+
+```json
+{
+  "workspace_type": "capability_library",
+  "metadata_json": {
+    "capability_roots": ["capabilities"]
+  }
+}
+```
+
+External capability roots are **local only**. The registry does not scan GitHub URLs, remote URLs, absolute paths, or paths that escape the workspace root. Ordinary (`project`) workspaces are not scanned.
+
+### Enable / disable state
+
+| Source | Default | Persisted? |
+|--------|---------|------------|
+| Builtin | manifest `enabled` (default `true`) | No — manifest is source of truth on reload |
+| External workspace | disabled | Yes — `$AGENT_SPACE_HOME/config/settings.yaml` |
+
+Persisted shape:
+
+```yaml
+capabilities:
+  enabled_external_capabilities:
+    - research_intake
+    - rss_watch
+```
+
+Manifests define capability code and metadata; they are **not** the local trust/enable store for external capabilities. Persisted IDs for capabilities that are no longer discovered are ignored safely. Newly discovered external capabilities are never auto-enabled.
+
+This is not a marketplace or remote install system.
 
 ## Built-in capabilities
 
@@ -61,11 +99,13 @@ It:
 | `memory.reflect` | Analyze sessions, generate memory proposals |
 | `agent.echo` | Dev/test: echo prompt and context back |
 
-## Future capabilities (not yet implemented)
+## Execution
 
-| ID | Purpose |
-|---|---|
-| `system.evolve` | Generate new capability code in sandbox, propose for approval |
-| `research.web` | Web search + summarization with memory storage |
-| `coding.agent` | Full CLI-based coding agent loop |
-| `knowledge.wiki` | Personal knowledge base management |
+Capability runs use `adapter_type="capability"` on a `Run`. The runtime adapter loads the manifest from the registry, verifies the capability is discovered and enabled, validates entrypoint/permissions, imports the local module, and calls `execute(context)`.
+
+## Related code
+
+- `core/backend/app/capabilities/registry.py`
+- `core/backend/app/capabilities/enabled_store.py`
+- `core/backend/app/capabilities/loader.py`
+- `core/backend/app/runtimes/adapters/capability.py`

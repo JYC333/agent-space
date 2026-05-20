@@ -31,6 +31,7 @@ The agent-space core owns the Agent layer. CLI tools and providers are pluggable
 | Adapter ID    | Type        | Vendor file  | Status | Notes                                    |
 |---------------|-------------|-------------|--------|------------------------------------------|
 | `echo`        | local       | none         | active | Deterministic test adapter, no LLM       |
+| `capability`  | local       | none         | active | Executes enabled local capability manifests |
 | `claude_code` | CLI wrapper | `CLAUDE.md`  | active | Wraps `claude` CLI (Claude Code)         |
 | `codex_cli`   | CLI wrapper | `AGENTS.md`  | active | Wraps `codex` CLI (OpenAI Codex CLI)     |
 
@@ -56,7 +57,13 @@ Runs carry a `model_selection_mode` field:
 
 Default is always `cli_default`.
 
-## Adapter Contract
+## Backend Adapter Contract
+
+Backend Run execution uses `app.runtimes`, not the older `app.agents.runner` registry. Product runtime adapters subclass `BaseRuntimeAdapter` in `core/backend/app/runtimes/base.py`, return `RuntimeAdapterResult`, and are registered in `core/backend/app/runtimes/registry.py`.
+
+The `capability` adapter is a local runtime adapter. It resolves `Run.capability_id`, loads the installed manifest from builtin registry roots or explicitly configured local capability-library workspaces, checks the enabled flag and v1 permission guardrails, calls a local `python_module` entrypoint, and returns normalized `output_json` for the standard Run materializer. Remote repositories are future install sources, not runtime scan targets.
+
+## Legacy Agent Adapter Contract
 
 All adapters subclass `AgentAdapter` (`agents/base.py`) and implement:
 

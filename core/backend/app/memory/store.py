@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
 from ..models import MemoryEntry
+from ..projects.service import assert_project_in_space
 from ..schemas import MemoryCreate, MemoryUpdate
 from ..config import settings
 from .read_auth import can_read_memory
@@ -208,10 +209,15 @@ class MemoryStore:
         namespace: str | None = None,
         memory_type: str | None = None,
         status: str = "active",
+        project_id: str | None = None,
         *,
         include_system_scope: bool = False,
     ) -> int:
+        if project_id:
+            assert_project_in_space(self.db, project_id, space_id)
         q = self._scoped_query(space_id, workspace_id, scope, namespace, memory_type, status)
+        if project_id:
+            q = q.filter(MemoryEntry.project_id == project_id)
         return len(
             self._filter_readable(
                 q.all(),
@@ -231,12 +237,17 @@ class MemoryStore:
         namespace: str | None = None,
         memory_type: str | None = None,
         status: str = "active",
+        project_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
         *,
         include_system_scope: bool = False,
     ) -> list[MemoryEntry]:
+        if project_id:
+            assert_project_in_space(self.db, project_id, space_id)
         q = self._scoped_query(space_id, workspace_id, scope, namespace, memory_type, status)
+        if project_id:
+            q = q.filter(MemoryEntry.project_id == project_id)
         rows = q.order_by(MemoryEntry.importance.desc(), MemoryEntry.updated_at.desc()).all()
         filtered = self._filter_readable(
             rows,

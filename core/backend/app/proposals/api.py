@@ -86,6 +86,7 @@ def list_proposals(
     proposal_type: str | None = wire_query(None, wire_name="type"),
     urgency: str | None = Query(None),
     expired: bool | None = Query(None),
+    project_id: str | None = Query(None),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
     ids: tuple[str, str] = Depends(get_identity),
@@ -95,26 +96,31 @@ def list_proposals(
     now = datetime.now(UTC)
     status_filter = resolve_proposal_list_status(status)
     svc = ProposalService(db)
-    total = svc.count_proposals(
-        space_id,
-        user_id,
-        status=status_filter,
-        proposal_type=proposal_type,
-        urgency=urgency,
-        expired=expired,
-        now=now,
-    )
-    items = svc.list_proposals(
-        space_id,
-        user_id,
-        status=status_filter,
-        proposal_type=proposal_type,
-        urgency=urgency,
-        expired=expired,
-        limit=limit,
-        offset=offset,
-        now=now,
-    )
+    try:
+        total = svc.count_proposals(
+            space_id,
+            user_id,
+            status=status_filter,
+            proposal_type=proposal_type,
+            urgency=urgency,
+            expired=expired,
+            project_id=project_id,
+            now=now,
+        )
+        items = svc.list_proposals(
+            space_id,
+            user_id,
+            status=status_filter,
+            proposal_type=proposal_type,
+            urgency=urgency,
+            expired=expired,
+            project_id=project_id,
+            limit=limit,
+            offset=offset,
+            now=now,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return Page(
         items=[proposal_to_out(p, now=now) for p in items],
         total=total,

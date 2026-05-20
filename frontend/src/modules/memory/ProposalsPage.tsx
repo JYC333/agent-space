@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
-import { FileCheck } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { FileCheck, FolderKanban, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { proposalsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -26,6 +26,9 @@ const RISK_VARIANT: Record<string, 'default' | 'secondary' | 'muted' | 'destruct
 
 export default function ProposalsPage() {
   const { activeOperationalSpaceId, activeOperationalSpaceName, userId } = useSpace()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const projectFilter = searchParams.get('project_id') ?? ''
+
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [filterStatus, setFilterStatus]       = useState('pending')
   const [filterType, setFilterType]           = useState('')
@@ -44,11 +47,12 @@ export default function ProposalsPage() {
         type: filterType || undefined,
         urgency: filterUrgency || undefined,
         expired: filterExpired === '' ? undefined : filterExpired === 'true',
+        project_id: projectFilter || undefined,
         limit: 80,
       })
       setProposals(r.items)
     } catch (e) { toast.error(errMsg(e)) }
-  }, [filterStatus, filterType, filterUrgency, filterExpired, activeOperationalSpaceId])
+  }, [filterStatus, filterType, filterUrgency, filterExpired, projectFilter, activeOperationalSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -121,6 +125,15 @@ export default function ProposalsPage() {
               {' '}— accept/reject use <code className="text-xs bg-muted px-1 rounded">POST /api/v1/proposals/…</code>.
             </p>
             <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+            {projectFilter && (
+              <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-accent/40 text-xs text-accent-foreground">
+                <FolderKanban className="size-3" />
+                Filtered by project
+                <button onClick={() => setSearchParams(p => { p.delete('project_id'); return p })} className="ml-0.5 hover:text-foreground" aria-label="Clear project filter">
+                  <X className="size-3" />
+                </button>
+              </span>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap gap-2 items-end">

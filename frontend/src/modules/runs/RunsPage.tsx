@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Link } from 'react-router-dom'
-import { Play } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { Play, FolderKanban, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { runsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -82,6 +82,9 @@ function StopRunButton({ runId, onDone }: { runId: string; onDone: () => void })
 
 export default function RunsPage() {
   const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const projectFilter = searchParams.get('project_id') ?? ''
+
   const [runs, setRuns] = useState<Run[]>([])
   const [loading, setLoading] = useState(true)
   const [fStatus, setFStatus] = useState('')
@@ -97,12 +100,14 @@ export default function RunsPage() {
     }
     setLoading(true)
     try {
-      const q: Record<string, string> = { limit: '100' }
-      if (fStatus) q.status = fStatus
-      if (fMode) q.mode = fMode
-      if (fAgent) q.agent_id = fAgent
-      if (fWs) q.workspace_id = fWs
-      const data = await runsApi.list(q)
+      const data = await runsApi.list({
+        limit: 100,
+        status: fStatus || undefined,
+        mode: fMode || undefined,
+        agent_id: fAgent || undefined,
+        workspace_id: fWs || undefined,
+        project_id: projectFilter || undefined,
+      })
       setRuns(data)
     } catch (e) {
       toast.error(errMsg(e))
@@ -110,7 +115,7 @@ export default function RunsPage() {
     } finally {
       setLoading(false)
     }
-  }, [fStatus, fMode, fAgent, fWs, activeOperationalSpaceId])
+  }, [fStatus, fMode, fAgent, fWs, projectFilter, activeOperationalSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -136,6 +141,15 @@ export default function RunsPage() {
           <h1 className="text-xl font-semibold tracking-tight">Runs</h1>
           <p className="text-sm text-muted-foreground">Canonical runs: queue, status, and links to activity and artifacts.</p>
           <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+          {projectFilter && (
+            <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-accent/40 text-xs text-accent-foreground">
+              <FolderKanban className="size-3" />
+              Filtered by project
+              <button onClick={() => setSearchParams(p => { p.delete('project_id'); return p })} className="ml-0.5 hover:text-foreground" aria-label="Clear project filter">
+                <X className="size-3" />
+              </button>
+            </span>
+          )}
         </div>
       </div>
 

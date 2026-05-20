@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
-import { Inbox } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { Inbox, FolderKanban, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { activityApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -30,6 +30,9 @@ const SOURCE_COLORS: Record<ActivitySourceType, string> = {
 
 export default function ActivityInboxPage() {
   const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const projectFilter = searchParams.get('project_id') ?? ''
+
   const [records, setRecords]   = useState<ActivityInboxRecord[]>([])
   const [filter, setFilter]     = useState<ActivityStatus>('raw')
   const [loading, setLoading]   = useState(false)
@@ -43,14 +46,17 @@ export default function ActivityInboxPage() {
     }
     setLoading(true)
     try {
-      const items = await activityApi.list({ status: filter })
+      const items = await activityApi.list({
+        status: filter,
+        project_id: projectFilter || undefined,
+      })
       setRecords(items)
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
       setLoading(false)
     }
-  }, [filter, activeOperationalSpaceId])
+  }, [filter, projectFilter, activeOperationalSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -74,6 +80,10 @@ export default function ActivityInboxPage() {
     finally { setBusy(null) }
   }
 
+  function clearProjectFilter() {
+    setSearchParams(p => { p.delete('project_id'); return p })
+  }
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between pb-4 border-b border-border">
@@ -91,6 +101,15 @@ export default function ActivityInboxPage() {
             <h1 className="text-xl font-semibold tracking-tight">Activity Inbox</h1>
             <p className="text-sm text-muted-foreground">Raw input records before they become memory proposals.</p>
             <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+            {projectFilter && (
+              <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-accent/40 text-xs text-accent-foreground">
+                <FolderKanban className="size-3" />
+                Filtered by project
+                <button onClick={clearProjectFilter} className="ml-0.5 hover:text-foreground" aria-label="Clear project filter">
+                  <X className="size-3" />
+                </button>
+              </span>
+            )}
           </div>
         </div>
         <div className="flex gap-1.5">

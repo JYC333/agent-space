@@ -2,6 +2,7 @@
 
 Contract (adapter ``output_json`` after success):
 - ``artifacts``: list of ``{artifact_type?, title?, content (required), ...}`` → ``Artifact`` rows.
+- ``activities``: list of ``{activity_type?, title?, content?, payload_json?}`` → ``ActivityRecord`` rows.
 - ``produced_artifact_paths``: handled by :mod:`app.runs.produced_artifact_path_ingestion` during
   execution (while the sandbox exists), not from ``output_json`` alone — see ``RuntimeAdapterResult``.
 - ``proposed_changes``: list of durable-change requests. Supported ``proposal_type``:
@@ -24,7 +25,7 @@ from sqlalchemy.orm import Session
 from ulid import ULID
 
 from ..memory.proposals import build_memory_create_proposal
-from ..models import Artifact, Proposal, Run, Workspace
+from ..models import ActivityRecord, Artifact, Proposal, Run, Workspace
 from ..personal_memory_grants.egress_guard import (
     EgressDecision,
     PersonalMemoryEgressError,
@@ -96,6 +97,13 @@ class RunOutputMaterializer:
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{label}: {exc}")
 
+        for i, spec in enumerate(data.get("activities") or []):
+            label = f"activities[{i}]"
+            try:
+                self._activity_from_spec(run, spec, label)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{label}: {exc}")
+
         for i, spec in enumerate(data.get("proposed_changes") or []):
             label = f"proposed_changes[{i}]"
             try:
@@ -148,20 +156,91 @@ class RunOutputMaterializer:
             raise TypeError("content must be a string")
         preview = bool(spec.get("preview", False))
         mime = str(spec.get("mime_type") or "text/plain")[:256]
+        metadata_json = spec.get("metadata_json")
+        if metadata_json is not None and not isinstance(metadata_json, dict):
+            raise TypeError("metadata_json must be an object")
         art = Artifact(
             id=_new_id(),
             space_id=run.space_id,
             run_id=run.id,
+            project_id=run.project_id,
             artifact_type=artifact_type,
             title=title,
             content=content,
             mime_type=mime,
             exportable=True,
             preview=preview,
+            metadata_json=metadata_json,
             owner_user_id=run.instructed_by_user_id,
         )
         self.db.add(art)
         link_run_outputs_to_tasks(self.db, run=run, artifact=art, proposal=None)
+
+    def _activity_from_spec(self, run: Run, spec: Any, label: str) -> None:
+        if not isinstance(spec, dict):
+            raise TypeError("activity spec must be an object")
+        del label
+
+        payload = spec.get("payload_json")
+        if payload is None:
+            payload = spec.get("metadata_json")
+        if payload is not None and not isinstance(payload, dict):
+            raise TypeError("payload_json must be an object")
+
+        source_kind = str(spec.get("source_kind") or "run_event")
+        if source_kind not in {
+            "user_capture",
+            "chat_message",
+            "external_chat",
+            "file_import",
+            "web_capture",
+            "run_event",
+            "workspace_event",
+            "system_event",
+            "external_source",
+        }:
+            raise ValueError("source_kind is invalid")
+
+        source_trust = str(spec.get("source_trust") or "internal_system")
+        if source_trust not in {
+            "user_confirmed",
+            "internal_system",
+            "trusted_external",
+            "untrusted_external",
+            "agent_inferred",
+        }:
+            raise ValueError("source_trust is invalid")
+
+        content = spec.get("content")
+        if content is not None and not isinstance(content, str):
+            raise TypeError("content must be a string")
+
+        source_url = spec.get("source_url")
+        if source_url is not None and not isinstance(source_url, str):
+            raise TypeError("source_url must be a string")
+
+        activity = ActivityRecord(
+            id=_new_id(),
+            space_id=run.space_id,
+            source_run_id=run.id,
+            session_id=run.session_id,
+            user_id=run.instructed_by_user_id,
+            workspace_id=run.workspace_id,
+            agent_id=run.agent_id,
+            project_id=run.project_id,
+            source_url=source_url,
+            activity_type=str(spec.get("activity_type") or "capability_event")[:64],
+            source_kind=source_kind,
+            source_trust=source_trust,
+            title=str(spec.get("title") or "Capability event")[:512],
+            content=content,
+            payload_json=payload or {},
+            status="raw",
+            lifecycle_status="raw",
+            consolidation_status="pending",
+            owner_user_id=run.instructed_by_user_id,
+        )
+        self.db.add(activity)
 
     def _proposal_from_spec(self, run: Run, spec: Any) -> None:
         if not isinstance(spec, dict):

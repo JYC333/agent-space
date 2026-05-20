@@ -5,7 +5,12 @@ description: >
   Analyzes session messages and generates structured memory proposals
   for user review. Supports placeholder (pattern-matching) and LLM modes.
 
-entrypoint: null
+enabled: true
+
+entrypoint:
+  type: python_module
+  module: capabilities.memory_reflect.main
+  function: execute
 
 memory_access:
   read:
@@ -21,9 +26,17 @@ memory_access:
 tools: []
 
 permissions:
-  network: false
-  filesystem: false
-  subprocess: false
+  network:
+    allow: []
+  filesystem:
+    read: []
+    write: []
+  subprocess:
+    allow: false
+
+outputs:
+  artifact_types:
+    - memory.reflection.v1
 
 validation:
   min_messages: 1

@@ -15,6 +15,7 @@ import type {
   PersonalMemoryGrantCreateRequest, PersonalMemoryGrantResponse,
   PersonalMemoryGrantAuditResponse,
   EgressApprovalRequest, ProposalApprovalResponse,
+  Project, ProjectCreate, ProjectUpdate, ProjectWorkspaceLinkCreate, ProjectWorkspaceLinkOut, ProjectSummary,
 } from '../types/api'
 
 const BASE = '/api/v1'
@@ -95,8 +96,27 @@ const del   = <T>(path: string, options?: RequestOptions)                => requ
 
 // ── Memory ────────────────────────────────────────────────────────────────
 export const memoryApi = {
-  list:   (params: Record<string, string> = {}) =>
-    get<Page<Memory>>('/memory?' + new URLSearchParams(params)),
+  list: (params: {
+    scope?: string
+    namespace?: string
+    type?: string
+    status?: string
+    workspace_id?: string
+    project_id?: string
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.scope !== undefined) q.scope = params.scope
+    if (params.namespace !== undefined) q.namespace = params.namespace
+    if (params.type !== undefined) q.type = params.type
+    if (params.status !== undefined) q.status = params.status
+    if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
+    if (params.project_id !== undefined) q.project_id = params.project_id
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<Memory>>('/memory?' + new URLSearchParams(q))
+  },
   create: (data: Partial<Memory>) =>
     post<Proposal>('/memory', { space_id: _spaceId, owner_user_id: _userId, ...data }),
   update: (id: string, data: Partial<Memory>) =>
@@ -171,8 +191,25 @@ export const meApi = {
 
 // ── Runs (canonical API) ──────────────────────────────────────────────────
 export const runsApi = {
-  list: (params: Record<string, string> = {}) =>
-    get<Run[]>('/runs?' + new URLSearchParams(params)),
+  list: (params: {
+    status?: string
+    mode?: string
+    agent_id?: string
+    workspace_id?: string
+    project_id?: string
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    if (params.mode !== undefined) q.mode = params.mode
+    if (params.agent_id !== undefined) q.agent_id = params.agent_id
+    if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
+    if (params.project_id !== undefined) q.project_id = params.project_id
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Run[]>('/runs?' + new URLSearchParams(q))
+  },
   get:    (id: string) => get<Run>(`/runs/${id}`),
   status: (id: string) => get<RunStatusOut>(`/runs/${id}/status`),
   stop:   (id: string) => patch<Record<string, unknown>>(`/runs/${id}/stop`),
@@ -205,8 +242,19 @@ export const personalMemoryGrantsApi = {
 
 // ── Artifacts ─────────────────────────────────────────────────────────────
 export const artifactsApi = {
-  list: (params: Record<string, string> = {}) =>
-    get<Page<Artifact>>('/artifacts?' + new URLSearchParams(params)),
+  list: (params: {
+    artifact_type?: string
+    project_id?: string
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.artifact_type !== undefined) q.artifact_type = params.artifact_type
+    if (params.project_id !== undefined) q.project_id = params.project_id
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<Artifact>>('/artifacts?' + new URLSearchParams(q))
+  },
   get: (id: string) => get<Artifact>(`/artifacts/${id}`),
   export: (id: string) => downloadArtifactExport(id),
 }
@@ -256,6 +304,7 @@ export const proposalsApi = {
     proposal_type?: string
     urgency?: string
     expired?: boolean
+    project_id?: string
     limit?: number
     offset?: number
   } = {}) => {
@@ -265,6 +314,7 @@ export const proposalsApi = {
     if (params.proposal_type !== undefined) q.type = params.proposal_type
     if (params.urgency !== undefined) q.urgency = params.urgency
     if (params.expired !== undefined) q.expired = String(params.expired)
+    if (params.project_id !== undefined) q.project_id = params.project_id
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
     return get<Page<Proposal>>('/proposals?' + new URLSearchParams(q))
@@ -381,8 +431,23 @@ export const jobsApi = {
 
 // ── Activity ──────────────────────────────────────────────────────────────
 export const activityApi = {
-  list:   (params: Record<string, string> = {}) =>
-    get<ActivityInboxRecord[]>('/activity?' + new URLSearchParams(params)),
+  list: (params: {
+    status?: string
+    source_type?: string
+    workspace_id?: string
+    project_id?: string
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    if (params.source_type !== undefined) q.source_type = params.source_type
+    if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
+    if (params.project_id !== undefined) q.project_id = params.project_id
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<ActivityInboxRecord[]>('/activity?' + new URLSearchParams(q))
+  },
   create: (
     data: { source_type: ActivitySourceType; content: string; title?: string; source_url?: string; workspace_id?: string; metadata_json?: Record<string, unknown> },
     options: { spaceId?: string } = {},
@@ -433,6 +498,29 @@ export const workspaceConsoleApi = {
 
   stopSession: (id: string) =>
     post<ConsoleSession>(`/workspace-console/sessions/${id}/stop`),
+}
+
+// ── Projects ──────────────────────────────────────────────────────────────
+export const projectsApi = {
+  list: (params: { status?: string; limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<Project>>('/projects?' + new URLSearchParams(q))
+  },
+  create: (data: ProjectCreate) => post<Project>('/projects', data),
+  get: (id: string) => get<Project>(`/projects/${id}`),
+  update: (id: string, data: ProjectUpdate) => patch<Project>(`/projects/${id}`, data),
+  archive: (id: string) => post<Project>(`/projects/${id}/archive`),
+  getSummary: (id: string) => get<ProjectSummary>(`/projects/${id}/summary`),
+  listWorkspaces: (id: string) => get<ProjectWorkspaceLinkOut[]>(`/projects/${id}/workspaces`),
+  linkWorkspace: (id: string, data: ProjectWorkspaceLinkCreate) =>
+    post<ProjectWorkspaceLinkOut>(`/projects/${id}/workspaces`, data),
+  unlinkWorkspace: (id: string, workspaceId: string, role?: string) => {
+    const q = role ? `?role=${encodeURIComponent(role)}` : ''
+    return del<null>(`/projects/${id}/workspaces/${workspaceId}${q}`)
+  },
 }
 
 // ── Features ──────────────────────────────────────────────────────────────

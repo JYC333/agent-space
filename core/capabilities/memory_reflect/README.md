@@ -10,12 +10,13 @@ A built-in capability that analyzes session messages and generates memory propos
 4. The user reviews and accepts or rejects each proposal
 5. Accepted proposals become active long-term memories
 
-## Modes
+## Capability Runtime
 
-- **pattern** (default): pattern-matching, no API key needed
-- **llm**: uses Claude to produce higher-quality proposals (requires `ANTHROPIC_API_KEY`)
+The executable capability entrypoint is currently a backend skeleton. It records
+reflection metadata as a run artifact/activity and does not emit memory proposals
+directly.
 
-Set `REFLECTOR_MODE=llm` in your `.env` to enable LLM mode.
+The existing session reflection API still owns the pattern/LLM proposal flow.
 
 ## Memory Access
 

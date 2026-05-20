@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Send, ChevronRight } from 'lucide-react'
+import { Send, ChevronRight, FolderKanban, Plus } from 'lucide-react'
 import { toast } from 'sonner'
-import { proposalsApi, sessionsApi, activityApi, homeApi } from '../../api/client'
+import { proposalsApi, sessionsApi, activityApi, homeApi, projectsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { useAuth } from '../../contexts/AuthContext'
 import { errMsg } from '../../lib/utils'
@@ -14,6 +14,7 @@ import type {
   HomePendingProposalItem,
   HomeRuntimeStatusSection,
   HomeSuggestedActionItem,
+  Project,
 } from '../../types/api'
 import { PreviewBadge, UrgencyBadge } from '../../components/PreviewBadge'
 import { MODULE_REGISTRY, APP_GROUPS, type AppGroup } from '../registry'
@@ -548,6 +549,55 @@ function RecentCard({ sessions }: { sessions: Session[] }) {
   )
 }
 
+/* ── Right sidebar: Active projects ──────────────────────────────────────── */
+function ProjectsCard({ projects }: { projects: Project[] }) {
+  const navigate = useNavigate()
+  return (
+    <div className="bg-card border border-border rounded-lg p-4 flex flex-col gap-3">
+      <div className="flex items-baseline justify-between">
+        <span className="text-[11px] font-bold tracking-[.1em] uppercase text-muted-foreground flex items-center gap-1.5">
+          <FolderKanban className="size-3" />
+          Projects
+        </span>
+        <Link
+          to="/projects"
+          className="text-[11px] text-accent-foreground flex items-center gap-1 hover:underline"
+        >
+          All <ChevronRight className="size-3" />
+        </Link>
+      </div>
+      {projects.length === 0 ? (
+        <div className="flex flex-col gap-2">
+          <p className="text-[12px] text-muted-foreground">No active projects.</p>
+          <Link
+            to="/projects"
+            className="inline-flex items-center gap-1 text-[11px] text-accent-foreground hover:underline"
+          >
+            <Plus className="size-3" />
+            Create your first project
+          </Link>
+        </div>
+      ) : (
+        <div className="flex flex-col">
+          {projects.slice(0, 5).map((p, i) => (
+            <button
+              key={p.id}
+              onClick={() => navigate(`/projects/${p.id}`)}
+              className="flex flex-col py-2 text-left w-full hover:bg-accent rounded transition-colors -mx-1 px-1"
+              style={{ borderTop: i === 0 ? 'none' : '1px solid color-mix(in oklch, var(--border) 50%, transparent)' }}
+            >
+              <div className="text-[12px] text-foreground truncate">{p.name}</div>
+              {p.current_focus && (
+                <div className="text-[10px] text-muted-foreground truncate">{p.current_focus}</div>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function emptyHomeSummary(): HomeSummaryOut {
   return {
     recent_runs: [],
@@ -582,6 +632,7 @@ export default function HomeGalleryPage() {
   const { currentUser } = useAuth()
   const [summary, setSummary] = useState<HomeSummaryOut | null>(null)
   const [sessions, setSessions] = useState<Session[]>([])
+  const [activeProjects, setActiveProjects] = useState<Project[]>([])
 
   const loadSummary = useCallback(async () => {
     if (!activeOperationalSpaceId) {
@@ -603,7 +654,12 @@ export default function HomeGalleryPage() {
 
   useEffect(() => {
     loadSummary()
-    if (activeOperationalSpaceId) sessionsApi.list().then(r => setSessions(r.items)).catch(() => {})
+    if (activeOperationalSpaceId) {
+      sessionsApi.list().then(r => setSessions(r.items)).catch(() => {})
+      projectsApi.list({ status: 'active', limit: 5 }).then(r => setActiveProjects(r.items)).catch(() => {})
+    } else {
+      setActiveProjects([])
+    }
   }, [loadSummary, activeOperationalSpaceId])
 
   async function decide(id: string, action: 'accept' | 'reject') {
@@ -684,6 +740,7 @@ export default function HomeGalleryPage() {
       {/* ── Right column ──────────────────────────────────────────────── */}
       <div className="flex flex-col gap-3 min-w-0">
         <ProposalStatusCard proposals={sidebarProposals} onDecide={decide} />
+        <ProjectsCard projects={activeProjects} />
         <RuntimeStatusCard status={s.runtime_status} />
         <SuggestedActionsCard actions={s.suggested_actions} />
         <RecentCard sessions={sessions} />

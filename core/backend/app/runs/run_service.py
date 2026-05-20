@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session as DBSession
 from fastapi import HTTPException
 
 from ..models import Run, ContextSnapshot, ActivityRecord, Artifact, Agent, AgentVersion
+from ..projects.service import assert_project_in_space
 from ..schemas import RunCreate
 from ..visibility.auth import can_read_scoped_object
 
@@ -266,7 +267,11 @@ class RunService:
         if data.workspace_id:
             self._validate_workspace_space(data.workspace_id, space_id)
 
-        # 6. Validate session_id if provided
+        # 6. Validate project_id if provided
+        if data.project_id:
+            assert_project_in_space(self.db, data.project_id, space_id)
+
+        # 7. Validate session_id if provided
         if data.session_id:
             self._validate_session_space(data.session_id, space_id)
 
@@ -358,6 +363,7 @@ class RunService:
             agent_version_id=agent.current_version_id,
             context_snapshot_id=snapshot.id,
             workspace_id=data.workspace_id,
+            project_id=data.project_id,
             session_id=data.session_id,
             parent_run_id=parent_run_id,
             instructed_by_user_id=effective_user_id,
@@ -371,6 +377,7 @@ class RunService:
             instruction=data.instruction,
             scheduled_at=data.scheduled_at,
             adapter_type=data.adapter_type,
+            capability_id=data.capability_id,
             required_sandbox_level="none",
             source="managed",
             execution_plane_id=execution_plane_id,
@@ -415,13 +422,18 @@ class RunService:
         mode: str | None = None,
         agent_id: str | None = None,
         workspace_id: str | None = None,
+        project_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
         *,
         user_id: str | None = None,
     ) -> list[Run]:
         """List runs scoped to space, with optional filters."""
+        if project_id:
+            assert_project_in_space(self.db, project_id, space_id)
         q = self.db.query(Run).filter(Run.space_id == space_id)
+        if project_id:
+            q = q.filter(Run.project_id == project_id)
         if status:
             q = q.filter(Run.status == status)
         if mode:

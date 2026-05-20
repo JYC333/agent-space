@@ -216,6 +216,7 @@ def list_runs(
     mode: str | None = Query(None),
     agent_id: str | None = Query(None),
     workspace_id: str | None = Query(None),
+    project_id: str | None = Query(None),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
     ids: tuple[str, str] = Depends(get_identity),
@@ -223,14 +224,18 @@ def list_runs(
 ):
     space_id, user_id = ids
     svc = RunService(db)
-    runs = svc.list_runs(
-        space_id=space_id,
-        status=status,
-        mode=mode,
-        agent_id=agent_id,
-        workspace_id=workspace_id,
-        limit=limit,
-        offset=offset,
-        user_id=user_id,
-    )
+    try:
+        runs = svc.list_runs(
+            space_id=space_id,
+            status=status,
+            mode=mode,
+            agent_id=agent_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            limit=limit,
+            offset=offset,
+            user_id=user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return runs

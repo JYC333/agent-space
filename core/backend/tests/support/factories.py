@@ -33,6 +33,8 @@ from app.models import (
     MemoryEntry,
     ModelProvider,
     Policy,
+    Project,
+    ProjectWorkspace,
     Proposal,
     Run,
     RunStep,
@@ -223,6 +225,8 @@ def create_test_workspace(
     root_path: str | None = None,
     name: str | None = None,
     created_by_user_id: str | None = None,
+    workspace_type: str = "project",
+    metadata_json: dict[str, Any] | None = None,
     commit: bool = False,
 ) -> Workspace:
     row = Workspace(
@@ -231,6 +235,8 @@ def create_test_workspace(
         name=name or "test-workspace",
         root_path=root_path,
         created_by_user_id=created_by_user_id,
+        workspace_type=workspace_type,
+        metadata_json=metadata_json,
     )
     db.add(row)
     return _finish(db, row, commit=commit)
@@ -569,6 +575,46 @@ def create_test_run_step(
         metadata_json=dict(metadata_json or {}),
         created_at=now,
         updated_at=now,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_project(
+    db: DBSession,
+    *,
+    space_id: str,
+    name: str = "test-project",
+    owner_user_id: str | None = None,
+    status: str = "active",
+    description: str | None = None,
+    commit: bool = False,
+) -> Project:
+    row = Project(
+        id=_new_id(),
+        space_id=space_id,
+        owner_user_id=owner_user_id,
+        name=name,
+        description=description,
+        status=status,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_project_workspace_link(
+    db: DBSession,
+    *,
+    project: Project,
+    workspace: Workspace,
+    role: str = "reference",
+    commit: bool = False,
+) -> ProjectWorkspace:
+    row = ProjectWorkspace(
+        id=_new_id(),
+        project_id=project.id,
+        workspace_id=workspace.id,
+        role=role,
     )
     db.add(row)
     return _finish(db, row, commit=commit)

@@ -1034,3 +1034,60 @@ export interface MePendingProposalItem {
   created_at: string
   updated_at: string
 }
+
+// ── Projects ───────────────────────────────────────────────────────────────
+
+export type ProjectStatus = 'active' | 'archived'
+
+export interface Project {
+  id: string
+  space_id: string
+  owner_user_id: string | null
+  name: string
+  description: string | null
+  status: ProjectStatus
+  current_focus: string | null
+  settings_json: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+  archived_at: string | null
+}
+
+export interface ProjectCreate {
+  name: string
+  description?: string | null
+  current_focus?: string | null
+  settings_json?: Record<string, unknown> | null
+}
+
+export interface ProjectUpdate {
+  name?: string | null
+  description?: string | null
+  current_focus?: string | null
+  status?: ProjectStatus | null
+  settings_json?: Record<string, unknown> | null
+}
+
+export interface ProjectWorkspaceLinkCreate {
+  workspace_id: string
+  role?: string
+}
+
+export interface ProjectWorkspaceLinkOut {
+  id: string
+  project_id: string
+  workspace_id: string
+  role: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectSummary {
+  project_id: string
+  activity_count: number
+  artifact_count: number
+  pending_proposal_count: number
+  workspace_count: number
+  active_run_count: number
+  memory_entry_count: number
+}

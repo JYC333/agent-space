@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from ..models import ActivityRecord, Run
 from ..param_binding import duplicate_mapper
 from ..visibility.auth import can_read_scoped_object
+from ..projects.service import assert_project_in_space
 
 
 def _new_id() -> str:
@@ -149,11 +150,16 @@ class ActivityService:
         workspace_id: str | None = None,
         source_type: str | None = None,
         status: str | None = None,
+        project_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
         viewer_user_id: str | None = None,
     ) -> list[ActivityRecord]:
+        if project_id:
+            assert_project_in_space(self.db, project_id, space_id)
         q = self.db.query(ActivityRecord).filter(ActivityRecord.space_id == space_id)
+        if project_id:
+            q = q.filter(ActivityRecord.project_id == project_id)
         if user_id:
             run_for_instructor = duplicate_mapper(Run)
             visible = or_(

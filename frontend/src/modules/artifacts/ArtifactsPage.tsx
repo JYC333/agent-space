@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
-import { Package } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { Package, FolderKanban, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { artifactsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -21,6 +21,9 @@ function fmt(dt: string | null | undefined) {
 
 export default function ArtifactsPage() {
   const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const projectFilter = searchParams.get('project_id') ?? ''
+
   const [items, setItems] = useState<Artifact[]>([])
   const [loading, setLoading] = useState(true)
   const [fType, setFType] = useState('')
@@ -33,9 +36,11 @@ export default function ArtifactsPage() {
     }
     setLoading(true)
     try {
-      const q: Record<string, string> = { limit: '100' }
-      if (fType.trim()) q.artifact_type = fType.trim()
-      const p = await artifactsApi.list(q)
+      const p = await artifactsApi.list({
+        limit: 100,
+        artifact_type: fType.trim() || undefined,
+        project_id: projectFilter || undefined,
+      })
       setItems(p.items)
     } catch (e) {
       toast.error(errMsg(e))
@@ -43,7 +48,7 @@ export default function ArtifactsPage() {
     } finally {
       setLoading(false)
     }
-  }, [fType, activeOperationalSpaceId])
+  }, [fType, projectFilter, activeOperationalSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -74,6 +79,15 @@ export default function ArtifactsPage() {
           <h1 className="text-xl font-semibold tracking-tight">Artifacts</h1>
           <p className="text-sm text-muted-foreground">Browse and export space-scoped artifacts.</p>
           <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+          {projectFilter && (
+            <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-accent/40 text-xs text-accent-foreground">
+              <FolderKanban className="size-3" />
+              Filtered by project
+              <button onClick={() => setSearchParams(p => { p.delete('project_id'); return p })} className="ml-0.5 hover:text-foreground" aria-label="Clear project filter">
+                <X className="size-3" />
+              </button>
+            </span>
+          )}
         </div>
       </div>
 

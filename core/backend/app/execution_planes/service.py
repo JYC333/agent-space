@@ -16,6 +16,7 @@ log = logging.getLogger(__name__)
 # Planes must be seeded by ExecutionPlaneSeeder before these lookups are useful.
 _ADAPTER_TO_PLANE: dict[str, str] = {
     "echo":                "agent_space_native_local",
+    "capability":          "agent_space_native_local",
     "anthropic_api":       "agent_space_native_local",
     "anthropic_messages":  "agent_space_native_local",
     "claude_code":         "local_claude_code_cli",

@@ -77,6 +77,7 @@ class ActivityOut(BaseModel):
     occurred_at: Optional[str] = None
     created_at: str
     updated_at: str
+    project_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -102,6 +103,7 @@ class ActivityOut(BaseModel):
             occurred_at=occ.isoformat() if occ is not None else None,
             created_at=m.created_at.isoformat(),   # type: ignore[attr-defined]
             updated_at=m.updated_at.isoformat(),   # type: ignore[attr-defined]
+            project_id=getattr(m, "project_id", None),  # type: ignore[attr-defined]
         )
 
 
@@ -161,6 +163,7 @@ def list_activities(
     workspace_id: Optional[str] = Query(default=None),
     source_type: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
+    project_id: Optional[str] = Query(default=None),
     limit: int = Query(default=50, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -179,6 +182,7 @@ def list_activities(
             workspace_id=workspace_id,
             source_type=source_type,
             status=status,
+            project_id=project_id,
             limit=limit,
             offset=offset,
             viewer_user_id=auth_user_id,

@@ -45,31 +45,37 @@ def list_memories(
     limit: int = Query(50, le=200),
     offset: int = Query(0),
     workspace_id: str | None = Query(None),
+    project_id: str | None = Query(None),
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
     space_id, user_id = ids
     store = MemoryStore(db)
-    total = store.count(
-        space_id=space_id,
-        user_id=user_id,
-        workspace_id=workspace_id,
-        scope=scope,
-        namespace=namespace,
-        memory_type=memory_type,
-        status=status,
-    )
-    items = store.list(
-        space_id=space_id,
-        user_id=user_id,
-        workspace_id=workspace_id,
-        scope=scope,
-        namespace=namespace,
-        memory_type=memory_type,
-        status=status,
-        limit=limit,
-        offset=offset,
-    )
+    try:
+        total = store.count(
+            space_id=space_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            scope=scope,
+            namespace=namespace,
+            memory_type=memory_type,
+            status=status,
+            project_id=project_id,
+        )
+        items = store.list(
+            space_id=space_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            scope=scope,
+            namespace=namespace,
+            memory_type=memory_type,
+            status=status,
+            project_id=project_id,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     outs: list[MemoryOut] = []
     for m in items:
         out = memory_entry_to_out(

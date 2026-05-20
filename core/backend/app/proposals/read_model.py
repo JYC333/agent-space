@@ -98,6 +98,7 @@ def proposal_to_out(proposal: Proposal, *, now: datetime | None = None) -> Propo
         ),
         egress_approval_status=approval.status if approval else None,
         egress_approval_id=approval.id if approval else None,
+        project_id=getattr(proposal, "project_id", None),
     )
 
 

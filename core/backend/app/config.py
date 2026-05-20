@@ -50,6 +50,10 @@ class AppPaths:
         return self.config_dir / "cli-credentials.yaml"
 
     @property
+    def instance_settings_config(self) -> Path:
+        return self.config_dir / "settings.yaml"
+
+    @property
     def provider_keys_key(self) -> Path:
         """AES-256-GCM master key for encrypting provider API keys at rest."""
         return self.secrets_dir / "provider_keys.key"

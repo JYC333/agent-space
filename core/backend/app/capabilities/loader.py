@@ -30,6 +30,7 @@ def load_capability_manifest(capability_dir: Path) -> dict | None:
         return None
 
     manifest["_dir"] = str(capability_dir)
+    manifest["_manifest_path"] = str(yaml_path)
     return manifest
 
 
@@ -48,11 +49,13 @@ def scan_capabilities(capabilities_dir: str) -> list[tuple[dict, list[str]]]:
     for child in sorted(root.iterdir()):
         if not child.is_dir():
             continue
+        if not (child / "capability.yaml").exists():
+            continue
         manifest = load_capability_manifest(child)
         if manifest is None:
             errors = [f"Failed to load capability.yaml in {child}"]
             results.append(({}, errors))
-        else:
-            results.append((manifest, []))
+            continue
+        results.append((manifest, []))
 
     return results

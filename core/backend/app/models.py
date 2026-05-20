@@ -203,6 +203,84 @@ class Workspace(Base):
 
 
 # ---------------------------------------------------------------------------
+# Project — goal/knowledge/context boundary
+# ---------------------------------------------------------------------------
+
+
+class Project(Base):
+    """Goal-oriented knowledge and activity container.
+
+    A Project organises activities, artifacts, proposals, runs, and linked
+    workspaces around a long-lived objective. It is a stable ownership/context
+    boundary — not a task manager or execution environment.
+
+    Workspace is the file/execution/sandbox boundary.
+    Project is the goal/knowledge boundary.
+    A Project can link to many Workspaces; a Workspace can serve many Projects.
+    """
+
+    __tablename__ = "projects"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    owner_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    current_focus: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    settings_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    space: Mapped["Space"] = relationship("Space")
+    owner: Mapped[Optional["User"]] = relationship("User", foreign_keys=[owner_user_id])
+    workspace_links: Mapped[list["ProjectWorkspace"]] = relationship(
+        "ProjectWorkspace", back_populates="project", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('active', 'archived', 'deleted')",
+            name="ck_projects_status",
+        ),
+    )
+
+
+class ProjectWorkspace(Base):
+    """M:N association between a Project and a Workspace.
+
+    The ``role`` column captures how the Workspace serves the Project
+    (e.g. primary code execution vs. docs vs. reference).
+    Cross-space links are rejected at the service layer.
+    """
+
+    __tablename__ = "project_workspaces"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    project_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("projects.id"), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(64), nullable=False, default="reference")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    project: Mapped["Project"] = relationship("Project", back_populates="workspace_links")
+    workspace: Mapped["Workspace"] = relationship("Workspace")
+
+    __table_args__ = (
+        CheckConstraint(
+            "role in ('primary_codebase', 'capability_library', 'docs', 'data', 'deployment', 'reference')",
+            name="ck_project_workspaces_role",
+        ),
+        UniqueConstraint(
+            "project_id", "workspace_id", "role",
+            name="uq_project_workspaces_project_workspace_role",
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Runtime configuration
 # ---------------------------------------------------------------------------
 
@@ -748,6 +826,9 @@ class Run(Base):
     # FK later without a batch table rebuild. **Canonical Task↔Run linkage is
     # ``task_runs`` (TaskRun);** task board reads must use TaskRun, not this column alone.
     task_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    # Soft reference to Project.id. No DB FK (SQLite ALTER TABLE cannot add FK to existing
+    # table without full rebuild). Project scoping is enforced at the service layer.
+    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
     user_id = synonym("instructed_by_user_id")
     cli_adapter_config_id = synonym("runtime_adapter_id")
     adapter_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -860,6 +941,8 @@ class ActivityRecord(Base):
     # here to ``tasks.id`` would create a DDL bootstrap cycle. Task output linkage
     # remains TaskRun / TaskArtifact / TaskProposal — never this column alone.
     source_task_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    # Soft reference to Project.id — no DB FK; enforced at service layer.
+    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
     source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     activity_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     title: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
@@ -956,6 +1039,8 @@ class Artifact(Base):
     source_runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
     source_execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
     trust_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # Soft reference to Project.id — no DB FK; enforced at service layer.
+    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
 
     # ORM mirrors for historical artifact field names.
     path = synonym("storage_path")
@@ -1006,6 +1091,8 @@ class Proposal(Base):
     visibility: Mapped[str] = mapped_column(
         String(32), nullable=False, default="space_shared", server_default=text("'space_shared'")
     )
+    # Soft reference to Project.id — no DB FK; enforced at service layer.
+    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
     type = synonym("proposal_type")
     decided_at = synonym("reviewed_at")
 
@@ -1434,6 +1521,8 @@ class MemoryEntry(Base):
     selected_user_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     last_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
+    # Soft reference to Project.id — no DB FK; enforced at service layer.
+    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
     agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True, index=True)
     capability_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     namespace: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)

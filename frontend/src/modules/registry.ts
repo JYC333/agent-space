@@ -170,6 +170,17 @@ export const MODULE_REGISTRY: Module[] = [
 
   // ── Work (task → run → outputs → review) ───────────────────────────────────
   {
+    id: 'projects', label: 'Projects', path: '/projects',
+    section: 'agents', group: 'work', icon: 'folder-kanban', accent: true,
+    description: 'Goal and knowledge context. Organize objectives, artifacts, proposals, memory, and linked workspaces.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    order: 5,
+    hasSubRoutes: true,
+    component: lazy(() => import('./projects/ProjectsModule')),
+  },
+  {
     id: 'tasks', label: 'Tasks', path: '/tasks',
     section: 'agents', group: 'work', icon: 'list-todo',
     description: 'Plan work, start runs, and review linked outputs.',

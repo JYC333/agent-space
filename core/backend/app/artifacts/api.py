@@ -25,6 +25,7 @@ def _export_filename(artifact) -> str:
 @router.get("", response_model=Page[ArtifactOut])
 def list_artifacts(
     artifact_type: str | None = Query(None),
+    project_id: str | None = Query(None),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
     ids: tuple[str, str] = Depends(get_identity),
@@ -32,9 +33,13 @@ def list_artifacts(
 ):
     space_id, user_id = ids
     svc = ArtifactReadService(db)
-    total, rows = svc.list_artifacts(
-        space_id, user_id=user_id, artifact_type=artifact_type, limit=limit, offset=offset
-    )
+    try:
+        total, rows = svc.list_artifacts(
+            space_id, user_id=user_id, artifact_type=artifact_type,
+            project_id=project_id, limit=limit, offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return Page(
         items=[artifact_to_out(a) for a in rows],
         total=total,

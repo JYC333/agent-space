@@ -391,6 +391,10 @@ class RunExecutionService:
                     model_name=version.model_name,
                     system_prompt=version.system_prompt,
                     adapter_config=safe_config,
+                    instruction=run.instruction,
+                    project_id=run.project_id,
+                    workspace_id=run.workspace_id,
+                    capability_id=run.capability_id,
                     simulate_failure=simulate_failure,
                     resolved_credentials=resolved_credentials,
                 )

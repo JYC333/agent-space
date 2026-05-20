@@ -10,6 +10,7 @@ from ..config import settings
 from ..models import Artifact
 from ..schemas import ArtifactOut
 from ..visibility.auth import can_read_scoped_object
+from ..projects.service import assert_project_in_space
 
 
 def artifact_to_out(row: Artifact, *, include_content: bool = False) -> ArtifactOut:
@@ -32,6 +33,7 @@ def artifact_to_out(row: Artifact, *, include_content: bool = False) -> Artifact
         content=(row.content if include_content else None),
         created_at=row.created_at,
         updated_at=row.updated_at,
+        project_id=row.project_id,
     )
 
 
@@ -45,10 +47,15 @@ class ArtifactReadService:
         *,
         user_id: str | None = None,
         artifact_type: str | None = None,
+        project_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[int, list[Artifact]]:
+        if project_id:
+            assert_project_in_space(self.db, project_id, space_id)
         q = self.db.query(Artifact).filter(Artifact.space_id == space_id)
+        if project_id:
+            q = q.filter(Artifact.project_id == project_id)
         if artifact_type:
             q = q.filter(Artifact.artifact_type == artifact_type)
         rows = q.order_by(Artifact.created_at.desc()).all()

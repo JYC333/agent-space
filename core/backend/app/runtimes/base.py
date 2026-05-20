@@ -40,6 +40,10 @@ class RuntimeExecutionContext:
     model_name: str | None
     system_prompt: str | None
     adapter_config: dict[str, Any]
+    instruction: str | None = None
+    project_id: str | None = None
+    workspace_id: str | None = None
+    capability_id: str | None = None
     simulate_failure: bool = False
     # Pre-resolved credentials — set by execution service via runtimes.credentials.
     # Adapters read api_key from here; never from adapter_config or env vars.

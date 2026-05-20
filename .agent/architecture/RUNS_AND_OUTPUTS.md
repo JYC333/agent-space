@@ -16,6 +16,7 @@ Runs are the durable execution record for agent work. A run must be auditable: r
 Run output materialization supports:
 
 - `output_json.artifacts` for content-backed artifacts.
+- `output_json.activities` for run-event activity records.
 - `output_json.proposed_changes` for proposal creation.
 - `produced_artifact_paths` from the runtime result for file-backed artifacts.
 
@@ -25,4 +26,5 @@ Materialization records errors in `run.output_json.materialization_errors` when 
 
 - Runtime/provider execution is outside the core product boundary and should be represented through adapter results.
 - Managed artifacts and proposals are durable product records.
+- Capability execution uses the same Run and adapter result path as other runtimes: `adapter_type="capability"` resolves an enabled local capability, stores its normalized result in `Run.output_json`, and materializes returned artifacts and activities.
 - Sandbox paths are transient execution details and must not become durable references.

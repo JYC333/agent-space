@@ -23,6 +23,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from ..db_uow import UnitOfWork
 from ..models import MemoryEntry, Policy, Proposal, Run, Workspace
 from ..param_binding import duplicate_mapper
+from ..projects.service import assert_project_in_space
 from ..schemas import MemoryCreate
 from .proposal_payload import (
     activity_provenance_entry,
@@ -499,10 +500,13 @@ class ProposalService:
         proposal_type: str | None = None,
         urgency: str | None = None,
         expired: bool | None = None,
+        project_id: str | None = None,
         *,
         now: datetime | None = None,
     ) -> int:
         now = now or datetime.now(UTC)
+        if project_id:
+            assert_project_in_space(self.db, project_id, space_id)
         if urgency and urgency not in _ALLOWED_URGENCY:
             from fastapi import HTTPException
 
@@ -527,6 +531,8 @@ class ProposalService:
             )
             .filter(Proposal.space_id == space_id, visible)
         )
+        if project_id:
+            q = q.filter(Proposal.project_id == project_id)
         if status:
             q = q.filter(Proposal.status == status)
         if proposal_type:
@@ -547,12 +553,15 @@ class ProposalService:
         proposal_type: str | None = None,
         urgency: str | None = None,
         expired: bool | None = None,
+        project_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
         *,
         now: datetime | None = None,
     ) -> list[Proposal]:
         now = now or datetime.now(UTC)
+        if project_id:
+            assert_project_in_space(self.db, project_id, space_id)
         if urgency and urgency not in _ALLOWED_URGENCY:
             from fastapi import HTTPException
 
@@ -576,6 +585,8 @@ class ProposalService:
             )
             .filter(Proposal.space_id == space_id, visible)
         )
+        if project_id:
+            q = q.filter(Proposal.project_id == project_id)
         if status:
             q = q.filter(Proposal.status == status)
         if proposal_type:

@@ -11,7 +11,7 @@
 | Automation / Trigger engine | Not implemented (`Run.trigger_origin` reserves enum values only) |
 | Connectors / Integrations platform | Not implemented |
 | Full first-class Source / Evidence schema | Deferred — field mapping only (`ActivityRecord`, `ProvenanceLink`, proposal provenance entries) |
-| Capability marketplace or install/discovery UX | Not implemented (capabilities are file-defined, in-memory registry) |
+| Capability marketplace or install/discovery UX | Not implemented (file-defined registry; local workspace roots; external enable state in `config/settings.yaml`; no remote install) |
 | Self-evolution behavior execution | Disabled (`ENABLE_SYSTEM_EVOLUTION=false` by default) |
 | App-container self-deployment | Blocked by deployer allowlist |
 | Deployment job persistence | 501-gated (`POST /deployments/jobs` → 501) |
