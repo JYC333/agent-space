@@ -244,3 +244,152 @@ def test_get_agent_version_same_space_succeeds(api_client, db, cross_space_pair)
     )
     assert r.status_code == 200
     assert r.json()["id"] == version_id
+
+
+def test_agent_save_default_model_provider(api_client, db, cross_space_pair, tmp_path, monkeypatch):
+    from app.config import paths
+    import app.crypto as crypto
+
+    monkeypatch.setattr(crypto, "_KEY", None)
+    home = tmp_path / "crypto_home_agent"
+    monkeypatch.setattr(paths, "home", home)
+    paths.init_dirs()
+
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    create_prov = cross_space_pair["client_a"].post(
+        "/api/v1/providers",
+        params=_params(a),
+        json={
+            "name": "Agent Prov",
+            "provider_type": "openai",
+            "api_key": "sk-agent-test",
+            "available_models": ["gpt-4o-mini"],
+            "default_model": "gpt-4o-mini",
+            "is_default": False,
+        },
+    )
+    assert create_prov.status_code == 201
+    prov_id = create_prov.json()["id"]
+
+    create_agent = cross_space_pair["client_a"].post(
+        "/api/v1/agents",
+        params=_params(a),
+        json={
+            "name": "Model Agent",
+            "default_model_provider_id": prov_id,
+            "default_model": "gpt-4o-mini",
+        },
+    )
+    assert create_agent.status_code == 201
+    body = create_agent.json()
+    assert body["model"]["provider_id"] == prov_id
+    assert body["model"]["model"] == "gpt-4o-mini"
+
+
+def test_run_create_resolves_agent_default_model(api_client, db, cross_space_pair, tmp_path, monkeypatch):
+    from app.config import paths
+    import app.crypto as crypto
+
+    monkeypatch.setattr(crypto, "_KEY", None)
+    home = tmp_path / "crypto_home_run"
+    monkeypatch.setattr(paths, "home", home)
+    paths.init_dirs()
+
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    create_prov = cross_space_pair["client_a"].post(
+        "/api/v1/providers",
+        params=_params(a),
+        json={
+            "name": "Run Prov",
+            "provider_type": "openai",
+            "api_key": "sk-run-test",
+            "available_models": ["gpt-4o-mini"],
+            "default_model": "gpt-4o-mini",
+            "is_default": False,
+        },
+    )
+    assert create_prov.status_code == 201
+    prov_id = create_prov.json()["id"]
+    assert create_prov.json()["has_api_key"] is True
+    assert "api_key" not in create_prov.json()
+
+    create_agent = cross_space_pair["client_a"].post(
+        "/api/v1/agents",
+        params=_params(a),
+        json={
+            "name": "Run Model Agent",
+            "default_model_provider_id": prov_id,
+            "default_model": "gpt-4o-mini",
+        },
+    )
+    assert create_agent.status_code == 201
+    agent_id = create_agent.json()["id"]
+
+    create_run = cross_space_pair["client_a"].post(
+        f"/api/v1/agents/{agent_id}/runs",
+        params=_params(a),
+        json={"mode": "live", "adapter_type": "echo"},
+    )
+    assert create_run.status_code == 201
+    run_body = create_run.json()
+    assert run_body["model_provider_id"] == prov_id
+    assert run_body["resolved_model"]["model"] == "gpt-4o-mini"
+    assert run_body["resolved_model"]["source"] == "agent_default"
+    assert run_body["resolved_model"]["used_by_adapter"] is False
+    assert run_body["resolved_model"]["adapter_model_support"] == "not_applicable"
+
+
+def test_run_create_request_model_overrides_agent_default(
+    api_client, db, cross_space_pair, tmp_path, monkeypatch
+):
+    from app.config import paths
+    import app.crypto as crypto
+
+    monkeypatch.setattr(crypto, "_KEY", None)
+    home = tmp_path / "crypto_home_run_override"
+    monkeypatch.setattr(paths, "home", home)
+    paths.init_dirs()
+
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    create_prov = cross_space_pair["client_a"].post(
+        "/api/v1/providers",
+        params=_params(a),
+        json={
+            "name": "Override Prov",
+            "provider_type": "openai",
+            "api_key": "sk-override",
+            "available_models": ["gpt-4o-mini", "gpt-4o"],
+            "default_model": "gpt-4o-mini",
+            "is_default": False,
+        },
+    )
+    prov_id = create_prov.json()["id"]
+
+    create_agent = cross_space_pair["client_a"].post(
+        "/api/v1/agents",
+        params=_params(a),
+        json={
+            "name": "Override Agent",
+            "default_model_provider_id": prov_id,
+            "default_model": "gpt-4o-mini",
+        },
+    )
+    agent_id = create_agent.json()["id"]
+
+    create_run = cross_space_pair["client_a"].post(
+        f"/api/v1/agents/{agent_id}/runs",
+        params=_params(a),
+        json={
+            "mode": "live",
+            "adapter_type": "echo",
+            "model_provider_id": prov_id,
+            "model": "gpt-4o",
+        },
+    )
+    assert create_run.status_code == 201
+    run_body = create_run.json()
+    assert run_body["resolved_model"]["model"] == "gpt-4o"
+    assert run_body["resolved_model"]["source"] == "request"

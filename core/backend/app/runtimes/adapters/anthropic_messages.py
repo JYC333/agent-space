@@ -43,6 +43,9 @@ class AnthropicMessagesRuntimeAdapter(BaseRuntimeAdapter):
     requires_credentials = True
     requires_file_access = False
     supports_sandboxed_execution = False
+    uses_model_config = True
+    model_config_behavior = "uses_model"
+    model_config_note = ""
 
     def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
         started = datetime.now(UTC)

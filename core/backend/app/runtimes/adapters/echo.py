@@ -12,6 +12,11 @@ class EchoRuntimeAdapter(BaseRuntimeAdapter):
     requires_credentials = False
     requires_file_access = False
     supports_sandboxed_execution = False
+    uses_model_config = False
+    model_config_behavior = "not_applicable"
+    model_config_note = (
+        "Echo adapter does not call an LLM; selected model is recorded but not used."
+    )
 
     def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
         started = datetime.now(UTC)

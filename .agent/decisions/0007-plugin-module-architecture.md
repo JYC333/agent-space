@@ -85,7 +85,7 @@ The following cross-module references existed before this ADR and are allowed as
 - `tasks/api.py` imports `app.runs.run_service.RunService` — **task board** `POST /tasks/{id}/runs` creates a queued `Run` and `TaskRun` link; **Task is not modeled as Job** and this path does not enqueue product tasks as `agent_run` jobs.
 - `sessions/api.py` imports `app.memory.reflector.MemoryReflector` — session reflect triggers memory proposals
 
-**Historical:** the singular `POST /tasks/{id}/run` Job enqueue path and `job_type="product_task"` are gone. Tasks enqueue through `POST /api/v1/tasks/{id}/runs`, `RunService`, and `TaskRun` links instead.
+**Removed:** the singular `POST /tasks/{id}/run` Job enqueue path and `job_type="product_task"` are gone. Tasks enqueue through `POST /api/v1/tasks/{id}/runs`, `RunService`, and `TaskRun` links instead.
 
 These dependencies express real domain relationships. They must be documented here and may not grow without an ADR update.
 

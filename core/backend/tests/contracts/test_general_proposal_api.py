@@ -365,7 +365,7 @@ def test_unsupported_proposal_type_accept_stable_error_no_mutation(api_client, d
         db,
         space_id=a,
         created_by_user_id=ua.id,
-        proposal_type="legacy_tool_call",
+        proposal_type="unrecognized_proposal_type",
         commit=True,
     )
     r = cross_space_pair["client_a"].post(
@@ -378,7 +378,7 @@ def test_unsupported_proposal_type_accept_stable_error_no_mutation(api_client, d
     msg = body.get("message")
     assert isinstance(msg, dict)
     assert msg.get("code") == "unsupported_proposal_type"
-    assert msg.get("proposal_type") == "legacy_tool_call"
+    assert msg.get("proposal_type") == "unrecognized_proposal_type"
     db.refresh(prop)
     assert prop.status == "pending"
     after_mem = (

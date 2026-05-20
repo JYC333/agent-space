@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from ..config import paths
+from ..config import settings
 
 log = logging.getLogger(__name__)
 
@@ -15,10 +15,14 @@ _SETTINGS_KEY = "capabilities"
 _ENABLED_KEY = "enabled_external_capabilities"
 
 
+def _instance_root(instance_root: str | None = None) -> Path:
+    if instance_root is not None:
+        return Path(instance_root).resolve()
+    return Path(settings.instance_root).resolve()
+
+
 def _settings_path(instance_root: str | None = None) -> Path:
-    if instance_root is None:
-        return paths.instance_settings_config
-    return Path(instance_root).resolve() / "config" / "settings.yaml"
+    return _instance_root(instance_root) / "config" / "settings.yaml"
 
 
 def load_enabled_external_capabilities(instance_root: str | None = None) -> set[str]:

@@ -1,106 +1,89 @@
-import { useState, useEffect } from 'react'
-import { ChevronDown } from 'lucide-react'
-import { providersApi } from '../../api/client'
-import { useSpace } from '../../contexts/SpaceContext'
-
-interface ProviderOption {
-  id: string
-  name: string
-  provider: string
-  models: string[]
-}
+import { useEffect, useState } from 'react'
+import { providersApi, type ModelProviderOut } from '../../api/client'
 
 interface ProviderSelectorProps {
   value: { provider_id: string; model: string } | null
   onChange: (value: { provider_id: string; model: string } | null) => void
-  className?: string
 }
 
-export function ProviderSelector({ value, onChange, className }: ProviderSelectorProps) {
-  const { activeOperationalSpaceId } = useSpace()
-  const [providers, setProviders] = useState<ProviderOption[]>([])
+export default function ProviderSelector({ value, onChange }: ProviderSelectorProps) {
+  const [providers, setProviders] = useState<ModelProviderOut[]>([])
+  const [models, setModels] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
-  const [open, setOpen] = useState(false)
 
   useEffect(() => {
-    if (!activeOperationalSpaceId) {
-      setProviders([])
-      setLoading(false)
+    providersApi.list()
+      .then(list => setProviders(list.filter(p => p.enabled)))
+      .catch(() => setProviders([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    if (!value?.provider_id) {
+      setModels([])
       return
     }
-    setLoading(true)
-    providersApi.list().then(setProviders).catch(() => setProviders([])).finally(() => setLoading(false))
-  }, [activeOperationalSpaceId])
+    providersApi.models(value.provider_id)
+      .then(r => setModels(r.models))
+      .catch(() => {
+        const p = providers.find(x => x.id === value.provider_id)
+        setModels(p?.available_models ?? (p?.default_model ? [p.default_model] : []))
+      })
+  }, [value?.provider_id, providers])
 
-  const selected = providers.find(p => p.id === value?.provider_id)
+  if (loading) {
+    return <p className="text-sm text-muted-foreground">Loading providers…</p>
+  }
+
+  if (providers.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No enabled model providers.{' '}
+        <a href="/providers" className="text-primary hover:underline">Configure one</a>
+      </p>
+    )
+  }
 
   return (
-    <div className={`relative ${className ?? ''}`}>
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-2 h-8 px-3 rounded-md border border-border bg-background text-[13px] text-left hover:bg-accent transition-colors w-full"
-      >
-        {loading ? (
-          <span className="text-muted-foreground">Loading…</span>
-        ) : selected ? (
-          <>
-            <span className="font-medium">{selected.name}</span>
-            <span className="text-muted-foreground">·</span>
-            <span className="font-mono text-[11px] text-muted-foreground">{value?.model}</span>
-          </>
-        ) : (
-          <span className="text-muted-foreground">
-            {activeOperationalSpaceId ? 'Select provider…' : 'No operational space'}
-          </span>
-        )}
-        <ChevronDown className="size-3.5 ml-auto text-muted-foreground" />
-      </button>
-
-      {open && (
-        <div className="absolute top-[calc(100%+4px)] left-0 w-64 bg-card border border-border rounded-lg shadow-lg z-50 py-1 max-h-64 overflow-y-auto">
-          {providers.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-muted-foreground">
-              {activeOperationalSpaceId ? (
-                <>
-                  No providers configured.{' '}
-                  <a href="/providers" className="text-primary hover:underline">Add one</a>
-                </>
-              ) : (
-                'Select an operational space to choose providers.'
-              )}
-            </div>
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Model provider</label>
+        <select
+          value={value?.provider_id ?? ''}
+          onChange={e => {
+            const id = e.target.value
+            if (!id) { onChange(null); return }
+            const p = providers.find(x => x.id === id)
+            onChange({ provider_id: id, model: p?.default_model ?? '' })
+          }}
+          className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
+        >
+          <option value="">System default</option>
+          {providers.map(p => (
+            <option key={p.id} value={p.id}>{p.name} ({p.provider_type})</option>
+          ))}
+        </select>
+      </div>
+      {value?.provider_id && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Model</label>
+          {models.length > 0 ? (
+            <select
+              value={value.model}
+              onChange={e => onChange({ ...value, model: e.target.value })}
+              className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm font-mono"
+            >
+              {models.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
           ) : (
-            providers.map(p => (
-              <div key={p.id}>
-                <div className="px-3 py-1.5 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                  {p.name}
-                </div>
-                {p.models.map(m => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => {
-                      onChange({ provider_id: p.id, model: m })
-                      setOpen(false)
-                    }}
-                    className={`w-full text-left px-3 py-1.5 text-[13px] hover:bg-accent transition-colors ${
-                      value?.provider_id === p.id && value?.model === m
-                        ? 'text-foreground font-medium'
-                        : 'text-muted-foreground'
-                    }`}
-                  >
-                    <span className="font-mono">{m}</span>
-                  </button>
-                ))}
-              </div>
-            ))
+            <input
+              value={value.model}
+              onChange={e => onChange({ ...value, model: e.target.value })}
+              placeholder="model name"
+              className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm font-mono"
+            />
           )}
         </div>
-      )}
-
-      {open && (
-        <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
       )}
     </div>
   )

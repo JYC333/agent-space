@@ -52,11 +52,11 @@ This document describes current capability lines and known future risks. It is o
 
 ### 4. Runtime / Adapter Expansion
 
-**Current state:** `app.runtimes` is canonical. `echo` and `anthropic_messages` adapters are active. `app.agents` CLI stack is compatibility-only for existing CLI surfaces.
+**Current state:** `app.runtimes` is canonical. `echo` and `anthropic_messages` adapters are active. `app.agents` is the separate CLI adapter runner for existing CLI surfaces; new adapters must go in `app.runtimes`.
 
 **Why it matters:** Supporting more runtimes expands useful agent work without compromising the control plane.
 
-**Likely next steps:** Document compatibility status of `app.agents` CLI adapters. Define adapter contract for new additions. Clarify `one_shot_docker` path in current run execution.
+**Likely next steps:** Document current status of `app.agents` CLI adapters. Define adapter contract for new additions. Clarify `one_shot_docker` path in current run execution.
 
 **What must be true first:** Credential resolver, sandbox policy, and RunStep are stable and tested for existing adapters.
 

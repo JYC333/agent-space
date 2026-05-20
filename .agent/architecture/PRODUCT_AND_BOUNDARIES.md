@@ -44,10 +44,12 @@ capture / trigger
 
 ### ModelProvider and RuntimeAdapter are separate
 
-- `ModelProvider` = model/vendor/API endpoint (Anthropic, OpenAI, Ollama, custom endpoint).
+- `ModelProvider` = model/vendor/API endpoint (Anthropic, OpenAI, OpenRouter, Ollama, custom OpenAI-compatible).
+- Configured per space via `GET/POST/PATCH /api/v1/providers`. API keys are encrypted server-side; responses expose `has_api_key` only.
 - `RuntimeAdapter` = execution loop/tool environment (echo, anthropic_messages, claude_code, codex_cli, etc.).
+- Agents select a default provider/model on `AgentVersion` (`model_provider_id`, `model_name`); runs resolve provider at creation time.
 - **Canonical path for new adapters:** `core/backend/app/runtimes/`.
-- `core/backend/app/agents/` CLI stack is compatibility-only for existing CLI surfaces.
+- `core/backend/app/agents/` is a separate CLI adapter runner for existing CLI surfaces. Do not add new adapters here; use `core/backend/app/runtimes/`.
 
 ### Credential resolution boundary
 

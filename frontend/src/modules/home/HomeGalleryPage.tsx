@@ -13,6 +13,7 @@ import type {
   HomeActiveTaskItem,
   HomePendingProposalItem,
   HomeRuntimeStatusSection,
+  HomeModelProviderStatusSection,
   HomeSuggestedActionItem,
   Project,
 } from '../../types/api'
@@ -460,6 +461,21 @@ function ProposalStatusCard({
   )
 }
 
+function ModelProviderStatusCard({ status }: { status: HomeModelProviderStatusSection }) {
+  const n = status.enabled_model_providers_count
+  return (
+    <div className="bg-card border border-border rounded-lg p-4 flex flex-col gap-3">
+      <span className="text-[11px] font-bold tracking-[.1em] uppercase text-muted-foreground">Model Providers</span>
+      <div className="text-[12px] text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
+        {n} enabled provider{n !== 1 ? 's' : ''}
+      </div>
+      {status.missing_model_provider_config && (
+        <Link to="/providers" className="text-[11px] text-primary hover:underline">Configure a model provider</Link>
+      )}
+    </div>
+  )
+}
+
 /* ── Right sidebar: Runtime (from home summary; no CLI probe on Home) ─────── */
 function RuntimeStatusCard({ status }: { status: HomeRuntimeStatusSection }) {
   const n = status.real_adapters_configured_count
@@ -622,6 +638,12 @@ function emptyHomeSummary(): HomeSummaryOut {
       configured_adapter_types: [],
       message: '',
     },
+    model_provider_status: {
+      model_providers_count: 0,
+      enabled_model_providers_count: 0,
+      missing_model_provider_config: true,
+      message: '',
+    },
     suggested_actions: [],
   }
 }
@@ -741,6 +763,7 @@ export default function HomeGalleryPage() {
       <div className="flex flex-col gap-3 min-w-0">
         <ProposalStatusCard proposals={sidebarProposals} onDecide={decide} />
         <ProjectsCard projects={activeProjects} />
+        <ModelProviderStatusCard status={s.model_provider_status} />
         <RuntimeStatusCard status={s.runtime_status} />
         <SuggestedActionsCard actions={s.suggested_actions} />
         <RecentCard sessions={sessions} />

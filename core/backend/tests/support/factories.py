@@ -159,8 +159,15 @@ def create_test_model_provider(
     provider_type: str = "openai",
     credential_id: str | None = None,
     default_model: str | None = "gpt-test",
+    base_url: str | None = None,
+    enabled: bool = True,
+    with_api_key: bool = False,
+    is_default: bool = False,
+    available_models: list[str] | None = None,
     commit: bool = False,
 ) -> ModelProvider:
+    cfg: dict = {"is_default": is_default}
+    models = available_models if available_models is not None else ([default_model] if default_model else [])
     row = ModelProvider(
         id=_new_id(),
         space_id=space_id,
@@ -168,8 +175,29 @@ def create_test_model_provider(
         provider_type=provider_type,
         credential_id=credential_id,
         default_model=default_model,
+        base_url=base_url,
+        enabled=enabled,
+        capabilities_json={"models": models},
+        config_json=cfg,
     )
     db.add(row)
+    db.flush()
+    if with_api_key:
+        from app.crypto import encrypt_to_base64
+        from app.secrets.secret_ref import encode_model_provider_api_key_secret_ref
+        ek, kn = encrypt_to_base64("sk-test-factory-key")
+        secret_ref = encode_model_provider_api_key_secret_ref(ek, kn)
+        cred = Credential(
+            id=_new_id(),
+            space_id=space_id,
+            name=f"{name} API key",
+            credential_type="api_key",
+            secret_ref=secret_ref,
+            scopes_json=[],
+        )
+        db.add(cred)
+        db.flush()
+        row.credential_id = cred.id
     return _finish(db, row, commit=commit)
 
 

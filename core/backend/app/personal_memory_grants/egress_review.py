@@ -181,7 +181,7 @@ def _find_existing_open_proposal(
         # Primary match: stable dedupe key stored at proposal creation time
         if payload.get("egress_review_dedupe_key") == dedupe_key:
             return candidate
-        # Backward-compat match: proposals created before F2.1 (no dedupe_key field)
+        # Read-time tolerance: stored proposals written before F2.1 lack egress_review_dedupe_key
         if (
             payload.get("target_space_id") == target_space_id
             and payload.get("target_object_type") == target_object_type

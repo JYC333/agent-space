@@ -1,5 +1,6 @@
 import { useState, useEffect, useId } from 'react'
-import { Settings, Sun, Moon, Users, Plus, Mail, Send } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Settings, Sun, Moon, Users, Plus, Mail, Send, KeyRound } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../contexts/AuthContext'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -115,6 +116,19 @@ export default function SettingsPage() {
           <p className="text-sm text-muted-foreground">Configure spaces, users, API keys, and preferences.</p>
         </div>
       </div>
+
+      {/* Model providers */}
+      <Card>
+        <CardTitle className="flex items-center gap-2">
+          <KeyRound className="size-3.5" /> Model Providers
+        </CardTitle>
+        <p className="text-sm text-muted-foreground mb-3">
+          Configure LLM backends (OpenAI, Anthropic, OpenRouter, Ollama) separately from runtime adapters.
+        </p>
+        <Button asChild variant="outline" size="sm">
+          <Link to="/providers">Open Model Providers</Link>
+        </Button>
+      </Card>
 
       {/* Appearance */}
       <Card>

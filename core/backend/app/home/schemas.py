@@ -102,6 +102,13 @@ class HomeRuntimeStatusSection(BaseModel):
     message: str
 
 
+class HomeModelProviderStatusSection(BaseModel):
+    model_providers_count: int
+    enabled_model_providers_count: int
+    missing_model_provider_config: bool
+    message: str
+
+
 class HomeSuggestedActionItem(BaseModel):
     id: str
     label: str
@@ -121,4 +128,5 @@ class HomeSummaryOut(BaseModel):
     run_stats_today: HomeRunStatsTodaySection
     job_queue_status: HomeJobQueueStatusSection
     runtime_status: HomeRuntimeStatusSection
+    model_provider_status: HomeModelProviderStatusSection
     suggested_actions: list[HomeSuggestedActionItem]

@@ -5,13 +5,14 @@ from ..db import get_db
 from ..models import Run
 from ..schemas import (
     AgentCreate, AgentUpdate, AgentOut,
-    RunRequest, RunOut,
+    RunRequest,
     AgentVersionCreate, AgentVersionOut,
-    RunCreate, RunOutV2,
+    RunCreate, RunOut,
 )
 from .agent_service import AgentService
 from .version_service import AgentVersionService
 from app.runs.run_service import RunService
+from app.runs.read_model import run_to_out
 from ..auth import get_identity
 from ..jobs.queue import get_queue
 from ..participation.service import try_record_participation
@@ -32,7 +33,9 @@ def create_agent(
     space_id, user_id = ids
     if not data.space_id:
         data.space_id = space_id
-    return AgentService(db).create(data, requesting_user_id=user_id)
+    svc = AgentService(db)
+    agent = svc.create(data, requesting_user_id=user_id)
+    return svc.to_agent_out(agent)
 
 
 @router.get("", response_model=list[AgentOut])
@@ -46,7 +49,8 @@ def list_agents(
     db: Session = Depends(get_db),
 ):
     space_id, _ = ids
-    return AgentService(db).list(
+    svc = AgentService(db)
+    agents = svc.list(
         space_id=space_id,
         created_by_user_id=created_by_user_id,
         visibility=visibility,
@@ -54,6 +58,7 @@ def list_agents(
         limit=limit,
         offset=offset,
     )
+    return [svc.to_agent_out(a) for a in agents]
 
 
 @router.get("/{agent_id}", response_model=AgentOut)
@@ -63,10 +68,11 @@ def get_agent(
     db: Session = Depends(get_db),
 ):
     space_id, _ = ids
-    agent = AgentService(db).get_or_404(agent_id)
+    svc = AgentService(db)
+    agent = svc.get_or_404(agent_id)
     if agent.space_id != space_id:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return agent
+    return svc.to_agent_out(agent)
 
 
 @router.patch("/{agent_id}", response_model=AgentOut)
@@ -84,7 +90,7 @@ def update_agent(
     updated = svc.update(agent_id, data)
     if not updated:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return updated
+    return svc.to_agent_out(updated)
 
 
 @router.delete("/{agent_id}", status_code=204)
@@ -108,7 +114,7 @@ def delete_agent(
 # and /{agent_id}/runs to prevent FastAPI matching "runs" as an agent_id.
 # ---------------------------------------------------------------------------
 
-@router.get("/runs", response_model=list[RunOutV2])
+@router.get("/runs", response_model=list[RunOut])
 def list_all_runs(
     limit: int = Query(50, le=200),
     ids: tuple[str, str] = Depends(get_identity),
@@ -117,10 +123,10 @@ def list_all_runs(
     """List all Runs in this space."""
     space_id, user_id = ids
     svc = RunService(db)
-    return svc.list_runs(space_id=space_id, limit=limit)
+    return [run_to_out(db, r) for r in svc.list_runs(space_id=space_id, limit=limit)]
 
 
-@router.get("/runs/{run_id}", response_model=RunOutV2)
+@router.get("/runs/{run_id}", response_model=RunOut)
 def get_run(
     run_id: str,
     ids: tuple[str, str] = Depends(get_identity),
@@ -128,10 +134,10 @@ def get_run(
 ):
     """Get a Run by ID, scoped to the request space."""
     space_id, _ = ids
-    return RunService(db).get_run(run_id, space_id)
+    return run_to_out(db, RunService(db).get_run(run_id, space_id))
 
 
-@router.get("/runs/{run_id}/chain", response_model=list[RunOutV2])
+@router.get("/runs/{run_id}/chain", response_model=list[RunOut])
 def get_run_delegation_chain(
     run_id: str,
     ids: tuple[str, str] = Depends(get_identity),
@@ -155,14 +161,14 @@ def get_run_delegation_chain(
     chain.reverse()
     if not chain:
         raise HTTPException(status_code=404, detail="Run not found")
-    return chain
+    return [run_to_out(db, r) for r in chain]
 
 
 # ---------------------------------------------------------------------------
 # Alternate run entrypoints (same enqueue path as POST /{agent_id}/runs)
 # ---------------------------------------------------------------------------
 
-@router.post("/{agent_id}/run", response_model=RunOutV2, status_code=202)
+@router.post("/{agent_id}/run", response_model=RunOut, status_code=202)
 async def run_agent(
     agent_id: str,
     req: RunRequest,
@@ -216,10 +222,10 @@ async def run_agent(
         user_id=user_id,
         agent_id=agent_id,
     )
-    return run
+    return run_to_out(db, run)
 
 
-@router.post("/{agent_id}/delegate", response_model=RunOutV2, status_code=201)
+@router.post("/{agent_id}/delegate", response_model=RunOut, status_code=201)
 async def delegate_to_agent(
     agent_id: str,
     req: RunRequest,
@@ -271,10 +277,10 @@ async def delegate_to_agent(
         user_id=ctx_user,
         agent_id=agent_id,
     )
-    return run
+    return run_to_out(db, run)
 
 
-@router.get("/{agent_id}/runs", response_model=list[RunOutV2])
+@router.get("/{agent_id}/runs", response_model=list[RunOut])
 def list_runs_for_agent(
     agent_id: str,
     limit: int = Query(50, le=200),
@@ -284,14 +290,14 @@ def list_runs_for_agent(
     """List Runs for a specific agent."""
     space_id, user_id = ids
     svc = RunService(db)
-    return svc.list_runs(space_id=space_id, agent_id=agent_id, limit=limit)
+    return [run_to_out(db, r) for r in svc.list_runs(space_id=space_id, agent_id=agent_id, limit=limit)]
 
 
 # ---------------------------------------------------------------------------
 # Run creation
 # ---------------------------------------------------------------------------
 
-@router.post("/{agent_id}/runs", response_model=RunOutV2, status_code=201)
+@router.post("/{agent_id}/runs", response_model=RunOut, status_code=201)
 def create_agent_run(
     agent_id: str,
     data: RunCreate,
@@ -330,7 +336,7 @@ def create_agent_run(
         source_object_id=run.id,
         role="instructed",
     )
-    return run
+    return run_to_out(db, run)
 
 
 # ---------------------------------------------------------------------------

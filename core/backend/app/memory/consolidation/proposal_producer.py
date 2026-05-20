@@ -6,7 +6,7 @@ from ulid import ULID
 from sqlalchemy.orm import Session
 
 from ...models import Proposal
-from ..proposal_payload import merge_distinct_provenance_entries, strip_legacy_provenance_keys
+from ..proposal_payload import merge_distinct_provenance_entries, strip_flat_provenance_keys
 from ..source_monitoring import SourceMonitoringService, monitoring_snapshot
 from .candidate import MemoryCandidate
 from .constants import CONSOLIDATION_COMPILER_VERSION
@@ -129,7 +129,7 @@ class MemoryProposalProducer:
             pol.setdefault("risk_level", risk)
             out = monitor.evaluate_policy_proposal(payload=pol, accept_context="direct_apply")
             pol["source_monitoring_result"] = monitoring_snapshot(out)
-            pol = strip_legacy_provenance_keys(pol)
+            pol = strip_flat_provenance_keys(pol)
             prop = Proposal(
                 id=_new_id(),
                 space_id=candidate.space_id,
@@ -177,7 +177,7 @@ class MemoryProposalProducer:
                 accept_context="direct_apply",
             )
             payload["source_monitoring_result"] = monitoring_snapshot(out)
-            payload = strip_legacy_provenance_keys(payload)
+            payload = strip_flat_provenance_keys(payload)
             prop = Proposal(
                 id=_new_id(),
                 space_id=candidate.space_id,
@@ -230,7 +230,7 @@ class MemoryProposalProducer:
                 accept_context="direct_apply",
             )
             payload["source_monitoring_result"] = monitoring_snapshot(out)
-            payload = strip_legacy_provenance_keys(payload)
+            payload = strip_flat_provenance_keys(payload)
             prop = Proposal(
                 id=_new_id(),
                 space_id=candidate.space_id,
@@ -285,7 +285,7 @@ class MemoryProposalProducer:
             accept_context="direct_apply",
         )
         payload["source_monitoring_result"] = monitoring_snapshot(out)
-        payload = strip_legacy_provenance_keys(payload)
+        payload = strip_flat_provenance_keys(payload)
         prop = Proposal(
             id=_new_id(),
             space_id=candidate.space_id,

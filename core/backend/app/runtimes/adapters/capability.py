@@ -26,6 +26,12 @@ class CapabilityRuntimeAdapter(BaseRuntimeAdapter):
     requires_credentials = False
     requires_file_access = False
     supports_sandboxed_execution = False
+    uses_model_config = False
+    model_config_behavior = "not_applicable"
+    model_config_note = (
+        "Capability adapter does not call an LLM directly. Model config is not used "
+        "unless the capability itself calls a model."
+    )
 
     def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
         try:

@@ -536,6 +536,8 @@ def test_external_capability_defaults_disabled_and_fails_execution(
     tmp_path,
     monkeypatch,
 ):
+    instance_root = tmp_path / "instance-disabled-exec"
+    monkeypatch.setattr(settings, "instance_root", str(instance_root))
     space_id, user = _fresh_space_user(db, "disabled-external-capability")
     monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
     monkeypatch.setattr(settings, "workspace_root", str(tmp_path / "workspaces-root"))

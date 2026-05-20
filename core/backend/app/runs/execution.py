@@ -283,6 +283,7 @@ class RunExecutionService:
                 self.db,
                 runtime_adapter_row=resolved.runtime_adapter_row,
                 version=version,
+                run_model_provider_id=run.model_provider_id,
             )
         except CredentialResolutionError as exc:
             return self._fail_run_terminal(
@@ -382,13 +383,16 @@ class RunExecutionService:
                     user_prompt=user_prompt,
                     personal_context_block=context_pkg.personal_context_block,
                 )
+                resolved_model_name = version.model_name
+                if run.model_override_json and run.model_override_json.get("model"):
+                    resolved_model_name = run.model_override_json["model"]
                 ctx = RuntimeExecutionContext(
                     run_id=run_id,
                     space_id=run_space_id,
                     prompt=runtime_prompt,
                     mode=run_mode,
                     sandbox_cwd=workdir,
-                    model_name=version.model_name,
+                    model_name=resolved_model_name,
                     system_prompt=version.system_prompt,
                     adapter_config=safe_config,
                     instruction=run.instruction,

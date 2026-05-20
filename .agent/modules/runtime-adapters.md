@@ -63,7 +63,7 @@ Backend Run execution uses `app.runtimes`, not the older `app.agents.runner` reg
 
 The `capability` adapter is a local runtime adapter. It resolves `Run.capability_id`, loads the installed manifest from builtin registry roots or explicitly configured local capability-library workspaces, checks the enabled flag and v1 permission guardrails, calls a local `python_module` entrypoint, and returns normalized `output_json` for the standard Run materializer. Remote repositories are future install sources, not runtime scan targets.
 
-## Legacy Agent Adapter Contract
+## CLI Adapter Runner Contract
 
 All adapters subclass `AgentAdapter` (`agents/base.py`) and implement:
 

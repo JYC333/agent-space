@@ -191,6 +191,34 @@ export default function RunDetailPage() {
             <div>Separate approval is required before anything is written to a shared space.</div>
           </div>
         </Card>
+        {(r.resolved_model?.provider_id || r.resolved_model?.model) && (
+          <Card className="p-4 space-y-2">
+            <h2 className="text-sm font-semibold">Model configuration</h2>
+            <div className="grid gap-2 text-sm sm:grid-cols-2">
+              <p>
+                <span className="text-muted-foreground">Provider</span><br />
+                <span>{r.resolved_model?.provider_name ?? r.resolved_model?.provider_id ?? '—'}</span>
+              </p>
+              <p>
+                <span className="text-muted-foreground">Model</span><br />
+                <span className="font-mono text-xs">{r.resolved_model?.model ?? '—'}</span>
+              </p>
+              <p>
+                <span className="text-muted-foreground">Source</span><br />
+                <span>{r.resolved_model?.source ?? 'none'}</span>
+              </p>
+              <p>
+                <span className="text-muted-foreground">Used by adapter</span><br />
+                <span>{r.resolved_model?.used_by_adapter ? 'Yes' : 'No'}</span>
+              </p>
+            </div>
+            {r.resolved_model?.disclosure_note && (
+              <p className="text-xs text-muted-foreground rounded-md border border-border bg-muted/30 p-3">
+                {r.resolved_model.disclosure_note}
+              </p>
+            )}
+          </Card>
+        )}
         <PersonalContextPanel
           run={r}
           currentUserId={userId}

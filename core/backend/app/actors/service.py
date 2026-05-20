@@ -13,7 +13,7 @@ Rules enforced here (not at DB level due to SQLite nullable-FK limitations):
 Internal paths that need a non-human actor identity MUST call the appropriate
 get_or_create_* helper instead of passing Settings.default_user_id.
 
-Historical authorship fields (Run.instructed_by_user_id, Proposal.created_by_user_id, …)
+Existing authorship fields (Run.instructed_by_user_id, Proposal.created_by_user_id, …)
 are not migrated in bulk. New records use actor_ref. Do not remove these fields here.
 """
 

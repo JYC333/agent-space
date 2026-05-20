@@ -3,7 +3,7 @@
 Covers:
 - User and Agent remain separate (not merged into Actor)
 - System/service/job actors must not impersonate default_user
-- Historical nullable user_id/agent_id fields remain readable
+- Existing nullable user_id/agent_id fields remain readable
 - Policy context can carry ActorRef without changing existing decision behavior
 - New surfaces (RunStep/audit/policy) must require actor identity (M3 gate)
 - HTTP query/default identity fallback remains absent
@@ -109,10 +109,10 @@ def test_system_actor_ref_factory_does_not_use_default_user_id():
 
 
 # ---------------------------------------------------------------------------
-# Invariant: historical nullable user_id/agent_id fields remain readable
+# Invariant: existing nullable user_id/agent_id fields remain readable
 # ---------------------------------------------------------------------------
 
-def test_run_historical_instructed_by_fields_remain_readable(db, test_user, test_space):
+def test_run_existing_instructed_by_fields_remain_readable(db, test_user, test_space):
     """Run.instructed_by_user_id and Run.instructed_by_agent_id are not removed in M2."""
     run = factories.create_test_run(db, space_id=test_space.id, user_id=test_user.id)
     # These columns must exist and be queryable
@@ -120,7 +120,7 @@ def test_run_historical_instructed_by_fields_remain_readable(db, test_user, test
     assert run.instructed_by_agent_id is None  # nullable
 
 
-def test_proposal_historical_created_by_fields_remain_readable(db, test_user, test_space):
+def test_proposal_existing_created_by_fields_remain_readable(db, test_user, test_space):
     """Proposal.created_by_user_id and created_by_agent_id are not removed in M2."""
     prop = factories.create_test_proposal(
         db,
@@ -131,7 +131,7 @@ def test_proposal_historical_created_by_fields_remain_readable(db, test_user, te
     assert prop.created_by_agent_id is None  # nullable
 
 
-def test_activity_historical_user_id_and_agent_id_remain_readable(db, test_user, test_space):
+def test_activity_existing_user_id_and_agent_id_remain_readable(db, test_user, test_space):
     """ActivityRecord.user_id and agent_id fields are not removed in M2."""
     act = factories.create_test_activity(
         db,
@@ -142,7 +142,7 @@ def test_activity_historical_user_id_and_agent_id_remain_readable(db, test_user,
     assert act.agent_id is None
 
 
-def test_historical_null_user_agent_rows_remain_readable(db, test_space):
+def test_existing_null_user_agent_rows_remain_readable(db, test_space):
     """Rows with null user_id and null agent_id (system-originated) are still readable."""
     # Simulate a system-created run with no instructed_by_user
     act = factories.create_test_activity(

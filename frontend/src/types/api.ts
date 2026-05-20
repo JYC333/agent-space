@@ -390,6 +390,17 @@ export interface TaskRunOut {
   created_at: string
 }
 
+export interface RunResolvedModel {
+  provider_id: string | null
+  provider_name: string | null
+  provider_type: string | null
+  model: string | null
+  source: 'request' | 'agent_default' | 'space_default' | 'none'
+  used_by_adapter: boolean
+  adapter_model_support: 'uses_model' | 'not_applicable' | 'unsupported' | 'unknown'
+  disclosure_note?: string | null
+}
+
 export interface Run {
   id: string
   space_id: string
@@ -416,6 +427,10 @@ export interface Run {
   error_json: Record<string, unknown> | null
   output_json: Record<string, unknown> | null
   usage_json: Record<string, unknown> | null
+  adapter_type?: string | null
+  capability_id?: string | null
+  model_provider_id?: string | null
+  resolved_model?: RunResolvedModel | null
   visibility?: ObjectVisibility
   task_id?: string | null
 }
@@ -649,6 +664,13 @@ export interface ProposalApprovalResponse {
   revoked_at: string | null
 }
 
+export interface AgentModelSummary {
+  provider_id: string | null
+  provider_name: string | null
+  provider_type: string | null
+  model: string | null
+}
+
 export interface AgentOut {
   id: string
   space_id: string
@@ -659,8 +681,28 @@ export interface AgentOut {
   role_instruction: string | null
   status: string
   current_version_id: string | null
+  model: AgentModelSummary | null
   created_at: string
   updated_at: string
+}
+
+export interface AgentCreateBody {
+  name: string
+  description?: string | null
+  visibility?: string
+  role_instruction?: string | null
+  default_model_provider_id?: string | null
+  default_model?: string | null
+}
+
+export interface AgentUpdateBody {
+  name?: string
+  description?: string | null
+  visibility?: string
+  role_instruction?: string | null
+  status?: string
+  default_model_provider_id?: string | null
+  default_model?: string | null
 }
 
 export interface RunCreateBody {
@@ -943,6 +985,13 @@ export interface HomeRuntimeStatusSection {
   message: string
 }
 
+export interface HomeModelProviderStatusSection {
+  model_providers_count: number
+  enabled_model_providers_count: number
+  missing_model_provider_config: boolean
+  message: string
+}
+
 export interface HomeSuggestedActionItem {
   id: string
   label: string
@@ -962,6 +1011,7 @@ export interface HomeSummaryOut {
   run_stats_today: HomeRunStatsTodaySection
   job_queue_status: HomeJobQueueStatusSection
   runtime_status: HomeRuntimeStatusSection
+  model_provider_status: HomeModelProviderStatusSection
   suggested_actions: HomeSuggestedActionItem[]
 }
 

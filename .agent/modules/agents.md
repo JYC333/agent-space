@@ -33,7 +33,7 @@ See `runtime-adapters.md` for the full adapter registry and license notes.
 - Policy decisions (policy module)
 - Sandbox container lifecycle (`workspace/sandbox_manager.py`)
 - Capability definitions (capability module)
-- Provider credentials (env vars in `config.py`)
+- Provider credentials (`ModelProvider` encrypted config + `runtimes/credentials.py`; not env vars for runtime execution)
 - Run execution orchestration (`app/runs/execution.py` + job worker)
 
 ## Key Models
@@ -48,6 +48,8 @@ Agent:
 AgentVersion:
   id, agent_id, space_id
   version                   — immutable label, e.g. "v1", "v2"
+  model_provider_id           — FK to ModelProvider (LLM backend for this version)
+  model_name                  — model id string for the selected provider
   model_config_json         — {model, temperature, max_tokens, ...}
   runtime_config_json       — {risk_level, can_delegate, max_delegation_depth, max_run_time_seconds}
   context_policy_json       — {readable_scopes, writable_scopes}

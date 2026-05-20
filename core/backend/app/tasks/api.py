@@ -8,10 +8,10 @@ from sqlalchemy.orm import Session
 from app.auth.api_key import get_identity
 from app.db import get_db
 from app.participation.service import try_record_participation
-from app.proposals.read_model import proposal_to_summary_out
+from app.runs.read_model import run_to_out
 from app.schemas import (
     Page,
-    RunOutV2,
+    RunOut,
     TaskArtifactOut,
     TaskCreate,
     TaskOut,
@@ -85,7 +85,7 @@ def patch_task(
     return TaskService(db).update(task_id, space_id, data, user_id=user_id)
 
 
-@router.post("/{task_id}/runs", response_model=RunOutV2, status_code=201)
+@router.post("/{task_id}/runs", response_model=RunOut, status_code=201)
 def create_task_run(
     task_id: str,
     body: TaskRunCreateBody,
@@ -94,7 +94,7 @@ def create_task_run(
 ):
     space_id, user_id = ids
     _link, run = TaskService(db).create_queued_run_for_task(task_id, space_id, user_id, body)
-    return run
+    return run_to_out(db, run)
 
 
 @router.get("/{task_id}/runs", response_model=Page[TaskRunListItem])
@@ -113,7 +113,10 @@ def list_task_runs(
     for link in links:
         r = run_by_id.get(link.run_id)
         if r:
-            items.append(TaskRunListItem(link=TaskRunOut.model_validate(link), run=RunOutV2.model_validate(r)))
+            items.append(TaskRunListItem(
+                link=TaskRunOut.model_validate(link),
+                run=run_to_out(db, r),
+            ))
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 

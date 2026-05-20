@@ -128,6 +128,13 @@ class AgentVersionOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AgentModelSummary(BaseModel):
+    provider_id: Optional[str] = None
+    provider_name: Optional[str] = None
+    provider_type: Optional[str] = None
+    model: Optional[str] = None
+
+
 class AgentVersionCreate(BaseModel):
     version_label: Optional[str] = None
     model_provider_id: Optional[str] = None
@@ -150,6 +157,8 @@ class AgentCreate(BaseModel):
     visibility: str = "private"
     role_instruction: Optional[str] = None
     space_id: Optional[str] = None
+    default_model_provider_id: Optional[str] = None
+    default_model: Optional[str] = None
     # Optional v1 execution snapshot (stored on initial AgentVersion).
     model_config_json: Optional[dict] = None
     memory_policy_json: Optional[dict] = None
@@ -164,6 +173,8 @@ class AgentUpdate(BaseModel):
     visibility: Optional[str] = None
     role_instruction: Optional[str] = None
     status: Optional[str] = None
+    default_model_provider_id: Optional[str] = None
+    default_model: Optional[str] = None
     # Execution config fields create a new AgentVersion when provided.
     model_config_json: Optional[dict] = None
     memory_policy_json: Optional[dict] = None
@@ -182,6 +193,7 @@ class AgentOut(BaseModel):
     role_instruction: Optional[str]
     status: str
     current_version_id: Optional[str]
+    model: Optional[AgentModelSummary] = None
     created_at: datetime
     updated_at: datetime
 
@@ -867,39 +879,6 @@ class TaskEvaluationOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class RunOut(BaseModel):
-    id: str
-    task_id: Optional[str]
-    space_id: str
-    user_id: str
-    agent_id: Optional[str]
-    cli_adapter_config_id: Optional[str]
-    instructed_by_user_id: Optional[str]
-    instructed_by_agent_id: Optional[str]
-    parent_run_id: Optional[str]
-    delegation_depth: int
-    adapter_type: str
-    capability_id: Optional[str]
-    model_selection_mode: str
-    model_override_json: Optional[dict]
-    prompt: str
-    status: str
-    output: Optional[str]
-    error: Optional[str]
-    exit_code: Optional[int]
-    sandbox_path: Optional[str]
-    runtime_seconds: Optional[float]
-    usage_accuracy: str
-    estimated_input_tokens: Optional[int]
-    estimated_output_tokens: Optional[int]
-    estimated_cost: Optional[float]
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
 # ---------------------------------------------------------------------------
 # Run Creation API
 # ---------------------------------------------------------------------------
@@ -926,9 +905,10 @@ class RunCreate(BaseModel):
     execution_plane_id: Optional[str] = None
     runtime_adapter_id: Optional[str] = None
     model_provider_id: Optional[str] = None
+    model: Optional[str] = None
 
 
-class RunOutV2(BaseModel):
+class RunOut(BaseModel):
     """Canonical Run output for the Run API."""
     id: str
     space_id: str
@@ -959,6 +939,7 @@ class RunOutV2(BaseModel):
     adapter_type: Optional[str] = None
     capability_id: Optional[str] = None
     model_provider_id: Optional[str] = None
+    resolved_model: Optional["RunResolvedModelOut"] = None
     required_sandbox_level: str = "none"
     visibility: str = "space_shared"
     project_id: Optional[str] = None
@@ -966,11 +947,26 @@ class RunOutV2(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RunResolvedModelOut(BaseModel):
+    """Safe public summary of model config resolved for a Run."""
+
+    provider_id: Optional[str] = None
+    provider_name: Optional[str] = None
+    provider_type: Optional[str] = None
+    model: Optional[str] = None
+    source: Literal["request", "agent_default", "space_default", "none"] = "none"
+    used_by_adapter: bool = False
+    adapter_model_support: Literal[
+        "uses_model", "not_applicable", "unsupported", "unknown"
+    ] = "unknown"
+    disclosure_note: Optional[str] = None
+
+
 class TaskRunListItem(BaseModel):
     """TaskRun association with full Run payload for task-scoped listing."""
 
     link: TaskRunOut
-    run: RunOutV2
+    run: RunOut
 
 
 class RunStatusOut(BaseModel):

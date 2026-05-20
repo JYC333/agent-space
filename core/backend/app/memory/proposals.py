@@ -27,7 +27,7 @@ from ..projects.service import assert_project_in_space
 from ..schemas import MemoryCreate
 from .proposal_payload import (
     activity_provenance_entry,
-    strip_legacy_provenance_keys,
+    strip_flat_provenance_keys,
 )
 
 
@@ -263,7 +263,7 @@ def build_memory_create_proposal(
         prov.extend(extra_provenance_entries)
     if prov:
         payload["provenance_entries"] = prov
-    payload = strip_legacy_provenance_keys(payload)
+    payload = strip_flat_provenance_keys(payload)
 
     return Proposal(
         id=proposal_id,
@@ -349,7 +349,7 @@ def build_memory_update_proposal(
         prov.extend(extra_provenance_entries)
     if prov:
         payload["provenance_entries"] = prov
-    payload = strip_legacy_provenance_keys(payload)
+    payload = strip_flat_provenance_keys(payload)
 
     return Proposal(
         id=proposal_id,

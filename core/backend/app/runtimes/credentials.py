@@ -4,10 +4,11 @@ Runtime adapters must not read raw API keys from adapter config_json or
 environment variables.  All credentials must flow through this module.
 
 Resolution priority for API-key-based providers:
-  1. RuntimeAdapter.provider_id → ModelProvider.config_json encrypted key
-  2. AgentVersion.model_provider_id → ModelProvider.config_json encrypted key
-  3. RuntimeAdapter.credential_id → Credential (opaque; not yet decryptable here)
-  4. None of the above → raises CredentialResolutionError with a sanitized message
+  1. run_model_provider_id → ModelProvider.credential_id → Credential.secret_ref
+  2. RuntimeAdapter.provider_id → ModelProvider.credential_id → Credential.secret_ref
+  3. AgentVersion.model_provider_id → ModelProvider.credential_id → Credential.secret_ref
+  4. RuntimeAdapter.credential_id → Credential.secret_ref
+  5. None of the above → empty dict (adapter must handle) or raises when required
 
 Env-variable fallback (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) is NOT
 performed here.  If only an env key is available, configure a ModelProvider
@@ -65,6 +66,7 @@ def resolve_runtime_credentials(
     *,
     runtime_adapter_row: Optional[RuntimeAdapter],
     version: Optional[AgentVersion] = None,
+    run_model_provider_id: Optional[str] = None,
     purpose: str = "runtime",
 ) -> dict[str, Any]:
     """Resolve credentials for a runtime adapter through the canonical boundary.
@@ -79,6 +81,15 @@ def resolve_runtime_credentials(
     Never reads raw ``api_key`` fields from adapter config_json.
     """
     del purpose  # reserved for future access-grant scoping
+
+    # 0. Run-level model provider override (highest priority)
+    if run_model_provider_id:
+        return _resolve_from_model_provider(
+            db,
+            provider_id=run_model_provider_id,
+            adapter_type=getattr(runtime_adapter_row, "adapter_type", None),
+            context="run.model_provider_id",
+        )
 
     # 1. RuntimeAdapter.provider_id → ModelProvider encrypted key
     if runtime_adapter_row is not None and runtime_adapter_row.provider_id:
@@ -98,23 +109,14 @@ def resolve_runtime_credentials(
             context="agent_version.model_provider_id",
         )
 
-    # 3. RuntimeAdapter.credential_id → Credential row (opaque ref; no decrypt yet)
+    # 3. RuntimeAdapter.credential_id → Credential.secret_ref
     if runtime_adapter_row is not None and runtime_adapter_row.credential_id:
-        cred = (
-            db.query(Credential)
-            .filter(Credential.id == runtime_adapter_row.credential_id)
-            .first()
+        return _resolve_from_credential(
+            db,
+            credential_id=runtime_adapter_row.credential_id,
+            adapter_type=getattr(runtime_adapter_row, "adapter_type", None),
+            context="runtime_adapter.credential_id",
         )
-        if cred is not None:
-            # Credential.secret_ref is an opaque reference — not the plaintext key.
-            # Full Credential decryption is deferred to a later milestone.
-            log.debug(
-                "credential_id %s found (type=%s) but opaque decryption is not yet implemented; "
-                "returning empty credentials dict",
-                cred.id,
-                cred.credential_type,
-            )
-            return {}
 
     # 4. No provider or credential configured — return empty (adapter must handle)
     return {}
@@ -187,37 +189,63 @@ def _resolve_from_model_provider(
             adapter_type=adapter_type,
         )
 
-    cfg = dict(provider.config_json or {})
-    encrypted_key = cfg.get("encrypted_key")
-    key_nonce = cfg.get("key_nonce")
-
-    if not encrypted_key or not key_nonce:
+    if not provider.credential_id:
         raise CredentialResolutionError(
-            f"ModelProvider '{provider_id}' has no stored encrypted credentials (via {context}). "
+            f"ModelProvider '{provider_id}' has no credential configured (via {context}). "
             "Configure the provider API key through the provider management interface.",
             adapter_type=adapter_type,
         )
 
-    try:
-        from ..crypto import decrypt_from_base64
-        api_key = decrypt_from_base64(encrypted_key, key_nonce)
-    except Exception as exc:
+    return _resolve_from_credential(
+        db,
+        credential_id=provider.credential_id,
+        adapter_type=adapter_type,
+        context=f"{context} → model_provider.credential_id",
+    )
+
+
+def _resolve_from_credential(
+    db: Session,
+    *,
+    credential_id: str,
+    adapter_type: str | None = None,
+    context: str = "unknown",
+) -> dict[str, Any]:
+    """Resolve API key material from a Credential.secret_ref."""
+    cred = (
+        db.query(Credential)
+        .filter(Credential.id == credential_id)
+        .first()
+    )
+    if cred is None:
         raise CredentialResolutionError(
-            f"ModelProvider '{provider_id}' credential decryption failed (via {context}): "
-            f"{type(exc).__name__} — check crypto configuration.",
+            f"Credential '{credential_id}' not found (referenced via {context})",
+            adapter_type=adapter_type,
+        )
+
+    from ..secrets.secret_ref import (
+        SecretRefResolutionError,
+        resolve_api_key_from_secret_ref,
+    )
+
+    try:
+        api_key = resolve_api_key_from_secret_ref(cred.secret_ref)
+    except SecretRefResolutionError as exc:
+        raise CredentialResolutionError(
+            f"Credential '{credential_id}' could not be resolved (via {context}): {exc}",
             adapter_type=adapter_type,
         ) from exc
 
-    if not api_key or not api_key.strip():
+    if not api_key:
         raise CredentialResolutionError(
-            f"ModelProvider '{provider_id}' decrypted to an empty API key (via {context})",
+            f"Credential '{credential_id}' resolved to an empty API key (via {context})",
             adapter_type=adapter_type,
         )
 
     log.debug(
-        "resolved api_key from ModelProvider %s via %s (adapter_type=%s)",
-        provider_id,
+        "resolved api_key from Credential %s via %s (adapter_type=%s)",
+        credential_id,
         context,
         adapter_type,
     )
-    return {"api_key": api_key.strip()}
+    return {"api_key": api_key}

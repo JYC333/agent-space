@@ -5,11 +5,12 @@ Typed payload helpers for memory and policy proposals.
 Canonical provenance is ``provenance_entries``: a list of objects
 ``{source_type, source_id, source_trust?, evidence_json?}``.
 
-Legacy keys ``source_activity_id`` / ``source_evidence`` (and related) are
-normalized into entries when *reading* payloads; new proposals should only
-persist ``provenance_entries`` (plus non-provenance operational fields such as
-``source_run_id`` is mirrored into entries at build time and may remain as a
-denormalized hint for queries until fully derived).
+Older stored proposals may carry flat keys ``source_activity_id`` /
+``source_evidence`` (and related) instead of a ``provenance_entries`` list.
+These are normalized into entries when *reading* payloads by
+``provenance_entries_from_payload``; new proposals persist only
+``provenance_entries``.  ``source_run_id`` is also mirrored into entries at
+build time and may remain as a denormalized hint for queries.
 """
 
 from dataclasses import dataclass
@@ -354,8 +355,8 @@ def merge_distinct_provenance_entries(
     return out
 
 
-def strip_legacy_provenance_keys(payload: dict[str, Any]) -> dict[str, Any]:
-    """Remove old provenance-only keys after normalization into provenance_entries."""
+def strip_flat_provenance_keys(payload: dict[str, Any]) -> dict[str, Any]:
+    """Remove flat scalar provenance fields after normalization into provenance_entries."""
     p = dict(payload)
     for k in (
         "source_activity_id",

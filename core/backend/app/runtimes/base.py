@@ -19,7 +19,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 
 @dataclass
@@ -95,6 +95,13 @@ class BaseRuntimeAdapter(ABC):
 
     # Declare whether this adapter supports sandboxed execution (worktree isolation).
     supports_sandboxed_execution: bool = False
+
+    # Model config consumption metadata (used by Run API resolved_model summary).
+    uses_model_config: bool = False
+    model_config_behavior: Literal[
+        "uses_model", "not_applicable", "unsupported"
+    ] = "not_applicable"
+    model_config_note: str = ""
 
     @abstractmethod
     def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:

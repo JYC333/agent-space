@@ -60,9 +60,10 @@ def test_provider_chat_uses_test_db_session(api_client, db, cross_space_pair, tm
         params=_params(a, ua.id),
         json={
             "name": "ChatCfg",
-            "provider": "openai",
+            "provider_type": "openai",
             "api_key": "sk-test-chat",
-            "models": ["gpt-4o-mini"],
+            "available_models": ["gpt-4o-mini"],
+            "default_model": "gpt-4o-mini",
             "is_default": True,
         },
     )
@@ -98,9 +99,10 @@ def test_provider_chat_cross_space_provider_id_returns_404(api_client, db, cross
         params=_params(a, ua.id),
         json={
             "name": "SpaceAProv",
-            "provider": "openai",
+            "provider_type": "openai",
             "api_key": "sk-test-xspace",
-            "models": ["gpt-4o-mini"],
+            "available_models": ["gpt-4o-mini"],
+            "default_model": "gpt-4o-mini",
             "is_default": False,
         },
     )
@@ -130,9 +132,10 @@ def test_provider_test_connection_uses_test_db_session(api_client, db, cross_spa
         params=_params(a, ua.id),
         json={
             "name": "TestCfg",
-            "provider": "openai",
+            "provider_type": "openai",
             "api_key": "sk-test-conn",
-            "models": ["gpt-4o-mini"],
+            "available_models": ["gpt-4o-mini"],
+            "default_model": "gpt-4o-mini",
             "is_default": False,
         },
     )
@@ -160,9 +163,10 @@ def test_provider_test_connection_failure_stable_shape(api_client, db, cross_spa
         params=_params(a, ua.id),
         json={
             "name": "FailCfg",
-            "provider": "openai",
+            "provider_type": "openai",
             "api_key": "sk-test-fail",
-            "models": ["gpt-4o-mini"],
+            "available_models": ["gpt-4o-mini"],
+            "default_model": "gpt-4o-mini",
             "is_default": False,
         },
     )

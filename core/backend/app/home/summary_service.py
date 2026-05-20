@@ -8,7 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.memory.proposals import ProposalService
-from app.models import ActivityRecord, Artifact, Job, Run, RuntimeAdapter, Task
+from app.models import ActivityRecord, Artifact, Job, ModelProvider, Run, RuntimeAdapter, Task
 from app.proposals.read_model import compute_proposal_expired
 
 from .schemas import (
@@ -16,6 +16,7 @@ from .schemas import (
     HomeActivitySummarySection,
     HomeArtifactSummaryItem,
     HomeJobQueueStatusSection,
+    HomeModelProviderStatusSection,
     HomePendingProposalItem,
     HomePendingProposalsSection,
     HomeRunStatsTodaySection,
@@ -62,6 +63,24 @@ def _run_to_item(r: Run) -> HomeRunSummaryItem:
     )
 
 
+def _model_provider_section(db: Session, space_id: str) -> HomeModelProviderStatusSection:
+    rows = db.query(ModelProvider).filter(ModelProvider.space_id == space_id).all()
+    enabled = [r for r in rows if r.enabled]
+    n_total = len(rows)
+    n_enabled = len(enabled)
+    missing = n_enabled == 0
+    if missing:
+        msg = "No enabled model providers configured for this space."
+    else:
+        msg = f"{n_enabled} enabled model provider(s) configured."
+    return HomeModelProviderStatusSection(
+        model_providers_count=n_total,
+        enabled_model_providers_count=n_enabled,
+        missing_model_provider_config=missing,
+        message=msg,
+    )
+
+
 def _runtime_section(db: Session, space_id: str) -> HomeRuntimeStatusSection:
     rows = (
         db.query(RuntimeAdapter)
@@ -90,6 +109,7 @@ def _suggested_actions(
     failed_today: int,
     needs_review_tasks: int,
     real_adapters: int,
+    enabled_providers: int,
 ) -> list[HomeSuggestedActionItem]:
     actions: list[HomeSuggestedActionItem] = []
     if pending_proposals > 0:
@@ -122,13 +142,23 @@ def _suggested_actions(
                 priority="normal",
             )
         )
+    if enabled_providers == 0:
+        actions.append(
+            HomeSuggestedActionItem(
+                id="configure-model-provider",
+                label="Configure a model provider",
+                reason="No enabled model providers are configured for this space.",
+                target_path="/providers",
+                priority="low",
+            )
+        )
     if real_adapters == 0:
         actions.append(
             HomeSuggestedActionItem(
                 id="configure-runtime-adapter",
-                label="Configure a real runtime adapter",
+                label="Configure a runtime adapter",
                 reason="No enabled runtime adapters are configured for this space.",
-                target_path="/providers",
+                target_path="/cli-tools",
                 priority="low",
             )
         )
@@ -364,11 +394,13 @@ def build_home_summary(
     )
 
     runtime_status = _runtime_section(db, space_id)
+    model_provider_status = _model_provider_section(db, space_id)
     suggested = _suggested_actions(
         pending_proposals=pending_count,
         failed_today=int(failed_today),
         needs_review_tasks=needs_review_count,
         real_adapters=runtime_status.real_adapters_configured_count,
+        enabled_providers=model_provider_status.enabled_model_providers_count,
     )
 
     return HomeSummaryOut(
@@ -382,5 +414,6 @@ def build_home_summary(
         run_stats_today=run_stats_today,
         job_queue_status=job_queue_status,
         runtime_status=runtime_status,
+        model_provider_status=model_provider_status,
         suggested_actions=suggested,
     )

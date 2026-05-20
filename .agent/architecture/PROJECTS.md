@@ -115,7 +115,7 @@ All five durable object list endpoints accept an optional `project_id` query par
 
 **Isolation guarantee:** Before filtering, each endpoint calls `assert_project_in_space(db, project_id, space_id)` which raises `ValueError` (→ HTTP 422) if the project does not exist in the requesting space. This prevents cross-space enumeration via a guessed project ID.
 
-**Output schemas:** Each corresponding output schema (`ActivityOut`, `ArtifactOut`, `ProposalOut`, `RunOutV2`, `MemoryOut`, `ActivityRecordOut`) now includes `project_id: Optional[str] = None`. Rows without a project are not affected.
+**Output schemas:** Each corresponding output schema (`ActivityOut`, `ArtifactOut`, `ProposalOut`, `RunOut`, `MemoryOut`, `ActivityRecordOut`) now includes `project_id: Optional[str] = None`. Rows without a project are not affected.
 
 **Frontend:** All five `*Api.list()` functions in `api/client.ts` accept `project_id`. `ProjectDetailPage` uses these to render per-section scoped previews (up to 5 items each) with "View all →" links to the global list.
 

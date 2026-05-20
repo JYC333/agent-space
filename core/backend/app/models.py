@@ -297,9 +297,6 @@ class Credential(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
-    # ORM mirrors for historical credential service field names.
-    provider = synonym("credential_type")
-    encrypted_secret_ref = synonym("secret_ref")
 
 
 class ModelProvider(Base):
@@ -320,11 +317,6 @@ class ModelProvider(Base):
 
     credential: Mapped[Optional[Credential]] = relationship("Credential")
 
-    # ORM mirrors for historical ProviderConfig field names.
-    provider = synonym("provider_type")
-    api_base = synonym("base_url")
-    models = synonym("capabilities_json")
-    status = synonym("enabled")
 
 
 class ExecutionPlane(Base):
@@ -412,7 +404,7 @@ class RuntimeAdapter(Base):
     credential: Mapped[Optional[Credential]] = relationship("Credential")
     execution_plane: Mapped[Optional[ExecutionPlane]] = relationship("ExecutionPlane")
 
-    # ORM mirrors for historical CLI adapter config field names.
+    # Field name aliases for CLI adapter config API (adapter_id, display_name, quota_status).
     adapter_id = synonym("adapter_type")
     display_name = synonym("name")
     quota_status = synonym("health_status")
@@ -974,7 +966,7 @@ class ActivityRecord(Base):
     )
     owner_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
 
-    # ORM mirrors for historical activity field names.
+    # Field name aliases for activity API (source_type, source_session_id, metadata_json).
     source_type = synonym("activity_type")
     source_session_id = synonym("session_id")
     metadata_json = synonym("payload_json")
@@ -1042,8 +1034,6 @@ class Artifact(Base):
     # Soft reference to Project.id — no DB FK; enforced at service layer.
     project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
 
-    # ORM mirrors for historical artifact field names.
-    path = synonym("storage_path")
 
     run: Mapped[Optional[Run]] = relationship("Run", back_populates="artifacts")
 
@@ -1152,9 +1142,9 @@ class Proposal(Base):
         from .memory.proposal_payload import first_activity_id, provenance_entries_from_payload
 
         p = self.payload_json or {}
-        legacy = p.get("source_activity_id")
-        if legacy:
-            return str(legacy)
+        flat_key = p.get("source_activity_id")
+        if flat_key:
+            return str(flat_key)
         return first_activity_id(provenance_entries_from_payload(p))
 
     @property

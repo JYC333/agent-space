@@ -308,7 +308,20 @@ class RunService:
         # Priority: runtime_adapter_id → execution_plane_id → adapter_type lookup.
         execution_plane_id = getattr(data, "execution_plane_id", None)
         runtime_adapter_id = getattr(data, "runtime_adapter_id", None)
-        model_provider_id = getattr(data, "model_provider_id", None)
+
+        version = self.db.query(AgentVersion).filter(
+            AgentVersion.id == agent.current_version_id
+        ).first()
+
+        from .model_config_resolution import resolve_model_config_for_run
+        resolved_model = resolve_model_config_for_run(
+            self.db,
+            space_id=space_id,
+            request_provider_id=getattr(data, "model_provider_id", None),
+            request_model=getattr(data, "model", None),
+            version=version,
+        )
+        model_provider_id = resolved_model.model_provider_id
 
         # Validate FK references belong to this space (prevent cross-space injection).
         if runtime_adapter_id:
@@ -322,12 +335,18 @@ class RunService:
                 )
         if model_provider_id:
             from ..models import ModelProvider as _MP
-            if not self.db.query(_MP).filter(
+            mp_row = self.db.query(_MP).filter(
                 _MP.id == model_provider_id, _MP.space_id == space_id
-            ).first():
+            ).first()
+            if not mp_row:
                 raise HTTPException(
                     status_code=400,
                     detail=f"ModelProvider '{model_provider_id}' not found in this space",
+                )
+            if not mp_row.enabled:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"ModelProvider '{model_provider_id}' is disabled",
                 )
 
         observability_level = None
@@ -383,6 +402,10 @@ class RunService:
             execution_plane_id=execution_plane_id,
             runtime_adapter_id=runtime_adapter_id,
             model_provider_id=model_provider_id,
+            model_override_json={
+                "model": resolved_model.model_name,
+                "source": resolved_model.source,
+            } if resolved_model.model_name or resolved_model.source != "none" else None,
             observability_level=observability_level,
             data_exposure_level=data_exposure_level,
             trust_level=trust_level,

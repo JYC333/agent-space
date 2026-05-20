@@ -109,6 +109,11 @@ def resolve_runtime_adapter(
         registry.reload(space_id=run.space_id)
         cap = registry.get(run.capability_id)
         if cap is not None:
+            if not cap.enabled:
+                raise AdapterResolutionError(
+                    "capability_disabled",
+                    f"Capability '{run.capability_id}' is disabled",
+                )
             merged = {**merged, "capability": asdict(cap)}
 
     return ResolvedRuntimeAdapter(

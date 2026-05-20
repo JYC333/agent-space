@@ -24,17 +24,26 @@ def _create_model_provider_with_key(
     space_id: str,
     plaintext_key: str = "sk-test-key-abc123",
 ) -> ModelProvider:
-    """Create a ModelProvider with an encrypted API key in config_json."""
+    """Create a ModelProvider with an API key stored via Credential.secret_ref."""
     from app.crypto import encrypt_to_base64
+    from app.models import Credential
+    from app.secrets.secret_ref import encode_model_provider_api_key_secret_ref
+    from tests.support.factories import _new_id
 
     encrypted_key, key_nonce = encrypt_to_base64(plaintext_key)
+    secret_ref = encode_model_provider_api_key_secret_ref(encrypted_key, key_nonce)
     mp = factories.create_test_model_provider(db, space_id=space_id, commit=False)
-    mp.config_json = {
-        "encrypted_key": encrypted_key,
-        "key_nonce": key_nonce,
-        "is_default": False,
-        "lifecycle_status": "active",
-    }
+    cred = Credential(
+        id=_new_id(),
+        space_id=space_id,
+        name="test-cred",
+        credential_type="api_key",
+        secret_ref=secret_ref,
+        scopes_json=[],
+    )
+    db.add(cred)
+    db.flush()
+    mp.credential_id = cred.id
     mp.enabled = True
     db.flush()
     return mp
@@ -210,6 +219,38 @@ class TestResolveCredentialsProviderPath:
         # RuntimeAdapter.provider_id takes priority
         assert result.get("api_key") == key_ra
 
+    def test_run_model_provider_id_takes_priority_over_adapter_and_version(
+        self, db, cross_space_pair
+    ):
+        a = cross_space_pair["space_a_id"]
+        ua = cross_space_pair["user_a"]
+        key_run = "sk-run-provider-key"
+        key_ra = "sk-adapter-provider-key"
+        key_ver = "sk-version-provider-key"
+        mp_run = _create_model_provider_with_key(db, space_id=a, plaintext_key=key_run)
+        mp_ra = _create_model_provider_with_key(db, space_id=a, plaintext_key=key_ra)
+        mp_ver = _create_model_provider_with_key(db, space_id=a, plaintext_key=key_ver)
+        agent = factories.create_test_agent(
+            db, space_id=a, owner_user_id=ua.id, commit=False
+        )
+        version = db.query(AgentVersion).filter(
+            AgentVersion.id == agent.current_version_id
+        ).one()
+        version.model_provider_id = mp_ver.id
+        ra = factories.create_test_runtime_adapter(
+            db, space_id=a, adapter_type="anthropic_messages",
+            provider_id=mp_ra.id, commit=False,
+        )
+        db.flush()
+
+        result = resolve_runtime_credentials(
+            db,
+            runtime_adapter_row=ra,
+            version=version,
+            run_model_provider_id=mp_run.id,
+        )
+        assert result.get("api_key") == key_run
+
     def test_missing_provider_raises_credential_resolution_error(self, db):
         from ulid import ULID
         # Test via resolve_provider_api_key — no FK constraint on the function call
@@ -237,10 +278,11 @@ class TestResolveCredentialsProviderPath:
             resolve_runtime_credentials(db, runtime_adapter_row=ra)
         assert "disabled" in str(exc_info.value).lower()
 
-    def test_provider_with_no_encrypted_key_raises(self, db, cross_space_pair):
+    def test_provider_with_no_credential_raises(self, db, cross_space_pair):
         a = cross_space_pair["space_a_id"]
         mp = factories.create_test_model_provider(db, space_id=a, commit=False)
-        mp.config_json = {}  # no encrypted_key
+        mp.credential_id = None
+        mp.config_json = {}
         mp.enabled = True
         db.flush()
         ra = factories.create_test_runtime_adapter(
@@ -251,7 +293,7 @@ class TestResolveCredentialsProviderPath:
 
         with pytest.raises(CredentialResolutionError) as exc_info:
             resolve_runtime_credentials(db, runtime_adapter_row=ra)
-        assert "no stored encrypted credentials" in str(exc_info.value).lower()
+        assert "no credential configured" in str(exc_info.value).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +316,63 @@ class TestResolveProviderApiKey:
             resolve_provider_api_key(db, str(ULID()))
 
 
+class TestProviderCredentialSecretRef:
+    def test_provider_create_stores_credential_secret_ref(
+        self, db, cross_space_pair, tmp_path, monkeypatch
+    ):
+        from app.config import paths
+        from app.models import Credential, ModelProvider
+        from app.providers.models import ModelProviderCreate
+        from app.providers.service import ModelService
+        import app.crypto as crypto
+
+        monkeypatch.setattr(crypto, "_KEY", None)
+        home = tmp_path / "crypto_home_cred"
+        monkeypatch.setattr(paths, "home", home)
+        paths.init_dirs()
+
+        a = cross_space_pair["space_a_id"]
+        out = ModelService().create_config(
+            db,
+            a,
+            ModelProviderCreate(
+                name="Cred Prov",
+                provider_type="openai",
+                api_key="sk-cred-test-key",
+                available_models=["gpt-4o-mini"],
+                default_model="gpt-4o-mini",
+            ),
+        )
+        assert out.has_api_key is True
+
+        row = db.query(ModelProvider).filter(ModelProvider.id == out.id).one()
+        assert row.credential_id is not None
+        cred = db.query(Credential).filter(Credential.id == row.credential_id).one()
+        assert "sk-cred-test-key" not in cred.secret_ref
+        assert cred.secret_ref.startswith("model_provider_api_key:v1:")
+
+        resolved = resolve_provider_api_key(db, row.id)
+        assert resolved == "sk-cred-test-key"
+
+    def test_broken_secret_ref_fails_resolution(self, db, cross_space_pair):
+        a = cross_space_pair["space_a_id"]
+        cred = factories.create_test_credential_stub(
+            db,
+            space_id=a,
+            secret_ref="model_provider_api_key:v1:bad",
+            commit=False,
+        )
+        mp = factories.create_test_model_provider(db, space_id=a, commit=False)
+        mp.credential_id = cred.id
+        mp.config_json = {}
+        db.flush()
+
+        with pytest.raises(CredentialResolutionError) as exc_info:
+            resolve_provider_api_key(db, mp.id)
+        assert "could not be resolved" in str(exc_info.value).lower()
+        assert "sk-" not in str(exc_info.value)
+
+
 # ---------------------------------------------------------------------------
 # Adapter metadata declarations
 # ---------------------------------------------------------------------------
@@ -282,12 +381,16 @@ class TestAdapterMetadataDeclarations:
     def test_echo_does_not_require_credentials(self):
         from app.runtimes.adapters.echo import EchoRuntimeAdapter
         assert EchoRuntimeAdapter.requires_credentials is False
+        assert EchoRuntimeAdapter.uses_model_config is False
+        assert EchoRuntimeAdapter.model_config_behavior == "not_applicable"
         assert EchoRuntimeAdapter.requires_file_access is False
         assert EchoRuntimeAdapter.supports_sandboxed_execution is False
 
     def test_anthropic_messages_requires_credentials(self):
         from app.runtimes.adapters.anthropic_messages import AnthropicMessagesRuntimeAdapter
         assert AnthropicMessagesRuntimeAdapter.requires_credentials is True
+        assert AnthropicMessagesRuntimeAdapter.uses_model_config is True
+        assert AnthropicMessagesRuntimeAdapter.model_config_behavior == "uses_model"
         assert AnthropicMessagesRuntimeAdapter.requires_file_access is False
 
     def test_anthropic_messages_no_env_fallback(self, monkeypatch):

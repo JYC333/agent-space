@@ -314,6 +314,16 @@ export const MODULE_REGISTRY: Module[] = [
     component: lazy(() => import('./capabilities/CapabilitiesPage')),
   },
   {
+    id: 'agents_mgmt', label: 'Agents', path: '/agents',
+    section: 'agents', group: 'agents', icon: 'bot',
+    description: 'Create agents and configure default model providers.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    hasSubRoutes: true,
+    component: lazy(() => import('./agents/AgentsModule')),
+  },
+  {
     id: 'providers', label: 'Providers', path: '/providers',
     section: 'dev', group: 'system', icon: 'key',
     description: 'Configure API keys for LLM model providers.',

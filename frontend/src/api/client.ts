@@ -7,7 +7,7 @@ import type {
   CurrentUser, SpaceWithMembership, SpaceMember, SpaceInvitationOut,
   Job, JobEvent, ActivityInboxRecord,
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
-  TaskArtifact, TaskProposal, Artifact, Proposal, ProposalAcceptOut, AgentOut, RunCreateBody,
+  TaskArtifact, TaskProposal, Artifact, Proposal, ProposalAcceptOut, AgentOut, AgentCreateBody, AgentUpdateBody, RunCreateBody,
   ActivityRecord, ActivitySourceType,
   FileNode, FileContent, GitStatus, RuntimeInfo, ConsoleSession, WorkspaceInfo,
   HomeSummaryOut, MeSummaryOut, MeTimelineEntry, MeTaskItem, MePendingProposalItem,
@@ -330,6 +330,9 @@ export const proposalsApi = {
 export const agentsApi = {
   list: (params: Record<string, string> = {}) =>
     get<AgentOut[]>('/agents?' + new URLSearchParams(params)),
+  get: (agentId: string) => get<AgentOut>(`/agents/${agentId}`),
+  create: (data: AgentCreateBody) => post<AgentOut>('/agents', data),
+  update: (agentId: string, data: AgentUpdateBody) => patch<AgentOut>(`/agents/${agentId}`, data),
   createRun: (agentId: string, body: RunCreateBody = {}) =>
     post<Run>(`/agents/${agentId}/runs`, body),
   listRuns:       (limit = 50)        => get<Run[]>(`/agents/runs?limit=${limit}`),
@@ -553,17 +556,32 @@ export const spacesApi = {
 }
 
 // ── Providers ─────────────────────────────────────────────────────────────
-export interface ProviderConfigOut {
+export type ProviderType =
+  | 'openai'
+  | 'anthropic'
+  | 'openrouter'
+  | 'ollama'
+  | 'custom_openai_compatible'
+  | 'other'
+
+export interface ModelProviderOut {
   id: string
   space_id: string
   name: string
-  provider: string
-  models: string[]
-  api_base: string | null
+  provider_type: ProviderType | string
+  base_url: string | null
+  default_model: string | null
+  available_models: string[]
+  enabled: boolean
   is_default: boolean
-  status: string
+  has_api_key: boolean
   created_at: string
   updated_at: string
+}
+
+export interface ModelProviderModelsOut {
+  models: string[]
+  source: 'configured' | 'live'
 }
 
 export interface CatalogInfo {
@@ -596,29 +614,35 @@ export interface ChatResponse {
 }
 
 export const providersApi = {
-  list: () => get<ProviderConfigOut[]>('/providers'),
+  list: () => get<ModelProviderOut[]>('/providers'),
 
   litellmProviders: () => get<string[]>('/providers/litellm-providers'),
 
   create: (data: {
     name: string
-    provider: string
-    api_key: string
-    models: string[]
-    api_base?: string
-    is_default: boolean
-  }) => post<ProviderConfigOut>('/providers', data),
+    provider_type: ProviderType | string
+    api_key?: string
+    default_model?: string
+    available_models?: string[]
+    base_url?: string
+    enabled?: boolean
+    is_default?: boolean
+  }) => post<ModelProviderOut>('/providers', data),
 
-  update: (id: string, data: Partial<{
+  patch: (id: string, data: Partial<{
     name: string
+    provider_type: ProviderType | string
     api_key: string
-    models: string[]
-    api_base?: string
+    default_model: string
+    available_models: string[]
+    base_url: string
+    enabled: boolean
     is_default: boolean
-    status: string
-  }>) => put<ProviderConfigOut>(`/providers/${id}`, data),
+  }>) => patch<ModelProviderOut>(`/providers/${id}`, data),
 
   delete: (id: string) => del<void>(`/providers/${id}`),
+
+  models: (id: string) => get<ModelProviderModelsOut>(`/providers/${id}/models`),
 
   test: (id: string) => post<TestConnectionOut>(`/providers/${id}/test`, {}),
 

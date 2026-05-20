@@ -1,90 +1,107 @@
 """
-Provider domain models — Pydantic schemas for API request/response and internal use.
+ModelProvider domain models — Pydantic schemas for API request/response and internal use.
 """
 
-from pydantic import BaseModel
-from typing import Optional
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field
+
+ProviderType = Literal[
+    "openai",
+    "anthropic",
+    "openrouter",
+    "ollama",
+    "custom_openai_compatible",
+    "other",
+]
 
 
-class ProviderConfigCreate(BaseModel):
-    """Request body for creating a new provider config."""
+class ModelProviderCreate(BaseModel):
     name: str
-    provider: str  # litellm provider id, e.g. "openai", "anthropic", "azure/openai"
-    api_key: str
-    models: list[str]
-    api_base: Optional[str] = None
+    provider_type: ProviderType
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    default_model: Optional[str] = None
+    available_models: list[str] = Field(default_factory=list)
+    enabled: bool = True
     is_default: bool = False
 
 
-class ProviderConfigUpdate(BaseModel):
-    """Request body for updating a provider config."""
+class ModelProviderUpdate(BaseModel):
     name: Optional[str] = None
+    provider_type: Optional[ProviderType] = None
+    base_url: Optional[str] = None
     api_key: Optional[str] = None
-    models: Optional[list[str]] = None
-    api_base: Optional[str] = None
+    default_model: Optional[str] = None
+    available_models: Optional[list[str]] = None
+    enabled: Optional[bool] = None
     is_default: Optional[bool] = None
-    status: Optional[str] = None
 
 
-class ProviderConfigOut(BaseModel):
+class ModelProviderOut(BaseModel):
     """Response body — never exposes raw API key."""
+
     id: str
     space_id: str
     name: str
-    provider: str
-    models: list[str]
-    api_base: Optional[str]
+    provider_type: str
+    base_url: Optional[str]
+    default_model: Optional[str]
+    available_models: list[str]
+    enabled: bool
     is_default: bool
-    status: str
-    created_at: str
-    updated_at: str
+    has_api_key: bool
+    created_at: datetime
+    updated_at: datetime
 
     @classmethod
-    def from_db_row(cls, row) -> "ProviderConfigOut":
-        caps = getattr(row, "capabilities_json", None)
-        if caps is None:
-            caps = getattr(row, "models", None)
+    def from_db_row(cls, row) -> "ModelProviderOut":
+        caps = row.capabilities_json or {}
         if isinstance(caps, dict):
-            models_list = caps.get("models", [])
+            models_list = list(caps.get("models") or [])
         elif isinstance(caps, list):
-            models_list = caps
+            models_list = list(caps)
         else:
             models_list = []
-        cfg = getattr(row, "config_json", None) or {}
-        lifecycle = cfg.get("lifecycle_status", "active")
-        is_default = bool(cfg.get("is_default", False))
-        prov = getattr(row, "provider", None) or getattr(row, "provider_type", "")
-        api_base = getattr(row, "api_base", None)
-        if api_base is None:
-            api_base = getattr(row, "base_url", None)
+        cfg = row.config_json or {}
+        has_key = bool(row.credential_id)
         return cls(
             id=row.id,
             space_id=row.space_id,
             name=row.name,
-            provider=prov,
-            models=models_list,
-            api_base=api_base,
-            is_default=is_default,
-            status=lifecycle,
-            created_at=row.created_at.isoformat(),
-            updated_at=row.updated_at.isoformat(),
+            provider_type=row.provider_type,
+            base_url=row.base_url,
+            default_model=row.default_model,
+            available_models=models_list,
+            enabled=bool(row.enabled),
+            is_default=bool(cfg.get("is_default", False)),
+            has_api_key=has_key,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
         )
 
 
-class ProviderConfigDB(BaseModel):
-    """
-    Internal model passed to adapters — holds decrypted API key.
-    Never expose this outside the service layer.
-    """
+class ModelProviderInternal(BaseModel):
+    """Internal model with decrypted API key — never expose via HTTP."""
+
     id: str
     space_id: str
     name: str
-    provider: str
-    api_key: str  # decrypted
-    models: list[str]
-    api_base: Optional[str]
+    provider_type: str
+    api_key: str
+    available_models: list[str]
+    base_url: Optional[str]
+    default_model: Optional[str]
     is_default: bool
-    status: str
+    enabled: bool
+
+
+class ModelProviderModelsOut(BaseModel):
+    models: list[str]
+    source: Literal["configured", "live"]
 
 
 class ConnectionTestResult(BaseModel):

@@ -25,7 +25,7 @@ from ..schemas import (
     ArtifactOut,
     Page,
     ProposalOut,
-    RunOutV2,
+    RunOut,
     RunStatusOut,
     RunStepOut,
 )
@@ -34,6 +34,7 @@ from ..artifacts.service import artifact_to_out
 from ..proposals.read_model import proposal_to_out
 from ..memory.proposals import ProposalService
 from .execution import RunExecutionService
+from .read_model import run_to_out
 from .run_service import RunService
 from .removed_runtime_token import is_obsolete_runtime_override_token
 from .steps import list_run_steps
@@ -136,7 +137,7 @@ def list_run_steps_route(
     return Page(items=page, total=len(steps), limit=limit, offset=offset)
 
 
-@router.get("/{run_id}", response_model=RunOutV2)
+@router.get("/{run_id}", response_model=RunOut)
 def get_run(
     run_id: str,
     ids: tuple[str, str] = Depends(get_identity),
@@ -145,7 +146,7 @@ def get_run(
     space_id, _ = ids
     svc = RunService(db)
     run = svc.get_run(run_id, space_id)
-    return run
+    return run_to_out(db, run)
 
 
 @router.get("/{run_id}/status", response_model=RunStatusOut)
@@ -160,7 +161,7 @@ def get_run_status(
     return run
 
 
-@router.post("/{run_id}/execute", response_model=RunOutV2)
+@router.post("/{run_id}/execute", response_model=RunOut)
 def execute_run_route(
     run_id: str,
     runtime: str | None = Query(
@@ -185,7 +186,7 @@ def execute_run_route(
             ),
         )
     RunExecutionService(db).execute_run(run_id, space_id=space_id, runtime=runtime)
-    return RunService(db).get_run(run_id, space_id)
+    return run_to_out(db, RunService(db).get_run(run_id, space_id))
 
 
 @router.patch("/{run_id}/stop")
@@ -238,4 +239,4 @@ def list_runs(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return runs
+    return [run_to_out(db, r) for r in runs]

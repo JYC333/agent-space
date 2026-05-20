@@ -66,8 +66,8 @@ a new table, not a revival of this removed table.
 | `source_monitoring_result` | Snapshot of SourceMonitoring gate at proposal creation or acceptance. |
 | `consolidation_run_id` | Which consolidation run produced this proposal. |
 | `activity_batch_hash` | Hash of contributing activity IDs. |
-| `source_run_id` (legacy) | Denormalized run reference; normalized into `provenance_entries` at build time. |
-| `source_activity_id` (legacy) | Normalized into `provenance_entries` via `provenance_entries_from_payload`; stripped from new proposals by `strip_legacy_provenance_keys`. |
+| `source_run_id` (stored payload, normalized on read) | Denormalized run reference; normalized into `provenance_entries` at build time. |
+| `source_activity_id` (stored payload, normalized on read) | Normalized into `provenance_entries` via `provenance_entries_from_payload`; stripped from new proposals by `strip_flat_provenance_keys`. |
 
 ### MemoryEntry — Approved Knowledge Layer
 

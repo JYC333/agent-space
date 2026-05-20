@@ -38,6 +38,7 @@ def test_home_summary_empty_stable_shape(api_client, db):
         "run_stats_today",
         "job_queue_status",
         "runtime_status",
+        "model_provider_status",
         "suggested_actions",
     ):
         assert key in data, f"missing {key}"
@@ -53,6 +54,13 @@ def test_home_summary_empty_stable_shape(api_client, db):
     assert set(rt.keys()) >= {
         "real_adapters_configured_count",
         "configured_adapter_types",
+        "message",
+    }
+    mp = data["model_provider_status"]
+    assert set(mp.keys()) >= {
+        "model_providers_count",
+        "enabled_model_providers_count",
+        "missing_model_provider_config",
         "message",
     }
 

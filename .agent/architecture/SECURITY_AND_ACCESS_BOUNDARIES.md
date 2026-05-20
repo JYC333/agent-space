@@ -201,7 +201,7 @@ throughout.
 - `GET /providers/{id}` constructs `ProviderConfigOut` manually — no `api_key` field included.
 - CLI credentials are stored as filesystem-managed paths; no secret material appears in API
   responses or SSE event streams.
-- `AgentVersionOut`, `RunOutV2`, and `ArtifactOut` schemas contain no credential fields.
+- `AgentVersionOut`, `RunOut`, and `ArtifactOut` schemas contain no credential fields.
 - Agent/run/artifact/proposal outputs must not expose secret material.
 
 ---

@@ -20,6 +20,19 @@ def _isolate_crypto_home(monkeypatch, tmp_path):
     paths.init_dirs()
 
 
+def _provider_create_body(**overrides):
+    body = {
+        "name": "LLM One",
+        "provider_type": "openai",
+        "api_key": "sk-test-contract",
+        "available_models": ["gpt-4o-mini"],
+        "default_model": "gpt-4o-mini",
+        "is_default": False,
+    }
+    body.update(overrides)
+    return body
+
+
 def test_providers_list_shape(api_client, db, cross_space_pair, tmp_path, monkeypatch):
     _isolate_crypto_home(monkeypatch, tmp_path)
     a = cross_space_pair["space_a_id"]
@@ -37,6 +50,26 @@ def test_cli_adapters_list_shape(api_client, db, cross_space_pair):
     assert isinstance(r.json(), list)
 
 
+def test_model_provider_response_never_includes_api_key(api_client, db, cross_space_pair, tmp_path, monkeypatch):
+    _isolate_crypto_home(monkeypatch, tmp_path)
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    create = cross_space_pair["client_a"].post(
+        "/api/v1/providers",
+        params=_params(a, ua.id),
+        json=_provider_create_body(name="Secret Test"),
+    )
+    assert create.status_code == 201
+    data = create.json()
+    assert data["has_api_key"] is True
+    assert "api_key" not in data
+
+    prov_id = data["id"]
+    get_r = cross_space_pair["client_a"].get(f"/api/v1/providers/{prov_id}", params=_params(a, ua.id))
+    assert get_r.status_code == 200
+    assert "api_key" not in get_r.json()
+
+
 def test_provider_update_does_not_mutate_runtime_adapter(api_client, db, cross_space_pair, tmp_path, monkeypatch):
     _isolate_crypto_home(monkeypatch, tmp_path)
     a = cross_space_pair["space_a_id"]
@@ -51,13 +84,7 @@ def test_provider_update_does_not_mutate_runtime_adapter(api_client, db, cross_s
     create = cross_space_pair["client_a"].post(
         "/api/v1/providers",
         params=_params(a, ua.id),
-        json={
-            "name": "LLM One",
-            "provider": "openai",
-            "api_key": "sk-test-contract",
-            "models": ["gpt-4o-mini"],
-            "is_default": False,
-        },
+        json=_provider_create_body(),
     )
     assert create.status_code == 201
     prov_id = create.json()["id"]
@@ -67,7 +94,7 @@ def test_provider_update_does_not_mutate_runtime_adapter(api_client, db, cross_s
     assert len(mine) == 1
     assert mine[0]["display_name"] == "Adapter Original"
 
-    up = cross_space_pair["client_a"].put(
+    up = cross_space_pair["client_a"].patch(
         f"/api/v1/providers/{prov_id}",
         params=_params(a, ua.id),
         json={"name": "LLM Renamed"},
@@ -88,13 +115,7 @@ def test_cli_adapter_update_does_not_mutate_provider(api_client, db, cross_space
     create = cross_space_pair["client_a"].post(
         "/api/v1/providers",
         params=_params(a, ua.id),
-        json={
-            "name": "Stable Name",
-            "provider": "openai",
-            "api_key": "sk-test-contract-2",
-            "models": ["gpt-4o-mini"],
-            "is_default": False,
-        },
+        json=_provider_create_body(name="Stable Name", api_key="sk-test-contract-2"),
     )
     assert create.status_code == 201
     prov = create.json()
@@ -131,13 +152,7 @@ def test_get_provider_other_space_returns_404(api_client, db, cross_space_pair, 
     create = cross_space_pair["client_a"].post(
         "/api/v1/providers",
         params=_params(a, ua.id),
-        json={
-            "name": "A-only",
-            "provider": "openai",
-            "api_key": "sk-test-contract-3",
-            "models": ["gpt-4o-mini"],
-            "is_default": False,
-        },
+        json=_provider_create_body(name="A-only", api_key="sk-test-contract-3"),
     )
     assert create.status_code == 201
     pid = create.json()["id"]
@@ -146,3 +161,21 @@ def test_get_provider_other_space_returns_404(api_client, db, cross_space_pair, 
         params=_params(b, ub.id),
     )
     assert r.status_code == 404
+
+
+def test_provider_models_endpoint_returns_configured_source(api_client, db, cross_space_pair, tmp_path, monkeypatch):
+    _isolate_crypto_home(monkeypatch, tmp_path)
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    create = cross_space_pair["client_a"].post(
+        "/api/v1/providers",
+        params=_params(a, ua.id),
+        json=_provider_create_body(available_models=["gpt-4o-mini", "gpt-4o"]),
+    )
+    assert create.status_code == 201
+    pid = create.json()["id"]
+    r = cross_space_pair["client_a"].get(f"/api/v1/providers/{pid}/models", params=_params(a, ua.id))
+    assert r.status_code == 200
+    data = r.json()
+    assert data["source"] == "configured"
+    assert "gpt-4o-mini" in data["models"]

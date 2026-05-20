@@ -23,11 +23,12 @@ from ulid import ULID
 from sqlalchemy.orm import Session as DBSession
 from fastapi import HTTPException
 
-from ..models import Agent, Run, AgentVersion
+from ..models import Agent, Run, AgentVersion, ModelProvider
 from ..schemas import (
     AgentCreate, AgentUpdate, RunRequest,
     AgentVersionCreate,
     RunCreate,
+    AgentOut, AgentModelSummary,
     DEFAULT_MODEL_CONFIG, DEFAULT_MEMORY_POLICY, DEFAULT_RUNTIME_POLICY,
 )
 from ..config import settings
@@ -60,6 +61,76 @@ class AgentService:
     def __init__(self, db: DBSession):
         self.db = db
 
+    def _validate_model_provider(self, provider_id: str | None, space_id: str) -> None:
+        if not provider_id:
+            return
+        from ..providers.service import ModelService
+        try:
+            ModelService().assert_selectable(self.db, provider_id, space_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def _model_summary_for_agent(self, agent: Agent) -> AgentModelSummary | None:
+        if not agent.current_version_id:
+            return None
+        version = self.db.query(AgentVersion).filter(
+            AgentVersion.id == agent.current_version_id
+        ).first()
+        if not version or not version.model_provider_id:
+            if version and version.model_name:
+                return AgentModelSummary(model=version.model_name)
+            return None
+        provider = self.db.query(ModelProvider).filter(
+            ModelProvider.id == version.model_provider_id
+        ).first()
+        return AgentModelSummary(
+            provider_id=version.model_provider_id,
+            provider_name=provider.name if provider else None,
+            provider_type=provider.provider_type if provider else None,
+            model=version.model_name,
+        )
+
+    def to_agent_out(self, agent: Agent) -> AgentOut:
+        return AgentOut(
+            id=agent.id,
+            space_id=agent.space_id,
+            created_by_user_id=agent.owner_user_id or settings.default_user_id,
+            name=agent.name,
+            description=agent.description,
+            visibility=agent.visibility,
+            role_instruction=agent.role_instruction,
+            status=agent.status,
+            current_version_id=agent.current_version_id,
+            model=self._model_summary_for_agent(agent),
+            created_at=agent.created_at,
+            updated_at=agent.updated_at,
+        )
+
+    def _version_fields_from_current(self, agent: Agent) -> dict:
+        base = {
+            "model_provider_id": None,
+            "model_name": None,
+            "model_config_json": DEFAULT_MODEL_CONFIG.copy(),
+            "memory_policy_json": DEFAULT_MEMORY_POLICY.copy(),
+            "capabilities_json": [],
+            "tool_permissions_json": {},
+            "runtime_policy_json": DEFAULT_RUNTIME_POLICY.copy(),
+        }
+        if not agent.current_version_id:
+            return base
+        from .version_service import AgentVersionService
+        current = AgentVersionService(self.db).get_or_404(agent.current_version_id)
+        base.update({
+            "model_provider_id": current.model_provider_id,
+            "model_name": current.model_name,
+            "model_config_json": current.model_config_json,
+            "memory_policy_json": current.memory_policy_json,
+            "capabilities_json": current.capabilities_json,
+            "tool_permissions_json": current.tool_permissions_json,
+            "runtime_policy_json": current.runtime_policy_json,
+        })
+        return base
+
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
@@ -70,6 +141,13 @@ class AgentService:
         owner_user_id = data.created_by_user_id or requesting_user_id or settings.default_user_id
 
         version_svc = AgentVersionService(self.db)
+
+        self._validate_model_provider(data.default_model_provider_id, space_id)
+        if data.default_model and not data.default_model_provider_id:
+            raise HTTPException(
+                status_code=400,
+                detail="default_model_provider_id is required when default_model is set",
+            )
 
         agent = Agent(
             id=_new_id(),
@@ -85,6 +163,8 @@ class AgentService:
         self.db.flush()
 
         version_data = AgentVersionCreate(
+            model_provider_id=data.default_model_provider_id,
+            model_name=data.default_model,
             model_config_json=dict(data.model_config_json or DEFAULT_MODEL_CONFIG),
             memory_policy_json=dict(data.memory_policy_json or DEFAULT_MEMORY_POLICY),
             capabilities_json=list(data.capabilities_json or []),
@@ -138,6 +218,7 @@ class AgentService:
 
         identity_fields = {}
         exec_field_names = {
+            "default_model_provider_id", "default_model",
             "model_config_json", "memory_policy_json", "capabilities_json",
             "tool_policy_json", "runtime_policy_json",
         }
@@ -150,47 +231,40 @@ class AgentService:
         for field, value in identity_fields.items():
             setattr(agent, field, value)
 
+        model_fields = {"default_model_provider_id", "default_model"}
+        has_model_change = any(fn in update_dict for fn in model_fields)
         has_exec_config = any(fn in update_dict for fn in exec_field_names)
+
+        if has_model_change:
+            pid = update_dict.get("default_model_provider_id")
+            if pid is None and agent.current_version_id:
+                current = self.db.query(AgentVersion).filter(
+                    AgentVersion.id == agent.current_version_id
+                ).first()
+                pid = current.model_provider_id if current else None
+            self._validate_model_provider(pid, agent.space_id)
+            model_name = update_dict.get("default_model")
+            if model_name and not pid:
+                raise HTTPException(
+                    status_code=400,
+                    detail="default_model_provider_id is required when default_model is set",
+                )
 
         if has_exec_config:
             version_svc = AgentVersionService(self.db)
-            version_dict = {}
+            version_dict = self._version_fields_from_current(agent)
 
-            if agent.current_version_id:
-                current = version_svc.get_or_404(agent.current_version_id)
-                current_vals = {
-                    "model_config_json": current.model_config_json,
-                    "memory_policy_json": current.memory_policy_json,
-                    "capabilities_json": current.capabilities_json,
-                    "tool_permissions_json": current.tool_permissions_json,
-                    "runtime_policy_json": current.runtime_policy_json,
-                }
-                for k, v in current_vals.items():
-                    version_dict[k] = v
-                for field in ["model_config_json", "memory_policy_json", "capabilities_json",
-                              "tool_policy_json", "runtime_policy_json"]:
-                    if field in update_dict and update_dict[field] is not None:
-                        if field == "tool_policy_json":
-                            version_dict["tool_permissions_json"] = update_dict[field]
-                        else:
-                            version_dict[field] = update_dict[field]
-            else:
-                for field in ["model_config_json", "memory_policy_json", "capabilities_json",
-                              "tool_policy_json", "runtime_policy_json"]:
-                    if field in update_dict and update_dict[field] is not None:
-                        if field == "tool_policy_json":
-                            version_dict["tool_permissions_json"] = update_dict[field]
-                        else:
-                            version_dict[field] = update_dict[field]
+            if "default_model_provider_id" in update_dict:
+                version_dict["model_provider_id"] = update_dict["default_model_provider_id"]
+            if "default_model" in update_dict:
+                version_dict["model_name"] = update_dict["default_model"]
+            for field in ["model_config_json", "memory_policy_json", "capabilities_json",
+                          "tool_policy_json", "runtime_policy_json"]:
+                if field in update_dict and update_dict[field] is not None:
+                    if field == "tool_policy_json":
+                        version_dict["tool_permissions_json"] = update_dict[field]
                     else:
-                        if field == "model_config_json":
-                            version_dict[field] = DEFAULT_MODEL_CONFIG.copy()
-                        elif field == "memory_policy_json":
-                            version_dict[field] = DEFAULT_MEMORY_POLICY.copy()
-                        elif field == "runtime_policy_json":
-                            version_dict[field] = DEFAULT_RUNTIME_POLICY.copy()
-                        elif field == "capabilities_json":
-                            version_dict[field] = []
+                        version_dict[field] = update_dict[field]
 
             version_data = AgentVersionCreate(**version_dict)
             new_version = version_svc.create(agent_id=agent.id, space_id=agent.space_id, data=version_data)
