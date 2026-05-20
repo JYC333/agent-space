@@ -35,7 +35,8 @@ cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants
 - `backend/app/memory/context_builder.py` — context package (requires space_id + user_id)
 - `backend/app/proposals/api.py` — proposal review API
 - `backend/app/memory/reflector.py` — session → memory proposals
-- `backend/app/agents/runner.py` — agent run orchestration
+- `backend/app/runs/execution.py` — RunExecutionService (canonical run orchestration)
+- `backend/app/cli_adapters/` — CLI adapter detection, executor infrastructure, sandbox support
 - `backend/app/capabilities/registry.py` — capability loader
 - `backend/app/main.py` — FastAPI app entry point
 
@@ -61,15 +62,22 @@ DEFAULT_USER_ID=default_user
 1. Create `capabilities/<your-id>/capability.yaml` with required fields (id, name, version, description)
 2. `POST /api/v1/capabilities/reload` or restart the server
 
-## Adding a new agent adapter
+## Adding a new runtime adapter (canonical path)
 
-1. Subclass `AgentAdapter` in `backend/app/agents/`
-2. Implement `adapter_type`, `is_available()`, and `run()`
-3. Register in `_ADAPTER_REGISTRY` in `runner.py`
+1. Subclass `BaseRuntimeAdapter` in `backend/app/runtimes/`
+2. Implement `execute(ctx: RuntimeExecutionContext) → RuntimeAdapterResult`; read credentials from `ctx.resolved_credentials`, never env vars
+3. Register in `backend/app/runtimes/registry.py:_RUNTIME_ADAPTER_CLASSES`
+
+## Adding a new CLI integration (CLI adapter path)
+
+1. Subclass `AgentAdapter` in `backend/app/cli_adapters/` (see `adapter_base.py`)
+2. Implement `adapter_type`, `is_available()`, `detect()`, and `run()`
+3. Register the class in `cli_adapters/service.py:_get_adapter_instance()` for detection probes
+4. To make it executable via `RunExecutionService`, also add a `BaseRuntimeAdapter` wrapper in `backend/app/runtimes/`
 
 ## Run execution
 
 - `RunExecutionService` (`backend/app/runs/execution.py`) drives queued Runs through **real** runtime adapters resolved from `AgentVersion` / `RuntimeAdapter` rows / `runtime_policy_json` (`default_adapter_type`, `allowed_adapter_types`, `allowed_model_providers`).
-- Built-in runtime adapter implementations live under `backend/app/runtimes/` (`echo` for zero-dependency tests, `anthropic_messages` for the Messages API — configure `ANTHROPIC_API_KEY` or adapter `config_json`; secrets are never written to logs).
+- Built-in runtime adapter implementations live under `backend/app/runtimes/` (`echo` for zero-dependency tests, `capability` for capability-based execution). Direct Anthropic API adapters are intentionally not registered — Anthropic/Claude execution uses the `claude_code` / `claude_cli` CLI integrations in `app.cli_adapters`.
 - Obsolete **runtime query / job payload overrides** from removed in-process tooling are not executed. `POST .../runs/{id}/execute` may return **410 Gone** when such an override is supplied; the job handler rejects obsolete overrides with `ValueError` (prefix `runtime_removed:`); `RunExecutionService` returns `error_code=runtime_removed` **without** mutating the Run row. There is **no** synthetic adapter fallback when a real adapter fails.
 - Text outputs are persisted with `ArtifactPersistenceService` under `artifact_storage_root`; ephemeral work uses `sandbox_root` (worktree isolation for high-risk policy) and is removed after the run while persisted artifact files remain.

@@ -98,7 +98,8 @@ cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants
 - `core/backend/app/memory/context_builder.py` — context package assembly (requires space_id)
 - `core/backend/app/proposals/api.py` — proposal review API
 - `core/backend/app/memory/reflector.py` — session → memory proposals
-- `core/backend/app/agents/runner.py` — agent run orchestration
+- `core/backend/app/runs/execution.py` — RunExecutionService (canonical run orchestration)
+- `core/backend/app/cli_adapters/` — CLI adapter detection, executor infrastructure, sandbox support
 - `core/backend/app/capabilities/registry.py` — capability loader
 - `frontend/src/modules/registry.js` — frontend module loader (nav + lazy routes)
 
@@ -133,8 +134,15 @@ DEFAULT_USER_ID=default_user
 1. Create `core/capabilities/<your-id>/capability.yaml`
 2. `POST /api/v1/capabilities/reload` or restart the server
 
-## Adding a new agent adapter
+## Adding a new runtime adapter (canonical path)
 
-1. Subclass `AgentAdapter` in `core/backend/app/agents/`
-2. Implement `adapter_type`, `is_available()`, and `run()`
-3. Register in `_ADAPTER_REGISTRY` in `runner.py`
+1. Subclass `BaseRuntimeAdapter` in `core/backend/app/runtimes/`
+2. Implement `execute(ctx: RuntimeExecutionContext) → RuntimeAdapterResult`; read credentials from `ctx.resolved_credentials`, never env vars
+3. Register in `core/backend/app/runtimes/registry.py:_RUNTIME_ADAPTER_CLASSES`
+
+## Adding a new CLI integration (CLI adapter path)
+
+1. Subclass `AgentAdapter` in `core/backend/app/cli_adapters/` (see `adapter_base.py`)
+2. Implement `adapter_type`, `is_available()`, `detect()`, and `run()`
+3. Register the class in `cli_adapters/service.py:_get_adapter_instance()` for detection probes
+4. To make it executable via `RunExecutionService`, also add a `BaseRuntimeAdapter` wrapper in `core/backend/app/runtimes/`

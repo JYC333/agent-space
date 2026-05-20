@@ -401,6 +401,9 @@ class RunExecutionService:
                     capability_id=run.capability_id,
                     simulate_failure=simulate_failure,
                     resolved_credentials=resolved_credentials,
+                    # Serialised ContextPackage for CLI adapters (ContextCompiler input).
+                    # Non-CLI adapters (echo, capability) ignore this field.
+                    context_package=context_pkg.model_dump(),
                 )
                 self.db.commit()
                 raw = adapter.execute(ctx)

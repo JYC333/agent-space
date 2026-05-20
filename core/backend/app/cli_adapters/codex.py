@@ -1,6 +1,14 @@
 from __future__ import annotations
 """
-Codex CLI adapter — wraps the `codex` CLI tool via subprocess.
+CodexCLIAdapter — wraps the `codex` CLI tool via subprocess.
+
+Non-execution support only. Used for:
+  - CLI tool detection (is `codex` installed and reachable?)
+  - Sandbox preparation (writing AGENTS.md context file into worktree/Docker dir)
+
+This adapter is NOT registered in app.runtimes.registry and cannot be executed
+through RunExecutionService. To make codex_cli executable canonically, add a
+BaseRuntimeAdapter wrapper in app.runtimes/adapters/.
 
 Context injection mirrors ClaudeCLIAdapter:
   With sandbox_dir: ContextCompiler writes AGENTS.md into sandbox_dir.
@@ -11,8 +19,8 @@ import json
 import shutil
 import subprocess
 from datetime import datetime, UTC
-from .base import AgentAdapter, RuntimeExecutionResult, CLIStatus, CLIAdapterCapabilities, CredentialSpec
-from .cli_adapter import LocalExecutor
+from .adapter_base import AgentAdapter, RuntimeExecutionResult, CLIStatus, CLIAdapterCapabilities, CredentialSpec
+from .executors import LocalExecutor
 
 
 class CodexCLIAdapter(AgentAdapter):
@@ -26,7 +34,7 @@ class CodexCLIAdapter(AgentAdapter):
         return "codex_cli"
 
     def is_available(self) -> bool:
-        from .cli_adapter import DockerExecutor
+        from .executors import DockerExecutor
         if isinstance(self.executor, DockerExecutor):
             return self.executor.available
         return shutil.which("codex") is not None

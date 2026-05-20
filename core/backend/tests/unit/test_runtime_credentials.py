@@ -163,7 +163,7 @@ class TestResolveCredentialsProviderPath:
         plaintext = "sk-test-provider-key-xyz"
         mp = _create_model_provider_with_key(db, space_id=a, plaintext_key=plaintext)
         ra = factories.create_test_runtime_adapter(
-            db, space_id=a, adapter_type="anthropic_messages",
+            db, space_id=a, adapter_type="echo",
             provider_id=mp.id, commit=False,
         )
         db.flush()
@@ -210,7 +210,7 @@ class TestResolveCredentialsProviderPath:
         ).one()
         version.model_provider_id = mp_ver.id
         ra = factories.create_test_runtime_adapter(
-            db, space_id=a, adapter_type="anthropic_messages",
+            db, space_id=a, adapter_type="echo",
             provider_id=mp_ra.id, commit=False,
         )
         db.flush()
@@ -238,7 +238,7 @@ class TestResolveCredentialsProviderPath:
         ).one()
         version.model_provider_id = mp_ver.id
         ra = factories.create_test_runtime_adapter(
-            db, space_id=a, adapter_type="anthropic_messages",
+            db, space_id=a, adapter_type="echo",
             provider_id=mp_ra.id, commit=False,
         )
         db.flush()
@@ -269,7 +269,7 @@ class TestResolveCredentialsProviderPath:
         mp.enabled = False
         db.flush()
         ra = factories.create_test_runtime_adapter(
-            db, space_id=a, adapter_type="anthropic_messages",
+            db, space_id=a, adapter_type="echo",
             provider_id=mp.id, commit=False,
         )
         db.flush()
@@ -286,7 +286,7 @@ class TestResolveCredentialsProviderPath:
         mp.enabled = True
         db.flush()
         ra = factories.create_test_runtime_adapter(
-            db, space_id=a, adapter_type="anthropic_messages",
+            db, space_id=a, adapter_type="echo",
             provider_id=mp.id, commit=False,
         )
         db.flush()
@@ -386,61 +386,26 @@ class TestAdapterMetadataDeclarations:
         assert EchoRuntimeAdapter.requires_file_access is False
         assert EchoRuntimeAdapter.supports_sandboxed_execution is False
 
-    def test_anthropic_messages_requires_credentials(self):
-        from app.runtimes.adapters.anthropic_messages import AnthropicMessagesRuntimeAdapter
-        assert AnthropicMessagesRuntimeAdapter.requires_credentials is True
-        assert AnthropicMessagesRuntimeAdapter.uses_model_config is True
-        assert AnthropicMessagesRuntimeAdapter.model_config_behavior == "uses_model"
-        assert AnthropicMessagesRuntimeAdapter.requires_file_access is False
+    def test_anthropic_direct_api_adapters_not_in_registry(self):
+        """Guard test: anthropic_messages and anthropic_api must not appear in the canonical registry.
 
-    def test_anthropic_messages_no_env_fallback(self, monkeypatch):
-        """AnthropicMessagesRuntimeAdapter must not read ANTHROPIC_API_KEY from env."""
-        import os
-        from app.runtimes.adapters.anthropic_messages import AnthropicMessagesRuntimeAdapter
-        from app.runtimes.base import RuntimeExecutionContext
-
-        # Inject a raw env key — adapter must ignore it and fail with credentials_missing
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-injected-key-abc")
-
-        adapter = AnthropicMessagesRuntimeAdapter()
-        ctx = RuntimeExecutionContext(
-            run_id="test-run",
-            space_id="test-space",
-            prompt="hello",
-            mode="live",
-            sandbox_cwd=None,
-            model_name=None,
-            system_prompt=None,
-            adapter_config={},
-            resolved_credentials={},  # no credentials passed
+        Product policy: Anthropic/Claude execution goes through CLI integrations only.
+        This test prevents reintroduction.
+        """
+        from app.runtimes.registry import is_adapter_type_implemented
+        assert not is_adapter_type_implemented("anthropic_messages"), (
+            "anthropic_messages must not be in canonical runtime registry (policy: CLI-only)"
         )
-        result = adapter.execute(ctx)
-        # Must fail with credentials_missing — not with the env key
-        assert result.success is False
-        assert result.error_code == "credentials_missing"
-        # Error text must never include a raw API key value
-        assert "sk-env-injected-key-abc" not in (result.error_text or "")
-
-    def test_anthropic_messages_no_raw_config_fallback(self):
-        """AnthropicMessagesRuntimeAdapter must not read api_key from adapter_config."""
-        from app.runtimes.adapters.anthropic_messages import AnthropicMessagesRuntimeAdapter
-        from app.runtimes.base import RuntimeExecutionContext
-
-        adapter = AnthropicMessagesRuntimeAdapter()
-        ctx = RuntimeExecutionContext(
-            run_id="test-run",
-            space_id="test-space",
-            prompt="hello",
-            mode="live",
-            sandbox_cwd=None,
-            model_name=None,
-            system_prompt=None,
-            # api_key in adapter_config must be ignored
-            adapter_config={"api_key": "sk-config-injected-key", "model": "test"},
-            resolved_credentials={},  # no resolved credentials
+        assert not is_adapter_type_implemented("anthropic_api"), (
+            "anthropic_api must not be in canonical runtime registry (policy: CLI-only)"
         )
-        result = adapter.execute(ctx)
-        assert result.success is False
-        assert result.error_code == "credentials_missing"
-        # Raw key must not appear in any error field
-        assert "sk-config-injected-key" not in (result.error_text or "")
+
+    def test_anthropic_messages_file_deleted(self):
+        """Guard test: anthropic_messages.py must not exist in app.runtimes.adapters."""
+        import importlib
+        import importlib.util
+        spec = importlib.util.find_spec("app.runtimes.adapters.anthropic_messages")
+        assert spec is None, (
+            "app.runtimes.adapters.anthropic_messages must not exist "
+            "(policy: Anthropic direct API adapter is not supported)"
+        )

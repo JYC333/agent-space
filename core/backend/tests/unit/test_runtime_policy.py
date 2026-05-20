@@ -55,7 +55,7 @@ def test_compute_runtime_policy_decision_empty_policy_defaults():
 
 
 def test_validate_adapter_denies_disallowed_adapter_type():
-    run = SimpleNamespace(adapter_type="anthropic_messages", model_provider_id=None)
+    run = SimpleNamespace(adapter_type="claude_code", model_provider_id=None)
     version = SimpleNamespace(model_provider_id=None)
     policy = {"allowed_adapter_types": ["echo"]}
     with pytest.raises(HTTPException) as ei:

@@ -1,11 +1,18 @@
-"""Concrete runtime adapters."""
+"""Concrete runtime adapters.
 
-from .anthropic_messages import AnthropicMessagesRuntimeAdapter
+Policy note:
+  ``anthropic_messages`` is intentionally not exported here. Anthropic/Claude
+  usage must go through CLI integrations (``app.cli_adapters``), not direct API
+  adapters. Do NOT re-add ``anthropic_messages`` or ``anthropic_api``.
+"""
+
 from .capability import CapabilityRuntimeAdapter
+from .cli_runtime import ClaudeCodeRuntimeAdapter, CodexCliRuntimeAdapter
 from .echo import EchoRuntimeAdapter
 
 __all__ = [
-    "AnthropicMessagesRuntimeAdapter",
     "CapabilityRuntimeAdapter",
+    "ClaudeCodeRuntimeAdapter",
+    "CodexCliRuntimeAdapter",
     "EchoRuntimeAdapter",
 ]

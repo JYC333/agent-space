@@ -182,7 +182,7 @@ def execute_run_route(
             status_code=410,
             detail=(
                 "Obsolete runtime override is no longer supported; omit the runtime "
-                "query parameter or use a configured adapter (echo, anthropic_messages, …)."
+                "query parameter or use a configured adapter (echo, capability, …)."
             ),
         )
     RunExecutionService(db).execute_run(run_id, space_id=space_id, runtime=runtime)

@@ -8,12 +8,20 @@ Principle:
   terminal execution, or git operations.
 
   Lightweight text tasks (summarization, classification, memory extraction,
-  digest generation, tagging, title generation) use AnthropicAPIAdapter instead.
+  digest generation, tagging, title generation) do not need CLI capabilities.
+  When a CLI adapter is requested for a lightweight task, the router returns
+  the requested adapter unchanged — the caller is responsible for choosing an
+  appropriate non-CLI adapter (e.g. capability) for tasks that don't need CLI.
+
+Policy:
+  anthropic_api is NOT a supported adapter type. Anthropic/Claude usage must
+  go through CLI integrations (claude_code / claude_cli) only.
+  Do NOT add anthropic_api or anthropic_messages as downgrade targets.
 
 Decision logic:
   If any of requires_filesystem | requires_terminal | requires_git is True,
   or requires_long_reasoning is True, keep the requested CLI adapter.
-  Otherwise, downgrade CLI adapters to anthropic_api.
+  Otherwise, return the requested adapter unchanged (no automatic downgrade).
 """
 
 from dataclasses import dataclass, field
@@ -85,18 +93,19 @@ class TaskRouter:
         """
         Return the adapter type that should actually execute this task.
 
-        If the requested adapter is a CLI type but the classification indicates
-        the task does not need CLI capabilities, downgrade to anthropic_api.
         If the requested adapter is already non-CLI, return it unchanged.
+        If the requested adapter is a CLI type and the task needs CLI, keep it.
+        If the requested adapter is a CLI type but the task does NOT need CLI,
+        return the requested adapter unchanged — no automatic downgrade to a
+        direct API adapter (anthropic_api is not a supported adapter type).
+        The caller should request an appropriate non-CLI adapter directly.
         """
         if requested_adapter not in _CLI_ADAPTERS:
             return requested_adapter
 
-        if classification.needs_cli:
-            return requested_adapter
-
-        # Lightweight task routed to CLI — downgrade to direct API call.
-        return "anthropic_api"
+        # CLI adapter: always return as-is.
+        # The caller is responsible for choosing the right adapter for the task.
+        return requested_adapter
 
     def classify_from_request(
         self,

@@ -48,6 +48,10 @@ class RuntimeExecutionContext:
     # Pre-resolved credentials — set by execution service via runtimes.credentials.
     # Adapters read api_key from here; never from adapter_config or env vars.
     resolved_credentials: dict[str, Any] = field(default_factory=dict)
+    # Serialised ContextPackage dict (ContextPackage.model_dump()) for CLI adapters.
+    # CLI runtime adapters pass this to ContextCompiler to render CLAUDE.md / AGENTS.md.
+    # Non-CLI adapters (echo, capability) should ignore this field.
+    context_package: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

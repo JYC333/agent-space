@@ -36,10 +36,11 @@ DEFAULT_RUNTIME_POLICY: dict = {
     "max_delegation_depth": 3,
     "max_run_time_seconds": 300,
     # adapter_ids this agent may use; matches RuntimeAdapter.adapter_id or adapter_type
+    # Note: anthropic_messages is intentionally absent — Anthropic/Claude usage
+    # must go through CLI integrations (claude_code / claude_cli).
     "allowed_adapter_types": [
         "echo",
         "capability",
-        "anthropic_messages",
         "claude_code",
         "codex_cli",
         "opencode",

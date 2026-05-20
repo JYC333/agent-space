@@ -51,14 +51,16 @@ Proposal. Read access is allowed. The forbidden write suffixes are declared in
 
 ## Workspace Console — Runtime Execution
 
-**There are two execution paths: synchronous and async.**
+**Console sessions use CLI adapters only (async background tasks).**
 
-| Runtime         | Path        | How it works |
-|-----------------|-------------|--------------|
-| `mock`          | Sync        | Returns hardcoded demo events immediately |
-| `anthropic_api` | Sync        | Blocks on `AnthropicAPIAdapter.run()`, returns completed session |
-| `claude_code`   | Async (BG)  | Saves status="running", dispatches `BackgroundTask`, returns immediately |
-| `codex`         | Async (BG)  | Same as claude_code |
+| Runtime       | Path       | How it works |
+|---------------|------------|--------------|
+| `claude_code` | Async (BG) | Saves status="running", dispatches `BackgroundTask`, returns immediately |
+| `codex`       | Async (BG) | Same as claude_code |
+
+Policy: `anthropic_api` / `anthropic_messages` direct API adapters are not
+supported. Anthropic/Claude execution must go through the `claude_code` CLI
+integration (subprocess wrapping the `claude` binary).
 
 Frontend polls `GET /workspace-console/sessions/{id}` every 2 s while
 `session.status === "running"`, then replays events with animation once done.
@@ -68,23 +70,16 @@ Frontend polls `GET /workspace-console/sessions/{id}` every 2 s while
 Pass `ClaudeCLIAdapter(model="claude-opus-4-7")` and it adds `--model` to the
 CLI command. Without a model, the CLI uses its configured default.
 
-**Background tasks use `_open_session()` — patch it in tests.**
-
-`_execute_session_background` opens its own DB session via `wc_api._open_session()`
-(not the request's `get_db()` session which is already closed). In tests, monkeypatch
-`app.workspace_console.api._open_session` to return a session bound to the test engine.
-
 **Runtime availability is checked live on every `GET /runtimes` call.**
 
 Each adapter's `is_available()` is called at request time. For `claude_code` this
-checks `shutil.which("claude")`. For `anthropic_api` it checks that the `anthropic`
-package is importable and `ANTHROPIC_API_KEY` is set.
+checks `shutil.which("claude")`.
 
 **Console sessions run in the workspace directory — no sandbox.**
 
 CLI adapters are called with `sandbox_dir=None` and `workspace_path=<ws.path>`.
 This means they execute directly in the workspace (no git worktree, no Docker).
-For production use with untrusted prompts, wire through `runner.py`'s sandbox
+For production use with untrusted prompts, wire through the sandbox
 infrastructure instead.
 
 ---

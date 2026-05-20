@@ -284,9 +284,9 @@ class SandboxManager:
         and executor_mode=="docker", its host_source_path/target_path are added as a
         volume mount into the container.
         """
-        from ..agents.cli_adapter import DockerExecutor
-        from ..agents.claude_adapter import ClaudeCLIAdapter
-        from ..agents.codex_adapter import CodexCLIAdapter
+        from ..cli_adapters.executors import DockerExecutor
+        from ..cli_adapters.claude import ClaudeCLIAdapter
+        from ..cli_adapters.codex import CodexCLIAdapter
 
         sandbox_dir = self.sandbox_root / run_id
         sandbox_dir.mkdir(parents=True, exist_ok=True)

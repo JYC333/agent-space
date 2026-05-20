@@ -1,30 +1,19 @@
 from __future__ import annotations
 """
-Agent adapter interface — runtime execution backends only.
+CLI adapter base classes — non-execution support only.
 
-AgentAdapter decouples the agent kernel from execution backends. The kernel
-(AgentService) is the single source of truth for agent identity, memory policy,
-delegation rules, and run logging. Adapters are thin execution wrappers: they
-receive a prompt + context snapshot and return a result. They own nothing.
+This module provides abstract base classes and data types for CLI adapter
+implementations used for:
+  - CLI tool detection and health probes (app.cli_adapters)
+  - Sandbox/worktree preparation (app.workspace.sandbox_manager)
 
-Adapter types built in:
-  "echo"       — deterministic test adapter; no external deps
-  "claude_cli" — Claude Code CLI subprocess
-  "codex_cli"  — OpenAI Codex CLI subprocess
-
-External frameworks (OpenAI Agents SDK, LangGraph, CrewAI, Letta, etc.) can
-be wired in as additional adapters without touching the kernel. An agent's
-`runtime_policy_json.allowed_adapter_types` controls which backends it may use.
-
-RuntimeExecutionResult is defined in app.runs.types (canonical location).
-Re-exported here for stable CLI adapter imports.
-New code should import from app.runs.types directly.
+These classes are NOT part of the canonical runtime execution path.
+Canonical executable adapters live in app.runtimes (BaseRuntimeAdapter).
+Do not add new product runtime adapters here.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional
+from dataclasses import dataclass
 
 # Canonical definition lives in app.runs.types — re-exported here for
 # stable CLI adapter imports.
@@ -80,7 +69,7 @@ class CredentialSpec:
 
 
 class AgentAdapter(ABC):
-    """Abstract base for all agent adapters."""
+    """Abstract base for CLI adapter implementations (detection + sandbox only)."""
 
     @property
     @abstractmethod

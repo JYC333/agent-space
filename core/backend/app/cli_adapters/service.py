@@ -466,9 +466,9 @@ def read_claude_stats() -> dict:
 
 def _get_adapter_instance(adapter_id: str):
     """Return an instantiated adapter for the given adapter_id, or None."""
-    from ..agents.cli_adapter import EchoAgentAdapter
-    from ..agents.claude_adapter import ClaudeCLIAdapter
-    from ..agents.codex_adapter import CodexCLIAdapter
+    from .executors import EchoAgentAdapter
+    from .claude import ClaudeCLIAdapter
+    from .codex import CodexCLIAdapter
 
     registry = {
         "echo": EchoAgentAdapter,

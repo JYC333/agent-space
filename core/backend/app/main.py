@@ -25,7 +25,6 @@ async def lifespan(app: FastAPI):
     from .auth.api_key import ApiKeyService
     from .feature_gates import API_KEYS_DB_PERSISTED
     from .models import Space, SpaceMembership
-    from .agents import hooks as _hooks  # noqa: F401 — registers post-run hooks
     from .jobs import handlers as _job_handlers  # noqa: F401 — registers job handlers
     from .jobs.queue import DatabaseQueueService, init_queue
     from .jobs.worker import start_worker

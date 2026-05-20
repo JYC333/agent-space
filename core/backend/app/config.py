@@ -1,6 +1,7 @@
 import os
 import stat
 from pathlib import Path
+from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -180,6 +181,12 @@ class Settings(BaseSettings):
 
     # Memory reflector
     reflector_mode: str = "pattern"  # "pattern" (deterministic) | "llm"
+    # LLM reflector model provider — must reference a configured ModelProvider row.
+    # Set REFLECTOR_MODEL_PROVIDER_ID to the provider's UUID/ULID.
+    # Set REFLECTOR_MODEL to override the provider's default_model (optional).
+    # Do NOT set REFLECTOR_ANTHROPIC_API_KEY — Anthropic is CLI-only.
+    reflector_model_provider_id: Optional[str] = None
+    reflector_model: Optional[str] = None
 
     # Google OAuth
     google_client_id: str = ""

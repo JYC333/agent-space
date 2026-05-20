@@ -16,13 +16,15 @@ Endpoints
 
 Runtime execution
 -----------------
-  anthropic_api — synchronous Anthropic SDK call (blocks until response)
-  claude_code   — async background task; runs `claude --print` in workspace dir
-  codex         — async background task; runs `codex` in workspace dir
+  claude_code — async background task; runs `claude --print` in workspace dir
+  codex       — async background task; runs `codex` in workspace dir
 
   CLI runtimes (claude_code, codex) return status="running" immediately and
   complete via BackgroundTask. Callers poll GET /sessions/{id} until the status
   changes to "completed" or "failed".
+
+Policy: anthropic_api / anthropic_messages direct API adapters are not supported.
+  Anthropic/Claude execution must go through the claude_code CLI integration.
 """
 from __future__ import annotations
 
@@ -41,7 +43,6 @@ from ..feature_gates import feature_not_implemented
 from ..models import Workspace
 from ..workspace.disk_path import workspace_absolute_root
 from ..workspace.path_policy import PathPolicy, PathPolicyError
-from ..agents.base import RuntimeExecutionResult
 
 router = APIRouter(prefix="/workspace-console", tags=["workspace_console"])
 
@@ -188,79 +189,25 @@ class ConsoleSessionCreate(BaseModel):
     prompt: str
 
 
-# ── Runtime adapter registry ──────────────────────────────────────────────────
+# ── Runtime availability ──────────────────────────────────────────────────────
 
-# Map console runtime IDs → adapter classes (imported lazily to avoid circular deps)
 _RUNTIME_SPECS: list[dict] = [
-    {"id": "anthropic_api", "name": "Anthropic API",  "models": ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5-20251001"]},
-    {"id": "claude_code",   "name": "Claude Code",    "models": ["claude-sonnet-4-6", "claude-opus-4-7"]},
-    {"id": "codex",         "name": "OpenAI Codex",   "models": ["codex-latest"]},
+    {"id": "claude_code", "name": "Claude Code",  "models": ["claude-sonnet-4-6", "claude-opus-4-7"]},
+    {"id": "codex",       "name": "OpenAI Codex", "models": ["codex-latest"]},
 ]
-
-
-def _make_adapter(runtime: str, model: str | None = None):
-    """Instantiate the appropriate adapter for a console runtime ID."""
-    if runtime == "anthropic_api":
-        from ..agents.api_adapter import AnthropicAPIAdapter
-        return AnthropicAPIAdapter(model=model)
-    if runtime == "claude_code":
-        from ..agents.claude_adapter import ClaudeCLIAdapter
-        return ClaudeCLIAdapter(model=model)
-    if runtime == "codex":
-        from ..agents.codex_adapter import CodexCLIAdapter
-        return CodexCLIAdapter()
-    return None
 
 
 def _is_available(runtime: str) -> bool:
     try:
-        adapter = _make_adapter(runtime)
-        return adapter is not None and adapter.is_available()
+        if runtime == "claude_code":
+            from ..cli_adapters.claude import ClaudeCLIAdapter
+            return ClaudeCLIAdapter().is_available()
+        if runtime == "codex":
+            from ..cli_adapters.codex import CodexCLIAdapter
+            return CodexCLIAdapter().is_available()
+        return False
     except Exception:
         return False
-
-
-def _result_to_events(result: "RuntimeExecutionResult") -> list[dict]:
-    """Convert a RuntimeExecutionResult to the RuntimeEvent list for a console session."""
-    events: list[dict] = []
-    if result.output:
-        events.append({"type": "text_delta", "content": result.output})
-    if result.success:
-        events.append({"type": "run_completed"})
-    else:
-        events.append({"type": "run_failed", "error": result.error or "Run failed"})
-    return events
-
-
-def _events_to_messages(events: list[dict]) -> list[dict]:
-    """
-    Reconstruct an Anthropic-style messages array from stored session events.
-
-    user_turn events mark user prompts; text_delta events accumulate assistant
-    content. Only completed turns (those followed by at least one text_delta)
-    are included — the caller is responsible for appending the new user message.
-    """
-    messages: list[dict] = []
-    current_prompt: str | None = None
-    current_response: list[str] = []
-
-    for ev in events:
-        t = ev.get("type")
-        if t == "user_turn":
-            if current_prompt is not None and current_response:
-                messages.append({"role": "user", "content": current_prompt})
-                messages.append({"role": "assistant", "content": "".join(current_response)})
-            current_prompt = ev.get("prompt", "")
-            current_response = []
-        elif t == "text_delta" and current_prompt is not None:
-            current_response.append(ev.get("content", ""))
-
-    # Flush the last turn if it has an assistant response
-    if current_prompt is not None and current_response:
-        messages.append({"role": "user", "content": current_prompt})
-        messages.append({"role": "assistant", "content": "".join(current_response)})
-
-    return messages
 
 
 # ── Routes: workspaces ────────────────────────────────────────────────────────

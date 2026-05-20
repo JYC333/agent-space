@@ -20,8 +20,11 @@ Agent            — product-level actor (space-scoped, policy-governed, memory-
     ↓ dispatches via
 Runtime Adapter  — CLI tool or execution backend (replaceable)
     ↓ optionally calls
-Model Provider   — underlying LLM API (Anthropic, OpenAI, …) [future direct mode]
+Model Provider   — underlying LLM API (OpenAI-compatible, …) [future direct mode]
 ```
+
+> Anthropic/Claude is **CLI-only** for this product. No direct Anthropic API adapter exists or
+> will be added to `app.runtimes`. See [ADR 0009](../decisions/0009-anthropic-cli-only-policy.md).
 
 These are three distinct concerns. Mixing them (e.g. "Claude IS the agent") is a design error.
 The agent-space core owns the Agent layer. CLI tools and providers are pluggable.
@@ -65,11 +68,11 @@ The `capability` adapter is a local runtime adapter. It resolves `Run.capability
 
 ## CLI Adapter Runner Contract
 
-All adapters subclass `AgentAdapter` (`agents/base.py`) and implement:
+All CLI adapters subclass `AgentAdapter` (`cli_adapters/adapter_base.py`) and implement:
 
 ```python
 @property
-def adapter_type(self) -> str: ...     # stable ID used in _ADAPTER_REGISTRY
+def adapter_type(self) -> str: ...     # stable ID used in cli_adapters/service.py
 
 def is_available(self) -> bool: ...    # check if CLI/SDK is installed
 
@@ -141,22 +144,26 @@ See `sandbox.md`. Short version:
 **Rule (B-RT-2):** An enterprise deployment must be able to disable any individual runtime adapter
 without breaking the core system (memory, wiki, cards, proposals, chat, activity capture).
 
-## Adding a New Adapter
+## Adding a New CLI Adapter
 
-1. Subclass `AgentAdapter` in `core/backend/app/agents/<name>_adapter.py`
-2. Implement `adapter_type`, `is_available()`, `run()`
-3. Override `detect()` and `get_capabilities()` if the CLI supports version probing
-4. Add to `_ADAPTER_REGISTRY` in `runner.py`
-5. Add to `_SANDBOXED_ADAPTERS` if it executes agent-generated code
-6. Add to `_BUILTIN_ADAPTERS` in `cli_adapters/service.py`
-7. Update this doc's adapter table
+1. Subclass `AgentAdapter` in `core/backend/app/cli_adapters/` (see `adapter_base.py`)
+2. Implement `adapter_type`, `is_available()`, `detect()`, and `run()`
+3. Register in `cli_adapters/service.py:_get_adapter_instance()` for detection probes
+4. To make it executable via `RunExecutionService`, also add a `BaseRuntimeAdapter` wrapper
+   in `core/backend/app/runtimes/` and register it in `runtimes/registry.py`
+5. Update this doc's adapter table
+
+> Do NOT add a direct Anthropic API adapter. See ADR 0009.
 
 ## Related Files
 
-- `core/backend/app/agents/base.py` — AgentAdapter, CLIStatus, CLIAdapterCapabilities
-- `core/backend/app/agents/runner.py` — _ADAPTER_REGISTRY, _SANDBOXED_ADAPTERS, _resolve_adapter
-- `core/backend/app/agents/claude_adapter.py` — ClaudeCLIAdapter
-- `core/backend/app/agents/codex_adapter.py` — CodexCLIAdapter
-- `core/backend/app/cli_adapters/` — CLIAdapterConfig CRUD and detection API
+- `core/backend/app/cli_adapters/adapter_base.py` — AgentAdapter, CLIStatus, CLIAdapterCapabilities
+- `core/backend/app/cli_adapters/claude.py` — ClaudeCLIAdapter
+- `core/backend/app/cli_adapters/codex.py` — CodexCLIAdapter
+- `core/backend/app/cli_adapters/executors.py` — LocalExecutor, DockerExecutor, EchoAgentAdapter
+- `core/backend/app/cli_adapters/service.py` — detection CRUD, `_get_adapter_instance()`
+- `core/backend/app/runtimes/base.py` — BaseRuntimeAdapter (canonical execution contract)
+- `core/backend/app/runtimes/registry.py` — canonical adapter registry
 - `core/backend/app/memory/context_compiler.py` — ContextCompiler (writes CLAUDE.md, AGENTS.md)
-- `.agent/decisions/0008-multi-cli-mvp.md` — ADR for this design
+- `.agent/decisions/0008-multi-cli-mvp.md` — ADR: managed multi-CLI MVP focus
+- `.agent/decisions/0009-anthropic-cli-only-policy.md` — ADR: Anthropic CLI-only policy

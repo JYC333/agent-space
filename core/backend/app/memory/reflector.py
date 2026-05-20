@@ -3,7 +3,9 @@ from __future__ import annotations
 MemoryReflector — analyzes a session's messages and generates memory proposals.
 
 Non-LLM mode: deterministic extraction without an external model.
-Mode "llm": uses Claude to produce structured proposals.
+Mode "llm": calls a configured ModelProvider (OpenAI-compatible only) via the
+             provider_client module.  Anthropic is not supported as a direct
+             provider — use an OpenAI-compatible provider.
 """
 
 import json
@@ -14,6 +16,12 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import Message
 from .proposals import ProposalService
+from .provider_client import (
+    ReflectorModelProviderMissingError,
+    UnsupportedProviderForReflectorError,
+    call_reflector_llm,
+    resolve_reflector_provider,
+)
 
 
 # Signal phrases that suggest a memory-worthy statement
@@ -128,18 +136,19 @@ class MemoryReflector:
         user_id: str,
         workspace_id: str | None,
     ) -> list:
-        """Use Claude to generate structured memory proposals."""
-        try:
-            import anthropic
-        except ImportError:
-            return self._reflect_pattern(
-                messages, session_id, space_id, user_id, workspace_id
-            )
+        """Use a configured ModelProvider to generate structured memory proposals.
 
-        if not settings.anthropic_api_key:
-            return self._reflect_pattern(
-                messages, session_id, space_id, user_id, workspace_id
-            )
+        Resolves provider config via ``settings.reflector_model_provider_id``
+        (a ModelProvider row ID).  Credentials are decrypted through
+        Credential.secret_ref — never read from environment variables.
+
+        Raises:
+            ReflectorModelProviderMissingError: no provider configured
+            UnsupportedProviderForReflectorError: provider_type=anthropic or unknown
+        """
+        provider_type, base_url, model, api_key = resolve_reflector_provider(
+            self.db, settings
+        )
 
         conversation = "\n".join(
             f"[{m.role.upper()}]: {m.content}" for m in messages
@@ -159,18 +168,18 @@ Return ONLY valid JSON. Example:
 
 If nothing is memory-worthy, return an empty array: []"""
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        response = client.messages.create(
-            model=settings.default_model,
-            max_tokens=2048,
-            system=system_prompt,
-            messages=[{"role": "user", "content": f"Conversation:\n\n{conversation}"}],
+        raw = call_reflector_llm(
+            provider_type,
+            base_url,
+            model,
+            api_key,
+            system_prompt,
+            f"Conversation:\n\n{conversation}",
         )
 
         try:
-            raw = response.content[0].text.strip()
-            items = json.loads(raw)
-        except (json.JSONDecodeError, IndexError):
+            items = json.loads(raw.strip())
+        except json.JSONDecodeError:
             return []
 
         proposals = []

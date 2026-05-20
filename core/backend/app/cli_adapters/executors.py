@@ -1,11 +1,14 @@
 from __future__ import annotations
 """
-LocalExecutor + DockerExecutor + EchoAgentAdapter.
+LocalExecutor, DockerExecutor, and EchoAgentAdapter — CLI subprocess infrastructure.
 
-Executors implement the Executor ABC and are injected into adapters.
-- LocalExecutor  — subprocess on the host (used in dev / echo agent)
-- DockerExecutor — runs commands inside an agent-space-sandbox container
-                   (used when runtime_policy.risk_level = "high" (escalates sandbox level))
+Non-execution support only:
+  - LocalExecutor / DockerExecutor are injected into CLI adapter classes for
+    sandbox (worktree + Docker) execution during workspace preparation.
+  - EchoAgentAdapter is used for detection/health probes.
+
+These classes are NOT part of the canonical runtime execution path.
+Canonical executable adapters live in app.runtimes (BaseRuntimeAdapter).
 """
 
 import os
@@ -13,7 +16,7 @@ import subprocess
 from datetime import datetime, UTC
 from pathlib import Path
 
-from .base import AgentAdapter, RuntimeExecutionResult, Executor, ExecutionResult
+from .adapter_base import AgentAdapter, RuntimeExecutionResult, Executor, ExecutionResult
 
 
 # Env vars forwarded from the host into sandbox containers.

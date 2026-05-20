@@ -1,6 +1,14 @@
 from __future__ import annotations
 """
-Claude CLI adapter — wraps the `claude` CLI tool via subprocess.
+ClaudeCLIAdapter — wraps the `claude` CLI tool via subprocess.
+
+Non-execution support only. Used for:
+  - CLI tool detection (is `claude` installed and reachable?)
+  - Sandbox preparation (writing CLAUDE.md context file into worktree/Docker dir)
+
+This adapter is NOT registered in app.runtimes.registry and cannot be executed
+through RunExecutionService. To make claude_code executable canonically, add a
+BaseRuntimeAdapter wrapper in app.runtimes/adapters/.
 
 Context injection:
   With sandbox_dir set: ContextCompiler writes CLAUDE.md into sandbox_dir.
@@ -14,8 +22,8 @@ import json
 import shutil
 import subprocess
 from datetime import datetime, UTC
-from .base import AgentAdapter, RuntimeExecutionResult, CLIStatus, CLIAdapterCapabilities, CredentialSpec
-from .cli_adapter import LocalExecutor
+from .adapter_base import AgentAdapter, RuntimeExecutionResult, CLIStatus, CLIAdapterCapabilities, CredentialSpec
+from .executors import LocalExecutor
 
 
 class ClaudeCLIAdapter(AgentAdapter):
@@ -39,7 +47,7 @@ class ClaudeCLIAdapter(AgentAdapter):
         return "claude_code"
 
     def is_available(self) -> bool:
-        from .cli_adapter import DockerExecutor
+        from .executors import DockerExecutor
         if isinstance(self.executor, DockerExecutor):
             return self.executor.available
         return shutil.which("claude") is not None

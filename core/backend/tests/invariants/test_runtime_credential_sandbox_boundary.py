@@ -43,18 +43,46 @@ class TestRunExecutionUsesCanonicalRuntimeRegistry:
         from app.runtimes.registry import is_adapter_type_implemented
         assert is_adapter_type_implemented("echo")
 
-    def test_runtime_registry_exposes_anthropic_messages_adapter(self):
-        from app.runtimes.registry import is_adapter_type_implemented
-        assert is_adapter_type_implemented("anthropic_messages")
+    def test_anthropic_direct_api_adapters_absent_from_canonical_registry(self):
+        """anthropic_api and anthropic_messages must NOT be in the canonical runtime registry.
 
-    def test_new_execution_uses_runtimes_registry_not_agent_runner_registry(self):
-        """app.agents.runner._ADAPTER_REGISTRY must not be the source of new adapters."""
-        from app.agents.runner import _ADAPTER_REGISTRY
-        from app.runtimes.registry import _RUNTIME_ADAPTER_CLASSES  # type: ignore[attr-defined]
-        # The CLI adapter registry may have overlapping names with canonical adapters,
-        # but new execution resolves through app.runtimes, not app.agents.
-        # Verify the canonical registry is a separate object.
-        assert _ADAPTER_REGISTRY is not _RUNTIME_ADAPTER_CLASSES
+        Product policy: Anthropic/Claude execution must go through CLI integrations
+        (claude_code / claude_cli in app.cli_adapters), not direct API adapters.
+        This test is a guard against reintroduction.
+        """
+        from app.runtimes.registry import is_adapter_type_implemented
+        assert not is_adapter_type_implemented("anthropic_api"), (
+            "anthropic_api must not be in canonical runtime registry (policy: CLI-only)"
+        )
+        assert not is_adapter_type_implemented("anthropic_messages"), (
+            "anthropic_messages must not be in canonical runtime registry (policy: CLI-only)"
+        )
+
+    def test_cli_adapter_types_registered_via_bridge(self):
+        """claude_code and codex_cli must be in the canonical registry via the CLI runtime bridge.
+
+        These are now executable through RunExecutionService via CliRuntimeAdapter subclasses.
+        The bridge delegates to app.cli_adapters without importing CLI classes into execution.py.
+        """
+        from app.runtimes.registry import is_adapter_type_implemented
+        assert is_adapter_type_implemented("claude_code"), (
+            "claude_code must be registered via ClaudeCodeRuntimeAdapter (CLI runtime bridge)"
+        )
+        assert is_adapter_type_implemented("codex_cli"), (
+            "codex_cli must be registered via CodexCliRuntimeAdapter (CLI runtime bridge)"
+        )
+
+    def test_cli_runtime_bridge_does_not_leak_cli_imports_to_execution_service(self):
+        """RunExecutionService must not directly import ClaudeCLIAdapter or CodexCLIAdapter."""
+        import inspect
+        import app.runs.execution as svc_module
+        source = inspect.getsource(svc_module)
+        assert "ClaudeCLIAdapter" not in source, (
+            "RunExecutionService must not import ClaudeCLIAdapter directly — use the CLI runtime bridge"
+        )
+        assert "CodexCLIAdapter" not in source, (
+            "RunExecutionService must not import CodexCLIAdapter directly — use the CLI runtime bridge"
+        )
 
 
 # ---------------------------------------------------------------------------
