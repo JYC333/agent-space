@@ -9,7 +9,7 @@ Surface:
   - GET /api/v1/runs/{id}        — Run detail (no full context payload)
   - GET /api/v1/runs/{id}/status — lightweight status
   - POST /api/v1/runs/{id}/execute — execute queued Run via configured runtime adapters
-  - PATCH /api/v1/runs/{id}/stop  — cancel (status change only, no runner interaction)
+  - PATCH /api/v1/runs/{id}/stop  — cancel run and best-effort terminate registered subprocess
   - GET /api/v1/runs            — list runs (optional, simple)
 """
 
@@ -34,12 +34,30 @@ from ..artifacts.service import artifact_to_out
 from ..proposals.read_model import proposal_to_out
 from ..memory.proposals import ProposalService
 from .execution import RunExecutionService
+from .preflight import PreflightRequest, PreflightResult, PreflightService
 from .read_model import run_to_out
 from .run_service import RunService
 from .removed_runtime_token import is_obsolete_runtime_override_token
 from .steps import list_run_steps
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+
+
+@router.post("/preflight", response_model=PreflightResult)
+def preflight_run(
+    body: PreflightRequest,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    """Validate all execution preconditions for a run without creating or starting it.
+
+    Returns a structured result with ``executable=True/False``, resolved
+    ``adapter_type``, ``required_sandbox_level``, and any ``warnings`` or ``errors``.
+
+    This endpoint does not mutate any state. It is safe to call at any time.
+    """
+    space_id, _ = ids
+    return PreflightService(db).check(body, space_id=space_id)
 
 
 @router.get("/{run_id}/activities", response_model=Page[ActivityRecordOut])

@@ -89,11 +89,11 @@ Run:
 
 ## Adapter Registry
 
-| Adapter       | Sandbox Level                     | Notes                                                    |
-|---------------|-----------------------------------|----------------------------------------------------------|
-| `echo`        | none                              | Test/demo only; always available                         |
-| `claude_code` | worktree (default) / one_shot_docker (high) | CLI installed in backend image; no new container at medium risk |
-| `codex_cli`   | worktree (default) / one_shot_docker (high) | CLI installed in backend image; no new container at medium risk |
+| Adapter       | Required risk_level | Sandbox Level   | Notes                                                     |
+|---------------|---------------------|-----------------|-----------------------------------------------------------|
+| `echo`        | any                 | none            | Test/demo only; always available; no file access          |
+| `claude_code` | **high** (required) | worktree        | CLI installed in backend image; fails validation if risk_level < high |
+| `codex_cli`   | **high** (required) | worktree        | CLI installed in backend image; fails validation if risk_level < high |
 
 ## Invariants
 
@@ -106,16 +106,16 @@ Run:
 
 ## Related Files
 
-- `core/backend/app/agents/runner.py` — adapter registry + post-run hooks
 - `core/backend/app/agents/agent_service.py` — AgentService CRUD and delegation helpers
 - `core/backend/app/runs/run_service.py` — Run creation and listing
-- `core/backend/app/runs/execution.py` — `RunExecutionService`
-- `core/backend/app/jobs/handlers.py` — `agent_run` queue handler
-- `core/backend/app/agents/claude_adapter.py` — ClaudeCLIAdapter
-- `core/backend/app/agents/codex_adapter.py` — CodexCLIAdapter
-- `core/backend/app/agents/cli_adapter.py` — EchoAgentAdapter + executors
+- `core/backend/app/runs/execution.py` — `RunExecutionService` (canonical orchestrator)
+- `core/backend/app/runs/runtime_policy.py` — risk→sandbox mapping, file-access adapter validation
+- `core/backend/app/runtimes/registry.py` — adapter registration
+- `core/backend/app/runtimes/adapters/cli_runtime.py` — CLI bridge (CliRuntimeAdapter)
+- `core/backend/app/cli_adapters/claude.py` — ClaudeCLIAdapter (subprocess wrapper)
+- `core/backend/app/cli_adapters/codex.py` — CodexCLIAdapter (subprocess wrapper)
+- `core/backend/app/cli_adapters/executors.py` — LocalExecutor, DockerExecutor
 - `core/backend/app/agents/seeder.py` — built-in agent definitions
-- `core/backend/app/workspace/sandbox_manager.py` — SandboxManager, SandboxContext
 
 ## Related Decisions
 

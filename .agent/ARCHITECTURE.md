@@ -79,7 +79,7 @@
 - **Run is the central execution object** — every agent invocation creates a Run; Run produces Activities, Artifacts, and Proposals; Session is conversation-level, Run is execution-level
 - **Proposal gate** — memory and code changes require explicit proposal approval before durable mutation
 - **Runtime-agnostic core** — Agent is a product-level actor; Runtime Adapter (echo, claude_code, codex_cli, opencode, …) is a replaceable execution backend; Model Provider (Anthropic, OpenAI, litellm) is the underlying LLM. These three are distinct. Note: `anthropic_api` / `anthropic_messages` direct API adapters are intentionally not supported — Anthropic/Claude execution must go through `claude_code` / `claude_cli` CLI integrations.
-- **Sandbox enforcement** — sandboxed adapters (those in `_SANDBOXED_ADAPTERS`: claude_code, codex_cli, and future coding runtimes) always run sandboxed; risk_level controls the sandbox level (worktree default, Docker for high-risk). See `modules/sandbox.md`.
+- **Sandbox enforcement** — file-access CLI adapters (`claude_code`, `codex_cli`) require `risk_level=high` in `runtime_policy_json`; the execution service validates this before the adapter starts and fails the run with a clear config error if it is not set. `risk_level=high` maps to `required_sandbox_level=worktree`; the agent works in a detached git worktree, never directly in the real workspace. See `modules/sandbox.md`.
 - **ContextCompiler** — vendor files (CLAUDE.md, AGENTS.md, SOUL.md) are compiled artefacts written to the sandbox, never source of truth; security scanning, token budgets, and `.agent/` progressive loading enforced at compile time
 - **ContextSnapshot** — frozen ContextPackage saved at run-start; immutable; stored in `context_snapshots` for audit
 - **ContextAttachment** — structured context references (file, git_diff, memory_entry, etc.) resolved and scanned by ContextBuilder
@@ -104,7 +104,7 @@
 | New review card type | Layer 6 | `app/cards/` (planned) |
 | New UI view (web) | Layer 12 | `frontend/src/modules/<name>/` |
 | New UI view (mobile-primary) | Layer 13 | `frontend/src/modules/<name>/` mobile variants |
-| New runtime adapter (CLI or SDK) | Layer 10 | `app/agents/` — see `modules/runtime-adapters.md` |
+| New runtime adapter (CLI or SDK) | Layer 10 | `app/runtimes/` — see `modules/runtime-adapters.md` |
 | Workspace file operation | Layer 11 | `app/workspace/` |
 | New optional feature module | All | add to `app/modules/registry.py` + `src/modules/registry.js` |
 

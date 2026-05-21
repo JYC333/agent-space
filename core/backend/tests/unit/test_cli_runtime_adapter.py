@@ -161,16 +161,17 @@ class TestResolveCLIAdapterFactory:
         )
         assert isinstance(adapter, ClaudeCLIAdapter)
 
-    def test_claude_cli_alias_returns_claude_cli_adapter(self):
+    def test_claude_cli_adapter_type_raises_key_error(self):
+        """claude_cli is not a canonical adapter type; _resolve_cli_adapter must raise KeyError."""
         from app.runtimes.adapters.cli_runtime import _resolve_cli_adapter
-        from app.cli_adapters.claude import ClaudeCLIAdapter
-        adapter = _resolve_cli_adapter(
-            adapter_type="claude_cli",
-            sandbox_dir=None,
-            credential_grant=None,
-            model=None,
-        )
-        assert isinstance(adapter, ClaudeCLIAdapter)
+        import pytest
+        with pytest.raises(KeyError):
+            _resolve_cli_adapter(
+                adapter_type="claude_cli",
+                sandbox_dir=None,
+                credential_grant=None,
+                model=None,
+            )
 
     def test_codex_cli_returns_codex_cli_adapter(self):
         from app.runtimes.adapters.cli_runtime import _resolve_cli_adapter
@@ -582,3 +583,276 @@ class TestContextPackageField:
             context_package=pkg,
         )
         assert ctx.context_package == pkg
+
+
+# ===========================================================================
+# 12. Credential risk/executor_mode propagation (Task 5)
+# ===========================================================================
+
+class TestCredentialRiskPropagation:
+    def test_resolve_credential_grant_uses_ctx_risk_level(self):
+        """_resolve_credential_grant must pass ctx.risk_level to CredentialBroker."""
+        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+
+        adapter = ClaudeCodeRuntimeAdapter()
+        ctx = RuntimeExecutionContext(
+            run_id="run-risk-001",
+            space_id="sp-a",
+            prompt="do something",
+            mode="normal",
+            sandbox_cwd="/tmp/sandbox",
+            model_name=None,
+            system_prompt=None,
+            adapter_config={},
+            risk_level="high",
+            executor_mode="worktree",
+        )
+
+        mock_broker_instance = MagicMock()
+        mock_broker_instance.grant_for_run.return_value = None
+
+        with patch("app.credentials.broker.CredentialBroker", return_value=mock_broker_instance):
+            adapter._resolve_credential_grant(ctx)
+
+        mock_broker_instance.grant_for_run.assert_called_once_with(
+            run_id="run-risk-001",
+            runtime="claude_code",
+            risk_level="high",
+            executor_mode="worktree",
+        )
+
+    def test_high_risk_worktree_run_passes_high_risk_to_broker(self):
+        """High-risk CLI runs must propagate risk_level=high, executor_mode=worktree."""
+        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+
+        adapter = ClaudeCodeRuntimeAdapter()
+        ctx = RuntimeExecutionContext(
+            run_id="run-risk-002",
+            space_id="sp-b",
+            prompt="work",
+            mode="normal",
+            sandbox_cwd="/wt",
+            model_name=None,
+            system_prompt=None,
+            adapter_config={},
+            risk_level="high",
+            executor_mode="worktree",
+        )
+
+        mock_broker_instance = MagicMock()
+        mock_broker_instance.grant_for_run.return_value = None
+        mock_cli = MagicMock()
+        mock_cli.is_available.return_value = True
+        mock_cli.run.return_value = _fake_cli_result()
+
+        with (
+            patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
+            patch("app.credentials.broker.CredentialBroker", return_value=mock_broker_instance),
+        ):
+            result = adapter.execute(ctx)
+
+        assert result.success is True
+        mock_broker_instance.grant_for_run.assert_called_once()
+        call_kwargs = mock_broker_instance.grant_for_run.call_args[1]
+        assert call_kwargs["risk_level"] == "high"
+        assert call_kwargs["executor_mode"] == "worktree"
+
+    def test_context_risk_level_defaults_to_low(self):
+        ctx = RuntimeExecutionContext(
+            run_id="r1",
+            space_id="s1",
+            prompt="p",
+            mode="normal",
+            sandbox_cwd=None,
+            model_name=None,
+            system_prompt=None,
+            adapter_config={},
+        )
+        assert ctx.risk_level == "low"
+        assert ctx.executor_mode == "worktree"
+
+
+# ===========================================================================
+# 13. Credential grant/source metadata in adapter_metadata (task C)
+# ===========================================================================
+
+class TestCredentialSourceMetadata:
+    def test_profile_grant_records_credential_source_profile(self):
+        """When broker returns a grant with a profile, credential_source='profile'."""
+        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+
+        adapter = ClaudeCodeRuntimeAdapter()
+        ctx = _make_ctx()
+
+        mock_grant = MagicMock()
+        mock_grant.temp_home = None  # docker-style grant (no temp home)
+
+        mock_cli = MagicMock()
+        mock_cli.is_available.return_value = True
+        mock_cli.run.return_value = _fake_cli_result()
+
+        with (
+            patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
+            patch.object(adapter, "_resolve_credential_grant", return_value=mock_grant),
+        ):
+            result = adapter.execute(ctx)
+
+        assert result.success is True
+        meta = result.adapter_metadata or {}
+        assert meta.get("credential_source") == "profile"
+        assert meta.get("credential_broker_used") is True
+        assert meta.get("fallback_used") is False
+
+    def test_no_grant_records_container_default_fallback(self):
+        """When broker returns None (no profile), credential_source='container_default' and fallback_used=True."""
+        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+
+        adapter = ClaudeCodeRuntimeAdapter()
+        ctx = _make_ctx()
+
+        mock_cli = MagicMock()
+        mock_cli.is_available.return_value = True
+        mock_cli.run.return_value = _fake_cli_result()
+
+        with (
+            patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
+            patch.object(adapter, "_resolve_credential_grant", return_value=None),
+        ):
+            result = adapter.execute(ctx)
+
+        assert result.success is True
+        meta = result.adapter_metadata or {}
+        assert meta.get("credential_source") == "container_default"
+        assert meta.get("credential_broker_used") is True
+        assert meta.get("fallback_used") is True
+        assert meta.get("fallback_reason") == "no_profile_configured"
+
+    def test_temp_home_created_recorded_when_grant_has_temp_home(self):
+        """When grant.temp_home is set, temp_home_created=True in adapter_metadata."""
+        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+
+        adapter = ClaudeCodeRuntimeAdapter()
+        ctx = _make_ctx()
+
+        mock_grant = MagicMock()
+        mock_grant.temp_home = "/tmp/run-001-home"
+
+        mock_cli = MagicMock()
+        mock_cli.is_available.return_value = True
+        mock_cli.run.return_value = _fake_cli_result()
+        mock_broker = MagicMock()
+
+        with (
+            patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
+            patch.object(adapter, "_resolve_credential_grant", return_value=mock_grant),
+            patch("app.credentials.broker.CredentialBroker", return_value=mock_broker),
+        ):
+            result = adapter.execute(ctx)
+
+        meta = result.adapter_metadata or {}
+        assert meta.get("temp_home_created") is True
+        assert meta.get("cleanup_status") == "ok"
+
+    def test_cleanup_failure_recorded_in_metadata(self):
+        """When cleanup_temp_home raises, cleanup_status='failed' in adapter_metadata."""
+        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+
+        adapter = ClaudeCodeRuntimeAdapter()
+        ctx = _make_ctx()
+
+        mock_grant = MagicMock()
+        mock_grant.temp_home = "/tmp/run-fail-home"
+
+        mock_cli = MagicMock()
+        mock_cli.is_available.return_value = True
+        mock_cli.run.return_value = _fake_cli_result()
+
+        mock_broker = MagicMock()
+        mock_broker.cleanup_temp_home.side_effect = OSError("cleanup failed")
+
+        with (
+            patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
+            patch.object(adapter, "_resolve_credential_grant", return_value=mock_grant),
+            patch("app.credentials.broker.CredentialBroker", return_value=mock_broker),
+        ):
+            result = adapter.execute(ctx)
+
+        meta = result.adapter_metadata or {}
+        assert meta.get("cleanup_status") == "failed"
+
+    def test_adapter_metadata_contains_no_secret_fields(self):
+        """adapter_metadata must not contain any obvious secret field names."""
+        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+
+        adapter = ClaudeCodeRuntimeAdapter()
+        ctx = _make_ctx()
+
+        mock_cli = MagicMock()
+        mock_cli.is_available.return_value = True
+        mock_cli.run.return_value = _fake_cli_result()
+
+        with (
+            patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
+            patch.object(adapter, "_resolve_credential_grant", return_value=None),
+        ):
+            result = adapter.execute(ctx)
+
+        meta = result.adapter_metadata or {}
+        secret_fields = {
+            "api_key", "token", "password", "secret", "auth_token",
+            "anthropic_api_key", "openai_api_key", "source_path", "home_path",
+        }
+        found = secret_fields & set(meta.keys())
+        assert not found, f"Secret field(s) found in adapter_metadata: {found}"
+
+    def test_broker_error_records_fallback_reason_broker_error(self):
+        """If broker raises, fallback_used=True and fallback_reason='broker_error'."""
+        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+
+        adapter = ClaudeCodeRuntimeAdapter()
+        ctx = _make_ctx()
+
+        mock_cli = MagicMock()
+        mock_cli.is_available.return_value = True
+        mock_cli.run.return_value = _fake_cli_result()
+
+        with (
+            patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
+            patch.object(
+                adapter, "_resolve_credential_grant",
+                side_effect=Exception("broker unavailable"),
+            ),
+        ):
+            result = adapter.execute(ctx)
+
+        assert result.success is True  # execution proceeds
+        meta = result.adapter_metadata or {}
+        assert meta.get("fallback_used") is True
+        assert meta.get("fallback_reason") == "broker_error"
+        assert meta.get("credential_source") == "container_default"
+
+
+# ===========================================================================
+# 14. Adapter naming guard — codex vs codex_cli (task A)
+# ===========================================================================
+
+class TestAdapterNamingGuard:
+    def test_codex_alone_not_in_registry(self):
+        """'codex' without '_cli' must not be a registered runtime adapter."""
+        from app.runtimes.registry import is_adapter_type_implemented
+        assert not is_adapter_type_implemented("codex")
+
+    def test_codex_cli_in_registry(self):
+        from app.runtimes.registry import is_adapter_type_implemented
+        assert is_adapter_type_implemented("codex_cli")
+
+    def test_codex_cli_instantiates(self):
+        from app.runtimes.registry import instantiate_runtime_adapter
+        from app.runtimes.adapters.cli_runtime import CodexCliRuntimeAdapter
+        adapter = instantiate_runtime_adapter("codex_cli")
+        assert isinstance(adapter, CodexCliRuntimeAdapter)
+
+    def test_codex_without_cli_raises(self):
+        from app.runtimes.registry import instantiate_runtime_adapter
+        with pytest.raises(KeyError):
+            instantiate_runtime_adapter("codex")

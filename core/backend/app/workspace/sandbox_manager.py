@@ -25,11 +25,11 @@ SandboxManager sandbox levels (risk-based):
   Level 1  worktree         — git worktree + local executor (DEFAULT)
   Level 2  one_shot_docker  — git worktree + one-shot Docker container (high-risk only)
 
-Risk → level mapping:
-  low      → dry_run
-  medium   → worktree          ← default for all CLI adapters
-  high     → one_shot_docker
-  critical → one_shot_docker   (future: remote/microVM)
+Risk → level mapping (app.runs.runtime_policy):
+  low      → none
+  medium   → dry_run
+  high     → worktree          ← required for file-access CLI adapters (claude_code, codex_cli)
+  critical → one_shot_docker   (not yet implemented)
 
 Design principles:
   - The default sandbox unit is a git worktree, not a Docker container.
@@ -60,7 +60,7 @@ log = logging.getLogger(__name__)
 SANDBOX_IMAGE = "agent-space-sandbox:latest"
 
 # Adapters that need internet access inside the container
-_BRIDGE_NETWORK_ADAPTERS = {"claude_code", "claude_cli", "codex_cli"}
+_BRIDGE_NETWORK_ADAPTERS = {"claude_code", "codex_cli"}
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +193,7 @@ class SandboxManager:
     """
     Creates isolated sandbox environments for agent runs.
 
-    Default usage (medium risk / worktree):
+    Default usage (high risk / worktree — required for file-access CLI adapters):
         mgr = SandboxManager()
         ctx = mgr.create_worktree(run_id, workspace_path)
         adapter = ClaudeCLIAdapter(executor=LocalExecutor(), sandbox_dir=str(ctx.sandbox_dir))
@@ -335,7 +335,7 @@ class SandboxManager:
         # In Docker mode, sandbox_dir inside the container is always /workspace
         docker_sandbox_dir = "/workspace"
 
-        if adapter_type in ("claude_code", "claude_cli"):
+        if adapter_type == "claude_code":
             return ClaudeCLIAdapter(executor=executor, sandbox_dir=docker_sandbox_dir)
         elif adapter_type == "codex_cli":
             return CodexCLIAdapter(executor=executor, sandbox_dir=docker_sandbox_dir)

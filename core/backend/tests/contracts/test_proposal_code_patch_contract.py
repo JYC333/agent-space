@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import hashlib
 
 from app.config import settings
 from tests.support import factories
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
@@ -27,7 +31,8 @@ def test_accept_code_patch_returns_kind_and_paths(api_client, db, cross_space_pa
     ws = factories.create_test_workspace(db, space_id=a, created_by_user_id=ua.id, commit=True)
     disk = ws_root / ws.id
     disk.mkdir(parents=True, exist_ok=True)
-    (disk / "a.txt").write_text("0", encoding="utf-8")
+    original = b"0"
+    (disk / "a.txt").write_bytes(original)
 
     prop = factories.create_test_proposal(
         db,
@@ -38,7 +43,15 @@ def test_accept_code_patch_returns_kind_and_paths(api_client, db, cross_space_pa
         title="t",
         payload_json={
             "patch": {
-                "operations": [{"op": "replace_file", "path": "a.txt", "content": "1"}],
+                "operations": [
+                    {
+                        "op": "replace_file",
+                        "path": "a.txt",
+                        "content": "1",
+                        "preimage_exists": True,
+                        "preimage_sha256": _sha256(original),
+                    }
+                ],
             },
             "source_run_id": None,
         },
@@ -79,7 +92,17 @@ def test_accept_code_patch_cross_space_returns_404(api_client, db, cross_space_p
         workspace_id=ws.id,
         title="x",
         payload_json={
-            "patch": {"operations": [{"op": "replace_file", "path": "f.txt", "content": ""}]},
+            "patch": {
+                "operations": [
+                    {
+                        "op": "replace_file",
+                        "path": "f.txt",
+                        "content": "",
+                        "preimage_exists": False,
+                        "preimage_sha256": None,
+                    }
+                ]
+            },
         },
         commit=True,
     )

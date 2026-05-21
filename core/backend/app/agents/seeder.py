@@ -76,7 +76,7 @@ _BUILTIN_AGENTS: list[dict] = [
             "can_delegate": False,
             "max_delegation_depth": 0,
             "max_run_time_seconds": 120,
-            "allowed_adapter_types": ["echo", "claude_cli"],
+            "allowed_adapter_types": ["echo", "claude_code"],
         },
     },
 ]

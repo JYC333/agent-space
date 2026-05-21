@@ -52,17 +52,29 @@ This document describes current capability lines and known future risks. It is o
 
 ### 4. Runtime / Adapter Expansion
 
-**Current state:** `app.runtimes` is canonical. `echo` and `anthropic_messages` adapters are active. `app.agents` is the separate CLI adapter runner for existing CLI surfaces; new adapters must go in `app.runtimes`.
+**Current state:** `app.runtimes` is canonical. Registered adapters: `echo` (test), `capability`, `claude_code`, `codex_cli`. Direct Anthropic API adapters (`anthropic_messages`) are intentionally not registered — Claude execution goes through the `claude_code` CLI integration only. `app.agents` contains Agent/AgentVersion CRUD and built-in seeder; new runtime adapters must go in `app.runtimes`.
+
+**Supported mutating CLI path:** `risk_level=high` → `required_sandbox_level=worktree`. This is the only supported path for file-writing CLI adapters (`claude_code`, `codex_cli`). All changes are collected as a `code_patch` Proposal and require human review before being applied to the real workspace.
+
+**Not supported yet (intentionally):** `risk_level=critical` → `one_shot_docker`. The Docker sandbox execution path is not implemented. Runs with `critical` risk fail early with error code `critical_runtime_requires_unimplemented_one_shot_docker`. Do not attempt to use critical risk level until Docker sandbox infrastructure is designed.
+
+**Automation-origin credential requirement:** Runs with `trigger_origin=automation` must use an explicit credential profile (CredentialBroker profile configured). Container-default fallback is not allowed for unattended execution — it could silently pick up stale or shared auth state. Manual runs may still use the container-default fallback for local dogfooding. Failure code: `runtime_credential_profile_required`.
+
+**Preflight:** `POST /api/v1/runs/preflight` validates all execution preconditions (agent, adapter, risk level, workspace, git repo, credential profile) without creating or starting a run. Use this before creating Automation entries.
+
+**Incomplete patch visibility:** When a CLI run produces file changes that cannot be collected (deleted, renamed, binary, oversized, not-UTF-8 files), the resulting code_patch Proposal is marked `incomplete_patch=true` in `payload_json`. Reviewers must be aware the proposal does not represent the full set of agent changes.
+
+**Process cancellation:** `PATCH /runs/{id}/stop` sends SIGTERM to any registered CLI subprocess (same OS process only). Cross-process termination is not supported. Stale runs in `running` status are recovered at worker startup via `RunService.recover_stale_runs()`.
 
 **Why it matters:** Supporting more runtimes expands useful agent work without compromising the control plane.
 
-**Likely next steps:** Document current status of `app.agents` CLI adapters. Define adapter contract for new additions. Clarify `one_shot_docker` path in current run execution.
+**Likely next steps:** Docker sandbox infrastructure design for critical/one_shot_docker. External webhook/cron trigger integration with preflight gate.
 
-**What must be true first:** Credential resolver, sandbox policy, and RunStep are stable and tested for existing adapters.
+**What must be true first:** Credential resolver, sandbox policy, RunStep, and preflight are stable and tested for existing adapters.
 
 **Risks if built too early:** New adapters may duplicate policy, sandbox, and credential behavior, or bypass the credential resolver.
 
-**Not now:** Broad CLI adapter deletion, Docker sandbox pool, production container infrastructure.
+**Not now:** Broad CLI adapter deletion, Docker sandbox pool, production container infrastructure, cross-process subprocess termination.
 
 ---
 
@@ -116,17 +128,21 @@ This document describes current capability lines and known future risks. It is o
 
 ### 8. Automation / Triggers
 
-**Current state:** Jobs exist and `Run.trigger_origin` reserves `automation`. No `Automation` or `Trigger` model.
+**Current state:** Jobs exist and `Run.trigger_origin` reserves `automation`. No `Automation` or `Trigger` model. Runtime foundation for automation-safe execution is in place:
+  - `trigger_origin="automation"` is validated in `RunService.create_run()`
+  - Automation-origin CLI runs must use an explicit credential profile (no container fallback)
+  - `POST /api/v1/runs/preflight` must pass before any Automation entry can be created
+  - `incomplete_patch` is surfaced on proposals so partial changes are never silently accepted
 
 **Why it matters:** Background work needs explicit ownership, policy, and audit. Hidden background mutations are dangerous.
 
-**Likely next steps:** Define automation invariants in documentation before any implementation. All automation must be proposal-producing or derived-cache-only until a model exists.
+**Likely next steps:** Define `Automation` model (owner, trigger type, schedule, preflight snapshot, max_runs_per_day). Wire preflight as a creation gate. All automation runs must produce proposals (no direct memory writes).
 
-**What must be true first:** Policy engine, proposal review, and RunStep audit are stable. Actor identity is available on all new events.
+**What must be true first:** Preflight endpoint, automation-safe credential check, and RunStep audit are all stable. Runtime foundation hardening is complete.
 
-**Risks if built too early:** Hidden background memory or policy writes. Runaway cost. No ownership or review path.
+**Risks if built too early:** Hidden background memory or policy writes. Runaway cost. No ownership or review path. Credential fallback allowing automation to silently use wrong credentials.
 
-**Not now:** Cron scheduler, external source refresh triggers, broad event-driven automation.
+**Not now:** Cron scheduler, external source refresh triggers, broad event-driven automation. Docker sandbox for critical-risk automation runs.
 
 ---
 

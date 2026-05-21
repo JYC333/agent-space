@@ -157,10 +157,13 @@ def test_code_patch_accept_uses_code_patch_applier_path(db, cross_space_pair, tm
     monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
     (tmp_path / "artifacts").mkdir(parents=True, exist_ok=True)
 
+    import hashlib
+
     ws = factories.create_test_workspace(db, space_id=a, created_by_user_id=ua.id, commit=True)
     disk = ws_root / ws.id
     disk.mkdir(parents=True, exist_ok=True)
-    (disk / "c.txt").write_text("0", encoding="utf-8")
+    original = b"0"
+    (disk / "c.txt").write_bytes(original)
 
     prop = factories.create_test_proposal(
         db,
@@ -170,7 +173,17 @@ def test_code_patch_accept_uses_code_patch_applier_path(db, cross_space_pair, tm
         workspace_id=ws.id,
         title="cp",
         payload_json={
-            "patch": {"operations": [{"op": "replace_file", "path": "c.txt", "content": "1"}]},
+            "patch": {
+                "operations": [
+                    {
+                        "op": "replace_file",
+                        "path": "c.txt",
+                        "content": "1",
+                        "preimage_exists": True,
+                        "preimage_sha256": hashlib.sha256(original).hexdigest(),
+                    }
+                ]
+            },
         },
         commit=True,
     )

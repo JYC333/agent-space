@@ -201,11 +201,40 @@ def approve_egress_granting_user(
 @router.post("/{proposal_id}/accept", response_model=ProposalAcceptOut)
 def accept_proposal(
     proposal_id: str,
+    confirm_incomplete_patch: bool = Query(
+        False,
+        description=(
+            "Set to true to apply a code_patch proposal that has incomplete_patch=true "
+            "(i.e. some agent file changes were skipped and the patch is partial). "
+            "Omitting this flag or passing false causes the request to fail with "
+            "incomplete_patch_requires_confirmation when the proposal is incomplete."
+        ),
+    ),
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
     space_id, user_id = ids
     svc = ProposalService(db)
+
+    # Guard: incomplete code_patch proposals require explicit opt-in.
+    # Check before accept() so the error is always clean and the proposal is untouched.
+    proposal = svc.get(proposal_id)
+    if proposal is not None and proposal.proposal_type == "code_patch":
+        payload = proposal.payload_json or {}
+        if payload.get("incomplete_patch") is True and not confirm_incomplete_patch:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "incomplete_patch_requires_confirmation",
+                    "message": (
+                        "This code_patch proposal has incomplete_patch=true: some agent file "
+                        "changes were skipped and the patch is partial. Pass "
+                        "confirm_incomplete_patch=true to apply it anyway."
+                    ),
+                    "skipped_changes": payload.get("skipped_changes") or [],
+                },
+            )
+
     try:
         result = svc.accept(proposal_id, space_id=space_id, user_id=user_id)
     except UnsupportedProposalTypeError as exc:

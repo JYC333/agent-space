@@ -19,7 +19,7 @@ def test_adapter_metadata_anthropic_messages_unsupported():
     """anthropic_messages is removed from the registry — metadata must reflect unsupported.
 
     Policy: direct Anthropic API adapters are not supported.
-    Anthropic/Claude execution goes through claude_code / claude_cli CLI integrations.
+    Anthropic/Claude execution goes through claude_code CLI integrations.
     """
     meta = get_adapter_model_config_metadata("anthropic_messages")
     assert meta.uses_model_config is False

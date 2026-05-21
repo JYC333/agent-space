@@ -167,7 +167,7 @@ for each.
 **Mitigations**:
 - `PathPolicy.validate()` calls `Path.resolve()` then `relative_to(root)` — any traversal attempt raises `PathPolicyError` before the filesystem is touched.
 - `_FORBIDDEN_FRAGMENTS` blacklist catches common targets (`.ssh`, `.env`, `credentials`).
-- Workspace roots are resolved from `settings.workspace_root / workspace_id` — not agent-supplied.
+- Workspace roots are validated before sandbox creation: they must exist, be directories, and reside under `settings.workspace_root` unless `Workspace.allow_external_root=True` is explicitly set. Cross-space workspace access returns the same `workspace_not_found` error as a missing workspace.
 
 ---
 

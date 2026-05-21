@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from sqlalchemy import func
 
 from app.auth.session import SESSION_COOKIE, UserSessionService
@@ -10,6 +11,10 @@ from app.main import app as _app
 from starlette.testclient import TestClient
 from app.models import MemoryEntry, Proposal
 from tests.support import factories
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
@@ -252,7 +257,8 @@ def test_code_patch_accept_returns_general_shape(api_client, db, cross_space_pai
     ws = factories.create_test_workspace(db, space_id=a, created_by_user_id=ua.id, commit=True)
     disk = ws_root / ws.id
     disk.mkdir(parents=True, exist_ok=True)
-    (disk / "a.txt").write_text("0", encoding="utf-8")
+    original = b"0"
+    (disk / "a.txt").write_bytes(original)
 
     prop = factories.create_test_proposal(
         db,
@@ -263,7 +269,15 @@ def test_code_patch_accept_returns_general_shape(api_client, db, cross_space_pai
         title="t",
         payload_json={
             "patch": {
-                "operations": [{"op": "replace_file", "path": "a.txt", "content": "1"}],
+                "operations": [
+                    {
+                        "op": "replace_file",
+                        "path": "a.txt",
+                        "content": "1",
+                        "preimage_exists": True,
+                        "preimage_sha256": _sha256(original),
+                    }
+                ],
             },
             "source_run_id": None,
         },
@@ -327,7 +341,8 @@ def test_double_accept_code_patch_does_not_reapply(api_client, db, cross_space_p
     ws = factories.create_test_workspace(db, space_id=a, created_by_user_id=ua.id, commit=True)
     disk = ws_root / ws.id
     disk.mkdir(parents=True, exist_ok=True)
-    (disk / "b.txt").write_text("x", encoding="utf-8")
+    original_b = b"x"
+    (disk / "b.txt").write_bytes(original_b)
 
     prop = factories.create_test_proposal(
         db,
@@ -338,7 +353,15 @@ def test_double_accept_code_patch_does_not_reapply(api_client, db, cross_space_p
         title="cp",
         payload_json={
             "patch": {
-                "operations": [{"op": "replace_file", "path": "b.txt", "content": "y"}],
+                "operations": [
+                    {
+                        "op": "replace_file",
+                        "path": "b.txt",
+                        "content": "y",
+                        "preimage_exists": True,
+                        "preimage_sha256": _sha256(original_b),
+                    }
+                ],
             },
         },
         commit=True,

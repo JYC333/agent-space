@@ -193,6 +193,9 @@ class Workspace(Base):
     system_managed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     registered_from: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # When True, root_path may resolve to a directory outside settings.workspace_root.
+    # Defaults to False: all unqualified absolute paths that escape workspace_root are rejected.
+    allow_external_root: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     owner_space_id = synonym("space_id")
 
@@ -1453,6 +1456,7 @@ class Job(Base):
     claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -2130,5 +2134,69 @@ class RuntimeToolBinding(Base):
         CheckConstraint(
             "observability_level in ('full_trace', 'structured_events', 'artifacts_only', 'final_output_only', 'black_box')",
             name="ck_runtime_tool_bindings_observability_level",
+        ),
+    )
+
+
+class RunExecutionLock(Base):
+    """Durable per-run execution lock.
+
+    Inserted when a worker begins executing a Run, deleted when execution
+    completes (success, failure, cancellation, or exception).  The PK on
+    run_id guarantees that at most one worker can hold the lock for a given
+    Run at any time — a second INSERT raises IntegrityError and the caller
+    aborts without executing the Run again.
+
+    This is defence-in-depth for the heartbeat / reclaim path: if a job is
+    reclaimed as stuck while the original worker is still in adapter.execute(),
+    the second worker's lock-acquire fails immediately rather than producing a
+    second code_patch proposal for the same run.
+    """
+
+    __tablename__ = "run_execution_locks"
+
+    run_id: Mapped[str] = mapped_column(
+        UUID_COL, ForeignKey("runs.id"), primary_key=True,
+    )
+    locked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now,
+    )
+    worker_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    job_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+
+
+class CliCredentialEvent(Base):
+    """Durable audit record for CLI credential usage during agent run execution.
+
+    Records metadata only — never stores raw secrets, API keys, tokens,
+    HOME paths, credential source paths, or session file contents.
+
+    Populated by CredentialBroker.record_usage() wired through CliRuntimeAdapter.
+    """
+
+    __tablename__ = "cli_credential_events"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=True, index=True)
+    runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+    runtime_adapter_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    credential_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # Source of the credential: "profile" | "container_default" | "none"
+    credential_source: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
+    trigger_origin: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    fallback_reason: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    broker_error: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # "ok" | "failed" | "not_needed" | "pending"
+    cleanup_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_needed")
+    # "grant" | "grant_failed" | "automation_denied" | "cleanup_failed"
+    action: Mapped[str] = mapped_column(String(64), nullable=False, default="grant")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "credential_source in ('profile', 'container_default', 'none')",
+            name="ck_cli_credential_events_credential_source",
         ),
     )

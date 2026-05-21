@@ -1,8 +1,7 @@
 """Guard tests: Anthropic direct API adapter policy enforcement.
 
 Product policy: Anthropic/Claude execution must go through CLI integrations
-(``claude_code`` / ``claude_cli`` in ``app.cli_adapters``), not direct
-in-process API key calls.
+(``claude_code`` in ``app.cli_adapters``), not direct in-process API key calls.
 
 These tests prevent reintroduction of:
 - ``anthropic_api`` adapter type in canonical registry
@@ -32,7 +31,7 @@ class TestAnthropicDirectAPIAdaptersAbsentFromRegistry:
         from app.runtimes.registry import is_adapter_type_implemented
         assert not is_adapter_type_implemented("anthropic_api"), (
             "POLICY VIOLATION: anthropic_api must not be in the canonical runtime registry. "
-            "Anthropic/Claude execution must go through claude_code / claude_cli CLI integrations."
+            "Anthropic/Claude execution must go through claude_code CLI integrations."
         )
 
     def test_anthropic_messages_not_in_canonical_registry(self):
@@ -40,7 +39,7 @@ class TestAnthropicDirectAPIAdaptersAbsentFromRegistry:
         from app.runtimes.registry import is_adapter_type_implemented
         assert not is_adapter_type_implemented("anthropic_messages"), (
             "POLICY VIOLATION: anthropic_messages must not be in the canonical runtime registry. "
-            "Anthropic/Claude execution must go through claude_code / claude_cli CLI integrations."
+            "Anthropic/Claude execution must go through claude_code CLI integrations."
         )
 
 

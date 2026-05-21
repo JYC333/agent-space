@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,10 @@ from app.config import settings
 from app.memory.proposals import ProposalService, UnsupportedProposalTypeError
 from app.models import MemoryEntry, Proposal
 from tests.support import factories
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def test_memory_update_pending_does_not_create_active_memory(db, cross_space_pair):
@@ -139,7 +144,8 @@ def test_accept_code_patch_links_applied_paths_on_proposal(db, test_user, tmp_pa
 
     ws = factories.create_test_workspace(db, space_id=a, created_by_user_id=ua.id, commit=True)
     (ws_root / ws.id).mkdir(parents=True, exist_ok=True)
-    Path(ws_root / ws.id / "z.txt").write_text("0", encoding="utf-8")
+    original = b"0"
+    Path(ws_root / ws.id / "z.txt").write_bytes(original)
 
     prop = factories.create_test_proposal(
         db,
@@ -149,7 +155,17 @@ def test_accept_code_patch_links_applied_paths_on_proposal(db, test_user, tmp_pa
         workspace_id=ws.id,
         title="z",
         payload_json={
-            "patch": {"operations": [{"op": "replace_file", "path": "z.txt", "content": "1"}]},
+            "patch": {
+                "operations": [
+                    {
+                        "op": "replace_file",
+                        "path": "z.txt",
+                        "content": "1",
+                        "preimage_exists": True,
+                        "preimage_sha256": _sha256(original),
+                    }
+                ]
+            },
         },
         commit=True,
     )
@@ -186,7 +202,17 @@ def test_code_patch_rejects_path_traversal_before_write(db, test_user, tmp_path,
         proposal_type="code_patch",
         workspace_id=ws.id,
         payload_json={
-            "patch": {"operations": [{"op": "replace_file", "path": "../escape.txt", "content": "x"}]},
+            "patch": {
+                "operations": [
+                    {
+                        "op": "replace_file",
+                        "path": "../escape.txt",
+                        "content": "x",
+                        "preimage_exists": False,
+                        "preimage_sha256": None,
+                    }
+                ]
+            },
         },
         commit=True,
     )
@@ -215,7 +241,8 @@ def test_code_patch_file_write_failure_does_not_mark_success(db, test_user, tmp_
     disk = ws_root / ws.id
     disk.mkdir(parents=True, exist_ok=True)
     target = disk / "a.txt"
-    target.write_text("before", encoding="utf-8")
+    original = b"before"
+    target.write_bytes(original)
 
     prop = factories.create_test_proposal(
         db,
@@ -224,7 +251,17 @@ def test_code_patch_file_write_failure_does_not_mark_success(db, test_user, tmp_
         proposal_type="code_patch",
         workspace_id=ws.id,
         payload_json={
-            "patch": {"operations": [{"op": "replace_file", "path": "a.txt", "content": "after"}]},
+            "patch": {
+                "operations": [
+                    {
+                        "op": "replace_file",
+                        "path": "a.txt",
+                        "content": "after",
+                        "preimage_exists": True,
+                        "preimage_sha256": _sha256(original),
+                    }
+                ]
+            },
         },
         commit=True,
     )
@@ -257,7 +294,8 @@ def test_code_patch_db_failure_after_file_write_rolls_back_file(db, test_user, t
     disk = ws_root / ws.id
     disk.mkdir(parents=True, exist_ok=True)
     target = disk / "db-fail.txt"
-    target.write_text("before", encoding="utf-8")
+    original = b"before"
+    target.write_bytes(original)
 
     prop = factories.create_test_proposal(
         db,
@@ -266,7 +304,17 @@ def test_code_patch_db_failure_after_file_write_rolls_back_file(db, test_user, t
         proposal_type="code_patch",
         workspace_id=ws.id,
         payload_json={
-            "patch": {"operations": [{"op": "replace_file", "path": "db-fail.txt", "content": "after"}]},
+            "patch": {
+                "operations": [
+                    {
+                        "op": "replace_file",
+                        "path": "db-fail.txt",
+                        "content": "after",
+                        "preimage_exists": True,
+                        "preimage_sha256": _sha256(original),
+                    }
+                ]
+            },
         },
         commit=True,
     )
@@ -303,7 +351,8 @@ def test_code_patch_rollback_failure_reports_partial_apply(db, test_user, tmp_pa
     disk = ws_root / ws.id
     disk.mkdir(parents=True, exist_ok=True)
     target = disk / "partial.txt"
-    target.write_text("before", encoding="utf-8")
+    original = b"before"
+    target.write_bytes(original)
 
     prop = factories.create_test_proposal(
         db,
@@ -312,7 +361,17 @@ def test_code_patch_rollback_failure_reports_partial_apply(db, test_user, tmp_pa
         proposal_type="code_patch",
         workspace_id=ws.id,
         payload_json={
-            "patch": {"operations": [{"op": "replace_file", "path": "partial.txt", "content": "after"}]},
+            "patch": {
+                "operations": [
+                    {
+                        "op": "replace_file",
+                        "path": "partial.txt",
+                        "content": "after",
+                        "preimage_exists": True,
+                        "preimage_sha256": _sha256(original),
+                    }
+                ]
+            },
         },
         commit=True,
     )

@@ -11,6 +11,11 @@ Profile discovery (in priority order):
   1. Instance config: $AGENT_SPACE_HOME/config/cli-credentials.yaml
   2. Directory scan: $AGENT_SPACE_HOME/secrets/cli-credentials/<runtime>/<profile>/
 
+Canonical runtime names (adapter_type strings):
+  claude_code, codex_cli, gemini_cli, opencode
+  Credential directories on disk must use these exact names.
+  No aliases or legacy names (e.g. claude-code, codex) are accepted.
+
 Worktree runs (medium-risk):
   Creates a per-run temp HOME directory with a symlink to the credential dir.
   The CLI subprocess inherits HOME pointing to the temp dir, so it finds its
@@ -49,10 +54,10 @@ log = logging.getLogger(__name__)
 @dataclass
 class CredentialProfile:
     """A named CLI login-state directory registered with the broker."""
-    id: str                  # e.g. "claude-code/default"
-    runtime: str             # e.g. "claude-code"
+    id: str                  # e.g. "claude_code/default"
+    runtime: str             # e.g. "claude_code"
     name: str                # e.g. "default"
-    source_path: str         # abs path to the credential dir (e.g. /app/aspace/secrets/cli-credentials/claude-code/default)
+    source_path: str         # abs path to the credential dir (e.g. /app/aspace/secrets/cli-credentials/claude_code/default)
     target_path: str         # where CLI expects it (e.g. /home/agent/.claude)
     readonly: bool = False   # Docker default; worktree ignores this (always writable via symlink)
     notes: str = ""
@@ -101,7 +106,7 @@ class CredentialBroker:
         broker = CredentialBroker()
         grant = broker.grant_for_run(
             run_id="01J...",
-            runtime="claude-code",
+            runtime="claude_code",
             risk_level="medium",
             executor_mode="worktree",
         )
@@ -187,16 +192,21 @@ class CredentialBroker:
         return self._load_profiles().get(profile_id)
 
     def get_default_profile(self, runtime: str) -> CredentialProfile | None:
-        """Return the 'default' profile for a runtime, or the first available."""
+        """Return the 'default' profile for *runtime*, or the first available.
+
+        Only the exact canonical adapter_type string is checked.
+        Credential directories must use canonical names (e.g. claude_code, codex_cli).
+        """
         profiles = self._load_profiles()
-        # prefer explicit "default"
+
         pid = f"{runtime}/default"
         if pid in profiles and Path(profiles[pid].source_path).exists():
             return profiles[pid]
-        # fall back to first matching runtime profile with an existing source_path
+
         for p in profiles.values():
             if p.runtime == runtime and Path(p.source_path).exists():
                 return p
+
         return None
 
     # ------------------------------------------------------------------
@@ -281,7 +291,7 @@ class CredentialBroker:
     def _create_temp_home(self, run_id: str, profile: CredentialProfile) -> str:
         """
         Create /instance/cache/runtime-homes/<run_id>/ and symlink the credential
-        dir at the expected relative path inside it (e.g. .claude for claude-code).
+        dir at the expected relative path inside it (e.g. .claude for claude_code).
         """
         temp_home = self._cache_root / run_id
         temp_home.mkdir(parents=True, exist_ok=True)
@@ -322,36 +332,80 @@ class CredentialBroker:
         run_id: str,
         space_id: str,
         grant: "CredentialGrant | None",
-        action: str = "credential.grant",
-        reason: str | None = None,
+        *,
+        runtime_adapter_type: str | None = None,
+        runtime_adapter_id: str | None = None,
+        trigger_origin: str | None = None,
+        fallback_used: bool = False,
+        fallback_reason: str | None = None,
+        broker_error: bool = False,
+        cleanup_status: str = "not_needed",
+        action: str = "grant",
     ) -> None:
-        # DB-backed credential usage events (e.g. CliCredentialEvent rows) are not implemented yet;
-        # there is no matching table in the canonical initial migration. Intentional no-op.
-        del db, run_id, space_id, grant, action, reason
-        return
+        """Insert a CliCredentialEvent audit row.
+
+        Records metadata only — never stores raw secrets, tokens, HOME paths,
+        or credential file contents.  This is a best-effort write; failures are
+        logged but never re-raised.
+        """
+        try:
+            from ..models import CliCredentialEvent
+            import uuid as _uuid_mod
+
+            if grant is not None:
+                credential_source = "profile"
+                credential_profile_id = grant.profile_id
+            elif broker_error:
+                credential_source = "none"
+                credential_profile_id = None
+            else:
+                credential_source = "container_default"
+                credential_profile_id = None
+
+            event = CliCredentialEvent(
+                id=str(_uuid_mod.uuid4()),
+                space_id=space_id,
+                run_id=run_id or None,
+                runtime_adapter_id=runtime_adapter_id,
+                runtime_adapter_type=runtime_adapter_type,
+                credential_profile_id=credential_profile_id,
+                credential_source=credential_source,
+                trigger_origin=trigger_origin,
+                fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
+                broker_error=broker_error,
+                cleanup_status=cleanup_status,
+                action=action,
+            )
+            db.add(event)
+            db.flush()
+            log.debug(
+                "credential audit: action=%s run=%s adapter=%s source=%s fallback=%s",
+                action, run_id, runtime_adapter_type, credential_source, fallback_used,
+            )
+        except Exception:
+            log.warning(
+                "CliCredentialEvent write failed (best-effort) run=%s", run_id, exc_info=True
+            )
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Canonical adapter_type → CLI config directory path inside the container HOME.
+# Credential directories on disk must use these exact names.
 _DEFAULT_TARGET_PATHS: dict[str, str] = {
-    "claude-code": "/home/agent/.claude",
     "claude_code": "/home/agent/.claude",
-    "codex":       "/home/agent/.codex",
     "codex_cli":   "/home/agent/.codex",
     "opencode":    "/home/agent/.opencode",
-    "gemini-cli":  "/home/agent/.gemini",
     "gemini_cli":  "/home/agent/.gemini",
 }
 
 # Env var injected when api_key.txt is found in the profile dir.
 _API_KEY_ENV_VARS: dict[str, str] = {
-    "claude-code": "ANTHROPIC_API_KEY",
     "claude_code": "ANTHROPIC_API_KEY",
-    "codex":       "OPENAI_API_KEY",
     "codex_cli":   "OPENAI_API_KEY",
-    "gemini-cli":  "GEMINI_API_KEY",
     "gemini_cli":  "GEMINI_API_KEY",
 }
 

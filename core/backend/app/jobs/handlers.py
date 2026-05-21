@@ -102,19 +102,64 @@ def _job_runtime(payload: dict) -> str | None:
 
 
 def _execute_existing_run(job, payload: dict, run_id: str) -> dict:
+    from fastapi import HTTPException
+
     from ..db import SessionLocal
+    from ..models import Run
     from ..runs.execution import RunExecutionService
+    from ..jobs.worker import WORKER_ID
 
     space_id, _ = _resolve_identity(job, payload)
+    job_id = getattr(job, "id", None)
     db = SessionLocal()
     try:
-        result = RunExecutionService(db).execute_run(
-            run_id,
-            space_id=space_id,
-            runtime=_job_runtime(payload),
-            simulate_failure=bool(payload.get("simulate_failure")),
-        )
-        from ..models import Run
+        # Guard: if the target Run was cancelled before this job worker picked it up,
+        # exit cleanly without retrying.  RunExecutionService raises HTTPException 409
+        # for any terminal-status run (including cancelled).  We catch that specific
+        # case here so the job records the outcome and does not re-enqueue.
+        # Full Job↔Run cancellation linkage is deferred; this guard ensures cancelled
+        # runs do not produce spurious job failure entries.  See runtime docs for the
+        # current-behaviour note on the queued-job / Run cancellation gap.
+        try:
+            result = RunExecutionService(db).execute_run(
+                run_id,
+                space_id=space_id,
+                runtime=_job_runtime(payload),
+                simulate_failure=bool(payload.get("simulate_failure")),
+                worker_id=WORKER_ID,
+                job_id=job_id,
+            )
+        except HTTPException as exc:
+            if exc.status_code == 409 and "terminal status" in str(exc.detail):
+                run = db.query(Run).filter(Run.id == run_id).first()
+                run_status = run.status if run else "unknown"
+                log.info(
+                    "agent_run job %s: run %s already in terminal status '%s'; "
+                    "exiting cleanly without retry",
+                    getattr(job, "id", "?"), run_id, run_status,
+                )
+                return {
+                    "run_id": run_id,
+                    "status": run_status,
+                    "skipped": True,
+                    "skip_reason": "run_already_terminal",
+                }
+            raise
+
+        # Duplicate-execution is non-retryable: another worker holds the lock.
+        # Return a completed (not failed) result so the job is not re-enqueued.
+        if result and result.error_code == "duplicate_execution":
+            log.info(
+                "agent_run job %s: run %s duplicate_execution — job completed, no retry",
+                getattr(job, "id", "?"), run_id,
+            )
+            return {
+                "run_id": run_id,
+                "status": "queued",
+                "skipped": True,
+                "skip_reason": "duplicate_execution",
+                "error_code": "duplicate_execution",
+            }
 
         run = db.query(Run).filter(Run.id == run_id).first()
         out: dict = {"run_id": run_id, "status": run.status if run else "unknown"}
@@ -139,8 +184,10 @@ def _create_and_execute_task_run(job, payload: dict, task_id: str) -> dict:
     from ..runs.execution import RunExecutionService
     from ..schemas import TaskRunCreateBody
     from ..tasks.service import TaskService
+    from ..jobs.worker import WORKER_ID
 
     space_id, user_id = _resolve_identity(job, payload)
+    job_id = getattr(job, "id", None)
     db = SessionLocal()
     try:
         body = TaskRunCreateBody(
@@ -166,6 +213,8 @@ def _create_and_execute_task_run(job, payload: dict, task_id: str) -> dict:
             space_id=space_id,
             runtime=_job_runtime(payload),
             simulate_failure=bool(payload.get("simulate_failure")),
+            worker_id=WORKER_ID,
+            job_id=job_id,
         )
         from ..models import Run
 
@@ -192,8 +241,10 @@ def _create_and_execute_agent_run(job, payload: dict, agent_id: str) -> dict:
     from ..runs.execution import RunExecutionService
     from ..runs.run_service import RunService
     from ..schemas import RunCreate
+    from ..jobs.worker import WORKER_ID
 
     space_id, user_id = _resolve_identity(job, payload)
+    job_id = getattr(job, "id", None)
     db = SessionLocal()
     try:
         run = RunService(db).create_run(
@@ -219,6 +270,8 @@ def _create_and_execute_agent_run(job, payload: dict, agent_id: str) -> dict:
             space_id=space_id,
             runtime=_job_runtime(payload),
             simulate_failure=bool(payload.get("simulate_failure")),
+            worker_id=WORKER_ID,
+            job_id=job_id,
         )
         from ..models import Run
 

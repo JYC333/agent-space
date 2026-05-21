@@ -2,13 +2,13 @@ from __future__ import annotations
 """
 ClaudeCLIAdapter — wraps the `claude` CLI tool via subprocess.
 
-Non-execution support only. Used for:
+Execution via canonical path only. Used for:
   - CLI tool detection (is `claude` installed and reachable?)
-  - Sandbox preparation (writing CLAUDE.md context file into worktree/Docker dir)
+  - Sandbox preparation (writing CLAUDE.md context file into worktree)
 
-This adapter is NOT registered in app.runtimes.registry and cannot be executed
-through RunExecutionService. To make claude_code executable canonically, add a
-BaseRuntimeAdapter wrapper in app.runtimes/adapters/.
+This adapter is executed canonically through app.runtimes.adapters.cli_runtime
+(ClaudeCodeRuntimeAdapter → CliRuntimeAdapter.execute). It is not directly
+registered in app.runtimes.registry.
 
 Context injection:
   With sandbox_dir set: ContextCompiler writes CLAUDE.md into sandbox_dir.
@@ -92,6 +92,7 @@ class ClaudeCLIAdapter(AgentAdapter):
         workspace_path: str | None = None,
         timeout: int = 300,
         continue_conversation: bool = False,
+        run_id: str | None = None,
         **_kwargs,
     ) -> RuntimeExecutionResult:
         """
@@ -140,6 +141,7 @@ class ClaudeCLIAdapter(AgentAdapter):
             cwd=cwd,
             timeout=timeout,
             env=cred_env,
+            run_id=run_id,
         )
         completed = datetime.now(UTC)
 

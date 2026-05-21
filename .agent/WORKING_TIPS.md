@@ -25,6 +25,10 @@ ws.path is absolute → use as-is
 ws.path is relative → workspace_root / ws.path
 ws.path is None     → workspace_root / ws.id   (pre-normalized rows only)
 ```
+For execution (worktree sandbox), `validate_workspace_root_for_execution()` additionally
+enforces that the resolved root is under `settings.workspace_root` unless
+`ws.allow_external_root=True`. Absolute paths outside the managed root fail unless
+this flag is set.
 
 ---
 

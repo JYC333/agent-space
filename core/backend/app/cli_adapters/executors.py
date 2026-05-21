@@ -12,6 +12,7 @@ Canonical executable adapters live in app.runtimes (BaseRuntimeAdapter).
 """
 
 import os
+import signal
 import subprocess
 from datetime import datetime, UTC
 from pathlib import Path
@@ -19,6 +20,9 @@ from pathlib import Path
 from .adapter_base import AgentAdapter, RuntimeExecutionResult, Executor, ExecutionResult
 
 
+# ---------------------------------------------------------------------------
+# Docker passthrough env — only these keys are forwarded into sandbox containers.
+# ---------------------------------------------------------------------------
 # Env vars forwarded from the host into sandbox containers.
 # Only keys explicitly listed here are passed — never the whole env.
 _PASSTHROUGH_ENV = {
@@ -28,6 +32,50 @@ _PASSTHROUGH_ENV = {
     "PATH",
 }
 
+# ---------------------------------------------------------------------------
+# LocalExecutor subprocess env allowlist
+# ---------------------------------------------------------------------------
+# Keys forwarded verbatim from host env into CLI subprocesses.
+# Never includes secret/credential env vars — those come via CredentialBroker
+# grant.env (HOME + optional API key) injected as explicit extras.
+#
+# LANG is an exact key match, not a prefix. This prevents LANG_TOKEN,
+# LANG_SECRET, or any other LANG_* name from leaking via a prefix match.
+_LOCAL_ENV_ALLOWED_KEYS: frozenset[str] = frozenset({"PATH", "TERM", "SHELL", "LANG"})
+# Only the LC_ prefix (locale category variables: LC_ALL, LC_CTYPE, …).
+_LOCAL_ENV_ALLOWED_PREFIXES: tuple[str, ...] = ("LC_",)
+
+# Explicit broker-injected keys permitted in the `extra` dict.
+# Any other key supplied via `extra` is silently dropped so callers cannot
+# accidentally inject arbitrary env vars.
+_BROKER_INJECTED_EXTRA_KEYS: frozenset[str] = frozenset({
+    "HOME",             # per-run temp HOME from CredentialBroker.grant_for_run()
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+})
+
+
+def _build_subprocess_env(extra: dict | None) -> dict:
+    """Build a subprocess env from an explicit allowlist plus broker-injected extras.
+
+    Reads only LANG, LC_*, PATH, TERM, SHELL from the host os.environ.  All
+    other host env vars — including any SECRET_*, TOKEN_*, API_KEY_*, HOME — are
+    excluded.  Credential env vars (HOME, *_API_KEY) must arrive via ``extra``
+    (from CredentialBroker grant.env); keys not in ``_BROKER_INJECTED_EXTRA_KEYS``
+    are silently dropped from ``extra`` to prevent callers from injecting
+    arbitrary variables.
+    """
+    safe: dict[str, str] = {}
+    for key, val in os.environ.items():
+        if key in _LOCAL_ENV_ALLOWED_KEYS or key.startswith(_LOCAL_ENV_ALLOWED_PREFIXES):
+            safe[key] = val
+    if extra:
+        for key, val in extra.items():
+            if key in _BROKER_INJECTED_EXTRA_KEYS:
+                safe[key] = val
+    return safe
+
 
 class LocalExecutor(Executor):
     def run_command(
@@ -36,31 +84,55 @@ class LocalExecutor(Executor):
         cwd: str | None = None,
         timeout: int = 60,
         env: dict | None = None,
+        run_id: str | None = None,
     ) -> ExecutionResult:
-        # If env is provided, merge it on top of the current process environment
-        # so the subprocess still inherits PATH, LANG, etc.
-        merged_env = None
-        if env:
-            merged_env = dict(os.environ)
-            merged_env.update(env)
+        # Build subprocess env from the allowlist; never inherit the full host env.
+        # API keys and HOME arrive via `env` (CredentialBroker grant.env only).
+        merged_env = _build_subprocess_env(env)
 
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 command,
                 cwd=cwd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
                 env=merged_env,
+                # New session puts the subprocess in its own process group so
+                # SIGKILL can be sent to the whole group (children included).
+                start_new_session=True,
             )
+            if run_id is not None:
+                from ..runs.process_registry import register as _reg_register
+                _reg_register(run_id, proc.pid)
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # Kill the entire process group, not just the parent PID.
+                # start_new_session=True makes the subprocess a process-group
+                # leader, so os.killpg reaches all child processes it spawned.
+                try:
+                    pgid = os.getpgid(proc.pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                except Exception:
+                    proc.kill()
+                stdout, stderr = proc.communicate()
+                return ExecutionResult(
+                    returncode=-1, stdout="", stderr="Command timed out.", timed_out=True
+                )
+            finally:
+                if run_id is not None:
+                    from ..runs.process_registry import deregister as _reg_deregister
+                    _reg_deregister(run_id)
             return ExecutionResult(
-                returncode=result.returncode,
-                stdout=result.stdout,
-                stderr=result.stderr,
+                returncode=proc.returncode,
+                stdout=stdout,
+                stderr=stderr,
             )
-        except subprocess.TimeoutExpired:
-            return ExecutionResult(returncode=-1, stdout="", stderr="Command timed out.", timed_out=True)
         except Exception as e:
+            if run_id is not None:
+                from ..runs.process_registry import deregister as _reg_deregister
+                _reg_deregister(run_id)
             return ExecutionResult(returncode=-1, stdout="", stderr=str(e))
 
 
@@ -72,7 +144,7 @@ class DockerExecutor(Executor):
     Per-run isolation:
       - sandbox_dir mounted rw at /workspace (agent's working directory)
       - workspace_path mounted ro at /workspace/repo (the actual repo, optional)
-      - network_mode controlled per adapter type (echo=none, claude_cli=bridge)
+      - network_mode controlled per adapter type (echo=none, claude_code=bridge)
       - 1 GB RAM, 1 CPU hard limits
       - Container auto-removed after completion
     """

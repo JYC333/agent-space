@@ -116,8 +116,17 @@ class QueueService(ABC):
     async def get_events(self, job_id: str) -> "list[JobEvent]": ...
 
     @abstractmethod
+    async def touch_heartbeat(self, job_id: str) -> None:
+        """Update heartbeat_at to now so reclaim logic treats this job as alive."""
+        ...
+
+    @abstractmethod
     async def reclaim_stuck_jobs(self, stuck_after_seconds: int = 600) -> int:
-        """Reset claimed/running jobs that haven't progressed (e.g. after a crash)."""
+        """Reset claimed/running jobs that haven't progressed (e.g. after a crash).
+
+        Uses COALESCE(heartbeat_at, updated_at) so a job that is actively
+        sending heartbeats is never considered stuck, even if updated_at is old.
+        """
         ...
 
 
@@ -220,10 +229,11 @@ class DatabaseQueueService(QueueService):
 
             result = db.execute(text(f"""
                 UPDATE jobs
-                SET status     = 'claimed',
-                    claimed_by = :worker_id,
-                    claimed_at = :now,
-                    updated_at = :now
+                SET status       = 'claimed',
+                    claimed_by   = :worker_id,
+                    claimed_at   = :now,
+                    heartbeat_at = NULL,
+                    updated_at   = :now
                 WHERE id = (
                     SELECT id FROM jobs
                     WHERE  status       = 'pending'
@@ -262,9 +272,11 @@ class DatabaseQueueService(QueueService):
         try:
             job = db.query(Job).filter(Job.id == job_id).first()
             if job:
+                now = datetime.now(UTC)
                 job.status = "running"
                 job.attempts = (job.attempts or 0) + 1
-                job.started_at = datetime.now(UTC)
+                job.started_at = now
+                job.heartbeat_at = now
                 db.commit()
         finally:
             db.close()
@@ -285,6 +297,7 @@ class DatabaseQueueService(QueueService):
                 job.status = "completed"
                 job.result = result
                 job.completed_at = datetime.now(UTC)
+                job.heartbeat_at = None
                 db.commit()
         finally:
             db.close()
@@ -304,6 +317,7 @@ class DatabaseQueueService(QueueService):
             if not job:
                 return
             job.error = error
+            job.heartbeat_at = None
             job.completed_at = datetime.now(UTC)
             if job.attempts < job.max_attempts:
                 # Back to pending for retry
@@ -326,13 +340,30 @@ class DatabaseQueueService(QueueService):
         await self._run_in_thread(self._cancel_job_sync, job_id)
 
     def _cancel_job_sync(self, job_id: str) -> None:
-        from ..models import Job
+        from ..models import Job, Run
         db = self._db_factory()
         try:
             job = db.query(Job).filter(Job.id == job_id).first()
-            if job and job.status in ("pending", "claimed"):
-                job.status = "cancelled"
-                db.commit()
+            if not job or job.status not in ("pending", "claimed"):
+                return
+            job.status = "cancelled"
+            job.heartbeat_at = None
+            # Cancel the linked Run when this is an agent_run job with a run_id payload.
+            # Only cancel non-terminal runs; leave succeeded/failed/cancelled/etc. untouched.
+            if job.job_type == "agent_run":
+                payload = job.payload or {}
+                run_id = payload.get("run_id")
+                if run_id:
+                    run = db.query(Run).filter(Run.id == run_id).first()
+                    if run and run.status not in (
+                        "succeeded", "failed", "degraded", "cancelled", "waiting_for_review"
+                    ):
+                        now = datetime.now(UTC)
+                        run.status = "cancelled"
+                        run.ended_at = now
+                        run.updated_at = now
+                        db.add(run)
+            db.commit()
         finally:
             db.close()
 
@@ -428,6 +459,26 @@ class DatabaseQueueService(QueueService):
             db.close()
 
     # ------------------------------------------------------------------
+    # touch_heartbeat — called periodically by the worker while handler runs
+    # ------------------------------------------------------------------
+
+    async def touch_heartbeat(self, job_id: str) -> None:
+        await self._run_in_thread(self._touch_heartbeat_sync, job_id)
+
+    def _touch_heartbeat_sync(self, job_id: str) -> None:
+        from sqlalchemy import text
+        db = self._db_factory()
+        try:
+            now = _dt(datetime.now(UTC))
+            db.execute(
+                text("UPDATE jobs SET heartbeat_at = :now WHERE id = :id"),
+                {"now": now, "id": job_id},
+            )
+            db.commit()
+        finally:
+            db.close()
+
+    # ------------------------------------------------------------------
     # reclaim_stuck_jobs
     # ------------------------------------------------------------------
 
@@ -435,21 +486,63 @@ class DatabaseQueueService(QueueService):
         return await self._run_in_thread(self._reclaim_stuck_sync, stuck_after_seconds)
 
     def _reclaim_stuck_sync(self, stuck_after_seconds: int) -> int:
+        import json as _json
         from sqlalchemy import text
         db = self._db_factory()
         try:
             from datetime import timedelta
             cutoff = _dt(datetime.now(UTC) - timedelta(seconds=stuck_after_seconds))
+
+            # Phase 1: clean up orphaned run_execution_locks for stuck agent_run jobs.
+            # A lock whose job_id matches a stuck job (or is NULL/old-style) is stale.
+            # A lock held by a fresh-heartbeating job is NOT in the stuck list and
+            # will never be deleted here.
+            try:
+                stuck_run_jobs = db.execute(text("""
+                    SELECT id, payload_json FROM jobs
+                    WHERE status IN ('claimed', 'running')
+                      AND job_type = 'agent_run'
+                      AND attempts < max_attempts
+                      AND COALESCE(heartbeat_at, updated_at) < :cutoff
+                """), {"cutoff": cutoff}).fetchall()
+
+                for row in stuck_run_jobs:
+                    job_id, payload_raw = row[0], row[1]
+                    try:
+                        payload = (
+                            _json.loads(payload_raw)
+                            if isinstance(payload_raw, str)
+                            else (payload_raw or {})
+                        )
+                    except Exception:
+                        continue
+                    run_id = payload.get("run_id")
+                    if not run_id:
+                        continue
+                    db.execute(text("""
+                        DELETE FROM run_execution_locks
+                        WHERE run_id = :run_id
+                          AND (job_id = :job_id OR job_id IS NULL)
+                    """), {"run_id": run_id, "job_id": job_id})
+            except Exception:
+                log.warning(
+                    "Orphan lock cleanup failed during reclaim_stuck_jobs — continuing",
+                    exc_info=True,
+                )
+
+            # Phase 2: move stuck jobs back to pending and reset heartbeat_at.
+            # COALESCE(heartbeat_at, updated_at): active heartbeat jobs are never reclaimed.
             result = db.execute(text("""
                 UPDATE jobs
-                SET status     = 'pending',
-                    claimed_by = NULL,
-                    claimed_at = NULL,
-                    started_at = NULL,
-                    updated_at = :now
+                SET status       = 'pending',
+                    claimed_by   = NULL,
+                    claimed_at   = NULL,
+                    started_at   = NULL,
+                    heartbeat_at = NULL,
+                    updated_at   = :now
                 WHERE status IN ('claimed', 'running')
-                  AND updated_at < :cutoff
-                  AND attempts   < max_attempts
+                  AND COALESCE(heartbeat_at, updated_at) < :cutoff
+                  AND attempts < max_attempts
             """), {"now": _dt(datetime.now(UTC)), "cutoff": cutoff})
             db.commit()
             n = result.rowcount

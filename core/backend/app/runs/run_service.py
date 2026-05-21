@@ -537,6 +537,10 @@ class RunService:
         Runs in terminal states (succeeded, failed, degraded, cancelled) are
         returned as-is with changed=False.
 
+        When a live subprocess is registered in the process registry for this
+        run_id, SIGTERM is sent before the DB status change. Cross-process
+        termination is not supported — only works within the same OS process.
+
         Returns (run, changed) tuple.
         """
         run = self.get_run(run_id, space_id)
@@ -545,9 +549,54 @@ class RunService:
             # Already terminal — return as-is
             return run, False
 
+        # Attempt subprocess termination if the run is executing in-process.
+        # Best-effort — failure to terminate does not block the status change.
+        if run.status == "running":
+            try:
+                from .process_registry import terminate as _terminate
+                _terminate(run_id)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "process_registry.terminate failed for run=%s", run_id, exc_info=True
+                )
+
         run.status = "cancelled"
         run.ended_at = datetime.now(UTC)
         run.updated_at = datetime.now(UTC)
         self.db.commit()
         self.db.refresh(run)
         return run, True
+
+    def recover_stale_runs(self, stale_after_seconds: int = 3600) -> int:
+        """Mark runs stuck in 'running' status as failed.
+
+        Intended to be called at worker/app startup to recover from crashes
+        that left runs stuck in the running state. Returns the count of
+        recovered runs.
+        """
+        from datetime import timedelta
+        threshold = datetime.now(UTC) - timedelta(seconds=stale_after_seconds)
+        stale = (
+            self.db.query(Run)
+            .filter(Run.status == "running", Run.started_at < threshold)
+            .all()
+        )
+        count = 0
+        for run in stale:
+            run.status = "failed"
+            run.error_message = "Run timed out (stale running recovery at startup)"
+            run.error_json = {
+                "error_code": "stale_run_recovered",
+                "error_text": "Run was stuck in running status and was recovered at startup",
+            }
+            run.ended_at = datetime.now(UTC)
+            run.updated_at = datetime.now(UTC)
+            count += 1
+        if count:
+            self.db.commit()
+            import logging
+            logging.getLogger(__name__).warning(
+                "recover_stale_runs: marked %d stale run(s) as failed", count
+            )
+        return count

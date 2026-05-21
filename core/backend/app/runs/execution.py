@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import HTTPException
@@ -21,7 +22,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..db_uow import UnitOfWork
-from ..models import AgentVersion, MemoryEntry, Run
+from ..models import AgentVersion, MemoryEntry, Run, Workspace
+from ..workspace.disk_path import workspace_absolute_root
+from ..workspace.root_validation import WorkspaceRootValidationError, validate_workspace_root_for_execution
 from .types import RuntimeExecutionResult
 from ..runtimes.base import RuntimeAdapterResult, RuntimeExecutionContext
 from ..runtimes.credentials import (
@@ -42,8 +45,12 @@ from .redaction import (
     redact_runtime_output,
     sanitize_runtime_metadata,
 )
+from .code_patch_collector import collect_and_create_code_patch_proposal
+from .worktree_validation import get_workspace_validation_commands, run_validation_in_worktree
+from .runtime_preflight import RuntimePreflightService
+from .execution_lock import RunExecutionLockService
 from .run_output_materialization import RunOutputMaterializer
-from .runtime_policy import compute_runtime_policy_decision
+from .runtime_policy import compute_runtime_policy_decision, validate_file_access_adapter_policy
 from .sandbox_manager import execution_workspace
 from .removed_runtime_token import is_obsolete_runtime_override_token
 from .task_output_linkage import link_run_outputs_to_tasks
@@ -148,6 +155,8 @@ class RunExecutionService:
         prompt: Optional[str] = None,
         context_snapshot_id: Optional[str] = None,
         simulate_failure: bool = False,
+        worker_id: str = "direct",
+        job_id: Optional[str] = None,
     ) -> RuntimeExecutionResult:
         del mode, prompt, context_snapshot_id  # API parity; Run row is authoritative
 
@@ -192,21 +201,51 @@ class RunExecutionService:
                 error_code="runtime_removed",
             )
 
-        policy_dict = dict(version.runtime_policy_json or {})
-        decision = compute_runtime_policy_decision(run=run, version=version)
-        run.required_sandbox_level = decision.required_sandbox_level
-        self.db.add(run)
-        self.db.flush()
+        # Acquire a durable per-run execution lock before any state mutation.
+        # This prevents a second worker from executing the same run if the job
+        # is reclaimed as stuck while the original worker is still in
+        # adapter.execute() (defence-in-depth alongside heartbeat protection).
+        lock_svc = RunExecutionLockService(self.db)
+        if not lock_svc.try_acquire(run_id, worker_id=worker_id, job_id=job_id):
+            log.warning(
+                "Duplicate execution prevented: run=%s is already being executed "
+                "(lock held by another worker). Returning duplicate_execution error.",
+                run_id,
+            )
+            return RuntimeExecutionResult(
+                success=False,
+                output="",
+                error=(
+                    f"Run '{run_id}' is already being executed by another worker. "
+                    "Duplicate execution prevented by execution lock."
+                ),
+                exit_code=1,
+                artifacts=[],
+                started_at=None,
+                completed_at=None,
+                stdout="",
+                stderr="",
+                error_code="duplicate_execution",
+            )
 
-        _normalize_runtime(runtime)
+        try:
+            policy_dict = dict(version.runtime_policy_json or {})
+            decision = compute_runtime_policy_decision(run=run, version=version)
+            run.required_sandbox_level = decision.required_sandbox_level
+            self.db.add(run)
+            self.db.flush()
 
-        return self._execute_real_adapter_path(
-            run=run,
-            version=version,
-            policy_dict=policy_dict,
-            decision=decision,
-            simulate_failure=simulate_failure,
-        )
+            _normalize_runtime(runtime)
+
+            return self._execute_real_adapter_path(
+                run=run,
+                version=version,
+                policy_dict=policy_dict,
+                decision=decision,
+                simulate_failure=simulate_failure,
+            )
+        finally:
+            lock_svc.release(run_id)
 
     def _execute_real_adapter_path(
         self,
@@ -254,8 +293,12 @@ class RunExecutionService:
                 run=run,
                 decision=decision,
                 actor_id=actor_id,
-                error_code="sandbox_one_shot_docker_not_implemented",
-                error_text="required_sandbox_level=one_shot_docker is not implemented in this build",
+                error_code="critical_runtime_requires_unimplemented_one_shot_docker",
+                error_text=(
+                    "risk_level=critical requires one_shot_docker sandbox isolation, "
+                    "which is not implemented in this build. "
+                    "Use risk_level=high (worktree) for mutating CLI runs."
+                ),
                 stdout="",
                 stderr="",
             )
@@ -340,6 +383,25 @@ class RunExecutionService:
 
         adapter = instantiate_runtime_adapter(resolved.adapter_type)
 
+        # Early policy guard: file-access adapters (claude_code, codex_cli) must
+        # have risk_level=high so they run inside a worktree sandbox.  This check
+        # fires before the adapter_started RunStep to surface the misconfiguration
+        # as a clean configuration error rather than a mid-execution failure.
+        policy_error = validate_file_access_adapter_policy(
+            adapter_type=resolved.adapter_type,
+            decision=decision,
+        )
+        if policy_error:
+            return self._fail_run_terminal(
+                run=run,
+                decision=decision,
+                actor_id=actor_id,
+                error_code="file_access_adapter_requires_worktree_policy",
+                error_text=policy_error,
+                stdout="",
+                stderr="",
+            )
+
         adapter_step = None
         if actor_id is not None:
             try:
@@ -359,8 +421,237 @@ class RunExecutionService:
                     run.id, exc_info=True,
                 )
 
+        # Guard: adapters that read/write files must run inside a worktree sandbox.
+        # Prevents CLI processes from executing in the backend cwd when the policy
+        # sandbox level is none or dry_run.
+        if (
+            getattr(adapter, "requires_file_access", False)
+            and decision.required_sandbox_level in ("none", "dry_run")
+        ):
+            if adapter_step is not None:
+                try:
+                    with UnitOfWork(self.db).savepoint():
+                        fail_step(
+                            self.db, adapter_step,
+                            error_type="sandbox_required",
+                            error_message=(
+                                f"Adapter '{resolved.adapter_type}' requires file access "
+                                f"but required_sandbox_level='{decision.required_sandbox_level}'"
+                            ),
+                            ended_at=_utcnow(),
+                        )
+                except Exception:
+                    log.warning(
+                        "RunStep fail_step failed (best-effort) run=%s step=adapter_started",
+                        run.id, exc_info=True,
+                    )
+            return self._fail_run_terminal(
+                run=run,
+                decision=decision,
+                actor_id=actor_id,
+                error_code="sandbox_required",
+                error_text=(
+                    f"Adapter '{resolved.adapter_type}' has requires_file_access=True but "
+                    f"required_sandbox_level='{decision.required_sandbox_level}'. "
+                    "Set risk_level=high in the agent's runtime_policy_json to enable worktree isolation."
+                ),
+                stdout="",
+                stderr="",
+            )
+
+        # Resolve and validate workspace root for git worktree when the run targets a workspace.
+        # Full root validation (ownership, existence, directory check, external-root trust, git
+        # repo check) happens here so errors surface before any sandbox is created.
+        # Only performed when the sandbox level requires an isolated workdir.
+        workspace_root_for_sandbox: Path | None = None
+        if run.workspace_id and decision.required_sandbox_level == "worktree":
+            ws = (
+                self.db.query(Workspace)
+                .filter(
+                    Workspace.id == run.workspace_id,
+                    Workspace.space_id == run.space_id,
+                )
+                .first()
+            )
+            if ws is None:
+                if adapter_step is not None:
+                    try:
+                        with UnitOfWork(self.db).savepoint():
+                            fail_step(
+                                self.db, adapter_step,
+                                error_type="workspace_not_found",
+                                error_message="workspace not found in this space",
+                                ended_at=_utcnow(),
+                            )
+                    except Exception:
+                        log.warning(
+                            "RunStep fail_step failed (best-effort) run=%s step=adapter_started",
+                            run.id, exc_info=True,
+                        )
+                return self._fail_run_terminal(
+                    run=run,
+                    decision=decision,
+                    actor_id=actor_id,
+                    error_code="workspace_not_found",
+                    error_text="workspace not found in this space",
+                    stdout="",
+                    stderr="",
+                )
+            resolved_root = workspace_absolute_root(ws)
+            try:
+                validate_workspace_root_for_execution(
+                    workspace_space_id=ws.space_id,
+                    run_space_id=run.space_id,
+                    workspace_root=resolved_root,
+                    allow_external_root=getattr(ws, "allow_external_root", False),
+                    sandbox_level=decision.required_sandbox_level,
+                )
+            except WorkspaceRootValidationError as exc:
+                if adapter_step is not None:
+                    try:
+                        with UnitOfWork(self.db).savepoint():
+                            fail_step(
+                                self.db, adapter_step,
+                                error_type=exc.error_code,
+                                error_message=exc.message,
+                                ended_at=_utcnow(),
+                            )
+                    except Exception:
+                        log.warning(
+                            "RunStep fail_step failed (best-effort) run=%s step=adapter_started",
+                            run.id, exc_info=True,
+                        )
+                return self._fail_run_terminal(
+                    run=run,
+                    decision=decision,
+                    actor_id=actor_id,
+                    error_code=exc.error_code,
+                    error_text=exc.message,
+                    stdout="",
+                    stderr="",
+                )
+            workspace_root_for_sandbox = resolved_root
+
+        # ---------------------------------------------------------------
+        # Workspace preflight: snapshot HEAD commit SHA and dirty status
+        # before creating the worktree.  The data is forwarded into the
+        # proposal payload and used by the automation preflight guard.
+        # ---------------------------------------------------------------
+        workspace_preflight = None
+        if workspace_root_for_sandbox is not None:
+            from .workspace_worktree import run_workspace_preflight, WorkspaceNotGitRepoError
+            try:
+                workspace_preflight = run_workspace_preflight(workspace_root_for_sandbox)
+                log.debug(
+                    "workspace_preflight run=%s commit=%s dirty=%s",
+                    run.id,
+                    workspace_preflight.base_commit_sha,
+                    workspace_preflight.is_dirty,
+                )
+            except WorkspaceNotGitRepoError:
+                pass  # already caught by validate_workspace_root_for_execution above
+            except Exception:
+                log.warning(
+                    "workspace_preflight failed (non-fatal) run=%s", run.id, exc_info=True
+                )
+
+        # ---------------------------------------------------------------
+        # Automation-origin preflight: fail fast before any subprocess or
+        # sandbox is created when the run cannot safely run unattended.
+        # ---------------------------------------------------------------
+        trigger_origin = getattr(run, "trigger_origin", "manual") or "manual"
+        if trigger_origin == "automation":
+            # Determine whether the selected adapter type has a credential
+            # profile available.  The CredentialBroker check is inexpensive
+            # (a file-system scan cached per process).
+            _has_cred_profile = False
+            try:
+                from ..credentials.broker import CredentialBroker
+                _has_cred_profile = (
+                    CredentialBroker().get_default_profile(resolved.adapter_type) is not None
+                )
+            except Exception:
+                log.warning(
+                    "automation preflight credential check failed run=%s; "
+                    "treating as no profile",
+                    run.id, exc_info=True,
+                )
+
+            _requires_file_access = getattr(adapter, "requires_file_access", False)
+            _uses_cli_credentials = getattr(adapter, "uses_cli_credentials", False)
+            try:
+                from .runtime_policy import parse_allow_dirty_workspace
+                _allow_dirty = parse_allow_dirty_workspace(version.runtime_policy_json)
+            except ValueError as _policy_exc:
+                from ..runs.runtime_preflight import PreflightResult as _PF
+                preflight_result = _PF(
+                    ok=False,
+                    error_code="automation_preflight_invalid_runtime_policy",
+                    error_message=str(_policy_exc),
+                )
+                if adapter_step is not None:
+                    try:
+                        from .steps import fail_step
+                        with UnitOfWork(self.db).savepoint():
+                            fail_step(
+                                self.db, adapter_step,
+                                error_type=preflight_result.error_code,
+                                error_message=preflight_result.error_message or "",
+                                ended_at=_utcnow(),
+                            )
+                    except Exception:
+                        log.warning(
+                            "RunStep fail_step failed (best-effort) run=%s step=adapter_started",
+                            run.id, exc_info=True,
+                        )
+                return self._fail_run_terminal(
+                    run=run,
+                    decision=decision,
+                    actor_id=actor_id,
+                    error_code="automation_preflight_invalid_runtime_policy",
+                    error_text=str(_policy_exc),
+                    stdout="",
+                    stderr="",
+                )
+            preflight_result = RuntimePreflightService().check_automation_run(
+                resolved_adapter_type=resolved.adapter_type,
+                requires_file_access=_requires_file_access,
+                requires_cli_credential_profile=_uses_cli_credentials,
+                risk_level=decision.risk_level,
+                has_credential_profile=_has_cred_profile,
+                workspace_id=run.workspace_id,
+                workspace_preflight=workspace_preflight,
+                allow_dirty_workspace=_allow_dirty,
+            )
+            if not preflight_result.ok:
+                if adapter_step is not None:
+                    try:
+                        from .steps import fail_step
+                        with UnitOfWork(self.db).savepoint():
+                            fail_step(
+                                self.db, adapter_step,
+                                error_type=preflight_result.error_code,
+                                error_message=preflight_result.error_message or "",
+                                ended_at=_utcnow(),
+                            )
+                    except Exception:
+                        log.warning(
+                            "RunStep fail_step failed (best-effort) run=%s step=adapter_started",
+                            run.id, exc_info=True,
+                        )
+                return self._fail_run_terminal(
+                    run=run,
+                    decision=decision,
+                    actor_id=actor_id,
+                    error_code=preflight_result.error_code or "automation_preflight_failed",
+                    error_text=preflight_result.error_message or "Automation preflight failed.",
+                    stdout="",
+                    stderr="",
+                )
+
         raw: RuntimeAdapterResult | None = None
         path_ingest_errors: list[str] = []
+        code_patch_warnings: list[str] = []
         run_id = run.id
         run_space_id = run.space_id
         run_mode = run.mode
@@ -370,6 +661,7 @@ class RunExecutionService:
                 space_id=run_space_id,
                 run_id=run_id,
                 required_sandbox_level=decision.required_sandbox_level,
+                workspace_root=workspace_root_for_sandbox,
             ) as workdir:
                 if decision.required_sandbox_level == "worktree":
                     run.sandbox_path = workdir
@@ -404,6 +696,22 @@ class RunExecutionService:
                     # Serialised ContextPackage for CLI adapters (ContextCompiler input).
                     # Non-CLI adapters (echo, capability) ignore this field.
                     context_package=context_pkg.model_dump(),
+                    # Policy values for CredentialBroker and audit — use real
+                    # decision values, not hardcoded defaults.
+                    risk_level=decision.risk_level,
+                    executor_mode=(
+                        "worktree"
+                        if decision.required_sandbox_level == "worktree"
+                        else "local"
+                    ),
+                    # trigger_origin forwarded so CLI adapters can enforce
+                    # automation-origin credential requirements.
+                    trigger_origin=getattr(run, "trigger_origin", "manual") or "manual",
+                    # DB session for inline credential audit event writes (CLI adapters).
+                    db=self.db,
+                    runtime_adapter_id=(
+                        resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
+                    ),
                 )
                 self.db.commit()
                 raw = adapter.execute(ctx)
@@ -418,6 +726,100 @@ class RunExecutionService:
                         source_root=workdir,
                         entries=raw.produced_artifact_paths,
                     )
+
+                # Collect workspace file changes from the git worktree and
+                # materialise a pending code_patch proposal.  Must happen while
+                # workdir still exists and before sandbox cleanup on context exit.
+                # Failures and no-op/skipped outcomes are recorded in
+                # code_patch_warnings for inclusion in run.output_json.
+                if (
+                    raw is not None
+                    and raw.success
+                    and workdir is not None
+                    and run.workspace_id
+                    and workspace_root_for_sandbox is not None
+                    and getattr(adapter, "requires_file_access", False)
+                ):
+                    try:
+                        # Run validation commands inside the worktree before collecting
+                        # the patch proposal.  Commands come from WorkspaceProfile so
+                        # we never run commands in the real workspace.
+                        _val_evidence = None
+                        try:
+                            _val_cmds = get_workspace_validation_commands(
+                                self.db,
+                                workspace_id=run.workspace_id,
+                                space_id=run.space_id,
+                            )
+                            if _val_cmds:
+                                _val_evidence = run_validation_in_worktree(
+                                    worktree_path=Path(workdir),
+                                    commands=_val_cmds,
+                                )
+                                log.info(
+                                    "worktree validation: run=%s status=%s commands=%d",
+                                    run.id,
+                                    _val_evidence.status,
+                                    _val_evidence.command_count,
+                                )
+                        except Exception:
+                            log.warning(
+                                "worktree validation failed (best-effort) run=%s; "
+                                "proposal will be created with validation.status=skipped",
+                                run.id, exc_info=True,
+                            )
+
+                        collection_result = collect_and_create_code_patch_proposal(
+                            self.db,
+                            run=run,
+                            worktree_path=Path(workdir),
+                            validation_evidence=_val_evidence,
+                            base_commit_sha=(
+                                workspace_preflight.base_commit_sha
+                                if workspace_preflight is not None
+                                else None
+                            ),
+                        )
+                        if collection_result.proposal_created and collection_result.proposal is not None:
+                            link_run_outputs_to_tasks(
+                                self.db,
+                                run=run,
+                                artifact=None,
+                                proposal=collection_result.proposal,
+                                proposal_role="code_patch",
+                            )
+                        if collection_result.incomplete_patch and collection_result.skipped:
+                            code_patch_warnings.append(
+                                "code_patch_incomplete: proposal does not include all agent "
+                                "changes — skipped_changes: "
+                                + "; ".join(
+                                    f"{s['path']} ({s['reason']})"
+                                    for s in collection_result.skipped
+                                )
+                            )
+                        if not collection_result.proposal_created and collection_result.no_op_reason:
+                            code_patch_warnings.append(
+                                f"code_patch_no_op: {collection_result.no_op_reason}"
+                            )
+                        if collection_result.skipped and not collection_result.proposal_created:
+                            code_patch_warnings.append(
+                                f"code_patch_skipped_files: "
+                                + "; ".join(
+                                    f"{s['path']} ({s['reason']})"
+                                    for s in collection_result.skipped
+                                )
+                            )
+                    except Exception:
+                        log.warning(
+                            "code_patch proposal collection failed run=%s; "
+                            "run still succeeds",
+                            run.id, exc_info=True,
+                        )
+                        import traceback
+                        code_patch_warnings.append(
+                            "code_patch_collection_error: "
+                            + traceback.format_exc()[:1000]
+                        )
         except Exception as exc:  # noqa: BLE001
             run.sandbox_path = None
             self.db.add(run)
@@ -448,6 +850,25 @@ class RunExecutionService:
         run.sandbox_path = None
         self.db.add(run)
         self.db.flush()
+
+        # Refresh the Run row to pick up any concurrent status change (e.g. stop_run
+        # setting status=cancelled while adapter.execute() was blocking).  If the run
+        # was cancelled during execution, preserve that status and do not overwrite it
+        # with succeeded or failed.
+        self.db.refresh(run)
+        if run.status == "cancelled":
+            self.db.commit()
+            return RuntimeExecutionResult(
+                success=False,
+                output=raw.output_text or "" if raw else "",
+                error="Run was cancelled while the adapter was executing",
+                exit_code=raw.exit_code if raw else 1,
+                started_at=(raw.started_at if raw else None) or run.started_at,
+                completed_at=run.ended_at,
+                stdout=raw.stdout if raw else "",
+                stderr=raw.stderr if raw else "",
+                error_code="run_cancelled",
+            )
 
         ended_wall = _utcnow()
         if raw.success:
@@ -493,6 +914,15 @@ class RunExecutionService:
                 "adapter_metadata": safe_adapter_metadata,
                 "runtime_policy_decision": decision.policy_snapshot,
                 "required_sandbox_level": run.required_sandbox_level,
+                # Workspace snapshot taken before worktree creation.
+                "base_commit_sha": (
+                    workspace_preflight.base_commit_sha
+                    if workspace_preflight is not None else None
+                ),
+                "workspace_is_dirty": (
+                    workspace_preflight.is_dirty
+                    if workspace_preflight is not None else None
+                ),
             }
             if output_provenance:
                 out["output_provenance"] = output_provenance
@@ -517,7 +947,7 @@ class RunExecutionService:
                 adapter_output=safe_adapter_output,
                 adapter_type=resolved.adapter_type,
             )
-            merged_errors = [*path_ingest_errors, *mat_errors]
+            merged_errors = [*path_ingest_errors, *mat_errors, *code_patch_warnings]
             if merged_errors:
                 merged = dict(run.output_json or {})
                 merged["materialization_errors"] = merged_errors

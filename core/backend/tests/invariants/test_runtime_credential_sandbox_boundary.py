@@ -47,7 +47,7 @@ class TestRunExecutionUsesCanonicalRuntimeRegistry:
         """anthropic_api and anthropic_messages must NOT be in the canonical runtime registry.
 
         Product policy: Anthropic/Claude execution must go through CLI integrations
-        (claude_code / claude_cli in app.cli_adapters), not direct API adapters.
+        (claude_code in app.cli_adapters), not direct API adapters.
         This test is a guard against reintroduction.
         """
         from app.runtimes.registry import is_adapter_type_implemented

@@ -52,6 +52,20 @@ class RuntimeExecutionContext:
     # CLI runtime adapters pass this to ContextCompiler to render CLAUDE.md / AGENTS.md.
     # Non-CLI adapters (echo, capability) should ignore this field.
     context_package: dict[str, Any] = field(default_factory=dict)
+    # Runtime policy values propagated from RuntimePolicyDecision so that
+    # CredentialBroker and other execution infrastructure receive the real
+    # risk classification rather than a hardcoded fallback.
+    risk_level: str = "low"
+    executor_mode: str = "worktree"
+    # Trigger origin from Run.trigger_origin — used by CLI adapters to enforce
+    # automation-origin credential requirements (must not fall back to container default).
+    trigger_origin: str = "manual"
+    # Optional DB session passed from RunExecutionService so CLI adapters can write
+    # durable audit events (CliCredentialEvent) inline.  Non-CLI adapters ignore this.
+    # Use Any to avoid circular imports; callers pass an SQLAlchemy Session.
+    db: Any | None = None
+    # Runtime adapter DB row id for audit linkage (passed from resolved adapter row).
+    runtime_adapter_id: str | None = None
 
 
 @dataclass
@@ -83,9 +97,24 @@ class BaseRuntimeAdapter(ABC):
     attributes so the registry and execution service can enforce policy before
     the adapter is invoked.
 
-    Credential rule: ``execute`` must read credentials from
-    ``ctx.resolved_credentials``, not from ``ctx.adapter_config`` raw fields
-    or environment variables.
+    Credential paths — two mutually exclusive patterns:
+
+    **api_key_runtime** (e.g. ``capability``, ``echo`` adapters):
+      The execution service resolves credentials from a ``Credential`` DB row
+      via ``runtimes.credentials.resolve_runtime_credentials()`` and passes the
+      decrypted API key through ``ctx.resolved_credentials["api_key"]``.
+      Adapters on this path read ``ctx.resolved_credentials`` only — never
+      ``ctx.adapter_config`` raw fields or environment variables.
+
+    **cli_login_state_runtime** (e.g. ``claude_code``, ``codex_cli`` adapters):
+      The ``CliRuntimeAdapter`` subclass calls
+      ``CredentialBroker.grant_for_run()`` to obtain a per-run temp HOME
+      directory with the CLI login state symlinked inside it.  If the profile
+      contains an ``api_key.txt``, the env var (e.g. ``ANTHROPIC_API_KEY``) is
+      injected via ``CredentialGrant.env`` into the subprocess only — it is
+      never placed in ``ctx.resolved_credentials`` and never inherited from the
+      host environment.  For automation-origin runs the broker raises
+      ``runtime_credential_profile_required`` when no explicit profile exists.
     """
 
     adapter_type: str
@@ -99,6 +128,12 @@ class BaseRuntimeAdapter(ABC):
 
     # Declare whether this adapter supports sandboxed execution (worktree isolation).
     supports_sandboxed_execution: bool = False
+
+    # Declare whether this adapter authenticates via CredentialBroker CLI
+    # login-state grants (True) rather than ModelProvider API keys (False).
+    # Used by automation preflight to skip the CLI credential-profile check for
+    # API-key-based adapters (echo, capability) that have no login state.
+    uses_cli_credentials: bool = False
 
     # Model config consumption metadata (used by Run API resolved_model summary).
     uses_model_config: bool = False

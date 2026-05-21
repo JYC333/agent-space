@@ -38,7 +38,13 @@ The agent-space core owns the Agent layer. CLI tools and providers are pluggable
 | `claude_code` | CLI wrapper | `CLAUDE.md`  | active | Wraps `claude` CLI (Claude Code)         |
 | `codex_cli`   | CLI wrapper | `AGENTS.md`  | active | Wraps `codex` CLI (OpenAI Codex CLI)     |
 
-> Configs may still say `claude_cli`; the backend maps that id to the same adapter as `claude_code`. Prefer `claude_code` in new manifests.
+Canonical adapter type names: `echo`, `capability`, `claude_code`, `codex_cli`.
+
+> Legacy notes:
+> - Configs may still say `claude_cli`; the runtime bridge (`cli_runtime.py`) maps that id to the same
+>   adapter class as `claude_code`. Prefer `claude_code` in new manifests.
+> - `"codex"` (without `_cli`) is not a canonical adapter type. The credential broker retains
+>   `"codex"` as a directory-scan alias for backward-compatible profile discovery only.
 
 ## Planned / Future Adapters
 
@@ -123,10 +129,48 @@ The frontend "CLI Tools" page shows the Monthly Quota Board and detection status
 ## Sandbox Routing
 
 See `sandbox.md`. Short version:
-- `echo` — never sandboxed
-- `claude_code`, `codex_cli` (and future coding runtimes) — always sandboxed
-  - `medium` risk → git worktree + local subprocess (no new container)
-  - `high`/`critical` risk → one-shot Docker container
+
+| risk_level | required_sandbox_level | File-access adapters allowed? |
+|------------|------------------------|-------------------------------|
+| `low`      | `none`                 | No — blocked before execution |
+| `medium`   | `dry_run`              | No — blocked before execution |
+| `high`     | `worktree`             | Yes — git worktree isolation  |
+| `critical` | `one_shot_docker`      | Future — not yet implemented  |
+
+- `echo`, `capability` — never sandboxed; no filesystem access.
+- `claude_code`, `codex_cli` — **require** `risk_level=high` (worktree).
+  Runs at lower risk levels fail pre-execution with
+  `error_code=file_access_adapter_requires_worktree_policy`.
+- `one_shot_docker` — intentionally not implemented. Returns
+  `error_code=sandbox_one_shot_docker_not_implemented`.
+
+### Worktree isolation semantics
+
+A **worktree sandbox** means **code-state isolation**, not OS/process/network isolation.
+
+What it provides:
+- The CLI subprocess operates in an ephemeral `git worktree` copy of the workspace.
+- The real workspace directory is never directly written during execution.
+- All file changes are collected via `git diff HEAD` after execution and emitted
+  as a pending `code_patch` Proposal. The real workspace is only mutated when a
+  human accepts the proposal.
+- The worktree is destroyed after the run; artifacts are persisted separately.
+
+What it does NOT provide:
+- No OS-level process isolation. The CLI subprocess can access the host filesystem
+  beyond the sandbox directory.
+- No network isolation. The CLI subprocess can make arbitrary outbound requests.
+- No resource limits. CPU, memory, and disk are shared with the backend process.
+
+Worktree is **acceptable** for:
+- Trusted personal repositories.
+- Normal coding tasks where the repository owner controls the code being executed.
+
+`one_shot_docker` should be required (when implemented) for:
+- Untrusted code or unknown dependency installation.
+- Database migrations with destructive potential.
+- Third-party repositories where the code content is not pre-reviewed.
+- Runs that modify sandbox, policy, or capability manifests.
 
 ## License & Compliance Notes
 

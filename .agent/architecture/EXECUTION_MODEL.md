@@ -38,10 +38,11 @@ Existing Run and Proposal rows use separate nullable `*_user_id` and `*_agent_id
 
 ## Canonical Runtime Path
 
-- **Canonical for new adapters:** `core/backend/app/runtimes/`
-- **CLI adapter path (existing CLI surfaces):** `core/backend/app/agents/`
+- **Canonical for new adapters:** `core/backend/app/runtimes/` (subclass `BaseRuntimeAdapter`, register in `registry.py`)
+- **CLI subprocess wrappers:** `core/backend/app/cli_adapters/` (detection, probing, subprocess execution via `LocalExecutor`/`DockerExecutor`)
+- **CLI bridge:** `core/backend/app/runtimes/adapters/cli_runtime.py` — the only point that imports CLI adapter classes and converts their output to `RuntimeAdapterResult`
 
-Do not add new adapters to the `app.agents` stack.
+Do not add new adapters to `app.agents` — it contains Agent/AgentVersion CRUD only.
 
 `RunExecutionService` owns the runtime execution lifecycle. Required external-call pattern:
 

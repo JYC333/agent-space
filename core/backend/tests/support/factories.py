@@ -255,6 +255,7 @@ def create_test_workspace(
     created_by_user_id: str | None = None,
     workspace_type: str = "project",
     metadata_json: dict[str, Any] | None = None,
+    allow_external_root: bool = False,
     commit: bool = False,
 ) -> Workspace:
     row = Workspace(
@@ -265,6 +266,7 @@ def create_test_workspace(
         created_by_user_id=created_by_user_id,
         workspace_type=workspace_type,
         metadata_json=metadata_json,
+        allow_external_root=allow_external_root,
     )
     db.add(row)
     return _finish(db, row, commit=commit)

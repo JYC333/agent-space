@@ -10,12 +10,18 @@ Provide risk-proportionate isolation for agent runs. Two distinct concerns:
 
 | Risk Level | Sandbox Level     | CLI runs in               | Workspace isolation | Process isolation | New container? |
 |------------|-------------------|---------------------------|---------------------|-------------------|----------------|
-| low        | `dry_run`         | nowhere                   | —                   | —                 | No             |
-| medium     | `worktree`        | backend process           | ✓ git worktree      | ✗                 | **No**         |
-| high       | `one_shot_docker` | sandbox container         | ✓ volume mount      | ✓                 | Yes            |
+| low        | `none`            | nowhere (no adapter exec) | —                   | —                 | No             |
+| medium     | `dry_run`         | nowhere (no adapter exec) | —                   | —                 | No             |
+| high       | `worktree`        | backend process           | ✓ git worktree      | ✗                 | **No**         |
 | critical   | `one_shot_docker` | sandbox container         | ✓ volume mount      | ✓                 | Yes            |
 
-**`worktree` (medium — default):**
+**File-access adapter requirement:** `claude_code` and `codex_cli` require `risk_level=high`.
+The execution service validates this before starting the adapter and fails the run with
+`error_code=file_access_adapter_requires_worktree_policy` if the policy is unsafe.
+This check fires before the `adapter_started` RunStep so the misconfiguration is surfaced
+as a configuration error, not a mid-execution failure.
+
+**`worktree` (high risk):**
 The CLI runs as a subprocess of the backend process with `cwd=sandboxes/{run_id}/`.
 No new container is spawned. The backend image (Dockerfile) installs `claude` and `codex`
 so this works identically on bare-metal and in Docker Compose.
@@ -35,7 +41,7 @@ Required when you need hard resource limits or stricter filesystem boundaries.
 - Docker concurrency limiter (`get_docker_semaphore()`)
 - `PathPolicy` — validates workspace file access paths
 
-## Worktree Flow (medium risk)
+## Worktree Flow (high risk)
 
 ```
 real workspace (git repo)
@@ -48,7 +54,7 @@ diff / artifacts created in sandboxes/{run_id}/
     ↓  SandboxContext.cleanup() → git worktree remove --force
 ```
 
-Falls back to plain `mkdir` when the workspace is not a git repo.
+The workspace root must be a git repository; validation fails before sandbox creation if it is not.
 
 ## Docker Sandbox Flow (high/critical risk)
 
@@ -72,7 +78,7 @@ Built separately (needed for high/critical risk only):
 docker build --network=host -t agent-space-sandbox deployments/sandbox/
 ```
 
-The backend Dockerfile also installs `claude` and `codex` for medium-risk worktree runs.
+The backend Dockerfile also installs `claude` and `codex` for high-risk worktree runs.
 Both images install the same CLI tools; they serve different isolation purposes.
 
 ## Concurrency Control
@@ -99,18 +105,23 @@ Adapters check `self.sandbox_dir is not None`:
 - Collect artifacts before cleanup
 
 ## Invariants
-- `claude_cli` and `codex_cli` are always sandboxed — `_SANDBOXED_ADAPTERS` in runner.py
-- An agent can escalate `risk_level` but cannot remove itself from `_SANDBOXED_ADAPTERS`
-- Medium risk never spawns a new container — CLI runs as a backend subprocess in the worktree
+- `claude_code` and `codex_cli` require `risk_level=high`; the execution service rejects any run where these adapters are paired with a lower risk level before the adapter starts
+- `risk_level=high` → `required_sandbox_level=worktree`; the agent always receives a detached git worktree, never the real workspace directory
+- Workspace roots outside `settings.workspace_root` require `Workspace.allow_external_root=True`; validation fails before sandbox creation otherwise
+- High risk never spawns a new container — CLI runs as a backend subprocess inside the worktree
 - CLAUDE.md / AGENTS.md are written to the sandbox dir, never to the real workspace
+- File changes from the worktree become a `code_patch` proposal; real workspace mutation happens only after the proposal is accepted
 
 ## Related Files
-- `core/backend/app/workspace/sandbox_manager.py` — SandboxManager, SandboxContext, SandboxLevel
-- `core/backend/app/agents/cli_adapter.py` — DockerExecutor, LocalExecutor
-- `core/backend/app/agents/runner.py` — _resolve_adapter, _SANDBOXED_ADAPTERS
-- `core/backend/Dockerfile` — installs claude + codex for worktree (medium-risk) runs
-- `deployments/sandbox/Dockerfile` — sandbox image for high/critical-risk runs
-- `deployments/local/docker-compose.yml` — mounts Docker socket for high-risk container spawning
+- `core/backend/app/runs/sandbox_manager.py` — execution_workspace context manager
+- `core/backend/app/runs/workspace_worktree.py` — workspace_git_worktree (detached git worktree creation)
+- `core/backend/app/runs/worktree_manager.py` — isolated_run_workdir (plain temp dir fallback)
+- `core/backend/app/workspace/root_validation.py` — validate_workspace_root_for_execution
+- `core/backend/app/runs/runtime_policy.py` — validate_file_access_adapter_policy, risk→sandbox mapping
+- `core/backend/app/cli_adapters/executors.py` — LocalExecutor, DockerExecutor
+- `core/backend/Dockerfile` — installs claude + codex for high-risk worktree runs
+- `deployments/sandbox/Dockerfile` — sandbox image for critical-risk one_shot_docker runs
+- `deployments/local/docker-compose.yml` — mounts Docker socket for critical-risk container spawning
 
 ## Related Decisions
 - [0005-desktop-runtime.md](../decisions/0005-desktop-runtime.md)

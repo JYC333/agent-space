@@ -4,7 +4,7 @@ Policy note:
   ``anthropic_messages`` (direct Anthropic Messages API adapter) has been
   intentionally removed from this registry per product policy.
   Anthropic/Claude usage must go through CLI integrations only
-  (``claude_code`` / ``claude_cli`` via ``app.cli_adapters``).
+  (``claude_code`` via ``app.cli_adapters``).
   Do NOT re-add ``anthropic_messages`` or ``anthropic_api`` here.
 """
 

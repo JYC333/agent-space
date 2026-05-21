@@ -15,7 +15,7 @@ Principle:
 
 Policy:
   anthropic_api is NOT a supported adapter type. Anthropic/Claude usage must
-  go through CLI integrations (claude_code / claude_cli) only.
+  go through CLI integrations (claude_code) only.
   Do NOT add anthropic_api or anthropic_messages as downgrade targets.
 
 Decision logic:
@@ -26,7 +26,7 @@ Decision logic:
 
 from dataclasses import dataclass, field
 
-_CLI_ADAPTERS: frozenset[str] = frozenset({"claude_code", "claude_cli", "codex_cli"})
+_CLI_ADAPTERS: frozenset[str] = frozenset({"claude_code", "codex_cli"})
 
 _LIGHTWEIGHT_TASK_TYPES: frozenset[str] = frozenset({
     "summarize",

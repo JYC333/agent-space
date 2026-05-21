@@ -2,13 +2,13 @@ from __future__ import annotations
 """
 CodexCLIAdapter — wraps the `codex` CLI tool via subprocess.
 
-Non-execution support only. Used for:
+Execution via canonical path only. Used for:
   - CLI tool detection (is `codex` installed and reachable?)
-  - Sandbox preparation (writing AGENTS.md context file into worktree/Docker dir)
+  - Sandbox preparation (writing AGENTS.md context file into worktree)
 
-This adapter is NOT registered in app.runtimes.registry and cannot be executed
-through RunExecutionService. To make codex_cli executable canonically, add a
-BaseRuntimeAdapter wrapper in app.runtimes/adapters/.
+This adapter is executed canonically through app.runtimes.adapters.cli_runtime
+(CodexCliRuntimeAdapter → CliRuntimeAdapter.execute). It is not directly
+registered in app.runtimes.registry.
 
 Context injection mirrors ClaudeCLIAdapter:
   With sandbox_dir: ContextCompiler writes AGENTS.md into sandbox_dir.
@@ -65,7 +65,7 @@ class CodexCLIAdapter(AgentAdapter):
 
     def get_credential_spec(self) -> CredentialSpec:
         return CredentialSpec(
-            runtime="codex",
+            runtime="codex_cli",
             required=False,
             default_target_path="/home/agent/.codex",
             supports_read_only=True,
@@ -91,7 +91,7 @@ class CodexCLIAdapter(AgentAdapter):
             from ..memory.context_compiler import ContextCompiler, TargetFormat
             ContextCompiler().compile(
                 context=context,
-                target=TargetFormat.codex,
+                target=TargetFormat.codex_cli,
                 task_goal=prompt,
                 sandbox_dir=self.sandbox_dir,
             )

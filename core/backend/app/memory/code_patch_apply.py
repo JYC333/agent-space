@@ -3,6 +3,19 @@
 File writes are staged through a narrow local file transaction. The proposal
 accept path commits DB state after file replacement; if that DB commit fails,
 callers can roll file changes back from captured preimages.
+
+Schema contract (strict — no backward compatibility):
+  Every replace_file operation must include:
+    op              = "replace_file"
+    path            = non-empty string
+    content         = string
+    preimage_exists = bool (true = file existed at proposal creation time)
+    preimage_sha256 = non-empty string when preimage_exists=true, else null
+
+  preimage_exists=true  → file must currently exist and sha256 must match;
+                          otherwise raises stale_code_patch:preimage_mismatch.
+  preimage_exists=false → file must currently not exist and preimage_sha256 must
+                          be null; otherwise raises stale_code_patch:file_created_after_proposal.
 """
 
 from __future__ import annotations
@@ -97,10 +110,36 @@ class CodePatchFileTransaction:
     def paths(self) -> list[str]:
         return [f.path for f in self._applied]
 
-    def apply_replace(self, *, rel: str, content: str) -> None:
+    def apply_replace(
+        self,
+        *,
+        rel: str,
+        content: str,
+        expected_preimage_sha256: str | None,
+        expected_preimage_exists: bool,
+    ) -> None:
         dest = self._validate_dest(rel)
         data = content.encode("utf-8")
         pre_bytes = dest.read_bytes() if dest.exists() else None
+
+        if expected_preimage_exists:
+            # File must exist and sha256 must match the preimage taken at proposal creation time.
+            current_sha = _sha256(pre_bytes) if pre_bytes is not None else None
+            if current_sha != expected_preimage_sha256:
+                raise CodePatchApplyError(
+                    f"stale_code_patch: preimage_mismatch for {_safe_rel(rel)!r} — "
+                    "the workspace file was modified after this proposal was created. "
+                    "Reject the proposal and re-run the agent to generate a fresh one."
+                )
+        else:
+            # File must not exist — if it does, it was created after the proposal.
+            if pre_bytes is not None:
+                raise CodePatchApplyError(
+                    f"stale_code_patch: file_created_after_proposal for {_safe_rel(rel)!r} — "
+                    "the file did not exist when this proposal was created but now exists. "
+                    "Reject the proposal and re-run the agent to generate a fresh one."
+                )
+
         pre = _FilePreimage(
             rel=rel,
             dest=dest,
@@ -222,21 +261,66 @@ def apply_code_patch_payload(
     policy = PathPolicy()
     tx = CodePatchFileTransaction(root=root, policy=policy)
 
-    for i, op in enumerate(ops):
-        if not isinstance(op, dict):
-            raise CodePatchApplyError(f"operations[{i}] must be an object")
-        kind = op.get("op")
-        if kind != "replace_file":
-            raise CodePatchApplyError(f"unsupported operation {kind!r} (only replace_file is supported)")
-        rel = op.get("path")
-        if not isinstance(rel, str) or not rel.strip():
-            raise CodePatchApplyError(f"operations[{i}].path must be a non-empty string")
-        rel = rel.strip().replace("\\", "/")
+    # Validate and apply all operations inside a single try block so that any
+    # failure (preimage mismatch, file-write error, or validation error) rolls
+    # back ALL previously applied operations before re-raising.  This makes the
+    # entire payload atomic: either every operation lands, or none do.
+    try:
+        for i, op in enumerate(ops):
+            if not isinstance(op, dict):
+                raise CodePatchApplyError(f"operations[{i}] must be an object")
+            kind = op.get("op")
+            if kind != "replace_file":
+                raise CodePatchApplyError(f"unsupported operation {kind!r} (only replace_file is supported)")
+            rel = op.get("path")
+            if not isinstance(rel, str) or not rel.strip():
+                raise CodePatchApplyError(f"operations[{i}].path must be a non-empty string")
+            rel = rel.strip().replace("\\", "/")
 
-        content = op.get("content")
-        if content is not None and not isinstance(content, str):
-            raise CodePatchApplyError(f"operations[{i}].content must be a string when present")
-        tx.apply_replace(rel=rel, content=content if content is not None else "")
+            content = op.get("content")
+            if not isinstance(content, str):
+                raise CodePatchApplyError(f"operations[{i}].content must be a string")
+
+            # preimage_exists is required and must be a real bool.
+            preimage_exists_raw = op.get("preimage_exists")
+            if not isinstance(preimage_exists_raw, bool):
+                raise CodePatchApplyError(
+                    f"operations[{i}].preimage_exists must be a bool (true or false)"
+                )
+            preimage_exists: bool = preimage_exists_raw
+
+            # preimage_sha256 must be consistent with preimage_exists.
+            expected_preimage = op.get("preimage_sha256")
+            if preimage_exists:
+                if not isinstance(expected_preimage, str) or not expected_preimage:
+                    raise CodePatchApplyError(
+                        f"operations[{i}].preimage_sha256 must be a non-empty string when preimage_exists=true"
+                    )
+            else:
+                if expected_preimage is not None:
+                    raise CodePatchApplyError(
+                        f"operations[{i}].preimage_sha256 must be null when preimage_exists=false"
+                    )
+
+            tx.apply_replace(
+                rel=rel,
+                content=content,
+                expected_preimage_sha256=expected_preimage if preimage_exists else None,
+                expected_preimage_exists=preimage_exists,
+            )
+    except CodePatchApplyError:
+        # apply_replace() rolls back internally for file-write failures.
+        # For preimage/validation errors it raises before any write, so prior
+        # successfully applied operations would remain on disk.  Explicitly
+        # rolling back here makes the entire payload atomic.
+        try:
+            tx.rollback()
+        except CodePatchApplyError as rollback_exc:
+            raise CodePatchPartialApplyError(
+                "code_patch apply failed and rollback also failed — "
+                "workspace may be in a partially-modified state"
+            ) from rollback_exc
+        raise
 
     _record_applied_activity(
         db,

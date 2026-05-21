@@ -37,6 +37,45 @@ _BUILTIN_ADAPTERS: dict[str, str] = {
     "echo": "Echo (test)",
 }
 
+# Adapter types that are planned but not yet implemented.
+# These may exist as rows but must be forced to enabled=False and
+# health_status="unimplemented".  Creating/updating one as enabled=True is
+# rejected; RunExecutionService still refuses to run them via
+# adapter_not_implemented error code.
+_PLANNED_UNIMPLEMENTED_ADAPTERS: frozenset[str] = frozenset({
+    "opencode",
+    "gemini_cli",
+    "custom",
+})
+
+
+def _validate_adapter_type(adapter_type: str, *, enabled: bool) -> None:
+    """Raise ValueError if adapter_type is unimplemented and enabled=True.
+
+    Unimplemented planned adapters may only be stored with enabled=False.
+    Completely unknown adapter types (not in registry and not planned) are also
+    rejected to prevent misconfiguration from silently entering the DB.
+    """
+    from ..runtimes.registry import is_adapter_type_implemented
+
+    if is_adapter_type_implemented(adapter_type):
+        return  # implemented — any enabled value is fine
+
+    if adapter_type in _PLANNED_UNIMPLEMENTED_ADAPTERS:
+        if enabled:
+            raise ValueError(
+                f"Adapter type '{adapter_type}' is planned but not yet implemented. "
+                "It may only be stored with enabled=false and health_status='unimplemented'. "
+                "Do not enable unimplemented adapters."
+            )
+        return  # planned, disabled — allowed
+
+    raise ValueError(
+        f"Unknown adapter type '{adapter_type}'. "
+        "Only implemented adapter types (claude_code, codex_cli, echo, capability) "
+        "and planned-but-disabled types (opencode, gemini_cli, custom) are accepted."
+    )
+
 
 class CLIAdapterService:
     def __init__(self, db: Session):
@@ -62,13 +101,25 @@ class CLIAdapterService:
         )
 
     def create(self, data: CLIAdapterConfigCreate, space_id: str) -> RuntimeAdapter:
+        adapter_type = data.adapter_id
+        enabled = data.enabled if data.enabled is not None else True
+
+        # Coerce planned-but-unimplemented adapters to disabled/unimplemented
+        # rather than raising — so the row can exist for reference.
+        if adapter_type in _PLANNED_UNIMPLEMENTED_ADAPTERS:
+            enabled = False
+            health_status = "unimplemented"
+        else:
+            _validate_adapter_type(adapter_type, enabled=enabled)
+            health_status = data.quota_status
+
         config = RuntimeAdapter(
             id=_new_id(),
             space_id=space_id,
-            adapter_id=data.adapter_id,
+            adapter_id=adapter_type,
             display_name=data.display_name,
-            enabled=data.enabled,
-            health_status=data.quota_status,
+            enabled=enabled,
+            health_status=health_status,
         )
         config.executable_path = data.executable_path
         config.default_mode = data.default_mode
@@ -82,7 +133,20 @@ class CLIAdapterService:
         config = self.get(config_id, space_id)
         if not config:
             return None
-        for field, value in data.model_dump(exclude_unset=True).items():
+
+        update_dict = data.model_dump(exclude_unset=True)
+        # adapter_type cannot be changed via CLIAdapterConfigUpdate — use existing row value.
+        adapter_type = config.adapter_type
+        new_enabled = update_dict.get("enabled", config.enabled)
+
+        # Enforce: planned-but-unimplemented adapters may not be enabled.
+        if adapter_type in _PLANNED_UNIMPLEMENTED_ADAPTERS:
+            update_dict["enabled"] = False
+            update_dict["health_status"] = "unimplemented"
+        else:
+            _validate_adapter_type(adapter_type, enabled=bool(new_enabled))
+
+        for field, value in update_dict.items():
             setattr(config, field, value)
         self.db.commit()
         self.db.refresh(config)
@@ -473,7 +537,6 @@ def _get_adapter_instance(adapter_id: str):
     registry = {
         "echo": EchoAgentAdapter,
         "claude_code": ClaudeCLIAdapter,
-        "claude_cli": ClaudeCLIAdapter,
         "codex_cli": CodexCLIAdapter,
     }
     cls = registry.get(adapter_id)

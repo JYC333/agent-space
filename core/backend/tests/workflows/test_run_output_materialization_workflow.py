@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from sqlalchemy import func
@@ -10,6 +11,10 @@ from app.config import settings
 from app.models import Artifact, MemoryEntry, Proposal, Run
 from tests.support import factories
 from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRuntimeConfig
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
@@ -168,7 +173,8 @@ def test_workflow_code_patch_from_run_then_accept_mutates_file(
     )
     disk = Path(tmp_path / "wsroot") / ws.id
     disk.mkdir(parents=True, exist_ok=True)
-    (disk / "note.txt").write_text("V0", encoding="utf-8")
+    original = b"V0"
+    (disk / "note.txt").write_bytes(original)
 
     cfg = FakeRuntimeConfig(
         output_text="",
@@ -181,7 +187,13 @@ def test_workflow_code_patch_from_run_then_accept_mutates_file(
                     "workspace_id": ws.id,
                     "patch": {
                         "operations": [
-                            {"op": "replace_file", "path": "note.txt", "content": "V1"},
+                            {
+                                "op": "replace_file",
+                                "path": "note.txt",
+                                "content": "V1",
+                                "preimage_exists": True,
+                                "preimage_sha256": _sha256(original),
+                            },
                         ]
                     },
                 }

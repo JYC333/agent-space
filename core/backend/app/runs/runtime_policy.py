@@ -16,6 +16,11 @@ from ..models import AgentVersion, Run
 
 _VALID_SANDBOX_LEVELS = frozenset({"none", "dry_run", "worktree", "one_shot_docker"})
 
+# Adapter types that require file-system access and therefore must execute in a
+# worktree sandbox.  Validated before execution so the error surfaces before the
+# adapter is started, not only at runtime.
+_FILE_ACCESS_ADAPTER_TYPES = frozenset({"claude_code", "codex_cli"})
+
 
 @dataclass(frozen=True)
 class RuntimePolicyDecision:
@@ -98,3 +103,56 @@ def validate_adapter_and_provider_or_raise(
                     status_code=403,
                     detail="model_provider_id is not allowed by runtime_policy_json.allowed_model_providers",
                 )
+
+
+def parse_allow_dirty_workspace(policy_json: dict | None) -> bool:
+    """Extract allow_dirty_workspace from runtime_policy_json.
+
+    Returns False when the key is absent.
+    Raises ValueError with error code 'automation_preflight_invalid_runtime_policy'
+    when the key is present but not a bool.
+    """
+    if not policy_json:
+        return False
+    raw = policy_json.get("allow_dirty_workspace")
+    if raw is None:
+        return False
+    if not isinstance(raw, bool):
+        raise ValueError(
+            "automation_preflight_invalid_runtime_policy: "
+            f"runtime_policy_json.allow_dirty_workspace must be a bool, got {type(raw).__name__!r}"
+        )
+    return raw
+
+
+def validate_file_access_adapter_policy(
+    *,
+    adapter_type: str,
+    decision: RuntimePolicyDecision,
+) -> str | None:
+    """Return an error message if a file-access adapter is configured with an unsafe policy.
+
+    CLI adapters such as ``claude_code`` and ``codex_cli`` read and write workspace
+    files, so they must run inside a worktree sandbox (``risk_level=high``).
+    Running them at lower risk levels would execute untrusted file writes directly
+    in the live workspace, bypassing the code_patch review flow.
+
+    Returns a human-readable error string when the combo is unsafe, or ``None``
+    when the policy is acceptable.
+
+    This check fires before the adapter is started so the misconfiguration is
+    caught early rather than failing mid-execution or silently mutating the
+    workspace.
+    """
+    if (
+        adapter_type in _FILE_ACCESS_ADAPTER_TYPES
+        and decision.required_sandbox_level != "worktree"
+    ):
+        return (
+            f"Adapter '{adapter_type}' requires file-system access and must run in a "
+            f"worktree sandbox, but required_sandbox_level='{decision.required_sandbox_level}' "
+            f"(derived from risk_level='{decision.risk_level}'). "
+            "Set risk_level=high in runtime_policy_json to enable worktree isolation for "
+            "file-access adapters."
+        )
+    return None

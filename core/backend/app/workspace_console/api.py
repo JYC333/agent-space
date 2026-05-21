@@ -17,9 +17,9 @@ Endpoints
 Runtime execution
 -----------------
   claude_code — async background task; runs `claude --print` in workspace dir
-  codex       — async background task; runs `codex` in workspace dir
+  codex_cli   — async background task; runs `codex` in workspace dir
 
-  CLI runtimes (claude_code, codex) return status="running" immediately and
+  CLI runtimes (claude_code, codex_cli) return status="running" immediately and
   complete via BackgroundTask. Callers poll GET /sessions/{id} until the status
   changes to "completed" or "failed".
 
@@ -193,7 +193,7 @@ class ConsoleSessionCreate(BaseModel):
 
 _RUNTIME_SPECS: list[dict] = [
     {"id": "claude_code", "name": "Claude Code",  "models": ["claude-sonnet-4-6", "claude-opus-4-7"]},
-    {"id": "codex",       "name": "OpenAI Codex", "models": ["codex-latest"]},
+    {"id": "codex_cli",   "name": "OpenAI Codex", "models": ["codex-latest"]},
 ]
 
 
@@ -202,7 +202,7 @@ def _is_available(runtime: str) -> bool:
         if runtime == "claude_code":
             from ..cli_adapters.claude import ClaudeCLIAdapter
             return ClaudeCLIAdapter().is_available()
-        if runtime == "codex":
+        if runtime == "codex_cli":
             from ..cli_adapters.codex import CodexCLIAdapter
             return CodexCLIAdapter().is_available()
         return False

@@ -13,6 +13,7 @@ from app.runs.runtime_policy import (
     compute_runtime_policy_decision,
     required_sandbox_level_for_risk,
     validate_adapter_and_provider_or_raise,
+    validate_file_access_adapter_policy,
 )
 
 
@@ -78,3 +79,70 @@ def test_validate_provider_denies_when_run_provider_not_allowed():
     with pytest.raises(HTTPException) as ei:
         validate_adapter_and_provider_or_raise(run=run, version=version, policy=policy)
     assert ei.value.status_code == 403
+
+
+# ===========================================================================
+# validate_file_access_adapter_policy — Task 6
+# ===========================================================================
+
+
+def _decision(risk_level: str) -> RuntimePolicyDecision:
+    from app.runs.runtime_policy import required_sandbox_level_for_risk
+    return RuntimePolicyDecision(
+        required_sandbox_level=required_sandbox_level_for_risk(risk_level),
+        risk_level=risk_level,
+        policy_snapshot={},
+    )
+
+
+def test_claude_code_with_low_risk_returns_error_message():
+    msg = validate_file_access_adapter_policy(
+        adapter_type="claude_code",
+        decision=_decision("low"),
+    )
+    assert msg is not None
+    assert "worktree" in msg
+    assert "claude_code" in msg
+
+
+def test_claude_code_with_high_risk_returns_none():
+    msg = validate_file_access_adapter_policy(
+        adapter_type="claude_code",
+        decision=_decision("high"),
+    )
+    assert msg is None
+
+
+def test_codex_cli_with_medium_risk_returns_error_message():
+    msg = validate_file_access_adapter_policy(
+        adapter_type="codex_cli",
+        decision=_decision("medium"),
+    )
+    assert msg is not None
+    assert "codex_cli" in msg
+
+
+def test_codex_cli_with_high_risk_returns_none():
+    msg = validate_file_access_adapter_policy(
+        adapter_type="codex_cli",
+        decision=_decision("high"),
+    )
+    assert msg is None
+
+
+def test_echo_adapter_with_low_risk_returns_none():
+    """Non-file-access adapters can safely use low risk."""
+    msg = validate_file_access_adapter_policy(
+        adapter_type="echo",
+        decision=_decision("low"),
+    )
+    assert msg is None
+
+
+def test_capability_adapter_with_low_risk_returns_none():
+    """Capability adapter is not a file-access adapter."""
+    msg = validate_file_access_adapter_policy(
+        adapter_type="capability",
+        decision=_decision("low"),
+    )
+    assert msg is None

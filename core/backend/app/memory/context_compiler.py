@@ -165,17 +165,17 @@ _FILE_TO_MODULE_DOCS: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 
 class TargetFormat(str, Enum):
-    claude  = "claude"
-    codex   = "codex"
-    cursor  = "cursor"
-    generic = "generic"
-    soul    = "soul"      # identity/persona file for agents that support it
-    prompt  = "prompt"    # generic prompt.md for adapters with no convention
+    claude    = "claude"
+    codex_cli = "codex_cli"
+    cursor    = "cursor"
+    generic   = "generic"
+    soul      = "soul"      # identity/persona file for agents that support it
+    prompt    = "prompt"    # generic prompt.md for adapters with no convention
 
 
 _INSTRUCTION_FILENAME: dict[TargetFormat, str] = {
-    TargetFormat.claude:  "CLAUDE.md",
-    TargetFormat.codex:   "AGENTS.md",
+    TargetFormat.claude:    "CLAUDE.md",
+    TargetFormat.codex_cli: "AGENTS.md",
     TargetFormat.cursor:  ".cursorrules",
     TargetFormat.generic: "CONTEXT.md",
     TargetFormat.soul:    "SOUL.md",

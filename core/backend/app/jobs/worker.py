@@ -29,10 +29,11 @@ from .handlers import get_handler
 
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL: float = 2.0      # seconds between empty-queue polls
-RECLAIM_INTERVAL: float = 120.0  # seconds between stuck-job reclaim sweeps
-STUCK_AFTER: int = 600           # seconds a job may sit in claimed/running before reclaim
-MAX_CONCURRENCY: int = 4         # max parallel jobs per worker
+POLL_INTERVAL: float = 2.0        # seconds between empty-queue polls
+RECLAIM_INTERVAL: float = 120.0   # seconds between stuck-job reclaim sweeps
+STUCK_AFTER: int = 600            # seconds since last heartbeat before reclaim
+MAX_CONCURRENCY: int = 4          # max parallel jobs per worker
+HEARTBEAT_INTERVAL: float = 60.0  # seconds between heartbeat updates while handler runs
 
 # Stable ID for this worker instance (set at module import time)
 WORKER_ID: str = str(ULID())
@@ -45,9 +46,29 @@ async def start_worker(queue: QueueService) -> asyncio.Task:
     """
     # Reset any orphaned jobs left over from a previous crash
     await queue.reclaim_stuck_jobs(STUCK_AFTER)
+    # Recover runs left in "running" state by a previous crash.
+    await asyncio.get_running_loop().run_in_executor(None, _recover_stale_runs)
     task = asyncio.create_task(_worker_loop(queue), name="job-worker")
     log.info("Job worker started (id=%s, concurrency=%d)", WORKER_ID, MAX_CONCURRENCY)
     return task
+
+
+def _recover_stale_runs() -> None:
+    """Recover runs stuck in 'running' status — called once at worker startup."""
+    try:
+        from sqlalchemy.orm import sessionmaker
+        from ..db import engine as _engine
+        Session = sessionmaker(bind=_engine)
+        db = Session()
+        try:
+            from ..runs.run_service import RunService
+            count = RunService(db).recover_stale_runs()
+            if count:
+                log.warning("Stale run recovery: %d run(s) marked failed at startup", count)
+        finally:
+            db.close()
+    except Exception:
+        log.exception("Stale run recovery failed at startup — continuing")
 
 
 async def _worker_loop(queue: QueueService) -> None:
@@ -83,6 +104,24 @@ async def _worker_loop(queue: QueueService) -> None:
             await asyncio.sleep(POLL_INTERVAL)
 
 
+async def _heartbeat_loop(job_id: str, queue: QueueService, interval: float) -> None:
+    """Send periodic heartbeats while a handler is running.
+
+    Cancelled by _run_job when the handler completes.  Each heartbeat updates
+    job.heartbeat_at so reclaim_stuck_jobs knows the job is still alive.
+    Heartbeat failures are logged but never propagate to the handler.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await queue.touch_heartbeat(job_id)
+            log.debug("Heartbeat sent for job %s", job_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("Heartbeat failed for job %s — will retry next interval", job_id)
+
+
 async def _run_job(job, queue: QueueService, sem: asyncio.Semaphore) -> None:
     """Execute one job, update its status, then release the concurrency slot."""
     async def _append_event_aux(event_type: str, message: str, data: dict | None = None) -> None:
@@ -96,6 +135,7 @@ async def _run_job(job, queue: QueueService, sem: asyncio.Semaphore) -> None:
                 event_type,
             )
 
+    hb_task: asyncio.Task | None = None
     try:
         handler = get_handler(job.job_type)
         if handler is None:
@@ -112,6 +152,13 @@ async def _run_job(job, queue: QueueService, sem: asyncio.Semaphore) -> None:
 
         log.info("Executing job %s type=%s attempt=%d", job.id, job.job_type, job.attempts + 1)
 
+        # Start a background heartbeat so reclaim_stuck_jobs does not evict
+        # this job while the handler is legitimately running (e.g. long CLI runs).
+        hb_task = asyncio.create_task(
+            _heartbeat_loop(job.id, queue, HEARTBEAT_INTERVAL),
+            name=f"heartbeat-{job.id}",
+        )
+
         result = await asyncio.get_running_loop().run_in_executor(None, handler, job)
 
         await queue.complete_job(job.id, result if isinstance(result, dict) else None)
@@ -126,4 +173,11 @@ async def _run_job(job, queue: QueueService, sem: asyncio.Semaphore) -> None:
         await queue.fail_job(job.id, str(exc))
         await _append_event_aux("error", f"Job failed: {exc}")
     finally:
+        # Always cancel the heartbeat task regardless of outcome.
+        if hb_task is not None and not hb_task.done():
+            hb_task.cancel()
+            try:
+                await hb_task
+            except (asyncio.CancelledError, Exception):
+                pass
         sem.release()
