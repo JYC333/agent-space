@@ -1465,6 +1465,7 @@ class TaskEvaluation(Base):
     space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
     task_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("tasks.id"), nullable=False, index=True)
     run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=True, index=True)
+    run_evaluation_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
     evaluator_type: Mapped[str] = mapped_column(String(32), nullable=False)
     evaluator_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
     evaluator_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)

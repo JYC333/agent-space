@@ -222,22 +222,29 @@ This document describes current capability lines and known future risks. It is o
 - `ContextSnapshot` runtime-facing metadata — rendered context state at run time
 - Artifact runtime/execution-plane provenance — artifacts carry producing plane and adapter
 
-**Design principle:** External runtime output is evidence, not truth. Long-term changes (memory, WorkspaceProfile, Capability, Policy) must go through proposals and require human approval. `ReflectionProposalBuilder` creates learning proposal candidates from `RunReflection` results. Apply handlers for these proposal types are not yet wired — accepting them raises `UnsupportedProposalTypeError`.
+**Design principle:** External runtime output is evidence, not truth. Long-term changes (memory, WorkspaceProfile, Capability, Policy) must go through proposals and require human approval. `ReflectionProposalBuilder` creates learning proposal candidates from `RunReflection` results.
 
 **Current target loop:**
 ```
 User request
-→ WorkspaceProfile
+→ WorkspaceProfile + ValidationRecipe
 → ContextSnapshot / rendered context
 → ExecutionPlane + RuntimeAdapter
 → Run
 → Artifact / ExternalRunRecord
 → RunEvaluation (deterministic harness layer)
-→ ValidationRecipe
-→ RunReflection  (downstream bridge, not yet wired)
-→ Proposal
-→ approved Memory / WorkspaceProfile / Capability / Policy update
+→ TaskEvaluation (append-only task bridge)
+→ RunReflection  (learning candidate source)
+→ Proposal (pending, requires human review)
+→ approved Task / Memory / WorkspaceProfile / Capability / Policy update
 ```
+
+**Learning apply status:**
+- `follow_up_task` — **implemented**. Accepted proposals create a `Task` row through `ProposalApplyService`. This is the first closed apply path in the learning loop.
+- `memory_update` (from reflection) — proposals created; apply uses the standard `memory_update` handler (target_memory_id required).
+- `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update` — proposals created by `ReflectionProposalBuilder`; accepting them raises `UnsupportedProposalTypeError`. Apply handlers are deferred.
+
+`RunReflection` is not automatically created by `RunEvaluationService` or `TaskEvaluationService`. Automation is not implemented.
 
 **RunEvaluation — canonical deterministic evaluation layer (implemented):**
 
@@ -249,10 +256,9 @@ User request
 - `adapter_started` terminal status counts as adapter completion from the harness perspective.
 - Evaluation never writes Memory, Policy, Proposal, WorkspaceProfile, ValidationRecipe, or Capability.
 
-**Downstream bridge layers (not yet implemented):**
-- `TaskEvaluation` — task-level evaluation derived from run evaluations. Not auto-created.
-- `RunReflection` — structured analysis against validation criteria. Not auto-created from evaluation.
-- LLM-as-judge evaluation — only after deterministic layer is stable and validated in dogfood.
+**Downstream bridge layers:**
+- `TaskEvaluation` — append-only task-level evaluation derived from `RunEvaluation` through `TaskEvaluationService`.
+- `RunReflection` — learning candidate source; populated externally (import, manual entry, or evaluator output). Not automatically created from evaluation.
 - Run Viewer UI — surface for browsing evaluation history per run.
 
 **Next work:**
@@ -270,12 +276,13 @@ User request
 - Separate `ContextBundle` table until one snapshot needs multiple rendered runtime bundles.
 - `ExternalCapability` / `CapabilityExport` until vendor plugin/skill export becomes real.
 - `Automation` / `Trigger` until managed run flow is stable.
+- Apply handlers for `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update` — deferred until dogfood validates payload shape.
 - Full native coding agent loop is not a current priority.
 - Cloud Codex / Claude managed integrations are not current priority.
 - Plugin marketplace is not current priority.
 
 **Risk watch:**
-- Proposal apply handlers are not wired yet; the learning loop does not close.
+- `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update` apply handlers are not wired; those paths in the learning loop remain open.
 - Runtime-facing context quality is unvalidated in real tasks.
 - RunReflection quality is unvalidated in real tasks.
 - WorkspaceProfile and ValidationRecipe usefulness must be validated through dogfooding.

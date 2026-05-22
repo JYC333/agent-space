@@ -955,6 +955,7 @@ def upgrade() -> None:
     sa.Column('space_id', sa.String(length=36), nullable=False),
     sa.Column('task_id', sa.String(length=36), nullable=False),
     sa.Column('run_id', sa.String(length=36), nullable=True),
+    sa.Column('run_evaluation_id', sa.String(length=36), nullable=True),
     sa.Column('evaluator_type', sa.String(length=32), nullable=False),
     sa.Column('evaluator_user_id', sa.String(length=36), nullable=True),
     sa.Column('evaluator_agent_id', sa.String(length=36), nullable=True),
@@ -973,6 +974,7 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['task_id'], ['tasks.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index(op.f('ix_task_evaluations_run_evaluation_id'), 'task_evaluations', ['run_evaluation_id'], unique=False)
     op.create_index(op.f('ix_task_evaluations_run_id'), 'task_evaluations', ['run_id'], unique=False)
     op.create_index(op.f('ix_task_evaluations_space_id'), 'task_evaluations', ['space_id'], unique=False)
     op.create_index(op.f('ix_task_evaluations_task_id'), 'task_evaluations', ['task_id'], unique=False)
@@ -1826,6 +1828,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_task_evaluations_task_id'), table_name='task_evaluations')
     op.drop_index(op.f('ix_task_evaluations_space_id'), table_name='task_evaluations')
     op.drop_index(op.f('ix_task_evaluations_run_id'), table_name='task_evaluations')
+    op.drop_index(op.f('ix_task_evaluations_run_evaluation_id'), table_name='task_evaluations')
     op.drop_table('task_evaluations')
     op.drop_index(op.f('ix_task_dependencies_task_id'), table_name='task_dependencies')
     op.drop_index(op.f('ix_task_dependencies_space_id'), table_name='task_dependencies')

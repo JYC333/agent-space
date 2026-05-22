@@ -56,6 +56,13 @@ def _build_proposal_accept_out(
             result={"approved_egress_review": True},
         )
 
+    if result.task is not None:
+        return ProposalAcceptOut(
+            proposal=prop_out,
+            result_type="follow_up_task",
+            result={"task_id": result.task.id, "title": result.task.title},
+        )
+
     # memory_create, memory_update, memory_archive all surface the MemoryEntry.
     memory = result.memory
     if memory is None:

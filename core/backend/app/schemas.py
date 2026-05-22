@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Generic, Literal, Optional, TypeVar
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ItemT = TypeVar('ItemT')
 
@@ -434,7 +434,7 @@ class ProposalAcceptOut(BaseModel):
     # code_patch_apply — code_patch accepted
     # policy_version   — policy_change accepted
     # egress_review    — metadata-only grant egress review accepted
-    result_type: Literal["memory_entry", "code_patch_apply", "policy_version", "egress_review"]
+    result_type: Literal["memory_entry", "code_patch_apply", "policy_version", "egress_review", "follow_up_task"]
     result: dict[str, Any]
 
 
@@ -863,18 +863,36 @@ class TaskProposalOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TaskEvaluationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evaluator_type: str
+    score: Optional[float] = Field(default=None, ge=0, le=1)
+    confidence: Optional[float] = Field(default=None, ge=0, le=1)
+    summary: Optional[str] = None
+    checklist_json: Optional[dict] = None
+    known_issues_json: Optional[list] = None
+    evidence_artifact_ids: Optional[list] = None
+    recommendation: Optional[str] = None
+    run_id: Optional[str] = None
+
+
 class TaskEvaluationOut(BaseModel):
     id: str
     space_id: str
     task_id: str
-    run_id: Optional[str]
+    run_id: Optional[str] = None
+    run_evaluation_id: Optional[str] = None
     evaluator_type: str
-    evaluator_user_id: Optional[str]
-    evaluator_agent_id: Optional[str]
-    score: Optional[float]
-    confidence: Optional[float]
-    summary: Optional[str]
-    recommendation: Optional[str]
+    evaluator_user_id: Optional[str] = None
+    evaluator_agent_id: Optional[str] = None
+    score: Optional[float] = None
+    confidence: Optional[float] = None
+    summary: Optional[str] = None
+    checklist_json: Optional[dict] = None
+    known_issues_json: Optional[list] = None
+    evidence_artifact_ids: Optional[list] = None
+    recommendation: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

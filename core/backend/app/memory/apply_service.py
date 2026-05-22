@@ -2,8 +2,8 @@ from __future__ import annotations
 """
 ProposalApplyService — the single durable write boundary for accepted proposals.
 
-All normal durable writes to MemoryEntry (create, version, archive) and Policy
-must flow through this service after proposal acceptance.
+All normal durable writes to MemoryEntry (create, version, archive), Policy,
+and Task must flow through this service after proposal acceptance.
 
 Supported proposal types
 ------------------------
@@ -12,6 +12,8 @@ Supported proposal types
   memory_archive  — mark MemoryEntry status=archived (no hard delete)
   policy_change   — create a new Policy version (optionally superseding an old one)
   code_patch      — delegated back to CodePatchProposalApplier (file writes, not memory)
+  egress_review   — metadata-only grant egress review marker
+  follow_up_task  — create a Task row from an accepted follow-up task proposal
 
 Callers
 -------
@@ -25,7 +27,7 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from ..models import MemoryEntry, Policy, Proposal, ProvenanceLink
+from ..models import MemoryEntry, Policy, Proposal, ProvenanceLink, Task
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +67,7 @@ class ApplyResult:
     code_patch_files: Optional[list[dict[str, Any]]] = None
     code_patch_transaction: Optional[Any] = None
     egress_review: bool = False
+    task: Optional[Task] = None
 
 
 def _validate_grant_egress_approval_or_raise(db: Session, proposal: Proposal) -> None:
@@ -488,6 +491,188 @@ class PolicyProposalApplier:
 
 
 # ---------------------------------------------------------------------------
+# FollowUpTaskProposalApplier
+# ---------------------------------------------------------------------------
+
+
+class FollowUpTaskProposalApplier:
+    """Apply follow_up_task proposals by creating exactly one Task row.
+
+    Never writes MemoryEntry, Policy, RunReflection, or any other learning object.
+    Workspace cross-space safety is verified before any write.
+    """
+
+    # Allowed top-level payload keys; anything else is rejected.
+    # "reflection_id" and "provenance_entries" are provenance fields set by
+    # ReflectionProposalBuilder and the general proposal system respectively.
+    _ALLOWED_TOPLEVEL: frozenset[str] = frozenset({"task", "reflection_id", "provenance_entries"})
+
+    _ALLOWED_TASK_FIELDS: frozenset[str] = frozenset({
+        "title",
+        "description",
+        "task_type",
+        "priority",
+        "risk_level",
+        "acceptance_criteria_json",
+        "required_outputs_json",
+        "tags",
+        "metadata_json",
+    })
+
+    _VALID_PRIORITIES: frozenset[str] = frozenset({"low", "normal", "high", "urgent"})
+    _VALID_RISK_LEVELS: frozenset[str] = frozenset({"low", "medium", "high", "critical"})
+    _VALID_VISIBILITIES: frozenset[str] = frozenset({
+        "private", "space_shared", "workspace_shared", "restricted", "public_template"
+    })
+
+    def __init__(self, db: Session) -> None:
+        self._db = db
+
+    def apply(self, proposal: Proposal, *, user_id: str) -> Task:
+        """Validate payload and create exactly one Task row.  Returns the Task ORM object."""
+        from ..models import Workspace
+
+        payload = proposal.payload_json or {}
+
+        if not isinstance(payload, dict):
+            raise ProposalApplyError("follow_up_task payload_json must be a dict")
+
+        unknown_toplevel = set(payload.keys()) - self._ALLOWED_TOPLEVEL
+        if unknown_toplevel:
+            raise ProposalApplyError(
+                f"follow_up_task payload has unknown top-level fields: {sorted(unknown_toplevel)}"
+            )
+
+        task_data = payload.get("task")
+        if task_data is None:
+            raise ProposalApplyError("follow_up_task payload_json is missing required 'task' field")
+        if not isinstance(task_data, dict):
+            raise ProposalApplyError("follow_up_task payload_json['task'] must be a dict")
+
+        unknown_task = set(task_data.keys()) - self._ALLOWED_TASK_FIELDS
+        if unknown_task:
+            raise ProposalApplyError(
+                f"follow_up_task task has unknown fields: {sorted(unknown_task)}"
+            )
+
+        title = task_data.get("title")
+        if title is None:
+            raise ProposalApplyError("follow_up_task task.title is required")
+        if not isinstance(title, str):
+            raise ProposalApplyError("follow_up_task task.title must be a string")
+        title = title.strip()
+        if not title:
+            raise ProposalApplyError("follow_up_task task.title must not be blank")
+
+        description = task_data.get("description")
+        if description is not None and not isinstance(description, str):
+            raise ProposalApplyError("follow_up_task task.description must be a string if provided")
+
+        task_type = task_data.get("task_type")
+        if task_type is not None:
+            if not isinstance(task_type, str) or not task_type.strip():
+                raise ProposalApplyError(
+                    "follow_up_task task.task_type must be a non-empty string if provided"
+                )
+            task_type = task_type.strip()
+        task_type = task_type or "general"
+
+        priority = task_data.get("priority")
+        if priority is not None and priority not in self._VALID_PRIORITIES:
+            raise ProposalApplyError(
+                f"follow_up_task task.priority must be one of {sorted(self._VALID_PRIORITIES)}, "
+                f"got {priority!r}"
+            )
+        priority = priority or "normal"
+
+        risk_level = task_data.get("risk_level")
+        if risk_level is not None and risk_level not in self._VALID_RISK_LEVELS:
+            raise ProposalApplyError(
+                f"follow_up_task task.risk_level must be one of {sorted(self._VALID_RISK_LEVELS)}, "
+                f"got {risk_level!r}"
+            )
+        risk_level = risk_level or "low"
+
+        acceptance_criteria = task_data.get("acceptance_criteria_json")
+        if acceptance_criteria is not None and not isinstance(acceptance_criteria, dict):
+            raise ProposalApplyError(
+                "follow_up_task task.acceptance_criteria_json must be a dict if provided"
+            )
+
+        required_outputs = task_data.get("required_outputs_json")
+        if required_outputs is not None and not isinstance(required_outputs, list):
+            raise ProposalApplyError(
+                "follow_up_task task.required_outputs_json must be a list if provided"
+            )
+
+        tags = task_data.get("tags")
+        if tags is not None:
+            if not isinstance(tags, list):
+                raise ProposalApplyError("follow_up_task task.tags must be a list if provided")
+            if not all(isinstance(t, str) for t in tags):
+                raise ProposalApplyError("follow_up_task task.tags must be a list of strings")
+
+        extra_metadata = task_data.get("metadata_json")
+        if extra_metadata is not None and not isinstance(extra_metadata, dict):
+            raise ProposalApplyError(
+                "follow_up_task task.metadata_json must be a dict if provided"
+            )
+
+        # Workspace cross-space safety: verify the workspace belongs to this space.
+        workspace_id = proposal.workspace_id
+        if workspace_id:
+            ws = (
+                self._db.query(Workspace)
+                .filter(
+                    Workspace.id == workspace_id,
+                    Workspace.space_id == proposal.space_id,
+                )
+                .first()
+            )
+            if ws is None:
+                raise ProposalApplyError(
+                    f"workspace {workspace_id!r} not found in space {proposal.space_id!r}"
+                )
+
+        # Visibility inherits from the proposal when valid; otherwise defaults to space_shared.
+        proposal_vis = getattr(proposal, "visibility", None) or "space_shared"
+        visibility = proposal_vis if proposal_vis in self._VALID_VISIBILITIES else "space_shared"
+
+        # Merge caller metadata under standardised provenance keys.
+        reflection_id = payload.get("reflection_id")
+        merged_meta: dict[str, Any] = dict(extra_metadata or {})
+        merged_meta.update({
+            "source": "follow_up_task_proposal",
+            "proposal_id": proposal.id,
+            "created_from_proposal_type": "follow_up_task",
+        })
+        if reflection_id:
+            merged_meta["reflection_id"] = reflection_id
+
+        task_row = Task(
+            space_id=proposal.space_id,
+            workspace_id=workspace_id,
+            title=title,
+            description=description,
+            task_type=task_type,
+            status="inbox",
+            priority=priority,
+            risk_level=risk_level,
+            visibility=visibility,
+            created_by_user_id=user_id,
+            source_proposal_id=proposal.id,
+            source_run_id=proposal.created_by_run_id,
+            acceptance_criteria_json=acceptance_criteria,
+            required_outputs_json=required_outputs,
+            tags=tags,
+            metadata_json=merged_meta,
+        )
+        self._db.add(task_row)
+        self._db.flush()
+        return task_row
+
+
+# ---------------------------------------------------------------------------
 # ProposalApplyService — central dispatch
 # ---------------------------------------------------------------------------
 
@@ -499,6 +684,7 @@ _SUPPORTED_TYPES = frozenset({
     "policy_change",
     "code_patch",
     "egress_review",
+    "follow_up_task",
 })
 
 
@@ -521,6 +707,7 @@ class ProposalApplyService:
         self._db = db
         self._memory_applier = MemoryProposalApplier(db)
         self._policy_applier = PolicyProposalApplier(db)
+        self._follow_up_task_applier = FollowUpTaskProposalApplier(db)
 
     @staticmethod
     def supported_types() -> frozenset[str]:
@@ -689,6 +876,10 @@ class ProposalApplyService:
                 code_patch_files=files,
                 code_patch_transaction=patch_result.transaction,
             )
+
+        if ptype == "follow_up_task":
+            task = self._follow_up_task_applier.apply(proposal, user_id=user_id)
+            return ApplyResult(proposal=proposal, task=task)
 
         raise ProposalApplyError(f"unhandled proposal type: {ptype!r}")
 

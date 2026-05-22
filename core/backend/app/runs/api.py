@@ -29,6 +29,7 @@ from ..schemas import (
     RunOut,
     RunStatusOut,
     RunStepOut,
+    TaskEvaluationOut,
 )
 from ..auth import get_identity
 from ..artifacts.service import artifact_to_out
@@ -41,6 +42,8 @@ from .run_service import RunService
 from .removed_runtime_token import is_obsolete_runtime_override_token
 from .steps import list_run_steps
 from .evaluation import RunEvaluationService
+from ..tasks.evaluation_errors import TaskEvaluationNotFoundError
+from ..tasks.evaluation_service import TaskEvaluationService
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -297,6 +300,32 @@ def get_run_evaluation(
             detail=f"No evaluation found for run '{run_id}'. POST /runs/{run_id}/evaluate first.",
         )
     return evaluation
+
+
+@router.post("/{run_id}/evaluation/task", response_model=TaskEvaluationOut, status_code=201)
+def create_task_evaluation_for_run(
+    run_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, _ = ids
+    evaluation = RunEvaluationService(db).get_latest(run_id, space_id=space_id)
+    if not evaluation:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No evaluation found for run '{run_id}'. POST /runs/{run_id}/evaluate first.",
+        )
+    try:
+        row = TaskEvaluationService(db).create_from_run_evaluation(
+            evaluation.id,
+            space_id=space_id,
+        )
+        db.commit()
+    except TaskEvaluationNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    db.refresh(row)
+    return TaskEvaluationOut.model_validate(row)
 
 
 @router.get("/{run_id}/evaluations", response_model=list[RunEvaluationOut])

@@ -573,6 +573,10 @@ export type ProposalAcceptOut = {
   proposal: Proposal
   result_type: 'egress_review'
   result: { approved_egress_review: boolean }
+} | {
+  proposal: Proposal
+  result_type: 'follow_up_task'
+  result: { task_id: string; title: string }
 }
 
 export interface PersonalMemoryGrantSafeMemoryFilter {

@@ -441,18 +441,22 @@ def create_test_proposal(
     commit: bool = False,
 ) -> Proposal:
     now = _utcnow()
-    base_payload: dict[str, Any] = {
-        "operation": "create",
-        "proposed_content": "proposed text",
-        "memory_type": "semantic",
-        "target_scope": "agent",
-        "target_namespace": "agent.test",
-        "target_visibility": "space_shared",
-        "sensitivity_level": "normal",
-    }
-    merged = {**base_payload, **(payload_json or {})}
     uid = created_by_user_id or ""
-    if proposal_type in ("memory_create", "memory_update", "memory_archive"):
+
+    # Memory-specific base payload only applies to memory and policy proposal types.
+    # Other proposal types (follow_up_task, code_patch, etc.) start from an empty base
+    # so caller-supplied payload_json is not polluted with memory fields.
+    if proposal_type in ("memory_create", "memory_update", "memory_archive", "policy_change"):
+        base_payload: dict[str, Any] = {
+            "operation": "create",
+            "proposed_content": "proposed text",
+            "memory_type": "semantic",
+            "target_scope": "agent",
+            "target_namespace": "agent.test",
+            "target_visibility": "space_shared",
+            "sensitivity_level": "normal",
+        }
+        merged = {**base_payload, **(payload_json or {})}
         if "provenance_entries" not in merged:
             merged["provenance_entries"] = [
                 {
@@ -462,16 +466,8 @@ def create_test_proposal(
                     "evidence_json": {"origin": "test_factory"},
                 }
             ]
-    if proposal_type == "policy_change":
-        if "provenance_entries" not in merged:
-            merged["provenance_entries"] = [
-                {
-                    "source_type": "user_confirmation",
-                    "source_id": uid,
-                    "source_trust": "user_confirmed",
-                    "evidence_json": {"origin": "test_factory"},
-                }
-            ]
+    else:
+        merged = dict(payload_json or {})
     row = Proposal(
         id=_new_id(),
         space_id=space_id,

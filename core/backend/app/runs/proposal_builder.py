@@ -13,18 +13,21 @@ Proposal types created here:
   validation_recipe_update  — candidate from reflection.validation_candidates
   capability_update         — candidate from reflection.capability_candidates
   policy_update             — candidate from reflection.policy_candidates
-  follow_up_task            — candidate from reflection.follow_up_tasks
+  follow_up_task            — candidate from reflection.follow_up_tasks (apply supported)
 
-Apply handlers for these types are not yet wired. Proposals appear in the
-review inbox as pending; attempting to accept them will raise
-UnsupportedProposalTypeError until apply handlers are registered.
+Apply handlers for workspace_profile_update, validation_recipe_update,
+capability_update, and policy_update are not implemented. Accepting those
+proposal types raises UnsupportedProposalTypeError.
+
+follow_up_task is fully supported: accepted proposals create a Task row via
+ProposalApplyService.
 """
 
 import logging
 from ulid import ULID
 from sqlalchemy.orm import Session
 
-from ..models import Proposal, RunReflection
+from ..models import Proposal, Run, RunReflection
 
 log = logging.getLogger(__name__)
 
@@ -43,11 +46,13 @@ def _build_proposal(
     title: str,
     summary: str,
     payload: dict,
+    created_by_user_id: str | None = None,
 ) -> Proposal:
     return Proposal(
         id=_new_id(),
         space_id=space_id,
         created_by_run_id=run_id,
+        created_by_user_id=created_by_user_id,
         proposal_type=proposal_type,
         status="pending",
         risk_level="low",
@@ -93,7 +98,21 @@ class ReflectionProposalBuilder:
         Returns the list of created Proposal rows (may be empty).
         """
         refl = self._get_reflection(reflection_id, space_id)
-        run_id = refl.run_id
+
+        run = (
+            self.db.query(Run)
+            .filter(Run.id == refl.run_id, Run.space_id == space_id)
+            .first()
+        )
+        if not run:
+            raise ValueError(
+                f"Source Run '{refl.run_id}' not found in space '{space_id}'"
+            )
+
+        run_id = run.id
+        # Agent-only/source-userless runs intentionally produce proposals without user reviewer
+        # ownership; accept remains unavailable until a reviewer assignment model exists.
+        reviewer_user_id = run.instructed_by_user_id
         created: list[Proposal] = []
 
         # -- memory candidates ------------------------------------------------
@@ -108,6 +127,7 @@ class ReflectionProposalBuilder:
                 title=title,
                 summary=candidate.get("rationale") or "Memory candidate extracted from run reflection.",
                 payload={"candidate": candidate},
+                created_by_user_id=reviewer_user_id,
             )
             self.db.add(p)
             created.append(p)
@@ -129,6 +149,7 @@ class ReflectionProposalBuilder:
                     "reusable_rules": reusable_rules,
                     "reusable_commands": refl.reusable_commands_json or [],
                 },
+                created_by_user_id=reviewer_user_id,
             )
             self.db.add(p)
             created.append(p)
@@ -145,6 +166,7 @@ class ReflectionProposalBuilder:
                 title=title,
                 summary=candidate.get("rationale") or "Validation recipe candidate from run reflection.",
                 payload={"candidate": candidate},
+                created_by_user_id=reviewer_user_id,
             )
             self.db.add(p)
             created.append(p)
@@ -161,6 +183,7 @@ class ReflectionProposalBuilder:
                 title=title,
                 summary=candidate.get("rationale") or "Capability candidate from run reflection.",
                 payload={"candidate": candidate},
+                created_by_user_id=reviewer_user_id,
             )
             self.db.add(p)
             created.append(p)
@@ -177,22 +200,38 @@ class ReflectionProposalBuilder:
                 title=title,
                 summary=candidate.get("rationale") or "Policy candidate from run reflection.",
                 payload={"candidate": candidate},
+                created_by_user_id=reviewer_user_id,
             )
             self.db.add(p)
             created.append(p)
 
         # -- follow-up tasks -------------------------------------------------
         for i, task in enumerate(refl.follow_up_tasks_json or []):
-            title = task.get("title") or f"Follow-up task {i+1} from run {run_id[:8]}"
+            if not isinstance(task, dict):
+                raise ValueError(
+                    f"follow_up_tasks_json item {i} must be a dict, got {type(task).__name__!r}"
+                )
+            # Normalize the payload to the canonical shape expected by
+            # FollowUpTaskProposalApplier. task.title must be a non-empty
+            # string; fall back to a generated title if missing or blank.
+            task_payload = dict(task)
+            raw_title = task_payload.get("title")
+            canonical_title = (
+                raw_title.strip()
+                if isinstance(raw_title, str) and raw_title.strip()
+                else f"Follow-up task {i+1} from run {run_id[:8]}"
+            )
+            task_payload["title"] = canonical_title
             p = _build_proposal(
                 space_id=space_id,
                 run_id=run_id,
                 reflection_id=reflection_id,
                 workspace_id=workspace_id,
                 proposal_type="follow_up_task",
-                title=title,
-                summary=task.get("description") or "Follow-up task from run reflection.",
-                payload={"task": task},
+                title=canonical_title,
+                summary=task_payload.get("description") or "Follow-up task from run reflection.",
+                payload={"task": task_payload},
+                created_by_user_id=reviewer_user_id,
             )
             self.db.add(p)
             created.append(p)

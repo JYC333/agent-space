@@ -2,18 +2,21 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.auth.api_key import get_identity
 from app.db import get_db
 from app.participation.service import try_record_participation
+from app.proposals.read_model import proposal_to_summary_out
 from app.runs.read_model import run_to_out
 from app.schemas import (
     Page,
     RunOut,
     TaskArtifactOut,
     TaskCreate,
+    TaskEvaluationCreate,
+    TaskEvaluationOut,
     TaskOut,
     TaskProposalOut,
     TaskRunCreateBody,
@@ -23,6 +26,8 @@ from app.schemas import (
 )
 
 from .board_api import router as board_router
+from .evaluation_errors import TaskEvaluationInvalidRequestError, TaskEvaluationNotFoundError
+from .evaluation_service import TaskEvaluationService
 from .service import TaskService
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -161,3 +166,48 @@ def list_task_proposals(
             )
         )
     return Page(items=out, total=total, limit=limit, offset=offset)
+
+
+@router.get("/{task_id}/evaluations", response_model=Page[TaskEvaluationOut])
+def list_task_evaluations(
+    task_id: str,
+    limit: int = Query(50, le=200),
+    offset: int = Query(0),
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, user_id = ids
+    try:
+        total, rows = TaskEvaluationService(db).list_task_evaluations(
+            task_id, space_id, user_id=user_id, limit=limit, offset=offset
+        )
+    except TaskEvaluationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Page(
+        items=[TaskEvaluationOut.model_validate(r) for r in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/{task_id}/evaluations", response_model=TaskEvaluationOut, status_code=201)
+def create_task_evaluation(
+    task_id: str,
+    data: TaskEvaluationCreate = Body(...),
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, user_id = ids
+    try:
+        row = TaskEvaluationService(db).create_manual_task_evaluation(
+            task_id, space_id, user_id, data
+        )
+    except TaskEvaluationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TaskEvaluationInvalidRequestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(row)
+    return TaskEvaluationOut.model_validate(row)
+

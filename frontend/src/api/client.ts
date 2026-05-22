@@ -91,7 +91,6 @@ async function request<T = unknown>(method: string, path: string, body?: unknown
 const get   = <T>(path: string, options?: RequestOptions)                => request<T>('GET',    path, undefined, options)
 const post  = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('POST',   path, body, options)
 const patch = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PATCH',  path, body, options)
-const put   = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PUT',    path, body, options)
 const del   = <T>(path: string, options?: RequestOptions)                => request<T>('DELETE', path, undefined, options)
 
 // ── Memory ────────────────────────────────────────────────────────────────

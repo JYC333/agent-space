@@ -5,9 +5,8 @@ Approval workflow. Durable memory and code changes must go through a Proposal be
 
 ## Owns
 - `Proposal` model (generalized, any type)
-- `ApprovalEvent`, `ProposalArtifact`
+- `ProposalApproval` — egress_granting_user approval gate (MVP: this approval type only)
 - `Artifact` (persistent output of agent runs)
-- `Approval` (per-item approval record)
 - `ProposalApplyService` — validates source trust, writes provenance links, dispatches to type-specific applier
 - `SourceMonitoringService` — gates semantic/policy acceptance by source trust
 
@@ -16,7 +15,7 @@ Approval workflow. Durable memory and code changes must go through a Proposal be
 ```
 Proposal:
   id, space_id, workspace_id
-  proposal_type (memory_create|memory_update|memory_archive|policy_change|code_patch)
+  proposal_type (memory_create|memory_update|memory_archive|policy_change|code_patch|egress_review|follow_up_task)
   title, summary, rationale, payload_json
   risk_level (low|medium|high|critical)
   status (pending|accepted|rejected|superseded|expired)
@@ -30,10 +29,11 @@ Proposal:
     source_evidence, sensitivity_level
     owner_user_id, subject_user_id, selected_user_ids
 
-ApprovalEvent:
-  proposal_id, user_id
-  decision (accepted|rejected|requested_changes)
-  comment, created_at
+ProposalApproval:
+  id, proposal_id, approval_type ('egress_granting_user')
+  approver_user_id, grant_id, target_space_id
+  status (approved|revoked)
+  metadata_json, created_at, revoked_at
 ```
 
 ## Main Flow
@@ -46,7 +46,7 @@ ApprovalEvent:
    - Enforces `SourceMonitoringService` for semantic/policy types
    - Writes `ProvenanceLink` rows for accepted memory/policy changes
    - Dispatches to type-specific applier (`MemoryUpdateProposalApplier`, `PolicyChangeApplier`, etc.)
-4. `ApprovalEvent` created; durable write completes
+4. `proposal.status = "accepted"`, `decided_at` set, commit — durable write completes. No separate approval-event row is created for normal accept/reject. `ProposalApproval` rows are a distinct gate for `egress_review` proposals only (written via `/proposals/{id}/approvals/egress-granting-user`).
 
 ## `accept_context` Values
 

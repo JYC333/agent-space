@@ -140,17 +140,72 @@ Note: `trajectory_status` does not imply `failure_layer`. A run can be `outcome_
 ### What evaluation does NOT do
 
 - Does not write MemoryEntry, Policy, Proposal, Capability, WorkspaceProfile, or ValidationRecipe.
-- Does not create TaskEvaluation or RunReflection (those are downstream bridge layers).
+- `RunEvaluationService` does not create TaskEvaluation or RunReflection; task-level evaluation is created through `TaskEvaluationService`.
 - Does not mutate Run, Artifact, or Proposal rows.
 - Does not auto-apply any Proposal.
 
-### Future work
+## TaskEvaluation — Task-Level Evaluation Bridge
+
+`TaskEvaluation` records task-level evaluation results. It is downstream of `RunEvaluation` and populated via `TaskEvaluationService`.
+
+### Evaluation layers
+
+| Layer | Class | Scope | Append-only |
+|---|---|---|---|
+| Harness | `RunEvaluation` | Per-Run, deterministic, harness-boundary evidence | Yes |
+| Task bridge | `TaskEvaluation` | Per-Task, mapped from RunEvaluation | Yes |
+
+### Design principles
+
+- **Append-only.** Each `TaskEvaluationService` call creates a new row. Old rows are never overwritten or deleted.
+- **Task ↔ Run source of truth is `TaskRun`.** `Run.task_id` is a denormalized shortcut only. All task-run linkage checks use `TaskRun` rows.
+- **RunEvaluation bridge.** `TaskEvaluationService.create_from_run_evaluation()` maps an existing `RunEvaluation` to a new `TaskEvaluation` row.
+- **Does not mutate Task.status.**
+- **Does not write MemoryEntry, Policy, Proposal, RunReflection, or any learning object.**
+- **API bridge.** `POST /runs/{id}/evaluation/task` uses the latest `RunEvaluation` for the run and creates the task-level bridge row.
+- **ValidationRecipe is an input/criteria source.** It flows in at the top of the execution loop alongside `WorkspaceProfile` and informs `RunEvaluation` classification. It is not downstream of `TaskEvaluation`.
+
+### Evidence artifact linkage rule
+
+| Creation path | Evidence source | TaskArtifact required |
+|---|---|---|
+| Bridge (`create_from_run_evaluation`) | Artifacts linked to the evaluated Run via `Artifact.run_id` | No |
+| Manual (`create_manual_task_evaluation`) | Caller-supplied `evidence_artifact_ids` | Yes — all IDs must be linked through `TaskArtifact` |
+
+Bridge rows do not create `TaskArtifact` rows as a side effect.
+
+### Deterministic mapping from RunEvaluation.outcome_status
+
+| outcome_status | score | recommendation | confidence |
+|---|---|---|---|
+| `passed` | 1.0 | `accept` | 1.0 |
+| `partial` | 0.5 | `review` | 0.7 |
+| `failed` | 0.0 | `retry` | 1.0 |
+| `unknown` | null | `needs_evidence` | 0.3 |
+
+`evaluator_type` is always `run_evaluation_bridge` for bridge-created rows.
+
+### RunReflection
+
+`RunReflection` is not automatically created by `RunEvaluationService` or `TaskEvaluationService`. It is populated externally (import, manual entry, or future evaluator output) and acts as the source for `ReflectionProposalBuilder`.
+
+### Learning Loop Apply Path
+
+`ReflectionProposalBuilder` creates pending proposal candidates from a `RunReflection`. Accepted proposals are applied through `ProposalApplyService`.
+
+**Supported apply types (from reflection):**
+- `follow_up_task` — accepted proposal creates a `Task` row. This is the first low-risk learning apply path.
+
+**Unsupported apply types (remain pending-only):**
+- `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update` — accepted proposals raise `UnsupportedProposalTypeError`.
+
+Automation is not implemented. No proposal type auto-applies without user acceptance.
+
+### Future Work
 
 - Richer trajectory evidence events per step.
-- Task-level evaluation bridge (TaskEvaluation).
-- Run reflection bridge (RunReflection).
-- LLM-as-judge layer, only after deterministic layer is stable.
 - Run Viewer UI.
+- Apply handlers for `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update`.
 
 ## What Is Intentionally Not Modeled Yet
 

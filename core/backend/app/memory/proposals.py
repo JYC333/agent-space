@@ -9,6 +9,7 @@ Supported proposal types for accept():
   policy_change   — create / supersede a Policy version
   code_patch      — apply patch to workspace files
   egress_review   — metadata-only grant egress review marker
+  follow_up_task  — create a Task row via ProposalApplyService
 """
 
 from dataclasses import dataclass
@@ -21,7 +22,7 @@ from sqlalchemy import and_, case, func, not_, or_
 from sqlalchemy.orm.attributes import flag_modified
 
 from ..db_uow import UnitOfWork
-from ..models import MemoryEntry, Policy, Proposal, Run, Workspace
+from ..models import MemoryEntry, Policy, Proposal, Run, Task, Workspace
 from ..param_binding import duplicate_mapper
 from ..projects.service import assert_project_in_space
 from ..schemas import MemoryCreate
@@ -34,7 +35,6 @@ from .proposal_payload import (
 _ALLOWED_URGENCY = frozenset({"low", "normal", "high", "critical"})
 
 # All proposal types whose accept() path is handled by ProposalApplyService.
-# Extend here when new types are added in future phases.
 _SUPPORTED_ACCEPT_TYPES = frozenset({
     "memory_create",
     "memory_update",
@@ -42,6 +42,7 @@ _SUPPORTED_ACCEPT_TYPES = frozenset({
     "policy_change",
     "code_patch",
     "egress_review",
+    "follow_up_task",
 })
 
 
@@ -62,6 +63,7 @@ class ProposalAcceptResult:
     policy: Optional[Policy] = None
     updated_paths: Optional[list[str]] = None
     egress_review: bool = False
+    task: Optional[Task] = None
 
 
 # ---------------------------------------------------------------------------
@@ -868,6 +870,7 @@ class ProposalService:
             policy=result.policy,
             updated_paths=result.updated_paths,
             egress_review=result.egress_review,
+            task=result.task,
         )
 
     def reject(
