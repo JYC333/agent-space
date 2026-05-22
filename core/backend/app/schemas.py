@@ -1240,6 +1240,31 @@ class RunStepOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# RunEvaluation
+# ---------------------------------------------------------------------------
+
+
+class RunEvaluationOut(BaseModel):
+    """Serialized output for a RunEvaluation row (append-only)."""
+
+    id: str
+    space_id: str
+    run_id: str
+    evaluator_type: str
+    evaluator_version: str
+    outcome_status: str
+    failure_layer: Optional[str] = None
+    failure_reason_code: Optional[str] = None
+    trajectory_status: str
+    evidence_json: Optional[dict] = None
+    rule_trace_json: Optional[list] = None
+    notes: Optional[str] = None
+    evaluated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
 # Project
 # ---------------------------------------------------------------------------
 

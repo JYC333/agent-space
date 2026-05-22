@@ -25,6 +25,7 @@ from ..schemas import (
     ArtifactOut,
     Page,
     ProposalOut,
+    RunEvaluationOut,
     RunOut,
     RunStatusOut,
     RunStepOut,
@@ -39,6 +40,7 @@ from .read_model import run_to_out
 from .run_service import RunService
 from .removed_runtime_token import is_obsolete_runtime_override_token
 from .steps import list_run_steps
+from .evaluation import RunEvaluationService
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -258,3 +260,51 @@ def list_runs(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return [run_to_out(db, r) for r in runs]
+
+
+@router.post("/{run_id}/evaluate", response_model=RunEvaluationOut)
+def evaluate_run(
+    run_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    """Evaluate a Run using deterministic harness-level evidence.
+
+    Creates a new RunEvaluation row. Existing evaluations are never deleted.
+    The run must belong to the current space.
+    """
+    space_id, _ = ids
+    try:
+        evaluation = RunEvaluationService(db).evaluate(run_id, space_id=space_id)
+        db.commit()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return evaluation
+
+
+@router.get("/{run_id}/evaluation", response_model=RunEvaluationOut)
+def get_run_evaluation(
+    run_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    """Return the latest evaluation for a Run, or 404 if not yet evaluated."""
+    space_id, _ = ids
+    evaluation = RunEvaluationService(db).get_latest(run_id, space_id=space_id)
+    if not evaluation:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No evaluation found for run '{run_id}'. POST /runs/{run_id}/evaluate first.",
+        )
+    return evaluation
+
+
+@router.get("/{run_id}/evaluations", response_model=list[RunEvaluationOut])
+def list_run_evaluations(
+    run_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    """Return all evaluations for a Run, newest first."""
+    space_id, _ = ids
+    return RunEvaluationService(db).list_for_run(run_id, space_id=space_id)

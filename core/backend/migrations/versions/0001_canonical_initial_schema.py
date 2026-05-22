@@ -1515,6 +1515,34 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_run_reflections_space_id'), 'run_reflections', ['space_id'], unique=False)
     op.create_index(op.f('ix_run_reflections_run_id'), 'run_reflections', ['run_id'], unique=False)
+    # run_evaluations: append-only deterministic harness-level evaluation of a completed run.
+    # Each evaluate() call creates a new row; existing rows are never deleted or overwritten.
+    op.create_table('run_evaluations',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('run_id', sa.String(length=36), nullable=False),
+    sa.Column('evaluator_type', sa.String(length=64), nullable=False, server_default='deterministic_harness'),
+    sa.Column('evaluator_version', sa.String(length=64), nullable=False, server_default='harness_eval.v1'),
+    sa.Column('outcome_status', sa.String(length=32), nullable=False),
+    sa.Column('failure_layer', sa.String(length=32), nullable=True),
+    sa.Column('failure_reason_code', sa.String(length=128), nullable=True),
+    sa.Column('trajectory_status', sa.String(length=32), nullable=False),
+    sa.Column('evidence_json', sa.JSON(), nullable=True),
+    sa.Column('rule_trace_json', sa.JSON(), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('evaluated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("outcome_status in ('passed', 'failed', 'partial', 'unknown')", name='ck_run_evaluations_outcome_status'),
+    sa.CheckConstraint("failure_layer is null or failure_layer in ('context', 'sandbox', 'runtime', 'tool', 'validation', 'policy', 'task_spec', 'orchestration', 'evaluator', 'unknown')", name='ck_run_evaluations_failure_layer'),
+    sa.CheckConstraint("trajectory_status in ('acceptable', 'incomplete', 'unsafe', 'insufficient_evidence')", name='ck_run_evaluations_trajectory_status'),
+    sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index(op.f('ix_run_evaluations_space_id'), 'run_evaluations', ['space_id'], unique=False)
+    op.create_index(op.f('ix_run_evaluations_run_id'), 'run_evaluations', ['run_id'], unique=False)
+    op.create_index(op.f('ix_run_evaluations_evaluated_at'), 'run_evaluations', ['evaluated_at'], unique=False)
+    op.create_index(op.f('ix_run_evaluations_evaluator_version'), 'run_evaluations', ['evaluator_version'], unique=False)
+    op.create_index('ix_run_evaluations_run_id_evaluated_at', 'run_evaluations', ['run_id', 'evaluated_at'], unique=False)
     # runtime_tool_bindings: explicit authorisation for external tools/plugins/skills/MCP per scope.
     op.create_table('runtime_tool_bindings',
     sa.Column('id', sa.String(length=36), nullable=False),
@@ -1673,6 +1701,9 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_runtime_tool_bindings_workspace_id'), table_name='runtime_tool_bindings')
     op.drop_index(op.f('ix_runtime_tool_bindings_space_id'), table_name='runtime_tool_bindings')
     op.drop_table('runtime_tool_bindings')
+    op.drop_index(op.f('ix_run_evaluations_run_id'), table_name='run_evaluations')
+    op.drop_index(op.f('ix_run_evaluations_space_id'), table_name='run_evaluations')
+    op.drop_table('run_evaluations')
     op.drop_index(op.f('ix_run_reflections_run_id'), table_name='run_reflections')
     op.drop_index(op.f('ix_run_reflections_space_id'), table_name='run_reflections')
     op.drop_table('run_reflections')

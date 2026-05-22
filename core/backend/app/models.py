@@ -921,6 +921,9 @@ class Run(Base):
     execution_plane: Mapped[Optional[ExecutionPlane]] = relationship("ExecutionPlane", foreign_keys=[execution_plane_id])
     external_run_records: Mapped[list["ExternalRunRecord"]] = relationship("ExternalRunRecord", back_populates="run")
     run_reflections: Mapped[list["RunReflection"]] = relationship("RunReflection", back_populates="run")
+    evaluations: Mapped[list["RunEvaluation"]] = relationship(
+        "RunEvaluation", back_populates="run", order_by="RunEvaluation.evaluated_at"
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -2122,6 +2125,55 @@ class RunReflection(Base):
         CheckConstraint(
             "source in ('native', 'external_import', 'manual', 'evaluator')",
             name="ck_run_reflections_source",
+        ),
+    )
+
+
+class RunEvaluation(Base):
+    """Deterministic harness-level evaluation of a completed Run.
+
+    Append-only: each call to RunEvaluationService.evaluate() creates a new row.
+    Existing evaluations are never deleted or overwritten. GET latest returns the
+    most recent evaluation for a run. This preserves classifier-version history
+    and auditability.
+
+    Uses only evidence observable at the harness boundary: Run status/error/output,
+    ordered RunSteps, ContextSnapshot metadata, Artifacts, Proposals, ValidationRecipe,
+    and linked Task/TaskRun. Never uses LLM-as-judge. Never auto-applies proposals.
+    """
+
+    __tablename__ = "run_evaluations"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=False, index=True)
+    evaluator_type: Mapped[str] = mapped_column(String(64), nullable=False, default="deterministic_harness")
+    evaluator_version: Mapped[str] = mapped_column(String(64), nullable=False, default="harness_eval.v1", index=True)
+    outcome_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    failure_layer: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    failure_reason_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    trajectory_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    evidence_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    rule_trace_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, index=True)
+
+    run: Mapped["Run"] = relationship("Run", foreign_keys=[run_id], back_populates="evaluations")
+
+    __table_args__ = (
+        CheckConstraint(
+            "outcome_status in ('passed', 'failed', 'partial', 'unknown')",
+            name="ck_run_evaluations_outcome_status",
+        ),
+        CheckConstraint(
+            "failure_layer is null or failure_layer in ("
+            "'context', 'sandbox', 'runtime', 'tool', 'validation', "
+            "'policy', 'task_spec', 'orchestration', 'evaluator', 'unknown')",
+            name="ck_run_evaluations_failure_layer",
+        ),
+        CheckConstraint(
+            "trajectory_status in ('acceptable', 'incomplete', 'unsafe', 'insufficient_evidence')",
+            name="ck_run_evaluations_trajectory_status",
         ),
     )
 

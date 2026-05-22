@@ -81,6 +81,77 @@ RunSteps are retained indefinitely (no auto-purge).
 
 `Artifact.storage_path` is always relative to `artifact_storage_root`. Export never serves files outside artifact storage root. Missing file returns 404, does not leak host path.
 
+## RunEvaluation — Deterministic Harness Evaluation
+
+`RunEvaluation` is the canonical record for deterministic harness-level evaluation of a completed Run.
+
+### Design principles
+
+- **Append-only.** Each `RunEvaluationService.evaluate()` call creates a new row. Existing evaluations are never deleted or overwritten. `GET /runs/{id}/evaluation` returns the most recent row.
+- **Classifier-version auditable.** `evaluator_version` (e.g. `harness_eval.v1`) is stored per row, so classification history is preserved across version upgrades.
+- **Harness-boundary evidence only.** Uses Run.status/error_json/output_json/exit_code, ordered RunSteps, ContextSnapshot metadata, Artifacts, Proposals, ValidationRecipe, and linked Task/TaskRun. No LLM-as-judge. No parsing of vendor CLI internal tool calls.
+- **Evidence-only for CLI runtimes.** CLI adapters are black-box at the harness. No internal tool-call trajectory is reconstructed from stdout/stderr.
+
+### RunStep adapter_started semantics
+
+`RunExecutionService` creates an `adapter_started` step and later marks it succeeded/failed via `complete_step`/`fail_step`. There is no required separate `adapter_completed` step.
+
+**Evaluation treats `adapter_started` with status in {`succeeded`, `failed`, `cancelled`} as adapter completion from the harness perspective.**
+
+`missing_adapter_completed` is only flagged when `adapter_started` exists AND is still in a non-terminal state (queued/running/pending) AND no `adapter_completed` step was recorded.
+
+### Classification pipeline
+
+**A. outcome_status** (ordered rules):
+1. Non-terminal status → `unknown`
+2. `status == failed` → `failed`
+3. `status == cancelled` → `failed` (`run_cancelled` synthesized into error codes so B2 exact map → `orchestration / run_cancelled`)
+4. `exit_code != 0` → `failed`
+5. `error_json` present → `failed`
+6. `status == degraded` → `partial`
+7. Succeeded + validation-failed proposal → `partial`
+8. Succeeded + incomplete patch or materialization warning → `partial`
+9. `status == succeeded` → `passed`
+10. Otherwise → `unknown`
+
+**B. failure_layer** (ordered rules, exact error-code mapping first):
+1. outcome passed/unknown → null
+2. Exact error-code mapping (canonical list in `evaluation.py:_EXACT_ERROR_CODE_MAP`) — overrides all heuristics
+3. Missing context snapshot (for runs that require one) → `context`
+4. Validation failure signals → `validation`
+5. `sandbox` keyword in failed step error_type → `sandbox`
+6. Missing adapter completion → `orchestration`
+7. Adapter step failed or non-zero exit → `runtime`
+8. `tool` keyword in step error_type → `tool`
+9. Otherwise → `unknown`
+
+**C. trajectory_status**:
+- `insufficient_evidence` — no steps, no snapshot, no artifacts, no proposals
+- `unsafe` — high-risk proposal (`risk_level=high/critical`) or low-trust artifact
+- `incomplete` — incomplete patch signals, adapter not yet terminal, or no terminal step
+- `acceptable`
+
+Note: `trajectory_status` does not imply `failure_layer`. A run can be `outcome_status=passed` and `trajectory_status=unsafe`.
+
+### Canonical error-code mappings
+
+`file_access_adapter_requires_worktree_policy` → `policy` (not `sandbox`; exact map runs first).
+
+### What evaluation does NOT do
+
+- Does not write MemoryEntry, Policy, Proposal, Capability, WorkspaceProfile, or ValidationRecipe.
+- Does not create TaskEvaluation or RunReflection (those are downstream bridge layers).
+- Does not mutate Run, Artifact, or Proposal rows.
+- Does not auto-apply any Proposal.
+
+### Future work
+
+- Richer trajectory evidence events per step.
+- Task-level evaluation bridge (TaskEvaluation).
+- Run reflection bridge (RunReflection).
+- LLM-as-judge layer, only after deterministic layer is stable.
+- Run Viewer UI.
+
 ## What Is Intentionally Not Modeled Yet
 
 - Full tool-call ontology (individual tool invocation records per step).

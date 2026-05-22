@@ -232,11 +232,28 @@ User request
 → ExecutionPlane + RuntimeAdapter
 → Run
 → Artifact / ExternalRunRecord
+→ RunEvaluation (deterministic harness layer)
 → ValidationRecipe
-→ RunReflection
+→ RunReflection  (downstream bridge, not yet wired)
 → Proposal
 → approved Memory / WorkspaceProfile / Capability / Policy update
 ```
+
+**RunEvaluation — canonical deterministic evaluation layer (implemented):**
+
+`RunEvaluation` is the append-only harness-level evaluation record. It is stable and tested. Key properties:
+- Each `evaluate()` call appends a new row. Existing rows are never deleted.
+- Uses harness-visible evidence only: Run metadata, RunSteps, ContextSnapshot, Artifacts, Proposals.
+- `evaluator_version` is stored per row for classifier-version auditability.
+- CLI runtimes are black-box; no internal tool-call trajectory is reconstructed.
+- `adapter_started` terminal status counts as adapter completion from the harness perspective.
+- Evaluation never writes Memory, Policy, Proposal, WorkspaceProfile, ValidationRecipe, or Capability.
+
+**Downstream bridge layers (not yet implemented):**
+- `TaskEvaluation` — task-level evaluation derived from run evaluations. Not auto-created.
+- `RunReflection` — structured analysis against validation criteria. Not auto-created from evaluation.
+- LLM-as-judge evaluation — only after deterministic layer is stable and validated in dogfood.
+- Run Viewer UI — surface for browsing evaluation history per run.
 
 **Next work:**
 1. Run a manual-managed dogfood flow using a real workspace.
