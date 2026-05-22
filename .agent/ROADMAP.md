@@ -11,7 +11,7 @@
 - Runtime adapter abstraction (`app.runtimes` canonical); credential resolver
 - Artifact persistence, export, and path safety
 - Task board ORM (`Task`, `Board`, `TaskRun`, `TaskArtifact`, `TaskProposal`)
-- Persisted policy enforcement: active `memory.write_direct` policy wired to `PolicyEngine`
+- Persisted policy enforcement: `memory.private_placement` and `run.user_private_scope` in `policy/enforcement.py`; structural write boundary via `_INTERNAL_WRITE_AUTHORITY` sentinel
 - `UnitOfWork` transaction boundary; savepoint-isolated RunStep evidence
 - `BackupService` primary backup; `scripts/backup.sh` fallback; `scripts/restore.sh` restore
 - Workspace lifecycle: stale-marking on missing paths (no hard-delete)

@@ -26,7 +26,7 @@ Covered by this file:
     - backup.sh --dry-run exits cleanly
 
   Regression M5:
-    - memory.write_direct policy is still enforced (POST /memory returns 202 proposal, not 200)
+    - write boundary is structural: POST /memory returns 202 proposal, never 200 MemoryEntry
 
   Regression M6:
     - Activity-first capture still works (POST /activity returns 201)

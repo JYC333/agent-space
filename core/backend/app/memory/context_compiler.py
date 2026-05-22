@@ -61,6 +61,22 @@ _SECTION_PRIORITY = {
     "output_format":  14,
 }
 
+# Sections that are never dropped even when the total budget is exceeded.
+_MANDATORY_SECTIONS: frozenset[str] = frozenset({"task"})
+
+# Per-section character caps applied before budget enforcement.
+# Sections exceeding their cap are truncated and flagged in budget_trace.
+_PER_SECTION_CAPS: dict[str, int] = {
+    "system_policy": 16_000,
+    "user_context":   8_000,
+    "project_docs":  24_000,
+    "workspace":     12_000,
+    "agent":          8_000,
+    "attachments":   16_000,
+    "episodes":       4_000,
+    "session":        2_000,
+}
+
 _MAX_PER_SCOPE = 5
 _MAX_EPISODES = 3
 _MAX_SESSION_SUMMARIES = 2
@@ -202,6 +218,8 @@ class CompiledContext:
     scan_result: SecurityScanResult | None = None
     # Names of sections that were dropped to fit budget
     dropped_sections: list[str] = field(default_factory=list)
+    # Deterministic budget trace: mandatory / capped / dropped / total
+    budget_trace: dict = field(default_factory=dict)
 
     @property
     def budget_used_pct(self) -> float:
@@ -278,7 +296,7 @@ class ContextCompiler:
             output_format=output_format,
         )
 
-        markdown, dropped = self._apply_budget(sections, budget_chars)
+        markdown, dropped, budget_trace = self._apply_budget(sections, budget_chars)
         full_markdown = _VENDOR_FILE_HEADER + markdown
         total_chars = len(full_markdown)
 
@@ -324,6 +342,7 @@ class ContextCompiler:
             budget_chars=budget_chars,
             scan_result=scan_result,
             dropped_sections=dropped,
+            budget_trace=budget_trace,
         )
 
     # ------------------------------------------------------------------
@@ -579,36 +598,91 @@ class ContextCompiler:
         self,
         sections: list[tuple[str, str, int]],
         budget_chars: int,
-    ) -> tuple[str, list[str]]:
+    ) -> tuple[str, list[str], dict]:
         """
-        Join sections into markdown, dropping lowest-priority sections if the
-        total would exceed budget_chars.
-        Returns (markdown, list_of_dropped_section_names).
-        """
-        # Sort by priority ascending (most important first) for budget decisions
-        ordered = sorted(sections, key=lambda x: x[2])
+        Enforce deterministic context budget.
 
-        kept: list[tuple[str, str, int]] = []
-        total = 0
+        Steps:
+        1. Apply per-section character caps (truncate oversized sections).
+        2. Never drop mandatory sections regardless of budget.
+        3. Drop lowest-priority non-mandatory sections until total fits budget.
+
+        Returns (markdown, dropped_section_names, budget_trace).
+        budget_trace keys: mandatory, capped, dropped, budget_chars, total_chars_before, total_chars_after.
+        """
+        capped_record: list[dict] = []
+
+        # Step 1: apply per-section caps
+        capped_sections: list[tuple[str, str, int]] = []
+        for name, text, priority in sections:
+            cap = _PER_SECTION_CAPS.get(name)
+            if cap and len(text) > cap:
+                truncated = text[:cap] + "\n\n> [truncated — section exceeded per-section cap]"
+                capped_record.append({
+                    "section": name,
+                    "original_chars": len(text),
+                    "capped_chars": len(truncated),
+                    "cap": cap,
+                })
+                log.debug(
+                    "ContextCompiler: capped section %r from %d → %d chars",
+                    name, len(text), len(truncated),
+                )
+                capped_sections.append((name, truncated, priority))
+            else:
+                capped_sections.append((name, text, priority))
+
+        total_before = sum(len(t) for _, t, _ in capped_sections)
+
+        # Step 2: split mandatory vs optional, sort optional by priority desc (lowest priority = highest number = first to drop)
+        mandatory: list[tuple[str, str, int]] = [
+            s for s in capped_sections if s[0] in _MANDATORY_SECTIONS
+        ]
+        optional: list[tuple[str, str, int]] = [
+            s for s in capped_sections if s[0] not in _MANDATORY_SECTIONS
+        ]
+        optional_ordered = sorted(optional, key=lambda x: x[2])  # most important first
+
+        mandatory_chars = sum(len(t) for _, t, _ in mandatory) + 8 * max(0, len(mandatory) - 1)
+        remaining_budget = budget_chars - mandatory_chars
+
+        kept_optional: list[tuple[str, str, int]] = []
+        total_optional = 0
         dropped: list[str] = []
 
-        for name, text, priority in ordered:
-            if total + len(text) <= budget_chars:
-                kept.append((name, text, priority))
-                total += len(text) + 8  # separator
+        for name, text, priority in optional_ordered:
+            cost = len(text) + 8  # separator overhead
+            if total_optional + cost <= remaining_budget:
+                kept_optional.append((name, text, priority))
+                total_optional += cost
             else:
                 dropped.append(name)
-                log.debug("ContextCompiler: dropped section %r (budget %d/%d)", name, total, budget_chars)
+                log.debug(
+                    "ContextCompiler: dropped section %r (budget %d/%d)",
+                    name, total_optional + mandatory_chars, budget_chars,
+                )
+
+        all_kept = mandatory + kept_optional
+        total_after = sum(len(t) for _, t, _ in all_kept)
+
+        budget_trace: dict = {
+            "budget_chars": budget_chars,
+            "total_chars_before": total_before,
+            "total_chars_after": total_after,
+            "mandatory": [s[0] for s in mandatory],
+            "capped": capped_record,
+            "dropped": dropped,
+        }
 
         if dropped:
             notice = f"\n\n> **Note:** {len(dropped)} context section(s) omitted to stay within token budget."
         else:
             notice = ""
 
-        # Re-sort kept sections by their original priority for natural reading order
-        kept_sorted = sorted(kept, key=lambda x: x[2])
-        markdown = "\n\n---\n\n".join(text for _, text, _ in kept_sorted)
-        return markdown + notice, dropped
+        # Re-sort kept sections by priority for natural reading order
+        all_kept_sorted = sorted(all_kept, key=lambda x: x[2])
+        markdown = "\n\n---\n\n".join(text for _, text, _ in all_kept_sorted)
+        return markdown + notice, dropped, budget_trace
 
     # ------------------------------------------------------------------
     # SOUL.md — agent identity / persona file

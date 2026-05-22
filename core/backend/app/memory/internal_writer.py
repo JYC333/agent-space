@@ -4,21 +4,22 @@ Internal-only write paths for MemoryEntry and Policy rows.
 
 ALLOWED CALLERS
 ---------------
-- ProposalApplyService  (accepted-proposal application — the normal durable write boundary)
-- System seed / bootstrap code
-- Database migration scripts
-- Tests (direct ORM construction or these writers)
+- ProposalApplyService (accepted-proposal application — the sole normal durable write boundary)
+- System seed / bootstrap code (create_system_seed_memory only)
+- Tests (direct ORM construction or create_system_seed_memory for seed rows)
 
 FORBIDDEN CALLERS
 -----------------
-- Public memory API routes  (memory/api.py)      → must create Proposals instead
-- Agent tools                                     → must go through Proposal workflow
-- Runtime adapters  (runtimes/)                  → no direct active-memory writes
-- Normal run execution paths                      → no direct active-memory writes
-- LocalMemoryProvider write methods when exposed as public/agent-facing path
+- Public memory API routes  (memory/api.py)   → must create Proposals instead
+- Agent tools                                  → must go through Proposal workflow
+- Runtime adapters  (runtimes/)               → no direct active-memory writes
+- Normal run execution paths                   → no direct active-memory writes
+- MemoryProvider / LocalMemoryProvider         → read-only; no write methods remain
 
-MemoryStore remains a low-level persistence helper but public and agent-facing
-paths must not call MemoryStore.create / update / delete to mutate active Memory.
+Active MemoryEntry rows are written through exactly two paths:
+  1. ProposalApplyService.apply()
+     → MemoryInternalWriter.create_from_approved_proposal() / mark_status_from_approved_proposal()
+  2. MemoryInternalWriter.create_system_seed_memory()  (bootstrap only)
 """
 
 from datetime import UTC, datetime
@@ -49,43 +50,8 @@ class MemoryInternalWriter:
         return None
 
     # ------------------------------------------------------------------
-    # Write helpers
+    # Proposal-approved write paths (the sole normal product write boundary)
     # ------------------------------------------------------------------
-
-    def create(
-        self,
-        data: "MemoryCreate",
-        *,
-        acting_user_id: Optional[str] = None,
-        actor_ref: Optional[dict[str, Any]] = None,
-        created_by: Optional[str] = None,
-        approved_by: Optional[str] = None,
-        created_from_proposal_id: Optional[str] = None,
-        root_memory_id: Optional[str] = None,
-        supersedes_memory_id: Optional[str] = None,
-        source_trust: Optional[str] = None,
-        source_activity_id: Optional[str] = None,
-        commit: bool = True,
-    ) -> MemoryEntry:
-        """Persist a new MemoryEntry and attach lineage fields when provided."""
-        self._enforce_direct_write_policy(
-            space_id=data.space_id,
-            resource_id=data.scope,
-            acting_user_id=acting_user_id,
-            actor_ref=actor_ref,
-        )
-        return self._persist(
-            data,
-            acting_user_id=acting_user_id,
-            created_by=created_by,
-            approved_by=approved_by,
-            created_from_proposal_id=created_from_proposal_id,
-            root_memory_id=root_memory_id,
-            supersedes_memory_id=supersedes_memory_id,
-            source_trust=source_trust,
-            source_activity_id=source_activity_id,
-            commit=commit,
-        )
 
     def create_from_approved_proposal(
         self,
@@ -115,75 +81,66 @@ class MemoryInternalWriter:
             commit=False,
         )
 
-    def update(
+    def mark_status_from_approved_proposal(
         self,
+        proposal: Proposal,
         memory_id: str,
-        space_id: str,
-        data: "MemoryUpdate",
-        *,
-        acting_user_id: Optional[str] = None,
-        actor_ref: Optional[dict[str, Any]] = None,
+        new_status: str,
     ) -> Optional[MemoryEntry]:
-        """Directly mutate a MemoryEntry after checking persisted direct-write policy."""
-        self._enforce_direct_write_policy(
-            space_id=space_id,
-            resource_id=memory_id,
-            acting_user_id=acting_user_id,
-            actor_ref=actor_ref,
+        """Set memory status during ProposalApplyService after explicit proposal approval."""
+        if proposal.proposal_type not in ("memory_update", "memory_archive"):
+            raise PermissionError("approved proposal status bypass requires a memory update/archive proposal")
+        if proposal.preview:
+            raise PermissionError("preview proposals cannot bypass the proposal-approval boundary")
+        if proposal.status != "pending":
+            raise PermissionError("proposal apply bypass is only valid during pending proposal acceptance")
+        db_row = (
+            self._db.query(Proposal)
+            .filter(Proposal.id == proposal.id, Proposal.space_id == proposal.space_id)
+            .first()
         )
-        from .store import MemoryStore
+        if db_row is None or db_row is not proposal:
+            raise PermissionError("proposal apply bypass requires a persisted proposal from this session")
+        return self._mark_status_without_policy_check(
+            memory_id, proposal.space_id, new_status, commit=False
+        )
 
-        return MemoryStore(self._db).update(memory_id, data, space_id=space_id)
+    # ------------------------------------------------------------------
+    # Bootstrap / seed path (system use only — not for tests or product code)
+    # ------------------------------------------------------------------
 
-    def delete(
+    def create_system_seed_memory(
         self,
-        memory_id: str,
-        space_id: str,
+        data: "MemoryCreate",
         *,
-        acting_user_id: Optional[str] = None,
-        actor_ref: Optional[dict[str, Any]] = None,
-    ) -> bool:
-        """Directly soft-delete a MemoryEntry after checking persisted direct-write policy."""
-        self._enforce_direct_write_policy(
-            space_id=space_id,
-            resource_id=memory_id,
-            acting_user_id=acting_user_id,
-            actor_ref=actor_ref,
+        created_by: str = "system_seed",
+        commit: bool = True,
+    ) -> MemoryEntry:
+        """Persist a system-bootstrap MemoryEntry without proposal review.
+
+        ONLY for bootstrap/seed code that runs before any space policies exist.
+        Sets ``source_trust="internal_system"`` so seed rows are auditably distinct
+        from proposal-created memory.
+
+        Forbidden callers: public API routes, agent tools, runtime adapters, tests
+        that verify product memory-creation behaviour.
+        """
+        return self._persist(
+            data,
+            created_by=created_by,
+            source_trust="internal_system",
+            commit=commit,
         )
-        from .store import MemoryStore
 
-        return MemoryStore(self._db).delete(memory_id, space_id=space_id)
-
-    def _enforce_direct_write_policy(
-        self,
-        *,
-        space_id: Optional[str],
-        resource_id: Optional[str],
-        acting_user_id: Optional[str],
-        actor_ref: Optional[dict[str, Any]],
-    ) -> None:
-        from ..policy.domains import MEMORY_WRITE_DIRECT
-        from ..policy.engine import PolicyEngine
-
-        PolicyEngine().assert_allowed(
-            {
-                "db": self._db,
-                "action": MEMORY_WRITE_DIRECT,
-                "resource_type": "memory",
-                "resource_id": resource_id,
-                "space_id": space_id,
-                "resource_space_id": space_id,
-                "user_id": acting_user_id,
-                "actor_id": actor_ref.get("actor_id") if actor_ref else None,
-                "actor_ref": actor_ref,
-            }
-        )
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
 
     def _validate_proposal_apply_bypass(self, proposal: Proposal, data: "MemoryCreate") -> None:
         if proposal.proposal_type not in ("memory_create", "memory_update"):
             raise PermissionError("approved proposal memory write bypass requires a memory create/update proposal")
         if proposal.preview:
-            raise PermissionError("preview proposals cannot bypass memory.write_direct policy")
+            raise PermissionError("preview proposals cannot bypass the proposal-approval boundary")
         if proposal.space_id != data.space_id:
             raise PermissionError("proposal space does not match memory write space")
         if proposal.status != "pending":
@@ -211,7 +168,7 @@ class MemoryInternalWriter:
         commit: bool = True,
     ) -> MemoryEntry:
 
-        from .store import MemoryStore
+        from .store import MemoryStore, _INTERNAL_WRITE_AUTHORITY
 
         store = MemoryStore(self._db)
         mem = store.create(
@@ -220,6 +177,7 @@ class MemoryInternalWriter:
             created_by=created_by,
             approved_by=approved_by,
             commit=False,
+            _write_authority=_INTERNAL_WRITE_AUTHORITY,
         )
 
         extras: dict[str, str | None] = {}
@@ -243,48 +201,6 @@ class MemoryInternalWriter:
             self._db.refresh(mem)
 
         return mem
-
-    def mark_status(
-        self,
-        memory_id: str,
-        space_id: str,
-        new_status: str,
-        *,
-        acting_user_id: Optional[str] = None,
-        actor_ref: Optional[dict[str, Any]] = None,
-    ) -> Optional[MemoryEntry]:
-        """Set status on an existing non-deleted MemoryEntry (e.g. 'superseded', 'archived')."""
-        self._enforce_direct_write_policy(
-            space_id=space_id,
-            resource_id=memory_id,
-            acting_user_id=acting_user_id,
-            actor_ref=actor_ref,
-        )
-        return self._mark_status_without_policy_check(memory_id, space_id, new_status)
-
-    def mark_status_from_approved_proposal(
-        self,
-        proposal: Proposal,
-        memory_id: str,
-        new_status: str,
-    ) -> Optional[MemoryEntry]:
-        """Set memory status during ProposalApplyService after explicit proposal approval."""
-        if proposal.proposal_type not in ("memory_update", "memory_archive"):
-            raise PermissionError("approved proposal status bypass requires a memory update/archive proposal")
-        if proposal.preview:
-            raise PermissionError("preview proposals cannot bypass memory.write_direct policy")
-        if proposal.status != "pending":
-            raise PermissionError("proposal apply bypass is only valid during pending proposal acceptance")
-        db_row = (
-            self._db.query(Proposal)
-            .filter(Proposal.id == proposal.id, Proposal.space_id == proposal.space_id)
-            .first()
-        )
-        if db_row is None or db_row is not proposal:
-            raise PermissionError("proposal apply bypass requires a persisted proposal from this session")
-        return self._mark_status_without_policy_check(
-            memory_id, proposal.space_id, new_status, commit=False
-        )
 
     def _mark_status_without_policy_check(
         self, memory_id: str, space_id: str, new_status: str, *, commit: bool = True

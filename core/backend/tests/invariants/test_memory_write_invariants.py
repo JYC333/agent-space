@@ -10,6 +10,8 @@ These invariants must hold regardless of proposal type:
 - policy_change creates a new Policy linked by created_from_proposal_id
 - memory_update marks old row superseded; does not hard-delete
 - memory_archive marks status=archived; does not hard-delete
+- accepted proposal path creates memory bypassing no review gate
+- atomicity: partial failure rolls back to no active MemoryEntry side effect
 """
 
 from __future__ import annotations
@@ -17,7 +19,6 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import func
 
-from app.memory.internal_writer import MemoryInternalWriter
 from app.memory.apply_service import (
     MemoryProposalApplier,
     PolicyProposalApplier,
@@ -26,7 +27,7 @@ from app.memory.apply_service import (
 )
 from app.memory.proposals import ProposalService, UnsupportedProposalTypeError
 from app.models import MemoryEntry, Policy, Proposal
-from app.schemas import MemoryCreate, MemoryUpdate
+from app.schemas import MemoryCreate
 from tests.support import factories
 
 
@@ -112,7 +113,6 @@ def test_memory_update_without_target_id_raises(db, cross_space_pair):
     )
     db.flush()
     with pytest.raises(Exception):
-        # ProposalApplyService raises ProposalApplyError → ProposalService re-raises as HTTPException
         ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
 
 
@@ -286,93 +286,15 @@ def test_policy_change_supersedes_old_policy(db, cross_space_pair):
     assert new_row.supersedes_policy_id == old_policy.id
 
 
-def _direct_memory_create(space_id: str, owner_user_id: str, *, content: str = "direct") -> MemoryCreate:
-    return MemoryCreate(
-        title="direct memory",
-        content=content,
-        type="semantic",
-        scope="agent",
-        namespace="agent.direct",
-        space_id=space_id,
-        visibility="space_shared",
-        owner_user_id=owner_user_id,
-    )
+# ---------------------------------------------------------------------------
+# Proposal-approved write path creates active memory
+# ---------------------------------------------------------------------------
 
 
-def _memory_write_policy_payload(effect: str = "deny") -> dict:
-    return {
-        "operation": "create",
-        "domain": "memory",
-        "policy_key": "memory.write_direct.guard",
-        "enforcement_mode": effect,
-        "rule_json": {
-            "policy_type": "memory_write",
-            "action": "memory.write_direct",
-            "resource_type": "memory",
-            "effect": effect,
-            "reason": "Direct memory writes must use proposal review",
-        },
-    }
-
-
-def test_accepted_memory_write_direct_policy_blocks_direct_internal_write(db, test_space, test_user):
-    a = test_space.id
-    ua = test_user
-    prop = factories.create_test_proposal(
-        db,
-        space_id=a,
-        created_by_user_id=ua.id,
-        proposal_type="policy_change",
-        title="Require proposal review for direct memory writes",
-        payload_json=_memory_write_policy_payload("deny"),
-        commit=True,
-    )
-
-    result = ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
-    assert result is not None
-    assert result.policy is not None
-    assert result.policy.status == "active"
-    assert result.policy.created_from_proposal_id == prop.id
-
-    with pytest.raises(PermissionError) as exc:
-        MemoryInternalWriter(db).create(
-            _direct_memory_create(a, ua.id),
-            acting_user_id=ua.id,
-        )
-    assert "memory.write_direct.guard" in str(exc.value)
-
-
-def test_memory_write_direct_require_approval_policy_blocks_direct_internal_write(db, cross_space_pair):
+def test_proposal_approved_memory_write_creates_active_memory(db, cross_space_pair):
+    """Accepting a memory_create proposal creates an active MemoryEntry linked to the proposal."""
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
-    factories.create_test_policy(
-        db,
-        space_id=a,
-        domain="memory",
-        policy_key="memory.write_direct.guard",
-        enforcement_mode="require_approval",
-        rule_json=_memory_write_policy_payload("require_approval")["rule_json"],
-    )
-
-    with pytest.raises(PermissionError) as exc:
-        MemoryInternalWriter(db).create(
-            _direct_memory_create(a, ua.id),
-            acting_user_id=ua.id,
-        )
-    assert "require_approval" in str(exc.value).lower()
-
-
-def test_proposal_approved_memory_write_bypasses_direct_write_policy(db, test_space, test_user):
-    a = test_space.id
-    ua = test_user
-    factories.create_test_policy(
-        db,
-        space_id=a,
-        domain="memory",
-        policy_key="memory.write_direct.guard",
-        enforcement_mode="deny",
-        rule_json=_memory_write_policy_payload("deny")["rule_json"],
-    )
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -392,6 +314,54 @@ def test_proposal_approved_memory_write_bypasses_direct_write_policy(db, test_sp
     assert result.memory is not None
     assert result.memory.created_from_proposal_id == prop.id
     assert result.memory.content == "approved write"
+    assert result.memory.status == "active"
+
+
+def test_proposal_approved_archive_sets_status_archived(db, cross_space_pair):
+    """Accepting a memory_archive proposal sets status=archived without hard-deleting."""
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    # Use ORM insertion for test fixture setup (no direct write path needed)
+    from app.models import MemoryEntry as ME
+    from ulid import ULID
+    mem = ME(
+        id=str(ULID()),
+        space_id=a,
+        scope_type="agent",
+        memory_type="semantic",
+        content="archive target",
+        status="active",
+        visibility="space_shared",
+        owner_user_id=ua.id,
+    )
+    db.add(mem)
+    db.commit()
+
+    prop = factories.create_test_proposal(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        proposal_type="memory_archive",
+        payload_json={
+            "operation": "archive",
+            "target_memory_id": mem.id,
+        },
+        commit=True,
+    )
+
+    result = ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
+
+    assert result is not None
+    assert result.memory is not None
+    assert result.memory.id == mem.id
+    db.expire_all()
+    archived = db.query(MemoryEntry).filter(MemoryEntry.id == mem.id).first()
+    assert archived.status == "archived"
+
+
+# ---------------------------------------------------------------------------
+# Atomicity: partial failure rolls back
+# ---------------------------------------------------------------------------
 
 
 def test_memory_proposal_apply_rolls_back_partial_memory_on_late_failure(
@@ -486,123 +456,9 @@ def test_approved_memory_proposal_commits_memory_and_source_fields_atomically(db
     assert mem.source_trust == "user_confirmed"
 
 
-def test_direct_memory_mutations_are_blocked_by_active_direct_write_policy(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
-    mem = MemoryInternalWriter(db).create(
-        _direct_memory_create(a, ua.id, content="before policy"),
-        acting_user_id=ua.id,
-    )
-    factories.create_test_policy(
-        db,
-        space_id=a,
-        domain="memory",
-        policy_key="memory.write_direct.guard",
-        enforcement_mode="deny",
-        rule_json=_memory_write_policy_payload("deny")["rule_json"],
-    )
-
-    writer = MemoryInternalWriter(db)
-    with pytest.raises(PermissionError):
-        writer.update(
-            mem.id,
-            a,
-            MemoryUpdate(content="blocked update"),
-            acting_user_id=ua.id,
-        )
-    with pytest.raises(PermissionError):
-        writer.mark_status(mem.id, a, "archived", acting_user_id=ua.id)
-    with pytest.raises(PermissionError):
-        writer.delete(mem.id, a, acting_user_id=ua.id)
-
-
-def test_proposal_approved_archive_bypasses_direct_write_policy(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
-    mem = MemoryInternalWriter(db).create(
-        _direct_memory_create(a, ua.id, content="archive target"),
-        acting_user_id=ua.id,
-    )
-    factories.create_test_policy(
-        db,
-        space_id=a,
-        domain="memory",
-        policy_key="memory.write_direct.guard",
-        enforcement_mode="deny",
-        rule_json=_memory_write_policy_payload("deny")["rule_json"],
-    )
-    prop = factories.create_test_proposal(
-        db,
-        space_id=a,
-        created_by_user_id=ua.id,
-        proposal_type="memory_archive",
-        payload_json={
-            "operation": "archive",
-            "target_memory_id": mem.id,
-        },
-        commit=True,
-    )
-
-    result = ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
-
-    assert result is not None
-    assert result.memory is not None
-    assert result.memory.id == mem.id
-    db.expire_all()
-    archived = db.query(MemoryEntry).filter(MemoryEntry.id == mem.id).first()
-    assert archived.status == "archived"
-
-
-def test_inactive_rejected_and_unrelated_policies_do_not_block_direct_write(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
-    rejected = factories.create_test_proposal(
-        db,
-        space_id=a,
-        created_by_user_id=ua.id,
-        proposal_type="policy_change",
-        title="Rejected policy",
-        payload_json=_memory_write_policy_payload("deny"),
-        commit=True,
-    )
-    assert ProposalService(db).reject(rejected.id, space_id=a, user_id=ua.id) is not None
-    factories.create_test_policy(
-        db,
-        space_id=a,
-        domain="memory",
-        status="disabled",
-        policy_key="memory.write_direct.disabled",
-        enforcement_mode="deny",
-        rule_json=_memory_write_policy_payload("deny")["rule_json"],
-    )
-    factories.create_test_policy(
-        db,
-        space_id=a,
-        domain="runtime",
-        policy_key="runtime.execute.deny",
-        enforcement_mode="deny",
-        rule_json={
-            "policy_type": "runtime_execution",
-            "action": "runtime.execute",
-            "resource_type": "run",
-            "effect": "deny",
-        },
-    )
-    factories.create_test_policy(
-        db,
-        space_id=a,
-        domain="memory",
-        policy_key="symbolic.only",
-        enforcement_mode="deny",
-        policy_json={"effect": "deny", "reason": "missing M5 selector"},
-    )
-
-    mem = MemoryInternalWriter(db).create(
-        _direct_memory_create(a, ua.id, content="allowed direct write"),
-        acting_user_id=ua.id,
-    )
-
-    assert mem.content == "allowed direct write"
+# ---------------------------------------------------------------------------
+# Write boundary: only internal_writer.py may call store.create
+# ---------------------------------------------------------------------------
 
 
 def test_memory_direct_write_bypass_is_not_generic_string_parameter():

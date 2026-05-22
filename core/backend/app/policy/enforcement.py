@@ -62,7 +62,7 @@ def check_private_memory_placement(
     Hard invariant: visibility=private only in personal spaces.
 
     Active Policy rows may document or reinforce denial; allow rows cannot weaken
-    the invariant for non-personal spaces in this phase.
+    the invariant for non-personal spaces.
     """
     match = get_active_policy_match(
         db,

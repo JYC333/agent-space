@@ -69,10 +69,10 @@ capture / trigger
 - Agents do not directly write active memory.
 - The public memory write API returns a `ProposalOut` with HTTP 202, not a direct memory mutation.
 
-### PolicyEngine enforces at least the selected persisted policy slice
+### PolicyEngine evaluates built-in runtime rules; persisted policy enforcement is domain-specific
 
-- `PolicyEngine` loads active persisted `Policy` rows for the current space.
-- The current active slice: `memory.write_direct` — an active deny policy prevents direct internal memory writes.
+- `PolicyEngine` evaluates stateless built-in rules. It does not load persisted Policy rows.
+- Domain-specific persisted-policy enforcement (e.g. `memory.private_placement`, `run.user_private_scope`) lives in `policy/enforcement.py`.
 - Accepted policy proposals create active `Policy` rows that affect real enforcement decisions.
 
 ### App runtime must not self-deploy with arbitrary host authority
@@ -94,7 +94,7 @@ capture / trigger
 | Space membership / selected space access | `auth/policy.py` membership + role helpers | Active |
 | Memory write (public API) | Returns Proposal (HTTP 202), not direct write | Active |
 | Memory proposal apply | Proposal gate + SourceMonitoring gate | Active |
-| Memory direct write (`memory.write_direct`) | `PolicyEngine` checks active persisted policy row | Active |
+| Memory write boundary | `_INTERNAL_WRITE_AUTHORITY` sentinel in `MemoryStore.create()`; structural, not policy-based | Active |
 | Policy proposal apply | Proposal gate creates active Policy row | Active |
 | Runtime execution | Runtime policy JSON, adapter resolver, credential resolver | Active |
 | Runtime credential use | Credential resolver + secret redaction | Active |

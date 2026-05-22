@@ -1,6 +1,6 @@
 from __future__ import annotations
 """
-MemoryProvider — abstract interface for memory storage backends.
+MemoryProvider — read-only abstract interface for memory storage backends.
 
 Only LocalMemoryProvider is enabled in the MVP.  The interface exists so
 future providers (vector databases, remote services, etc.) can be swapped
@@ -8,20 +8,19 @@ in without changing callers.
 
 Write governance
 ----------------
-LocalMemoryProvider.create / update / delete are INTERNAL-ONLY methods.
-They must NOT be called from:
-  - Public API routes (memory/api.py)    → those create Proposals
-  - Agent tools                          → must go through Proposal workflow
-  - Runtime adapters (runtimes/)         → no direct active-memory writes
-  - Normal run execution paths
+MemoryProvider and LocalMemoryProvider are READ-ONLY. There are no create,
+update, or delete methods. All active MemoryEntry mutations must go through
+the proposal-approval write boundary:
 
-Allowed callers of the write methods:
-  - ProposalApplyService (accepted-proposal application)
-  - System seed / bootstrap
-  - Migration scripts
-  - Tests that need to pre-populate memory state
+  POST /memory / PATCH /memory/{id} / DELETE /memory/{id}
+  → Proposal (pending)
+  → ProposalService.accept()
+  → ProposalApplyService.apply()
+  → MemoryInternalWriter.create_from_approved_proposal()
 
-Usage (reads — unchanged):
+System seeds use MemoryInternalWriter.create_system_seed_memory() exclusively.
+
+Usage (reads):
     provider = LocalMemoryProvider(db_session)
     memories = provider.list(space_id="personal", user_id="...", scope="user")
 """
@@ -33,8 +32,6 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
     from ..models import MemoryEntry
 
-_INTERNAL_WRITE_ALLOWED = True  # sentinel — future phases may gate this per caller
-
 
 # ---------------------------------------------------------------------------
 # Abstract interface
@@ -43,7 +40,7 @@ _INTERNAL_WRITE_ALLOWED = True  # sentinel — future phases may gate this per c
 
 class MemoryProvider(ABC):
     """
-    Pluggable storage backend for memory entries.
+    Pluggable read-only storage backend for memory entries.
 
     All methods operate within a single space_id boundary — cross-space
     access must be denied before calling any provider method.
@@ -81,33 +78,6 @@ class MemoryProvider(ABC):
         limit: int = 20,
     ) -> list[dict]:
         """Full-text / semantic search across content and titles."""
-        ...
-
-    @abstractmethod
-    def create(self, space_id: str, data: dict) -> dict:
-        """INTERNAL ONLY.  Persist a new memory entry. Returns the created record as a dict.
-
-        Must not be called from public API routes or agent/runtime-facing paths.
-        Use the Proposal workflow for public memory creation.
-        """
-        ...
-
-    @abstractmethod
-    def update(self, memory_id: str, space_id: str, updates: dict) -> dict:
-        """INTERNAL ONLY.  Apply partial updates to an existing memory.
-
-        Must not be called from public API routes or agent/runtime-facing paths.
-        Use the Proposal workflow for public memory updates.
-        """
-        ...
-
-    @abstractmethod
-    def delete(self, memory_id: str, space_id: str) -> bool:
-        """INTERNAL ONLY.  Soft-delete a memory.
-
-        Must not be called from public API routes or agent/runtime-facing paths.
-        Use the Proposal workflow for public memory archives.
-        """
         ...
 
     @property
@@ -160,13 +130,14 @@ def _row_to_dict(m: "MemoryEntry") -> dict:
 
 class LocalMemoryProvider(MemoryProvider):
     """
-    SQLAlchemy-backed memory provider.
+    SQLAlchemy-backed read-only memory provider.
 
     Wraps MemoryStore so callers can depend on the abstract interface without
     importing the concrete store directly.
 
-    Write methods (create / update / delete) are INTERNAL-ONLY — see module
-    docstring for the full list of allowed and forbidden callers.
+    Write operations (create / update / delete) are not available here — use
+    the proposal-approval path (ProposalApplyService) or bootstrap path
+    (MemoryInternalWriter.create_system_seed_memory) instead.
     """
 
     def __init__(self, db: "Session") -> None:
@@ -230,43 +201,3 @@ class LocalMemoryProvider(MemoryProvider):
             limit=limit,
         )
         return [_row_to_dict(m) for m in rows]
-
-    # ------------------------------------------------------------------
-    # Write methods — INTERNAL ONLY
-    # See module docstring for allowed callers.
-    # ------------------------------------------------------------------
-
-    def create(self, space_id: str, data: dict) -> dict:
-        """INTERNAL ONLY.  Direct MemoryEntry creation — not for public or agent use."""
-        from .internal_writer import MemoryInternalWriter
-        from ..schemas import MemoryCreate
-
-        payload = dict(data)
-        payload.setdefault("space_id", space_id)
-        acting = payload.pop("acting_user_id", None) or payload.pop("user_id", None)
-        mc = MemoryCreate.model_validate(payload)
-        m = MemoryInternalWriter(self._store.db).create(mc, acting_user_id=acting)
-        return _row_to_dict(m)
-
-    def update(self, memory_id: str, space_id: str, updates: dict) -> dict:
-        """INTERNAL ONLY.  Direct MemoryEntry mutation — not for public or agent use."""
-        from .internal_writer import MemoryInternalWriter
-        from ..schemas import MemoryUpdate
-
-        m = self._store.get_for_space(space_id, memory_id)
-        if not m:
-            raise ValueError("memory not found")
-        mu = MemoryUpdate.model_validate(updates)
-        m2 = MemoryInternalWriter(self._store.db).update(memory_id, space_id, mu)
-        if not m2:
-            raise ValueError("memory not found")
-        return _row_to_dict(m2)
-
-    def delete(self, memory_id: str, space_id: str) -> bool:
-        """INTERNAL ONLY.  Direct soft-delete — not for public or agent use."""
-        from .internal_writer import MemoryInternalWriter
-
-        m = self._store.get_for_space(space_id, memory_id)
-        if not m:
-            return False
-        return MemoryInternalWriter(self._store.db).delete(memory_id, space_id)

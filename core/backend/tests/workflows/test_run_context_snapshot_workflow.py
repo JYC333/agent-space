@@ -11,6 +11,7 @@ Verifies:
 
 from __future__ import annotations
 
+import pytest
 from datetime import UTC, datetime
 
 from ulid import ULID
@@ -268,6 +269,42 @@ def test_context_snapshot_populator_populates_all_fields(db, cross_space_pair):
     assert snap.compiler_version == "context_digest.v1"
 
 
+def test_context_snapshot_source_refs_includes_session_summary(db, cross_space_pair):
+    """ContextSnapshot.source_refs_json contains source_type=session_summary when session is active."""
+    from app.models import AgentVersion, Session as SessionModel, Message, SessionSummary
+    from app.sessions.condenser import SessionCondenser
+
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+
+    session = SessionModel(id=_new_id(), space_id=a, user_id=ua.id, status="active")
+    db.add(session)
+    db.flush()
+    db.add(Message(id=_new_id(), space_id=a, session_id=session.id, user_id=ua.id, role="user", content="snapshot source ref test"))
+    db.flush()
+    summary = SessionCondenser(db).condense(session.id, a, user_id=ua.id)
+    db.commit()
+
+    agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
+    run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
+    run.prompt = "source refs session test"
+    run.session_id = session.id
+    db.flush()
+
+    version = db.query(AgentVersion).filter(AgentVersion.id == run.agent_version_id).one()
+    ContextSnapshotPopulator(db).populate(run, version)
+    db.commit()
+
+    snap = db.query(ContextSnapshot).filter(ContextSnapshot.id == run.context_snapshot_id).one()
+    summary_refs = [
+        r for r in (snap.source_refs_json or [])
+        if r.get("source_type") == "session_summary"
+    ]
+    assert len(summary_refs) == 1, "ContextSnapshot.source_refs_json must contain session_summary"
+    assert summary_refs[0]["source_id"] == summary.id
+    assert summary_refs[0]["derived_context"] is True
+
+
 def test_activity_consolidation_still_produces_proposals(db, cross_space_pair):
     """Activity consolidation pipeline produces proposals independently of context snapshot changes."""
     from app.memory.consolidation.service import ActivityConsolidationService
@@ -307,27 +344,38 @@ def test_activity_consolidation_still_produces_proposals(db, cross_space_pair):
 
 
 def test_proposal_write_governance_enforced(db, cross_space_pair):
-    """Writing memory directly (bypassing proposals) must still be blocked at the API level."""
+    """MemoryStore.create/update/delete are sentinel-guarded; only proposal-approved paths write."""
     from app.memory.store import MemoryStore
+    from app.memory.internal_writer import MemoryInternalWriter
     from app.schemas import MemoryCreate
 
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
 
-    # MemoryStore.create is INTERNAL-ONLY; API routes must use proposals.
-    # Here we verify the store still works for internal callers (e.g. ProposalApplyService).
-    store = MemoryStore(db)
-    mem = store.create(
+    # MemoryStore.create() without sentinel raises PermissionError.
+    with pytest.raises(PermissionError):
+        MemoryStore(db).create(
+            MemoryCreate(
+                title="governance check",
+                space_id=a,
+                scope="agent",
+                type="semantic",
+                content="sentinel guard test",
+                visibility="space_shared",
+            ),
+            acting_user_id=ua.id,
+        )
+
+    # create_system_seed_memory() is the bootstrap write path (goes through the sentinel).
+    mem = MemoryInternalWriter(db).create_system_seed_memory(
         MemoryCreate(
-            title="mf2 regression check",
+            title="governance check seed",
             space_id=a,
-            scope="user",
+            scope="agent",
             type="semantic",
-            content="mf2 regression check",
+            content="sentinel guard verified",
             visibility="space_shared",
-            owner_user_id=ua.id,
-        ),
-        acting_user_id=ua.id,
+        )
     )
     assert mem.id is not None
     assert mem.status == "active"

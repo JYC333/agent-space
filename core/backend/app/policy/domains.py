@@ -11,8 +11,6 @@ MEMORY_PRIVATE_PLACEMENT = "memory.private_placement"
 MEMORY_CROSS_SPACE_READ = "memory.cross_space_read"
 RUN_USER_PRIVATE_SCOPE = "run.user_private_scope"
 
-MEMORY_WRITE_DIRECT = "memory.write_direct"
-
 
 @dataclass(frozen=True)
 class PolicyDomainSpec:
@@ -23,12 +21,6 @@ class PolicyDomainSpec:
 
 
 DOMAIN_REGISTRY: dict[str, PolicyDomainSpec] = {
-    MEMORY_WRITE_DIRECT: PolicyDomainSpec(
-        domain=MEMORY_WRITE_DIRECT,
-        purpose="Direct MemoryEntry writes without proposal review",
-        status="enforced",
-        enforcement_point="app.memory.internal_writer.MemoryInternalWriter._enforce_direct_write_policy",
-    ),
     MEMORY_PRIVATE_PLACEMENT: PolicyDomainSpec(
         domain=MEMORY_PRIVATE_PLACEMENT,
         purpose="visibility=private may only be stored in personal-type spaces",

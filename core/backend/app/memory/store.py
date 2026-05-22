@@ -1,20 +1,33 @@
 from __future__ import annotations
 """
-MemoryStore — CRUD and query operations for long-term memories.
+MemoryStore — read and low-level insertion operations for long-term memories.
 
-Single-row reads and mutations require an explicit ``space_id`` via
+Single-row reads require an explicit ``space_id`` via
 :meth:`MemoryStore.get_for_space` (and ``can_read_memory`` / ``can_read_entry`` at
 the API boundary). There is no id-only lookup on the store.
+
+Write boundary
+--------------
+``MemoryStore.create()`` requires the ``_INTERNAL_WRITE_AUTHORITY`` sentinel from
+``MemoryInternalWriter._persist()``. Callers without the sentinel raise
+``PermissionError`` immediately. It is the only low-level insertion helper;
+all update and delete mutations go through the proposal-approval path in
+``MemoryInternalWriter`` directly (ORM setattr + flush/commit).
+
+Authorised write paths:
+  1. ``MemoryInternalWriter.create_from_approved_proposal()``  (via ``_persist()``)
+     → only after ``ProposalApplyService.apply()``
+  2. ``MemoryInternalWriter.create_system_seed_memory()``  (via ``_persist()``)
+     → bootstrap/seed only; sets source_trust="internal_system"
 """
 
-from datetime import datetime, UTC
 from ulid import ULID
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
 from ..models import MemoryEntry
 from ..projects.service import assert_project_in_space
-from ..schemas import MemoryCreate, MemoryUpdate
+from ..schemas import MemoryCreate
 from ..config import settings
 from .read_auth import can_read_memory
 from .access_log import record_memory_access
@@ -22,6 +35,10 @@ from .access_log import record_memory_access
 
 def _new_id() -> str:
     return str(ULID())
+
+
+# Unforgeable sentinel — only MemoryInternalWriter._persist() holds a reference.
+_INTERNAL_WRITE_AUTHORITY = object()
 
 
 class MemoryStore:
@@ -36,7 +53,15 @@ class MemoryStore:
         created_by: str | None = None,
         approved_by: str | None = None,
         commit: bool = True,
+        _write_authority: object = None,
     ) -> MemoryEntry:
+        if _write_authority is not _INTERNAL_WRITE_AUTHORITY:
+            raise PermissionError(
+                "MemoryStore.create() must not be called directly to create active "
+                "MemoryEntry rows. Use MemoryInternalWriter (which enforces the "
+                "the proposal-approval boundary) or, for "
+                "test setup fixtures, insert MemoryEntry ORM rows directly."
+            )
         owner_user_id = data.owner_user_id
         if data.visibility == "private" and owner_user_id is None:
             owner_user_id = acting_user_id
@@ -119,43 +144,6 @@ class MemoryStore:
             include_system_scope=include_system_scope,
             include_public_templates=include_public_templates,
         )
-
-    def update(
-        self,
-        memory_id: str,
-        data: MemoryUpdate,
-        *,
-        space_id: str,
-        commit: bool = True,
-    ) -> MemoryEntry | None:
-        mem = self.get_for_space(space_id, memory_id)
-        if not mem:
-            return None
-        payload = data.model_dump(exclude_none=True)
-        for field, value in payload.items():
-            if field == "scope":
-                setattr(mem, "scope_type", value)
-            elif field == "type":
-                setattr(mem, "memory_type", value)
-            else:
-                setattr(mem, field, value)
-        mem.version += 1
-        mem.updated_at = datetime.now(UTC)
-        self.db.flush()
-        if commit:
-            self.db.commit()
-            self.db.refresh(mem)
-        return mem
-
-    def delete(self, memory_id: str, *, space_id: str, commit: bool = True) -> bool:
-        mem = self.get_for_space(space_id, memory_id)
-        if not mem:
-            return False
-        mem.deleted_at = datetime.now(UTC)
-        self.db.flush()
-        if commit:
-            self.db.commit()
-        return True
 
     def _filter_readable(
         self,

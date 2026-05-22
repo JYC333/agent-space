@@ -481,6 +481,36 @@ def upgrade() -> None:
     op.create_index(op.f('ix_messages_session_id'), 'messages', ['session_id'], unique=False)
     op.create_index(op.f('ix_messages_space_id'), 'messages', ['space_id'], unique=False)
     op.create_index(op.f('ix_messages_user_id'), 'messages', ['user_id'], unique=False)
+    op.create_table('session_summaries',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('session_id', sa.String(length=36), nullable=False),
+    sa.Column('user_id', sa.String(length=36), nullable=True),
+    sa.Column('version', sa.Integer(), nullable=False),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('summary_text', sa.Text(), nullable=False),
+    sa.Column('source_message_count', sa.Integer(), nullable=False),
+    sa.Column('source_first_message_id', sa.String(length=36), nullable=True),
+    sa.Column('source_last_message_id', sa.String(length=36), nullable=True),
+    sa.Column('summary_json', sa.JSON(), nullable=True),
+    sa.Column('token_estimate_before', sa.Integer(), nullable=True),
+    sa.Column('token_estimate_after', sa.Integer(), nullable=True),
+    sa.Column('condenser_version', sa.String(length=64), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("status in ('active', 'superseded')", name='ck_session_summaries_status'),
+    sa.UniqueConstraint('session_id', 'version', name='uq_session_summaries_session_version'),
+    sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_session_summaries_space_id', 'session_summaries', ['space_id'], unique=False)
+    op.create_index('ix_session_summaries_session_id', 'session_summaries', ['session_id'], unique=False)
+    op.create_index('ix_session_summaries_user_id', 'session_summaries', ['user_id'], unique=False)
+    op.create_index('ix_session_summaries_status', 'session_summaries', ['status'], unique=False)
+    op.create_index('ix_session_summaries_session_status', 'session_summaries', ['session_id', 'status'], unique=False)
+    op.create_index('ix_session_summaries_space_session_status', 'session_summaries', ['space_id', 'session_id', 'status'], unique=False)
+    op.create_index('ix_session_summaries_one_active_per_session', 'session_summaries', ['session_id'], unique=True, sqlite_where=sa.text("status = 'active'"))
     op.create_table('runs',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -1844,6 +1874,14 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_runs_agent_id'), table_name='runs')
     op.drop_table('run_execution_locks')
     op.drop_table('runs')
+    op.drop_index('ix_session_summaries_one_active_per_session', table_name='session_summaries')
+    op.drop_index('ix_session_summaries_space_session_status', table_name='session_summaries')
+    op.drop_index('ix_session_summaries_session_status', table_name='session_summaries')
+    op.drop_index('ix_session_summaries_status', table_name='session_summaries')
+    op.drop_index('ix_session_summaries_user_id', table_name='session_summaries')
+    op.drop_index('ix_session_summaries_session_id', table_name='session_summaries')
+    op.drop_index('ix_session_summaries_space_id', table_name='session_summaries')
+    op.drop_table('session_summaries')
     op.drop_index(op.f('ix_messages_user_id'), table_name='messages')
     op.drop_index(op.f('ix_messages_space_id'), table_name='messages')
     op.drop_index(op.f('ix_messages_session_id'), table_name='messages')

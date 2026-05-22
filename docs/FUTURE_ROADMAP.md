@@ -8,8 +8,8 @@ begins.
 
 ## PersonalMemoryGrant Expansion
 
-- **Full shared-content pipeline from approved egress_review.** The current MVP applies
-  `egress_review` proposals as metadata-only (no shared artifact or memory is created).
+- **Full shared-content pipeline from approved egress_review.** Applying an `egress_review`
+  proposal is currently metadata-only (no shared artifact or memory is created).
   A future phase would wire the full shared-content apply pipeline with content review,
   semantic leakage detection/redaction, and granting-user approval.
 
@@ -18,16 +18,16 @@ begins.
   meaning in egress_review proposals must be reviewed manually. Automated semantic
   leakage detection requires a new design.
 
-- **Long-lived grants.** MVP grants are one-time and run-scoped. Multi-use and long-lived
-  grants require explicit policy and lifecycle design.
+- **Long-lived grants.** Grants are currently one-time and run-scoped. Multi-use and
+  long-lived grants require explicit policy and lifecycle design.
 
 - **Agent-level grants.** `target_agent_id`-scoped grants are deferred. Requires agent
   lifecycle and scope definitions.
 
 - **Space-level grants.** Space-wide grant scope is deferred (too broad for safe dogfooding).
 
-- **Multi-user grants.** MVP is single granting user per grant. Multi-user grants require
-  new consent and audit design.
+- **Multi-user grants.** Currently one granting user per grant is supported. Multi-user
+  grants require new consent and audit design.
 
 - **Restricted / highly_restricted grant model.** Currently only `normal` and `sensitive`
   memory sensitivity levels are grant-readable. `restricted` and `highly_restricted` require
@@ -37,7 +37,7 @@ begins.
   admin aggregate grant statistics. Must return safe aggregate counts only (no personal
   memory content, no granting user identity).
 
-- **Consuming-only sub-limit.** MVP enforces a combined active+consuming cap of 10. A
+- **Consuming-only sub-limit.** Combined active+consuming cap of 10 is enforced. A
   separate consuming-only cap of 3 is deferred pending usage data.
 
 ---
@@ -75,8 +75,7 @@ begins.
 
 ## Policy Enforcement
 
-- **Additional persisted policy classes.** Only `memory.write_direct`, `memory.private_placement`,
-  and `run.user_private_scope` are fully wired. Candidates: `runtime.execute`, `credential.access`.
+- **Additional persisted policy classes.** Currently active: `memory.private_placement` and `run.user_private_scope`. Candidates for next: `runtime.execute`, `credential.access`.
 
 - **Persistent policy audit log.** Current policy traces are JSON log lines only. A
   dedicated DB table for queryable policy decisions is deferred.
@@ -101,9 +100,8 @@ begins.
 
 ## Test Suite
 
-- **Frontend component tests for PersonalMemoryGrant flow.** Backend tests are organized
-  around product boundaries after the test consolidation cleanup. Automated frontend
-  coverage for the grant/egress/approval UI remains future work.
+- **Frontend component tests for PersonalMemoryGrant flow.** Automated frontend coverage
+  for the grant/egress/approval UI remains future work.
 
 ---
 
@@ -120,7 +118,7 @@ begins.
 
 ## See Also
 
-- `docs/PERSONAL_MEMORY_GRANT.md` — current MVP limitations
+- `docs/PERSONAL_MEMORY_GRANT.md` — PersonalMemoryGrant current state and deferred items
 - `docs/SOURCE_POINTER.md` — SourcePointer current state and deferred federation
 - `docs/POLICY_AND_PRIVACY_BOUNDARIES.md` — current enforcement and deferred items
 - `docs/FEDERATED_ACCESS_MODEL.md` — federation design (deferred)

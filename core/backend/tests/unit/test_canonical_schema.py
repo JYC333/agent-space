@@ -683,7 +683,7 @@ def test_personal_memory_grant_required_columns_exist(canonical_engine):
     assert col_defs["target_run_id"]["nullable"] is False
     # read_expires_at must be NOT NULL
     assert col_defs["read_expires_at"]["nullable"] is False
-    # target_agent_id must be nullable (MVP: NULL enforced by CHECK constraint)
+    # target_agent_id must be nullable (agent-level grants are deferred; NULL enforced by CHECK constraint)
     assert col_defs["target_agent_id"]["nullable"] is True
 
 

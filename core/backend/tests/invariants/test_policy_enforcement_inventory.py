@@ -7,8 +7,8 @@ from unittest.mock import patch
 import pytest
 from ulid import ULID
 
+from app.memory.internal_writer import MemoryInternalWriter
 from app.memory.retriever import MemoryRetriever
-from app.memory.store import MemoryStore
 from app.policy.access import (
     ActivePolicyDecision,
     get_active_policy_decision,
@@ -20,10 +20,9 @@ from app.policy.domains import (
     DOMAIN_REGISTRY,
     MEMORY_CROSS_SPACE_READ,
     MEMORY_PRIVATE_PLACEMENT,
-    MEMORY_WRITE_DIRECT,
     RUN_USER_PRIVATE_SCOPE,
 )
-from app.schemas import MemoryCreate
+from app.policy.enforcement import check_private_memory_placement
 from tests.support import factories
 
 
@@ -97,7 +96,6 @@ def _private_memory(db, *, space_id: str, owner_user_id: str, content: str = "se
 
 def test_policy_domain_constants_registered():
     for domain in (
-        MEMORY_WRITE_DIRECT,
         MEMORY_PRIVATE_PLACEMENT,
         RUN_USER_PRIVATE_SCOPE,
         MEMORY_CROSS_SPACE_READ,
@@ -175,23 +173,16 @@ def test_enforcement_helper_recognizes_private_placement_domain(db, cross_space_
 def test_private_memory_write_to_team_space_rejected(db):
     space_id, user = _team_space(db)
     with pytest.raises(ValueError, match="personal"):
-        MemoryStore(db).create(
-            MemoryCreate(
-                title="x",
-                space_id=space_id,
-                scope="user",
-                type="semantic",
-                content="nope",
-                visibility="private",
-                owner_user_id=user.id,
-            ),
-            acting_user_id=user.id,
+        check_private_memory_placement(
+            db, space_id=space_id, visibility="private", acting_user_id=user.id
         )
 
 
 def test_private_memory_write_to_personal_space_allowed(db):
     space_id, user = _personal_space(db)
-    mem = MemoryStore(db).create(
+    from app.schemas import MemoryCreate
+
+    mem = MemoryInternalWriter(db).create_system_seed_memory(
         MemoryCreate(
             title="ok",
             space_id=space_id,
@@ -200,15 +191,16 @@ def test_private_memory_write_to_personal_space_allowed(db):
             content="personal-private",
             visibility="private",
             owner_user_id=user.id,
-        ),
-        acting_user_id=user.id,
+        )
     )
     assert mem.visibility == "private"
 
 
 def test_space_shared_write_to_team_space_allowed(db):
     space_id, user = _team_space(db)
-    mem = MemoryStore(db).create(
+    from app.schemas import MemoryCreate
+
+    mem = MemoryInternalWriter(db).create_system_seed_memory(
         MemoryCreate(
             title="shared",
             space_id=space_id,
@@ -216,8 +208,7 @@ def test_space_shared_write_to_team_space_allowed(db):
             type="semantic",
             content="team-shared",
             visibility="space_shared",
-        ),
-        acting_user_id=user.id,
+        )
     )
     assert mem.visibility == "space_shared"
 
@@ -226,17 +217,8 @@ def test_active_deny_policy_does_not_weaken_private_placement_rejection(db):
     space_id, user = _team_space(db)
     _policy_row(db, space_id=space_id, domain=MEMORY_PRIVATE_PLACEMENT, effect="deny")
     with pytest.raises(ValueError, match="personal"):
-        MemoryStore(db).create(
-            MemoryCreate(
-                title="deny policy",
-                space_id=space_id,
-                scope="user",
-                type="semantic",
-                content="still blocked",
-                visibility="private",
-                owner_user_id=user.id,
-            ),
-            acting_user_id=user.id,
+        check_private_memory_placement(
+            db, space_id=space_id, visibility="private", acting_user_id=user.id
         )
 
 
@@ -244,17 +226,8 @@ def test_active_allow_policy_cannot_permit_private_in_team_space(db):
     space_id, user = _team_space(db)
     _policy_row(db, space_id=space_id, domain=MEMORY_PRIVATE_PLACEMENT, effect="allow")
     with pytest.raises(ValueError, match="personal"):
-        MemoryStore(db).create(
-            MemoryCreate(
-                title="allow override attempt",
-                space_id=space_id,
-                scope="user",
-                type="semantic",
-                content="allow cannot override",
-                visibility="private",
-                owner_user_id=user.id,
-            ),
-            acting_user_id=user.id,
+        check_private_memory_placement(
+            db, space_id=space_id, visibility="private", acting_user_id=user.id
         )
 
 
@@ -265,17 +238,8 @@ def test_no_policy_row_hard_invariant_still_rejects_unsafe_placement(db):
         == ActivePolicyDecision.NO_POLICY
     )
     with pytest.raises(ValueError, match="personal"):
-        MemoryStore(db).create(
-            MemoryCreate(
-                title="hard invariant",
-                space_id=space_id,
-                scope="user",
-                type="semantic",
-                content="hard invariant",
-                visibility="private",
-                owner_user_id=user.id,
-            ),
-            acting_user_id=user.id,
+        check_private_memory_placement(
+            db, space_id=space_id, visibility="private", acting_user_id=user.id
         )
 
 
@@ -377,18 +341,9 @@ def test_allow_with_log_on_space_shared_write_emits_trace(db):
     space_id, user = _team_space(db)
     _policy_row(db, space_id=space_id, domain=MEMORY_PRIVATE_PLACEMENT, effect="allow_with_log")
     with patch("app.policy.enforcement.record_policy_decision_trace") as trace:
-        mem = MemoryStore(db).create(
-            MemoryCreate(
-                title="traced shared",
-                space_id=space_id,
-                scope="agent",
-                type="semantic",
-                content="shared ok",
-                visibility="space_shared",
-            ),
-            acting_user_id=user.id,
+        check_private_memory_placement(
+            db, space_id=space_id, visibility="space_shared", acting_user_id=user.id
         )
-    assert mem.visibility == "space_shared"
     assert trace.called
     assert any(
         c.kwargs.get("domain") == MEMORY_PRIVATE_PLACEMENT
@@ -401,17 +356,8 @@ def test_allow_with_log_private_personal_write_emits_trace(db):
     space_id, user = _personal_space(db)
     _policy_row(db, space_id=space_id, domain=MEMORY_PRIVATE_PLACEMENT, effect="allow_with_log")
     with patch("app.policy.enforcement.record_policy_decision_trace") as trace:
-        MemoryStore(db).create(
-            MemoryCreate(
-                title="traced private",
-                space_id=space_id,
-                scope="user",
-                type="semantic",
-                content="personal ok",
-                visibility="private",
-                owner_user_id=user.id,
-            ),
-            acting_user_id=user.id,
+        check_private_memory_placement(
+            db, space_id=space_id, visibility="private", acting_user_id=user.id
         )
     assert trace.called
     assert any(c.kwargs.get("outcome") == "allowed" for c in trace.call_args_list)
@@ -422,17 +368,8 @@ def test_private_placement_deny_emits_trace(db):
     _policy_row(db, space_id=space_id, domain=MEMORY_PRIVATE_PLACEMENT, effect="deny")
     with patch("app.policy.enforcement.record_policy_decision_trace") as trace:
         with pytest.raises(ValueError, match="denied by active policy"):
-            MemoryStore(db).create(
-                MemoryCreate(
-                    title="denied",
-                    space_id=space_id,
-                    scope="user",
-                    type="semantic",
-                    content="nope",
-                    visibility="private",
-                    owner_user_id=user.id,
-                ),
-                acting_user_id=user.id,
+            check_private_memory_placement(
+                db, space_id=space_id, visibility="private", acting_user_id=user.id
             )
     assert any(c.kwargs.get("outcome") == "denied" for c in trace.call_args_list)
 

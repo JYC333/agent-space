@@ -16,7 +16,7 @@ ContextSnapshot DB columns.
 Digest integration:
   When active ContextDigest rows exist for the space/workspace/agent, their
   rendered content is injected into stable_prefix (before direct memory rows).
-  If no digest exists, falls back to direct MemoryRetriever behaviour (MF5).
+  If no digest exists, falls back to direct MemoryRetriever behaviour.
   Digest usage is recorded in source_refs_json and retrieval_trace_json for
   full auditability, including the underlying source_memory_ids/policy_ids.
 """
@@ -140,7 +140,7 @@ def _render_stable_prefix(
                 tag = f"[digest:{digest.digest_type}:v{digest.version}]"
                 parts.append(f"{tag}\n{digest.content.strip()}")
     else:
-        # Fallback: render active policies directly (MF5 behaviour).
+        # Fallback: render active policies directly.
         for p in pkg.active_policies:
             name = p.get("name", p.get("id", "policy"))
             domain = p.get("domain", "")
@@ -230,6 +230,7 @@ class ContextSnapshotPopulator:
             space_id=run.space_id,
             user_id=user_id,
             workspace_id=workspace_id,
+            session_id=run.session_id or None,
             agent_id=run.agent_id,
             run_id=run.id,
             query=run.prompt or None,

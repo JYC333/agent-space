@@ -3,8 +3,8 @@
 Invariants verified:
   1.  claude_code/default resolves for runtime="claude_code" (canonical name).
   2.  codex_cli/default resolves for runtime="codex_cli" (canonical name).
-  3.  claude-code/default does NOT resolve for runtime="claude_code" (legacy name rejected).
-  4.  codex/default does NOT resolve for runtime="codex_cli" (legacy name rejected).
+  3.  claude-code/default does NOT resolve for runtime="claude_code" (hyphenated form not recognized).
+  4.  codex/default does NOT resolve for runtime="codex_cli" (short form not recognized).
   5.  No profile → get_default_profile returns None.
   6.  Canonical exact-match takes priority over any other profile under the same runtime.
   7.  RunExecutionService / preflight does NOT manually probe aliases
@@ -82,12 +82,12 @@ def test_codex_cli_canonical_resolves(tmp_path):
 
 
 # ===========================================================================
-# 3. Legacy claude-code/default does NOT resolve for runtime="claude_code"
+# 3. Hyphenated claude-code/default does NOT resolve for runtime="claude_code"
 # ===========================================================================
 
 
-def test_legacy_claude_dash_code_does_not_resolve_for_claude_code(tmp_path):
-    """claude-code/default is a legacy directory name — it must not be found for claude_code."""
+def test_hyphenated_claude_dash_code_does_not_resolve_for_claude_code(tmp_path):
+    """claude-code/default uses a hyphenated name — broker requires underscore-normalized runtime names."""
     profile_dir = tmp_path / "claude-code" / "default"
     profile_dir.mkdir(parents=True)
 
@@ -99,12 +99,12 @@ def test_legacy_claude_dash_code_does_not_resolve_for_claude_code(tmp_path):
 
 
 # ===========================================================================
-# 4. Legacy codex/default does NOT resolve for runtime="codex_cli"
+# 4. Short-form codex/default does NOT resolve for runtime="codex_cli"
 # ===========================================================================
 
 
-def test_legacy_codex_does_not_resolve_for_codex_cli(tmp_path):
-    """codex/default is a legacy directory name — it must not be found for codex_cli."""
+def test_short_codex_does_not_resolve_for_codex_cli(tmp_path):
+    """codex/default uses the short non-canonical name — broker requires codex_cli/default."""
     profile_dir = tmp_path / "codex" / "default"
     profile_dir.mkdir(parents=True)
 

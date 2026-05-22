@@ -14,9 +14,8 @@ from sqlalchemy import func
 
 from app.models import MemoryEntry, Proposal
 from app.memory.proposals import ProposalService
-from app.memory.store import MemoryStore
 from app.policy.domains import MEMORY_PRIVATE_PLACEMENT
-from app.schemas import MemoryCreate
+from app.policy.enforcement import check_private_memory_placement
 from tests.support import factories
 
 
@@ -158,18 +157,7 @@ def test_allow_with_log_space_shared_store_write_traces_and_succeeds(db, cross_s
         commit=True,
     )
     with patch("app.policy.enforcement.record_policy_decision_trace") as trace:
-        mem = MemoryStore(db).create(
-            MemoryCreate(
-                title="Shared traced",
-                space_id=a,
-                scope="agent",
-                type="semantic",
-                content="ok",
-                visibility="space_shared",
-            ),
-            acting_user_id=ua.id,
-        )
-    assert mem.visibility == "space_shared"
+        check_private_memory_placement(db, space_id=a, visibility="space_shared", acting_user_id=ua.id)
     assert trace.called
     assert any(
         c.kwargs.get("domain") == MEMORY_PRIVATE_PLACEMENT and c.kwargs.get("outcome") == "allowed"
@@ -188,16 +176,10 @@ def test_deny_policy_rejects_private_placement_in_personal_space(db, test_space,
         commit=True,
     )
     with pytest.raises(ValueError, match="denied by active policy"):
-        MemoryStore(db).create(
-            MemoryCreate(
-                title="Denied",
-                space_id=test_space.id,
-                scope="user",
-                type="semantic",
-                content="nope",
-                visibility="private",
-                owner_user_id=test_user.id,
-            ),
+        check_private_memory_placement(
+            db,
+            space_id=test_space.id,
+            visibility="private",
             acting_user_id=test_user.id,
         )
 
@@ -215,18 +197,7 @@ def test_allow_policy_cannot_override_private_placement_in_team_space(db, cross_
         commit=True,
     )
     with pytest.raises(ValueError, match="personal"):
-        MemoryStore(db).create(
-            MemoryCreate(
-                title="Blocked",
-                space_id=a,
-                scope="user",
-                type="semantic",
-                content="nope",
-                visibility="private",
-                owner_user_id=ua.id,
-            ),
-            acting_user_id=ua.id,
-        )
+        check_private_memory_placement(db, space_id=a, visibility="private", acting_user_id=ua.id)
 
 
 def test_accepting_space_shared_proposal_in_team_space_allowed(db, cross_space_pair):

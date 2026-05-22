@@ -80,13 +80,13 @@ This document describes current capability lines and known future risks. It is o
 
 ### 5. Policy Enforcement Expansion
 
-**Current state:** `PolicyEngine` loads active persisted Policy rows. One slice active: `memory.write_direct` with `deny` effect. Most enforcement points still use local route/service checks.
+**Current state:** `PolicyEngine` evaluates stateless built-in rules. Domain-specific persisted-policy enforcement lives in `policy/enforcement.py` (`memory.private_placement`, `run.user_private_scope`). The memory write boundary is structural (`_INTERNAL_WRITE_AUTHORITY` sentinel), not policy-based. Most other enforcement points still use local route/service checks.
 
 **Why it matters:** Scattered policy means bypasses are hard to detect as capabilities grow. Future automation and agent work need centralized auditable enforcement.
 
 **Likely next steps:** Inventory remaining enforcement points. Add one additional persisted policy class (candidate: `runtime.execute`). Prove wiring with tests.
 
-**What must be true first:** Current `memory.write_direct` enforcement is fully tested and stable.
+**What must be true first:** Existing persisted-policy enforcement (`memory.private_placement`, `run.user_private_scope`) is fully tested and stable.
 
 **Risks if built too early:** Full RBAC/ABAC before the audit trail is solid creates false enforcement confidence.
 
@@ -208,7 +208,7 @@ This document describes current capability lines and known future risks. It is o
 
 ### 13. Control Plane and Learning Loop
 
-**Current state:** The data model is sufficient for the MVP control-plane loop. Core model supports:
+**Current state:** The data model supports the current control-plane loop. Core model supports:
 
 - `ExecutionPlane` — registered execution environments and their capability envelope
 - `ModelProvider` — provider credential and config binding

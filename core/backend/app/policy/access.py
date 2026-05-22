@@ -8,7 +8,6 @@ from typing import Any
 
 from .domains import (
     ALL_REGISTERED_DOMAINS,
-    MEMORY_WRITE_DIRECT,
     SECURITY_SENSITIVE_DOMAINS,
 )
 
@@ -99,68 +98,11 @@ def _row_matches_domain(row: Any, domain: str) -> bool:
     return False
 
 
-def row_matches_write_direct(row: Any, *, action: str, resource_type: str) -> bool:
-    """Match persisted rows for ``memory.write_direct`` (PolicyEngine)."""
-    if row.policy_key in (MEMORY_WRITE_DIRECT, "memory.write_direct.guard"):
-        rule_json = _as_dict(row.rule_json)
-        policy_json = _as_dict(row.policy_json)
-        applies_to = _as_dict(row.applies_to_json)
-        row_action = (
-            rule_json.get("action")
-            or policy_json.get("action")
-            or applies_to.get("action")
-            or MEMORY_WRITE_DIRECT
-        )
-        row_resource_type = (
-            rule_json.get("resource_type")
-            or policy_json.get("resource_type")
-            or applies_to.get("resource_type")
-            or "memory"
-        )
-        return row_action == action and row_resource_type == resource_type
-
-    rule_json = _as_dict(row.rule_json)
-    policy_json = _as_dict(row.policy_json)
-    applies_to = _as_dict(row.applies_to_json)
-    policy_type = (
-        rule_json.get("policy_type")
-        or policy_json.get("policy_type")
-        or applies_to.get("policy_type")
-        or row.policy_key
-    )
-    row_action = (
-        rule_json.get("action")
-        or policy_json.get("action")
-        or applies_to.get("action")
-    )
-    row_resource_type = (
-        rule_json.get("resource_type")
-        or policy_json.get("resource_type")
-        or applies_to.get("resource_type")
-    )
-    if policy_type not in ("memory_write", "memory_write_direct"):
-        return False
-    return row_action == action and row_resource_type == resource_type
-
-
 def load_active_policies_for_domain(db: Any, *, space_id: str, domain: str) -> list[Any]:
     if domain not in ALL_REGISTERED_DOMAINS:
         return []
     rows = load_active_policy_rows(db, space_id=space_id)
     return [row for row in rows if _row_matches_domain(row, domain)]
-
-
-def load_active_policies_for_write_direct(
-    db: Any,
-    *,
-    space_id: str,
-    action: str,
-    resource_type: str,
-) -> list[Any]:
-    if action != MEMORY_WRITE_DIRECT or resource_type != "memory":
-        return []
-    rows = load_active_policy_rows(db, space_id=space_id, policy_domain_column="memory")
-    return [row for row in rows if row_matches_write_direct(row, action=action, resource_type=resource_type)]
 
 
 def get_active_policy_match(

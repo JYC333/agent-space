@@ -1,15 +1,13 @@
 """Invariant: private memory placement and access control.
 
-Gap 2b (closed): MemoryStore.create() now rejects visibility=private writes to any
-non-personal space (household, team).  The enforcement is at the lowest shared creation
-path so all write routes are covered without requiring API-layer changes.
+Placement enforcement: MemoryStore.create → check_private_memory_placement rejects
+visibility=private in non-personal spaces. This is a hard structural invariant —
+no policy row can override it for team/household spaces.
 
 Test structure:
 - PLACEMENT ENFORCEMENT tests: assert write-layer rejection for non-personal spaces.
 - ACCESS CONTROL tests: verify read-time protection at can_read_memory / MemoryRetriever.
 - CORRECT PATTERN tests: verify that personal-space private memory works as intended.
-
-See: .agent/reports/space-ownership-visibility-gap-analysis.md § Gap 2b, Gap 2c
 """
 
 from __future__ import annotations
@@ -17,10 +15,11 @@ from __future__ import annotations
 import pytest
 from ulid import ULID
 
+from app.memory.internal_writer import MemoryInternalWriter
 from app.memory.read_auth import can_read_memory
 from app.memory.retriever import MemoryRetriever
 from app.models import MemoryEntry, Space, SpaceMembership
-from app.memory.store import MemoryStore
+from app.policy.enforcement import check_private_memory_placement
 from tests.support import factories
 
 
@@ -73,16 +72,16 @@ def _insert_private_memory(db, *, space_id: str, owner_user_id: str, content: st
 
 
 # ---------------------------------------------------------------------------
-# PLACEMENT ENFORCEMENT: MemoryStore.create() rejects private writes to non-personal spaces
+# PLACEMENT ENFORCEMENT: write path rejects private writes to non-personal spaces
 # ---------------------------------------------------------------------------
 
 
 def test_space_shared_memory_write_to_team_space_is_allowed(db):
-    """MemoryStore.create() allows visibility=space_shared writes to team/household spaces."""
+    """The write layer allows visibility=space_shared writes to team/household spaces."""
     from app.schemas import MemoryCreate
 
     setup = _make_space(db, space_type="team")
-    mem = MemoryStore(db).create(
+    mem = MemoryInternalWriter(db).create_system_seed_memory(
         MemoryCreate(
             title="Shared in team",
             space_id=setup["space_id"],
@@ -90,8 +89,7 @@ def test_space_shared_memory_write_to_team_space_is_allowed(db):
             type="semantic",
             content="team-shared",
             visibility="space_shared",
-        ),
-        acting_user_id=setup["user"].id,
+        )
     )
     assert mem.id is not None
     assert mem.visibility == "space_shared"
@@ -99,24 +97,16 @@ def test_space_shared_memory_write_to_team_space_is_allowed(db):
 
 @pytest.mark.parametrize("space_type", ["team", "household"])
 def test_private_memory_write_to_non_personal_space_is_rejected(db, space_type):
-    """MemoryStore.create() rejects visibility=private writes to non-personal spaces."""
-    from app.schemas import MemoryCreate
-
+    """Write path rejects visibility=private writes to non-personal spaces."""
     setup = _make_space(db, space_type=space_type)
     space = db.query(Space).filter(Space.id == setup["space_id"]).first()
     assert space.type == space_type, "Precondition: space must be non-personal"
 
     with pytest.raises(ValueError, match="personal"):
-        MemoryStore(db).create(
-            MemoryCreate(
-                title=f"Private in {space_type}",
-                space_id=setup["space_id"],
-                scope="user",
-                type="semantic",
-                content=f"private-in-{space_type}",
-                visibility="private",
-                owner_user_id=setup["user"].id,
-            ),
+        check_private_memory_placement(
+            db,
+            space_id=setup["space_id"],
+            visibility="private",
             acting_user_id=setup["user"].id,
         )
 
@@ -185,22 +175,21 @@ def test_misplaced_private_memory_excluded_from_non_owner_retrieval(db):
 
 
 # ---------------------------------------------------------------------------
-# MemoryStore enforcement: owner_user_id is required for private visibility
+# Write-layer enforcement: owner_user_id is required for private visibility
 # ---------------------------------------------------------------------------
 
 
-def test_memory_store_requires_owner_user_id_for_private_visibility(db):
-    """MemoryStore.create() raises ValueError when visibility=private has no owner.
+def test_write_layer_requires_owner_user_id_for_private_visibility(db):
+    """Write path raises ValueError when visibility=private has no owner.
 
-    This is partial write-layer protection: ensures private memories always have
-    an identifiable owner even though placement (space type) is not enforced.
+    Ensures private memories always have an identifiable owner.
     """
     from app.schemas import MemoryCreate
 
-    setup = _make_space(db, space_type="household")
+    setup = _make_space(db, space_type="personal")
 
     with pytest.raises(ValueError, match="owner_user_id"):
-        MemoryStore(db).create(
+        MemoryInternalWriter(db).create_system_seed_memory(
             MemoryCreate(
                 space_id=setup["space_id"],
                 scope="user",
@@ -208,8 +197,7 @@ def test_memory_store_requires_owner_user_id_for_private_visibility(db):
                 content="orphan-private",
                 visibility="private",
                 owner_user_id=None,
-            ),
-            acting_user_id=None,  # no user context either
+            )
         )
 
 

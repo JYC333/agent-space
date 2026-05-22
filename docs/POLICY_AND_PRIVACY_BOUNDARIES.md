@@ -16,8 +16,8 @@ active rows (`enabled`, `status=active`, priority desc, created_at desc, id desc
 **Domain decisions:** `get_active_policy_match()` / `get_active_policy_decision()` —
 filter in Python via `_row_matches_domain()`.
 
-**PolicyEngine persisted class:** `load_active_policies_for_write_direct()` — same
-canonical loader + `row_matches_write_direct()`.
+**PolicyEngine** evaluates stateless built-in rules only. It does not load persisted
+Policy rows. Domain-specific persisted-policy enforcement lives in `policy/enforcement.py`.
 
 Space membership role checks (`app.auth.policy`) remain separate from persisted Policy rows.
 
@@ -43,14 +43,6 @@ policy traces are separate log events.
 ---
 
 ## Enforced Policy Domains
-
-### `memory.write_direct`
-
-**Status:** Enforced
-
-- `MemoryInternalWriter` → `PolicyEngine.assert_allowed()` with `MEMORY_WRITE_DIRECT` constant.
-- Persisted rows matched via canonical loader + `row_matches_write_direct()`.
-- Tests: `tests/invariants/test_memory_write_invariants.py`, `tests/unit/test_policy_engine.py`
 
 ### `memory.private_placement`
 
@@ -109,8 +101,8 @@ policy traces are separate log events.
 
 ## PersonalMemoryGrant Enforcement Boundaries
 
-PersonalMemoryGrant is the MVP for allowing a shared-space run to use personal-space
-private memory as reasoning-only context. The current MVP is complete.
+PersonalMemoryGrant allows a shared-space run to use personal-space private memory as
+reasoning-only context, subject to explicit grant, ephemeral injection, and egress guard.
 
 ### Grant API and Lifecycle (`app.personal_memory_grants`)
 
@@ -153,7 +145,7 @@ regardless). Instead, the proposal payload carries explicit risk metadata:
 ### Proposal Approval Gate (`app.proposals.approvals`)
 
 - `proposal_approvals` table stores first-class metadata-only approval rows.
-- MVP approval type: `egress_granting_user`; statuses: `approved \| revoked`.
+- Approval type: `egress_granting_user`; statuses: `approved \| revoked`.
 - Only `PersonalMemoryGrant.granting_user_id` may record `egress_granting_user`; space
   admins/owners cannot approve on behalf of the granting user.
 - `ProposalApplyService` requires a valid `proposal_approvals` row before applying
@@ -207,9 +199,8 @@ No `visibility=public`; proposal type `publish` not in `_SUPPORTED_ACCEPT_TYPES`
 
 | Domain | Runtime wired | Tracing |
 |--------|---------------|---------|
-| `memory.write_direct` | PolicyEngine | Not yet (engine uses allow/deny/require_approval only) |
-| `memory.private_placement` | Yes | Structured log |
-| `run.user_private_scope` | Yes | Structured log |
+| `memory.private_placement` | `policy/enforcement.py` | Structured log |
+| `run.user_private_scope` | `policy/enforcement.py` | Structured log |
 | `memory.cross_space_read` | Structural deny only | Structured log on blocked cross-space |
 
 Malformed effects on security-sensitive domains fail safe → **deny** (`get_active_policy_match`).

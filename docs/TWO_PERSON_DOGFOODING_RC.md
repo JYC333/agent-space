@@ -773,9 +773,9 @@ Resume dogfooding only after the failed gate passes and the incident note is fil
 2. **Household membership access bypass** — A non-member user accesses household space
    data.
 
-3. **Memory write bypasses proposal or active policy boundary** — A direct internal memory
-   write succeeds without going through `create_from_approved_proposal` when an active
-   `memory.write_direct` deny policy is in effect.
+3. **Memory write bypasses the structural write boundary** — A direct internal memory
+   write succeeds without going through the proposal-approval path (`create_from_approved_proposal`)
+   or the bootstrap seed path (`create_system_seed_memory`).
 
 4. **Accepted policy does not affect enforcement** — An accepted, active `Policy` row
    with the selected class does not change the enforcement decision it was meant to govern.
@@ -873,7 +873,7 @@ Backup manifest inspected: <yes / no>
 |---|---|
 | `Credential.secret_ref` full decryption deferred | Only `ModelProvider` encrypted keys decryptable; full secret_ref deferred |
 | `app.agents` CLI adapter runtime path | CLI adapters only; new adapters must use `app.runtimes` |
-| Most PolicyEngine enforcement points not yet wired to persisted policy | One class (`memory.write_direct`) is wired; rest documented in `PRODUCT_AND_BOUNDARIES.md` |
+| Most PolicyEngine enforcement points not yet wired to persisted policy | Active classes: `memory.private_placement`, `run.user_private_scope`; structural write boundary via sentinel; rest documented in `PRODUCT_AND_BOUNDARIES.md` |
 | Artifact archive/delete API not yet implemented | Artifacts accumulate; deferred |
 | Activity archive/delete not yet implemented | Deferred |
 | Workspace stale status has no recovery UI | Operator must use `PATCH /workspaces/{id}` |

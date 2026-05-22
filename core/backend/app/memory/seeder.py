@@ -104,6 +104,6 @@ def seed_system_memories_for_space(db: Session, space_id: str) -> int:
             .first()
         )
         if not exists:
-            writer.create(seed, created_by="system_seed")
+            writer.create_system_seed_memory(seed, created_by="system_seed")
             inserted += 1
     return inserted

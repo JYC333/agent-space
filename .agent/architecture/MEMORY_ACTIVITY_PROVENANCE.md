@@ -106,11 +106,9 @@ The gate runs inside `ProposalApplyService._enforce_source_monitoring` before an
 
 Activity-first capture with `source_type=user_capture` resolves to `user_confirmed`, which satisfies the gate for semantic memory proposals.
 
-## Direct Memory Write Policy Enforcement
+## Memory Write Boundary
 
-`MemoryInternalWriter` enforces a `PolicyEngine` check with action `memory.write_direct` on all direct internal writes (create, update, delete, mark_status).
-
-An active persisted `Policy` row with `domain=memory`, `action=memory.write_direct`, `effect=deny` blocks direct internal memory writes.
+Active `MemoryEntry` creation requires the `_INTERNAL_WRITE_AUTHORITY` sentinel (held only by `MemoryInternalWriter._persist()`). The only allowed write paths are the proposal-approval path (`ProposalApplyService` → `MemoryInternalWriter.create_from_approved_proposal()`) and the bootstrap seed path (`MemoryInternalWriter.create_system_seed_memory()`). There is no policy-based write gate on this boundary — it is structural.
 
 Approved proposal apply uses proposal-validated writer methods. Ordinary callers cannot pass a generic bypass reason string.
 

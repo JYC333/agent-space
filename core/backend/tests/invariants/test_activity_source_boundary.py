@@ -10,8 +10,7 @@ These invariants protect the following product rules:
 5. Accepted memory proposal preserves provenance into MemoryEntry and ProvenanceLink rows.
 6. ActivityRecord is the product activity/inbox layer; it does not produce active memory directly.
 7. Information Horizon: no code path creates active Memory from raw capture without proposal.
-8. Public memory writes remain proposal-first.
-9. Direct memory write policy (M5) remains enforced under Activity-first path.
+8. Public memory writes remain proposal-first (POST /memory → 202 Proposal, never 200 MemoryEntry).
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ import pytest
 from sqlalchemy import func
 
 from app.memory.apply_service import ProposalApplyService, ProposalApplyError
-from app.memory.internal_writer import MemoryInternalWriter
 from app.memory.proposals import ProposalService
 from app.memory.source_monitoring import SourceMonitoringService
 from app.models import ActivityRecord, MemoryEntry, Policy, ProvenanceLink, Proposal, Session
@@ -342,16 +340,19 @@ def test_activity_record_status_progression_stays_in_inbox_states(db, cross_spac
 
 
 def test_no_direct_memory_write_from_raw_activity_payload(db, cross_space_pair):
-    """MemoryInternalWriter cannot be called with raw activity content directly.
+    """No code path auto-creates active Memory from raw ActivityRecord.
 
-    This proves no shortcut from raw Activity content to active Memory exists outside
-    the proposal/apply path. The writer is governed by M5 policy; direct writes require
-    no active deny policy here, but the boundary is that raw capture → direct writer → memory
-    is structurally prevented by requiring the approved-proposal writer methods.
+    The boundary: raw capture → active Memory requires proposal/apply cycle.
+    ActivityRecord factory must not auto-promote to active Memory.
     """
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
-    from app.schemas import MemoryCreate
+
+    before = (
+        db.query(func.count(MemoryEntry.id))
+        .filter(MemoryEntry.space_id == a, MemoryEntry.status == "active")
+        .scalar()
+    )
 
     act = factories.create_test_activity(
         db,
@@ -363,34 +364,9 @@ def test_no_direct_memory_write_from_raw_activity_payload(db, cross_space_pair):
         commit=True,
     )
 
-    writer = MemoryInternalWriter(db)
-    mem_data = MemoryCreate(
-        title="direct write attempt",
-        content=act.content or "",
-        type="semantic",
-        scope="user",
-        namespace="user.default",
-        space_id=a,
-        visibility="private",
-        sensitivity_level="normal",
-        owner_user_id=ua.id,
-    )
-
-    # Direct write without an approved proposal is blocked when an active deny policy exists;
-    # without one it succeeds (M5 default-allow when no active policy row).
-    # The boundary being tested here is that there is no code path that auto-creates
-    # Memory from ActivityRecord without going through the proposal/accept cycle.
-    # We confirm the raw activity is still 'raw' and that writing via the writer requires
-    # explicit caller intent — no implicit pipeline auto-creates memory from Activity.
-    before = (
-        db.query(func.count(MemoryEntry.id))
-        .filter(MemoryEntry.space_id == a, MemoryEntry.status == "active")
-        .scalar()
-    )
     db.refresh(act)
-    assert act.status == "raw", "activity must remain raw after this test preamble"
-    # The raw activity has no auto-promotion path in product code.
-    # Confirm no memory was auto-created during the activity factory call.
+    assert act.status == "raw", "activity must remain raw after factory call"
+
     after = (
         db.query(func.count(MemoryEntry.id))
         .filter(MemoryEntry.space_id == a, MemoryEntry.status == "active")
@@ -440,50 +416,3 @@ def test_public_memory_write_returns_proposal_not_memory(api_client, db, cross_s
     assert after == before, "public memory write must not create active MemoryEntry"
 
 
-# ---------------------------------------------------------------------------
-# 9. Direct memory write remains governed by M5 policy (regression)
-# ---------------------------------------------------------------------------
-
-
-def test_direct_memory_write_blocked_by_active_deny_policy(db, cross_space_pair):
-    """M5: MemoryInternalWriter.create is blocked by an active deny policy (regression)."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
-    from app.schemas import MemoryCreate
-
-    active_policy = factories.create_test_policy(
-        db,
-        space_id=a,
-        domain="memory",
-        policy_key="memory.write_direct.guard",
-        status="active",
-        enabled=True,
-        rule_json={
-            "policy_type": "memory_write",
-            "action": "memory.write_direct",
-            "resource_type": "memory",
-            "effect": "deny",
-            "reason": "M6 regression: direct writes must use proposal",
-        },
-        commit=True,
-    )
-
-    writer = MemoryInternalWriter(db)
-    mem_data = MemoryCreate(
-        title="blocked write",
-        content="should be blocked",
-        type="semantic",
-        scope="user",
-        namespace="user.default",
-        space_id=a,
-        visibility="private",
-        sensitivity_level="normal",
-        owner_user_id=ua.id,
-    )
-
-    with pytest.raises(PermissionError):
-        writer.create(
-            mem_data,
-            created_by=ua.id,
-            acting_user_id=ua.id,
-        )

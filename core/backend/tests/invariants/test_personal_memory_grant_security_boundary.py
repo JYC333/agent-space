@@ -537,15 +537,14 @@ def test_grant_does_not_enable_team_memory_write_of_private_content(db):
 # ---------------------------------------------------------------------------
 
 
-def test_multi_user_grant_rejected_in_mvp(db):
+def test_multi_user_grant_rejected(db):
     """Multi-user grants are deferred: user_A cannot create a grant for a run instructed by user_B.
 
-    MVP rule: the granting user (caller) must be the same user who instructed the target run.
+    The granting user (caller) must be the same user who instructed the target run.
     The Run model has a single instructed_by_user_id. Granting access to another user's run
     is rejected at the service layer via TargetRunOwnershipError.
 
-    This documents the deferral explicitly: multi-user grants require a safe per-user
-    isolation model and are deferred to future product design.
+    Multi-user grants require a safe per-user isolation model and are deferred.
     """
     from app.personal_memory_grants.service import (
         TargetRunOwnershipError,

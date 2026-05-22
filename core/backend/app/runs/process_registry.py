@@ -1,7 +1,7 @@
 """In-process subprocess handle registry for run cancellation.
 
 Maps run_id → PID for CLI subprocesses in progress. Thread-safe for single-process
-deployments. Cross-process termination is not supported in this slice.
+deployments. Cross-process termination is not yet implemented.
 
 Usage:
     register(run_id, pid)    — called by LocalExecutor when subprocess starts

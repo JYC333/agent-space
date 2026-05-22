@@ -574,6 +574,48 @@ class Message(Base):
     )
 
 
+class SessionSummary(Base):
+    """Derived condensed summary of a chat session.
+
+    Invariants:
+    - Never a MemoryEntry. SessionCondenser must not create Proposal or MemoryEntry rows.
+    - Derived context only: can be regenerated, superseded, or discarded.
+    - Multiple versions per session are kept; only one has status="active".
+    - version is monotonically increasing per session (unique per session).
+    """
+
+    __tablename__ = "session_summaries"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("sessions.id"), nullable=False, index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source_first_message_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+    source_last_message_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+    summary_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    token_estimate_before: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    token_estimate_after: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    condenser_version: Mapped[str] = mapped_column(String(64), nullable=False, default="pattern.v1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    __table_args__ = (
+        CheckConstraint("status in ('active', 'superseded')", name="ck_session_summaries_status"),
+        UniqueConstraint("session_id", "version", name="uq_session_summaries_session_version"),
+        Index("ix_session_summaries_session_status", "session_id", "status"),
+        Index("ix_session_summaries_space_session_status", "space_id", "session_id", "status"),
+        Index(
+            "ix_session_summaries_one_active_per_session",
+            "session_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Source pointers and immutable snapshots
 # ---------------------------------------------------------------------------

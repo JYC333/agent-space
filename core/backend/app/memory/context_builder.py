@@ -366,7 +366,6 @@ class ContextBuilder:
 
         _ = task_type  # reserved
         _ = capability_id  # reserved
-        _ = session_id  # reserved
 
         include_system_scope = (
             agent_memory_policy is None
@@ -460,13 +459,58 @@ class ContextBuilder:
             for p in active_policies
         ]
 
+        # ── Latest active session summary ────────────────────────────────
+        recent_session_summary: list[dict] = []
+        session_summary_trace: dict = {
+            "session_summary_used": False,
+            "session_summary_id": None,
+            "session_summary_version": None,
+            "session_summary_fallback_reason": None,
+        }
+        if session_id:
+            try:
+                from ..sessions.condenser import SessionCondenser
+                summary = SessionCondenser(self.db).get_latest(session_id, space_id)
+                if summary is not None:
+                    recent_session_summary = [{
+                        "summary": summary.summary_text,
+                        "session_id": session_id,
+                        "version": summary.version,
+                        "condenser_version": summary.condenser_version,
+                    }]
+                    # Source ref — session_summary lives in the dynamic tail
+                    summary_ref = {
+                        "source_type": "session_summary",
+                        "source_id": summary.id,
+                        "session_id": session_id,
+                        "version": summary.version,
+                        "section": "dynamic_tail",
+                        "derived_context": True,
+                    }
+                    dynamic_tail_refs.append(summary_ref)
+                    source_refs.append(summary_ref)
+                    session_summary_trace = {
+                        "session_summary_used": True,
+                        "session_summary_id": summary.id,
+                        "session_summary_version": summary.version,
+                        "session_summary_fallback_reason": None,
+                    }
+                else:
+                    session_summary_trace["session_summary_fallback_reason"] = "no_active_summary"
+            except Exception as exc:  # noqa: BLE001
+                log.warning("ContextBuilder: session summary lookup failed: %s", exc)
+                session_summary_trace["session_summary_fallback_reason"] = f"lookup_error:{type(exc).__name__}"
+
+        retrieval_trace = dict(retrieval_trace) if retrieval_trace else {}
+        retrieval_trace["session_summary"] = session_summary_trace
+
         return ContextPackage(
             user_memory=_to_out_list(user_memory, include_system=False),
             workspace_memory=_to_out_list(workspace_memory, include_system=False),
             capability_memory=_to_out_list(capability_memory, include_system=False),
             agent_memory=_to_out_list(agent_memory, include_system=False),
             system_policy=_to_out_list(system_policy_mem, include_system=True),
-            recent_session_summary=[],
+            recent_session_summary=recent_session_summary,
             relevant_episodes=_to_out_list(relevant_episodes, include_system=False),
             attachments=resolved_attachments,
             active_policies=active_policy_dicts,
