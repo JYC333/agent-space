@@ -49,11 +49,12 @@ from .code_patch_collector import collect_and_create_code_patch_proposal
 from .worktree_validation import get_workspace_validation_commands, run_validation_in_worktree
 from .runtime_preflight import RuntimePreflightService
 from .execution_lock import RunExecutionLockService
-from .run_output_materialization import RunOutputMaterializer
+from .run_output_materialization import MaterializationResult, RunOutputMaterializer
 from .runtime_policy import compute_runtime_policy_decision, validate_file_access_adapter_policy
 from .sandbox_manager import execution_workspace
 from .removed_runtime_token import is_obsolete_runtime_override_token
 from .task_output_linkage import link_run_outputs_to_tasks
+from .events import safe_append_run_event
 
 log = logging.getLogger(__name__)
 
@@ -346,6 +347,27 @@ class RunExecutionService:
                 resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
             ),
         )
+        safe_append_run_event(
+            self.db,
+            run_id=run.id,
+            space_id=run.space_id,
+            event_type="runtime_selected",
+            status="succeeded",
+            runtime_adapter_id=(
+                resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
+            ),
+            workspace_id=run.workspace_id,
+            data_exposure_level=run.data_exposure_level,
+            trust_level=run.trust_level,
+            metadata_json={
+                "adapter_type": resolved.adapter_type,
+                "required_sandbox_level": decision.required_sandbox_level,
+                "risk_level": decision.risk_level,
+                "execution_plane_id": str(run.execution_plane_id) if run.execution_plane_id else None,
+                "observability_level": run.observability_level,
+            },
+            log_context="runtime_selected",
+        )
 
         mem_before = (
             self.db.query(func.count(MemoryEntry.id))
@@ -380,6 +402,22 @@ class RunExecutionService:
             )
 
         _emit("context_prepared", "succeeded", title="Execution context prepared")
+        safe_append_run_event(
+            self.db,
+            run_id=run.id,
+            space_id=run.space_id,
+            event_type="context_compiled",
+            status="succeeded",
+            workspace_id=run.workspace_id,
+            data_exposure_level=run.data_exposure_level,
+            trust_level=run.trust_level,
+            metadata_json={
+                "context_snapshot_id": run.context_snapshot_id,
+                "compiler_version": "context_snapshot_populator.v1",
+                "has_personal_grant_context": run.has_personal_grant_context,
+            },
+            log_context="context_compiled",
+        )
 
         adapter = instantiate_runtime_adapter(resolved.adapter_type)
 
@@ -667,6 +705,30 @@ class RunExecutionService:
                     run.sandbox_path = workdir
                     self.db.add(run)
                     self.db.commit()
+                    safe_append_run_event(
+                        self.db,
+                        run_id=run_id,
+                        space_id=run_space_id,
+                        event_type="sandbox_created",
+                        status="succeeded",
+                        workspace_id=run.workspace_id,
+                        runtime_adapter_id=(
+                            resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
+                        ),
+                        metadata_json={
+                            "required_sandbox_level": decision.required_sandbox_level,
+                            "sandbox_kind": "worktree",
+                            "base_commit_sha": (
+                                workspace_preflight.base_commit_sha
+                                if workspace_preflight is not None else None
+                            ),
+                            "workspace_is_dirty": (
+                                workspace_preflight.is_dirty
+                                if workspace_preflight is not None else None
+                            ),
+                        },
+                        log_context="sandbox_created",
+                    )
 
                 # Sanitize merged_config: strip raw secret fields so adapter_config
                 # is safe to log and inspect.  Credentials flow via resolved_credentials.
@@ -714,7 +776,50 @@ class RunExecutionService:
                     ),
                 )
                 self.db.commit()
+                safe_append_run_event(
+                    self.db,
+                    run_id=run_id,
+                    space_id=run_space_id,
+                    event_type="adapter_invoked",
+                    status="running",
+                    runtime_adapter_id=(
+                        resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
+                    ),
+                    workspace_id=run.workspace_id,
+                    step_id=adapter_step.id if adapter_step is not None else None,
+                    metadata_json={
+                        "adapter_type": resolved.adapter_type,
+                        "executor_mode": "worktree" if decision.required_sandbox_level == "worktree" else "local",
+                        "model_name": resolved_model_name,
+                    },
+                    log_context="adapter_invoked",
+                )
+                # Commit the adapter_invoked event before calling adapter.execute().
+                # Adapter must execute outside an open transaction (invariant).
+                self.db.commit()
                 raw = adapter.execute(ctx)
+                _adapter_completed_status = "succeeded" if (raw is not None and raw.success) else "failed"
+                _adapter_completed_error_code = None if (raw is not None and raw.success) else (raw.error_code if raw else "adapter_no_result")
+                _adapter_completed_error_msg = None if (raw is not None and raw.success) else (raw.error_text if raw else None)
+                safe_append_run_event(
+                    self.db,
+                    run_id=run_id,
+                    space_id=run_space_id,
+                    event_type="adapter_completed",
+                    status=_adapter_completed_status,
+                    runtime_adapter_id=(
+                        resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
+                    ),
+                    workspace_id=run.workspace_id,
+                    step_id=adapter_step.id if adapter_step is not None else None,
+                    error_code=_adapter_completed_error_code,
+                    error_message=_adapter_completed_error_msg,
+                    metadata_json={
+                        "adapter_type": resolved.adapter_type,
+                        "exit_code": raw.exit_code if raw else None,
+                    },
+                    log_context="adapter_completed",
+                )
                 if (
                     raw is not None
                     and raw.success
@@ -725,6 +830,21 @@ class RunExecutionService:
                         run=run,
                         source_root=workdir,
                         entries=raw.produced_artifact_paths,
+                    )
+                    _ingest_status = "warning" if path_ingest_errors else "succeeded"
+                    safe_append_run_event(
+                        self.db,
+                        run_id=run_id,
+                        space_id=run_space_id,
+                        event_type="artifact_ingested",
+                        status=_ingest_status,
+                        workspace_id=run.workspace_id,
+                        metadata_json={
+                            "produced_artifact_count": len(raw.produced_artifact_paths),
+                            "error_count": len(path_ingest_errors),
+                        },
+                        error_code="produced_artifact_ingestion_error" if path_ingest_errors else None,
+                        log_context="artifact_ingested",
                     )
 
                 # Collect workspace file changes from the git worktree and
@@ -752,6 +872,16 @@ class RunExecutionService:
                                 space_id=run.space_id,
                             )
                             if _val_cmds:
+                                safe_append_run_event(
+                                    self.db,
+                                    run_id=run_id,
+                                    space_id=run_space_id,
+                                    event_type="validation_started",
+                                    status="running",
+                                    workspace_id=run.workspace_id,
+                                    metadata_json={"command_count": len(_val_cmds)},
+                                    log_context="validation_started",
+                                )
                                 _val_evidence = run_validation_in_worktree(
                                     worktree_path=Path(workdir),
                                     commands=_val_cmds,
@@ -761,6 +891,24 @@ class RunExecutionService:
                                     run.id,
                                     _val_evidence.status,
                                     _val_evidence.command_count,
+                                )
+                                safe_append_run_event(
+                                    self.db,
+                                    run_id=run_id,
+                                    space_id=run_space_id,
+                                    event_type="validation_completed",
+                                    status=(
+                                        "succeeded" if _val_evidence.status == "passed"
+                                        else "warning" if _val_evidence.status == "skipped"
+                                        else "failed"
+                                    ),
+                                    workspace_id=run.workspace_id,
+                                    metadata_json={
+                                        "command_count": _val_evidence.command_count,
+                                        "status": _val_evidence.status,
+                                        "failed_count": _val_evidence.failed_count if hasattr(_val_evidence, "failed_count") else None,
+                                    },
+                                    log_context="validation_completed",
                                 )
                         except Exception:
                             log.warning(
@@ -788,6 +936,23 @@ class RunExecutionService:
                                 proposal=collection_result.proposal,
                                 proposal_role="code_patch",
                             )
+                            safe_append_run_event(
+                                self.db,
+                                run_id=run_id,
+                                space_id=run_space_id,
+                                event_type="proposal_created",
+                                status="succeeded",
+                                proposal_id=collection_result.proposal.id,
+                                workspace_id=run.workspace_id,
+                                metadata_json={
+                                    "proposal_type": "code_patch",
+                                    "incomplete_patch": collection_result.incomplete_patch,
+                                    "ops_count": collection_result.ops_count,
+                                    "skipped_count": len(collection_result.skipped) if collection_result.skipped else 0,
+                                    "validation_status": _val_evidence.status if _val_evidence else "skipped",
+                                },
+                                log_context="proposal_created.code_patch",
+                            )
                         if collection_result.incomplete_patch and collection_result.skipped:
                             code_patch_warnings.append(
                                 "code_patch_incomplete: proposal does not include all agent "
@@ -809,6 +974,54 @@ class RunExecutionService:
                                     for s in collection_result.skipped
                                 )
                             )
+                        # F: patch_collected — exactly one per run attempt.
+                        # If a proposal was created but the patch is incomplete,
+                        # status=warning signals partial collection to the evaluator.
+                        if collection_result.proposal_created and collection_result.incomplete_patch:
+                            _patch_status = "warning"
+                            _patch_error_code: Optional[str] = "code_patch_incomplete"
+                        elif collection_result.proposal_created:
+                            _patch_status = "succeeded"
+                            _patch_error_code = None
+                        elif collection_result.no_op_reason and not collection_result.skipped:
+                            _patch_status = "skipped"
+                            _patch_error_code = None
+                        elif collection_result.skipped:
+                            _patch_status = "warning"
+                            _patch_error_code = "code_patch_skipped_files"
+                        elif collection_result.incomplete_patch:
+                            _patch_status = "warning"
+                            _patch_error_code = "code_patch_incomplete"
+                        else:
+                            _patch_status = "skipped"
+                            _patch_error_code = None
+                        _skipped_reasons = (
+                            list({s["reason"] for s in collection_result.skipped})
+                            if collection_result.skipped else []
+                        )
+                        safe_append_run_event(
+                            self.db,
+                            run_id=run_id,
+                            space_id=run_space_id,
+                            event_type="patch_collected",
+                            status=_patch_status,
+                            proposal_id=(
+                                collection_result.proposal.id
+                                if collection_result.proposal_created and collection_result.proposal
+                                else None
+                            ),
+                            workspace_id=run.workspace_id,
+                            error_code=_patch_error_code,
+                            metadata_json={
+                                "proposal_created": collection_result.proposal_created,
+                                "ops_count": collection_result.ops_count,
+                                "skipped_count": len(collection_result.skipped) if collection_result.skipped else 0,
+                                "skipped_reasons": _skipped_reasons,
+                                "no_op_reason": collection_result.no_op_reason,
+                                "incomplete_patch": collection_result.incomplete_patch,
+                            },
+                            log_context="patch_collected",
+                        )
                     except Exception:
                         log.warning(
                             "code_patch proposal collection failed run=%s; "
@@ -819,6 +1032,16 @@ class RunExecutionService:
                         code_patch_warnings.append(
                             "code_patch_collection_error: "
                             + traceback.format_exc()[:1000]
+                        )
+                        safe_append_run_event(
+                            self.db,
+                            run_id=run_id,
+                            space_id=run_space_id,
+                            event_type="patch_collected",
+                            status="failed",
+                            workspace_id=run.workspace_id,
+                            error_code="code_patch_collection_error",
+                            log_context="patch_collected.exception",
                         )
         except Exception as exc:  # noqa: BLE001
             run.sandbox_path = None
@@ -837,6 +1060,22 @@ class RunExecutionService:
                         )
                 except Exception:
                     log.warning("RunStep fail_step failed (best-effort)", exc_info=True)
+            safe_append_run_event(
+                self.db,
+                run_id=run_id,
+                space_id=run_space_id,
+                event_type="adapter_completed",
+                status="failed",
+                error_code="adapter_runtime_error",
+                error_message=safe_exc,
+                runtime_adapter_id=(
+                    resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
+                ),
+                workspace_id=run.workspace_id,
+                step_id=adapter_step.id if adapter_step is not None else None,
+                metadata_json={"adapter_type": resolved.adapter_type},
+                log_context="adapter_completed.exception",
+            )
             return self._fail_run_terminal(
                 run=run,
                 decision=decision,
@@ -942,12 +1181,88 @@ class RunExecutionService:
                 except Exception:
                     log.warning("RunStep complete_step failed (best-effort)", exc_info=True)
 
-            mat_errors = RunOutputMaterializer(self.db).materialize(
+            mat_result = RunOutputMaterializer(self.db).materialize(
                 run=run,
                 adapter_output=safe_adapter_output,
                 adapter_type=resolved.adapter_type,
             )
-            merged_errors = [*path_ingest_errors, *mat_errors, *code_patch_warnings]
+            # Emit RunEvents for each output artifact and proposal materialization outcome.
+            for item in mat_result.artifact_items:
+                safe_append_run_event(
+                    self.db,
+                    run_id=run_id, space_id=run_space_id,
+                    event_type="artifact_ingested", status="succeeded",
+                    artifact_id=item["id"], workspace_id=run.workspace_id,
+                    metadata_json={
+                        "artifact_type": item["artifact_type"],
+                        "source": "adapter_output",
+                        "label": item["label"],
+                    },
+                    log_context="artifact_ingested.output",
+                )
+            for item in mat_result.proposal_items:
+                safe_append_run_event(
+                    self.db,
+                    run_id=run_id, space_id=run_space_id,
+                    event_type="proposal_created", status="succeeded",
+                    proposal_id=item["id"], workspace_id=run.workspace_id,
+                    metadata_json={
+                        "proposal_type": item["proposal_type"],
+                        "source": "adapter_output",
+                        "label": item["label"],
+                    },
+                    log_context="proposal_created.output",
+                )
+            for item in mat_result.failed_items:
+                _kind = item["kind"]
+                if _kind == "artifact":
+                    safe_append_run_event(
+                        self.db,
+                        run_id=run_id, space_id=run_space_id,
+                        event_type="artifact_ingested", status="warning",
+                        error_code=item["error_code"],
+                        error_message=item["error_message"],
+                        workspace_id=run.workspace_id,
+                        metadata_json={
+                            "artifact_type": item.get("artifact_type"),
+                            "source": "adapter_output",
+                            "label": item["label"],
+                        },
+                        log_context="artifact_ingested.output.failed",
+                    )
+                elif _kind == "proposal":
+                    safe_append_run_event(
+                        self.db,
+                        run_id=run_id, space_id=run_space_id,
+                        event_type="proposal_created", status="warning",
+                        error_code=item["error_code"],
+                        error_message=item["error_message"],
+                        workspace_id=run.workspace_id,
+                        metadata_json={
+                            "proposal_type": item.get("proposal_type"),
+                            "source": "adapter_output",
+                            "label": item["label"],
+                        },
+                        log_context="proposal_created.output.failed",
+                    )
+                elif _kind == "activity":
+                    safe_append_run_event(
+                        self.db,
+                        run_id=run_id, space_id=run_space_id,
+                        event_type="artifact_ingested", status="warning",
+                        error_code="output_activity_materialization_error",
+                        error_message=item["error_message"],
+                        summary="Output activity materialization failed",
+                        workspace_id=run.workspace_id,
+                        metadata_json={
+                            "kind": "activity",
+                            "source": "adapter_output",
+                            "label": item["label"],
+                        },
+                        log_context="artifact_ingested.output.activity.failed",
+                    )
+
+            merged_errors = [*path_ingest_errors, *mat_result.errors, *code_patch_warnings]
             if merged_errors:
                 merged = dict(run.output_json or {})
                 merged["materialization_errors"] = merged_errors
@@ -969,16 +1284,73 @@ class RunExecutionService:
                         preview=run.mode == "dry_run",
                     )
                 except PersonalMemoryEgressError as exc:
+                    _safe_rt_exc = redact_error(str(exc)[:512]) or ""
                     merged = dict(run.output_json or {})
                     existing_errors = list(merged.get("materialization_errors") or [])
-                    existing_errors.append(f"runtime_output_artifact: {exc}")
+                    existing_errors.append(f"runtime_output_artifact: {_safe_rt_exc}")
                     merged["materialization_errors"] = existing_errors
                     run.output_json = redact_runtime_output(merged)
                     self.db.flush()
+                    _egress_proposal_id: Optional[str] = None
+                    _exc_msg = str(exc)
+                    if "egress_review_proposal_id=" in _exc_msg:
+                        try:
+                            _egress_proposal_id = _exc_msg.split("egress_review_proposal_id=")[1].split(";")[0].strip()
+                        except Exception:
+                            pass
+                    safe_append_run_event(
+                        self.db,
+                        run_id=run_id, space_id=run_space_id,
+                        event_type="artifact_ingested", status="failed",
+                        error_code="runtime_output_artifact",
+                        error_message=_safe_rt_exc,
+                        workspace_id=run.workspace_id,
+                        metadata_json={
+                            "artifact_type": "runtime_output",
+                            "source": "runtime_output_text",
+                            "egress_review_required": True,
+                            "egress_review_proposal_id": _egress_proposal_id,
+                        },
+                        log_context="artifact_ingested.runtime_output.egress",
+                    )
+                    artifacts_out = []
+                except Exception as exc:  # noqa: BLE001
+                    _safe_rt_exc = redact_error(str(exc)[:512]) or ""
+                    merged = dict(run.output_json or {})
+                    existing_errors = list(merged.get("materialization_errors") or [])
+                    existing_errors.append(f"runtime_output_artifact: {_safe_rt_exc}")
+                    merged["materialization_errors"] = existing_errors
+                    run.output_json = redact_runtime_output(merged)
+                    self.db.flush()
+                    safe_append_run_event(
+                        self.db,
+                        run_id=run_id, space_id=run_space_id,
+                        event_type="artifact_ingested", status="failed",
+                        error_code="runtime_output_artifact",
+                        error_message=_safe_rt_exc,
+                        workspace_id=run.workspace_id,
+                        metadata_json={
+                            "artifact_type": "runtime_output",
+                            "source": "runtime_output_text",
+                            "egress_review_required": False,
+                        },
+                        log_context="artifact_ingested.runtime_output.error",
+                    )
                     artifacts_out = []
                 else:
                     link_run_outputs_to_tasks(self.db, run=run, artifact=art, proposal=None)
                     artifacts_out = [{"id": art.id, "title": art.title, "storage_path": art.storage_path}]
+                    safe_append_run_event(
+                        self.db,
+                        run_id=run_id, space_id=run_space_id,
+                        event_type="artifact_ingested", status="succeeded",
+                        artifact_id=art.id, workspace_id=run.workspace_id,
+                        metadata_json={
+                            "artifact_type": "runtime_output",
+                            "source": "runtime_output_text",
+                        },
+                        log_context="artifact_ingested.runtime_output",
+                    )
                     if actor_id is not None:
                         try:
                             with UnitOfWork(self.db).savepoint():

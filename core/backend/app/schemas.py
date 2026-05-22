@@ -1258,6 +1258,37 @@ class RunStepOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# RunEvent evidence spine
+# ---------------------------------------------------------------------------
+
+
+class RunEventOut(BaseModel):
+    """Serialized output for a single RunEvent row (append-only evidence record)."""
+
+    id: str
+    space_id: str
+    run_id: str
+    step_id: Optional[str] = None
+    actor_id: Optional[str] = None
+    event_index: int
+    event_type: str
+    status: str
+    summary: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    runtime_adapter_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+    artifact_id: Optional[str] = None
+    proposal_id: Optional[str] = None
+    data_exposure_level: Optional[str] = None
+    trust_level: Optional[str] = None
+    metadata_json: Optional[dict] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
 # RunEvaluation
 # ---------------------------------------------------------------------------
 

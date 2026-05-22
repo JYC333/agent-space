@@ -189,7 +189,7 @@ def test_grant_derived_shared_output_block_creates_sanitized_egress_review_propo
     run, grant = _build_grant_derived_run(db, personal_id=personal_id, team_id=team_id, user=user)
 
     materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
+    _mat_result = materializer.materialize(
         run=run,
         adapter_output=adapter_output,
         adapter_type="test",
@@ -197,8 +197,8 @@ def test_grant_derived_shared_output_block_creates_sanitized_egress_review_propo
     db.commit()
 
     # Direct persistence blocked
-    assert len(errors) > 0
-    assert any("egress" in e.lower() for e in errors)
+    assert len(_mat_result.errors) > 0
+    assert any("egress" in e.lower() for e in _mat_result.errors)
 
     all_proposals = db.query(Proposal).filter(Proposal.space_id == team_id).all()
 
@@ -449,7 +449,7 @@ def test_no_grant_output_does_not_create_egress_review_proposal(db):
     assert run.has_personal_grant_context is False
 
     materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
+    _mat_result = materializer.materialize(
         run=run,
         adapter_output={
             "artifacts": [{
@@ -463,7 +463,7 @@ def test_no_grant_output_does_not_create_egress_review_proposal(db):
     db.commit()
 
     # Should succeed with no errors
-    assert len(errors) == 0
+    assert len(_mat_result.errors) == 0
 
     # No egress_review proposals should exist
     egress_proposals = (
@@ -628,7 +628,7 @@ def test_error_message_includes_egress_review_proposal_id(db):
     run, _ = _build_grant_derived_run(db, personal_id=personal_id, team_id=team_id, user=user)
 
     materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
+    _mat_result = materializer.materialize(
         run=run,
         adapter_output={
             "artifacts": [{
@@ -641,10 +641,10 @@ def test_error_message_includes_egress_review_proposal_id(db):
     )
     db.commit()
 
-    assert len(errors) > 0
-    combined = " ".join(errors)
+    assert len(_mat_result.errors) > 0
+    combined = " ".join(_mat_result.errors)
     assert "egress_review_proposal_id=" in combined, (
-        f"Error must include egress_review_proposal_id: {errors}"
+        f"Error must include egress_review_proposal_id: {_mat_result.errors}"
     )
 
 

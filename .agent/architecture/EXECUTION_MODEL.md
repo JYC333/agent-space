@@ -2,9 +2,11 @@
 
 ## Core Objects
 
-**Run** — the central execution object. Every formal agent execution has a durable Run. A run is created by user request, task, automation trigger, API call, or scheduled job. Run produces RunSteps, artifacts, and proposals.
+**Run** — the central execution object. Every formal agent execution has a durable Run. A run is created by user request, task, automation trigger, API call, or scheduled job. Run produces RunSteps, RunEvents, artifacts, and proposals.
 
 **RunStep** — coarse execution steps within a run. Provides the replay spine for failure diagnosis without reading raw adapter logs.
+
+**RunEvent** — structured append-only harness evidence records within a run. Finer-grained than RunStep but coarser than raw adapter logs. Each RunEvent captures one significant phase (context compilation, runtime selection, sandbox creation, adapter invocation/completion, artifact ingestion, patch collection, validation, proposal creation, evaluation). Used by RunEvaluationService as the primary structured evidence source.
 
 **Job** — background system task (import, consolidation, backup, agent-run dispatch). Separate from Run. Job handlers create or dispatch Runs; jobs themselves are not product execution records.
 
@@ -27,6 +29,35 @@ RunStep records the coarse execution spine of a run:
 | `failed` | Run failed; sanitized error captured in step |
 
 RunSteps are **best-effort evidence**. They are savepoint-isolated from critical writes (run terminal state, memory, policy rows). A RunStep write failure must not poison the run's terminal state commit.
+
+## RunEvent Taxonomy
+
+RunEvent records the structured phase-level evidence spine of a run:
+
+| event_type | Meaning |
+|---|---|
+| `context_compiled` | ContextSnapshotPopulator completed successfully |
+| `runtime_selected` | Runtime adapter resolved; sandbox level decided |
+| `credential_granted` | Credentials resolved for adapter |
+| `sandbox_created` | Worktree sandbox created |
+| `adapter_invoked` | Adapter.execute() called (status=running) |
+| `adapter_completed` | Adapter returned; status succeeded/failed/cancelled |
+| `artifact_ingested` | Produced artifact paths ingested |
+| `patch_collected` | Code patch proposal collected; one per run attempt |
+| `validation_started` | Worktree validation commands started |
+| `validation_completed` | Worktree validation commands completed |
+| `proposal_created` | Proposal created from run output |
+| `evaluation_created` | RunEvaluation appended |
+
+RunEvent statuses: `pending`, `running`, `succeeded`, `failed`, `skipped`, `warning`, `cancelled`.
+
+**RunEvent vs RunStep:** RunStep is the coarse lifecycle replay spine. RunEvent is the structured evidence spine used for classification. RunEvent references RunStep, Artifact, Proposal — it does not replace them.
+
+**Append-only:** RunEvent rows are never updated or deleted. `event_index` uses MAX()+1 scoped to `(space_id, run_id)` — same documented distributed-writer risk as RunStep.
+
+**Best-effort writes:** `safe_append_run_event()` wraps all instrumentation points in a savepoint. A RunEvent write failure must not poison Run terminal-state commits, artifact persistence, proposal creation, or evaluation creation.
+
+**Never stored in RunEvent metadata:** raw credentials, stdout/stderr content, full rendered context text, full patch body, raw private memory text, complete file contents.
 
 RunStep error/metadata is filtered by `app/runs/redaction.py` before persisting. Raw credential values are never stored in RunStep rows.
 
@@ -89,7 +120,9 @@ RunSteps are retained indefinitely (no auto-purge).
 
 - **Append-only.** Each `RunEvaluationService.evaluate()` call creates a new row. Existing evaluations are never deleted or overwritten. `GET /runs/{id}/evaluation` returns the most recent row.
 - **Classifier-version auditable.** `evaluator_version` (e.g. `harness_eval.v1`) is stored per row, so classification history is preserved across version upgrades.
-- **Harness-boundary evidence only.** Uses Run.status/error_json/output_json/exit_code, ordered RunSteps, ContextSnapshot metadata, Artifacts, Proposals, ValidationRecipe, and linked Task/TaskRun. No LLM-as-judge. No parsing of vendor CLI internal tool calls.
+- **Harness-boundary evidence only.** Uses Run.status/error_json/output_json/exit_code, ordered RunSteps, RunEvents, ContextSnapshot metadata, Artifacts, Proposals, ValidationRecipe, and linked Task/TaskRun. No LLM-as-judge. No parsing of vendor CLI internal tool calls.
+- **RunEvent as primary classification source.** RunEvent structured `error_code` fields are the canonical classification input for patch, artifact, adapter, and materialization event evidence. `output_json.materialization_errors` is never parsed as classifier evidence — it is a debug/summary field only.
+- **Materialization outcomes are RunEvent-covered.** `RunOutputMaterializer` returns a `MaterializationResult` (artifact_items, proposal_items, failed_items). `RunExecutionService` emits `artifact_ingested` / `proposal_created` RunEvents for each output JSON artifact and proposal success and failure. Runtime output text persistence emits `artifact_ingested` on success and failure. All materialization error codes map to the `tool` failure_layer via `_EXACT_ERROR_CODE_MAP`. Activity materialization failures are represented as artifact_ingested warning events with metadata_json.kind="activity" to avoid expanding the RunEvent enum.
 - **Evidence-only for CLI runtimes.** CLI adapters are black-box at the harness. No internal tool-call trajectory is reconstructed from stdout/stderr.
 
 ### RunStep adapter_started semantics
@@ -136,6 +169,14 @@ Note: `trajectory_status` does not imply `failure_layer`. A run can be `outcome_
 ### Canonical error-code mappings
 
 `file_access_adapter_requires_worktree_policy` → `policy` (not `sandbox`; exact map runs first).
+
+Materialization error codes → `tool` failure_layer (all via exact map):
+- `produced_artifact_ingestion_error` — produced artifact path ingestion failure
+- `runtime_output_artifact` — runtime output text persistence failure
+- `output_artifact_materialization_error` — adapter output_json artifact spec failure
+- `output_proposal_materialization_error` — adapter output_json proposed_change spec failure
+- `output_activity_materialization_error` — adapter output_json activity spec failure
+- `code_patch_collection_error` — worktree patch collection exception
 
 ### What evaluation does NOT do
 
@@ -203,8 +244,7 @@ Automation is not implemented. No proposal type auto-applies without user accept
 
 ### Future Work
 
-- Richer trajectory evidence events per step.
-- Run Viewer UI.
+- Run Viewer UI — surface for browsing RunEvent and RunEvaluation history per run.
 - Apply handlers for `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update`.
 
 ## What Is Intentionally Not Modeled Yet

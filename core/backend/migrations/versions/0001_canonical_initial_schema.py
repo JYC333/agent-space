@@ -1307,6 +1307,76 @@ def upgrade() -> None:
     op.create_index(op.f('ix_run_steps_artifact_id'), 'run_steps', ['artifact_id'], unique=False)
     op.create_index(op.f('ix_run_steps_proposal_id'), 'run_steps', ['proposal_id'], unique=False)
     op.create_index('ix_run_steps_space_run_index', 'run_steps', ['space_id', 'run_id', 'step_index'], unique=False)
+    # run_events — structured append-only harness evidence spine.
+    # run_events depends on spaces, runs, run_steps, actors, runtime_adapters, workspaces,
+    # artifacts, and proposals — all created above.
+    # Rows are never updated or deleted. event_index is MAX()+1 scoped to (space_id, run_id).
+    # Never stores raw credentials, stdout/stderr, full rendered context, full patch bodies,
+    # or raw private memory text.
+    op.create_table('run_events',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('run_id', sa.String(length=36), nullable=False),
+    sa.Column('step_id', sa.String(length=36), nullable=True),
+    sa.Column('actor_id', sa.String(length=36), nullable=True),
+    sa.Column('event_index', sa.Integer(), nullable=False),
+    sa.Column('event_type', sa.String(length=64), nullable=False),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('summary', sa.Text(), nullable=True),
+    sa.Column('error_code', sa.String(length=128), nullable=True),
+    sa.Column('error_message', sa.Text(), nullable=True),
+    sa.Column('runtime_adapter_id', sa.String(length=36), nullable=True),
+    sa.Column('workspace_id', sa.String(length=36), nullable=True),
+    sa.Column('artifact_id', sa.String(length=36), nullable=True),
+    sa.Column('proposal_id', sa.String(length=36), nullable=True),
+    sa.Column('data_exposure_level', sa.String(length=64), nullable=True),
+    sa.Column('trust_level', sa.String(length=32), nullable=True),
+    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint(
+        "event_type in ("
+        "'context_compiled', 'runtime_selected', 'credential_granted', "
+        "'sandbox_created', 'adapter_invoked', 'adapter_completed', "
+        "'artifact_ingested', 'patch_collected', 'validation_started', "
+        "'validation_completed', 'proposal_created', 'evaluation_created')",
+        name='ck_run_events_event_type',
+    ),
+    sa.CheckConstraint(
+        "status in ('pending', 'running', 'succeeded', 'failed', 'skipped', 'warning', 'cancelled')",
+        name='ck_run_events_status',
+    ),
+    sa.CheckConstraint(
+        "data_exposure_level is null or data_exposure_level in "
+        "('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')",
+        name='ck_run_events_data_exposure_level',
+    ),
+    sa.CheckConstraint(
+        "trust_level is null or trust_level in ('high', 'medium', 'low', 'unknown')",
+        name='ck_run_events_trust_level',
+    ),
+    sa.ForeignKeyConstraint(['actor_id'], ['actors.id'], ),
+    sa.ForeignKeyConstraint(['artifact_id'], ['artifacts.id'], ),
+    sa.ForeignKeyConstraint(['proposal_id'], ['proposals.id'], ),
+    sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),
+    sa.ForeignKeyConstraint(['runtime_adapter_id'], ['runtime_adapters.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['step_id'], ['run_steps.id'], ),
+    sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('space_id', 'run_id', 'event_index', name='uq_run_events_space_run_event_index'),
+    )
+    op.create_index(op.f('ix_run_events_space_id'), 'run_events', ['space_id'], unique=False)
+    op.create_index(op.f('ix_run_events_run_id'), 'run_events', ['run_id'], unique=False)
+    op.create_index(op.f('ix_run_events_step_id'), 'run_events', ['step_id'], unique=False)
+    op.create_index(op.f('ix_run_events_actor_id'), 'run_events', ['actor_id'], unique=False)
+    op.create_index(op.f('ix_run_events_event_type'), 'run_events', ['event_type'], unique=False)
+    op.create_index(op.f('ix_run_events_status'), 'run_events', ['status'], unique=False)
+    op.create_index(op.f('ix_run_events_error_code'), 'run_events', ['error_code'], unique=False)
+    op.create_index(op.f('ix_run_events_runtime_adapter_id'), 'run_events', ['runtime_adapter_id'], unique=False)
+    op.create_index(op.f('ix_run_events_workspace_id'), 'run_events', ['workspace_id'], unique=False)
+    op.create_index(op.f('ix_run_events_artifact_id'), 'run_events', ['artifact_id'], unique=False)
+    op.create_index(op.f('ix_run_events_proposal_id'), 'run_events', ['proposal_id'], unique=False)
+    op.create_index(op.f('ix_run_events_created_at'), 'run_events', ['created_at'], unique=False)
     # source_pointers — provenance pointer ledger (metadata only; no content columns).
     op.create_table('source_pointers',
     sa.Column('id', sa.String(length=36), nullable=False),
@@ -1757,6 +1827,20 @@ def downgrade() -> None:
     # visibility/owner_user_id columns on existing tables are NOT dropped here.
     # SQLite <3.35 does not support DROP COLUMN. Since this is a baseline migration with
     # no historical data, the downgrade path is to recreate from scratch.
+    # Drop run_events before run_steps (run_events has a FK to run_steps).
+    op.drop_index(op.f('ix_run_events_created_at'), table_name='run_events')
+    op.drop_index(op.f('ix_run_events_proposal_id'), table_name='run_events')
+    op.drop_index(op.f('ix_run_events_artifact_id'), table_name='run_events')
+    op.drop_index(op.f('ix_run_events_workspace_id'), table_name='run_events')
+    op.drop_index(op.f('ix_run_events_runtime_adapter_id'), table_name='run_events')
+    op.drop_index(op.f('ix_run_events_error_code'), table_name='run_events')
+    op.drop_index(op.f('ix_run_events_status'), table_name='run_events')
+    op.drop_index(op.f('ix_run_events_event_type'), table_name='run_events')
+    op.drop_index(op.f('ix_run_events_actor_id'), table_name='run_events')
+    op.drop_index(op.f('ix_run_events_step_id'), table_name='run_events')
+    op.drop_index(op.f('ix_run_events_run_id'), table_name='run_events')
+    op.drop_index(op.f('ix_run_events_space_id'), table_name='run_events')
+    op.drop_table('run_events')
     # Drop run_steps first (references actors, runs, spaces, and other tables).
     op.drop_index('ix_run_steps_space_run_index', table_name='run_steps')
     op.drop_index(op.f('ix_run_steps_proposal_id'), table_name='run_steps')

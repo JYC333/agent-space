@@ -918,6 +918,7 @@ class Run(Base):
     proposals: Mapped[list["Proposal"]] = relationship("Proposal", back_populates="created_by_run")
     activities: Mapped[list["ActivityRecord"]] = relationship("ActivityRecord", back_populates="source_run")
     steps: Mapped[list["RunStep"]] = relationship("RunStep", back_populates="run", order_by="RunStep.step_index")
+    events: Mapped[list["RunEvent"]] = relationship("RunEvent", back_populates="run", order_by="RunEvent.event_index")
     execution_plane: Mapped[Optional[ExecutionPlane]] = relationship("ExecutionPlane", foreign_keys=[execution_plane_id])
     external_run_records: Mapped[list["ExternalRunRecord"]] = relationship("ExternalRunRecord", back_populates="run")
     run_reflections: Mapped[list["RunReflection"]] = relationship("RunReflection", back_populates="run")
@@ -1791,6 +1792,72 @@ class RunStep(Base):
         CheckConstraint(
             "status in ('pending', 'running', 'succeeded', 'failed', 'skipped', 'cancelled')",
             name="ck_run_steps_status",
+        ),
+    )
+
+
+class RunEvent(Base):
+    """Structured append-only harness evidence record for a Run.
+
+    RunEvent is finer-grained than RunStep but coarser than raw adapter logs.
+    It captures each significant phase of a run as a structured record (context
+    compilation, runtime selection, sandbox creation, adapter invocation/completion,
+    artifact ingestion, patch collection, validation, proposal creation, evaluation).
+
+    Append-only: rows are never updated or deleted. event_index is MAX()+1 scoped
+    to (space_id, run_id) — the same documented distributed-writer risk as RunStep.
+
+    RunEvent is evidence; it references Artifact, Proposal, RunStep, etc. but does
+    not replace them. Never stores raw credentials, stdout/stderr, full rendered
+    context, full patch bodies, or raw private memory text.
+    """
+
+    __tablename__ = "run_events"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=False, index=True)
+    step_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("run_steps.id"), nullable=True, index=True)
+    actor_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("actors.id"), nullable=True, index=True)
+    event_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
+    artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("artifacts.id"), nullable=True, index=True)
+    proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True)
+    data_exposure_level: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    trust_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, index=True)
+
+    run: Mapped["Run"] = relationship("Run", back_populates="events")
+
+    __table_args__ = (
+        UniqueConstraint("space_id", "run_id", "event_index", name="uq_run_events_space_run_event_index"),
+        CheckConstraint(
+            "event_type in ("
+            "'context_compiled', 'runtime_selected', 'credential_granted', "
+            "'sandbox_created', 'adapter_invoked', 'adapter_completed', "
+            "'artifact_ingested', 'patch_collected', 'validation_started', "
+            "'validation_completed', 'proposal_created', 'evaluation_created')",
+            name="ck_run_events_event_type",
+        ),
+        CheckConstraint(
+            "status in ('pending', 'running', 'succeeded', 'failed', 'skipped', 'warning', 'cancelled')",
+            name="ck_run_events_status",
+        ),
+        CheckConstraint(
+            "data_exposure_level is null or data_exposure_level in "
+            "('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')",
+            name="ck_run_events_data_exposure_level",
+        ),
+        CheckConstraint(
+            "trust_level is null or trust_level in ('high', 'medium', 'low', 'unknown')",
+            name="ck_run_events_trust_level",
         ),
     )
 

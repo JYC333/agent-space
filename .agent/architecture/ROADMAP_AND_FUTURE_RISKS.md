@@ -54,6 +54,8 @@ This document describes current capability lines and known future risks. It is o
 
 **Current state:** `app.runtimes` is canonical. Registered adapters: `echo` (test), `capability`, `claude_code`, `codex_cli`. Direct Anthropic API adapters (`anthropic_messages`) are intentionally not registered — Claude execution goes through the `claude_code` CLI integration only. `app.agents` contains Agent/AgentVersion CRUD and built-in seeder; new runtime adapters must go in `app.runtimes`.
 
+`RunEvent` evidence spine is fully implemented. `RunExecutionService` emits structured event types covering the full execution lifecycle: context_compiled, runtime_selected, sandbox_created, adapter_invoked, adapter_completed, artifact_ingested (produced paths, output_json artifacts, runtime_output text), patch_collected, validation_started/completed, proposal_created (worktree code_patch and output_json proposals), evaluation_created. `RunEvaluationService` consumes RunEvent as the sole structured evidence source — `output_json.materialization_errors` is a debug field and is never parsed as classifier evidence. `GET /api/v1/runs/{id}/events` returns paginated RunEvent records with DB-level event_type/status filtering.
+
 **Supported mutating CLI path:** `risk_level=high` → `required_sandbox_level=worktree`. This is the only supported path for file-writing CLI adapters (`claude_code`, `codex_cli`). All changes are collected as a `code_patch` Proposal and require human review before being applied to the real workspace.
 
 **Not supported yet (intentionally):** `risk_level=critical` → `one_shot_docker`. The Docker sandbox execution path is not implemented. Runs with `critical` risk fail early with error code `critical_runtime_requires_unimplemented_one_shot_docker`. Do not attempt to use critical risk level until Docker sandbox infrastructure is designed.
@@ -231,8 +233,9 @@ User request
 → ContextSnapshot / rendered context
 → ExecutionPlane + RuntimeAdapter
 → Run
+→ RunEvent (structured append-only harness evidence spine)
 → Artifact / ExternalRunRecord
-→ RunEvaluation (deterministic harness layer)
+→ RunEvaluation (deterministic harness layer, RunEvent as primary evidence)
 → TaskEvaluation (append-only task bridge)
 → RunReflection  (learning candidate source)
 → Proposal (pending, requires human review)

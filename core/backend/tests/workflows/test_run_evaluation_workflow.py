@@ -5,7 +5,7 @@ Tests verify:
 - Real RunStep shape: adapter_started terminal status counts as adapter completion
 - Exact error-code mapping before heuristics
 - ContextSnapshot evidence handling (real token_budget_json shape)
-- Materialization error and code_patch warning classification
+- RunEvent structured evidence for patch/artifact classification (canonical path)
 - Trajectory vs outcome independence
 - Hard invariants: evaluation never writes Memory, Policy, Proposal, etc.
 """
@@ -19,7 +19,6 @@ from app.runs.evaluation import (
     RunEvaluationService,
     _classify_trajectory,
     _collect_error_codes,
-    _normalize_mat_error_code,
     requires_context_snapshot,
 )
 from tests.support import factories
@@ -259,23 +258,20 @@ class TestOutcomeStatus:
 
         assert result.outcome_status == "partial"
 
-    def test_succeeded_with_incomplete_patch_in_output_is_partial(self, db):
+    def test_succeeded_with_run_event_code_patch_incomplete_is_partial(self, db):
+        """patch_collected warning event with code_patch_incomplete → partial outcome."""
+        from app.runs.events import RunEventService
         _setup(db)
         run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
         run.status = "succeeded"
-        run.output_json = {"incomplete_patch": True, "summary": "partial work"}
         db.flush()
 
-        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
-        db.flush()
-
-        assert result.outcome_status == "partial"
-
-    def test_succeeded_with_mat_error_code_patch_skipped_files_is_partial(self, db):
-        _setup(db)
-        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
-        run.status = "succeeded"
-        run.output_json = {"materialization_errors": ["code_patch_skipped_files"]}
+        RunEventService(db).append_event(
+            run_id=run.id, space_id=SPACE,
+            event_type="patch_collected", status="warning",
+            error_code="code_patch_incomplete",
+            metadata_json={"incomplete_patch": True, "proposal_created": True},
+        )
         db.flush()
 
         result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
@@ -694,10 +690,15 @@ class TestContextSnapshotHandling:
 
 
 # ---------------------------------------------------------------------------
-# Materialization errors and code_patch warnings
+# RunEvent structured evidence for patch/artifact classification (canonical path)
 # ---------------------------------------------------------------------------
 
-class TestMaterializationErrors:
+class TestRunEventPatchArtifactEvidence:
+    """RunEvaluation must classify using RunEvent structured evidence only.
+
+    output_json.materialization_errors is never parsed — it is not event evidence.
+    """
+
     def test_proposal_incomplete_patch_gives_partial_and_trajectory_incomplete(self, db):
         _setup(db)
         run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
@@ -715,11 +716,43 @@ class TestMaterializationErrors:
         assert result.outcome_status == "partial"
         assert result.trajectory_status == "incomplete"
 
-    def test_mat_error_code_patch_skipped_files_gives_partial_and_incomplete(self, db):
+    def test_patch_collected_warning_event_gives_partial_and_incomplete(self, db):
+        """patch_collected status=warning with error_code=code_patch_incomplete → partial+incomplete."""
+        from app.runs.events import RunEventService
         _setup(db)
         run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
         run.status = "succeeded"
-        run.output_json = {"materialization_errors": ["code_patch_skipped_files"]}
+        db.flush()
+
+        RunEventService(db).append_event(
+            run_id=run.id, space_id=SPACE,
+            event_type="patch_collected", status="warning",
+            error_code="code_patch_incomplete",
+            metadata_json={"incomplete_patch": True, "proposal_created": True, "ops_count": 3},
+        )
+        db.flush()
+
+        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
+        db.flush()
+
+        assert result.outcome_status == "partial"
+        assert result.trajectory_status == "incomplete"
+        mat = result.evidence_json.get("materialization", {})
+        assert "code_patch_incomplete" in mat.get("code_patch_warnings", [])
+
+    def test_patch_collected_failed_event_gives_partial_and_incomplete(self, db):
+        """patch_collected status=failed with error_code=code_patch_collection_error → partial+incomplete."""
+        from app.runs.events import RunEventService
+        _setup(db)
+        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
+        run.status = "succeeded"
+        db.flush()
+
+        RunEventService(db).append_event(
+            run_id=run.id, space_id=SPACE,
+            event_type="patch_collected", status="failed",
+            error_code="code_patch_collection_error",
+        )
         db.flush()
 
         result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
@@ -728,7 +761,58 @@ class TestMaterializationErrors:
         assert result.outcome_status == "partial"
         assert result.trajectory_status == "incomplete"
 
-    def test_mat_error_code_patch_collection_error_on_failed_run_gives_tool_layer(self, db):
+    def test_artifact_ingested_warning_event_gives_partial(self, db):
+        """artifact_ingested status=warning gives partial outcome on succeeded run."""
+        from app.runs.events import RunEventService
+        _setup(db)
+        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
+        run.status = "succeeded"
+        db.flush()
+
+        RunEventService(db).append_event(
+            run_id=run.id, space_id=SPACE,
+            event_type="artifact_ingested", status="warning",
+            error_code="produced_artifact_ingestion_error",
+        )
+        db.flush()
+
+        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
+        db.flush()
+
+        assert result.outcome_status == "partial"
+        mat = result.evidence_json.get("materialization", {})
+        assert "produced_artifact_ingestion_error" in mat.get("codes", [])
+
+    def test_output_json_materialization_errors_not_parsed_as_event_evidence(self, db):
+        """materialization_errors in output_json must never drive classification.
+
+        Even when no RunEvent rows exist, output_json.materialization_errors strings
+        are not parsed. A clean succeeded run must be 'passed' regardless of what
+        is stored in output_json.materialization_errors.
+        """
+        _setup(db)
+        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
+        run.status = "succeeded"
+        run.output_json = {
+            "materialization_errors": [
+                "code_patch_skipped_files: a.png (binary)",
+                "code_patch_collection_error: Traceback...",
+            ]
+        }
+        db.flush()
+
+        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
+        db.flush()
+
+        # Without RunEvent rows, output_json.materialization_errors must NOT cause partial
+        assert result.outcome_status == "passed"
+        # Materialization evidence must be empty (no fallback parsing)
+        mat = result.evidence_json.get("materialization", {})
+        assert mat.get("errors", []) == []
+        assert mat.get("codes", []) == []
+        assert mat.get("code_patch_warnings", []) == []
+
+    def test_patch_collection_error_in_error_json_gives_tool_layer(self, db):
         """code_patch_collection_error in error_json on failed run → tool layer via exact map."""
         _setup(db)
         run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
@@ -741,33 +825,6 @@ class TestMaterializationErrors:
 
         assert result.failure_layer == "tool"
         assert result.failure_reason_code == "code_patch_collection_error"
-
-    def test_mat_error_code_patch_collection_error_on_succeeded_run_gives_partial(self, db):
-        """code_patch_collection_error in materialization_errors on succeeded run → partial + incomplete."""
-        _setup(db)
-        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
-        run.status = "succeeded"
-        run.output_json = {"materialization_errors": ["code_patch_collection_error"]}
-        db.flush()
-
-        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
-        db.flush()
-
-        assert result.outcome_status == "partial"
-        assert result.trajectory_status == "incomplete"
-
-    def test_code_patch_no_op_is_evidence_only(self, db):
-        """code_patch_no_op in materialization_errors does not cause failure or partial."""
-        _setup(db)
-        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
-        run.status = "succeeded"
-        run.output_json = {"materialization_errors": ["code_patch_no_op"]}
-        db.flush()
-
-        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
-        db.flush()
-
-        assert result.outcome_status == "passed"
 
     def test_proposal_validation_failed_gives_validation_layer(self, db):
         _setup(db)
@@ -788,189 +845,6 @@ class TestMaterializationErrors:
 
         assert result.outcome_status == "partial"
         assert result.failure_layer == "validation"
-
-    # --- Realistic strings as written by RunExecutionService ---
-
-    def test_realistic_skipped_files_string_gives_partial_and_incomplete(self, db):
-        """Realistic string 'code_patch_skipped_files: a.png (binary)' → partial + incomplete."""
-        _setup(db)
-        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
-        run.status = "succeeded"
-        run.output_json = {
-            "materialization_errors": [
-                "code_patch_skipped_files: a.png (binary) — cannot include in patch"
-            ]
-        }
-        db.flush()
-
-        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
-        db.flush()
-
-        assert result.outcome_status == "partial"
-        assert result.trajectory_status == "incomplete"
-        # Original string preserved in evidence
-        assert result.evidence_json["materialization"]["errors"][0].startswith(
-            "code_patch_skipped_files:"
-        )
-        # Normalized code present
-        assert "code_patch_skipped_files" in result.evidence_json["materialization"]["codes"]
-
-    def test_realistic_collection_error_on_succeeded_gives_partial_and_incomplete(self, db):
-        """Realistic 'code_patch_collection_error: Traceback...' on succeeded → partial + incomplete."""
-        _setup(db)
-        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
-        run.status = "succeeded"
-        run.output_json = {
-            "materialization_errors": [
-                "code_patch_collection_error: Traceback (most recent call last):\n  File..."
-            ]
-        }
-        db.flush()
-
-        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
-        db.flush()
-
-        assert result.outcome_status == "partial"
-        assert result.trajectory_status == "incomplete"
-
-    def test_realistic_collection_error_on_failed_run_gives_tool_layer(self, db):
-        """Realistic 'code_patch_collection_error: Traceback...' in error_json on failed run → tool."""
-        _setup(db)
-        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
-        run.status = "failed"
-        run.error_json = {
-            "error_code": "code_patch_collection_error",
-            "detail": "Traceback (most recent call last):\n  File...",
-        }
-        db.flush()
-
-        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
-        db.flush()
-
-        assert result.failure_layer == "tool"
-        assert result.failure_reason_code == "code_patch_collection_error"
-
-    def test_realistic_no_op_string_is_evidence_only(self, db):
-        """Realistic 'code_patch_no_op: The CLI run completed without modifying...' → passed."""
-        _setup(db)
-        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
-        run.status = "succeeded"
-        run.output_json = {
-            "materialization_errors": [
-                "code_patch_no_op: The CLI run completed without modifying any tracked files."
-            ]
-        }
-        db.flush()
-
-        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
-        db.flush()
-
-        assert result.outcome_status == "passed"
-        assert result.evidence_json["materialization"]["errors"][0].startswith("code_patch_no_op:")
-        assert "code_patch_no_op" in result.evidence_json["materialization"]["codes"]
-
-    def test_evidence_preserves_original_strings_and_exposes_codes(self, db):
-        """evidence_json.materialization.errors = originals, .codes = normalized."""
-        _setup(db)
-        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
-        run.status = "succeeded"
-        run.output_json = {
-            "materialization_errors": [
-                "code_patch_skipped_files: img.png (binary)",
-                "code_patch_no_op: no changes",
-            ]
-        }
-        db.flush()
-
-        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
-        db.flush()
-
-        mat = result.evidence_json["materialization"]
-        assert len(mat["errors"]) == 2
-        assert mat["errors"][0] == "code_patch_skipped_files: img.png (binary)"
-        assert mat["errors"][1] == "code_patch_no_op: no changes"
-        assert set(mat["codes"]) == {"code_patch_skipped_files", "code_patch_no_op"}
-
-    def test_dict_mat_error_preserved_as_dict_in_evidence(self, db):
-        """A dict materialization error must remain a dict in evidence_json, not str(dict)."""
-        _setup(db)
-        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
-        run.status = "succeeded"
-        run.output_json = {
-            "materialization_errors": [
-                {
-                    "error_code": "produced_artifact_ingestion_error",
-                    "path": "../bad",
-                    "detail": "rejected",
-                }
-            ]
-        }
-        db.flush()
-
-        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
-        db.flush()
-
-        mat = result.evidence_json["materialization"]
-        assert len(mat["errors"]) == 1
-        err = mat["errors"][0]
-        assert isinstance(err, dict), f"Expected dict, got {type(err)}: {err!r}"
-        assert err["error_code"] == "produced_artifact_ingestion_error"
-        assert err["path"] == "../bad"
-        assert err["detail"] == "rejected"
-
-    def test_dict_mat_error_code_contributes_normalized_code(self, db):
-        """error_code/type/code in a dict entry contributes to materialization.codes."""
-        _setup(db)
-        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
-        run.status = "succeeded"
-        run.output_json = {
-            "materialization_errors": [
-                {"error_code": "produced_artifact_ingestion_error", "path": "x.bin"},
-            ]
-        }
-        db.flush()
-
-        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
-        db.flush()
-
-        mat = result.evidence_json["materialization"]
-        assert "produced_artifact_ingestion_error" in mat["codes"]
-
-    def test_mixed_string_and_dict_entries_preserve_originals_deduplicate_codes(self, db):
-        """Mixed string + dict entries: originals preserved as-is; codes deduplicated."""
-        _setup(db)
-        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
-        run.status = "succeeded"
-        run.output_json = {
-            "materialization_errors": [
-                "code_patch_skipped_files: a.png (binary)",
-                {
-                    "error_code": "produced_artifact_ingestion_error",
-                    "path": "../bad",
-                    "detail": "rejected",
-                },
-            ]
-        }
-        db.flush()
-
-        result = RunEvaluationService(db).evaluate(run.id, space_id=SPACE)
-        db.flush()
-
-        import json
-        # evidence_json must be JSON-serializable
-        json.dumps(result.evidence_json)
-
-        mat = result.evidence_json["materialization"]
-        assert len(mat["errors"]) == 2
-        assert isinstance(mat["errors"][0], str)
-        assert isinstance(mat["errors"][1], dict)
-        assert mat["errors"][1]["error_code"] == "produced_artifact_ingestion_error"
-        assert set(mat["codes"]) == {
-            "code_patch_skipped_files",
-            "produced_artifact_ingestion_error",
-        }
-        # No duplicate codes
-        assert len(mat["codes"]) == len(set(mat["codes"]))
 
 
 # ---------------------------------------------------------------------------
@@ -1194,11 +1068,12 @@ class TestEvaluationInvariants:
 # ---------------------------------------------------------------------------
 
 class TestCollectErrorCodes:
-    def _mock_run(self, error_json=None, output_json=None):
+    def _mock_run(self, error_json=None, output_json=None, status="succeeded"):
         from unittest.mock import MagicMock
         run = MagicMock()
         run.error_json = error_json
         run.output_json = output_json
+        run.status = status
         return run
 
     def test_collects_from_error_json_error_code(self):
@@ -1211,24 +1086,16 @@ class TestCollectErrorCodes:
         codes = _collect_error_codes(run, [], [])
         assert "runtime_removed" in codes
 
-    def test_collects_from_output_json_materialization_errors(self):
+    def test_does_not_parse_output_json_materialization_errors(self):
+        """output_json.materialization_errors must never be parsed into error codes."""
         run = self._mock_run(output_json={"materialization_errors": ["code_patch_skipped_files"]})
         codes = _collect_error_codes(run, [], [])
-        assert "code_patch_skipped_files" in codes
+        assert "code_patch_skipped_files" not in codes
 
-    def test_normalizes_realistic_mat_error_strings(self):
-        """Realistic strings like 'code_X: detail...' are normalized to just 'code_X'."""
-        run = self._mock_run(output_json={
-            "materialization_errors": [
-                "code_patch_skipped_files: a.png (binary)",
-                "code_patch_no_op: no changes made",
-            ]
-        })
+    def test_collects_output_json_top_level_error_code(self):
+        run = self._mock_run(output_json={"error_code": "adapter_runtime_error"})
         codes = _collect_error_codes(run, [], [])
-        assert "code_patch_skipped_files" in codes
-        assert "code_patch_no_op" in codes
-        # Must not contain the full string
-        assert not any(":" in c for c in codes)
+        assert "adapter_runtime_error" in codes
 
     def test_deduplicates_codes(self):
         run = self._mock_run(
@@ -1237,46 +1104,3 @@ class TestCollectErrorCodes:
         )
         codes = _collect_error_codes(run, [], [])
         assert codes.count("adapter_runtime_error") == 1
-
-
-# ---------------------------------------------------------------------------
-# Materialization error code normalizer unit tests
-# ---------------------------------------------------------------------------
-
-class TestNormalizeMatErrorCode:
-    def test_plain_code_string(self):
-        assert _normalize_mat_error_code("code_patch_skipped_files") == "code_patch_skipped_files"
-
-    def test_string_with_colon_detail(self):
-        assert _normalize_mat_error_code(
-            "code_patch_skipped_files: a.png (binary) — skipped"
-        ) == "code_patch_skipped_files"
-
-    def test_string_with_traceback(self):
-        assert _normalize_mat_error_code(
-            "code_patch_collection_error: Traceback (most recent call last):\n  File..."
-        ) == "code_patch_collection_error"
-
-    def test_no_op_string(self):
-        assert _normalize_mat_error_code(
-            "code_patch_no_op: The CLI run completed without modifying any tracked files."
-        ) == "code_patch_no_op"
-
-    def test_dict_with_error_code(self):
-        assert _normalize_mat_error_code({"error_code": "sandbox_required"}) == "sandbox_required"
-
-    def test_dict_with_type(self):
-        assert _normalize_mat_error_code({"type": "runtime_output_artifact"}) == "runtime_output_artifact"
-
-    def test_dict_with_code(self):
-        assert _normalize_mat_error_code({"code": "produced_artifact_ingestion_error"}) == "produced_artifact_ingestion_error"
-
-    def test_empty_string_returns_none(self):
-        assert _normalize_mat_error_code("") is None
-
-    def test_none_input_returns_none(self):
-        assert _normalize_mat_error_code(None) is None  # type: ignore
-
-    def test_string_starting_with_colon_returns_empty_prefix(self):
-        # ":something" → empty prefix → None
-        assert _normalize_mat_error_code(": no prefix") is None

@@ -155,7 +155,7 @@ def test_grant_derived_run_cannot_materialize_shared_artifact_directly(db):
     run = _build_grant_derived_run(db, personal_id=personal_id, team_id=team_id, user=user)
 
     materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
+    _mat_result = materializer.materialize(
         run=run,
         adapter_output={
             "artifacts": [{
@@ -168,8 +168,8 @@ def test_grant_derived_run_cannot_materialize_shared_artifact_directly(db):
     )
 
     # Direct persistence must still be blocked
-    assert len(errors) > 0, "Egress guard must block grant-derived artifact creation"
-    assert any("egress" in e.lower() or "grant" in e.lower() or "personal" in e.lower() for e in errors)
+    assert len(_mat_result.errors) > 0, "Egress guard must block grant-derived artifact creation"
+    assert any("egress" in e.lower() or "grant" in e.lower() or "personal" in e.lower() for e in _mat_result.errors)
 
     # No artifact must exist in team space
     from app.models import Artifact
@@ -201,7 +201,7 @@ def test_non_grant_run_shared_artifact_behavior_unchanged(db):
     assert run.has_personal_grant_context is False
 
     materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
+    _mat_result = materializer.materialize(
         run=run,
         adapter_output={
             "artifacts": [{
@@ -213,7 +213,7 @@ def test_non_grant_run_shared_artifact_behavior_unchanged(db):
         adapter_type="test",
     )
 
-    assert len(errors) == 0, f"Non-grant run must be able to create artifacts; errors: {errors}"
+    assert len(_mat_result.errors) == 0, f"Non-grant run must be able to create artifacts; errors: {_mat_result.errors}"
 
     from app.models import Artifact
     team_artifacts = db.query(Artifact).filter(Artifact.space_id == team_id).all()
@@ -240,7 +240,7 @@ def test_grant_derived_run_cannot_create_shared_memory_directly(db):
     run = _build_grant_derived_run(db, personal_id=personal_id, team_id=team_id, user=user)
 
     materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
+    _mat_result = materializer.materialize(
         run=run,
         adapter_output={
             "proposed_changes": [{
@@ -259,7 +259,7 @@ def test_grant_derived_run_cannot_create_shared_memory_directly(db):
     )
 
     # Direct persistence must still be blocked
-    assert len(errors) > 0, "Egress guard must block grant-derived memory proposal creation"
+    assert len(_mat_result.errors) > 0, "Egress guard must block grant-derived memory proposal creation"
 
     db.commit()
     all_proposals = db.query(Proposal).filter(Proposal.space_id == team_id).all()
@@ -287,7 +287,7 @@ def test_non_grant_run_shared_memory_behavior_unchanged(db):
     assert run.has_personal_grant_context is False
 
     materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
+    _mat_result = materializer.materialize(
         run=run,
         adapter_output={
             "proposed_changes": [{
@@ -305,7 +305,7 @@ def test_non_grant_run_shared_memory_behavior_unchanged(db):
         adapter_type="test",
     )
 
-    assert len(errors) == 0, f"Non-grant run must be able to create memory proposals; errors: {errors}"
+    assert len(_mat_result.errors) == 0, f"Non-grant run must be able to create memory proposals; errors: {_mat_result.errors}"
 
     proposals = db.query(Proposal).filter(Proposal.space_id == team_id).all()
     assert len(proposals) == 1, "Non-grant run must create a memory proposal in team space"
@@ -836,7 +836,7 @@ def test_grant_derived_code_patch_proposal_carries_risk_metadata(db):
     workspace = factories.create_test_workspace(db, space_id=team_id, commit=True)
 
     materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
+    _mat_result = materializer.materialize(
         run=run,
         adapter_output={
             "proposed_changes": [{
@@ -855,7 +855,7 @@ def test_grant_derived_code_patch_proposal_carries_risk_metadata(db):
         adapter_type="test",
     )
 
-    assert len(errors) == 0, f"Code patch proposal creation must not error; got: {errors}"
+    assert len(_mat_result.errors) == 0, f"Code patch proposal creation must not error; got: {_mat_result.errors}"
 
     proposal = db.query(Proposal).filter(
         Proposal.space_id == team_id,
@@ -890,7 +890,7 @@ def test_non_grant_code_patch_proposal_risk_metadata_unchanged(db):
     workspace = factories.create_test_workspace(db, space_id=team_id, commit=True)
 
     materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
+    _mat_result = materializer.materialize(
         run=run,
         adapter_output={
             "proposed_changes": [{
@@ -909,7 +909,7 @@ def test_non_grant_code_patch_proposal_risk_metadata_unchanged(db):
         adapter_type="test",
     )
 
-    assert len(errors) == 0, f"Non-grant code patch proposal must succeed; errors: {errors}"
+    assert len(_mat_result.errors) == 0, f"Non-grant code patch proposal must succeed; errors: {_mat_result.errors}"
 
     proposal = db.query(Proposal).filter(
         Proposal.space_id == team_id,

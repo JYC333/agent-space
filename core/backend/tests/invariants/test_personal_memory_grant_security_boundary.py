@@ -503,7 +503,7 @@ def test_grant_does_not_enable_team_memory_write_of_private_content(db):
     # Attempt team memory creation via RunOutputMaterializer — must be blocked
     from app.runs.run_output_materialization import RunOutputMaterializer
     materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
+    _mat_result = materializer.materialize(
         run=run,
         adapter_output={
             "proposed_changes": [{
@@ -521,7 +521,7 @@ def test_grant_does_not_enable_team_memory_write_of_private_content(db):
         adapter_type="test",
     )
 
-    assert len(errors) > 0, "Egress guard must block grant-derived memory proposal creation"
+    assert len(_mat_result.errors) > 0, "Egress guard must block grant-derived memory proposal creation"
 
     # Invariant: no team memory proposal must exist; egress_review proposals are allowed.
     proposals = db.query(Proposal).filter(Proposal.space_id == team_id).all()

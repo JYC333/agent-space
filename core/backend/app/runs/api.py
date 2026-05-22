@@ -26,6 +26,7 @@ from ..schemas import (
     Page,
     ProposalOut,
     RunEvaluationOut,
+    RunEventOut,
     RunOut,
     RunStatusOut,
     RunStepOut,
@@ -42,6 +43,7 @@ from .run_service import RunService
 from .removed_runtime_token import is_obsolete_runtime_override_token
 from .steps import list_run_steps
 from .evaluation import RunEvaluationService
+from .events import RunEventService
 from ..tasks.evaluation_errors import TaskEvaluationNotFoundError
 from ..tasks.evaluation_service import TaskEvaluationService
 
@@ -158,6 +160,28 @@ def list_run_steps_route(
     steps = list_run_steps(db, run_id, space_id)
     page = steps[offset : offset + limit]
     return Page(items=page, total=len(steps), limit=limit, offset=offset)
+
+
+@router.get("/{run_id}/events", response_model=Page[RunEventOut])
+def list_run_events(
+    run_id: str,
+    event_type: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int = Query(200, le=500),
+    offset: int = Query(0),
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    """Return RunEvent evidence records for a Run, ordered by event_index ascending."""
+    space_id, _ = ids
+    RunService(db).get_run(run_id, space_id)
+    svc = RunEventService(db)
+    total, items = svc.list_for_run(
+        run_id, space_id,
+        limit=limit, offset=offset,
+        event_type=event_type, status=status,
+    )
+    return Page(items=[RunEventOut.model_validate(e) for e in items], total=total, limit=limit, offset=offset)
 
 
 @router.get("/{run_id}", response_model=RunOut)

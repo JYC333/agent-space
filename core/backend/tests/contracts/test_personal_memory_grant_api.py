@@ -734,7 +734,7 @@ def test_grant_derived_context_does_not_create_team_memory(db, client):
 
     # Attempt to materialize a team memory proposal — must be blocked by egress guard
     materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
+    _mat_result = materializer.materialize(
         run=run,
         adapter_output={
             "proposed_changes": [{
@@ -752,7 +752,7 @@ def test_grant_derived_context_does_not_create_team_memory(db, client):
         adapter_type="test",
     )
 
-    assert len(errors) > 0, "Egress guard must block grant-derived memory proposal"
+    assert len(_mat_result.errors) > 0, "Egress guard must block grant-derived memory proposal"
 
     # No memory proposals may exist in team space; only egress_review proposals 
     all_proposals = db.query(Proposal).filter(Proposal.space_id == team_id).all()

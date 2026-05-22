@@ -327,7 +327,7 @@ def test_personal_memory_summary_does_not_create_team_memory(db):
     # Attempt to materialize a team memory from this grant-derived run
     from app.runs.run_output_materialization import RunOutputMaterializer
     materializer = RunOutputMaterializer(db)
-    errors = materializer.materialize(
+    _mat_result = materializer.materialize(
         run=run,
         adapter_output={
             "proposed_changes": [{
@@ -345,9 +345,9 @@ def test_personal_memory_summary_does_not_create_team_memory(db):
         adapter_type="test",
     )
 
-    assert len(errors) > 0, "Materialization must fail for grant-derived run targeting team space"
-    assert any("egress" in e.lower() or "personal" in e.lower() or "grant" in e.lower() for e in errors), (
-        f"Error must mention egress or grant context; got: {errors}"
+    assert len(_mat_result.errors) > 0, "Materialization must fail for grant-derived run targeting team space"
+    assert any("egress" in e.lower() or "personal" in e.lower() or "grant" in e.lower() for e in _mat_result.errors), (
+        f"Error must mention egress or grant context; got: {_mat_result.errors}"
     )
 
     # Only egress_review proposals may exist (no memory proposals)

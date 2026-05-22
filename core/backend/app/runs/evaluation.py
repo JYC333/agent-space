@@ -7,11 +7,11 @@ Evidence sources (harness-boundary only):
   - Run.status / error_json / output_json / exit_code / source / trigger_origin
   - Run.required_sandbox_level / observability_level / data_exposure_level
   - Ordered RunSteps (step_type, status, error_type)
+  - RunEvent structured event records (patch/artifact/adapter event evidence)
   - ContextSnapshot token_budget_json / retrieval_trace_json
   - Produced Artifacts (trust_level)
   - Created Proposals (risk_level, payload_json validation/patch signals)
   - ValidationRecipe / WorkspaceProfile when available
-  - output_json.materialization_errors
 
 Hard rules:
   - No LLM-as-judge.
@@ -36,6 +36,7 @@ from ..models import (
     Proposal,
     Run,
     RunEvaluation,
+    RunEvent,
     RunStep,
     Task,
     TaskRun,
@@ -69,6 +70,9 @@ _PARTIAL_OUTCOME_MAT_ERRORS = frozenset({
     "code_patch_incomplete", "code_patch_skipped_files",
     "code_patch_collection_error", "runtime_output_artifact",
     "produced_artifact_ingestion_error",
+    "output_artifact_materialization_error",
+    "output_proposal_materialization_error",
+    "output_activity_materialization_error",
 })
 
 # ---------------------------------------------------------------------------
@@ -109,6 +113,10 @@ _EXACT_ERROR_CODE_MAP: dict[str, tuple[str, str]] = {
     # tool
     "code_patch_collection_error": ("tool", "code_patch_collection_error"),
     "produced_artifact_ingestion_error": ("tool", "produced_artifact_ingestion_error"),
+    "runtime_output_artifact": ("tool", "runtime_output_artifact"),
+    "output_artifact_materialization_error": ("tool", "output_artifact_materialization_error"),
+    "output_proposal_materialization_error": ("tool", "output_proposal_materialization_error"),
+    "output_activity_materialization_error": ("tool", "output_activity_materialization_error"),
 }
 
 
@@ -121,43 +129,63 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def _normalize_mat_error_code(entry: "str | dict") -> Optional[str]:
-    """Extract the canonical error code from a materialization error entry.
 
-    RunExecutionService writes strings like:
-      "code_patch_skipped_files: a.png (binary) — skipped"
-      "code_patch_collection_error: Traceback (most recent call last)..."
+def _gather_events_evidence(db: Session, run: Run) -> dict:
+    """Gather structured evidence from RunEvent rows (canonical harness evidence spine).
 
-    For strings: split on the first ':', strip, return the prefix as the code.
-    For dicts: read error_code, type, or code key.
-    Returns None if no code can be extracted.
+    Returns a dict with counts, error_codes, and patch/artifact/validation signals
+    derived from structured RunEvent rows.  RunEvent is the sole structured evidence
+    source for patch, artifact, and adapter classification signals.
     """
-    if isinstance(entry, str):
-        code = entry.split(":", 1)[0].strip()
-        return code if code else None
-    if isinstance(entry, dict):
-        ec = entry.get("error_code") or entry.get("type") or entry.get("code")
-        return str(ec) if ec else None
-    return None
+    events: list[RunEvent] = (
+        db.query(RunEvent)
+        .filter(RunEvent.run_id == run.id, RunEvent.space_id == run.space_id)
+        .order_by(RunEvent.event_index)
+        .all()
+    )
 
+    event_error_codes: list[str] = []
+    event_warnings: list[dict] = []
+    events_by_type: dict[str, list[RunEvent]] = {}
+    for e in events:
+        events_by_type.setdefault(e.event_type, []).append(e)
+        if e.error_code and e.error_code not in event_error_codes:
+            event_error_codes.append(e.error_code)
+        if e.status == "warning":
+            event_warnings.append({"event_type": e.event_type, "error_code": e.error_code})
 
-def _sanitize_dict_for_evidence(d: dict) -> dict:
-    """Return a copy of d safe for JSON serialization.
+    patch_events = events_by_type.get("patch_collected", [])
+    patch_incomplete = any(
+        e.error_code == "code_patch_incomplete"
+        or bool((e.metadata_json or {}).get("incomplete_patch"))
+        for e in patch_events
+    )
+    patch_skipped = any(
+        e.error_code == "code_patch_skipped_files"
+        or (e.metadata_json or {}).get("skipped_count", 0) > 0
+        for e in patch_events
+    )
+    patch_collection_error = any(
+        e.status == "failed" and e.error_code == "code_patch_collection_error"
+        for e in patch_events
+    )
 
-    Only non-serializable leaf values are converted to strings — the dict
-    structure and all serializable values are preserved as-is.
-    """
-    import json
+    artifact_events = events_by_type.get("artifact_ingested", [])
+    artifact_ingestion_errors = sum(
+        1 for e in artifact_events if e.status in ("failed", "warning")
+    )
 
-    result: dict = {}
-    for k, v in d.items():
-        sk = str(k) if not isinstance(k, str) else k
-        try:
-            json.dumps(v)
-            result[sk] = v
-        except (TypeError, ValueError):
-            result[sk] = str(v)
-    return result
+    return {
+        "count": len(events),
+        "event_types": [e.event_type for e in events],
+        "event_error_codes": event_error_codes,
+        "event_warnings": event_warnings,
+        "patch_incomplete": patch_incomplete,
+        "patch_skipped": patch_skipped,
+        "patch_collection_error": patch_collection_error,
+        "artifact_ingestion_errors": artifact_ingestion_errors,
+    }
+
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +205,21 @@ def _collect_error_codes(
     run: Run,
     steps: list[RunStep],
     proposals: list[Proposal],
+    events_ev: Optional[dict] = None,
 ) -> list[str]:
-    """Collect all error/reason codes from run evidence, deduped, order-preserved."""
+    """Collect all error/reason codes from run evidence, deduped, order-preserved.
+
+    RunEvent structured error_codes are the primary source. Run.error_json and
+    Run.output_json top-level error_code are included. No string parsing of
+    output_json.materialization_errors is performed.
+    """
     codes: list[str] = []
+
+    # Primary source: RunEvent structured error codes (canonical, no string parsing)
+    if events_ev and events_ev.get("count", 0) > 0:
+        for ec in events_ev.get("event_error_codes", []):
+            if ec:
+                codes.append(ec)
 
     # From run.error_json
     err = run.error_json or {}
@@ -195,14 +235,6 @@ def _collect_error_codes(
         v = out.get("error_code")
         if v and isinstance(v, str):
             codes.append(v)
-
-        # From output_json.materialization_errors — normalize before appending
-        mat = out.get("materialization_errors") or []
-        if isinstance(mat, list):
-            for e in mat:
-                code = _normalize_mat_error_code(e)
-                if code:
-                    codes.append(code)
 
     # From failed RunStep.error_type
     for s in steps:
@@ -308,29 +340,35 @@ def _gather_context_evidence(
 def _gather_materialization_evidence(
     run: Run,
     proposals: list[Proposal],
+    events_ev: Optional[dict] = None,
 ) -> dict:
-    out = run.output_json or {}
-    mat_errors: list[str] = []    # original strings, preserved for audit
-    mat_codes: list[str] = []     # normalized codes, used for classification
+    """Gather patch/artifact materialization signals from RunEvent and Proposals.
+
+    RunEvent structured fields are the canonical source for patch and artifact signals.
+    Proposal payload_json is read for patch warnings. output_json.materialization_errors
+    string parsing is not performed.
+    """
+    mat_errors: list[str] = []   # always empty; retained for evidence_json schema stability
+    mat_codes: list[str] = []    # from RunEvent structured evidence
     code_patch_warnings: list[str] = []
 
-    if isinstance(out, dict):
-        raw = out.get("materialization_errors") or []
-        if isinstance(raw, list):
-            for e in raw:
-                # Preserve original for audit — strings stay strings, dicts stay dicts
-                if isinstance(e, str):
-                    mat_errors.append(e)
-                elif isinstance(e, dict):
-                    mat_errors.append(_sanitize_dict_for_evidence(e))
-                # Normalized code for classification
-                code = _normalize_mat_error_code(e)
-                if code and code not in mat_codes:
-                    mat_codes.append(code)
-        # output_json top-level patch signals
-        if out.get("incomplete_patch") or out.get("patch_incomplete"):
+    if events_ev and events_ev.get("count", 0) > 0:
+        if events_ev.get("patch_incomplete"):
             if "code_patch_incomplete" not in code_patch_warnings:
                 code_patch_warnings.append("code_patch_incomplete")
+        if events_ev.get("patch_skipped"):
+            if "code_patch_skipped_files" not in code_patch_warnings:
+                code_patch_warnings.append("code_patch_skipped_files")
+        if events_ev.get("patch_collection_error"):
+            if "code_patch_collection_error" not in code_patch_warnings:
+                code_patch_warnings.append("code_patch_collection_error")
+        if events_ev.get("artifact_ingestion_errors", 0) > 0:
+            if "produced_artifact_ingestion_error" not in mat_codes:
+                mat_codes.append("produced_artifact_ingestion_error")
+        # Propagate output/runtime materialization error codes from RunEvent structured evidence
+        for _ec in (events_ev.get("event_error_codes") or []):
+            if _ec in _PARTIAL_OUTCOME_MAT_ERRORS and _ec not in mat_codes:
+                mat_codes.append(_ec)
 
     for prop in proposals:
         payload = prop.payload_json or {}
@@ -355,6 +393,7 @@ def _gather_evidence_json(
     task: Optional[Task],
     validation_recipe: Optional[ValidationRecipe],
     error_codes: list[str],
+    events_ev: Optional[dict] = None,
 ) -> dict:
     """Build the canonical structured evidence_json dict."""
 
@@ -416,9 +455,9 @@ def _gather_evidence_json(
         else:
             recipe_status = "skipped"
 
-    mat_ev = _gather_materialization_evidence(run, proposals)
+    mat_ev = _gather_materialization_evidence(run, proposals, events_ev=events_ev)
 
-    return {
+    result = {
         "run": {
             "status": run.status,
             "exit_code": run.exit_code,
@@ -455,6 +494,14 @@ def _gather_evidence_json(
         },
         "materialization": mat_ev,
     }
+    if events_ev is not None:
+        result["events"] = {
+            "count": events_ev["count"],
+            "event_types": events_ev["event_types"],
+            "event_error_codes": events_ev["event_error_codes"],
+            "event_warnings": events_ev["event_warnings"],
+        }
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -762,6 +809,26 @@ class RunEvaluationService:
 
         self.db.add(evaluation)
         self.db.flush()
+
+        from .events import safe_append_run_event
+        safe_append_run_event(
+            self.db,
+            run_id=run_id,
+            space_id=space_id,
+            event_type="evaluation_created",
+            status="succeeded",
+            metadata_json={
+                "run_evaluation_id": evaluation.id,
+                "evaluator_type": evaluation.evaluator_type,
+                "evaluator_version": evaluation.evaluator_version,
+                "outcome_status": evaluation.outcome_status,
+                "failure_layer": evaluation.failure_layer,
+                "failure_reason_code": evaluation.failure_reason_code,
+                "trajectory_status": evaluation.trajectory_status,
+            },
+            log_context="evaluation_created",
+        )
+
         return evaluation
 
     def get_latest(self, run_id: str, *, space_id: str) -> Optional[RunEvaluation]:
@@ -816,7 +883,8 @@ class RunEvaluationService:
                     .first()
                 )
 
-        error_codes = _collect_error_codes(run, steps, proposals)
+        events_ev = _gather_events_evidence(self.db, run)
+        error_codes = _collect_error_codes(run, steps, proposals, events_ev=events_ev)
         ev = _gather_evidence_json(
             run=run,
             steps=steps,
@@ -826,6 +894,7 @@ class RunEvaluationService:
             task=task,
             validation_recipe=validation_recipe,
             error_codes=error_codes,
+            events_ev=events_ev,
         )
 
         outcome, outcome_trace = _classify_outcome(ev)

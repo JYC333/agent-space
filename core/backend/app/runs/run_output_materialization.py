@@ -8,8 +8,7 @@ Contract (adapter ``output_json`` after success):
 - ``proposed_changes``: list of durable-change requests. Supported ``proposal_type``:
   ``memory_update`` (requires ``payload`` with memory fields), ``code_patch`` (requires
   ``workspace_id`` + ``patch.operations`` with ``replace_file`` only). Invalid entries are
-  recorded on ``run.output_json["materialization_errors"]`` and skipped without aborting
-  the run.
+  skipped without aborting the run; failures are recorded in MaterializationResult.failed_items.
 
 When grant-derived artifact or memory-proposal materialization is blocked by the egress guard,
 a sanitized metadata-only egress_review proposal is created for the granting user. Direct
@@ -18,6 +17,7 @@ persistence remains blocked. The error message includes the proposal ID.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -33,6 +33,21 @@ from ..personal_memory_grants.egress_guard import (
 )
 from ..personal_memory_grants.egress_review import create_egress_review_proposal
 from .task_output_linkage import link_run_outputs_to_tasks
+
+
+@dataclass
+class MaterializationResult:
+    """Structured result from RunOutputMaterializer.materialize().
+
+    errors: human-readable strings for run.output_json["materialization_errors"] (debug).
+    artifact_items: successfully created artifacts: {id, artifact_type, label}.
+    proposal_items: successfully created proposals: {id, proposal_type, label}.
+    failed_items: failures: {kind, label, error_code, error_message, artifact_type?, proposal_type?}.
+    """
+    errors: list[str] = field(default_factory=list)
+    artifact_items: list[dict] = field(default_factory=list)
+    proposal_items: list[dict] = field(default_factory=list)
+    failed_items: list[dict] = field(default_factory=list)
 
 
 def _new_id() -> str:
@@ -80,41 +95,76 @@ class RunOutputMaterializer:
         run: Run,
         adapter_output: dict[str, Any] | None,
         adapter_type: str,
-    ) -> list[str]:
+    ) -> MaterializationResult:
         """
         Create rows from ``adapter_output`` keys ``artifacts`` and ``proposed_changes``.
 
-        Returns a list of human-readable error strings; durable mutations are skipped
-        for those entries only.
+        Returns a MaterializationResult with successes, failures, and human-readable
+        error strings.  Durable mutations are skipped for failed entries only.
         """
-        errors: list[str] = []
+        result = MaterializationResult()
         data = dict(adapter_output or {})
 
         for i, spec in enumerate(data.get("artifacts") or []):
             label = f"artifacts[{i}]"
+            artifact_type = str(spec.get("artifact_type") or "report")[:64] if isinstance(spec, dict) else None
             try:
-                self._artifact_from_spec(run, spec, adapter_type, label)
+                art = self._artifact_from_spec(run, spec, adapter_type, label)
+                result.artifact_items.append({
+                    "id": art.id,
+                    "artifact_type": art.artifact_type,
+                    "label": label,
+                })
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"{label}: {exc}")
+                msg = str(exc)[:256]
+                result.errors.append(f"{label}: {msg}")
+                result.failed_items.append({
+                    "kind": "artifact",
+                    "label": label,
+                    "error_code": "output_artifact_materialization_error",
+                    "error_message": msg,
+                    "artifact_type": artifact_type,
+                })
 
         for i, spec in enumerate(data.get("activities") or []):
             label = f"activities[{i}]"
             try:
                 self._activity_from_spec(run, spec, label)
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"{label}: {exc}")
+                msg = str(exc)[:256]
+                result.errors.append(f"{label}: {msg}")
+                result.failed_items.append({
+                    "kind": "activity",
+                    "label": label,
+                    "error_code": "output_activity_materialization_error",
+                    "error_message": msg,
+                })
 
         for i, spec in enumerate(data.get("proposed_changes") or []):
             label = f"proposed_changes[{i}]"
+            ptype = spec.get("proposal_type") if isinstance(spec, dict) else None
             try:
-                self._proposal_from_spec(run, spec)
+                prop = self._proposal_from_spec(run, spec)
+                result.proposal_items.append({
+                    "id": prop.id,
+                    "proposal_type": ptype or "unknown",
+                    "label": label,
+                })
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"{label}: {exc}")
+                msg = str(exc)[:256]
+                result.errors.append(f"{label}: {msg}")
+                result.failed_items.append({
+                    "kind": "proposal",
+                    "label": label,
+                    "error_code": "output_proposal_materialization_error",
+                    "error_message": msg,
+                    "proposal_type": ptype,
+                })
 
         self.db.flush()
-        return errors
+        return result
 
-    def _artifact_from_spec(self, run: Run, spec: Any, adapter_type: str, label: str) -> None:
+    def _artifact_from_spec(self, run: Run, spec: Any, adapter_type: str, label: str) -> Artifact:
         if not isinstance(spec, dict):
             raise TypeError("artifact spec must be an object")
 
@@ -175,6 +225,7 @@ class RunOutputMaterializer:
         )
         self.db.add(art)
         link_run_outputs_to_tasks(self.db, run=run, artifact=art, proposal=None)
+        return art
 
     def _activity_from_spec(self, run: Run, spec: Any, label: str) -> None:
         if not isinstance(spec, dict):
@@ -242,7 +293,7 @@ class RunOutputMaterializer:
         )
         self.db.add(activity)
 
-    def _proposal_from_spec(self, run: Run, spec: Any) -> None:
+    def _proposal_from_spec(self, run: Run, spec: Any) -> Proposal:
         if not isinstance(spec, dict):
             raise TypeError("proposed_change must be an object")
         uid = run.instructed_by_user_id
@@ -251,13 +302,13 @@ class RunOutputMaterializer:
 
         ptype = spec.get("proposal_type")
         if ptype == "memory_update":
-            self._memory_update_proposal(run, spec, uid)
+            return self._memory_update_proposal(run, spec, uid)
         elif ptype == "code_patch":
-            self._code_patch_proposal(run, spec, uid)
+            return self._code_patch_proposal(run, spec, uid)
         else:
             raise ValueError(f"unsupported proposal_type {ptype!r}")
 
-    def _memory_update_proposal(self, run: Run, spec: dict[str, Any], user_id: str) -> None:
+    def _memory_update_proposal(self, run: Run, spec: dict[str, Any], user_id: str) -> Proposal:
         payload = spec.get("payload")
         if not isinstance(payload, dict):
             raise ValueError("memory_update requires payload object")
@@ -323,8 +374,9 @@ class RunOutputMaterializer:
         )
         self.db.add(prop)
         link_run_outputs_to_tasks(self.db, run=run, artifact=None, proposal=prop, proposal_role="memory_create")
+        return prop
 
-    def _code_patch_proposal(self, run: Run, spec: dict[str, Any], user_id: str) -> None:
+    def _code_patch_proposal(self, run: Run, spec: dict[str, Any], user_id: str) -> Proposal:
         ws_id = spec.get("workspace_id")
         if not isinstance(ws_id, str) or not ws_id.strip():
             raise ValueError("code_patch requires workspace_id")
@@ -385,3 +437,4 @@ class RunOutputMaterializer:
         )
         self.db.add(prop)
         link_run_outputs_to_tasks(self.db, run=run, artifact=None, proposal=prop, proposal_role="code_patch")
+        return prop
