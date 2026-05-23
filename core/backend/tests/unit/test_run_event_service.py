@@ -40,10 +40,46 @@ class TestConstants:
         assert "patch_collected" in RUN_EVENT_TYPES
         assert "evaluation_created" in RUN_EVENT_TYPES
 
+    def test_policy_checked_in_run_event_types(self):
+        assert "policy_checked" in RUN_EVENT_TYPES
+
     def test_run_event_statuses_is_frozenset(self):
         assert isinstance(RUN_EVENT_STATUSES, frozenset)
         assert "warning" in RUN_EVENT_STATUSES
         assert "skipped" in RUN_EVENT_STATUSES
+
+
+class TestPolicyCheckedEvent:
+    """policy_checked RunEvent can be persisted; safe_append_run_event does not swallow it."""
+
+    def test_policy_checked_event_persists(self, db):
+        _setup(db)
+        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
+        svc = RunEventService(db)
+        ev = svc.append_event(
+            run_id=run.id,
+            space_id=SPACE,
+            event_type="policy_checked",
+            status="succeeded",
+            summary="runtime.execute allowed",
+        )
+        assert ev.id
+        assert ev.event_type == "policy_checked"
+        assert ev.status == "succeeded"
+
+    def test_safe_append_policy_checked_does_not_raise(self, db):
+        _setup(db)
+        run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
+        result = safe_append_run_event(
+            db,
+            run_id=run.id,
+            space_id=SPACE,
+            event_type="policy_checked",
+            status="failed",
+            metadata_json={"decision": "deny", "action": "runtime.execute"},
+        )
+        assert result is not None
+        assert result.event_type == "policy_checked"
 
 
 # ---------------------------------------------------------------------------

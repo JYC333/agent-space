@@ -322,6 +322,43 @@ def collect_and_create_code_patch_proposal(
         else "medium"
     )
 
+    # Policy gate: proposal.create — audit for system-created code_patch proposals.
+    # force_record=True ensures HIGH-risk code_patch proposals are always recorded.
+    # Never stores patch content in metadata.
+    from ..policy.gateway import PolicyGateway, PolicyCheckRequest
+    _create_decision = PolicyGateway(db).check_and_record(
+        PolicyCheckRequest(
+            action="proposal.create",
+            actor_type="run",
+            actor_id=str(run.id),
+            space_id=run.space_id,
+            resource_type="proposal",
+            run_id=str(run.id),
+            force_record=True,
+            metadata_json={
+                "proposal_type": "code_patch",
+                "workspace_id": str(run.workspace_id) if run.workspace_id else None,
+                "source_run_id": str(run.id),
+                "risk_level": effective_risk_level,
+                "ops_count": len(ops),
+                "skipped_count": len(skipped),
+                "incomplete_patch": incomplete_patch,
+                "validation_status": validation_dict.get("status"),
+            },
+        )
+    )
+    if _create_decision.denied:
+        log.warning(
+            "code_patch proposal.create denied by policy for run=%s: %s",
+            run.id, _create_decision.message,
+        )
+        return WorktreeCollectionResult(
+            proposal_created=False,
+            ops_count=len(ops),
+            skipped=skipped,
+            no_op_reason=f"code_patch proposal.create denied by policy: {_create_decision.message}",
+        )
+
     proposal = Proposal(
         id=str(ULID()),
         space_id=run.space_id,

@@ -201,7 +201,6 @@ def _create_and_execute_task_run(job, payload: dict, task_id: str) -> dict:
             instruction=payload.get("instruction"),
             set_task_in_progress=bool(payload.get("set_task_in_progress", True)),
             parent_run_id=payload.get("parent_run_id"),
-            instructed_by_agent_id=payload.get("instructed_by_agent_id"),
             adapter_type=payload.get("adapter_type"),
         )
         _link, run = TaskService(db).create_queued_run_for_task(
@@ -258,7 +257,6 @@ def _create_and_execute_agent_run(job, payload: dict, agent_id: str) -> dict:
                 prompt=payload.get("prompt"),
                 instruction=payload.get("instruction"),
                 parent_run_id=payload.get("parent_run_id"),
-                instructed_by_agent_id=payload.get("instructed_by_agent_id"),
                 adapter_type=payload.get("adapter_type"),
             ),
             space_id=space_id,

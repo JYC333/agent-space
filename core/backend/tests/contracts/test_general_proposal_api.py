@@ -84,24 +84,33 @@ def test_reject_proposal_cross_space_returns_404(api_client, db, cross_space_pai
     _assert_error_envelope(r.json(), error="not_found")
 
 
-def test_non_creator_cannot_accept_in_same_space(api_client, db, cross_space_pair):
+def test_member_cannot_accept_in_same_space_returns_403(api_client, db, cross_space_pair):
+    """Member-role users cannot apply proposals — policy gate returns 403."""
+    from app.models import SpaceMembership, User
+    from ulid import ULID
+
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
-    u_other = factories.create_test_user(db, space_id=a, display_name="Other A", commit=True)
-    prop = factories.create_test_proposal(
-        db,
-        space_id=a,
-        created_by_user_id=ua.id,
-        commit=True,
+
+    # Create a member-role user (not owner/admin)
+    member_id = str(ULID())
+    member_user = User(
+        id=member_id, space_id=a,
+        display_name="member-user", email=f"{member_id}@test.invalid",
     )
-    _, raw = UserSessionService(db).create(u_other.id)
-    other_client = TestClient(_app, cookies={SESSION_COOKIE: raw}, raise_server_exceptions=True)
-    r = other_client.post(
+    db.add(member_user)
+    db.add(SpaceMembership(id=str(ULID()), space_id=a, user_id=member_id, role="member", status="active"))
+    db.commit()
+
+    prop = factories.create_test_proposal(db, space_id=a, created_by_user_id=ua.id, commit=True)
+    _, raw = UserSessionService(db).create(member_id)
+    member_client = TestClient(_app, cookies={SESSION_COOKIE: raw}, raise_server_exceptions=True)
+    r = member_client.post(
         f"/api/v1/proposals/{prop.id}/accept",
-        params=_params(a, u_other.id),
+        params=_params(a, member_id),
     )
-    assert r.status_code == 404
-    _assert_error_envelope(r.json(), error="not_found")
+    assert r.status_code == 403
+    _assert_error_envelope(r.json(), error="forbidden")
 
 
 def test_non_creator_cannot_reject_in_same_space(api_client, db, cross_space_pair):
@@ -395,9 +404,9 @@ def test_unsupported_proposal_type_accept_stable_error_no_mutation(api_client, d
         f"/api/v1/proposals/{prop.id}/accept",
         params=_params(a, ua.id),
     )
-    assert r.status_code == 409
+    assert r.status_code == 403
     body = r.json()
-    assert body.get("error") == "conflict"
+    assert body.get("error") == "forbidden"
     msg = body.get("message")
     assert isinstance(msg, dict)
     assert msg.get("code") == "unsupported_proposal_type"
@@ -551,3 +560,75 @@ def test_get_proposal_detail_general_shape(api_client, db, cross_space_pair):
     assert out.get("id") == prop.id
     assert out.get("proposal_type") == "memory_update"
     assert "proposed_title" in out and "status" in out
+
+
+# ---------------------------------------------------------------------------
+# Incomplete patch visibility — cross-space user must not receive skipped_changes
+# ---------------------------------------------------------------------------
+
+def test_incomplete_patch_cross_space_returns_404_not_422(api_client, db, cross_space_pair):
+    """Cross-space user cannot see incomplete_patch detail for another space's proposal."""
+    from tests.support.factories import create_test_workspace
+
+    a = cross_space_pair["space_a_id"]
+    b = cross_space_pair["space_b_id"]
+    ua = cross_space_pair["user_a"]
+    ub = cross_space_pair["user_b"]
+
+    ws = create_test_workspace(db, space_id=a, created_by_user_id=ua.id)
+    prop = factories.create_test_proposal(
+        db, space_id=a, created_by_user_id=ua.id,
+        proposal_type="code_patch",
+        workspace_id=ws.id,
+        payload_json={
+            "patch": {"operations": []},
+            "incomplete_patch": True,
+            "skipped_changes": ["secret_file.py"],
+        },
+        commit=True,
+    )
+
+    r = cross_space_pair["client_b"].post(
+        f"/api/v1/proposals/{prop.id}/accept",
+        params=_params(b, ub.id),
+    )
+    assert r.status_code == 404
+    body = r.json()
+    _assert_error_envelope(body, error="not_found")
+    assert "skipped_changes" not in str(body)
+    assert "secret_file.py" not in str(body)
+
+
+def test_incomplete_patch_same_space_owner_gets_422(api_client, db, cross_space_pair):
+    """Owner in same space receives incomplete_patch_requires_confirmation (422) before apply."""
+    from tests.support.factories import create_test_workspace
+
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+
+    ws = create_test_workspace(db, space_id=a, created_by_user_id=ua.id)
+    prop = factories.create_test_proposal(
+        db, space_id=a, created_by_user_id=ua.id,
+        proposal_type="code_patch",
+        workspace_id=ws.id,
+        payload_json={
+            "patch": {"operations": []},
+            "incomplete_patch": True,
+            "skipped_changes": ["some_file.py"],
+        },
+        commit=True,
+    )
+
+    r = cross_space_pair["client_a"].post(
+        f"/api/v1/proposals/{prop.id}/accept",
+        params=_params(a, ua.id),
+    )
+    assert r.status_code == 422
+    body = r.json()
+    # Our error middleware wraps HTTPException detail as {"error": ..., "message": <detail>}
+    message = body.get("message", body.get("detail", {}))
+    if isinstance(message, str):
+        assert "incomplete_patch_requires_confirmation" in message
+    else:
+        assert message.get("code") == "incomplete_patch_requires_confirmation"
+        assert "some_file.py" in str(message.get("skipped_changes", []))

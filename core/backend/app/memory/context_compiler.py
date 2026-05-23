@@ -569,8 +569,6 @@ class ContextCompiler:
             max_time = sandbox_policy.get("max_run_time_seconds")
             if max_time:
                 policy_lines.append(f"- Time limit: {max_time}s")
-            if not sandbox_policy.get("can_delegate", True):
-                policy_lines.append("- Sub-agent delegation is not permitted")
             if policy_lines:
                 add("sandbox", "# Sandbox Policy\n\n" + "\n".join(policy_lines))
 

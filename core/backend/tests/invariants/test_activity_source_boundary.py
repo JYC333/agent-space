@@ -204,7 +204,9 @@ def test_proposal_apply_rejects_missing_provenance_for_semantic_memory(db, cross
 
     svc = ProposalApplyService(db)
     with pytest.raises(ProposalApplyError) as exc:
-        svc.apply(prop, user_id=ua.id, accept_context="direct_apply")
+        # explicit_user_accept runs source monitoring (which rejects missing provenance)
+        # without triggering the accept_context defense-in-depth gate.
+        svc.apply(prop, user_id=ua.id, accept_context="explicit_user_accept")
     assert "provenance" in str(exc.value).lower()
 
 

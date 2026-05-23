@@ -112,12 +112,10 @@ def test_system_actor_ref_factory_does_not_use_default_user_id():
 # Invariant: existing nullable user_id/agent_id fields remain readable
 # ---------------------------------------------------------------------------
 
-def test_run_existing_instructed_by_fields_remain_readable(db, test_user, test_space):
-    """Run.instructed_by_user_id and Run.instructed_by_agent_id are not removed in M2."""
+def test_run_instructed_by_user_id_is_readable(db, test_user, test_space):
+    """Run.instructed_by_user_id records the human actor who instructed the run."""
     run = factories.create_test_run(db, space_id=test_space.id, user_id=test_user.id)
-    # These columns must exist and be queryable
     assert run.instructed_by_user_id == test_user.id
-    assert run.instructed_by_agent_id is None  # nullable
 
 
 def test_proposal_existing_created_by_fields_remain_readable(db, test_user, test_space):
@@ -168,7 +166,7 @@ def test_policy_context_accepts_actor_ref_without_changing_allow_decision():
     engine = PolicyEngine()
     ref = ActorRef(actor_type="user", user_id="u-1", space_id="personal")
     ctx_without = {
-        "action": "memory.read",
+        "action": "context.inject_memory",
         "space_id": "personal",
         "resource_space_id": "personal",
         "agent_status": "active",
@@ -189,7 +187,7 @@ def test_policy_context_accepts_system_actor_ref_without_changing_deny_decision(
     engine = PolicyEngine()
     ref = actor_ref_for_system(service_name="system", space_id="personal")
     ctx = {
-        "action": "memory.read",
+        "action": "context.inject_memory",
         "space_id": "personal",
         "resource_space_id": "work",
         "actor_ref": ref.model_dump(),

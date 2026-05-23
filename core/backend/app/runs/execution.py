@@ -51,6 +51,7 @@ from .runtime_preflight import RuntimePreflightService
 from .execution_lock import RunExecutionLockService
 from .run_output_materialization import MaterializationResult, RunOutputMaterializer
 from .runtime_policy import compute_runtime_policy_decision, validate_file_access_adapter_policy
+from ..policy.gateway import PolicyGateway, PolicyCheckRequest, PolicyDecisionRecordPersistError
 from .sandbox_manager import execution_workspace
 from .removed_runtime_token import is_obsolete_runtime_override_token
 from .task_output_linkage import link_run_outputs_to_tasks
@@ -265,6 +266,14 @@ class RunExecutionService:
             resolve_run_actor,
         )
 
+        # Capture agent status early via the Agent row — AgentVersion has no status field.
+        # Must be read before any db.commit() that could expire the relationship.
+        _agent_status: str | None = None
+        try:
+            _agent_status = version.agent.status if version.agent else None
+        except Exception:
+            log.warning("agent status lookup failed for run %s; agent_status=None for policy check", run.id)
+
         try:
             actor = resolve_run_actor(self.db, run)
             actor_id: str | None = actor.id
@@ -318,6 +327,287 @@ class RunExecutionService:
                 stdout="",
                 stderr="",
             )
+
+        # Policy gate: runtime.execute — checked before credential resolution, before
+        # ContextSnapshot population, and before adapter invocation.
+        # DENY or REQUIRE_APPROVAL halts execution here with a stable error_code.
+        # Rule-relevant fields go in context so PolicyEngine rules can read them;
+        # safe copies are kept in metadata_json for audit trail only.
+        _exec_trigger_origin = getattr(run, "trigger_origin", "manual") or "manual"
+        # tool_permissions_json default is {} (empty dict), meaning "no restriction".
+        # Only a list value (including empty []) restricts which tools may be used.
+        _raw_tool_perms = getattr(version, "tool_permissions_json", None)
+        _agent_tool_permissions = _raw_tool_perms if isinstance(_raw_tool_perms, list) else None
+
+        # Actor semantics: prefer the instructing user for manual/user-origin runs.
+        # For non-user origins (automation, job, system), the run itself is the actor;
+        # a structured actor_ref preserves run traceability without losing trigger context.
+        # run_id and resource_id always refer to the run regardless of actor type.
+        _instructed_by = getattr(run, "instructed_by_user_id", None)
+        if _instructed_by and _exec_trigger_origin == "manual":
+            _exec_actor_type: str = "user"
+            _exec_actor_id: str = str(_instructed_by)
+            _exec_actor_ref: Optional[dict] = None
+        else:
+            _exec_actor_type = "run"
+            _exec_actor_id = str(run.id)
+            _exec_actor_ref = {
+                "run_id": str(run.id),
+                "trigger_origin": _exec_trigger_origin,
+            }
+
+        try:
+            _exec_policy_decision = PolicyGateway(self.db).check_and_record(
+                PolicyCheckRequest(
+                    action="runtime.execute",
+                    actor_type=_exec_actor_type,
+                    actor_id=_exec_actor_id,
+                    actor_ref=_exec_actor_ref,
+                    space_id=run.space_id,
+                    resource_type="run",
+                    resource_id=str(run.id),
+                    run_id=str(run.id),
+                    context={
+                        "agent_status": _agent_status,
+                        "agent_tool_permissions": _agent_tool_permissions,
+                        "tool_name": resolved.adapter_type,
+                        "adapter_type": resolved.adapter_type,
+                        "trigger_origin": _exec_trigger_origin,
+                        "risk_level": decision.risk_level,
+                        "required_sandbox_level": decision.required_sandbox_level,
+                        "data_exposure_level": run.data_exposure_level,
+                        "trust_level": run.trust_level,
+                        "observability_level": run.observability_level,
+                    },
+                    metadata_json={
+                        "agent_id": str(run.agent_id) if run.agent_id else None,
+                        "agent_version_id": str(run.agent_version_id) if run.agent_version_id else None,
+                        "runtime_adapter_id": (
+                            str(resolved.runtime_adapter_row.id)
+                            if resolved.runtime_adapter_row else None
+                        ),
+                        "adapter_type": resolved.adapter_type,
+                        "workspace_id": str(run.workspace_id) if run.workspace_id else None,
+                        "trigger_origin": _exec_trigger_origin,
+                        "risk_level": decision.risk_level,
+                        "required_sandbox_level": decision.required_sandbox_level,
+                        "data_exposure_level": run.data_exposure_level,
+                        "trust_level": run.trust_level,
+                        "observability_level": run.observability_level,
+                        "agent_status": _agent_status,
+                    },
+                )
+            )
+        except PolicyDecisionRecordPersistError:
+            return self._fail_run_terminal(
+                run=run,
+                decision=decision,
+                actor_id=actor_id,
+                error_code="policy_decision_record_persist_failed",
+                error_text="Policy audit record persistence failed for runtime.execute. Run not started.",
+                stdout="",
+                stderr="",
+            )
+        safe_append_run_event(
+            self.db,
+            run_id=run.id,
+            space_id=run.space_id,
+            event_type="policy_checked",
+            status="succeeded" if _exec_policy_decision.allowed else "failed",
+            workspace_id=run.workspace_id,
+            metadata_json={
+                "action": "runtime.execute",
+                "decision": _exec_policy_decision.decision.value,
+                "risk_level": _exec_policy_decision.risk_level.value,
+                "policy_rule_id": _exec_policy_decision.policy_rule_id,
+                "audit_code": _exec_policy_decision.audit_code,
+            },
+            log_context="policy_checked.runtime_execute",
+        )
+        if _exec_policy_decision.denied:
+            return self._fail_run_terminal(
+                run=run,
+                decision=decision,
+                actor_id=actor_id,
+                error_code="policy_denied_runtime_execute",
+                error_text=f"Runtime execution denied by policy: {_exec_policy_decision.message}",
+                stdout="",
+                stderr="",
+            )
+        if _exec_policy_decision.requires_approval:
+            return self._fail_run_terminal(
+                run=run,
+                decision=decision,
+                actor_id=actor_id,
+                error_code="policy_requires_approval_runtime_execute",
+                error_text=f"Runtime execution requires approval: {_exec_policy_decision.message}",
+                stdout="",
+                stderr="",
+            )
+
+        # Policy gate: runtime.use_credential — check before any credential material
+        # is resolved or handed to the adapter. Records a PolicyDecisionRecord.
+        # Walk the same priority order as resolve_runtime_credentials() but only query
+        # metadata (ModelProvider row, Credential.space_id) — never decrypt secret material.
+        # Fail closed if any row referenced by the priority chain is missing.
+        _has_credential_source = bool(
+            getattr(run, "model_provider_id", None)
+            or (resolved.runtime_adapter_row is not None and getattr(resolved.runtime_adapter_row, "provider_id", None))
+            or getattr(version, "model_provider_id", None)
+            or (resolved.runtime_adapter_row is not None and getattr(resolved.runtime_adapter_row, "credential_id", None))
+        )
+        if _has_credential_source:
+            from ..models import Credential as _Credential, ModelProvider as _ModelProvider
+
+            _cred_source: str = "unknown"
+            _cred_credential_id: str | None = None
+            _cred_space_id: str = run.space_id
+
+            def _provider_meta(provider_id: str, source: str):
+                """Resolve (credential_id, space_id) from a ModelProvider row. Returns None on error."""
+                _mp = self.db.query(_ModelProvider).filter(_ModelProvider.id == provider_id).first()
+                if _mp is None or not _mp.credential_id:
+                    return self._fail_run_terminal(
+                        run=run, decision=decision, actor_id=actor_id,
+                        error_code="credential_metadata_missing",
+                        error_text=(
+                            f"ModelProvider metadata missing for provider_id={provider_id!r} "
+                            f"(via {source}); failing closed before secret resolution."
+                        ),
+                        stdout="", stderr="",
+                    )
+                # ModelProvider must be in the same space as the run.
+                # A cross-space provider is a configuration error — fail closed
+                # before any credential lookup or secret resolution.
+                if _mp.space_id != run.space_id:
+                    return self._fail_run_terminal(
+                        run=run, decision=decision, actor_id=actor_id,
+                        error_code="credential_metadata_missing",
+                        error_text=(
+                            f"ModelProvider {provider_id!r} is in space {_mp.space_id!r}, "
+                            f"not run space {run.space_id!r} (via {source}); "
+                            "failing closed before secret resolution."
+                        ),
+                        stdout="", stderr="",
+                    )
+                _cr = self.db.query(_Credential).filter(_Credential.id == _mp.credential_id).first()
+                if _cr is None:
+                    return self._fail_run_terminal(
+                        run=run, decision=decision, actor_id=actor_id,
+                        error_code="credential_metadata_missing",
+                        error_text=(
+                            f"Credential row missing for provider_id={provider_id!r} "
+                            f"(via {source}); failing closed before secret resolution."
+                        ),
+                        stdout="", stderr="",
+                    )
+                return str(_mp.credential_id), _cr.space_id
+
+            # Priority 1: run.model_provider_id
+            if run.model_provider_id:
+                _res = _provider_meta(run.model_provider_id, "run.model_provider_id")
+                if not isinstance(_res, tuple):
+                    return _res
+                _cred_source = "run.model_provider_id"
+                _cred_credential_id, _cred_space_id = _res
+
+            # Priority 2: runtime_adapter.provider_id
+            elif (resolved.runtime_adapter_row is not None
+                  and getattr(resolved.runtime_adapter_row, "provider_id", None)):
+                _pid = resolved.runtime_adapter_row.provider_id
+                _res = _provider_meta(_pid, "runtime_adapter.provider_id")
+                if not isinstance(_res, tuple):
+                    return _res
+                _cred_source = "runtime_adapter.provider_id"
+                _cred_credential_id, _cred_space_id = _res
+
+            # Priority 3: version.model_provider_id
+            elif getattr(version, "model_provider_id", None):
+                _res = _provider_meta(version.model_provider_id, "agent_version.model_provider_id")
+                if not isinstance(_res, tuple):
+                    return _res
+                _cred_source = "agent_version.model_provider_id"
+                _cred_credential_id, _cred_space_id = _res
+
+            # Priority 4: runtime_adapter.credential_id (direct)
+            elif (resolved.runtime_adapter_row is not None
+                  and getattr(resolved.runtime_adapter_row, "credential_id", None)):
+                _direct_cid = str(resolved.runtime_adapter_row.credential_id)
+                _cr = self.db.query(_Credential).filter(_Credential.id == _direct_cid).first()
+                if _cr is None:
+                    return self._fail_run_terminal(
+                        run=run, decision=decision, actor_id=actor_id,
+                        error_code="credential_metadata_missing",
+                        error_text=(
+                            f"Credential row missing for credential_id={_direct_cid!r} "
+                            "(via runtime_adapter.credential_id); failing closed before secret resolution."
+                        ),
+                        stdout="", stderr="",
+                    )
+                _cred_source = "runtime_adapter.credential_id"
+                _cred_credential_id = _direct_cid
+                _cred_space_id = _cr.space_id
+
+            _cred_trigger_origin = getattr(run, "trigger_origin", "manual") or "manual"
+            try:
+                _cred_decision = PolicyGateway(self.db).check_and_record(
+                    PolicyCheckRequest(
+                        action="runtime.use_credential",
+                        actor_type="run",
+                        actor_id=str(run.id),
+                        space_id=run.space_id,
+                        resource_type="credential",
+                        resource_id=_cred_credential_id,
+                        resource_space_id=_cred_space_id,
+                        run_id=str(run.id),
+                        context={
+                            "trigger_origin": _cred_trigger_origin,
+                            "instructed_by_user_id": (
+                                str(run.instructed_by_user_id)
+                                if run.instructed_by_user_id else None
+                            ),
+                        },
+                        metadata_json={
+                            "resolution_source": _cred_source,
+                            "adapter_type": resolved.adapter_type,
+                            "has_model_provider": bool(getattr(version, "model_provider_id", None)),
+                            "trigger_origin": _cred_trigger_origin,
+                            "credential_space_id": _cred_space_id,
+                            "risk_level": decision.risk_level,
+                            "data_exposure_level": run.data_exposure_level,
+                        },
+                    )
+                )
+            except PolicyDecisionRecordPersistError:
+                return self._fail_run_terminal(
+                    run=run,
+                    decision=decision,
+                    actor_id=actor_id,
+                    error_code="policy_decision_record_persist_failed",
+                    error_text="Policy audit record persistence failed for runtime.use_credential. Credential not resolved.",
+                    stdout="",
+                    stderr="",
+                )
+            if _cred_decision.denied:
+                return self._fail_run_terminal(
+                    run=run,
+                    decision=decision,
+                    actor_id=actor_id,
+                    error_code="policy_denied_runtime_use_credential",
+                    error_text=f"Credential use denied by policy: {_cred_decision.message}",
+                    stdout="",
+                    stderr="",
+                )
+            if _cred_decision.requires_approval:
+                return self._fail_run_terminal(
+                    run=run,
+                    decision=decision,
+                    actor_id=actor_id,
+                    error_code="policy_requires_approval_runtime_use_credential",
+                    error_text=f"Credential use requires approval: {_cred_decision.message}",
+                    stdout="",
+                    stderr="",
+                )
 
         # Resolve credentials through the canonical boundary before execution.
         # If the adapter requires credentials and none are configured, fail early
@@ -776,6 +1066,71 @@ class RunExecutionService:
                     ),
                 )
                 self.db.commit()
+                # Policy gate: context.render_for_runtime — context package is prepared;
+                # check before handing rendered context to the adapter.
+                # Never stores full prompt, raw context, memory content, or personal_context_block.
+                # Decision inputs go in context; audit-only identifiers stay in metadata_json.
+                try:
+                    _ctx_render_decision = PolicyGateway(self.db).check_and_record(
+                        PolicyCheckRequest(
+                            action="context.render_for_runtime",
+                            actor_type="run",
+                            actor_id=str(run.id),
+                            space_id=run_space_id,
+                            resource_type="context",
+                            resource_id=str(run.context_snapshot_id) if run.context_snapshot_id else None,
+                            run_id=str(run_id),
+                            context={
+                                "has_personal_grant_context": bool(
+                                    getattr(run, "has_personal_grant_context", False)
+                                ),
+                            },
+                            metadata_json={
+                                "context_snapshot_id": (
+                                    str(run.context_snapshot_id) if run.context_snapshot_id else None
+                                ),
+                                "adapter_type": resolved.adapter_type,
+                                "data_exposure_level": run.data_exposure_level,
+                                "trust_level": run.trust_level,
+                            },
+                        )
+                    )
+                except PolicyDecisionRecordPersistError:
+                    return self._fail_run_terminal(
+                        run=run,
+                        decision=decision,
+                        actor_id=actor_id,
+                        error_code="policy_decision_record_persist_failed",
+                        error_text="Policy audit record persistence failed for context.render_for_runtime. Run not started.",
+                        stdout="",
+                        stderr="",
+                    )
+                if _ctx_render_decision.denied:
+                    return self._fail_run_terminal(
+                        run=run,
+                        decision=decision,
+                        actor_id=actor_id,
+                        error_code="policy_denied_context_render_for_runtime",
+                        error_text=(
+                            f"Context render denied by policy: {_ctx_render_decision.message}"
+                        ),
+                        stdout="",
+                        stderr="",
+                    )
+                if _ctx_render_decision.requires_approval:
+                    return self._fail_run_terminal(
+                        run=run,
+                        decision=decision,
+                        actor_id=actor_id,
+                        error_code="policy_requires_approval_context_render_for_runtime",
+                        error_text=(
+                            f"Context render requires approval: {_ctx_render_decision.message}"
+                        ),
+                        stdout="",
+                        stderr="",
+                    )
+                # Only write adapter_invoked after both runtime.execute and context.render_for_runtime allow.
+                self.db.commit()
                 safe_append_run_event(
                     self.db,
                     run_id=run_id,
@@ -794,8 +1149,7 @@ class RunExecutionService:
                     },
                     log_context="adapter_invoked",
                 )
-                # Commit the adapter_invoked event before calling adapter.execute().
-                # Adapter must execute outside an open transaction (invariant).
+                # Commit the adapter_invoked event; adapter must execute outside an open transaction.
                 self.db.commit()
                 raw = adapter.execute(ctx)
                 _adapter_completed_status = "succeeded" if (raw is not None and raw.success) else "failed"

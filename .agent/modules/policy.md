@@ -1,53 +1,293 @@
 # Module: Policy
 
 ## Purpose
-Central permission engine. Decides allow / deny / require_approval for every sensitive action. Prevents permission logic from being scattered across API routes.
+
+Centralized risk-routing layer. Decides whether sensitive actions are **allowed**,
+**denied**, or must go through **approval/proposal review**. Policy is not an enterprise
+RBAC/ABAC platform — it is a lightweight, code-owned permission layer that routes risk.
+
+## What policy IS
+
+- A risk-routing layer that gates sensitive actions.
+- A canonical registry of every sensitive action the system can perform.
+- An approval resolver that checks whether a human actor has authority to apply a proposal.
+- A hard invariant enforcer for structural constraints (private memory placement, cross-space reads).
+
+## What policy IS NOT
+
+- Not enterprise RBAC/ABAC.
+- Not a policy DSL (no expression language).
+- Not a policy UI.
+- Not a membership system — `SpaceMembership` roles (owner, admin, member, guest, viewer) are the membership source of truth.
+- "Reviewer" is **not** a SpaceMembership role. Future per-user approval capabilities are modeled as approval resolver extensions, not base roles.
+- "Forbidden" is **not** a risk level. Forbidden behavior is represented as `decision=deny`.
 
 ## Owns
-- `PolicyEngine` — core allow/deny/require_approval decisions
-- Policy rules and rule registry
-- Policy decision records (optional audit log)
+
+- `PolicyEngine` — stateless built-in rule evaluation (per-request).
+- `PolicyActionDefinition` registry (`actions.py`) — canonical code-owned list of sensitive actions.
+- `UnknownPolicyActionError` — raised by `require_action_definition()` and `can_approve_policy_action()` for unregistered actions. Unknown actions never silently fall through.
+- `PolicyDecision` — structured decision result with audit fields.
+- Approval resolver (`approval.py`) — `can_approve_policy_action`, `get_space_role`.
+- Proposal apply gate (`proposal_apply.py`) — `check_proposal_apply_policy`, `effective_proposal_risk`, `ProposalRiskLevelError`.
+- Domain-specific persisted-policy enforcement (`enforcement.py`, `access.py`).
+- Policy decision tracing (`trace.py`).
 
 ## Does Not Own
-- User authentication (auth module)
-- Proposal approval UI (proposals module)
-- Agent runtime policy (stored on Agent model, read by runner.py)
+
+- User authentication (auth module).
+- Proposal creation UI or workflow (proposals module).
+- Agent runtime policy (stored on AgentVersion.runtime_policy_json, read by runners).
 
 ## Key Models
 
 ```
 PolicyDecision: allow | deny | require_approval
-PolicyContext:
-  space_id, user_id, agent_id
-  workspace_id, capability_id
-  action, resource_type, resource_id
+  reason_code     — stable machine-readable code for runtime branching (not persisted)
+  policy_rule_id  — which rule/invariant produced the decision (persisted in PolicyDecisionRecord)
+  audit_code      — stable durable search token persisted in PolicyDecisionRecord
+  actor_type      — "user" | "run" | None
+  actor_id, actor_ref, space_id, resource_type, resource_id
+
+PolicyContext (engine):
+  action, space_id, resource_space_id
+  user_id, agent_id, agent_status
+  agent_tool_permissions, tool_name
+  resource_type, resource_id
+
+PolicyActionDefinition:
+  action, resource_type, default_risk_level, default_decision
+  audit_required, approval_capability, default_required_approver_role
+  current_enforcement_point, description
+  lifecycle_status: WIRED | RESERVED
+
+RiskLevel: low | medium | high | critical
+Decision: allow | deny | require_approval
 ```
 
-## Main Flows
+`reason_code` is an ephemeral in-process field — it is never stored in `PolicyDecisionRecord`.
+Durable audit uses `audit_code` (DB-searchable) and `policy_rule_id` (DB column).
 
-**Per-request policy check:**
-1. API route calls `PolicyEngine.check(context)` before executing action
-2. Engine evaluates rules in priority order: system → space → workspace → agent
-3. Returns `allow`, `deny`, or `require_approval`
-4. `require_approval` → creates a Proposal instead of executing immediately
+## Canonical Action Registry
 
-**Policy rule sources:**
-- System defaults (hardcoded in `rules.py`)
-- Space-level overrides (stored in Space config)
-- Agent-level grants (in `runtime_policy_json`)
+Every sensitive action is registered in `app/policy/actions.py`. Unknown sensitive
+actions must raise through `require_action_definition()` — they do not silently fall
+through as allow.
 
-## Invariants
-- Every destructive or sensitive action must pass through PolicyEngine
-- Permission checks must not be duplicated across routes — centralize in engine
-- `deny` is never overridable by the calling agent
-- Agent runtime policy can only escalate restrictions, never lower system-level deny rules
+**PolicyGateway is the enforcement entry point.** `PolicyEngine` alone is not
+enforcement — it is the stateless rule evaluator inside `PolicyGateway`. All business
+code that performs sensitive actions must call `PolicyGateway.check_and_record()`.
 
-## Related Files
-- `core/backend/app/policy/engine.py` — PolicyEngine
-- `core/backend/app/policy/rules.py` — rule definitions
-- `core/backend/app/policy/decisions.py` — decision types
+The registry now contains two categories of actions, distinguished by `lifecycle_status`:
 
-## TODO
-- PolicyEngine not yet fully wired to all API routes
-- Space-level policy overrides not yet implemented
-- Audit log for policy decisions not yet implemented
+**Wired actions** (`lifecycle_status=WIRED`) — have a real `PolicyGateway.check_and_record()` call site.
+**Reserved actions** (`lifecycle_status=RESERVED`) — registered for registry completeness and
+fail-closed defence-in-depth. `current_enforcement_point="not_implemented"`. Not wired
+to any business code yet. `PolicyGateway` always denies reserved actions regardless of
+registry `default_decision`. Not full RBAC/ABAC — they express intent and default risk.
+
+### Wired actions (12)
+
+| Action | Resource | Risk | Default Decision | Enforcement |
+|---|---|---|---|---|
+| `runtime.execute` | run | medium | allow | `runs/execution.py` |
+| `runtime.use_credential` | credential | high | require_approval | `runs/execution.py` |
+| `context.inject_memory` | memory | low | allow | `runs/context_snapshot_populator.py` |
+| `context.render_for_runtime` | context | low | allow | `runs/execution.py` |
+| `workspace.write_patch` | workspace | high | require_approval | `memory/code_patch_apply.py` |
+| `artifact.persist` | artifact | low | allow (audit_required) | `runs/artifact_persistence.py` |
+| `proposal.create` | proposal | low | allow | `memory/proposals.py` + `runs/code_patch_collector.py` |
+| `proposal.apply` | proposal | medium | require_approval | `memory/proposals.py` |
+| `memory.create` | memory | medium | require_approval | via `proposal.apply` |
+| `memory.update` | memory | medium | require_approval | via `proposal.apply` |
+| `memory.archive` | memory | medium | require_approval | via `proposal.apply` |
+| `policy.change` | policy | high | require_approval | `policy/rules.py` |
+
+`proposal.create` covers both user-created memory proposals and system-created
+code_patch proposals from CLI runs; the `proposal.apply` gate is the durable
+enforcement point for all memory mutations.
+
+### Reserved actions (15) — lifecycle_status=RESERVED
+
+Registered for registry completeness and fail-closed defence-in-depth.
+`current_enforcement_point="not_implemented"`. `PolicyGateway` always denies these.
+Not wired to business code. The registry is **not** full RBAC/ABAC.
+
+| Action | Resource | Risk | Default Decision |
+|---|---|---|---|
+| `context.use_personal_grant` | personal_memory_grant | high | require_approval |
+| `workspace.read` | workspace | low | allow |
+| `workspace.apply_patch` | workspace | high | require_approval |
+| `artifact.export` | artifact | high | require_approval |
+| `proposal.approve` | proposal | medium | require_approval |
+| `memory.read_private` | memory | high | require_approval |
+| `memory.promote_shared` | memory | high | require_approval |
+| `capability.enable` | capability | high | require_approval |
+| `capability.update` | capability | high | require_approval |
+| `tool_binding.enable` | tool_binding | high | require_approval |
+| `automation.create` | automation | high | require_approval |
+| `automation.fire` | automation | medium | require_approval |
+| `automation.update` | automation | high | require_approval |
+| `deployment.propose` | deployment | high | require_approval |
+| `deployment.execute` | deployment | **critical** | require_approval |
+
+**Actions NOT in the registry at all** (no placeholder yet — must fail-closed as unknown):
+- `agent.delegate`
+
+`agent.delegate` is not registered. Agent-to-agent delegation is deferred; future
+design should use a control-plane child-run concept such as `run.spawn_child` or
+`run.create_child`. `runtime.execute` is separate from delegation and only controls
+adapter execution.
+
+## Approval Resolver
+
+`can_approve_policy_action(db, *, user_id, space_id, action, ...)` in `approval.py`.
+
+- Raises `UnknownPolicyActionError` for any action not in the canonical registry. Unknown actions never return True.
+- Default approval rules:
+  - **owner**: can approve all currently supported proposal.apply actions including critical.
+  - **admin**: can approve low, medium, and high risk actions; NOT critical.
+  - **member / guest / viewer**: cannot approve by default.
+  - No membership in the space: cannot approve.
+
+## Proposal Apply Gate
+
+`check_proposal_apply_policy(db, *, user_id, space_id, proposal)` in `proposal_apply.py`.
+
+Returns a full `PolicyDecision` with:
+- `decision`: allow / require_approval / deny
+- `message`, `audit_code` (approved_owner, approved_admin, insufficient_role, no_membership, unsupported_proposal_type)
+- `reason_code`: stable machine-readable code matching `audit_code` in all branches
+- `policy_rule_id`: stable rule identifier (e.g. `proposal_apply_owner_allow`, `proposal_type_not_supported`)
+- `actor_type="user"` on all branches
+- `risk_level`: effective risk = `max(type_default_risk, proposal.risk_level)`
+- `action="proposal.apply"`, `resource_type="proposal"`, `resource_id=proposal.id`
+- `proposal_type`, `approval_capability`
+- `metadata_json`: proposal_type, membership_role, effective_risk, proposal_declared_risk, default_type_risk, supported_apply_type
+
+Effective risk computation:
+- `memory_create / memory_update / memory_archive / follow_up_task` → medium
+- `code_patch / policy_change / egress_review` → high
+- Unknown proposal type → high (conservative)
+- Effective risk = max(type default, explicit proposal.risk_level)
+- Invalid proposal.risk_level string raises `ProposalRiskLevelError` before any role check
+
+`supported_apply_type` in `metadata_json`:
+- `true` for the 7 supported types (memory_create, memory_update, memory_archive, policy_change, code_patch, egress_review, follow_up_task)
+- `false` for unsupported/unknown types — policy may allow but apply dispatch will raise `UnsupportedProposalTypeError`
+
+At proposal accept time:
+- `allow` → proceed to `ProposalApplyService.apply()`
+- `require_approval` → actor lacks authority; raise `ProposalPolicyDeniedError`; proposal stays pending
+- `deny` → fail
+
+`ProposalPolicyDeniedError` carries: user_id, space_id, proposal_id, proposal_type, risk_level, decision, message, audit_code.
+
+## Additional Enforcement Boundaries
+
+### proposal.apply gate (wired)
+`ProposalService.accept()` in `app/memory/proposals.py` calls
+`check_proposal_apply_policy(...)` before any call to `ProposalApplyService.apply()`.
+
+- Accepted proposals represent the human approval event.
+- The acting user must have approval authority for the proposal type and effective risk level.
+- `ProposalPolicyDeniedError` is raised if denied; HTTP callers return 403.
+- No durable write (MemoryEntry, Policy, Task, code patch) occurs on denial.
+- `ProposalRiskLevelError` is raised for invalid proposal.risk_level; HTTP callers return 422.
+
+### Memory placement invariant (wired)
+`check_private_memory_placement()` in `enforcement.py` — `visibility=private` only in personal spaces.
+
+### Run user private scope (wired)
+`can_read_memory_in_run_context()` in `enforcement.py` — private memory access in run context.
+
+## Active Enforcement Points
+
+### PolicyGateway (enforcement entry point)
+
+`PolicyGateway(db).check_and_record(PolicyCheckRequest(...))` is the only enforcement
+entry point for sensitive policy decisions. Do not call `PolicyEngine` or
+`HardInvariantGuard` directly to authorize or perform sensitive actions.
+`PreflightService` alone may call `PolicyEngine` for a non-mutating dry-run
+simulation; it does not persist `PolicyDecisionRecord`, and actual runtime
+execution still uses `PolicyGateway`.
+
+`PolicyGateway.check_proposal_apply(user_id, space_id, proposal)` — consolidated gate
+for proposal.apply: runs HardInvariantGuard, role/risk matrix, persists record, returns
+decision. Called by `ProposalService.accept()`.
+
+### Wired enforcement points
+
+`PolicyGateway` is the only enforcement entry point. `PolicyEngine` is internal to
+the policy package except for the documented non-mutating `PreflightService`
+simulation path.
+
+| Action | File | When |
+|---|---|---|
+| `runtime.execute` | `runs/execution.py` | Before credentials, context snapshot, and adapter.execute() |
+| `runtime.use_credential` | `runs/execution.py` | Uses real `Credential.space_id` from DB; before secret resolution |
+| `context.inject_memory` | `runs/context_snapshot_populator.py` | Before ContextBuilder.build() |
+| `context.render_for_runtime` | `runs/execution.py` | After context snapshot, before adapter.execute() |
+| `artifact.persist` | `runs/artifact_persistence.py` | DENY and REQUIRE_APPROVAL both block write; before filesystem write |
+| `proposal.create` | `memory/proposals.py`, `runs/code_patch_collector.py` | User-created memory proposals and system-created code_patch proposals |
+| `proposal.apply` | `memory/proposals.py` via `PolicyGateway.check_proposal_apply` | Before ProposalApplyService.apply() |
+| `workspace.write_patch` | `memory/code_patch_apply.py` | Covered by workspace.write_patch rule |
+| `policy.change` | `policy/rules.py` | rule_policy_change — role check |
+
+**runtime.execute context fields**: Rule-relevant fields (`agent_status`, `agent_tool_permissions`,
+`tool_name`, `adapter_type`, `trigger_origin`, `risk_level`, etc.) are passed in
+`PolicyCheckRequest.context` so `PolicyEngine` rules can read them. Safe copies are
+kept in `metadata_json` for audit only.
+
+**runtime.execute actor semantics**: For manual/user-origin runs where
+`instructed_by_user_id` is set and `trigger_origin == "manual"`, the actor is the
+instructing user: `actor_type="user"`, `actor_id=instructed_by_user_id`. For
+non-user-origin runs (automation, job, system), the actor is the run itself:
+`actor_type="run"`, `actor_id=run.id`, with an `actor_ref` dict carrying
+`{run_id, trigger_origin}` for traceability. `run_id` and `resource_id` always
+refer to the run regardless of actor type.
+
+**runtime.use_credential**: `resource_space_id` is resolved from the actual `Credential` row by ID,
+not from `RuntimeAdapter.space_id`. If a `credential_id` exists but the `Credential` row is
+missing, execution fails closed with `credential_metadata_missing` before any secret is resolved.
+
+**proposal.create coverage**: `proposal.create` gates user-created memory proposals
+and system-created code_patch proposals. The latter uses `force_record=True`;
+durable memory mutation still occurs only behind `proposal.apply`.
+
+### ProposalApplyService defense-in-depth
+
+`ProposalApplyService.apply()` requires `accept_context` in `{"explicit_user_accept", "internal_seed"}`.
+Direct calls without a valid `accept_context` must pass `bypass_source_monitoring=True` (test/seed paths only).
+
+### Stateless Engine Rules
+
+`PolicyEngine.check()` first calls `require_action_definition(action)`. Unknown actions
+return DENY with `audit_code="unknown_policy_action"`. `BUILTIN_RULES` evaluated in order:
+
+1. `rule_space_boundary` — deny cross-space access
+2. `rule_agent_status` — deny `runtime.execute` and `memory.*` for non-active agents
+3. `rule_memory_scope` — `require_approval` for `memory.create/update/archive` to protected scopes
+4. `rule_use_credential` — same-space manual ALLOW; cross-space DENY (CRITICAL); automation REQUIRE_APPROVAL
+5. `rule_tool_permission` — deny `runtime.execute` if tool/adapter not in agent allowlist
+6. `rule_workspace_write_patch` — `require_approval` without proposal_id; `allow` with valid proposal
+7. `rule_policy_change` — deny `policy.change` for roles below admin
+
+Falls through to registry default only for **known** registered actions when no rule matches.
+
+## Future Work
+
+- **Wiring placeholder actions**: Each placeholder action in the registry needs a
+  `PolicyGateway.check_and_record()` call site before it becomes enforceable. Until
+  wired, unknown-action fail-closed still applies if they are called without a registry
+  entry, but having them registered means callers can at least look up metadata.
+- `context.use_personal_grant` — add PolicyGateway call site in `personal_memory_grants/`
+  when grant resolution merits its own policy audit trail; until then, egress guard is
+  the enforcement boundary.
+- `workspace.read` — add PolicyGateway call site in workspace read APIs when access
+  control is needed.
+- `memory.create/update/archive` are WIRED_VIA_PROPOSAL — enforced only through `proposal.apply`. There is no direct `PolicyGateway.check_and_record()` call site for these actions and none should be added without explicit design.
+- Extend approval resolver with per-user/per-project approval capabilities when needed.
+- Space-level policy row overrides (currently domain-specific only).
+- Future multi-agent child-run creation: design as `run.spawn_child` / `run.create_child`
+  with explicit control-plane policy and evaluation gates.

@@ -755,6 +755,35 @@ class TestPreflightService:
         assert result.executable is False
         assert any("not found" in e for e in result.errors)
 
+    def test_preflight_disabled_agent_policy_simulation_does_not_record_decision(self, db):
+        from tests.support import factories
+        from app.models import PolicyDecisionRecord
+        from app.runs.preflight import PreflightRequest, PreflightService
+
+        space_id = "test-preflight-disabled-simulation"
+        factories.create_test_space(db, space_id=space_id, commit=True)
+        user = factories.create_test_user(db, space_id=space_id, commit=True)
+        agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
+        agent.status = "disabled"
+        db.commit()
+
+        result = PreflightService(db).check(
+            PreflightRequest(agent_id=agent.id),
+            space_id=space_id,
+        )
+
+        assert result.executable is False
+        assert any("not runnable" in e.lower() for e in result.errors)
+        records = (
+            db.query(PolicyDecisionRecord)
+            .filter(
+                PolicyDecisionRecord.space_id == space_id,
+                PolicyDecisionRecord.action == "runtime.execute",
+            )
+            .all()
+        )
+        assert records == [], "dry-run preflight policy simulation must not create audit records"
+
     def test_preflight_no_adapter_configured_returns_error(self, db):
         from tests.support import factories
         from app.runs.preflight import PreflightRequest, PreflightService

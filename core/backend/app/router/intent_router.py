@@ -63,14 +63,14 @@ class IntentRouter:
                     capability_id="memory.reflect",
                     space_id=space_id,
                     workspace_id=workspace_id,
-                    action="agent.run",
+                    action="runtime.execute",
                 )
             case ["agent", "run", agent_name, *rest]:
                 return RoutingDecision(
                     agent_id=agent_name,
                     space_id=space_id,
                     workspace_id=workspace_id,
-                    action="agent.run",
+                    action="runtime.execute",
                     params={"extra": rest},
                 )
             case ["capabilities", "list"]:

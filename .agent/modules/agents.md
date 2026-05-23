@@ -51,7 +51,7 @@ AgentVersion:
   model_provider_id           — FK to ModelProvider (LLM backend for this version)
   model_name                  — model id string for the selected provider
   model_config_json         — {model, temperature, max_tokens, ...}
-  runtime_config_json       — {risk_level, can_delegate, max_delegation_depth, max_run_time_seconds}
+  runtime_config_json       — {risk_level, max_run_time_seconds}
   context_policy_json       — {readable_scopes, writable_scopes}
   memory_policy_json        — {readable_scopes, writable_scopes, requires_proposal}
   capabilities_json         — list of capability IDs
@@ -65,7 +65,8 @@ Run:
   id, space_id, agent_id, agent_version_id
   status (queued|running|succeeded|failed|cancelled|degraded|waiting_for_review)
   mode (live|dry_run)
-  parent_run_id, delegation_depth, instructed_by_agent_id
+  parent_run_id               — user-created run lineage (follow-up, retry, continuation)
+  instructed_by_agent_id      — internal-only ORM field for actor resolution; not settable via public API
   prompt, instruction, output_json, error_json, sandbox metadata fields
 ```
 
@@ -77,10 +78,16 @@ Run:
 2. Worker picks up `agent_run` jobs → `RunExecutionService` selects adapters from policy
 3. Adapters execute with sandbox routing managed outside `AgentService`
 
-**Delegation**
+**Run lineage (parent_run_id)**
 
-- `AgentService.delegate()` creates a child `Run` with `parent_run_id` populated
-- `delegation_depth` increments; max checked against `runtime_policy.max_delegation_depth`
+`parent_run_id` supports user-created lineage: follow-up runs, retries, manual continuations, and
+external run imports. `trigger_origin="parent_run"` is not a valid trigger origin — parent lineage
+is a structural link, not a trigger type. Valid trigger origins: `manual`, `automation`, `job`, `system`.
+
+Agent-to-agent delegation is not a current canonical capability and is deferred.
+Future multi-agent child-run creation must be designed as `run.spawn_child` / `run.create_child`
+with explicit control-plane policy and evaluation gates. `runtime.execute` controls adapter
+execution only; it is not a delegation replacement.
 
 ## Built-in Agents
 
@@ -98,7 +105,6 @@ Run:
 ## Invariants
 
 - `claude_code` and `codex_cli` stay in the sandboxed adapter set — cannot be downgraded to host execution
-- Agents cannot exceed declared `max_delegation_depth`
 - Context snapshots captured at run creation stay immutable
 - No vendor adapter is the source of truth for memory, policy, or audit
 - `agent_version_id` on `Run` is immutable per row — historical runs stay reproducible after edits to `Agent`
@@ -106,7 +112,7 @@ Run:
 
 ## Related Files
 
-- `core/backend/app/agents/agent_service.py` — AgentService CRUD and delegation helpers
+- `core/backend/app/agents/agent_service.py` — AgentService CRUD and run creation helpers
 - `core/backend/app/runs/run_service.py` — Run creation and listing
 - `core/backend/app/runs/execution.py` — `RunExecutionService` (canonical orchestrator)
 - `core/backend/app/runs/runtime_policy.py` — risk→sandbox mapping, file-access adapter validation

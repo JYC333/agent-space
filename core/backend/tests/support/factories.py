@@ -340,8 +340,6 @@ def create_test_run(
         session_id=data.session_id,
         parent_run_id=None,
         instructed_by_user_id=user_id,
-        instructed_by_agent_id=None,
-        delegation_depth=0,
         run_type=data.run_type,
         trigger_origin=data.trigger_origin,
         status="queued",

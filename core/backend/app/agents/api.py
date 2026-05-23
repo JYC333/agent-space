@@ -138,12 +138,12 @@ def get_run(
 
 
 @router.get("/runs/{run_id}/chain", response_model=list[RunOut])
-def get_run_delegation_chain(
+def get_run_lineage_chain(
     run_id: str,
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    """Walk parent_run_id links to return the full delegation ancestry, space-scoped."""
+    """Walk parent_run_id links to return the full run lineage ancestry, space-scoped."""
     space_id, _ = ids
 
     chain: list[Run] = []
@@ -224,60 +224,6 @@ async def run_agent(
     )
     return run_to_out(db, run)
 
-
-@router.post("/{agent_id}/delegate", response_model=RunOut, status_code=201)
-async def delegate_to_agent(
-    agent_id: str,
-    req: RunRequest,
-    parent_run_id: str = Query(..., description="The run ID of the delegating agent"),
-    instructed_by_agent_id: str = Query(..., description="The agent ID that is delegating"),
-    ids: tuple[str, str] = Depends(get_identity),
-    db: Session = Depends(get_db),
-):
-    """
-    Superseded URL shape; prefer POST /{agent_id}/runs with parent_run_id.
-
-    Agent-to-agent delegation. Creates a Run via RunService and enqueues
-    for deferred execution.
-    """
-    space_id, diag_user_id = ids
-
-    from ..memory.context_builder import ContextBuilder
-
-    svc = AgentService(db)
-    run = svc.delegate(
-        target_agent_id=agent_id,
-        req=req,
-        space_id=space_id,
-        parent_run_id=parent_run_id,
-        instructed_by_agent_id=instructed_by_agent_id,
-    )
-
-    ctx_user = run.instructed_by_user_id or diag_user_id
-    context = ContextBuilder(db).build(
-        space_id=space_id,
-        user_id=ctx_user,
-        workspace_id=req.workspace_id,
-        agent_id=agent_id,
-    ).model_dump()
-
-    # Enqueue job for deferred execution
-    await get_queue().enqueue(
-        "agent_run",
-        {
-            "run_id": run.id,
-            "adapter_type": req.adapter_type,
-            "prompt": req.prompt,
-            "context": context,
-            "workspace_path": req.workspace_path,
-            "timeout": 300,
-            "risk_level": req.risk_level,
-        },
-        space_id=space_id,
-        user_id=ctx_user,
-        agent_id=agent_id,
-    )
-    return run_to_out(db, run)
 
 
 @router.get("/{agent_id}/runs", response_model=list[RunOut])

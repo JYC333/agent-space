@@ -84,6 +84,28 @@ Do not add new adapters to `app.agents` — it contains Agent/AgentVersion CRUD 
 2. Call runtime adapter **outside** the transaction.
 3. Open short transaction → write result or failure → commit.
 
+## Runtime Policy Gates
+
+`PolicyGateway` is the only enforcement entry point for all policy gates.
+`PolicyEngine` is internal to the policy package; business services must not
+call it directly to authorize or perform a sensitive action. `PreflightService`
+may call it only for non-mutating dry-run simulation, which does not persist a
+`PolicyDecisionRecord`. Actual runtime execution still uses `PolicyGateway`.
+
+Policy gates run in this order inside `RunExecutionService._execute_real_adapter_path()`:
+
+1. **`runtime.execute`** — `PolicyGateway.check_and_record()` called **before** credential resolution, context snapshot population, and adapter.execute(). Rule-relevant fields (`agent_status`, `agent_tool_permissions`, `tool_name`, `adapter_type`, `trigger_origin`, etc.) are passed in `PolicyCheckRequest.context` so `PolicyEngine` rules can evaluate them. Safe copies are kept in `metadata_json` for audit only. DENY/REQUIRE_APPROVAL → `error_code=policy_denied_runtime_execute` / `policy_requires_approval_runtime_execute`.
+
+2. **`runtime.use_credential`** — called after adapter type resolution but **before** any secret fetch. `resource_space_id` is resolved from the actual `Credential` row by ID — never inferred from `RuntimeAdapter.space_id`. If `credential_id` exists but the `Credential` row is missing, execution fails closed with `error_code=credential_metadata_missing`. Cross-space credential → hard DENY (CRITICAL). Automation origin → REQUIRE_APPROVAL. Same-space manual/api → ALLOW. DENY → `error_code=policy_denied_runtime_use_credential`.
+
+3. **`context.inject_memory`** — called in `ContextSnapshotPopulator.populate()` **before** `ContextBuilder.build()`. Cross-space without grant → hard DENY. DENY → RuntimeError with `[error_code=policy_denied_context_inject_memory]`.
+
+4. **`context.render_for_runtime`** — called after context snapshot is assembled, **before** `adapter.execute()`. Cross-space without grant → hard DENY. DENY → `error_code=policy_denied_context_render_for_runtime`.
+
+None of these gates may be bypassed. No secret material is resolved before `runtime.use_credential` passes. No context is injected before `context.inject_memory` passes. No adapter is invoked before both `runtime.execute` and `context.render_for_runtime` pass.
+
+**artifact.persist** — both DENY and REQUIRE_APPROVAL block file write and Artifact row creation. Callers receive `PersonalMemoryEgressError` with a message distinguishing denial vs approval-required.
+
 ## Runtime Credential Resolver
 
 `runtimes/credentials.py` is the canonical resolver.

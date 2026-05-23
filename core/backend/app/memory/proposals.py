@@ -24,6 +24,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from ..db_uow import UnitOfWork
 from ..models import MemoryEntry, Policy, Proposal, Run, Task, Workspace
 from ..param_binding import duplicate_mapper
+from ..policy.gateway import PolicyGateway, PolicyDecisionRecordPersistError
 from ..projects.service import assert_project_in_space
 from ..schemas import MemoryCreate
 from .proposal_payload import (
@@ -34,24 +35,34 @@ from .proposal_payload import (
 
 _ALLOWED_URGENCY = frozenset({"low", "normal", "high", "critical"})
 
-# All proposal types whose accept() path is handled by ProposalApplyService.
-_SUPPORTED_ACCEPT_TYPES = frozenset({
-    "memory_create",
-    "memory_update",
-    "memory_archive",
-    "policy_change",
-    "code_patch",
-    "egress_review",
-    "follow_up_task",
-})
+class ProposalPolicyDeniedError(Exception):
+    """Raised when the proposal.apply policy gate denies the acting user.
 
+    Carries the full PolicyDecision so callers can construct meaningful error responses.
+    HTTP callers should surface this as 403 without exposing metadata_json.
+    """
 
-class UnsupportedProposalTypeError(Exception):
-    """Raised when ``accept`` is called for a proposal type that has no apply path."""
-
-    def __init__(self, proposal_type: str) -> None:
+    def __init__(
+        self,
+        *,
+        user_id: str,
+        space_id: str,
+        proposal_id: str,
+        proposal_type: str,
+        risk_level: str,
+        decision: str,
+        message: str,
+        audit_code: Optional[str] = None,
+    ) -> None:
+        self.user_id = user_id
+        self.space_id = space_id
+        self.proposal_id = proposal_id
         self.proposal_type = proposal_type
-        super().__init__(proposal_type)
+        self.risk_level = risk_level
+        self.decision = decision
+        self.message = message
+        self.audit_code = audit_code
+        super().__init__(message)
 
 
 @dataclass
@@ -466,6 +477,38 @@ class ProposalService:
             review_deadline=review_deadline,
             expires_at=expires_at,
         )
+        # Policy gate: proposal.create — audit for user-created memory proposals.
+        # Never stores proposed_content or rationale in policy metadata.
+        # Decision inputs (target_visibility, target_scope) go in context;
+        # audit-only identifiers and settings stay in metadata_json.
+        from ..policy.gateway import PolicyGateway, PolicyCheckRequest
+        _create_decision = PolicyGateway(self.db).check_and_record(
+            PolicyCheckRequest(
+                action="proposal.create",
+                actor_type="user",
+                actor_id=user_id,
+                space_id=space_id,
+                resource_type="proposal",
+                context={
+                    "target_visibility": target_visibility,
+                    "target_scope": target_scope,
+                },
+                metadata_json={
+                    "proposal_type": "memory_create",
+                    "workspace_id": workspace_id,
+                    "source_run_id": source_run_id,
+                    "sensitivity_level": sensitivity_level,
+                    "urgency": urgency,
+                },
+            )
+        )
+        if _create_decision.denied:
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=403,
+                detail=f"proposal.create denied by policy: {_create_decision.message}",
+            )
+
         proposal = build_memory_create_proposal(
             _new_id(),
             space_id,
@@ -609,13 +652,77 @@ class ProposalService:
         )
         return q.offset(offset).limit(limit).all()
 
-    def count_reviewable_proposals(self, space_id: str, user_id: str) -> int:
-        """Count pending proposals visible to user (same visibility rules as list_proposals)."""
+    def _reviewable_filter(self, space_id: str, user_id: str):
+        """Return a SQLAlchemy filter expression for proposals in the user's reviewable inbox.
+
+        "Reviewable" is a product inbox category, not a universal approval-authority claim:
+
+        - owner: all proposals visible to the user (space_shared OR directly involved).
+          Owners can approve all visible proposals under current policy.
+        - admin: user-visible proposals where effective risk <= high.
+          Admins can approve low/medium/high; proposals with risk_level='critical' are
+          excluded because admins lack approval authority for critical effective risk.
+          Effective risk is max(type_default, declared). Type defaults max at HIGH,
+          so critical effective risk only arises when risk_level='critical'.
+        - reviewer: user-visible proposals where effective risk <= medium.
+          Effective risk = max(type_default, declared_risk). Both conditions must hold:
+            1. proposal_type must be a MEDIUM-or-lower-default type (memory_create /
+               memory_update / memory_archive / follow_up_task). HIGH-default types
+               (code_patch / policy_change / egress_review) always have effective risk
+               >= HIGH regardless of declared risk, so they are always excluded.
+            2. declared risk_level must be 'low' or 'medium'.
+        - member/guest/no membership: directly involved proposals only
+          (created by this user, or run instructed by this user).
+          Member/guest cannot approve; proposal.apply is denied by the policy gate.
+
+        Returns a tuple (filter_expr, outerjoin_pair) for composing into a query.
+        """
+        from ..policy.approval import get_space_role
+
+        role = get_space_role(self.db, user_id, space_id)
         run_for_instructed = duplicate_mapper(Run)
-        visible = or_(
+        directly_involved = or_(
             Proposal.created_by_user_id == user_id,
             run_for_instructed.instructed_by_user_id == user_id,
         )
+        visible_to_user = or_(
+            Proposal.visibility == "space_shared",
+            directly_involved,
+        )
+
+        if role == "owner":
+            reviewable = visible_to_user
+        elif role == "admin":
+            non_critical = or_(
+                Proposal.risk_level == None,  # noqa: E711
+                Proposal.risk_level != "critical",
+            )
+            reviewable = and_(visible_to_user, non_critical)
+        elif role == "reviewer":
+            from ..policy.proposal_apply import MEDIUM_DEFAULT_PROPOSAL_TYPES
+
+            # Effective risk = max(type_default, declared_risk). Only include proposals
+            # where both the type default and the declared risk are <= MEDIUM.
+            # HIGH-default types (code_patch, policy_change, egress_review) always have
+            # effective risk >= HIGH regardless of declared_risk.
+            reviewer_risk = and_(
+                Proposal.proposal_type.in_(MEDIUM_DEFAULT_PROPOSAL_TYPES),
+                Proposal.risk_level.in_(["low", "medium"]),
+            )
+            reviewable = and_(visible_to_user, reviewer_risk)
+        else:
+            reviewable = directly_involved
+
+        return reviewable, run_for_instructed
+
+    def count_reviewable_proposals(self, space_id: str, user_id: str) -> int:
+        """Count pending proposals in the user's reviewable inbox for this space.
+
+        For owner/admin/reviewer this means approvable (or potentially approvable)
+        proposals filtered by role. For member/guest this means directly involved
+        proposals for visibility; approval authority is separate.
+        """
+        reviewable, run_for_instructed = self._reviewable_filter(space_id, user_id)
         q = (
             self.db.query(func.count(Proposal.id))
             .select_from(Proposal)
@@ -628,7 +735,7 @@ class ProposalService:
             )
             .filter(
                 Proposal.space_id == space_id,
-                visible,
+                reviewable,
                 Proposal.status == "pending",
             )
         )
@@ -642,12 +749,13 @@ class ProposalService:
         limit: int = 20,
         offset: int = 0,
     ) -> list[Proposal]:
-        """List pending proposals visible to user (same visibility as list_proposals)."""
-        run_for_instructed = duplicate_mapper(Run)
-        visible = or_(
-            Proposal.created_by_user_id == user_id,
-            run_for_instructed.instructed_by_user_id == user_id,
-        )
+        """List pending proposals in the user's reviewable inbox for this space.
+
+        For owner/admin/reviewer this means approvable (or potentially approvable)
+        proposals filtered by role. For member/guest this means directly involved
+        proposals for visibility; approval authority is separate.
+        """
+        reviewable, run_for_instructed = self._reviewable_filter(space_id, user_id)
         q = (
             self.db.query(Proposal)
             .outerjoin(
@@ -659,7 +767,7 @@ class ProposalService:
             )
             .filter(
                 Proposal.space_id == space_id,
-                visible,
+                reviewable,
                 Proposal.status == "pending",
             )
         )
@@ -791,20 +899,56 @@ class ProposalService:
         Returns None when:
           - Proposal not found or already decided
           - preview=True  (dry-run proposals must never be applied)
-          - Wrong space or wrong reviewer
+          - Proposal does not belong to the requested space
 
-        Raises UnsupportedProposalTypeError when the proposal_type has no apply path.
+        Raises ProposalPolicyDeniedError when the acting user lacks approval authority
+        for this proposal type and risk level in the space (HTTP callers: 403).
+        Unsupported proposal types are denied at the policy gate with
+        audit_code="unsupported_proposal_type".
         """
         proposal = self.get(proposal_id)
         if not proposal or proposal.status != "pending":
             return None
         if proposal.preview:
             return None
-        if proposal.space_id != space_id or proposal.created_by_user_id != user_id:
+        if proposal.space_id != space_id:
             return None
 
-        if proposal.proposal_type not in _SUPPORTED_ACCEPT_TYPES:
-            raise UnsupportedProposalTypeError(proposal.proposal_type)
+        # Single policy gate: runs HardInvariantGuard + approval authority check + record persistence.
+        # ProposalRiskLevelError propagates to caller (invalid proposal.risk_level → 422).
+        # PolicyDecisionRecordPersistError is converted to a stable denial: proposal stays pending,
+        # ProposalApplyService.apply() is never called.
+        try:
+            decision = PolicyGateway(self.db).check_proposal_apply(
+                user_id=user_id,
+                space_id=space_id,
+                proposal=proposal,
+            )
+        except PolicyDecisionRecordPersistError:
+            raise ProposalPolicyDeniedError(
+                user_id=user_id,
+                space_id=space_id,
+                proposal_id=proposal.id,
+                proposal_type=proposal.proposal_type,
+                risk_level="unknown",
+                decision="deny",
+                message=(
+                    "Policy audit record persistence failed for proposal.apply. "
+                    "Proposal not applied. audit_code='policy_decision_record_persist_failed'"
+                ),
+                audit_code="policy_decision_record_persist_failed",
+            )
+        if not decision.allowed:
+            raise ProposalPolicyDeniedError(
+                user_id=user_id,
+                space_id=space_id,
+                proposal_id=proposal.id,
+                proposal_type=proposal.proposal_type,
+                risk_level=decision.risk_level.value,
+                decision=decision.decision.value,
+                message=decision.message,
+                audit_code=decision.audit_code,
+            )
 
         from .apply_service import ProposalApplyService, ProposalApplyError
 

@@ -77,6 +77,7 @@ REQUIRED_TABLES = {
     "run_evaluations",
     "run_finalizations",
     "runtime_tool_bindings",
+    "policy_decision_records",
 }
 
 

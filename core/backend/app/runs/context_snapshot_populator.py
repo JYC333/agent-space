@@ -225,6 +225,46 @@ class ContextSnapshotPopulator:
 
         agent_memory_policy = dict(version.memory_policy_json or {})
 
+        # Policy gate: context.inject_memory — batch-level check before any memory
+        # is retrieved and injected into the context package.
+        # Does not log memory content; safe metadata only.
+        # Decision inputs go in context; audit-only identifiers stay in metadata_json.
+        from ..policy.gateway import PolicyGateway, PolicyCheckRequest
+        _inject_decision = PolicyGateway(self.db).check_and_record(
+            PolicyCheckRequest(
+                action="context.inject_memory",
+                actor_type="run",
+                actor_id=str(run.id),
+                space_id=run.space_id,
+                resource_type="memory",
+                run_id=str(run.id),
+                context={
+                    "trigger_origin": getattr(run, "trigger_origin", "manual") or "manual",
+                },
+                metadata_json={
+                    "agent_id": str(run.agent_id) if run.agent_id else None,
+                    "workspace_id": str(workspace_id) if workspace_id else None,
+                    "data_exposure_level": run.data_exposure_level,
+                    "trust_level": run.trust_level,
+                    "has_personal_grant_context": bool(
+                        getattr(run, "has_personal_grant_context", False)
+                    ),
+                },
+            )
+        )
+        if _inject_decision.denied:
+            raise RuntimeError(
+                f"context.inject_memory denied by policy for run {run.id}: "
+                f"{_inject_decision.message} "
+                f"[error_code=policy_denied_context_inject_memory]"
+            )
+        if _inject_decision.requires_approval:
+            raise RuntimeError(
+                f"context.inject_memory requires approval for run {run.id}: "
+                f"{_inject_decision.message} "
+                f"[error_code=policy_requires_approval_context_inject_memory]"
+            )
+
         builder = ContextBuilder(self.db)
         pkg = builder.build(
             space_id=run.space_id,

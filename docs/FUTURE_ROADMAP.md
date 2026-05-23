@@ -77,8 +77,10 @@ begins.
 
 - **Additional persisted policy classes.** Currently active: `memory.private_placement` and `run.user_private_scope`. Candidates for next: `runtime.execute`, `credential.access`.
 
-- **Persistent policy audit log.** Current policy traces are JSON log lines only. A
-  dedicated DB table for queryable policy decisions is deferred.
+- **Additional policy audit coverage.** `PolicyDecisionRecord` is the queryable
+  durable audit table for wired sensitive-action decisions; structured domain
+  policy traces also remain available. Future work may wire additional actions
+  only when corresponding enforcement surfaces exist.
 
 - **Credential access grants.** Per-run/per-tool credential scope. Currently the
   credential resolver is a single boundary with no per-run grants.

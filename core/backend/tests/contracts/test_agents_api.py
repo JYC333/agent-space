@@ -393,3 +393,60 @@ def test_run_create_request_model_overrides_agent_default(
     run_body = create_run.json()
     assert run_body["resolved_model"]["model"] == "gpt-4o"
     assert run_body["resolved_model"]["source"] == "request"
+
+
+# ---------------------------------------------------------------------------
+# No delegate route; public run schemas reject unknown fields
+# ---------------------------------------------------------------------------
+
+def test_delegate_route_does_not_exist(api_client, db, cross_space_pair):
+    """POST /{agent_id}/delegate must return 404, not 501."""
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
+    r = cross_space_pair["client_a"].post(
+        f"/api/v1/agents/{agent.id}/delegate",
+        params=_params(a),
+        json={},
+    )
+    assert r.status_code == 404
+
+
+def test_run_creation_rejects_parent_run_trigger_origin(api_client, db, cross_space_pair):
+    """trigger_origin='parent_run' is not a valid trigger origin."""
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
+    r = cross_space_pair["client_a"].post(
+        f"/api/v1/agents/{agent.id}/runs",
+        params=_params(a),
+        json={"mode": "live", "trigger_origin": "parent_run"},
+    )
+    assert r.status_code == 422
+
+
+def test_run_creation_rejects_instructed_by_agent_id(api_client, db, cross_space_pair):
+    """instructed_by_agent_id is not a public RunCreate field; RunCreate uses extra='forbid'."""
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
+    r = cross_space_pair["client_a"].post(
+        f"/api/v1/agents/{agent.id}/runs",
+        params=_params(a),
+        json={"mode": "live", "instructed_by_agent_id": agent.id},
+    )
+    assert r.status_code == 422
+
+
+def test_superseded_run_endpoint_rejects_parent_run_id(api_client, db, cross_space_pair):
+    """POST /{agent_id}/run does not support lineage; parent_run_id returns 422."""
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
+    run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
+    r = cross_space_pair["client_a"].post(
+        f"/api/v1/agents/{agent.id}/run",
+        params=_params(a),
+        json={"prompt": "test", "parent_run_id": run.id},
+    )
+    assert r.status_code == 422

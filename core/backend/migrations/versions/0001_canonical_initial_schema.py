@@ -123,6 +123,10 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('accepted_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint(
+        "role in ('owner', 'admin', 'reviewer', 'member', 'guest')",
+        name='ck_space_invitations_role',
+    ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('token_hash')
@@ -141,6 +145,10 @@ def upgrade() -> None:
     sa.Column('last_login_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint(
+        "role in ('owner', 'admin', 'reviewer', 'member', 'guest')",
+        name='ck_users_role',
+    ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -207,6 +215,10 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=32), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint(
+        "role in ('owner', 'admin', 'reviewer', 'member', 'guest')",
+        name='ck_space_memberships_role',
+    ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id'),
@@ -522,8 +534,6 @@ def upgrade() -> None:
     sa.Column('parent_run_id', sa.String(length=36), nullable=True),
     sa.Column('instructed_by', sa.String(length=128), nullable=True),
     sa.Column('instructed_by_user_id', sa.String(length=36), nullable=True),
-    sa.Column('instructed_by_agent_id', sa.String(length=36), nullable=True),
-    sa.Column('delegation_depth', sa.Integer(), nullable=False),
     sa.Column('run_type', sa.String(length=32), nullable=False),
     sa.Column('trigger_origin', sa.String(length=32), nullable=False),
     sa.Column('status', sa.String(length=32), nullable=False),
@@ -568,7 +578,7 @@ def upgrade() -> None:
     sa.CheckConstraint("mode in ('live', 'dry_run')", name='ck_runs_mode'),
     sa.CheckConstraint("run_type in ('agent', 'system', 'workflow', 'validation', 'reflection', 'export')", name='ck_runs_run_type'),
     sa.CheckConstraint("status in ('queued', 'running', 'succeeded', 'degraded', 'failed', 'cancelled', 'waiting_for_review')", name='ck_runs_status'),
-    sa.CheckConstraint("trigger_origin in ('manual', 'automation', 'job', 'parent_run', 'system')", name='ck_runs_trigger_origin'),
+    sa.CheckConstraint("trigger_origin in ('manual', 'automation', 'job', 'system')", name='ck_runs_trigger_origin'),
     sa.CheckConstraint("required_sandbox_level in ('none', 'dry_run', 'worktree', 'one_shot_docker')", name='ck_runs_required_sandbox_level'),
     sa.CheckConstraint("source is null or source in ('managed', 'ide_assist', 'manual_import', 'remote_import', 'scheduled', 'webhook')", name='ck_runs_source'),
     sa.CheckConstraint("externality_level is null or externality_level in ('native', 'local_external', 'remote_external', 'hybrid', 'manual')", name='ck_runs_externality_level'),
@@ -579,7 +589,6 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['agent_version_id'], ['agent_versions.id'], ),
     sa.ForeignKeyConstraint(['context_snapshot_id'], ['context_snapshots.id'], ),
     sa.ForeignKeyConstraint(['execution_plane_id'], ['execution_planes.id'], ),
-    sa.ForeignKeyConstraint(['instructed_by_agent_id'], ['agents.id'], ),
     sa.ForeignKeyConstraint(['instructed_by_user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['model_provider_id'], ['model_providers.id'], ),
     sa.ForeignKeyConstraint(['parent_run_id'], ['runs.id'], ),
@@ -592,7 +601,6 @@ def upgrade() -> None:
     op.create_index(op.f('ix_runs_agent_id'), 'runs', ['agent_id'], unique=False)
     op.create_index(op.f('ix_runs_agent_version_id'), 'runs', ['agent_version_id'], unique=False)
     op.create_index(op.f('ix_runs_context_snapshot_id'), 'runs', ['context_snapshot_id'], unique=False)
-    op.create_index(op.f('ix_runs_instructed_by_agent_id'), 'runs', ['instructed_by_agent_id'], unique=False)
     op.create_index(op.f('ix_runs_instructed_by_user_id'), 'runs', ['instructed_by_user_id'], unique=False)
     op.create_index(op.f('ix_runs_mode'), 'runs', ['mode'], unique=False)
     op.create_index(op.f('ix_runs_model_provider_id'), 'runs', ['model_provider_id'], unique=False)
@@ -1365,7 +1373,7 @@ def upgrade() -> None:
     sa.CheckConstraint(
         "event_type in ("
         "'context_compiled', 'runtime_selected', 'credential_granted', "
-        "'sandbox_created', 'adapter_invoked', 'adapter_completed', "
+        "'sandbox_created', 'policy_checked', 'adapter_invoked', 'adapter_completed', "
         "'artifact_ingested', 'patch_collected', 'validation_started', "
         "'validation_completed', 'proposal_created', 'evaluation_created', "
         "'run_finalized')",
@@ -1775,11 +1783,75 @@ def upgrade() -> None:
         op.f('ix_cli_credential_events_run_id'),
         'cli_credential_events', ['run_id'], unique=False,
     )
+    op.create_table('policy_decision_records',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=True),
+    sa.Column('actor_type', sa.String(length=64), nullable=True),
+    sa.Column('actor_id', sa.String(length=36), nullable=True),
+    sa.Column('actor_ref_json', sa.JSON(), nullable=True),
+    sa.Column('action', sa.String(length=128), nullable=False),
+    sa.Column('resource_type', sa.String(length=64), nullable=True),
+    sa.Column('resource_id', sa.String(length=256), nullable=True),
+    sa.Column('decision', sa.String(length=32), nullable=False),
+    sa.Column('risk_level', sa.String(length=32), nullable=False),
+    sa.Column('required_approver_role', sa.String(length=32), nullable=True),
+    sa.Column('approval_capability', sa.String(length=128), nullable=True),
+    sa.Column('policy_rule_id', sa.String(length=128), nullable=True),
+    sa.Column('policy_source', sa.String(length=64), nullable=True),
+    sa.Column('policy_id', sa.String(length=36), nullable=True),
+    sa.Column('audit_code', sa.String(length=128), nullable=True),
+    sa.Column('run_id', sa.String(length=36), nullable=True),
+    sa.Column('proposal_id', sa.String(length=36), nullable=True),
+    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint(
+        "decision in ('allow', 'deny', 'require_approval')",
+        name='ck_policy_decision_records_decision',
+    ),
+    sa.CheckConstraint(
+        "risk_level in ('low', 'medium', 'high', 'critical')",
+        name='ck_policy_decision_records_risk_level',
+    ),
+    sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index(op.f('ix_policy_decision_records_space_id'), 'policy_decision_records', ['space_id'], unique=False)
+    op.create_index(op.f('ix_policy_decision_records_actor_id'), 'policy_decision_records', ['actor_id'], unique=False)
+    op.create_index(op.f('ix_policy_decision_records_action'), 'policy_decision_records', ['action'], unique=False)
+    op.create_index(op.f('ix_policy_decision_records_resource_type'), 'policy_decision_records', ['resource_type'], unique=False)
+    op.create_index(op.f('ix_policy_decision_records_resource_id'), 'policy_decision_records', ['resource_id'], unique=False)
+    op.create_index(op.f('ix_policy_decision_records_decision'), 'policy_decision_records', ['decision'], unique=False)
+    op.create_index(op.f('ix_policy_decision_records_risk_level'), 'policy_decision_records', ['risk_level'], unique=False)
+    op.create_index(op.f('ix_policy_decision_records_audit_code'), 'policy_decision_records', ['audit_code'], unique=False)
+    op.create_index(op.f('ix_policy_decision_records_run_id'), 'policy_decision_records', ['run_id'], unique=False)
+    op.create_index(op.f('ix_policy_decision_records_proposal_id'), 'policy_decision_records', ['proposal_id'], unique=False)
+    op.create_index(op.f('ix_policy_decision_records_created_at'), 'policy_decision_records', ['created_at'], unique=False)
+    op.create_index('ix_policy_decision_records_space_created', 'policy_decision_records', ['space_id', 'created_at'], unique=False)
+    op.create_index('ix_policy_decision_records_space_action_created', 'policy_decision_records', ['space_id', 'action', 'created_at'], unique=False)
+    op.create_index('ix_policy_decision_records_run_created', 'policy_decision_records', ['run_id', 'created_at'], unique=False)
+    op.create_index('ix_policy_decision_records_proposal_created', 'policy_decision_records', ['proposal_id', 'created_at'], unique=False)
+    op.create_index('ix_policy_decision_records_audit_created', 'policy_decision_records', ['audit_code', 'created_at'], unique=False)
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_index('ix_policy_decision_records_audit_created', table_name='policy_decision_records')
+    op.drop_index('ix_policy_decision_records_proposal_created', table_name='policy_decision_records')
+    op.drop_index('ix_policy_decision_records_run_created', table_name='policy_decision_records')
+    op.drop_index('ix_policy_decision_records_space_action_created', table_name='policy_decision_records')
+    op.drop_index('ix_policy_decision_records_space_created', table_name='policy_decision_records')
+    op.drop_index(op.f('ix_policy_decision_records_created_at'), table_name='policy_decision_records')
+    op.drop_index(op.f('ix_policy_decision_records_proposal_id'), table_name='policy_decision_records')
+    op.drop_index(op.f('ix_policy_decision_records_run_id'), table_name='policy_decision_records')
+    op.drop_index(op.f('ix_policy_decision_records_audit_code'), table_name='policy_decision_records')
+    op.drop_index(op.f('ix_policy_decision_records_risk_level'), table_name='policy_decision_records')
+    op.drop_index(op.f('ix_policy_decision_records_decision'), table_name='policy_decision_records')
+    op.drop_index(op.f('ix_policy_decision_records_resource_id'), table_name='policy_decision_records')
+    op.drop_index(op.f('ix_policy_decision_records_resource_type'), table_name='policy_decision_records')
+    op.drop_index(op.f('ix_policy_decision_records_action'), table_name='policy_decision_records')
+    op.drop_index(op.f('ix_policy_decision_records_actor_id'), table_name='policy_decision_records')
+    op.drop_index(op.f('ix_policy_decision_records_space_id'), table_name='policy_decision_records')
+    op.drop_table('policy_decision_records')
     op.drop_index(op.f('ix_cli_credential_events_run_id'), table_name='cli_credential_events')
     op.drop_index(op.f('ix_cli_credential_events_space_id'), table_name='cli_credential_events')
     op.drop_table('cli_credential_events')
@@ -2028,7 +2100,6 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_runs_model_provider_id'), table_name='runs')
     op.drop_index(op.f('ix_runs_mode'), table_name='runs')
     op.drop_index(op.f('ix_runs_instructed_by_user_id'), table_name='runs')
-    op.drop_index(op.f('ix_runs_instructed_by_agent_id'), table_name='runs')
     op.drop_index(op.f('ix_runs_context_snapshot_id'), table_name='runs')
     op.drop_index(op.f('ix_runs_agent_version_id'), table_name='runs')
     op.drop_index(op.f('ix_runs_agent_id'), table_name='runs')

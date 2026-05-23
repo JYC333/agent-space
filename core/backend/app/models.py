@@ -838,8 +838,6 @@ class Run(Base):
     parent_run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=True, index=True)
     instructed_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     instructed_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
-    instructed_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True, index=True)
-    delegation_depth: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     run_type: Mapped[str] = mapped_column(String(32), nullable=False, default="agent", index=True)
     trigger_origin: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
@@ -940,7 +938,7 @@ class Run(Base):
             name="ck_runs_run_type",
         ),
         CheckConstraint(
-            "trigger_origin in ('manual', 'automation', 'job', 'parent_run', 'system')",
+            "trigger_origin in ('manual', 'automation', 'job', 'system')",
             name="ck_runs_trigger_origin",
         ),
         CheckConstraint(
@@ -2420,5 +2418,56 @@ class CliCredentialEvent(Base):
         CheckConstraint(
             "credential_source in ('profile', 'container_default', 'none')",
             name="ck_cli_credential_events_credential_source",
+        ),
+    )
+
+
+class PolicyDecisionRecord(Base):
+    """Append-only durable evidence of sensitive policy decisions.
+
+    Records who requested what action, what the decision was, and why.
+    Never stores raw memory content, personal_context_block, credentials,
+    prompts, patch body, stdout, stderr, or other sensitive payloads.
+    Metadata is sanitized via sanitize_policy_metadata() before persistence.
+    """
+
+    __tablename__ = "policy_decision_records"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, nullable=True, index=True)
+    actor_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    actor_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    actor_ref_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    action: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    resource_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    resource_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, index=True)
+    decision: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    risk_level: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    required_approver_role: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    approval_capability: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    policy_rule_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    policy_source: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    policy_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+    audit_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, index=True
+    )
+
+    __table_args__ = (
+        Index("ix_policy_decision_records_space_created", "space_id", "created_at"),
+        Index("ix_policy_decision_records_space_action_created", "space_id", "action", "created_at"),
+        Index("ix_policy_decision_records_run_created", "run_id", "created_at"),
+        Index("ix_policy_decision_records_proposal_created", "proposal_id", "created_at"),
+        Index("ix_policy_decision_records_audit_created", "audit_code", "created_at"),
+        CheckConstraint(
+            "decision in ('allow', 'deny', 'require_approval')",
+            name="ck_policy_decision_records_decision",
+        ),
+        CheckConstraint(
+            "risk_level in ('low', 'medium', 'high', 'critical')",
+            name="ck_policy_decision_records_risk_level",
         ),
     )

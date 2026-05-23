@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import func
 
-from app.memory.proposals import ProposalService
+from app.memory.proposals import ProposalPolicyDeniedError, ProposalService
 from app.models import MemoryEntry, Proposal
 from tests.support import factories
 
@@ -60,11 +61,13 @@ def test_accept_applies_once_second_accept_is_noop(db, cross_space_pair):
 def test_wrong_reviewer_cannot_reject_or_accept(db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
-    ub = cross_space_pair["user_b"]
-    prop = factories.create_test_proposal(db, space_id=a, created_by_user_id=ua.id, commit=False)
-    db.flush()
+    ub = cross_space_pair["user_b"]  # owner in space_b, no membership in space_a
+    prop = factories.create_test_proposal(db, space_id=a, created_by_user_id=ua.id, commit=True)
+    # Reject still uses the original creator check; ub is not the creator so None is returned.
     assert ProposalService(db).reject(prop.id, space_id=a, user_id=ub.id) is None
-    assert ProposalService(db).accept(prop.id, space_id=a, user_id=ub.id) is None
+    # Accept now uses the policy gate; ub has no membership in space_a → policy denied.
+    with pytest.raises(ProposalPolicyDeniedError):
+        ProposalService(db).accept(prop.id, space_id=a, user_id=ub.id)
     db.refresh(prop)
     assert prop.status == "pending"
 

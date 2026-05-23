@@ -264,6 +264,12 @@ Never writes `MemoryEntry`, `Proposal`, or `Policy`.
 
 Called immediately before adapter execution. Builds and persists a `ContextSnapshot` row.
 
+**Policy gate:** `context.inject_memory` is checked via `PolicyGateway.check_and_record()` at the
+start of `populate()`, before `ContextBuilder.build()`. Cross-space memory injection without a
+`PersonalMemoryGrant` fires `HardInvariantGuard._cross_space_memory_read` → DENY. A DENY raises
+`RuntimeError([error_code=policy_denied_context_inject_memory])` which stops context population
+and propagates as a run failure. No memory is retrieved or injected after a DENY.
+
 Stable prefix strategy:
 - Resolves `ContextDigest` rows for space / workspace / agent via `_load_digest_bundle()`
 - Falls back to direct `MemoryRetriever` when no digest available (records `fallback_reason` in retrieval_trace)
@@ -280,6 +286,8 @@ Stores in `ContextSnapshot`:
 ## 9. ProposalApplyService (`memory/apply_service.py`)
 
 **Primary durable write boundary** for accepted proposals. Supports two additional write paths with explicit provenance controls (see write boundary table in section 1).
+
+**Defense-in-depth gate:** `apply()` requires `accept_context` in `{"explicit_user_accept", "internal_seed"}`. Unrecognized `accept_context` without `bypass_source_monitoring=True` raises `ProposalApplyError`. Proposal payloads with approval-proof flags (`approved_by_user`, `approved_by_granting_user`, etc.) are rejected by `HardInvariantGuard._payload_flags_not_approval_proof` before reaching `apply()`.
 
 Supported proposal types:
 - `memory_create` → new active `MemoryEntry` (calls `MemoryInternalWriter.create_from_approved_proposal()`)
@@ -308,6 +316,11 @@ After applying `memory_create` / `memory_update` / `memory_archive`:
 | Egress approval | `proposals/approvals.py:validate_egress_granting_user_approval()` | PersonalMemoryGrant egress |
 | Workspace root validation | `runs/preflight.py:validate_workspace_root_for_execution()` | Before run executes |
 | Per-run execution lock | `runs/execution_lock.py:RunExecutionLockService` | RunExecutionService |
+| **context.inject_memory** | `PolicyGateway` in `runs/context_snapshot_populator.py` | Before ContextBuilder.build() |
+| **context.render_for_runtime** | `PolicyGateway` in `runs/execution.py` | Before adapter.execute() |
+| **proposal.create** | `PolicyGateway` in `memory/proposals.py`, `runs/code_patch_collector.py` | Before Proposal row insert |
+| **proposal.apply** | `PolicyGateway.check_proposal_apply()` in `memory/proposals.py` | Before ProposalApplyService.apply() |
+| ProposalApplyService accept_context | `memory/apply_service.py` | Defense-in-depth at apply() entry |
 
 ---
 

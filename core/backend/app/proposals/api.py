@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session
 from ..auth.api_key import get_identity
 from ..db import get_db
 from ..memory.code_patch_apply import CodePatchApplyError
-from ..memory.proposals import ProposalAcceptResult, ProposalService, UnsupportedProposalTypeError
+from ..memory.proposals import (
+    ProposalAcceptResult,
+    ProposalPolicyDeniedError,
+    ProposalService,
+)
+from ..policy.proposal_apply import ProposalRiskLevelError
 from ..participation.service import try_record_participation
 from .list_params import resolve_proposal_list_status
 from ..memory.serialization import memory_entry_to_out
@@ -224,10 +229,10 @@ def accept_proposal(
     svc = ProposalService(db)
 
     # Guard: incomplete code_patch proposals require explicit opt-in.
-    # Check before accept() so the error is always clean and the proposal is untouched.
-    proposal = svc.get(proposal_id)
-    if proposal is not None and proposal.proposal_type == "code_patch":
-        payload = proposal.payload_json or {}
+    # Use space-scoped visibility lookup to avoid leaking proposal existence across spaces.
+    visible_proposal = svc.get_proposal_for_viewer(proposal_id, space_id, user_id)
+    if visible_proposal is not None and visible_proposal.proposal_type == "code_patch":
+        payload = visible_proposal.payload_json or {}
         if payload.get("incomplete_patch") is True and not confirm_incomplete_patch:
             raise HTTPException(
                 status_code=422,
@@ -244,12 +249,23 @@ def accept_proposal(
 
     try:
         result = svc.accept(proposal_id, space_id=space_id, user_id=user_id)
-    except UnsupportedProposalTypeError as exc:
+    except ProposalRiskLevelError as exc:
         raise HTTPException(
-            status_code=409,
+            status_code=422,
             detail={
-                "code": "unsupported_proposal_type",
+                "code": "invalid_proposal_risk_level",
+                "risk_value": exc.risk_value,
+                "message": str(exc),
+            },
+        ) from exc
+    except ProposalPolicyDeniedError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": exc.audit_code or "proposal_apply_denied",
                 "proposal_type": exc.proposal_type,
+                "risk_level": exc.risk_level,
+                "message": exc.message,
             },
         ) from exc
     except CodePatchApplyError as exc:

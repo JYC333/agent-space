@@ -4,7 +4,7 @@ These invariants must hold regardless of proposal type:
 - preview proposals cannot be accepted
 - rejected proposals cannot be accepted
 - already-accepted proposals cannot be accepted again
-- unknown proposal types raise UnsupportedProposalTypeError
+- unknown proposal types are denied at the policy gate (ProposalPolicyDeniedError, audit_code="unsupported_proposal_type")
 - memory_update without target_memory_id fails at apply time
 - memory_archive without target_memory_id fails at apply time
 - policy_change creates a new Policy linked by created_from_proposal_id
@@ -25,10 +25,20 @@ from app.memory.apply_service import (
     ProposalApplyError,
     ProposalApplyService,
 )
-from app.memory.proposals import ProposalService, UnsupportedProposalTypeError
+from app.memory.proposals import ProposalService, ProposalPolicyDeniedError
 from app.models import MemoryEntry, Policy, Proposal
 from app.schemas import MemoryCreate
 from tests.support import factories
+
+
+def _make_member(db, space_id):
+    from app.models import SpaceMembership, User
+    from ulid import ULID
+    uid = str(ULID())
+    db.add(User(id=uid, space_id=space_id, display_name="member", email=f"{uid}@test.invalid"))
+    db.add(SpaceMembership(id=str(ULID()), space_id=space_id, user_id=uid, role="member", status="active"))
+    db.flush()
+    return uid
 
 
 # ---------------------------------------------------------------------------
@@ -76,16 +86,17 @@ def test_accepted_proposal_cannot_be_accepted_twice(db, cross_space_pair):
     assert second is None
 
 
-def test_unknown_proposal_type_raises(db, cross_space_pair):
+def test_unknown_proposal_type_denied_at_policy_gate(db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
     prop = factories.create_test_proposal(
         db, space_id=a, created_by_user_id=ua.id,
         proposal_type="completely_unknown_type", commit=True,
     )
-    with pytest.raises(UnsupportedProposalTypeError) as ei:
+    with pytest.raises(ProposalPolicyDeniedError) as ei:
         ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
     assert ei.value.proposal_type == "completely_unknown_type"
+    assert ei.value.audit_code == "unsupported_proposal_type"
 
 
 # ---------------------------------------------------------------------------
@@ -502,9 +513,63 @@ def test_proposal_apply_service_used_memory_internal_writer(db, cross_space_pair
     prop = factories.create_test_proposal(
         db, space_id=a, created_by_user_id=ua.id, commit=True
     )
-    # Apply directly through ProposalApplyService (the allowed internal boundary).
+    # Apply directly through ProposalApplyService using bypass_source_monitoring=True
+    # (trusted internal/test boundary that skips the accept_context gate).
     svc = ProposalApplyService(db)
-    result = svc.apply(prop, user_id=ua.id)
+    result = svc.apply(prop, user_id=ua.id, bypass_source_monitoring=True)
     assert result.memory is not None
     assert result.memory.created_from_proposal_id == prop.id
     assert result.memory.source_proposal_id == prop.id
+
+
+# ---------------------------------------------------------------------------
+# policy.change — WIRED_VIA_PROPOSAL; enforcement is via proposal.apply gate
+# ---------------------------------------------------------------------------
+
+
+def test_policy_change_owner_creates_policy_row(db, cross_space_pair):
+    """Owner applying policy_change via ProposalApplyService creates a Policy row.
+
+    policy.change is WIRED_VIA_PROPOSAL: the PolicyDecisionRecord is created by
+    PolicyGateway.check_proposal_apply() in ProposalService.accept(), not by
+    PolicyProposalApplier.apply() itself. The direct ProposalApplyService.apply()
+    path (used here with bypass_source_monitoring=True) is the inner applier called
+    after the gate — it does not create a PDR for 'policy.change'.
+    """
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    prop = factories.create_test_proposal(
+        db, space_id=a, created_by_user_id=ua.id, proposal_type="policy_change",
+        payload_json={"domain": "memory", "rule_json": {"effect": "allow"}},
+        commit=True,
+    )
+    before_policies = db.query(func.count(Policy.id)).filter(Policy.space_id == a).scalar()
+
+    result = ProposalApplyService(db).apply(prop, user_id=ua.id, bypass_source_monitoring=True)
+    assert result.policy is not None
+    assert db.query(func.count(Policy.id)).filter(Policy.space_id == a).scalar() == before_policies + 1
+
+
+def test_policy_change_member_is_denied_and_no_policy_row(db, cross_space_pair):
+    """Member applying policy_change gets ProposalApplyError; no Policy row created.
+
+    policy.change is WIRED_VIA_PROPOSAL: the inline role check in
+    PolicyProposalApplier.apply() rejects members. No PolicyDecisionRecord is
+    created here — that happens in PolicyGateway.check_proposal_apply() inside
+    ProposalService.accept() (the gate that this direct apply() path bypasses).
+    """
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    member_id = _make_member(db, a)
+    prop = factories.create_test_proposal(
+        db, space_id=a, created_by_user_id=ua.id, proposal_type="policy_change",
+        payload_json={"domain": "memory", "rule_json": {"effect": "allow"}},
+        commit=True,
+    )
+    before_policies = db.query(func.count(Policy.id)).filter(Policy.space_id == a).scalar()
+
+    with pytest.raises(ProposalApplyError):
+        ProposalApplyService(db).apply(prop, user_id=member_id, bypass_source_monitoring=True)
+
+    # No Policy row created
+    assert db.query(func.count(Policy.id)).filter(Policy.space_id == a).scalar() == before_policies

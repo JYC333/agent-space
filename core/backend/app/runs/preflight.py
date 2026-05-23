@@ -7,7 +7,13 @@ Preflight does NOT:
   - start a run or mutate DB state
   - create sandboxes
   - write workspace files
+  - enforce sensitive actions or persist PolicyDecisionRecord
   - call any external API or subprocess (except lightweight CLI availability checks)
+
+Policy simulation contract: PreflightService may call PolicyEngine directly only to
+predict whether a prospective runtime.execute request would be allowed. It is a
+non-mutating dry-run, not an enforcement point. Real runtime execution must go
+through PolicyGateway and record decisions there when required.
 
 Resolution contract: preflight resolves adapter_type and required_sandbox_level using the
 exact same priority order as RunExecutionService + resolve_runtime_adapter + compute_runtime_policy_decision.
@@ -65,15 +71,13 @@ class PreflightRequest(BaseModel):
 class PreflightResult(BaseModel):
     """Structured preflight outcome."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=False)
+
     executable: bool
     adapter_type: str | None = None
     required_sandbox_level: str | None = None
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
-
-    class Config:
-        # Allow field(...) defaults for mutable types
-        arbitrary_types_allowed = False
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +95,11 @@ class _PreflightState:
 
 
 class PreflightService:
-    """Validate runtime execution preconditions without mutating state."""
+    """Validate runtime execution preconditions without mutating or auditing decisions.
+
+    Direct PolicyEngine evaluation in this service is simulation only. Enforcement
+    of an actual runtime execution remains the responsibility of PolicyGateway.
+    """
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -141,14 +149,17 @@ class PreflightService:
             state.errors.append(f"Agent '{req.agent_id}' not found in space '{state.space_id}'")
             return
 
+        # Dry-run simulation only: do not use PolicyGateway or write an audit
+        # decision here. RunExecutionService enforces runtime.execute through
+        # PolicyGateway before actual execution.
         d = PolicyEngine().check({
-            "action": "agent.run",
+            "action": "runtime.execute",
             "space_id": state.space_id,
             "resource_space_id": agent.space_id,
             "agent_status": agent.status,
         })
         if d.denied:
-            state.errors.append(f"Agent is not runnable: {d.reason}")
+            state.errors.append(f"Agent is not runnable: {d.message}")
             return
 
         if not agent.current_version_id:

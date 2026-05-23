@@ -36,6 +36,7 @@ RUN_EVENT_TYPES = frozenset({
     "runtime_selected",
     "credential_granted",
     "sandbox_created",
+    "policy_checked",
     "adapter_invoked",
     "adapter_completed",
     "artifact_ingested",

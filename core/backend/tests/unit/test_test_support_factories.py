@@ -115,7 +115,7 @@ def test_assert_memory_unchanged_fails_when_new_row(db):
 
 def test_assert_policy_requires_approval_helper():
     assert_policy_requires_approval(
-        {"action": "memory.write", "resource_id": "user"},
+        {"action": "memory.create", "resource_id": "user"},
     )
 
 

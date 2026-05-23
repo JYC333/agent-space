@@ -200,7 +200,7 @@ def test_populator_no_instructed_by_excludes_private_memory(db):
     run = factories.create_test_run(
         db, space_id=setup["space_id"], user_id=setup["user"].id, commit=False
     )
-    # Simulate a delegated agent run with no explicit human instructed_by
+    # Simulate a run with no explicit human instructed_by (system-initiated)
     run.instructed_by_user_id = None
     db.flush()
     db.commit()

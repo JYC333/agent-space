@@ -10,10 +10,8 @@ Responsibilities:
   - ContextSnapshot is created and linked
   - mode=dry_run only records the mode (no preview artifact/proposal until execute)
   - Stop only changes status to cancelled
-
-Delegation:
-  - Delegation metadata and depth limits are enforced here (single choke point).
   - Optional adapter_type on RunCreate is validated against the target agent version policy.
+  - parent_run_id supports user-created lineage: follow-up runs, retries, manual continuations.
 """
 
 from __future__ import annotations
@@ -31,7 +29,7 @@ from ..visibility.auth import can_read_scoped_object
 
 _VALID_MODES = {"live", "dry_run"}
 _VALID_RUN_TYPES = {"agent", "system", "workflow", "validation", "reflection", "export"}
-_VALID_TRIGGER_ORIGINS = {"manual", "automation", "job", "parent_run", "system"}
+_VALID_TRIGGER_ORIGINS = {"manual", "automation", "job", "system"}
 _TERMINAL_STATUSES = {"succeeded", "failed", "degraded", "cancelled"}
 _STOPABLE_STATUSES = {"queued", "running", "waiting_for_review"}
 
@@ -108,48 +106,51 @@ class RunService:
         )
         return dict(v.runtime_policy_json or {}) if v else {}
 
-    def _policy_engine(self):
-        from ..policy import PolicyEngine
-
-        return PolicyEngine()
-
     def _validate_run_target_agent(self, agent: Agent, space_id: str) -> None:
-        d = self._policy_engine().check(
-            {
-                "action": "agent.run",
-                "space_id": space_id,
-                "resource_space_id": agent.space_id,
-                "agent_status": agent.status,
-            }
-        )
+        # Non-mutating preflight simulation — must not persist PolicyDecisionRecord.
+        # Real enforcement (with PolicyGateway.check_and_record) happens in RunExecutionService.
+        from ..policy.engine import PolicyEngine
+
+        d = PolicyEngine().check({
+            "action": "runtime.execute",
+            "space_id": space_id,
+            "resource_space_id": agent.space_id,
+            "agent_status": agent.status,
+        })
         if d.denied:
-            raise HTTPException(status_code=409, detail=d.reason)
+            raise HTTPException(status_code=409, detail=d.message)
 
     def _validate_adapter_for_target(self, agent: Agent, adapter_type: str, space_id: str) -> None:
         policy = self._runtime_policy_for_agent(agent)
         allowed = policy.get("allowed_adapter_types")
         if allowed is None or not isinstance(allowed, list) or len(allowed) == 0:
             return
-        d = self._policy_engine().check(
-            {
-                "action": "tool.execute",
-                "space_id": space_id,
-                "tool_name": adapter_type,
-                "agent_tool_permissions": allowed,
-            }
-        )
-        if d.denied:
-            raise HTTPException(status_code=403, detail=d.reason)
+        # Non-mutating preflight simulation — must not persist PolicyDecisionRecord.
+        # Real enforcement (with PolicyGateway.check_and_record) happens in RunExecutionService.
+        from ..policy.engine import PolicyEngine
 
-    def _resolve_delegation(
+        d = PolicyEngine().check({
+            "action": "runtime.execute",
+            "space_id": space_id,
+            "tool_name": adapter_type,
+            "agent_tool_permissions": allowed,
+        })
+        if d.denied:
+            raise HTTPException(status_code=403, detail=d.message)
+
+    def _resolve_lineage(
         self,
         *,
         data: RunCreate,
         space_id: str,
-    ) -> tuple[str | None, int, str | None]:
-        """Return ``(parent_run_id, delegation_depth, instructed_by_agent_id)`` for the new Run."""
+    ) -> str | None:
+        """Return parent_run_id for the new Run, or None.
+
+        parent_run_id supports user-created lineage: follow-up runs, retries,
+        manual continuations, and external run imports. Cross-space parents are rejected.
+        """
         if not data.parent_run_id:
-            return None, 0, None
+            return None
 
         parent = (
             self.db.query(Run)
@@ -167,35 +168,7 @@ class RunService:
                 detail="Cross-space parent_run_id is not allowed",
             )
 
-        delegator_id = data.instructed_by_agent_id or parent.agent_id
-        delegator = (
-            self.db.query(Agent)
-            .filter(Agent.id == delegator_id, Agent.space_id == space_id)
-            .first()
-        )
-        if not delegator:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Delegating agent '{delegator_id}' not found in this space",
-            )
-
-        policy = self._runtime_policy_for_agent(delegator)
-        d = self._policy_engine().check(
-            {
-                "action": "agent.delegate",
-                "space_id": space_id,
-                "resource_space_id": delegator.space_id,
-                "agent_status": delegator.status,
-                "can_delegate": policy.get("can_delegate", True),
-                "delegation_depth": parent.delegation_depth,
-                "max_delegation_depth": policy.get("max_delegation_depth", 3),
-            }
-        )
-        if d.denied:
-            raise HTTPException(status_code=403, detail=d.reason)
-
-        next_depth = parent.delegation_depth + 1
-        return parent.id, next_depth, delegator_id
+        return parent.id
 
     # ------------------------------------------------------------------
     # Run creation
@@ -279,20 +252,12 @@ class RunService:
         if data.adapter_type:
             self._validate_adapter_for_target(agent, data.adapter_type, space_id)
 
-        parent_run_id, delegation_depth, instructed_by_agent_id = self._resolve_delegation(
+        parent_run_id = self._resolve_lineage(
             data=data,
             space_id=space_id,
         )
 
-        # Agent→agent delegation (``trigger_origin=parent_run`` + ``instructed_by_agent_id``)
-        # leaves ``instructed_by_user_id`` unset; user-initiated runs keep the caller id.
         effective_user_id = user_id
-        if (
-            parent_run_id
-            and data.trigger_origin == "parent_run"
-            and data.instructed_by_agent_id is not None
-        ):
-            effective_user_id = None
 
         # 7. Create minimal ContextSnapshot
         snapshot = ContextSnapshot(
@@ -386,8 +351,6 @@ class RunService:
             session_id=data.session_id,
             parent_run_id=parent_run_id,
             instructed_by_user_id=effective_user_id,
-            instructed_by_agent_id=instructed_by_agent_id,
-            delegation_depth=delegation_depth,
             run_type=data.run_type,
             trigger_origin=data.trigger_origin,
             status="queued",

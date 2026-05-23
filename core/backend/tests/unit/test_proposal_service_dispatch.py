@@ -1,16 +1,16 @@
 """ProposalService dispatches memory_create / memory_update / memory_archive / policy_change / code_patch;
-unsupported types raise UnsupportedProposalTypeError.
+unsupported types are denied at the policy gate with audit_code="unsupported_proposal_type".
 """
 
 from __future__ import annotations
 
 import pytest
 
-from app.memory.proposals import ProposalService, UnsupportedProposalTypeError
+from app.memory.proposals import ProposalService, ProposalPolicyDeniedError
 from tests.support import factories
 
 
-def test_unsupported_proposal_type_raises_at_service_boundary(db, cross_space_pair):
+def test_unsupported_proposal_type_denied_at_policy_gate(db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
     prop = factories.create_test_proposal(
@@ -20,9 +20,10 @@ def test_unsupported_proposal_type_raises_at_service_boundary(db, cross_space_pa
         proposal_type="unknown_dispatch_type",
         commit=True,
     )
-    with pytest.raises(UnsupportedProposalTypeError) as ei:
+    with pytest.raises(ProposalPolicyDeniedError) as ei:
         ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
     assert ei.value.proposal_type == "unknown_dispatch_type"
+    assert ei.value.audit_code == "unsupported_proposal_type"
 
 
 def test_memory_create_accept_creates_memory_entry(db, cross_space_pair):

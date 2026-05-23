@@ -21,17 +21,24 @@ class RiskLevel(str, Enum):
 @dataclass
 class PolicyDecision:
     decision: Decision
-    reason: str
+    message: str
     risk_level: RiskLevel = RiskLevel.LOW
+    reason_code: Optional[str] = None
     required_approver_role: Optional[str] = None
     policy_rule_id: Optional[str] = None
     policy_source: str = "builtin"
     policy_id: Optional[str] = None
+    actor_type: Optional[str] = None
     actor_id: Optional[str] = None
     actor_ref: Optional[dict[str, Any]] = None
     space_id: Optional[str] = None
     action: Optional[str] = None
     resource_type: Optional[str] = None
+    resource_id: Optional[str] = None
+    audit_code: Optional[str] = None
+    approval_capability: Optional[str] = None
+    proposal_type: Optional[str] = None
+    metadata_json: Optional[dict[str, Any]] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property

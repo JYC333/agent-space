@@ -29,6 +29,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from ..models import ActivityRecord, Workspace
+from ..policy.gateway import PolicyGateway, PolicyCheckRequest, PolicyDecisionRecordPersistError
 from ..workspace.path_policy import PathPolicy, PathPolicyError
 from ..workspace.disk_path import workspace_absolute_root
 
@@ -252,9 +253,55 @@ def apply_code_patch_payload(
 
     Raises :class:`CodePatchApplyError` on any validation or unsupported-op error.
     """
+    # Policy gate: workspace.write_patch — record before any file writes.
+    # Human-accepted code_patch proposal satisfies the review requirement, but
+    # the decision is recorded for audit evidence. Store safe summary only —
+    # never the patch body or file content.
     ops = patch.get("operations")
     if not isinstance(ops, list) or not ops:
         raise CodePatchApplyError("patch.operations must be a non-empty list")
+
+    _safe_paths = [
+        str(op.get("path", ""))[:256]
+        for op in ops[:32]
+        if isinstance(op, dict)
+    ]
+    try:
+        _patch_decision = PolicyGateway(db).check_and_record(
+            PolicyCheckRequest(
+                action="workspace.write_patch",
+                actor_type="user",
+                actor_id=user_id,
+                space_id=space_id,
+                resource_type="workspace",
+                resource_id=str(workspace.id),
+                proposal_id=proposal_id,
+                context={
+                    "proposal_type": "code_patch",
+                    "proposal_apply_allowed": True,
+                },
+                metadata_json={
+                    "ops_count": len(ops),
+                    "paths": _safe_paths,
+                    "source_run_id": source_run_id,
+                    "proposal_id": proposal_id,
+                },
+                force_record=True,
+            )
+        )
+    except PolicyDecisionRecordPersistError:
+        raise CodePatchApplyError(
+            "policy_decision_record_persist_failed: policy audit record persistence "
+            "failed for workspace.write_patch. No files written."
+        )
+    if _patch_decision.denied:
+        raise CodePatchApplyError(
+            f"workspace.write_patch denied by policy: {_patch_decision.message}"
+        )
+    if _patch_decision.requires_approval:
+        raise CodePatchApplyError(
+            f"workspace.write_patch requires an accepted code_patch proposal: {_patch_decision.message}"
+        )
 
     root = workspace_absolute_root(workspace)
     root.mkdir(parents=True, exist_ok=True)

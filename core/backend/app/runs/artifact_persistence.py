@@ -17,6 +17,7 @@ from ..personal_memory_grants.egress_guard import (
     PersonalMemoryEgressError,
     check_personal_memory_egress,
 )
+from ..policy.gateway import PolicyGateway, PolicyCheckRequest, PolicyDecisionRecordPersistError
 
 
 def _new_id() -> str:
@@ -46,6 +47,54 @@ class ArtifactPersistenceService:
         preview: bool = False,
     ) -> Artifact:
         """Write UTF-8 text to persisted storage and create an ``Artifact`` row."""
+        # Policy gate: artifact.persist — before any write or egress check.
+        # Never stores artifact content, file content, or personal_context_block.
+        # Decision inputs (target_space_id, derived_from_personal_memory_grant,
+        # raw_private_memory_included) go in context so HardInvariantGuard reads
+        # them as authoritative.
+        # Audit-only fields stay in metadata_json.
+        try:
+            _persist_decision = PolicyGateway(self.db).check_and_record(
+                PolicyCheckRequest(
+                    action="artifact.persist",
+                    actor_type="run",
+                    actor_id=str(run.id),
+                    space_id=run.space_id,
+                    resource_type="artifact",
+                    run_id=str(run.id),
+                    context={
+                        "target_space_id": run.space_id,
+                        "derived_from_personal_memory_grant": bool(
+                            getattr(run, "has_personal_grant_context", False)
+                        ),
+                        "raw_private_memory_included": False,
+                    },
+                    metadata_json={
+                        "artifact_type": artifact_type,
+                        "target_space_id": run.space_id,
+                        "target_workspace_id": str(run.workspace_id) if run.workspace_id else None,
+                        "source_run_id": str(run.id),
+                        "preview": preview,
+                    },
+                )
+            )
+        except PolicyDecisionRecordPersistError:
+            raise PersonalMemoryEgressError(
+                "policy_decision_record_persist_failed: policy audit record persistence "
+                "failed for artifact.persist. No artifact written.",
+                grant_id=None,
+            )
+        if _persist_decision.denied:
+            raise PersonalMemoryEgressError(
+                f"artifact.persist denied by policy: {_persist_decision.message}",
+                grant_id=None,
+            )
+        if _persist_decision.requires_approval:
+            raise PersonalMemoryEgressError(
+                f"artifact.persist requires approval: {_persist_decision.message}",
+                grant_id=None,
+            )
+
         # Egress guard: block grant-derived artifacts targeting non-personal spaces.
         egress = check_personal_memory_egress(
             self.db,
@@ -97,6 +146,53 @@ class ArtifactPersistenceService:
         metadata_json: dict[str, Any] | None = None,
     ) -> Artifact:
         """Copy a regular file from an adapter sandbox into persisted storage."""
+        # Policy gate: artifact.persist — before any write or egress check.
+        # Decision inputs go in context; audit-only fields stay in metadata_json.
+        try:
+            _persist_decision = PolicyGateway(self.db).check_and_record(
+                PolicyCheckRequest(
+                    action="artifact.persist",
+                    actor_type="run",
+                    actor_id=str(run.id),
+                    space_id=run.space_id,
+                    resource_type="artifact",
+                    run_id=str(run.id),
+                    context={
+                        "target_space_id": run.space_id,
+                        "derived_from_personal_memory_grant": bool(
+                            getattr(run, "has_personal_grant_context", False)
+                        ),
+                        "raw_private_memory_included": False,
+                    },
+                    metadata_json={
+                        "artifact_type": artifact_type,
+                        "target_space_id": run.space_id,
+                        "target_workspace_id": str(run.workspace_id) if run.workspace_id else None,
+                        "source_run_id": str(run.id),
+                        "source_relative_path_hash": (
+                            source_relative_path[:64] if source_relative_path else None
+                        ),
+                        "preview": preview,
+                    },
+                )
+            )
+        except PolicyDecisionRecordPersistError:
+            raise PersonalMemoryEgressError(
+                "policy_decision_record_persist_failed: policy audit record persistence "
+                "failed for artifact.persist. No artifact written.",
+                grant_id=None,
+            )
+        if _persist_decision.denied:
+            raise PersonalMemoryEgressError(
+                f"artifact.persist denied by policy: {_persist_decision.message}",
+                grant_id=None,
+            )
+        if _persist_decision.requires_approval:
+            raise PersonalMemoryEgressError(
+                f"artifact.persist requires approval: {_persist_decision.message}",
+                grant_id=None,
+            )
+
         # Egress guard: block grant-derived artifacts targeting non-personal spaces.
         egress = check_personal_memory_egress(
             self.db,

@@ -1,64 +1,44 @@
 from __future__ import annotations
 """
-PolicyEngine — built-in runtime permission rules.
+PolicyEngine — stateless policy rule evaluator.
 
-Evaluates stateless built-in rules (BUILTIN_RULES from policy/rules.py) in
-priority order and returns the first matching PolicyDecision, or ALLOW if none
-match.
+Evaluates built-in rules (BUILTIN_RULES from policy/rules.py) in priority order.
+If no rule matches, returns the action registry default_decision — not a permissive
+ALLOW. Unknown actions always fail closed with DENY.
 
-PolicyEngine does NOT load persisted Policy rows. Domain-specific persisted-policy
-enforcement (e.g. memory.private_placement, run.user_private_scope) is implemented
-in policy/enforcement.py using policy/access.py helpers. Policy row loading
-helpers live in policy/access.py (load_active_policy_rows, get_active_policy_match,
-get_active_policy_decision).
-
-Usage:
-    engine = PolicyEngine()
-    decision = engine.check({
-        "action": "memory.propose",
-        "space_id": "personal",
-        "user_id": "default_user",
-        "resource_id": "user",        # scope name for memory actions
-    })
-    if decision.denied:
-        raise HTTPException(status_code=403, detail=decision.reason)
+PolicyEngine does NOT load persisted Policy rows and does NOT run HardInvariantGuard.
+Use PolicyGateway (policy/gateway.py) as the enforcement entry point for actual
+sensitive actions — it composes HardInvariantGuard, PolicyEngine, and
+PolicyDecisionRecord persistence. PreflightService may call PolicyEngine only
+for its non-mutating dry-run simulation.
 
 PolicyContext keys (all optional unless noted):
-    action               (str, required)  — e.g. "memory.read", "tool.execute", "agent.delegate"
+    action               (str, required)  — e.g. "memory.create", "runtime.execute"
     space_id             (str)            — requesting space
     resource_space_id    (str)            — space of the resource being accessed
-    user_id              (str)            — requesting user
+    actor_id             (str)            — requesting actor (user or system)
+    actor_ref            (dict)           — structured actor reference
     agent_id             (str)            — agent performing the action
     agent_status         (str)            — "active" | "disabled" | ...
-    agent_tool_permissions (list[str])    — agent's allowed tools
+    agent_tool_permissions (list[str])    — agent's allowed tools/adapters
     resource_type        (str)            — "memory" | "workspace" | "credential" | ...
     resource_id          (str)            — ID or scope name of the resource
-    tool_name            (str)            — for tool.execute actions
-    delegation_depth     (int)            — current depth
-    max_delegation_depth (int)            — from agent's runtime_policy
-    can_delegate         (bool)           — from agent's runtime_policy
+    tool_name            (str)            — for runtime.execute when checking a specific tool/adapter
 """
 
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
+from .actions import require_action_definition, UnknownPolicyActionError
 from .decisions import PolicyDecision, Decision, RiskLevel
 from .rules import BUILTIN_RULES
 
 PolicyContext = dict
 RuleFunction = Callable[[PolicyContext], Optional[PolicyDecision]]
 
-_DEFAULT_ALLOW = PolicyDecision(
-    decision=Decision.ALLOW,
-    reason="No rule denied this action",
-    risk_level=RiskLevel.LOW,
-    policy_rule_id="default_allow",
-    policy_source="default",
-)
-
 
 class PolicyEngine:
     """
     Evaluates policy rules in order. First non-None result wins.
-    Falls through to ALLOW if no rule matches.
+    Falls through to the action registry default_decision when no rule matches.
     """
 
     def __init__(self, extra_rules: list[RuleFunction] | None = None):
@@ -69,34 +49,54 @@ class PolicyEngine:
     def check(self, ctx: PolicyContext) -> PolicyDecision:
         """
         Evaluate all rules against the given context.
-        Returns the first matching PolicyDecision, or ALLOW if none match.
+
+        Unknown actions fail closed with DENY (audit_code="unknown_policy_action").
+        Known actions with no matching rule use the action's registry default_decision —
+        never a permissive ALLOW fallback.
         """
+        action = ctx.get("action")
+        try:
+            defn = require_action_definition(action)
+        except (UnknownPolicyActionError, TypeError):
+            return PolicyDecision(
+                decision=Decision.DENY,
+                message=f"Unknown policy action {action!r}. All sensitive actions must be registered in the canonical action registry.",
+                risk_level=RiskLevel.HIGH,
+                reason_code="unknown_policy_action",
+                policy_rule_id="unknown_action_deny",
+                policy_source="builtin",
+                audit_code="unknown_policy_action",
+                action=action,
+                space_id=ctx.get("space_id"),
+            )
+
         for rule in self._rules:
             result = rule(ctx)
             if result is not None:
                 return result
+
         return PolicyDecision(
-            decision=_DEFAULT_ALLOW.decision,
-            reason=_DEFAULT_ALLOW.reason,
-            risk_level=_DEFAULT_ALLOW.risk_level,
-            policy_rule_id=_DEFAULT_ALLOW.policy_rule_id,
-            policy_source=_DEFAULT_ALLOW.policy_source,
+            decision=defn.default_decision,
+            message=f"No rule matched; registry default for {action!r} is {defn.default_decision.value}",
+            risk_level=defn.default_risk_level,
+            reason_code="registry_default",
+            required_approver_role=defn.default_required_approver_role,
+            approval_capability=defn.approval_capability,
+            policy_rule_id="registry_default",
+            policy_source="registry",
+            resource_type=defn.resource_type,
+            action=action,
             actor_id=ctx.get("actor_id"),
             actor_ref=ctx.get("actor_ref") if isinstance(ctx.get("actor_ref"), dict) else None,
             space_id=ctx.get("space_id"),
-            action=ctx.get("action"),
-            resource_type=ctx.get("resource_type"),
         )
 
     def assert_allowed(self, ctx: PolicyContext) -> PolicyDecision:
-        """
-        Like check(), but raises ValueError if the decision is not ALLOW.
-        Use this at enforcement points where you want an exception on deny.
-        """
+        """Like check(), but raises PermissionError if the decision is not ALLOW."""
         decision = self.check(ctx)
         if not decision.allowed:
             raise PermissionError(
-                f"[{decision.policy_rule_id}] {decision.reason} "
+                f"[{decision.policy_rule_id}] {decision.message} "
                 f"(decision={decision.decision}, risk={decision.risk_level})"
             )
         return decision

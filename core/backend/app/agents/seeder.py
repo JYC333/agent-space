@@ -41,8 +41,6 @@ _BUILTIN_AGENTS: list[dict] = [
         "tool_permissions_json": {},
         "runtime_policy_json": {
             "risk_level": "low",
-            "can_delegate": False,
-            "max_delegation_depth": 0,
             "max_run_time_seconds": 30,
             "allowed_adapter_types": ["echo"],
             "default_adapter_type": "echo",
@@ -73,8 +71,6 @@ _BUILTIN_AGENTS: list[dict] = [
         "capabilities_json": ["memory.reflect"],
         "tool_permissions_json": {},
         "runtime_policy_json": {
-            "can_delegate": False,
-            "max_delegation_depth": 0,
             "max_run_time_seconds": 120,
             "allowed_adapter_types": ["echo", "claude_code"],
         },

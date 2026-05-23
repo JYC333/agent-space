@@ -13,7 +13,7 @@ PATCH with execution config fields creates a new AgentVersion and advances
 current_version_id. Prior versions are never modified.
 Run execution reads runtime_policy from the current AgentVersion.
 
-run(), submit(), and delegate() create Runs via RunService (status=queued).
+run() and submit() create Runs via RunService (status=queued).
 Adapter execution, Artifact/Proposal/MemoryEntry materialization, and sandbox
 work happen in RunExecutionService — not in AgentService.
 """
@@ -34,7 +34,6 @@ from ..schemas import (
 from ..config import settings
 
 _task_router = None
-_engine = None
 
 
 def _new_id() -> str:
@@ -47,14 +46,6 @@ def _get_task_router():
         from ..router.task_router import TaskRouter
         _task_router = TaskRouter()
     return _task_router
-
-
-def _get_engine():
-    global _engine
-    if _engine is None:
-        from ..policy import PolicyEngine
-        _engine = PolicyEngine()
-    return _engine
 
 
 class AgentService:
@@ -327,79 +318,37 @@ class AgentService:
         return memory_policy, runtime_policy
 
     def _check_run(self, agent: Agent, adapter_type: str, space_id: str) -> tuple:
-        """Run all policy checks for a user→agent run. Raises HTTP 4xx on deny."""
-        engine = _get_engine()
+        """Non-mutating preflight checks before creating a queued run.
+
+        Uses PolicyEngine directly (no PolicyDecisionRecord persisted here).
+        Real enforcement with PolicyGateway.check_and_record runs in RunExecutionService.
+        """
+        from ..policy.engine import PolicyEngine
+
+        engine = PolicyEngine()
 
         d = engine.check({
-            "action": "agent.run",
+            "action": "runtime.execute",
             "space_id": space_id,
             "resource_space_id": agent.space_id,
             "agent_status": agent.status,
         })
         if d.denied:
-            raise HTTPException(status_code=409, detail=d.reason)
+            raise HTTPException(status_code=409, detail=d.message)
 
         _, runtime_policy = self._get_policy_fields(agent)
         allowed = runtime_policy.get("allowed_adapter_types")
         d = engine.check({
-            "action": "tool.execute",
+            "action": "runtime.execute",
             "space_id": space_id,
             "tool_name": adapter_type,
             "agent_tool_permissions": allowed,
         })
         if d.denied:
-            raise HTTPException(status_code=403, detail=d.reason)
+            raise HTTPException(status_code=403, detail=d.message)
 
         memory_policy, _ = self._get_policy_fields(agent)
         return d, memory_policy, runtime_policy
-
-    def _check_delegate(
-        self,
-        delegating_agent: Agent,
-        parent_run: Run,
-        target_agent: Agent,
-        adapter_type: str,
-        space_id: str,
-    ) -> tuple:
-        """Run all policy checks for agent→agent delegation. Raises HTTP 4xx on deny."""
-        engine = _get_engine()
-
-        _, delegator_runtime = self._get_policy_fields(delegating_agent)
-
-        d = engine.check({
-            "action": "agent.delegate",
-            "space_id": space_id,
-            "resource_space_id": delegating_agent.space_id,
-            "agent_status": delegating_agent.status,
-            "can_delegate": delegator_runtime.get("can_delegate", True),
-            "delegation_depth": parent_run.delegation_depth,
-            "max_delegation_depth": delegator_runtime.get("max_delegation_depth", 3),
-        })
-        if d.denied:
-            raise HTTPException(status_code=403, detail=d.reason)
-
-        d2 = engine.check({
-            "action": "agent.run",
-            "space_id": space_id,
-            "resource_space_id": target_agent.space_id,
-            "agent_status": target_agent.status,
-        })
-        if d2.denied:
-            raise HTTPException(status_code=409, detail=d2.reason)
-
-        delegator_memory, _ = self._get_policy_fields(delegating_agent)
-        _, target_runtime = self._get_policy_fields(target_agent)
-        allowed = target_runtime.get("allowed_adapter_types")
-        d3 = engine.check({
-            "action": "tool.execute",
-            "space_id": space_id,
-            "tool_name": adapter_type,
-            "agent_tool_permissions": allowed,
-        })
-        if d3.denied:
-            raise HTTPException(status_code=403, detail=d.reason)
-
-        return d, delegator_memory, target_runtime
 
     # ------------------------------------------------------------------
     # Task routing
@@ -505,48 +454,3 @@ class AgentService:
         self.db.commit()
         return run
 
-    # ------------------------------------------------------------------
-    # Delegation — creates a queued Run for the delegating agent
-    # ------------------------------------------------------------------
-
-    def delegate(
-        self,
-        target_agent_id: str,
-        req: RunRequest,
-        space_id: str,
-        parent_run_id: str,
-        instructed_by_agent_id: str,
-    ) -> Run:
-        """
-        Create a Run for agent→agent delegation.
-        Returns a queued Run via RunService. No adapter execution here.
-        """
-        from app.runs.run_service import RunService
-
-        parent_run = self.db.query(Run).filter(Run.id == parent_run_id).first()
-        if not parent_run:
-            raise HTTPException(status_code=404, detail=f"Parent run '{parent_run_id}' not found")
-
-        delegating_agent = self.get_or_404(instructed_by_agent_id)
-        target_agent = self.get_or_404(target_agent_id)
-
-        adapter_type = self._resolve_adapter_type(req)
-        self._check_delegate(delegating_agent, parent_run, target_agent, adapter_type, space_id)
-
-        run_svc = RunService(self.db)
-        run = run_svc.create_run(
-            agent_id=target_agent_id,
-            data=RunCreate(
-                mode="live",
-                run_type="agent",
-                trigger_origin="parent_run",
-                workspace_id=req.workspace_id,
-                parent_run_id=parent_run_id,
-                instructed_by_agent_id=instructed_by_agent_id,
-                adapter_type=adapter_type,
-                prompt=req.prompt,
-            ),
-            space_id=space_id,
-            user_id=parent_run.user_id or settings.default_user_id,
-        )
-        return run

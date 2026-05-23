@@ -12,7 +12,6 @@ only concrete friction discovered during use.
 - Artifact archive/delete API.
 - Activity archive/delete.
 - Workspace stale recovery UI.
-- Additional persisted policy enforcement classes (e.g. `runtime.execute`).
 
 ## Non-Goals (Today)
 

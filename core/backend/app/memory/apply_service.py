@@ -436,6 +436,17 @@ class PolicyProposalApplier:
         from .proposal_payload import merge_distinct_provenance_entries, proposal_provenance_entry
         from .proposal_payload import provenance_entries_from_payload
         from .provenance_apply import TARGET_POLICY, write_provenance_links
+        from ..policy.roles import get_space_role_normalized
+
+        # policy.change is WIRED_VIA_PROPOSAL: enforcement is via proposal.apply gate only.
+        # The role check below is the canonical guard; calling PolicyGateway.check_and_record()
+        # here would fail closed (WIRED_VIA_PROPOSAL denial) and is intentionally removed.
+        _role = get_space_role_normalized(self._db, user_id=user_id, space_id=proposal.space_id)
+        if _role not in ("admin", "owner"):
+            raise ProposalApplyError(
+                f"policy.change requires admin or owner authority; "
+                f"user {user_id!r} has role {_role!r} in space {proposal.space_id!r}"
+            )
 
         payload = proposal.payload_json or {}
         writer = PolicyInternalWriter(self._db)
@@ -677,15 +688,7 @@ class FollowUpTaskProposalApplier:
 # ---------------------------------------------------------------------------
 
 
-_SUPPORTED_TYPES = frozenset({
-    "memory_create",
-    "memory_update",
-    "memory_archive",
-    "policy_change",
-    "code_patch",
-    "egress_review",
-    "follow_up_task",
-})
+from ..policy.proposal_apply import SUPPORTED_PROPOSAL_TYPES as _SUPPORTED_TYPES
 
 
 class ProposalApplyService:
@@ -774,6 +777,12 @@ class ProposalApplyService:
         except PersonalMemoryEgressApprovalError as exc:
             raise ProposalApplyError(str(exc)) from exc
 
+    # Valid accept contexts that confirm the proposal went through an explicit policy gate.
+    _VALID_ACCEPT_CONTEXTS: frozenset[str] = frozenset({
+        "explicit_user_accept",
+        "internal_seed",
+    })
+
     def apply(
         self,
         proposal: Proposal,
@@ -782,11 +791,25 @@ class ProposalApplyService:
         bypass_source_monitoring: bool = False,
         accept_context: str = "direct_apply",
     ) -> ApplyResult:
-        """Apply a validated accepted proposal.  Raises ProposalApplyError on failure."""
+        """Apply a validated accepted proposal.  Raises ProposalApplyError on failure.
+
+        Defense-in-depth: reject apply attempts that bypass the explicit policy gate.
+        ProposalService.accept() always passes accept_context="explicit_user_accept".
+        Tests/seeds may pass "internal_seed". All other callers are rejected.
+        """
         ptype = proposal.proposal_type
 
         if ptype not in _SUPPORTED_TYPES:
             raise ProposalApplyError(f"unsupported proposal type: {ptype!r}")
+
+        if accept_context not in self._VALID_ACCEPT_CONTEXTS and not bypass_source_monitoring:
+            raise ProposalApplyError(
+                f"ProposalApplyService.apply() called with unrecognized accept_context="
+                f"{accept_context!r}. "
+                "Proposals must be applied through ProposalService.accept() which enforces "
+                "the policy gate. Pass bypass_source_monitoring=True only for trusted internal "
+                "seed paths."
+            )
 
         self._enforce_personal_memory_egress_approval(proposal)
 

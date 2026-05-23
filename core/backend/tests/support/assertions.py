@@ -136,7 +136,7 @@ def assert_policy_requires_approval(
     msg: str | None = None,
 ) -> None:
     d = PolicyEngine().check(context)
-    assert d.requires_approval, msg or f"expected REQUIRE_APPROVAL, got {d.decision} ({d.reason})"
+    assert d.requires_approval, msg or f"expected REQUIRE_APPROVAL, got {d.decision} ({d.message})"
 
 
 def assert_run_has_audit_trail(

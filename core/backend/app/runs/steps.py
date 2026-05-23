@@ -7,7 +7,6 @@ a failed step write does not hide the original run failure.
 
 Actor attribution rule:
 - User-initiated runs: get_or_create_user_actor for the instructing user.
-- Agent-initiated/delegated runs: get_or_create_agent_actor.
 - Job-triggered runs: get_or_create_job_actor(db, "agent_run", space_id).
 - System/internal paths: get_or_create_system_actor.
 
@@ -82,29 +81,22 @@ def resolve_run_actor(db: Session, run: Run) -> Actor:
 
     Resolution order:
     1. instructed_by_user_id → user actor
-    2. instructed_by_agent_id → agent actor
-    3. trigger_origin == "job" → job actor (service_name="agent_run")
-    4. Otherwise → system actor
+    2. trigger_origin == "job" → job actor (service_name="agent_run")
+    3. Otherwise → system actor
 
     Never uses Settings.default_user_id.
     """
     from ..actors.service import (
-        get_or_create_agent_actor,
         get_or_create_job_actor,
         get_or_create_system_actor,
         get_or_create_user_actor,
     )
-    from ..models import Agent, User
+    from ..models import User
 
     if run.instructed_by_user_id:
         user = db.query(User).filter(User.id == run.instructed_by_user_id).first()
         if user:
             return get_or_create_user_actor(db, user, run.space_id)
-
-    if run.instructed_by_agent_id:
-        agent = db.query(Agent).filter(Agent.id == run.instructed_by_agent_id).first()
-        if agent:
-            return get_or_create_agent_actor(db, agent, run.space_id)
 
     if run.trigger_origin == "job":
         return get_or_create_job_actor(db, "agent_run", space_id=run.space_id)

@@ -219,7 +219,6 @@ class TaskService:
                 prompt=body.prompt,
                 instruction=body.instruction,
                 parent_run_id=body.parent_run_id,
-                instructed_by_agent_id=body.instructed_by_agent_id,
                 adapter_type=body.adapter_type,
             ),
             space_id=space_id,

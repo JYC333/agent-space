@@ -82,17 +82,80 @@ This document describes current capability lines and known future risks. It is o
 
 ### 5. Policy Enforcement Expansion
 
-**Current state:** `PolicyEngine` evaluates stateless built-in rules. Domain-specific persisted-policy enforcement lives in `policy/enforcement.py` (`memory.private_placement`, `run.user_private_scope`). The memory write boundary is structural (`_INTERNAL_WRITE_AUTHORITY` sentinel), not policy-based. Most other enforcement points still use local route/service checks.
+**Current state:**
 
-**Why it matters:** Scattered policy means bypasses are hard to detect as capabilities grow. Future automation and agent work need centralized auditable enforcement.
+- **`PolicyEngine.check()`** is fail-closed: unknown actions return `decision=deny` with
+  `audit_code="unknown_policy_action"`. Only registered actions can fall through to allow.
+  `BUILTIN_RULES` evaluated in order: space_boundary, agent_status, memory_scope,
+  use_credential, tool_permission, workspace_write_patch, policy_change.
+- `agent.delegate` is **not** a current action — agent-to-agent delegation is deferred.
+- Domain-specific persisted-policy enforcement in `policy/enforcement.py`
+  (`memory.private_placement`, `run.user_private_scope`).
+- **Canonical action registry** (`policy/actions.py`): **12 wired sensitive actions** are
+  code-defined. `require_action_definition()` raises `UnknownPolicyActionError` for unregistered
+  actions. **Reserved actions** (15, `lifecycle_status=RESERVED`, including automation.create/fire,
+  capability.enable, tool_binding.enable, artifact.export, context.use_personal_grant, workspace.read)
+  are registered with `current_enforcement_point="not_implemented"`. `PolicyGateway` always denies
+  reserved actions; they are not wired to any `PolicyGateway.check_and_record()` call site yet.
+- **Approval resolver** (`policy/approval.py`): `can_approve_policy_action()` calls
+  `require_action_definition(action)` first, then checks SpaceMembership role against effective risk.
+  - owner → can approve all supported actions including critical
+  - admin → can approve low/medium/high; not critical
+  - member/guest/viewer → cannot approve by default
+- **`proposal.apply` gate** — consolidated in `PolicyGateway.check_proposal_apply()`. Called from
+  `ProposalService.accept()`. Runs HardInvariantGuard first (payload flag check), then
+  role/risk matrix, then persists PolicyDecisionRecord. Always recorded (audit_required=True).
+  Effective risk = `max(type_default, proposal.risk_level)`.
+  Denial → HTTP 403; no durable write occurs.
+- **`runtime.execute` gate** — checked before credential resolution. DENY/REQUIRE_APPROVAL
+  blocks adapter with `error_code=policy_denied_runtime_execute`.
+- **`runtime.use_credential` gate** — checked before secret fetch. Same-space manual/api → ALLOW.
+  Cross-space → hard DENY (CRITICAL). Automation → REQUIRE_APPROVAL.
+- **`context.inject_memory` gate** — in ContextSnapshotPopulator before ContextBuilder.build().
+  Cross-space without grant → hard DENY. DENY raises RuntimeError blocking context population.
+- **`context.render_for_runtime` gate** — in execution.py before adapter.execute(). Cross-space
+  without grant → hard DENY. DENY → `error_code=policy_denied_context_render_for_runtime`.
+- **`artifact.persist` gate** — in ArtifactPersistenceService before filesystem write and egress
+  guard. personal_context_block in metadata → hard DENY. Always recorded (audit_required=True).
+- **`proposal.create` gate** — in ProposalService and CodePatchCollector before Proposal insert.
+  force_record=True for high-risk types. DENY blocks proposal creation.
+- **PolicyDecisionRecord** — all sensitive decisions persisted. Metadata sanitized before storage:
+  no credentials, prompts, patch bodies, stdout/stderr, raw memory, personal_context_block.
+- **ProposalApplyService defense-in-depth** — `apply()` requires `accept_context` in
+  `{"explicit_user_accept", "internal_seed"}`. Unrecognized context rejects without
+  `bypass_source_monitoring=True`.
+- **Reviewable proposal inbox** is role-aware.
+- Memory write boundary is structural (`_INTERNAL_WRITE_AUTHORITY` sentinel).
 
-**Likely next steps:** Inventory remaining enforcement points. Add one additional persisted policy class (candidate: `runtime.execute`). Prove wiring with tests.
+**Design invariants:**
+- Policy is a risk-routing layer, not enterprise RBAC/ABAC.
+- PolicyGateway is the only enforcement entry point. Never call PolicyEngine or
+  HardInvariantGuard directly to authorize or perform a sensitive action.
+  `PreflightService` may call PolicyEngine only for non-mutating dry-run simulation;
+  it must not persist `PolicyDecisionRecord`, and real execution still uses PolicyGateway.
+- No enforcement point has legacy fallback paths or backward-compatibility wrappers.
+- No secret material is resolved before `runtime.use_credential` passes.
+- No context is injected before `context.inject_memory` passes.
+- No adapter is invoked before `runtime.execute` and `context.render_for_runtime` pass.
+- "Reviewer" is not a SpaceMembership role — it is a future approval capability.
+- "Forbidden" is `decision=deny`, not a risk level. Risk levels: low, medium, high, critical.
+- Unknown sensitive actions must not silently fall through as allow.
+- Proposal acceptance is the human approval event; the proposal.apply gate enforces this.
+- `agent.delegate` is not a current canonical action. Future multi-agent child-run creation
+  should be designed as `run.spawn_child` / `run.create_child` with explicit control-plane
+  policy and evaluation gates.
 
-**What must be true first:** Existing persisted-policy enforcement (`memory.private_placement`, `run.user_private_scope`) is fully tested and stable.
+**Why it matters:** Scattered policy means bypasses are hard to detect as capabilities grow. PolicyGateway provides a single auditable boundary for all sensitive actions.
 
-**Risks if built too early:** Full RBAC/ABAC before the audit trail is solid creates false enforcement confidence.
+**Remaining gaps:**
+1. `memory.create/update/archive` enforcement points at MemoryStore level (currently only
+   at proposal.apply gate).
+2. `workspace.read` enforcement point when workspace access control is built.
+3. `automation.create`, `automation.fire` — when Automation model is built.
+4. `capability.enable`, `tool_binding.enable` — when capability management API is built.
+5. Per-user approval capabilities table (extension point exists; table not built).
 
-**Not now:** Full enterprise RBAC/ABAC, user-facing policy editor, global route rewrite, connector/automation policy, credential access grants.
+**Not now:** Full enterprise RBAC/ABAC, user-facing policy editor, global route rewrite, policy DSL, lab/scientific identity roles, agent-to-agent delegation (deferred).
 
 ---
 
@@ -312,7 +375,7 @@ User request
 | Distributed multi-process locking | Current advisory lock is single-host only | Documented risk; single-process for now |
 | Cloud/offsite backup | No automated offsite replication | Manual GPG + offsite transfer documented; not automated |
 | Full retention policy | Personal data retention and legal obligations | Lifecycle states defined; retention policy engine deferred |
-| Broader policy enforcement | Most enforcement points use local checks, not centralized PolicyEngine | One class wired; full inventory documented |
+| Broader policy enforcement | Some enforcement points (memory.create at MemoryStore, workspace.read) still use local checks, not PolicyGateway | 8 enforcement points wired via PolicyGateway; memory/workspace remaining |
 | Credential access grants | No per-run/per-tool credential scope; credential resolver is a single boundary | Resolver boundary set; grants deferred |
 | Source/Evidence first-class schema | Current field mapping insufficient for broad external ingestion | Deferred behind ingestion gate |
 | Information Horizon ingestion safety | External data can pollute trusted Memory without trust gates | Candidate-only rule enforced by absence of implementation |

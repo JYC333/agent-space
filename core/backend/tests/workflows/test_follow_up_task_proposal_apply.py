@@ -18,7 +18,7 @@ import pytest
 from ulid import ULID
 
 from app.memory.apply_service import ProposalApplyService, ProposalApplyError
-from app.memory.proposals import UnsupportedProposalTypeError, ProposalService
+from app.memory.proposals import ProposalService
 from app.models import ContextSnapshot, MemoryEntry, Policy, Proposal, Run, Task
 from tests.support import factories
 
@@ -68,7 +68,7 @@ class TestApplyFollowUpTaskCreatesTask:
         })
 
         svc = ProposalApplyService(db)
-        result = svc.apply(prop, user_id=USER)
+        result = svc.apply(prop, user_id=USER, bypass_source_monitoring=True)
 
         tasks = db.query(Task).filter(Task.space_id == SPACE).all()
         assert len(tasks) == 1
@@ -93,7 +93,7 @@ class TestApplyFollowUpTaskCreatesTask:
         prop = _make_proposal(db, payload={"task": {"title": "Fix bug"}}, run_id=run.id)
 
         svc = ProposalApplyService(db)
-        result = svc.apply(prop, user_id=USER)
+        result = svc.apply(prop, user_id=USER, bypass_source_monitoring=True)
 
         assert result.task.source_proposal_id == prop.id
         assert result.task.source_run_id == run.id
@@ -107,7 +107,7 @@ class TestApplyFollowUpTaskCreatesTask:
         })
 
         svc = ProposalApplyService(db)
-        result = svc.apply(prop, user_id=USER)
+        result = svc.apply(prop, user_id=USER, bypass_source_monitoring=True)
 
         meta = result.task.metadata_json
         assert meta["source"] == "follow_up_task_proposal"
@@ -127,7 +127,7 @@ class TestApplyFollowUpTaskSetsCleanDefaults:
         prop = _make_proposal(db, payload={"task": {"title": "  Minimal task  "}})
 
         svc = ProposalApplyService(db)
-        result = svc.apply(prop, user_id=USER)
+        result = svc.apply(prop, user_id=USER, bypass_source_monitoring=True)
 
         task = result.task
         assert task.title == "Minimal task"  # stripped
@@ -142,7 +142,7 @@ class TestApplyFollowUpTaskSetsCleanDefaults:
         prop = _make_proposal(db, payload={"task": {"title": "No description"}})
 
         svc = ProposalApplyService(db)
-        result = svc.apply(prop, user_id=USER)
+        result = svc.apply(prop, user_id=USER, bypass_source_monitoring=True)
 
         assert result.task.description is None
 
@@ -151,7 +151,7 @@ class TestApplyFollowUpTaskSetsCleanDefaults:
         prop = _make_proposal(db, payload={"task": {"title": "Sparse"}})
 
         svc = ProposalApplyService(db)
-        result = svc.apply(prop, user_id=USER)
+        result = svc.apply(prop, user_id=USER, bypass_source_monitoring=True)
 
         task = result.task
         assert task.acceptance_criteria_json is None
@@ -212,7 +212,7 @@ class TestMalformedPayloadRejection:
 
         svc = ProposalApplyService(db)
         with pytest.raises(ProposalApplyError):
-            svc.apply(prop, user_id=USER)
+            svc.apply(prop, user_id=USER, bypass_source_monitoring=True)
 
         db.expire_all()
         after = db.query(Task).filter(Task.space_id == SPACE).count()
@@ -225,7 +225,7 @@ class TestMalformedPayloadRejection:
 
         svc = ProposalApplyService(db)
         with pytest.raises(ProposalApplyError):
-            svc.apply(prop, user_id=USER)
+            svc.apply(prop, user_id=USER, bypass_source_monitoring=True)
 
         db.expire_all()
         assert db.query(Task).filter(Task.space_id == SPACE).count() == before
@@ -250,7 +250,7 @@ class TestCrossSpaceWorkspaceRejection:
 
         svc = ProposalApplyService(db)
         with pytest.raises(ProposalApplyError):
-            svc.apply(prop, user_id=USER)
+            svc.apply(prop, user_id=USER, bypass_source_monitoring=True)
 
         db.expire_all()
         assert db.query(Task).filter(Task.space_id == SPACE).count() == 0
@@ -284,7 +284,7 @@ class TestUnsupportedTypesRemainUnsupported:
             commit=False,
         )
         with pytest.raises(ProposalApplyError, match="unsupported proposal type"):
-            ProposalApplyService(db).apply(prop, user_id=USER)
+            ProposalApplyService(db).apply(prop, user_id=USER, bypass_source_monitoring=True)
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +300,7 @@ class TestFollowUpTaskDoesNotWriteMemoryOrPolicy:
         mem_before = db.query(MemoryEntry).filter(MemoryEntry.space_id == SPACE).count()
         pol_before = db.query(Policy).filter(Policy.space_id == SPACE).count()
 
-        ProposalApplyService(db).apply(prop, user_id=USER)
+        ProposalApplyService(db).apply(prop, user_id=USER, bypass_source_monitoring=True)
 
         db.expire_all()
         assert db.query(MemoryEntry).filter(MemoryEntry.space_id == SPACE).count() == mem_before
@@ -369,7 +369,7 @@ class TestReflectionProposalBuilderTitleNormalization:
         assert prop.payload_json["task"]["title"] == prop.title
 
         # The normalized proposal should apply cleanly.
-        result = ProposalApplyService(db).apply(prop, user_id=test_user.id)
+        result = ProposalApplyService(db).apply(prop, user_id=test_user.id, bypass_source_monitoring=True)
         assert result.task is not None
         assert result.task.title == prop.title
 
@@ -393,7 +393,7 @@ class TestReflectionProposalBuilderTitleNormalization:
         assert prop.title == "Specific follow-up"
         assert prop.payload_json["task"]["title"] == "Specific follow-up"
 
-        result = ProposalApplyService(db).apply(prop, user_id=test_user.id)
+        result = ProposalApplyService(db).apply(prop, user_id=test_user.id, bypass_source_monitoring=True)
         assert result.task is not None
         assert result.task.title == "Specific follow-up"
 
@@ -529,13 +529,26 @@ class TestBuilderProposalOwnership:
         assert task.source_proposal_id == prop.id
         assert task.source_run_id == run.id
 
-    def test_builder_created_follow_up_task_without_source_user_is_not_accepted_by_random_user(self, db):
+    def test_builder_created_follow_up_task_owner_can_accept_system_proposal(self, db):
+        """An owner can accept a system-created proposal (no creator user).
+
+        The proposal.apply gate checks space membership, not proposal creator.
+        A member-role user cannot accept, but an owner can.
+        """
+        from app.memory.proposals import ProposalPolicyDeniedError
+        from app.models import SpaceMembership, User
         from app.runs.proposal_builder import ReflectionProposalBuilder
 
         space_id = str(ULID())
         factories.create_test_space(db, space_id=space_id)
-        some_user = factories.create_test_user(db, space_id=space_id)
-        agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=some_user.id, commit=False)
+        owner_user = factories.create_test_user(db, space_id=space_id)
+        agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=owner_user.id, commit=False)
+
+        # Create a member-role user who should be denied
+        member_id = str(ULID())
+        member_user = User(id=member_id, space_id=space_id, display_name="member", email=f"{member_id}@t.invalid")
+        db.add(member_user)
+        db.add(SpaceMembership(id=str(ULID()), space_id=space_id, user_id=member_id, role="member", status="active"))
         db.flush()
 
         snapshot = ContextSnapshot(
@@ -555,7 +568,6 @@ class TestBuilderProposalOwnership:
             agent_version_id=agent.current_version_id,
             context_snapshot_id=snapshot.id,
             instructed_by_user_id=None,
-            delegation_depth=0,
             status="queued",
             mode="live",
             required_sandbox_level="none",
@@ -574,13 +586,20 @@ class TestBuilderProposalOwnership:
 
         assert len(proposals) == 1
         prop = proposals[0]
-        assert prop.created_by_user_id is None
+        assert prop.created_by_user_id is None  # system-created proposal, no user creator
 
-        result = ProposalService(db).accept(prop.id, space_id=space_id, user_id=some_user.id)
-        assert result is None
-
+        # Member cannot accept — policy gate denies
+        with pytest.raises(ProposalPolicyDeniedError):
+            ProposalService(db).accept(prop.id, space_id=space_id, user_id=member_id)
         db.expire_all()
         assert db.query(Task).filter(Task.space_id == space_id).count() == 0
+
+        # Owner CAN accept — policy gate allows
+        result = ProposalService(db).accept(prop.id, space_id=space_id, user_id=owner_user.id)
+        assert result is not None
+        assert result.task is not None
+        db.expire_all()
+        assert db.query(Task).filter(Task.space_id == space_id).count() == 1
 
     def test_builder_rejects_non_dict_follow_up_task_item(self, db):
         from app.runs.proposal_builder import ReflectionProposalBuilder

@@ -32,8 +32,6 @@ DEFAULT_MEMORY_POLICY: dict = {
 
 DEFAULT_RUNTIME_POLICY: dict = {
     "risk_level": "medium",  # low | medium | high | critical — controls sandbox level
-    "can_delegate": True,
-    "max_delegation_depth": 3,
     "max_run_time_seconds": 300,
     # adapter_ids this agent may use; matches RuntimeAdapter.adapter_id or adapter_type
     # Note: anthropic_messages is intentionally absent — Anthropic/Claude usage
@@ -202,7 +200,10 @@ class AgentOut(BaseModel):
 
 
 class RunRequest(BaseModel):
-    """Used by both user→agent and agent→agent calls."""
+    """Run creation request body for POST /agents/{agent_id}/run."""
+
+    model_config = ConfigDict(extra="forbid")
+
     prompt: str
     workspace_id: Optional[str] = None
     workspace_path: Optional[str] = None
@@ -213,9 +214,6 @@ class RunRequest(BaseModel):
     model_selection_mode: str = "cli_default"
     model_override_json: Optional[dict] = None
     risk_level: str = "medium"  # low | medium | high | critical
-    # Set by the system when an agent delegates to another agent
-    parent_run_id: Optional[str] = None
-    instructed_by_agent_id: Optional[str] = None
     # Task routing signals — used by TaskRouter to choose the right adapter.
     # CLI adapters are only used when at least one of the requires_* flags is True
     # or the task_type maps to a heavy task. Lightweight tasks are redirected to
@@ -782,6 +780,8 @@ class TaskOut(BaseModel):
 class TaskRunCreateBody(BaseModel):
     """POST /tasks/{id}/runs — optional overrides; agent_id falls back to task.assigned_agent_id."""
 
+    model_config = ConfigDict(extra="forbid")
+
     agent_id: Optional[str] = None
     mode: str = Field(default="live")
     run_type: str = Field(default="agent")
@@ -792,7 +792,6 @@ class TaskRunCreateBody(BaseModel):
     instruction: Optional[str] = None
     set_task_in_progress: bool = Field(default=True)
     parent_run_id: Optional[str] = None
-    instructed_by_agent_id: Optional[str] = None
     adapter_type: Optional[str] = None
 
 
@@ -904,6 +903,9 @@ class TaskEvaluationOut(BaseModel):
 
 class RunCreate(BaseModel):
     """Input for POST /api/v1/agents/{id}/runs."""
+
+    model_config = ConfigDict(extra="forbid")
+
     mode: str = Field(default="live")
     run_type: str = Field(default="agent")
     trigger_origin: str = Field(default="manual")
@@ -913,10 +915,8 @@ class RunCreate(BaseModel):
     prompt: Optional[str] = None
     instruction: Optional[str] = None
     scheduled_at: Optional[datetime] = None
-    # Delegation (optional). Child runs require ``parent_run_id``;
-    # ``delegation_depth`` is always derived server-side.
+    # Run lineage: set parent_run_id for follow-up, retry, or manual continuation runs.
     parent_run_id: Optional[str] = None
-    instructed_by_agent_id: Optional[str] = None
     adapter_type: Optional[str] = None
     capability_id: Optional[str] = None
     # Execution plane hints — used by the service to resolve and snapshot plane metadata.
@@ -937,9 +937,7 @@ class RunOut(BaseModel):
     workspace_id: Optional[str]
     session_id: Optional[str]
     parent_run_id: Optional[str]
-    delegation_depth: int = 0
     instructed_by_user_id: Optional[str] = None
-    instructed_by_agent_id: Optional[str] = None
     run_type: str
     trigger_origin: str
     status: str

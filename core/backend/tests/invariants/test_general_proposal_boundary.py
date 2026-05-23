@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import func
 
 from app.config import settings
-from app.memory.proposals import ProposalService, UnsupportedProposalTypeError
+from app.memory.proposals import ProposalService, ProposalPolicyDeniedError
 from app.models import MemoryEntry, Proposal
 from tests.support import factories
 
@@ -88,12 +88,10 @@ def test_unsupported_proposal_type_accept_raises_no_durable_mutation(db, cross_s
         proposal_type="unknown_type_x",
         commit=True,
     )
-    try:
+    with pytest.raises(ProposalPolicyDeniedError) as ei:
         ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
-    except UnsupportedProposalTypeError as exc:
-        assert exc.proposal_type == "unknown_type_x"
-    else:
-        raise AssertionError("expected UnsupportedProposalTypeError")
+    assert ei.value.proposal_type == "unknown_type_x"
+    assert ei.value.audit_code == "unsupported_proposal_type"
     db.refresh(prop)
     assert prop.status == "pending"
     after = (

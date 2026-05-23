@@ -17,7 +17,7 @@ Proposal types created here:
 
 Apply handlers for workspace_profile_update, validation_recipe_update,
 capability_update, and policy_update are not implemented. Accepting those
-proposal types raises UnsupportedProposalTypeError.
+proposal types is denied at the policy gate (audit_code="unsupported_proposal_type").
 
 follow_up_task is fully supported: accepted proposals create a Task row via
 ProposalApplyService.
