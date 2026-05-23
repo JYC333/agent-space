@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from ulid import ULID
@@ -330,85 +330,62 @@ class TestTaskEvaluationBridgeService:
         }
 
 
-class TestTaskEvaluationBridgeAPI:
-    def test_post_creates_from_latest_run_evaluation(self, db, same_space_pair):
+class TestTaskEvaluationBridgeViaFinalize:
+    def test_finalize_task_linked_run_creates_task_evaluation(self, db, same_space_pair):
         space = same_space_pair["space_id"]
         user = same_space_pair["user_a"]
         task = _task(db, space_id=space, user_id=user.id)
         run = _run(db, space_id=space, user_id=user.id)
         _link(db, task=task, run=run)
-        _run_evaluation(
-            db,
-            run=run,
-            outcome_status="failed",
-            failure_layer="runtime",
-            failure_reason_code="adapter_runtime_error",
-            evaluated_at=datetime.now(UTC) - timedelta(minutes=5),
-        )
-        latest = _run_evaluation(
-            db,
-            run=run,
-            outcome_status="passed",
-            trajectory_status="acceptable",
-            evaluated_at=datetime.now(UTC),
-        )
         db.commit()
 
         response = same_space_pair["client_a"].post(
-            f"/api/v1/runs/{run.id}/evaluation/task",
+            f"/api/v1/runs/{run.id}/finalize",
             params={"space_id": space},
         )
 
-        assert response.status_code == 201
+        assert response.status_code == 200
         body = response.json()
-        assert body["task_id"] == task.id
-        assert body["run_id"] == run.id
-        assert body["run_evaluation_id"] == latest.id
-        assert body["recommendation"] == "accept"
+        assert body["status"] == "completed"
+        assert body["task_evaluation_id"] is not None
 
-    def test_post_404_when_no_run_evaluation_exists(self, db, same_space_pair):
-        space = same_space_pair["space_id"]
-        user = same_space_pair["user_a"]
-        task = _task(db, space_id=space, user_id=user.id)
-        run = _run(db, space_id=space, user_id=user.id)
-        _link(db, task=task, run=run)
-        db.commit()
+        task_eval = db.query(TaskEvaluation).filter(
+            TaskEvaluation.id == body["task_evaluation_id"]
+        ).first()
+        assert task_eval is not None
+        assert task_eval.task_id == task.id
+        assert task_eval.run_id == run.id
+        assert task_eval.recommendation == "accept"
 
-        response = same_space_pair["client_a"].post(
-            f"/api/v1/runs/{run.id}/evaluation/task",
-            params={"space_id": space},
-        )
-
-        assert response.status_code == 404
-        assert "evaluate first" in response.json()["message"]
-
-    def test_post_404_when_no_task_run_linkage_exists(self, db, same_space_pair):
+    def test_finalize_without_task_run_skips_task_evaluation(self, db, same_space_pair):
         space = same_space_pair["space_id"]
         user = same_space_pair["user_a"]
         run = _run(db, space_id=space, user_id=user.id)
-        _run_evaluation(db, run=run)
         db.commit()
 
         response = same_space_pair["client_a"].post(
-            f"/api/v1/runs/{run.id}/evaluation/task",
+            f"/api/v1/runs/{run.id}/finalize",
             params={"space_id": space},
         )
 
-        assert response.status_code == 404
-        assert "No TaskRun linkage found" in response.json()["message"]
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "completed"
+        assert body["task_evaluation_id"] is None
+        assert body["skipped_reasons_json"] is not None
+        assert "no_task_run_link" in body["skipped_reasons_json"]
 
-    def test_post_rejects_cross_space_access(self, db, cross_space_pair):
+    def test_finalize_cross_space_returns_404(self, db, cross_space_pair):
         space_a = cross_space_pair["space_a_id"]
         space_b = cross_space_pair["space_b_id"]
         user_b = cross_space_pair["user_b"]
         task = _task(db, space_id=space_b, user_id=user_b.id)
         run = _run(db, space_id=space_b, user_id=user_b.id)
         _link(db, task=task, run=run)
-        _run_evaluation(db, run=run)
         db.commit()
 
         response = cross_space_pair["client_a"].post(
-            f"/api/v1/runs/{run.id}/evaluation/task",
+            f"/api/v1/runs/{run.id}/finalize",
             params={"space_id": space_a},
         )
 

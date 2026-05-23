@@ -925,6 +925,9 @@ class Run(Base):
     evaluations: Mapped[list["RunEvaluation"]] = relationship(
         "RunEvaluation", back_populates="run", order_by="RunEvaluation.evaluated_at"
     )
+    finalizations: Mapped[list["RunFinalization"]] = relationship(
+        "RunFinalization", back_populates="run", order_by="RunFinalization.finalized_at"
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -1466,7 +1469,7 @@ class TaskEvaluation(Base):
     space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
     task_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("tasks.id"), nullable=False, index=True)
     run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=True, index=True)
-    run_evaluation_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    run_evaluation_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("run_evaluations.id"), nullable=True, index=True)
     evaluator_type: Mapped[str] = mapped_column(String(32), nullable=False)
     evaluator_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
     evaluator_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)
@@ -1843,7 +1846,8 @@ class RunEvent(Base):
             "'context_compiled', 'runtime_selected', 'credential_granted', "
             "'sandbox_created', 'adapter_invoked', 'adapter_completed', "
             "'artifact_ingested', 'patch_collected', 'validation_started', "
-            "'validation_completed', 'proposal_created', 'evaluation_created')",
+            "'validation_completed', 'proposal_created', 'evaluation_created', "
+            "'run_finalized')",
             name="ck_run_events_event_type",
         ),
         CheckConstraint(
@@ -2242,6 +2246,62 @@ class RunEvaluation(Base):
         CheckConstraint(
             "trajectory_status in ('acceptable', 'incomplete', 'unsafe', 'insufficient_evidence')",
             name="ck_run_evaluations_trajectory_status",
+        ),
+    )
+
+
+class RunFinalization(Base):
+    """Canonical post-run finalization record.
+
+    Created by PostRunFinalizationService after a Run reaches a terminal state.
+    Idempotent per (run_id, finalizer_version): repeated finalization calls return
+    the existing completed or failed record without creating duplicate RunEvaluation,
+    TaskEvaluation, or run_finalized RunEvent rows.
+
+    Append-only: rows are never updated after creation.
+    """
+
+    __tablename__ = "run_finalizations"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=False, index=True)
+    finalizer_version: Mapped[str] = mapped_column(String(64), nullable=False, default="post_run_finalization.v1")
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    run_evaluation_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("run_evaluations.id"), nullable=True, index=True)
+    task_evaluation_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("task_evaluations.id"), nullable=True, index=True)
+    outcome_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    failure_layer: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    failure_reason_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    trajectory_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    skipped_reasons_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    error_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    finalized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    run: Mapped["Run"] = relationship("Run", foreign_keys=[run_id], back_populates="finalizations")
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "finalizer_version", name="uq_run_finalizations_run_version"),
+        CheckConstraint(
+            "status in ('completed', 'failed')",
+            name="ck_run_finalizations_status",
+        ),
+        CheckConstraint(
+            "outcome_status is null or outcome_status in ('passed', 'failed', 'partial', 'unknown')",
+            name="ck_run_finalizations_outcome_status",
+        ),
+        CheckConstraint(
+            "failure_layer is null or failure_layer in ("
+            "'context', 'sandbox', 'runtime', 'tool', 'validation', "
+            "'policy', 'task_spec', 'orchestration', 'evaluator', 'unknown')",
+            name="ck_run_finalizations_failure_layer",
+        ),
+        CheckConstraint(
+            "trajectory_status is null or trajectory_status in "
+            "('acceptable', 'incomplete', 'unsafe', 'insufficient_evidence')",
+            name="ck_run_finalizations_trajectory_status",
         ),
     )
 

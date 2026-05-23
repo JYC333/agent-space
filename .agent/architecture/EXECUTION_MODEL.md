@@ -6,7 +6,9 @@
 
 **RunStep** — coarse execution steps within a run. Provides the replay spine for failure diagnosis without reading raw adapter logs.
 
-**RunEvent** — structured append-only harness evidence records within a run. Finer-grained than RunStep but coarser than raw adapter logs. Each RunEvent captures one significant phase (context compilation, runtime selection, sandbox creation, adapter invocation/completion, artifact ingestion, patch collection, validation, proposal creation, evaluation). Used by RunEvaluationService as the primary structured evidence source.
+**RunEvent** — structured append-only harness evidence records within a run. Finer-grained than RunStep but coarser than raw adapter logs. Each RunEvent captures one significant phase (context compilation, runtime selection, sandbox creation, adapter invocation/completion, artifact ingestion, patch collection, validation, proposal creation, evaluation, finalization). Used by RunEvaluationService as the primary structured evidence source.
+
+**RunFinalization** — canonical post-run record created by `PostRunFinalizationService` after a Run reaches a terminal state. Idempotent per `(run_id, finalizer_version)`. Records run evaluation outcome, task evaluation bridge result, and skipped reasons. Append-only.
 
 **Job** — background system task (import, consolidation, backup, agent-run dispatch). Separate from Run. Job handlers create or dispatch Runs; jobs themselves are not product execution records.
 
@@ -48,6 +50,7 @@ RunEvent records the structured phase-level evidence spine of a run:
 | `validation_completed` | Worktree validation commands completed |
 | `proposal_created` | Proposal created from run output |
 | `evaluation_created` | RunEvaluation appended |
+| `run_finalized` | RunFinalization completed or failed |
 
 RunEvent statuses: `pending`, `running`, `succeeded`, `failed`, `skipped`, `warning`, `cancelled`.
 
@@ -112,7 +115,55 @@ RunSteps are retained indefinitely (no auto-purge).
 
 `Artifact.storage_path` is always relative to `artifact_storage_root`. Export never serves files outside artifact storage root. Missing file returns 404, does not leak host path.
 
-## RunEvaluation — Deterministic Harness Evaluation
+## Run Lifecycle
+
+```
+queued → running → terminal → finalized
+```
+
+**Terminal** means runtime execution has ended (status: `succeeded`, `failed`, `degraded`, or `cancelled`).
+
+**Finalized** means `PostRunFinalizationService` has performed deterministic post-run evaluation and, when applicable, task-level evaluation bridging.
+
+Automation should create Runs and call `POST /runs/{id}/finalize` after the run reaches a terminal state. Do not call internal evaluation services directly.
+
+## PostRunFinalizationService — Canonical Post-Run Boundary
+
+`PostRunFinalizationService` is the canonical post-run write boundary. It is the only service that should be called to trigger post-run evaluation and task bridging.
+
+### API
+
+- **`POST /api/v1/runs/{run_id}/finalize`** — finalize a terminal run; idempotent.
+- **`GET /api/v1/runs/{run_id}/finalization`** — latest `RunFinalization` for the run.
+- **`GET /api/v1/runs/{run_id}/finalizations`** — all `RunFinalization` records, newest first.
+
+The finalize endpoint is the single write surface.
+
+### What finalization does
+
+1. Calls `RunEvaluationService.evaluate()` to create one `RunEvaluation`.
+2. If a `TaskRun` link exists, calls `TaskEvaluationService.create_from_run_evaluation()` to create one `TaskEvaluation` bridge row.
+3. Creates one `RunFinalization` row with `status=completed`.
+4. Appends one `run_finalized` `RunEvent`.
+
+### What finalization does NOT do
+
+- Does not mutate Run terminal status.
+- Does not write MemoryEntry, Policy, WorkspaceProfile, ValidationRecipe, Capability, Artifact, or Proposal.
+- Does not create RunReflection.
+- Does not create learning proposals.
+- Does not auto-apply anything.
+- Does not call an LLM.
+
+### Idempotency
+
+Repeated calls to `POST /finalize` for the same `(run_id, finalizer_version)` return the existing completed `RunFinalization` without creating additional `RunEvaluation`, `TaskEvaluation`, or `run_finalized` event rows.
+
+### Non-terminal rejection
+
+Calling `POST /finalize` on a non-terminal run (queued, running, waiting_for_review) returns HTTP 422.
+
+## RunEvaluation — Deterministic Harness Evaluation (Internal Primitive)
 
 `RunEvaluation` is the canonical record for deterministic harness-level evaluation of a completed Run.
 
@@ -200,10 +251,10 @@ Materialization error codes → `tool` failure_layer (all via exact map):
 
 - **Append-only.** Each `TaskEvaluationService` call creates a new row. Old rows are never overwritten or deleted.
 - **Task ↔ Run source of truth is `TaskRun`.** `Run.task_id` is a denormalized shortcut only. All task-run linkage checks use `TaskRun` rows.
-- **RunEvaluation bridge.** `TaskEvaluationService.create_from_run_evaluation()` maps an existing `RunEvaluation` to a new `TaskEvaluation` row.
+- **RunEvaluation bridge.** `TaskEvaluationService.create_from_run_evaluation()` maps an existing `RunEvaluation` to a new `TaskEvaluation` row. This method is invoked by `PostRunFinalizationService` when `TaskRun` linkage exists — do not call it directly from API routes.
 - **Does not mutate Task.status.**
 - **Does not write MemoryEntry, Policy, Proposal, RunReflection, or any learning object.**
-- **API bridge.** `POST /runs/{id}/evaluation/task` uses the latest `RunEvaluation` for the run and creates the task-level bridge row.
+- **Invoked by finalization.** `POST /runs/{id}/finalize` orchestrates both RunEvaluation and TaskEvaluation bridge through `PostRunFinalizationService`. There is no separate public API for creating TaskEvaluation bridge rows from a Run.
 - **ValidationRecipe is an input/criteria source.** It flows in at the top of the execution loop alongside `WorkspaceProfile` and informs `RunEvaluation` classification. It is not downstream of `TaskEvaluation`.
 
 ### Evidence artifact linkage rule

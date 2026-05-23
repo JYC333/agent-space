@@ -44,6 +44,7 @@ RUN_EVENT_TYPES = frozenset({
     "validation_completed",
     "proposal_created",
     "evaluation_created",
+    "run_finalized",
 })
 
 RUN_EVENT_STATUSES = frozenset({

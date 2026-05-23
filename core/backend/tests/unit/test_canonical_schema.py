@@ -74,6 +74,8 @@ REQUIRED_TABLES = {
     "workspace_profiles",
     "external_run_records",
     "run_reflections",
+    "run_evaluations",
+    "run_finalizations",
     "runtime_tool_bindings",
 }
 
@@ -448,6 +450,10 @@ def test_key_canonical_foreign_keys_exist(canonical_engine):
     assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "provenance_links")
     # policies.created_from_proposal_id is intentionally a soft reference (policies precedes proposals in migration order)
     assert ("created_from_proposal_id", "proposals", "id") not in _foreign_keys(inspector, "policies")
+    # These three fields are real FKs (not soft references) — enforced in ORM and migration.
+    assert ("run_evaluation_id", "run_evaluations", "id") in _foreign_keys(inspector, "task_evaluations")
+    assert ("run_evaluation_id", "run_evaluations", "id") in _foreign_keys(inspector, "run_finalizations")
+    assert ("task_evaluation_id", "task_evaluations", "id") in _foreign_keys(inspector, "run_finalizations")
 
 
 def test_initial_migration_has_no_forward_table_references():

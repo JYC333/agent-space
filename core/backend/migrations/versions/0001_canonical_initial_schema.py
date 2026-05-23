@@ -950,6 +950,34 @@ def upgrade() -> None:
     op.create_index(op.f('ix_task_dependencies_depends_on_task_id'), 'task_dependencies', ['depends_on_task_id'], unique=False)
     op.create_index(op.f('ix_task_dependencies_space_id'), 'task_dependencies', ['space_id'], unique=False)
     op.create_index(op.f('ix_task_dependencies_task_id'), 'task_dependencies', ['task_id'], unique=False)
+    # run_evaluations: append-only deterministic harness-level evaluation of a completed run.
+    # Each evaluate() call creates a new row; existing rows are never deleted or overwritten.
+    op.create_table('run_evaluations',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('run_id', sa.String(length=36), nullable=False),
+    sa.Column('evaluator_type', sa.String(length=64), nullable=False, server_default='deterministic_harness'),
+    sa.Column('evaluator_version', sa.String(length=64), nullable=False, server_default='harness_eval.v1'),
+    sa.Column('outcome_status', sa.String(length=32), nullable=False),
+    sa.Column('failure_layer', sa.String(length=32), nullable=True),
+    sa.Column('failure_reason_code', sa.String(length=128), nullable=True),
+    sa.Column('trajectory_status', sa.String(length=32), nullable=False),
+    sa.Column('evidence_json', sa.JSON(), nullable=True),
+    sa.Column('rule_trace_json', sa.JSON(), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('evaluated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("outcome_status in ('passed', 'failed', 'partial', 'unknown')", name='ck_run_evaluations_outcome_status'),
+    sa.CheckConstraint("failure_layer is null or failure_layer in ('context', 'sandbox', 'runtime', 'tool', 'validation', 'policy', 'task_spec', 'orchestration', 'evaluator', 'unknown')", name='ck_run_evaluations_failure_layer'),
+    sa.CheckConstraint("trajectory_status in ('acceptable', 'incomplete', 'unsafe', 'insufficient_evidence')", name='ck_run_evaluations_trajectory_status'),
+    sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index(op.f('ix_run_evaluations_space_id'), 'run_evaluations', ['space_id'], unique=False)
+    op.create_index(op.f('ix_run_evaluations_run_id'), 'run_evaluations', ['run_id'], unique=False)
+    op.create_index(op.f('ix_run_evaluations_evaluated_at'), 'run_evaluations', ['evaluated_at'], unique=False)
+    op.create_index(op.f('ix_run_evaluations_evaluator_version'), 'run_evaluations', ['evaluator_version'], unique=False)
+    op.create_index('ix_run_evaluations_run_id_evaluated_at', 'run_evaluations', ['run_id', 'evaluated_at'], unique=False)
     op.create_table('task_evaluations',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -969,6 +997,7 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['evaluator_agent_id'], ['agents.id'], ),
     sa.ForeignKeyConstraint(['evaluator_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['run_evaluation_id'], ['run_evaluations.id'], ),
     sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.ForeignKeyConstraint(['task_id'], ['tasks.id'], ),
@@ -1338,7 +1367,8 @@ def upgrade() -> None:
         "'context_compiled', 'runtime_selected', 'credential_granted', "
         "'sandbox_created', 'adapter_invoked', 'adapter_completed', "
         "'artifact_ingested', 'patch_collected', 'validation_started', "
-        "'validation_completed', 'proposal_created', 'evaluation_created')",
+        "'validation_completed', 'proposal_created', 'evaluation_created', "
+        "'run_finalized')",
         name='ck_run_events_event_type',
     ),
     sa.CheckConstraint(
@@ -1587,34 +1617,40 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_run_reflections_space_id'), 'run_reflections', ['space_id'], unique=False)
     op.create_index(op.f('ix_run_reflections_run_id'), 'run_reflections', ['run_id'], unique=False)
-    # run_evaluations: append-only deterministic harness-level evaluation of a completed run.
-    # Each evaluate() call creates a new row; existing rows are never deleted or overwritten.
-    op.create_table('run_evaluations',
+    # run_finalizations: canonical post-run finalization record, idempotent per (run_id, finalizer_version).
+    op.create_table('run_finalizations',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
     sa.Column('run_id', sa.String(length=36), nullable=False),
-    sa.Column('evaluator_type', sa.String(length=64), nullable=False, server_default='deterministic_harness'),
-    sa.Column('evaluator_version', sa.String(length=64), nullable=False, server_default='harness_eval.v1'),
-    sa.Column('outcome_status', sa.String(length=32), nullable=False),
+    sa.Column('finalizer_version', sa.String(length=64), nullable=False, server_default='post_run_finalization.v1'),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('run_evaluation_id', sa.String(length=36), nullable=True),
+    sa.Column('task_evaluation_id', sa.String(length=36), nullable=True),
+    sa.Column('outcome_status', sa.String(length=32), nullable=True),
     sa.Column('failure_layer', sa.String(length=32), nullable=True),
     sa.Column('failure_reason_code', sa.String(length=128), nullable=True),
-    sa.Column('trajectory_status', sa.String(length=32), nullable=False),
-    sa.Column('evidence_json', sa.JSON(), nullable=True),
-    sa.Column('rule_trace_json', sa.JSON(), nullable=True),
-    sa.Column('notes', sa.Text(), nullable=True),
-    sa.Column('evaluated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.CheckConstraint("outcome_status in ('passed', 'failed', 'partial', 'unknown')", name='ck_run_evaluations_outcome_status'),
-    sa.CheckConstraint("failure_layer is null or failure_layer in ('context', 'sandbox', 'runtime', 'tool', 'validation', 'policy', 'task_spec', 'orchestration', 'evaluator', 'unknown')", name='ck_run_evaluations_failure_layer'),
-    sa.CheckConstraint("trajectory_status in ('acceptable', 'incomplete', 'unsafe', 'insufficient_evidence')", name='ck_run_evaluations_trajectory_status'),
+    sa.Column('trajectory_status', sa.String(length=32), nullable=True),
+    sa.Column('skipped_reasons_json', sa.JSON(), nullable=True),
+    sa.Column('error_json', sa.JSON(), nullable=True),
+    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('finalized_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("status in ('completed', 'failed')", name='ck_run_finalizations_status'),
+    sa.CheckConstraint("outcome_status is null or outcome_status in ('passed', 'failed', 'partial', 'unknown')", name='ck_run_finalizations_outcome_status'),
+    sa.CheckConstraint("failure_layer is null or failure_layer in ('context', 'sandbox', 'runtime', 'tool', 'validation', 'policy', 'task_spec', 'orchestration', 'evaluator', 'unknown')", name='ck_run_finalizations_failure_layer'),
+    sa.CheckConstraint("trajectory_status is null or trajectory_status in ('acceptable', 'incomplete', 'unsafe', 'insufficient_evidence')", name='ck_run_finalizations_trajectory_status'),
+    sa.ForeignKeyConstraint(['run_evaluation_id'], ['run_evaluations.id'], ),
     sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['task_evaluation_id'], ['task_evaluations.id'], ),
     sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('run_id', 'finalizer_version', name='uq_run_finalizations_run_version'),
     )
-    op.create_index(op.f('ix_run_evaluations_space_id'), 'run_evaluations', ['space_id'], unique=False)
-    op.create_index(op.f('ix_run_evaluations_run_id'), 'run_evaluations', ['run_id'], unique=False)
-    op.create_index(op.f('ix_run_evaluations_evaluated_at'), 'run_evaluations', ['evaluated_at'], unique=False)
-    op.create_index(op.f('ix_run_evaluations_evaluator_version'), 'run_evaluations', ['evaluator_version'], unique=False)
-    op.create_index('ix_run_evaluations_run_id_evaluated_at', 'run_evaluations', ['run_id', 'evaluated_at'], unique=False)
+    op.create_index(op.f('ix_run_finalizations_space_id'), 'run_finalizations', ['space_id'], unique=False)
+    op.create_index(op.f('ix_run_finalizations_run_id'), 'run_finalizations', ['run_id'], unique=False)
+    op.create_index(op.f('ix_run_finalizations_run_evaluation_id'), 'run_finalizations', ['run_evaluation_id'], unique=False)
+    op.create_index(op.f('ix_run_finalizations_task_evaluation_id'), 'run_finalizations', ['task_evaluation_id'], unique=False)
+    op.create_index(op.f('ix_run_finalizations_finalized_at'), 'run_finalizations', ['finalized_at'], unique=False)
     # runtime_tool_bindings: explicit authorisation for external tools/plugins/skills/MCP per scope.
     op.create_table('runtime_tool_bindings',
     sa.Column('id', sa.String(length=36), nullable=False),
@@ -1774,6 +1810,17 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_runtime_tool_bindings_space_id'), table_name='runtime_tool_bindings')
     op.drop_table('runtime_tool_bindings')
     op.drop_index(op.f('ix_run_evaluations_run_id'), table_name='run_evaluations')
+    op.drop_index(op.f('ix_run_finalizations_finalized_at'), table_name='run_finalizations')
+    op.drop_index(op.f('ix_run_finalizations_task_evaluation_id'), table_name='run_finalizations')
+    op.drop_index(op.f('ix_run_finalizations_run_evaluation_id'), table_name='run_finalizations')
+    op.drop_index(op.f('ix_run_finalizations_run_id'), table_name='run_finalizations')
+    op.drop_index(op.f('ix_run_finalizations_space_id'), table_name='run_finalizations')
+    op.drop_table('run_finalizations')
+    op.drop_index(op.f('ix_task_evaluations_task_id'), table_name='task_evaluations')
+    op.drop_index(op.f('ix_task_evaluations_space_id'), table_name='task_evaluations')
+    op.drop_index(op.f('ix_task_evaluations_run_id'), table_name='task_evaluations')
+    op.drop_index(op.f('ix_task_evaluations_run_evaluation_id'), table_name='task_evaluations')
+    op.drop_table('task_evaluations')
     op.drop_index(op.f('ix_run_evaluations_space_id'), table_name='run_evaluations')
     op.drop_table('run_evaluations')
     op.drop_index(op.f('ix_run_reflections_run_id'), table_name='run_reflections')
@@ -1909,11 +1956,6 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_memory_entries_capability_id'), table_name='memory_entries')
     op.drop_index(op.f('ix_memory_entries_agent_id'), table_name='memory_entries')
     op.drop_table('memory_entries')
-    op.drop_index(op.f('ix_task_evaluations_task_id'), table_name='task_evaluations')
-    op.drop_index(op.f('ix_task_evaluations_space_id'), table_name='task_evaluations')
-    op.drop_index(op.f('ix_task_evaluations_run_id'), table_name='task_evaluations')
-    op.drop_index(op.f('ix_task_evaluations_run_evaluation_id'), table_name='task_evaluations')
-    op.drop_table('task_evaluations')
     op.drop_index(op.f('ix_task_dependencies_task_id'), table_name='task_dependencies')
     op.drop_index(op.f('ix_task_dependencies_space_id'), table_name='task_dependencies')
     op.drop_index(op.f('ix_task_dependencies_depends_on_task_id'), table_name='task_dependencies')

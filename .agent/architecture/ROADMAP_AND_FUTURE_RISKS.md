@@ -249,9 +249,20 @@ User request
 
 `RunReflection` is not automatically created by `RunEvaluationService` or `TaskEvaluationService`. Automation is not implemented.
 
-**RunEvaluation — canonical deterministic evaluation layer (implemented):**
+**PostRunFinalizationService — canonical post-run boundary (implemented):**
 
-`RunEvaluation` is the append-only harness-level evaluation record. It is stable and tested. Key properties:
+`PostRunFinalizationService` is the single write surface for post-run evaluation. Automation should call `POST /runs/{id}/finalize` after a run reaches a terminal state.
+
+- Creates exactly one `RunEvaluation` per finalization (internal: `RunEvaluationService`).
+- If a `TaskRun` link exists, creates one `TaskEvaluation` bridge row (internal: `TaskEvaluationService`).
+- Creates one `RunFinalization` record; idempotent per `(run_id, finalizer_version)`.
+- Appends one `run_finalized` RunEvent.
+- Never writes Memory, Policy, Proposal, WorkspaceProfile, ValidationRecipe, Capability, or RunReflection.
+- Never auto-applies anything.
+
+**RunEvaluation — deterministic internal evaluation primitive (implemented):**
+
+`RunEvaluation` is the append-only harness-level evaluation record created by `RunEvaluationService`. It is an internal primitive called by `PostRunFinalizationService`. Key properties:
 - Each `evaluate()` call appends a new row. Existing rows are never deleted.
 - Uses harness-visible evidence only: Run metadata, RunSteps, ContextSnapshot, Artifacts, Proposals.
 - `evaluator_version` is stored per row for classifier-version auditability.
@@ -260,9 +271,9 @@ User request
 - Evaluation never writes Memory, Policy, Proposal, WorkspaceProfile, ValidationRecipe, or Capability.
 
 **Downstream bridge layers:**
-- `TaskEvaluation` — append-only task-level evaluation derived from `RunEvaluation` through `TaskEvaluationService`.
-- `RunReflection` — learning candidate source; populated externally (import, manual entry, or evaluator output). Not automatically created from evaluation.
-- Run Viewer UI — surface for browsing evaluation history per run.
+- `TaskEvaluation` — append-only task-level evaluation derived from `RunEvaluation` through `TaskEvaluationService`. Invoked by `PostRunFinalizationService` when `TaskRun` linkage exists.
+- `RunReflection` — learning candidate source; populated externally (import, manual entry, or evaluator output). Not automatically created from evaluation or finalization.
+- Run Viewer UI — surface for browsing finalization and evaluation history per run.
 
 **Next work:**
 1. Run a manual-managed dogfood flow using a real workspace.

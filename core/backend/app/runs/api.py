@@ -6,11 +6,16 @@ POST /api/v1/agents/{id}/runs lives in app.agents.api instead to keep agent
 sub-resources grouped with agent CRUD.
 
 Surface:
-  - GET /api/v1/runs/{id}        — Run detail (no full context payload)
-  - GET /api/v1/runs/{id}/status — lightweight status
-  - POST /api/v1/runs/{id}/execute — execute queued Run via configured runtime adapters
-  - PATCH /api/v1/runs/{id}/stop  — cancel run and best-effort terminate registered subprocess
-  - GET /api/v1/runs            — list runs (optional, simple)
+  - GET /api/v1/runs/{id}                — Run detail (no full context payload)
+  - GET /api/v1/runs/{id}/status         — lightweight status
+  - POST /api/v1/runs/{id}/execute       — execute queued Run via configured runtime adapters
+  - PATCH /api/v1/runs/{id}/stop         — cancel run and best-effort terminate subprocess
+  - GET /api/v1/runs                     — list runs
+  - POST /api/v1/runs/{id}/finalize      — canonical post-run finalization (evaluation + bridging)
+  - GET /api/v1/runs/{id}/finalization   — latest finalization record
+  - GET /api/v1/runs/{id}/finalizations  — all finalization records newest first
+  - GET /api/v1/runs/{id}/evaluation     — latest RunEvaluation (read-only)
+  - GET /api/v1/runs/{id}/evaluations    — all RunEvaluations (read-only)
 """
 
 from datetime import UTC, datetime
@@ -27,16 +32,17 @@ from ..schemas import (
     ProposalOut,
     RunEvaluationOut,
     RunEventOut,
+    RunFinalizationOut,
     RunOut,
     RunStatusOut,
     RunStepOut,
-    TaskEvaluationOut,
 )
 from ..auth import get_identity
 from ..artifacts.service import artifact_to_out
 from ..proposals.read_model import proposal_to_out
 from ..memory.proposals import ProposalService
 from .execution import RunExecutionService
+from .finalization import NonTerminalRunError, PostRunFinalizationService, RunNotFoundError
 from .preflight import PreflightRequest, PreflightResult, PreflightService
 from .read_model import run_to_out
 from .run_service import RunService
@@ -44,8 +50,6 @@ from .removed_runtime_token import is_obsolete_runtime_override_token
 from .steps import list_run_steps
 from .evaluation import RunEvaluationService
 from .events import RunEventService
-from ..tasks.evaluation_errors import TaskEvaluationNotFoundError
-from ..tasks.evaluation_service import TaskEvaluationService
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -289,24 +293,60 @@ def list_runs(
     return [run_to_out(db, r) for r in runs]
 
 
-@router.post("/{run_id}/evaluate", response_model=RunEvaluationOut)
-def evaluate_run(
+@router.post("/{run_id}/finalize", response_model=RunFinalizationOut, status_code=200)
+def finalize_run(
     run_id: str,
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    """Evaluate a Run using deterministic harness-level evidence.
+    """Finalize a terminal Run through PostRunFinalizationService.
 
-    Creates a new RunEvaluation row. Existing evaluations are never deleted.
-    The run must belong to the current space.
+    Creates one RunEvaluation, optionally one TaskEvaluation bridge row when
+    TaskRun linkage exists, one RunFinalization record, and one run_finalized
+    RunEvent. Idempotent: repeated calls return the existing completed finalization.
+
+    Returns 422 if the run is not yet terminal.
     """
     space_id, _ = ids
     try:
-        evaluation = RunEvaluationService(db).evaluate(run_id, space_id=space_id)
+        result = PostRunFinalizationService(db).finalize(run_id, space_id=space_id)
         db.commit()
-    except ValueError as exc:
+    except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return evaluation
+    except NonTerminalRunError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return RunFinalizationOut.model_validate(result)
+
+
+@router.get("/{run_id}/finalization", response_model=RunFinalizationOut)
+def get_run_finalization(
+    run_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    """Return the latest finalization record for a Run, or 404 if not finalized."""
+    space_id, _ = ids
+    RunService(db).get_run(run_id, space_id)
+    result = PostRunFinalizationService(db).get_latest(run_id, space_id=space_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No finalization found for run '{run_id}'. POST /runs/{run_id}/finalize first.",
+        )
+    return RunFinalizationOut.model_validate(result)
+
+
+@router.get("/{run_id}/finalizations", response_model=list[RunFinalizationOut])
+def list_run_finalizations(
+    run_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    """Return all finalization records for a Run, newest first."""
+    space_id, _ = ids
+    RunService(db).get_run(run_id, space_id)
+    results = PostRunFinalizationService(db).list_for_run(run_id, space_id=space_id)
+    return [RunFinalizationOut.model_validate(r) for r in results]
 
 
 @router.get("/{run_id}/evaluation", response_model=RunEvaluationOut)
@@ -315,41 +355,15 @@ def get_run_evaluation(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    """Return the latest evaluation for a Run, or 404 if not yet evaluated."""
+    """Return the latest RunEvaluation for a Run, or 404 if not yet evaluated."""
     space_id, _ = ids
     evaluation = RunEvaluationService(db).get_latest(run_id, space_id=space_id)
     if not evaluation:
         raise HTTPException(
             status_code=404,
-            detail=f"No evaluation found for run '{run_id}'. POST /runs/{run_id}/evaluate first.",
+            detail=f"No evaluation found for run '{run_id}'. POST /runs/{run_id}/finalize first.",
         )
     return evaluation
-
-
-@router.post("/{run_id}/evaluation/task", response_model=TaskEvaluationOut, status_code=201)
-def create_task_evaluation_for_run(
-    run_id: str,
-    ids: tuple[str, str] = Depends(get_identity),
-    db: Session = Depends(get_db),
-):
-    space_id, _ = ids
-    evaluation = RunEvaluationService(db).get_latest(run_id, space_id=space_id)
-    if not evaluation:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No evaluation found for run '{run_id}'. POST /runs/{run_id}/evaluate first.",
-        )
-    try:
-        row = TaskEvaluationService(db).create_from_run_evaluation(
-            evaluation.id,
-            space_id=space_id,
-        )
-        db.commit()
-    except TaskEvaluationNotFoundError as exc:
-        db.rollback()
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    db.refresh(row)
-    return TaskEvaluationOut.model_validate(row)
 
 
 @router.get("/{run_id}/evaluations", response_model=list[RunEvaluationOut])
@@ -358,6 +372,6 @@ def list_run_evaluations(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    """Return all evaluations for a Run, newest first."""
+    """Return all RunEvaluations for a Run, newest first."""
     space_id, _ = ids
     return RunEvaluationService(db).list_for_run(run_id, space_id=space_id)

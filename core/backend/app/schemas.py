@@ -1313,6 +1313,29 @@ class RunEvaluationOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RunFinalizationOut(BaseModel):
+    """Serialized output for a RunFinalization row."""
+
+    id: str
+    space_id: str
+    run_id: str
+    finalizer_version: str
+    status: str
+    run_evaluation_id: Optional[str] = None
+    task_evaluation_id: Optional[str] = None
+    outcome_status: Optional[str] = None
+    failure_layer: Optional[str] = None
+    failure_reason_code: Optional[str] = None
+    trajectory_status: Optional[str] = None
+    skipped_reasons_json: Optional[list] = None
+    error_json: Optional[dict] = None
+    metadata_json: Optional[dict] = None
+    finalized_at: datetime
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # ---------------------------------------------------------------------------
 # Project
 # ---------------------------------------------------------------------------
