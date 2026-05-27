@@ -5,14 +5,16 @@ from ..db import get_db
 from ..models import Run
 from ..schemas import (
     AgentCreate, AgentUpdate, AgentOut,
+    AgentConfigProposalCreate,
     RunRequest,
     AgentVersionCreate, AgentVersionOut,
-    RunCreate, RunOut,
+    RunCreate, RunOut, ProposalOut,
 )
 from .agent_service import AgentService
 from .version_service import AgentVersionService
 from app.runs.run_service import RunService
 from app.runs.read_model import run_to_out
+from ..proposals.read_model import proposal_to_out
 from ..auth import get_identity
 from ..jobs.queue import get_queue
 from ..participation.service import try_record_participation
@@ -106,6 +108,22 @@ def delete_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
     if not svc.delete(agent_id):
         raise HTTPException(status_code=404, detail="Agent not found")
+
+
+@router.post("/{agent_id}/config-proposals", response_model=ProposalOut, status_code=202)
+def create_agent_config_proposal(
+    agent_id: str,
+    data: AgentConfigProposalCreate,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    space_id, user_id = ids
+    svc = AgentService(db)
+    agent = svc.get_or_404(agent_id)
+    if agent.space_id != space_id:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    proposal = svc.create_config_update_proposal(agent_id, data, user_id=user_id)
+    return proposal_to_out(proposal)
 
 
 # ---------------------------------------------------------------------------
@@ -296,14 +314,20 @@ def create_agent_version(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    """Explicitly create a new AgentVersion and advance current_version_id."""
+    """Direct AgentVersion advancement is disabled; use config proposals."""
     space_id, user_id = ids
     svc = AgentService(db)
     # Validate agent exists and belongs to this space
     agent = svc.get_or_404(agent_id)
     if agent.space_id != space_id:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return svc.create_version(agent_id, data)
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Direct AgentVersion creation is disabled. "
+            "Use POST /api/v1/agents/{agent_id}/config-proposals."
+        ),
+    )
 
 
 @router.get("/{agent_id}/versions", response_model=list[AgentVersionOut])

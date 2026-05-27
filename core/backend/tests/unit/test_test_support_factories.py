@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.models import Space, User
+from app.models import Space, SpaceMembership, User
 from app.runtimes.base import RuntimeExecutionContext
 from tests.support.assertions import assert_memory_unchanged, assert_policy_requires_approval
 from tests.support.fake_provider import DeterministicFakeProvider, FakeProviderConfig
@@ -19,7 +19,17 @@ def test_create_test_space_user_roundtrip(db):
     s = factories.create_test_space(db, space_id="s_iso_1", name="N1", space_type="team")
     u = factories.create_test_user(db, space_id=s.id, user_id="u_iso_1")
     assert db.query(Space).filter(Space.id == s.id).one().name == "N1"
-    assert db.query(User).filter(User.id == u.id).one().space_id == s.id
+    assert db.query(User).filter(User.id == u.id).one().id == u.id
+    assert (
+        db.query(SpaceMembership)
+        .filter(
+            SpaceMembership.space_id == s.id,
+            SpaceMembership.user_id == u.id,
+            SpaceMembership.status == "active",
+        )
+        .count()
+        == 1
+    )
 
 
 def test_create_test_agent_has_version(db):

@@ -5,10 +5,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..db import get_db
-from ..models import Proposal
 from ..param_binding import wire_query
 from ..schemas import (
     MemoryCreate,
@@ -21,14 +19,11 @@ from ..schemas import (
 from .store import MemoryStore
 from .serialization import memory_entry_to_out
 from .proposal_payload import merge_distinct_provenance_entries, user_confirmation_entry
+from .proposals import ProposalService
 from ..auth.api_key import get_identity
 from ..proposals.read_model import proposal_to_out
 
 router = APIRouter(prefix="/memory", tags=["memory"])
-
-
-def _new_id() -> str:
-    return str(ULID())
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +191,8 @@ def create_memory(
     """Create a memory_create proposal.  Returns 202; MemoryEntry is created on acceptance."""
     space_id, user_id = ids
     effective_space_id = data.space_id or space_id
+    if effective_space_id != space_id:
+        raise HTTPException(status_code=403, detail="Cannot create memory proposal in another space")
 
     scope = data.scope or "user"
     if scope == "system":
@@ -231,23 +228,19 @@ def create_memory(
     if data.source_id is not None:
         payload["source_id"] = data.source_id
 
-    proposal = Proposal(
-        id=_new_id(),
+    proposal = ProposalService(db).create_user_proposal(
         space_id=effective_space_id,
+        user_id=user_id,
         proposal_type="memory_create",
-        status="pending",
         title=data.title,
-        summary=None,
         payload_json=payload,
         rationale="Memory creation requested via public API.",
         workspace_id=data.workspace_id,
-        created_by_user_id=user_id,
         risk_level="low",
         urgency="normal",
+        target_scope=scope,
+        target_visibility=data.visibility,
     )
-    db.add(proposal)
-    db.commit()
-    db.refresh(proposal)
     return proposal_to_out(proposal)
 
 
@@ -317,23 +310,20 @@ def update_memory(
         or mem.title
         or f"Update: {memory_id[:8]}"
     )
-    proposal = Proposal(
-        id=_new_id(),
+    proposal = ProposalService(db).create_user_proposal(
         space_id=space_id,
+        user_id=user_id,
         proposal_type="memory_update",
-        status="pending",
         title=proposal_title,
-        summary=None,
         payload_json=payload,
         rationale="Memory update requested via public API.",
         workspace_id=workspace_id or mem.workspace_id,
-        created_by_user_id=user_id,
         risk_level="low",
         urgency="normal",
+        target_scope=payload.get("target_scope"),
+        target_visibility=payload.get("target_visibility") or payload.get("visibility"),
+        target_memory_id=memory_id,
     )
-    db.add(proposal)
-    db.commit()
-    db.refresh(proposal)
     return proposal_to_out(proposal)
 
 
@@ -374,23 +364,20 @@ def delete_memory(
         ),
     }
 
-    proposal = Proposal(
-        id=_new_id(),
+    proposal = ProposalService(db).create_user_proposal(
         space_id=space_id,
+        user_id=user_id,
         proposal_type="memory_archive",
-        status="pending",
         title=f"Archive: {mem.title or memory_id[:8]}",
-        summary=None,
         payload_json=payload,
         rationale="Memory archive requested via public API.",
         workspace_id=workspace_id or mem.workspace_id,
-        created_by_user_id=user_id,
         risk_level="low",
         urgency="normal",
+        target_scope=mem.scope_type,
+        target_visibility=mem.visibility,
+        target_memory_id=memory_id,
     )
-    db.add(proposal)
-    db.commit()
-    db.refresh(proposal)
     return proposal_to_out(proposal)
 
 

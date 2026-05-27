@@ -28,6 +28,7 @@ Policy: anthropic_api / anthropic_messages direct API adapters are not supported
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -41,6 +42,7 @@ from ..config import settings
 from ..db import get_db
 from ..feature_gates import feature_not_implemented
 from ..models import Workspace
+from ..policy.gateway import PolicyCheckRequest, PolicyGateway
 from ..workspace.disk_path import workspace_absolute_root
 from ..workspace.path_policy import PathPolicy, PathPolicyError
 
@@ -67,15 +69,106 @@ def _get_ws(db: Session, workspace_id: str, space_id: str) -> Workspace:
     return ws
 
 
+def _enforce_workspace_read(
+    db: Session,
+    *,
+    ws: Workspace,
+    actor_user_id: str,
+    read_kind: str,
+    relative_path: str | None = None,
+    force_record: bool | None = None,
+    audit_reasons: list[str] | None = None,
+) -> None:
+    audit_reasons = audit_reasons or _workspace_read_audit_reasons(
+        ws,
+        read_kind=read_kind,
+        relative_path=relative_path,
+    )
+    PolicyGateway(db).enforce(
+        PolicyCheckRequest(
+            action="workspace.read",
+            actor_type="user",
+            actor_id=actor_user_id,
+            space_id=ws.space_id,
+            resource_type="workspace",
+            resource_id=ws.id,
+            resource_space_id=ws.space_id,
+            context={
+                "read_kind": read_kind,
+                "relative_path": relative_path,
+                "workspace_type": ws.workspace_type,
+                "workspace_visibility": ws.visibility,
+                "workspace_protected": bool(ws.protected),
+                "workspace_system_managed": bool(ws.system_managed),
+                "workspace_external_root": bool(ws.allow_external_root),
+                "audit_reasons": audit_reasons,
+            },
+            metadata_json={
+                "read_kind": read_kind,
+                "relative_path": relative_path,
+                "workspace_type": ws.workspace_type,
+                "workspace_visibility": ws.visibility,
+                "audit_reasons": audit_reasons,
+            },
+            force_record=bool(force_record) or bool(audit_reasons),
+        )
+    )
+
+
 # ── File tree ─────────────────────────────────────────────────────────────────
 
 _MAX_DEPTH = 5
 _MAX_FILES = 500
+_MAX_DIFF_BYTES = 512 * 1024
+_SECRET_VALUE_RE = re.compile(
+    r"(?i)(api[_-]?key|token|secret|password|private[_-]?key)\s*[:=]\s*([^\s'\"]+)"
+)
+_SECRET_DIFF_PATH_RE = re.compile(
+    r"(?i)(^|/)(\.env($|\.)|id_rsa$|id_ed25519$|secrets?\.[^/]+$|[^/]+\.(pem|key)$|\.ssh/|\.aws/|config/secrets/)"
+)
 _IGNORE_DIRS = {
     ".git", "__pycache__", "node_modules", ".venv", "venv",
     ".tox", "dist", "build", ".next", ".nuxt", "coverage",
 }
 _SHOW_HIDDEN = {".gitignore", ".env.example", ".claude", ".editorconfig"}
+
+
+def _looks_secret_like_path(path: str | None) -> bool:
+    return bool(path and _SECRET_DIFF_PATH_RE.search(path))
+
+
+def _workspace_read_audit_reasons(
+    ws: Workspace,
+    *,
+    read_kind: str,
+    relative_path: str | None,
+) -> list[str]:
+    reasons: list[str] = []
+    if ws.workspace_type == "system_core" or ws.system_managed:
+        reasons.append("system_core")
+    if ws.allow_external_root:
+        reasons.append("external_root")
+    if ws.protected or ws.visibility == "restricted":
+        reasons.append("restricted_workspace")
+    if read_kind == "git_diff" and relative_path is None:
+        reasons.append("full_diff")
+    if _looks_secret_like_path(relative_path):
+        reasons.append("secret_like_path")
+    return reasons
+
+
+def _redact_secret_like_diff(diff: str) -> tuple[str, bool]:
+    redacted, count = _SECRET_VALUE_RE.subn(r"\1=[REDACTED]", diff)
+    return redacted, count > 0
+
+
+def _diff_touches_secret_like_path(diff: str) -> bool:
+    for line in diff.splitlines():
+        if not line.startswith(("diff --git ", "+++ ", "--- ")):
+            continue
+        if _looks_secret_like_path(line):
+            return True
+    return False
 
 
 class FileNode(BaseModel):
@@ -238,8 +331,9 @@ def get_file_tree(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _ = ids
+    space_id, user_id = ids
     ws = _get_ws(db, workspace_id, space_id)
+    _enforce_workspace_read(db, ws=ws, actor_user_id=user_id, read_kind="tree")
     root = _ws_path(ws)
     if not root.exists():
         raise HTTPException(status_code=404, detail="Workspace directory not found on disk")
@@ -253,17 +347,19 @@ def get_file_content(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _ = ids
+    space_id, user_id = ids
     ws = _get_ws(db, workspace_id, space_id)
     root = _ws_path(ws)
     try:
-        safe = _policy.validate(root / path, allowed_root=root, mode="read")
+        safe = _policy.validate(root / path, allowed_root=root, mode="read", workspace_type=ws.workspace_type)
     except PathPolicyError as e:
         raise HTTPException(status_code=403, detail=str(e))
     if not safe.exists():
         raise HTTPException(status_code=404, detail="File not found")
     if not safe.is_file():
         raise HTTPException(status_code=400, detail="Path is a directory")
+    rel_path = safe.relative_to(root).as_posix()
+    _enforce_workspace_read(db, ws=ws, actor_user_id=user_id, read_kind="file", relative_path=rel_path)
     size = safe.stat().st_size
     if size > 1_048_576:  # 1 MiB
         raise HTTPException(status_code=413, detail="File too large to display (max 1 MiB)")
@@ -280,8 +376,9 @@ def get_git_status(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _ = ids
+    space_id, user_id = ids
     ws = _get_ws(db, workspace_id, space_id)
+    _enforce_workspace_read(db, ws=ws, actor_user_id=user_id, read_kind="git_status")
     root = _ws_path(ws)
     if not (root / ".git").exists():
         return GitStatus(is_repo=False, branch=None, files=[])
@@ -297,20 +394,30 @@ def get_git_diff(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
-    space_id, _ = ids
+    space_id, user_id = ids
     ws = _get_ws(db, workspace_id, space_id)
     root = _ws_path(ws)
     cmd = ["diff", "HEAD", "--"]
+    rel_path: str | None = None
     if path:
         try:
-            safe = _policy.validate(root / path, allowed_root=root, mode="read")
-            cmd.append(str(safe))
+            safe = _policy.validate(root / path, allowed_root=root, mode="read", workspace_type=ws.workspace_type)
+            rel_path = safe.relative_to(root).as_posix()
+            cmd.append(rel_path)
         except PathPolicyError as exc:
             raise HTTPException(status_code=403, detail=str(exc))
+    _enforce_workspace_read(db, ws=ws, actor_user_id=user_id, read_kind="git_diff", relative_path=rel_path)
     diff = _run_git(cmd, root, timeout=15)
     if not diff:
         diff = _run_git(["diff", "--"] + (cmd[3:] if path else []), root, timeout=15)
-    return {"diff": diff, "path": path}
+    if _diff_touches_secret_like_path(diff):
+        raise HTTPException(status_code=403, detail="Diff includes blocked path")
+    diff, redacted = _redact_secret_like_diff(diff)
+    encoded = diff.encode("utf-8")
+    truncated = len(encoded) > _MAX_DIFF_BYTES
+    if truncated:
+        diff = encoded[:_MAX_DIFF_BYTES].decode("utf-8", errors="replace")
+    return {"diff": diff, "path": path, "truncated": truncated, "redacted": redacted}
 
 
 # ── Routes: runtimes ──────────────────────────────────────────────────────────

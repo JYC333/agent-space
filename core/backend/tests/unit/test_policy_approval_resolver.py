@@ -91,7 +91,7 @@ def _make_admin(db, space_id: str):
 
     uid = _uid()
     from app.models import User
-    user = User(id=uid, space_id=space_id, display_name="admin", email=f"{uid}@test.invalid")
+    user = User(id=uid, display_name="admin", email=f"{uid}@test.invalid")
     db.add(user)
     db.add(SpaceMembership(
         id=_uid(),
@@ -143,7 +143,7 @@ def _make_reviewer(db, space_id: str):
     from app.models import SpaceMembership, User
 
     uid = _uid()
-    user = User(id=uid, space_id=space_id, display_name="reviewer", email=f"{uid}@test.invalid")
+    user = User(id=uid, display_name="reviewer", email=f"{uid}@test.invalid")
     db.add(user)
     db.add(SpaceMembership(
         id=_uid(),
@@ -191,7 +191,7 @@ def test_non_privileged_role_cannot_approve(db, role):
     sid = _uid()
     factories.create_test_space(db, space_id=sid, space_type="team")
     uid = _uid()
-    user = User(id=uid, space_id=sid, display_name=role, email=f"{uid}@test.invalid")
+    user = User(id=uid, display_name=role, email=f"{uid}@test.invalid")
     db.add(user)
     db.add(SpaceMembership(
         id=_uid(),
@@ -223,7 +223,7 @@ def test_member_cannot_approve_any_proposal_type(db, proposal_type):
     sid = _uid()
     factories.create_test_space(db, space_id=sid, space_type="team")
     uid = _uid()
-    user = User(id=uid, space_id=sid, display_name="member", email=f"{uid}@test.invalid")
+    user = User(id=uid, display_name="member", email=f"{uid}@test.invalid")
     db.add(user)
     db.add(SpaceMembership(
         id=_uid(),
@@ -273,7 +273,7 @@ def test_unknown_action_raises_for_admin(db):
     sid = _uid()
     factories.create_test_space(db, space_id=sid, space_type="team")
     uid = _uid()
-    db.add(User(id=uid, space_id=sid, display_name="admin", email=f"{uid}@test.invalid"))
+    db.add(User(id=uid, display_name="admin", email=f"{uid}@test.invalid"))
     db.add(SpaceMembership(id=_uid(), space_id=sid, user_id=uid, role="admin", status="active"))
     db.flush()
     with pytest.raises(UnknownPolicyActionError):
@@ -309,8 +309,8 @@ def test_active_action_strings_are_all_registered():
         assert is_known_action(action), f"Active action {action!r} is not registered"
 
 
-def test_legacy_action_strings_are_not_registered():
+def test_unsupported_action_strings_are_not_registered():
     from app.policy.actions import is_known_action
 
-    for old_action in ["memory.write", "memory.propose", "tool.execute", "agent.run", "agent.delegate"]:
-        assert not is_known_action(old_action), f"Legacy action {old_action!r} must not be registered"
+    for action in ["memory.write", "memory.propose", "tool.execute", "agent.run", "agent.delegate"]:
+        assert not is_known_action(action), f"Unsupported action {action!r} must not be registered"

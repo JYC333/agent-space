@@ -52,11 +52,11 @@ def test_post_activity_consolidate_returns_proposal_list(api_client, db, cross_s
 
 
 
-def test_consolidation_proposal_payload_has_dedupe_and_provenance(db, cross_space_pair):
+def test_consolidation_proposal_payload_has_dedupe_and_provenance(db, cross_space_pair_db):
     from app.memory.consolidation.service import ActivityConsolidationService
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = ActivityRecord(
         id=str(ULID()),
         space_id=a,

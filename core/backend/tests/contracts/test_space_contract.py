@@ -24,8 +24,8 @@ def _membership(space_id: str, user_id: str, role: str = "member") -> SpaceMembe
     return SpaceMembership(id=str(ULID()), space_id=space_id, user_id=user_id, role=role, status="active")
 
 
-def test_create_space_uses_household_as_canonical_type(api_client, db, cross_space_pair):
-    ua = cross_space_pair["user_a"]
+def test_create_space_uses_household_as_canonical_type(api_client, db, cross_space_pair_db):
+    ua = cross_space_pair_db["user_a"]
 
     r = _authed_client(db, ua.id).post(
         "/api/v1/spaces",
@@ -41,8 +41,8 @@ def test_create_space_uses_household_as_canonical_type(api_client, db, cross_spa
     assert row.type == "household"
 
 
-def test_create_space_rejects_family_type_string(api_client, db, cross_space_pair):
-    ua = cross_space_pair["user_a"]
+def test_create_space_rejects_family_type_string(api_client, db, cross_space_pair_db):
+    ua = cross_space_pair_db["user_a"]
 
     r = _authed_client(db, ua.id).post(
         "/api/v1/spaces",
@@ -52,8 +52,8 @@ def test_create_space_rejects_family_type_string(api_client, db, cross_space_pai
     assert r.status_code == 422
 
 
-def test_create_team_space_returns_team(api_client, db, cross_space_pair):
-    ua = cross_space_pair["user_a"]
+def test_create_team_space_returns_team(api_client, db, cross_space_pair_db):
+    ua = cross_space_pair_db["user_a"]
 
     r = _authed_client(db, ua.id).post(
         "/api/v1/spaces",
@@ -129,10 +129,10 @@ def test_unauthenticated_request_returns_401(api_client):
     assert r.status_code == 401
 
 
-def test_query_user_id_and_space_id_do_not_authenticate(api_client, db, cross_space_pair):
+def test_query_user_id_and_space_id_do_not_authenticate(api_client, db, cross_space_pair_db):
     """Query params never substitute for session/API-key auth."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     r = api_client.get(
         "/api/v1/memory",

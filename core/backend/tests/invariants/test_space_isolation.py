@@ -26,12 +26,12 @@ from app.runs.run_service import RunService
 from tests.support import factories
 
 
-def test_memory_list_scoped_to_space_query(db, cross_space_pair):
+def test_memory_list_scoped_to_space_query(db, cross_space_pair_db):
     """MemoryStore list/search only considers rows for the requested space_id."""
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
-    ub = cross_space_pair["user_b"]
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
+    ub = cross_space_pair_db["user_b"]
     factories.create_test_memory_entry(
         db,
         space_id=a,
@@ -48,11 +48,11 @@ def test_memory_list_scoped_to_space_query(db, cross_space_pair):
     assert store.count(space_id=b, user_id=ub.id) == 0
 
 
-def test_memory_get_for_space_denies_cross_space(db, cross_space_pair):
+def test_memory_get_for_space_denies_cross_space(db, cross_space_pair_db):
     """``MemoryStore.get_for_space`` never returns a row from another ``space_id``."""
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
     mem = factories.create_test_memory_entry(
         db,
         space_id=a,
@@ -66,10 +66,10 @@ def test_memory_get_for_space_denies_cross_space(db, cross_space_pair):
     assert store.get_for_space(a, mem.id) is not None
 
 
-def test_activity_get_requires_matching_space(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
+def test_activity_get_requires_matching_space(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(
         db,
         space_id=a,
@@ -82,10 +82,10 @@ def test_activity_get_requires_matching_space(db, cross_space_pair):
     assert ActivityService(db).get(act.id, a).id == act.id
 
 
-def test_run_get_run_rejects_other_space(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
+def test_run_get_run_rejects_other_space(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, commit=False)
     db.flush()
     with pytest.raises(HTTPException) as ei:
@@ -93,10 +93,10 @@ def test_run_get_run_rejects_other_space(db, cross_space_pair):
     assert ei.value.status_code == 404
 
 
-def test_proposal_accept_rejects_wrong_space(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
+def test_proposal_accept_rejects_wrong_space(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -109,10 +109,10 @@ def test_proposal_accept_rejects_wrong_space(db, cross_space_pair):
     assert prop.status == "pending"
 
 
-def test_workspace_row_not_found_when_filtered_by_other_space(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
+def test_workspace_row_not_found_when_filtered_by_other_space(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
     ws = factories.create_test_workspace(db, space_id=a, created_by_user_id=ua.id, commit=False)
     db.flush()
     assert (
@@ -122,18 +122,18 @@ def test_workspace_row_not_found_when_filtered_by_other_space(db, cross_space_pa
     ) is None
 
 
-def test_agent_query_scoped_by_space(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
+def test_agent_query_scoped_by_space(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
     ag = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     db.flush()
     assert db.query(Agent).filter(Agent.id == ag.id, Agent.space_id == b).first() is None
 
 
-def test_policy_runtime_row_isolated_by_space(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
+def test_policy_runtime_row_isolated_by_space(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
     pol = factories.create_test_policy(db, space_id=a, name="pol-a", commit=False)
     cred = factories.create_test_credential_stub(db, space_id=a, commit=False)
     mp = factories.create_test_model_provider(db, space_id=a, commit=False)
@@ -147,10 +147,10 @@ def test_policy_runtime_row_isolated_by_space(db, cross_space_pair):
     ) is None
 
 
-def test_artifact_and_proposal_counts_other_space_empty(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
+def test_artifact_and_proposal_counts_other_space_empty(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, commit=False)
     art = factories.create_test_artifact(db, space_id=a, run_id=run.id, commit=False)
     prop = factories.create_test_proposal(db, space_id=a, run_id=run.id, created_by_user_id=ua.id, commit=False)
@@ -169,7 +169,7 @@ def test_artifact_and_proposal_counts_other_space_empty(db, cross_space_pair):
     )
 
 
-def test_cross_space_memory_not_included_in_context_retrieval(db, cross_space_pair):
+def test_cross_space_memory_not_included_in_context_retrieval(db, cross_space_pair_db):
     """MemoryRetriever for space A cannot include space_shared memories from space B.
 
     Even when space B has space_shared memories (maximum visibility), the cross-space
@@ -177,10 +177,10 @@ def test_cross_space_memory_not_included_in_context_retrieval(db, cross_space_pa
     """
     from app.memory.retriever import MemoryRetriever
 
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
-    ub = cross_space_pair["user_b"]
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
+    ub = cross_space_pair_db["user_b"]
 
     # Memory in space B with maximum visibility — deliberately matches keyword
     b_mem = factories.create_test_memory_entry(
@@ -210,14 +210,14 @@ def test_cross_space_memory_not_included_in_context_retrieval(db, cross_space_pa
     )
 
 
-def test_context_space_boundary_preserves_same_space_memories(db, cross_space_pair):
+def test_context_space_boundary_preserves_same_space_memories(db, cross_space_pair_db):
     """Context retrieval for space A includes same-space memories and excludes other-space ones."""
     from app.memory.retriever import MemoryRetriever
 
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
-    ub = cross_space_pair["user_b"]
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
+    ub = cross_space_pair_db["user_b"]
 
     sentinel = "isolation-context-sentinel-zq9"
     a_mem = factories.create_test_memory_entry(
@@ -241,11 +241,11 @@ def test_context_space_boundary_preserves_same_space_memories(db, cross_space_pa
     assert a_mem.id not in ids_b, "Space A memory must not appear in space B retrieval"
 
 
-def test_run_list_only_returns_same_space(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
-    ub = cross_space_pair["user_b"]
+def test_run_list_only_returns_same_space(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
+    ub = cross_space_pair_db["user_b"]
     r_a = factories.create_test_run(db, space_id=a, user_id=ua.id, commit=False)
     factories.create_test_run(db, space_id=b, user_id=ub.id, commit=False)
     db.flush()

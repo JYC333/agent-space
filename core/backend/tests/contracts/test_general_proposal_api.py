@@ -84,18 +84,18 @@ def test_reject_proposal_cross_space_returns_404(api_client, db, cross_space_pai
     _assert_error_envelope(r.json(), error="not_found")
 
 
-def test_member_cannot_accept_in_same_space_returns_403(api_client, db, cross_space_pair):
+def test_member_cannot_accept_in_same_space_returns_403(api_client, db, cross_space_pair_db):
     """Member-role users cannot apply proposals — policy gate returns 403."""
     from app.models import SpaceMembership, User
     from ulid import ULID
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     # Create a member-role user (not owner/admin)
     member_id = str(ULID())
     member_user = User(
-        id=member_id, space_id=a,
+        id=member_id,
         display_name="member-user", email=f"{member_id}@test.invalid",
     )
     db.add(member_user)
@@ -110,12 +110,16 @@ def test_member_cannot_accept_in_same_space_returns_403(api_client, db, cross_sp
         params=_params(a, member_id),
     )
     assert r.status_code == 403
-    _assert_error_envelope(r.json(), error="forbidden")
+    body = r.json()
+    _assert_error_envelope(body, error="policy_requires_approval")
+    assert body.get("reason_code") == "insufficient_role"
+    assert body.get("audit_code") == "insufficient_role"
+    assert body.get("action") == "proposal.apply"
 
 
-def test_non_creator_cannot_reject_in_same_space(api_client, db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_non_creator_cannot_reject_in_same_space(api_client, db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     u_other = factories.create_test_user(db, space_id=a, display_name="Other Rej", commit=True)
     prop = factories.create_test_proposal(
         db,
@@ -312,13 +316,13 @@ def test_policy_change_accept_returns_policy_version_shape(api_client, db, cross
         space_id=a,
         created_by_user_id=ua.id,
         proposal_type="policy_change",
-        title="Require review",
+        title="Log policy",
         payload_json={
-            "domain": "memory",
-            "policy_key": "memory.require_review",
+            "domain": "memory.private_placement",
+            "policy_key": "memory.allow_with_log",
             "policy_version": 2,
-            "rule_json": {"requires_review": True},
-            "enforcement_mode": "require_approval",
+            "rule_json": {"effect": "allow_with_log"},
+            "enforcement_mode": "allow_with_log",
         },
         commit=True,
     )
@@ -406,11 +410,11 @@ def test_unsupported_proposal_type_accept_stable_error_no_mutation(api_client, d
     )
     assert r.status_code == 403
     body = r.json()
-    assert body.get("error") == "forbidden"
-    msg = body.get("message")
-    assert isinstance(msg, dict)
-    assert msg.get("code") == "unsupported_proposal_type"
-    assert msg.get("proposal_type") == "unrecognized_proposal_type"
+    assert body.get("error") == "policy_denied"
+    assert body.get("reason_code") == "unsupported_proposal_type"
+    assert body.get("audit_code") == "unsupported_proposal_type"
+    assert body.get("action") == "proposal.apply"
+    assert "unrecognized_proposal_type" in body.get("message", "")
     db.refresh(prop)
     assert prop.status == "pending"
     after_mem = (

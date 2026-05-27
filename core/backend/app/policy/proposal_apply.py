@@ -22,6 +22,7 @@ _PROPOSAL_TYPE_RISK: dict[str, RiskLevel] = {
     "code_patch": RiskLevel.HIGH,
     "policy_change": RiskLevel.HIGH,
     "egress_review": RiskLevel.HIGH,
+    "agent_config_update": RiskLevel.HIGH,
 }
 
 # Single authoritative set of proposal types that have a real apply handler.

@@ -10,7 +10,7 @@ Verifies that:
   - Existing allow/deny paths are unaffected (regression coverage).
 
 These tests complement test_policy_hard_invariants.py (pure guard unit tests)
-and test_policy_gateway_workflow.py (gateway + DB persistence tests).
+and PolicyGateway enforcement tests.
 """
 
 from __future__ import annotations
@@ -19,8 +19,16 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.policy.decisions import Decision
+from app.policy.exceptions import PolicyGateBlocked
 from app.policy.gateway import PolicyGateway, PolicyCheckRequest
 from app.policy.hard_invariants import HardInvariantGuard
+
+
+def _enforce_decision(db: Session, req: PolicyCheckRequest):
+    try:
+        return PolicyGateway(db).enforce(req)
+    except PolicyGateBlocked as exc:
+        return exc.decision
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +167,7 @@ class TestTargetSpaceInputSemantics:
 
     def test_empty_context_target_space_denies_artifact_persist(self, db: Session):
         """An empty decision input fails closed for egress-sensitive persistence."""
-        decision = PolicyGateway(db).check_and_record(
+        decision = _enforce_decision(db,
             PolicyCheckRequest(
                 action="artifact.persist",
                 actor_type="run",
@@ -176,7 +184,7 @@ class TestTargetSpaceInputSemantics:
                     "target_space_id": "space_a",
                     "source_run_id": "run-target-empty-ctx",
                 },
-            )
+            ),
         )
         assert decision.denied
         assert decision.policy_source == "hard_invariant"
@@ -187,7 +195,7 @@ class TestTargetSpaceInputSemantics:
         self, db: Session
     ):
         """An audit-only empty target does not satisfy or fail the invariant."""
-        decision = PolicyGateway(db).check_and_record(
+        decision = _enforce_decision(db,
             PolicyCheckRequest(
                 action="artifact.persist",
                 actor_type="run",
@@ -203,7 +211,7 @@ class TestTargetSpaceInputSemantics:
                     "target_space_id": "",
                     "source_run_id": "run-target-empty-meta",
                 },
-            )
+            ),
         )
         assert decision.allowed
 
@@ -222,8 +230,7 @@ class TestPersonalContextBlockInputSemantics:
     ):
         """artifact.persist with personal_context_block in context → DENY via
         HardInvariantGuard and the record has it redacted."""
-        gw = PolicyGateway(db)
-        decision = gw.check_and_record(
+        decision = _enforce_decision(db,
             PolicyCheckRequest(
                 action="artifact.persist",
                 actor_type="run",
@@ -241,28 +248,18 @@ class TestPersonalContextBlockInputSemantics:
                     "source_run_id": "run-pcb-ctx",
                     "preview": False,
                 },
-            )
+            ),
         )
         assert decision.denied
         assert decision.policy_source == "hard_invariant"
         assert decision.audit_code == "personal_context_block_persist_attempt"
-
-        from app.models import PolicyDecisionRecord
-        record = db.query(PolicyDecisionRecord).filter(
-            PolicyDecisionRecord.run_id == "run-pcb-ctx",
-            PolicyDecisionRecord.action == "artifact.persist",
-        ).first()
-        assert record is not None
-        assert record.decision == "deny"
 
     def test_artifact_persist_redacts_personal_context_block_from_metadata_json(
         self, db: Session
     ):
         """artifact.persist with personal_context_block accidentally in metadata_json →
         defense-in-depth: DENY and record has [REDACTED], not the raw value."""
-        gw = PolicyGateway(db)
-        decision = gw.check_and_record(
-            PolicyCheckRequest(
+        req = PolicyCheckRequest(
                 action="artifact.persist",
                 actor_type="run",
                 actor_id="run-pcb-meta",
@@ -279,20 +276,15 @@ class TestPersonalContextBlockInputSemantics:
                     "source_run_id": "run-pcb-meta",
                     "preview": False,
                 },
-            )
         )
+        with pytest.raises(PolicyGateBlocked) as exc_info:
+            PolicyGateway(db).enforce(req)
+        decision = exc_info.value.decision
         assert decision.denied
         assert decision.policy_source == "hard_invariant"
         assert decision.audit_code == "personal_context_block_persist_attempt"
 
-        from app.models import PolicyDecisionRecord
-        record = db.query(PolicyDecisionRecord).filter(
-            PolicyDecisionRecord.run_id == "run-pcb-meta",
-            PolicyDecisionRecord.action == "artifact.persist",
-        ).first()
-        assert record is not None
-        assert record.decision == "deny"
-        meta = record.metadata_json or {}
+        meta = exc_info.value.metadata_json or {}
         pcb_val = meta.get("personal_context_block")
         assert pcb_val == "[REDACTED]", (
             "personal_context_block must be redacted before persistence, "
@@ -353,11 +345,10 @@ class TestExistingPathsUnaffected:
         """Cross-space credential access fires via resource_space_id (top-level
         PolicyCheckRequest field) before any Credential.secret_value is resolved.
 
-        This test uses PolicyGateway.check_and_record() directly, which is the
-        gate that fires before resolve_runtime_credentials() in RunExecutionService.
+        This test uses PolicyGateway.enforce(), which is the gate that fires
+        before resolve_runtime_credentials() in RunExecutionService.
         """
-        gw = PolicyGateway(db)
-        decision = gw.check_and_record(
+        decision = _enforce_decision(db,
             PolicyCheckRequest(
                 action="runtime.use_credential",
                 actor_type="run",
@@ -374,24 +365,15 @@ class TestExistingPathsUnaffected:
                     "resolution_source": "run.model_provider_id",
                     "adapter_type": "echo",
                 },
-            )
+            ),
         )
         assert decision.denied, (
             "Cross-space credential use must be denied before secret resolution"
         )
 
-        from app.models import PolicyDecisionRecord
-        record = db.query(PolicyDecisionRecord).filter(
-            PolicyDecisionRecord.run_id == "run-cred-cross",
-            PolicyDecisionRecord.action == "runtime.use_credential",
-        ).first()
-        assert record is not None
-        assert record.decision == "deny"
-
     def test_artifact_persist_safe_context_allows(self, db: Session):
         """artifact.persist with safe context fields and no flags set → ALLOW."""
-        gw = PolicyGateway(db)
-        decision = gw.check_and_record(
+        decision = _enforce_decision(db,
             PolicyCheckRequest(
                 action="artifact.persist",
                 actor_type="run",
@@ -409,14 +391,6 @@ class TestExistingPathsUnaffected:
                     "source_run_id": "run-art-safe-ctx",
                     "preview": False,
                 },
-            )
+            ),
         )
         assert decision.allowed
-
-        from app.models import PolicyDecisionRecord
-        record = db.query(PolicyDecisionRecord).filter(
-            PolicyDecisionRecord.run_id == "run-art-safe-ctx",
-            PolicyDecisionRecord.action == "artifact.persist",
-        ).first()
-        assert record is not None, "artifact.persist is audit_required — must record ALLOW"
-        assert record.decision == "allow"

@@ -143,6 +143,14 @@ def _prepare_roots(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
 
 
+def _stub_durable_policy_audit(monkeypatch) -> None:
+    """Keep SQLite output persistence atomic while exercising policy and egress logic."""
+    monkeypatch.setattr(
+        "app.policy.audit.DurablePolicyAuditWriter.write",
+        lambda _writer, _envelope: "stub-policy-audit",
+    )
+
+
 def _grant_run(db, *, prompt: str = "Use the available context") -> tuple[str, Any, str, Run, PersonalMemoryGrant, MemoryEntry]:
     personal_id, user = _personal_space(db)
     team_id, _team_user = _team_space(db)
@@ -233,6 +241,7 @@ def test_persisted_context_snapshot_does_not_include_runtime_personal_context(
 def test_adapter_echoed_personal_context_block_is_redacted_from_persisted_run_output(
     db, monkeypatch, tmp_path
 ):
+    _stub_durable_policy_audit(monkeypatch)
     _, _, _, run, _, _ = _grant_run(db)
     adapter = _CapturingRuntimeAdapter(echo_prompt_output=True)
 
@@ -283,6 +292,7 @@ def test_no_grant_runtime_prompt_has_no_personal_context_block(db, monkeypatch, 
 def test_runtime_injection_does_not_enable_direct_shared_artifact_persistence(
     db, monkeypatch, tmp_path
 ):
+    _stub_durable_policy_audit(monkeypatch)
     _, _, team_id, run, grant, _ = _grant_run(db)
     adapter = _CapturingRuntimeAdapter(
         output_text="model output derived from runtime personal context",

@@ -67,8 +67,8 @@ def _active_policy(db, *, space_id, name="test-pol") -> Policy:
 # ---------------------------------------------------------------------------
 
 
-def test_policy_bundle_digest_generation_creates_active_digest(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
+def test_policy_bundle_digest_generation_creates_active_digest(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
     _active_policy(db, space_id=space_id)
     svc = ContextDigestService(db)
     digest = svc.generate_policy_bundle_digest(space_id)
@@ -80,9 +80,9 @@ def test_policy_bundle_digest_generation_creates_active_digest(db, cross_space_p
     assert digest.content is not None
 
 
-def test_workspace_digest_generation_creates_active_digest(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_workspace_digest_generation_creates_active_digest(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws = factories.create_test_workspace(db, space_id=space_id, created_by_user_id=ua.id)
     _active_memory(db, space_id=space_id, scope_type="workspace", workspace_id=ws.id)
     svc = ContextDigestService(db)
@@ -94,9 +94,9 @@ def test_workspace_digest_generation_creates_active_digest(db, cross_space_pair)
     assert digest.scope_id == ws.id
 
 
-def test_agent_digest_generation_creates_active_digest(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_agent_digest_generation_creates_active_digest(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=ua.id)
     _active_memory(db, space_id=space_id, scope_type="agent", agent_id=agent.id)
     svc = ContextDigestService(db)
@@ -113,9 +113,9 @@ def test_agent_digest_generation_creates_active_digest(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_digest_excludes_archived_memory(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_digest_excludes_archived_memory(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws = factories.create_test_workspace(db, space_id=space_id, created_by_user_id=ua.id)
     active_m = _active_memory(db, space_id=space_id, scope_type="workspace", workspace_id=ws.id, content="active")
     archived_m = _active_memory(db, space_id=space_id, scope_type="workspace", workspace_id=ws.id, content="archived")
@@ -127,9 +127,9 @@ def test_digest_excludes_archived_memory(db, cross_space_pair):
     assert archived_m.id not in (digest.source_memory_ids_json or [])
 
 
-def test_digest_excludes_superseded_memory(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_digest_excludes_superseded_memory(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws = factories.create_test_workspace(db, space_id=space_id, created_by_user_id=ua.id)
     sup_m = _active_memory(db, space_id=space_id, scope_type="workspace", workspace_id=ws.id, content="superseded")
     sup_m.status = "superseded"
@@ -139,9 +139,9 @@ def test_digest_excludes_superseded_memory(db, cross_space_pair):
     assert sup_m.id not in (digest.source_memory_ids_json or [])
 
 
-def test_digest_excludes_proposed_memory(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_digest_excludes_proposed_memory(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws = factories.create_test_workspace(db, space_id=space_id, created_by_user_id=ua.id)
     prop_m = _active_memory(db, space_id=space_id, scope_type="workspace", workspace_id=ws.id, content="proposed")
     prop_m.status = "proposed"
@@ -151,8 +151,8 @@ def test_digest_excludes_proposed_memory(db, cross_space_pair):
     assert prop_m.id not in (digest.source_memory_ids_json or [])
 
 
-def test_digest_excludes_disabled_policy(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
+def test_digest_excludes_disabled_policy(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
     disabled_p = _active_policy(db, space_id=space_id, name="disabled-pol")
     disabled_p.enabled = False
     db.flush()
@@ -161,8 +161,8 @@ def test_digest_excludes_disabled_policy(db, cross_space_pair):
     assert disabled_p.id not in (digest.source_policy_ids_json or [])
 
 
-def test_digest_excludes_superseded_policy(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
+def test_digest_excludes_superseded_policy(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
     sup_p = _active_policy(db, space_id=space_id, name="superseded-pol")
     sup_p.status = "superseded"
     db.flush()
@@ -176,8 +176,8 @@ def test_digest_excludes_superseded_policy(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_same_source_hash_does_not_create_new_version(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
+def test_same_source_hash_does_not_create_new_version(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
     _active_policy(db, space_id=space_id)
     svc = ContextDigestService(db)
     d1 = svc.generate_policy_bundle_digest(space_id)
@@ -192,9 +192,9 @@ def test_same_source_hash_does_not_create_new_version(db, cross_space_pair):
     assert count == 1, "No duplicate digest rows for same source_hash"
 
 
-def test_changed_source_memory_creates_new_version(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_changed_source_memory_creates_new_version(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws = factories.create_test_workspace(db, space_id=space_id, created_by_user_id=ua.id)
     svc = ContextDigestService(db)
     d1 = svc.generate_workspace_digest(space_id, ws.id)
@@ -207,9 +207,9 @@ def test_changed_source_memory_creates_new_version(db, cross_space_pair):
     assert d2.id != d1.id, "New digest row created"
 
 
-def test_old_digest_becomes_superseded_on_new_version(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_old_digest_becomes_superseded_on_new_version(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws = factories.create_test_workspace(db, space_id=space_id, created_by_user_id=ua.id)
     svc = ContextDigestService(db)
     d1 = svc.generate_workspace_digest(space_id, ws.id)
@@ -221,8 +221,8 @@ def test_old_digest_becomes_superseded_on_new_version(db, cross_space_pair):
     assert old_row.status == "superseded", "Previous active digest must become superseded"
 
 
-def test_content_hash_stable_for_same_content(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
+def test_content_hash_stable_for_same_content(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
     _active_policy(db, space_id=space_id, name="stable-pol")
     svc = ContextDigestService(db)
     d1 = svc.generate_policy_bundle_digest(space_id)
@@ -235,8 +235,8 @@ def test_content_hash_stable_for_same_content(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_digest_generation_does_not_create_memory_entry(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
+def test_digest_generation_does_not_create_memory_entry(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
     before = db.query(MemoryEntry).filter(MemoryEntry.space_id == space_id).count()
     _active_policy(db, space_id=space_id)
     svc = ContextDigestService(db)
@@ -245,8 +245,8 @@ def test_digest_generation_does_not_create_memory_entry(db, cross_space_pair):
     assert after == before, "Digest generation must not create MemoryEntry rows"
 
 
-def test_digest_generation_does_not_create_proposal(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
+def test_digest_generation_does_not_create_proposal(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
     before = db.query(Proposal).filter(Proposal.space_id == space_id).count()
     _active_policy(db, space_id=space_id)
     svc = ContextDigestService(db)
@@ -260,9 +260,9 @@ def test_digest_generation_does_not_create_proposal(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_accepted_workspace_memory_marks_workspace_digest_dirty(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_accepted_workspace_memory_marks_workspace_digest_dirty(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws = factories.create_test_workspace(db, space_id=space_id, created_by_user_id=ua.id)
     _active_memory(db, space_id=space_id, scope_type="workspace", workspace_id=ws.id, content="existing")
     # Generate digest so it exists.
@@ -302,9 +302,9 @@ def test_accepted_workspace_memory_marks_workspace_digest_dirty(db, cross_space_
     assert digest.dirty_since is not None
 
 
-def test_accepted_policy_change_marks_policy_bundle_dirty(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_accepted_policy_change_marks_policy_bundle_dirty(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _active_policy(db, space_id=space_id)
     svc = ContextDigestService(db)
     digest = svc.generate_policy_bundle_digest(space_id)
@@ -318,8 +318,8 @@ def test_accepted_policy_change_marks_policy_bundle_dirty(db, cross_space_pair):
         status="pending",
         title="new policy",
         payload_json={
-            "domain": "memory",
-            "rule_json": {"deny": "all"},
+            "domain": "memory.private_placement",
+            "rule_json": {"effect": "deny"},
             "provenance_entries": [
                 {"source_type": "user_confirmed", "source_id": ua.id, "source_trust": "user_confirmed"}
             ],
@@ -339,8 +339,8 @@ def test_accepted_policy_change_marks_policy_bundle_dirty(db, cross_space_pair):
     assert digest.dirty_since is not None
 
 
-def test_mark_digest_dirty_noop_when_no_active_digest(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
+def test_mark_digest_dirty_noop_when_no_active_digest(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
     # No digest generated — mark_digest_dirty should not raise.
     svc = ContextDigestService(db)
     svc.mark_digest_dirty(space_id, "space", None, "policy_bundle", reason="test")

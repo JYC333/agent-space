@@ -9,7 +9,8 @@ import pytest
 from sqlalchemy import func
 
 from app.config import settings
-from app.memory.proposals import ProposalService, ProposalPolicyDeniedError
+from app.memory.proposals import ProposalService
+from app.policy.exceptions import PolicyGateBlocked
 from app.models import MemoryEntry, Proposal
 from tests.support import factories
 
@@ -18,9 +19,9 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def test_memory_update_pending_does_not_create_active_memory(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_memory_update_pending_does_not_create_active_memory(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     before = (
         db.query(func.count(MemoryEntry.id))
         .filter(MemoryEntry.space_id == a, MemoryEntry.status == "active")
@@ -41,9 +42,9 @@ def test_memory_update_pending_does_not_create_active_memory(db, cross_space_pai
     assert prop.status == "pending"
 
 
-def test_code_patch_pending_does_not_mutate_workspace_files(db, cross_space_pair, tmp_path, monkeypatch):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_code_patch_pending_does_not_mutate_workspace_files(db, cross_space_pair_db, tmp_path, monkeypatch):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws_root = tmp_path / "wsroot"
     ws_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(settings, "workspace_root", str(ws_root))
@@ -73,9 +74,9 @@ def test_code_patch_pending_does_not_mutate_workspace_files(db, cross_space_pair
     assert (disk / "f.txt").read_text(encoding="utf-8") == "ORIG"
 
 
-def test_unsupported_proposal_type_accept_raises_no_durable_mutation(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_unsupported_proposal_type_accept_raises_no_durable_mutation(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     before = (
         db.query(func.count(MemoryEntry.id))
         .filter(MemoryEntry.space_id == a, MemoryEntry.status == "active")
@@ -88,10 +89,10 @@ def test_unsupported_proposal_type_accept_raises_no_durable_mutation(db, cross_s
         proposal_type="unknown_type_x",
         commit=True,
     )
-    with pytest.raises(ProposalPolicyDeniedError) as ei:
+    with pytest.raises(PolicyGateBlocked) as ei:
         ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
-    assert ei.value.proposal_type == "unknown_type_x"
-    assert ei.value.audit_code == "unsupported_proposal_type"
+    assert ei.value.decision.proposal_type == "unknown_type_x"
+    assert ei.value.decision.audit_code == "unsupported_proposal_type"
     db.refresh(prop)
     assert prop.status == "pending"
     after = (
@@ -102,10 +103,10 @@ def test_unsupported_proposal_type_accept_raises_no_durable_mutation(db, cross_s
     assert after == before
 
 
-def test_cross_space_proposal_apply_denied(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
+def test_cross_space_proposal_apply_denied(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -117,9 +118,9 @@ def test_cross_space_proposal_apply_denied(db, cross_space_pair):
     assert prop.status == "pending"
 
 
-def test_accept_links_memory_entry_to_proposal(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_accept_links_memory_entry_to_proposal(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(db, space_id=a, created_by_user_id=ua.id, commit=True)
     out = ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
     assert out is not None
@@ -130,8 +131,8 @@ def test_accept_links_memory_entry_to_proposal(db, cross_space_pair):
     assert out.proposal.resulting_memory_id == mem.id
 
 
-def test_accept_code_patch_links_applied_paths_on_proposal(db, test_user, tmp_path, monkeypatch):
-    a = test_user.space_id
+def test_accept_code_patch_links_applied_paths_on_proposal(db, test_user, test_space, tmp_path, monkeypatch):
+    a = test_space.id
     ua = test_user
     ws_root = tmp_path / "wsroot"
     ws_root.mkdir(parents=True, exist_ok=True)
@@ -179,10 +180,10 @@ def test_accept_code_patch_links_applied_paths_on_proposal(db, test_user, tmp_pa
     assert files[0]["postimage_sha256"]
 
 
-def test_code_patch_rejects_path_traversal_before_write(db, test_user, tmp_path, monkeypatch):
+def test_code_patch_rejects_path_traversal_before_write(db, test_user, test_space, tmp_path, monkeypatch):
     from app.memory.proposals import ProposalService
 
-    a = test_user.space_id
+    a = test_space.id
     ua = test_user
     ws_root = tmp_path / "wsroot"
     ws_root.mkdir(parents=True, exist_ok=True)
@@ -223,11 +224,11 @@ def test_code_patch_rejects_path_traversal_before_write(db, test_user, tmp_path,
     assert prop.status == "pending"
 
 
-def test_code_patch_file_write_failure_does_not_mark_success(db, test_user, tmp_path, monkeypatch):
+def test_code_patch_file_write_failure_does_not_mark_success(db, test_user, test_space, tmp_path, monkeypatch):
     from app.memory.proposals import ProposalService
     import app.memory.code_patch_apply as patch_mod
 
-    a = test_user.space_id
+    a = test_space.id
     ua = test_user
     ws_root = tmp_path / "wsroot"
     ws_root.mkdir(parents=True, exist_ok=True)
@@ -277,10 +278,10 @@ def test_code_patch_file_write_failure_does_not_mark_success(db, test_user, tmp_
     assert prop.status == "pending"
 
 
-def test_code_patch_db_failure_after_file_write_rolls_back_file(db, test_user, tmp_path, monkeypatch):
+def test_code_patch_db_failure_after_file_write_rolls_back_file(db, test_user, test_space, tmp_path, monkeypatch):
     from app.memory.proposals import ProposalService
 
-    a = test_user.space_id
+    a = test_space.id
     ua = test_user
     ws_root = tmp_path / "wsroot"
     ws_root.mkdir(parents=True, exist_ok=True)
@@ -333,11 +334,11 @@ def test_code_patch_db_failure_after_file_write_rolls_back_file(db, test_user, t
     assert target.read_text(encoding="utf-8") == "before"
 
 
-def test_code_patch_rollback_failure_reports_partial_apply(db, test_user, tmp_path, monkeypatch):
+def test_code_patch_rollback_failure_reports_partial_apply(db, test_user, test_space, tmp_path, monkeypatch):
     from app.memory.code_patch_apply import CodePatchFileTransaction, CodePatchPartialApplyError
     from app.memory.proposals import ProposalService
 
-    a = test_user.space_id
+    a = test_space.id
     ua = test_user
     ws_root = tmp_path / "wsroot"
     ws_root.mkdir(parents=True, exist_ok=True)

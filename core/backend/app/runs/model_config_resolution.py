@@ -27,6 +27,7 @@ def resolve_model_config_priority(
     default_provider_id: Optional[str],
     default_provider_model: Optional[str],
     default_provider_available_models: Optional[list[str]] = None,
+    default_provider_source: str = "space_default",
 ) -> ResolvedModelConfig:
     """Pure resolution — no database access."""
     if request_provider_id:
@@ -55,7 +56,7 @@ def resolve_model_config_priority(
         return ResolvedModelConfig(
             model_provider_id=default_provider_id,
             model_name=model,
-            source="space_default",
+            source=default_provider_source,
         )
 
     return ResolvedModelConfig(
@@ -74,28 +75,44 @@ def _available_models(row: ModelProvider) -> list[str]:
     return []
 
 
-def _find_space_default_provider(db: Session, space_id: str) -> ModelProvider | None:
-    from app.models import ModelProvider
-
-    for row in db.query(ModelProvider).filter(ModelProvider.space_id == space_id).all():
-        cfg = row.config_json or {}
-        if bool(cfg.get("is_default")) and row.enabled:
-            return row
-    return None
-
-
-def resolve_model_config_for_run(
+def resolve_model_config_for_runtime(
     db: Session,
     *,
     space_id: str,
+    adapter_type: Optional[str],
     request_provider_id: Optional[str],
     request_model: Optional[str],
     version: AgentVersion,
 ) -> ResolvedModelConfig:
-    default_row = _find_space_default_provider(db, space_id)
+    """Resolve model config only when the runtime requirements allow it."""
+    from ..runtimes.requirements import (
+        get_runtime_requirements,
+        resolve_default_provider_for_runtime,
+    )
+
+    requirements = get_runtime_requirements(adapter_type)
+    if requirements.model_provider_mode == "none":
+        return ResolvedModelConfig(
+            model_provider_id=None,
+            model_name=None,
+            source="none",
+        )
+
+    default_row = resolve_default_provider_for_runtime(db, space_id, adapter_type)
     default_id = default_row.id if default_row else None
     default_model = default_row.default_model if default_row else None
     default_models = _available_models(default_row) if default_row else []
+    default_source = (
+        "runtime_default"
+        if _is_runtime_scoped_default(default_row, adapter_type)
+        else "space_default"
+    )
+
+    if requirements.model_provider_mode == "optional":
+        default_id = None
+        default_model = None
+        default_models = []
+        default_source = "space_default"
 
     return resolve_model_config_priority(
         request_provider_id=request_provider_id,
@@ -105,4 +122,22 @@ def resolve_model_config_for_run(
         default_provider_id=default_id,
         default_provider_model=default_model,
         default_provider_available_models=default_models,
+        default_provider_source=default_source,
     )
+
+
+def _is_runtime_scoped_default(row: ModelProvider | None, adapter_type: str | None) -> bool:
+    if row is None or not adapter_type:
+        return False
+    cfg = row.config_json or {}
+    if not isinstance(cfg, dict):
+        return False
+    if cfg.get("runtime_default_for") == adapter_type:
+        return True
+    if cfg.get("runtime_default_adapter_type") == adapter_type:
+        return True
+    adapter_types = cfg.get("runtime_default_adapter_types")
+    if isinstance(adapter_types, list) and adapter_type in adapter_types:
+        return True
+    runtime_defaults = cfg.get("runtime_defaults")
+    return isinstance(runtime_defaults, dict) and runtime_defaults.get(adapter_type) is True

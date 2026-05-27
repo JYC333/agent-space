@@ -60,12 +60,11 @@ class UserService:
             email=email,
         ))
 
-        space = self._make_space(
+        self._make_space(
             user_id=user.id,
             name=f"{display_name}'s Personal Space",
             space_type="personal",
         )
-        user.default_space_id = space.id
 
         self.db.commit()
         self.db.refresh(user)

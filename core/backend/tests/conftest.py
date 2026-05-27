@@ -93,6 +93,7 @@ _configure_agent_space_home_for_pytest()
 import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
+from fastapi import Request
 from fastapi.testclient import TestClient
 from alembic import command
 from alembic.config import Config
@@ -147,7 +148,6 @@ def db_engine(tmp_path_factory):
         session.add(
             User(
                 id=USER,
-                space_id=SPACE,
                 email="default@example.com",
                 display_name="Default User",
             )
@@ -183,8 +183,9 @@ def db(db_engine):
 def client(db_engine):
     Session = sessionmaker(bind=db_engine)
 
-    def override_get_db():
+    def override_get_db(request: Request):
         session = Session()
+        request.state.db = session
         try:
             yield session
         finally:

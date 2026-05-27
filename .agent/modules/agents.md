@@ -41,13 +41,14 @@ See `runtime-adapters.md` for the full adapter registry and license notes.
 ```
 Agent:
   id, space_id, name, description, visibility
-  role_instruction          — system prompt text
+  role_instruction          — public identity/role description
   current_version_id        — convenience pointer to latest AgentVersion
   status (active|inactive|archived)
 
 AgentVersion:
   id, agent_id, space_id
   version                   — immutable label, e.g. "v1", "v2"
+  system_prompt             — immutable execution prompt text
   model_provider_id           — FK to ModelProvider (LLM backend for this version)
   model_name                  — model id string for the selected provider
   model_config_json         — {model, temperature, max_tokens, ...}
@@ -57,6 +58,8 @@ AgentVersion:
   capabilities_json         — list of capability IDs
   tool_permissions_json     — {allowed_tools, allowed_adapter_types}
   runtime_policy_json       — {sandbox_required, allowed_adapter_types}
+  source_proposal_id        — proposal that approved this version, when post-create
+  source_activity_id        — activity record for the config change, when post-create
   created_at
   Note: AgentVersion is append-only. Agent.current_version_id is updated on save.
         Existing runs keep their agent_version_id and remain reproducible.
@@ -89,6 +92,23 @@ Future multi-agent child-run creation must be designed as `run.spawn_child` / `r
 with explicit control-plane policy and evaluation gates. `runtime.execute` controls adapter
 execution only; it is not a delegation replacement.
 
+**Agent execution config changes**
+
+Initial agent creation may create its first immutable `AgentVersion` directly.
+Post-create execution config changes must go through
+`POST /api/v1/agents/{agent_id}/config-proposals`.
+
+`PATCH /agents/{agent_id}` is limited to identity fields. Execution fields such
+as model, runtime adapter, system prompt, model/runtime/context/memory policies,
+capabilities, and tool permissions return a conflict/validation error pointing
+callers to the config proposal route.
+
+Accepting an `agent_config_update` proposal validates that the agent, model
+provider, runtime adapter, and base version are in the same space. It rejects a
+stale `base_version_id`, creates a new immutable `AgentVersion`, records
+proposal/activity provenance, advances `Agent.current_version_id`, and marks
+the affected agent digest dirty.
+
 ## Built-in Agents
 
 - `system.echo-agent` — deterministic test adapter, no LLM needed
@@ -109,6 +129,12 @@ execution only; it is not a delegation replacement.
 - No vendor adapter is the source of truth for memory, policy, or audit
 - `agent_version_id` on `Run` is immutable per row — historical runs stay reproducible after edits to `Agent`
 - `AgentVersion` is append-only — prior rows are not rewritten in place
+- Public post-create execution config mutation is proposal-only. Direct public
+  AgentVersion creation must not advance `Agent.current_version_id`.
+- Accepted config proposals leave provenance from the new AgentVersion to the
+  accepted Proposal and ActivityRecord.
+- Execution config fields that affect context, memory, runtime, model, tools,
+  capabilities, or system prompt dirty the agent digest. Identity-only fields do not.
 
 ## Related Files
 

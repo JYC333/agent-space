@@ -6,19 +6,30 @@ Every sensitive action the system can perform must be registered here.
 Unknown sensitive actions must not silently fall through as allow — callers
 must use require_action_definition() at policy-check integration points.
 
+Action counts (current):
+  WIRED_DIRECT     (13): runtime.execute, runtime.use_credential,
+                          context.inject_memory, context.render_for_runtime,
+                          workspace.write_patch, workspace.read, artifact.persist,
+                          proposal.create, proposal.apply, agent.config_update,
+                          automation.create, automation.update, automation.fire
+  WIRED_VIA_PROPOSAL (4): memory.create, memory.update, memory.archive, policy.change
+  RESERVED          (11): context.use_personal_grant, workspace.apply_patch,
+                           artifact.export, proposal.approve,
+                           memory.read_private, memory.promote_shared,
+                           capability.enable, capability.update, tool_binding.enable,
+                           deployment.propose, deployment.execute
+
 Action lifecycle states
 -----------------------
 WIRED_DIRECT
-    The action has a real direct PolicyGateway.check_and_record(action=...)
+    The action has a real direct PolicyGateway.enforce(action=...)
     enforcement call site in business code.  HardInvariantGuard and PolicyEngine
     are run normally.
 
 WIRED_VIA_PROPOSAL
     The action is not directly checked as a standalone action.  It is protected
-    by the proposal.apply gate (PolicyGateway.check_proposal_apply) and
-    ProposalApplyService.  Passing one of these actions directly to
-    PolicyGateway.check_and_record() is a misuse and will fail closed with
-    reason_code="policy_action_via_proposal_only".
+    by the proposal.apply gate (PolicyGateway.enforce_proposal_apply) and
+    ProposalApplyService.
 
 RESERVED
     The action is registered for vocabulary completeness and fail-closed
@@ -33,9 +44,9 @@ record_failure_mode
                  allow decisions and non-mutating dry-run simulations.
 
 "fail_closed"  — If PolicyDecisionRecord persistence fails, raise
-                 PolicyDecisionRecordPersistError and block the action.
+                 PolicyAuditPersistError and block the action.
                  Required for: runtime.use_credential, proposal.apply,
-                 workspace.write_patch, policy.change, automation-origin
+                 workspace.write_patch, artifact.persist, policy.change, automation-origin
                  sensitive actions, and critical-risk audit-required decisions.
 """
 
@@ -60,9 +71,9 @@ class RecordFailureMode(str, Enum):
     BEST_EFFORT — if persistence fails, log a warning and allow the action to
                   proceed. Acceptable for low-risk manual allow decisions.
 
-    FAIL_CLOSED — if persistence fails, raise PolicyDecisionRecordPersistError
-                  and block the action. Required for: runtime.use_credential,
-                  proposal.apply, workspace.write_patch, policy.change, and any
+    FAIL_CLOSED — if persistence fails, preferred enforcement raises
+                  PolicyAuditPersistError and blocks the action. Required for: runtime.use_credential,
+                  proposal.apply, workspace.write_patch, artifact.persist, policy.change, and any
                   automation-origin or CRITICAL-risk audit_required decision.
     """
 
@@ -97,7 +108,7 @@ def _reg(*defs: PolicyActionDefinition) -> None:
 
 _reg(
     # ------------------------------------------------------------------
-    # WIRED_DIRECT actions — have real PolicyGateway.check_and_record()
+    # WIRED_DIRECT actions — have real preferred PolicyGateway enforcement
     # call sites in business code.
     # ------------------------------------------------------------------
     PolicyActionDefinition(
@@ -176,7 +187,7 @@ _reg(
         current_enforcement_point="app.runs.artifact_persistence.ArtifactPersistenceService",
         description="Persist an artifact produced by a run.",
         lifecycle_status=PolicyActionLifecycle.WIRED_DIRECT,
-        record_failure_mode=RecordFailureMode.BEST_EFFORT,
+        record_failure_mode=RecordFailureMode.FAIL_CLOSED,
     ),
     PolicyActionDefinition(
         action="proposal.create",
@@ -188,6 +199,7 @@ _reg(
         default_required_approver_role=None,
         current_enforcement_point=(
             "app.memory.proposals.ProposalService.create_proposal"
+            ", app.memory.proposals.ProposalService.create_user_proposal"
             ", app.runs.code_patch_collector.collect_and_create_code_patch_proposal"
         ),
         description=(
@@ -214,11 +226,26 @@ _reg(
         lifecycle_status=PolicyActionLifecycle.WIRED_DIRECT,
         record_failure_mode=RecordFailureMode.FAIL_CLOSED,
     ),
+    PolicyActionDefinition(
+        action="agent.config_update",
+        resource_type="agent",
+        default_risk_level=RiskLevel.HIGH,
+        default_decision=Decision.ALLOW,
+        audit_required=True,
+        approval_capability="approve_agent_config_change",
+        default_required_approver_role="owner",
+        current_enforcement_point="app.agents.agent_service.AgentService.create_config_update_proposal",
+        description=(
+            "Create an agent_config_update proposal for post-create execution "
+            "configuration changes. The durable mutation is still protected by "
+            "proposal.apply."
+        ),
+        lifecycle_status=PolicyActionLifecycle.WIRED_DIRECT,
+        record_failure_mode=RecordFailureMode.BEST_EFFORT,
+    ),
     # ------------------------------------------------------------------
     # WIRED_VIA_PROPOSAL actions — protected by the proposal.apply gate
-    # (PolicyGateway.check_proposal_apply) and ProposalApplyService.
-    # These actions must not be passed directly to PolicyGateway.check_and_record().
-    # Direct calls fail closed with reason_code="policy_action_via_proposal_only".
+    # (PolicyGateway.enforce_proposal_apply) and ProposalApplyService.
     # current_enforcement_point documents the proposal apply path.
     # ------------------------------------------------------------------
     PolicyActionDefinition(
@@ -315,9 +342,9 @@ _reg(
         audit_required=False,
         approval_capability=None,
         default_required_approver_role=None,
-        current_enforcement_point="not_implemented",
+        current_enforcement_point="app.workspace_console.api",
         description="Read files or metadata from a workspace.",
-        lifecycle_status=PolicyActionLifecycle.RESERVED,
+        lifecycle_status=PolicyActionLifecycle.WIRED_DIRECT,
     ),
     PolicyActionDefinition(
         action="workspace.apply_patch",
@@ -425,14 +452,12 @@ _reg(
         lifecycle_status=PolicyActionLifecycle.RESERVED,
     ),
     # ------------------------------------------------------------------
-    # Automation reserved actions — registered for vocabulary completeness.
-    # No Automation models, tables, APIs, scheduler, or worker behavior exist.
-    # These actions always fail closed at PolicyGateway.
+    # Automation WIRED_DIRECT actions — wired to AutomationService.
     #
-    # Future automation-origin policy context keys (not DB schema):
-    #   automation_id, automation_policy_snapshot_hash,
-    #   automation_preflight_snapshot_hash, credential_allowance_id,
-    #   credential_allowance_snapshot, automation_approval_id.
+    # Context keys consumed by PolicyEngine rules:
+    #   agent_id, trigger_type, trigger_origin.
+    # Metadata keys (audit-only, never grant permission):
+    #   automation_name, preflight_executable.
     #
     # Automation-origin runs must not directly mutate memory, policy, workspace
     # files, credentials, capabilities, or deployment state. They may produce
@@ -450,12 +475,13 @@ _reg(
         audit_required=True,
         approval_capability="approve_automation_change",
         default_required_approver_role="owner",
-        current_enforcement_point="not_implemented",
+        current_enforcement_point="app.automation.service.AutomationService.create",
         description=(
             "Create an automation rule that can trigger agent runs on a "
             "schedule or event."
         ),
-        lifecycle_status=PolicyActionLifecycle.RESERVED,
+        lifecycle_status=PolicyActionLifecycle.WIRED_DIRECT,
+        record_failure_mode=RecordFailureMode.FAIL_CLOSED,
     ),
     PolicyActionDefinition(
         action="automation.fire",
@@ -465,9 +491,10 @@ _reg(
         audit_required=True,
         approval_capability=None,
         default_required_approver_role="owner",
-        current_enforcement_point="not_implemented",
-        description="Trigger an automation rule to start an agent run immediately.",
-        lifecycle_status=PolicyActionLifecycle.RESERVED,
+        current_enforcement_point="app.automation.service.AutomationService.fire",
+        description="Manually trigger an automation rule to queue an agent run.",
+        lifecycle_status=PolicyActionLifecycle.WIRED_DIRECT,
+        record_failure_mode=RecordFailureMode.FAIL_CLOSED,
     ),
     PolicyActionDefinition(
         action="automation.update",
@@ -477,9 +504,10 @@ _reg(
         audit_required=True,
         approval_capability="approve_automation_change",
         default_required_approver_role="owner",
-        current_enforcement_point="not_implemented",
+        current_enforcement_point="app.automation.service.AutomationService.update",
         description="Update an existing automation rule's trigger condition or configuration.",
-        lifecycle_status=PolicyActionLifecycle.RESERVED,
+        lifecycle_status=PolicyActionLifecycle.WIRED_DIRECT,
+        record_failure_mode=RecordFailureMode.FAIL_CLOSED,
     ),
     PolicyActionDefinition(
         action="deployment.propose",

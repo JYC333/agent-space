@@ -54,10 +54,10 @@ def _setup_execution(
 
 
 def test_executed_run_snapshot_has_prefix_and_tail_hash(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=a, user_id=ua.id)
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
@@ -80,10 +80,10 @@ def test_executed_run_snapshot_has_prefix_and_tail_hash(
 
 
 def test_executed_run_snapshot_has_retrieval_trace_json(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=a, user_id=ua.id)
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
@@ -111,10 +111,10 @@ def test_executed_run_snapshot_has_retrieval_trace_json(
 
 
 def test_executed_run_snapshot_has_token_budget_json(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=a, user_id=ua.id)
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
@@ -140,10 +140,10 @@ def test_executed_run_snapshot_has_token_budget_json(
 
 
 def test_executed_run_snapshot_has_source_refs_json(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=a, user_id=ua.id)
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
@@ -167,10 +167,10 @@ def test_executed_run_snapshot_has_source_refs_json(
 
 
 def test_policy_in_source_refs_when_policy_exists(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=a, user_id=ua.id)
 
     # Create an active policy in the space.
@@ -208,10 +208,10 @@ def test_policy_in_source_refs_when_policy_exists(
 
 
 def test_memory_injected_into_context_creates_access_log(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=a, user_id=ua.id)
 
     # Create a space_shared memory so it passes the hard filter for this user.
@@ -251,11 +251,11 @@ def test_memory_injected_into_context_creates_access_log(
 
 
 def test_prefix_hash_stable_for_same_stable_input(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
     """Two runs for the same agent/space produce equal prefix_hash when stable input is unchanged."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=a, user_id=ua.id)
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
@@ -287,10 +287,10 @@ def test_prefix_hash_stable_for_same_stable_input(
     )
 
 
-def test_queued_run_snapshot_initially_has_no_hash(db, cross_space_pair):
+def test_queued_run_snapshot_initially_has_no_hash(db, cross_space_pair_db):
     """A newly created (queued) Run has an empty ContextSnapshot (populated later)."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
@@ -304,11 +304,11 @@ def test_queued_run_snapshot_initially_has_no_hash(db, cross_space_pair):
 
 
 def test_token_budget_json_contains_stable_prefix_pct(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
     """token_budget_json always contains stable_prefix_pct as an audit metric."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=a, user_id=ua.id)
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
@@ -334,7 +334,7 @@ def test_token_budget_json_contains_stable_prefix_pct(
 
 
 def test_token_budget_warning_recorded_when_prefix_exceeds_target(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
     """
     When stable_prefix occupies more than 50% of total context,
@@ -344,8 +344,8 @@ def test_token_budget_warning_recorded_when_prefix_exceeds_target(
     from app.runs.context_snapshot_populator import ContextSnapshotPopulator, _STABLE_PREFIX_BUDGET_CHARS
     from app.models import AgentVersion
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)

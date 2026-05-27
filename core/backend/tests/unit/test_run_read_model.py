@@ -42,9 +42,9 @@ def test_adapter_metadata_capability_not_applicable():
     assert meta.model_config_behavior == "not_applicable"
 
 
-def test_build_resolved_model_agent_default(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_build_resolved_model_agent_default(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     mp = factories.create_test_model_provider(
         db,
         space_id=a,
@@ -73,10 +73,10 @@ def test_build_resolved_model_agent_default(db, cross_space_pair):
     assert resolved.disclosure_note is not None
 
 
-def test_build_resolved_model_unsupported_adapter(db, cross_space_pair):
+def test_build_resolved_model_unsupported_adapter(db, cross_space_pair_db):
     """A run with an unsupported/removed adapter_type should surface adapter_model_support=unsupported."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     mp = factories.create_test_model_provider(
         db, space_id=a, with_api_key=True, commit=False
     )
@@ -94,9 +94,9 @@ def test_build_resolved_model_unsupported_adapter(db, cross_space_pair):
     assert resolved.source == "request"
 
 
-def test_run_to_out_includes_resolved_model(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_run_to_out_includes_resolved_model(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     out = run_to_out(db, run)

@@ -266,7 +266,6 @@ UNSUPPORTED_LEARNING_TYPES = [
     "validation_recipe_update",
     "capability_update",
     "policy_update",
-    "agent_config_update",
     "automation_update",
     "tool_binding_update",
 ]
@@ -423,9 +422,9 @@ class TestReflectionProposalBuilderTitleNormalization:
 
 
 class TestProposalServiceAcceptPath:
-    def test_accept_creates_task(self, db, cross_space_pair):
-        a = cross_space_pair["space_a_id"]
-        ua = cross_space_pair["user_a"]
+    def test_accept_creates_task(self, db, cross_space_pair_db):
+        a = cross_space_pair_db["space_a_id"]
+        ua = cross_space_pair_db["user_a"]
 
         run = factories.create_test_run(db, space_id=a, user_id=ua.id, commit=True)
         prop = factories.create_test_proposal(
@@ -535,7 +534,7 @@ class TestBuilderProposalOwnership:
         The proposal.apply gate checks space membership, not proposal creator.
         A member-role user cannot accept, but an owner can.
         """
-        from app.memory.proposals import ProposalPolicyDeniedError
+        from app.policy.exceptions import PolicyGateBlocked
         from app.models import SpaceMembership, User
         from app.runs.proposal_builder import ReflectionProposalBuilder
 
@@ -546,7 +545,7 @@ class TestBuilderProposalOwnership:
 
         # Create a member-role user who should be denied
         member_id = str(ULID())
-        member_user = User(id=member_id, space_id=space_id, display_name="member", email=f"{member_id}@t.invalid")
+        member_user = User(id=member_id, display_name="member", email=f"{member_id}@t.invalid")
         db.add(member_user)
         db.add(SpaceMembership(id=str(ULID()), space_id=space_id, user_id=member_id, role="member", status="active"))
         db.flush()
@@ -589,7 +588,7 @@ class TestBuilderProposalOwnership:
         assert prop.created_by_user_id is None  # system-created proposal, no user creator
 
         # Member cannot accept — policy gate denies
-        with pytest.raises(ProposalPolicyDeniedError):
+        with pytest.raises(PolicyGateBlocked):
             ProposalService(db).accept(prop.id, space_id=space_id, user_id=member_id)
         db.expire_all()
         assert db.query(Task).filter(Task.space_id == space_id).count() == 0

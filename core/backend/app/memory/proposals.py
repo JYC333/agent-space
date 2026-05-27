@@ -14,7 +14,7 @@ Supported proposal types for accept():
 
 from dataclasses import dataclass
 from datetime import datetime, UTC
-from typing import Optional
+from typing import Any, Optional
 
 from ulid import ULID
 from sqlalchemy.orm import Session
@@ -22,9 +22,9 @@ from sqlalchemy import and_, case, func, not_, or_
 from sqlalchemy.orm.attributes import flag_modified
 
 from ..db_uow import UnitOfWork
-from ..models import MemoryEntry, Policy, Proposal, Run, Task, Workspace
+from ..models import AgentVersion, MemoryEntry, Policy, Proposal, Run, Task, Workspace
 from ..param_binding import duplicate_mapper
-from ..policy.gateway import PolicyGateway, PolicyDecisionRecordPersistError
+from ..policy.gateway import PolicyCheckRequest, PolicyGateway
 from ..projects.service import assert_project_in_space
 from ..schemas import MemoryCreate
 from .proposal_payload import (
@@ -34,35 +34,6 @@ from .proposal_payload import (
 
 
 _ALLOWED_URGENCY = frozenset({"low", "normal", "high", "critical"})
-
-class ProposalPolicyDeniedError(Exception):
-    """Raised when the proposal.apply policy gate denies the acting user.
-
-    Carries the full PolicyDecision so callers can construct meaningful error responses.
-    HTTP callers should surface this as 403 without exposing metadata_json.
-    """
-
-    def __init__(
-        self,
-        *,
-        user_id: str,
-        space_id: str,
-        proposal_id: str,
-        proposal_type: str,
-        risk_level: str,
-        decision: str,
-        message: str,
-        audit_code: Optional[str] = None,
-    ) -> None:
-        self.user_id = user_id
-        self.space_id = space_id
-        self.proposal_id = proposal_id
-        self.proposal_type = proposal_type
-        self.risk_level = risk_level
-        self.decision = decision
-        self.message = message
-        self.audit_code = audit_code
-        super().__init__(message)
 
 
 @dataclass
@@ -75,6 +46,7 @@ class ProposalAcceptResult:
     updated_paths: Optional[list[str]] = None
     egress_review: bool = False
     task: Optional[Task] = None
+    agent_version: Optional[AgentVersion] = None
 
 
 # ---------------------------------------------------------------------------
@@ -477,12 +449,7 @@ class ProposalService:
             review_deadline=review_deadline,
             expires_at=expires_at,
         )
-        # Policy gate: proposal.create — audit for user-created memory proposals.
-        # Never stores proposed_content or rationale in policy metadata.
-        # Decision inputs (target_visibility, target_scope) go in context;
-        # audit-only identifiers and settings stay in metadata_json.
-        from ..policy.gateway import PolicyGateway, PolicyCheckRequest
-        _create_decision = PolicyGateway(self.db).check_and_record(
+        PolicyGateway(self.db).enforce(
             PolicyCheckRequest(
                 action="proposal.create",
                 actor_type="user",
@@ -502,12 +469,6 @@ class ProposalService:
                 },
             )
         )
-        if _create_decision.denied:
-            from fastapi import HTTPException
-            raise HTTPException(
-                status_code=403,
-                detail=f"proposal.create denied by policy: {_create_decision.message}",
-            )
 
         proposal = build_memory_create_proposal(
             _new_id(),
@@ -528,6 +489,90 @@ class ProposalService:
             subject_user_id=subject_user_id,
             sensitivity_level=sensitivity_level,
             selected_user_ids=selected_user_ids,
+            urgency=urgency,
+            review_deadline=review_deadline,
+            expires_at=expires_at,
+        )
+        self.db.add(proposal)
+        self.db.commit()
+        self.db.refresh(proposal)
+        return proposal
+
+    def create_user_proposal(
+        self,
+        *,
+        space_id: str,
+        user_id: str,
+        proposal_type: str,
+        title: str,
+        payload_json: dict,
+        rationale: str,
+        workspace_id: str | None = None,
+        risk_level: str = "low",
+        urgency: str = "normal",
+        target_scope: str | None = None,
+        target_visibility: str | None = None,
+        target_memory_id: str | None = None,
+        review_deadline: datetime | None = None,
+        expires_at: datetime | None = None,
+        policy_action: str = "proposal.create",
+        policy_resource_type: str = "proposal",
+        policy_resource_id: str | None = None,
+        policy_context: dict[str, Any] | None = None,
+        policy_metadata_json: dict[str, Any] | None = None,
+    ) -> Proposal:
+        """Create a user-origin proposal behind a proposal creation policy gate.
+
+        Most user proposals use ``proposal.create``. Domain-specific proposal
+        boundaries may pass a more precise action such as ``agent.config_update``
+        so audit records express the concrete risk without duplicating records.
+        """
+        validate_proposal_review_fields(
+            urgency=urgency,
+            review_deadline=review_deadline,
+            expires_at=expires_at,
+        )
+        base_context = {
+            "target_visibility": target_visibility,
+            "target_scope": target_scope,
+        }
+        if policy_context:
+            base_context.update(policy_context)
+        base_metadata = {
+            "proposal_type": proposal_type,
+            "workspace_id": workspace_id,
+            "target_memory_id": target_memory_id,
+            "sensitivity_level": payload_json.get("sensitivity_level"),
+            "urgency": urgency,
+        }
+        if policy_metadata_json:
+            base_metadata.update(policy_metadata_json)
+        PolicyGateway(self.db).enforce(
+            PolicyCheckRequest(
+                action=policy_action,
+                actor_type="user",
+                actor_id=user_id,
+                space_id=space_id,
+                resource_type=policy_resource_type,
+                resource_id=policy_resource_id,
+                resource_space_id=space_id,
+                context=base_context,
+                metadata_json=base_metadata,
+            )
+        )
+
+        proposal = Proposal(
+            id=_new_id(),
+            space_id=space_id,
+            proposal_type=proposal_type,
+            status="pending",
+            title=title,
+            summary=None,
+            payload_json=payload_json,
+            rationale=rationale,
+            workspace_id=workspace_id,
+            created_by_user_id=user_id,
+            risk_level=risk_level,
             urgency=urgency,
             review_deadline=review_deadline,
             expires_at=expires_at,
@@ -901,7 +946,7 @@ class ProposalService:
           - preview=True  (dry-run proposals must never be applied)
           - Proposal does not belong to the requested space
 
-        Raises ProposalPolicyDeniedError when the acting user lacks approval authority
+        Raises PolicyGateBlocked when the acting user lacks approval authority
         for this proposal type and risk level in the space (HTTP callers: 403).
         Unsupported proposal types are denied at the policy gate with
         audit_code="unsupported_proposal_type".
@@ -914,41 +959,14 @@ class ProposalService:
         if proposal.space_id != space_id:
             return None
 
-        # Single policy gate: runs HardInvariantGuard + approval authority check + record persistence.
+        # Policy gate: enforce_proposal_apply writes one durable ALLOW record or
+        # raises PolicyGateBlocked for the global HTTP handler to record.
         # ProposalRiskLevelError propagates to caller (invalid proposal.risk_level → 422).
-        # PolicyDecisionRecordPersistError is converted to a stable denial: proposal stays pending,
-        # ProposalApplyService.apply() is never called.
-        try:
-            decision = PolicyGateway(self.db).check_proposal_apply(
-                user_id=user_id,
-                space_id=space_id,
-                proposal=proposal,
-            )
-        except PolicyDecisionRecordPersistError:
-            raise ProposalPolicyDeniedError(
-                user_id=user_id,
-                space_id=space_id,
-                proposal_id=proposal.id,
-                proposal_type=proposal.proposal_type,
-                risk_level="unknown",
-                decision="deny",
-                message=(
-                    "Policy audit record persistence failed for proposal.apply. "
-                    "Proposal not applied. audit_code='policy_decision_record_persist_failed'"
-                ),
-                audit_code="policy_decision_record_persist_failed",
-            )
-        if not decision.allowed:
-            raise ProposalPolicyDeniedError(
-                user_id=user_id,
-                space_id=space_id,
-                proposal_id=proposal.id,
-                proposal_type=proposal.proposal_type,
-                risk_level=decision.risk_level.value,
-                decision=decision.decision.value,
-                message=decision.message,
-                audit_code=decision.audit_code,
-            )
+        PolicyGateway(self.db).enforce_proposal_apply(
+            user_id=user_id,
+            space_id=space_id,
+            proposal=proposal,
+        )
 
         from .apply_service import ProposalApplyService, ProposalApplyError
 
@@ -961,6 +979,7 @@ class ProposalService:
             )
             proposal.status = "accepted"
             proposal.decided_at = datetime.now(UTC)
+            proposal.reviewed_by = user_id
 
             if result.memory is not None:
                 proposal.resulting_memory_id = result.memory.id
@@ -1015,6 +1034,7 @@ class ProposalService:
             updated_paths=result.updated_paths,
             egress_review=result.egress_review,
             task=result.task,
+            agent_version=result.agent_version,
         )
 
     def reject(

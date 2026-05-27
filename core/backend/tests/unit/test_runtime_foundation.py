@@ -3,7 +3,7 @@
 Covers:
   1. CLI registry — claude_code and codex_cli are registered
   2. Automation-origin CLI run rejects missing explicit credential profile
-  3. Manual-origin CLI run uses container-default fallback (no failure)
+  3. Manual-origin CLI run rejects missing explicit credential profile
   4. Critical risk level fails early (critical_runtime_requires_unimplemented_one_shot_docker)
   5. High risk level resolves to worktree and passes file-access adapter policy
   6. Preflight endpoint — success and failure paths
@@ -23,6 +23,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from types import SimpleNamespace
+
+
+def _patch_success_adapter_without_artifact(monkeypatch) -> None:
+    """Execute successfully without unrelated runtime artifact persistence."""
+    from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRuntimeConfig
+
+    monkeypatch.setattr(
+        "app.runs.execution.instantiate_runtime_adapter",
+        lambda _adapter_type: ConfigurableFakeRuntimeAdapter(FakeRuntimeConfig(output_text="")),
+    )
 
 
 # ===========================================================================
@@ -88,7 +98,7 @@ def _make_ctx(
 
 class TestAutomationCredentialCheck:
     def test_automation_origin_with_no_profile_fails(self):
-        """Automation run with no credential grant must fail with runtime_credential_profile_required."""
+        """CLI run with no credential grant must fail with runtime_credential_profile_required."""
         from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
 
         adapter = ClaudeCodeRuntimeAdapter()
@@ -101,7 +111,6 @@ class TestAutomationCredentialCheck:
 
         assert result.success is False
         assert result.error_code == "runtime_credential_profile_required"
-        assert "automation" in result.error_text.lower()
         assert "credential profile" in result.error_text.lower()
 
     def test_automation_origin_with_profile_proceeds(self):
@@ -130,8 +139,8 @@ class TestAutomationCredentialCheck:
         assert result.success is True
         assert result.error_code is None
 
-    def test_manual_origin_with_no_profile_uses_fallback(self):
-        """Manual-origin runs may fall back to container-default credentials — no failure."""
+    def test_manual_origin_with_no_profile_fails(self):
+        """Manual-origin CLI runs require the same explicit credential profile."""
         from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
 
         adapter = ClaudeCodeRuntimeAdapter()
@@ -150,10 +159,13 @@ class TestAutomationCredentialCheck:
         ):
             result = adapter.execute(ctx)
 
-        assert result.success is True
+        assert result.success is False
+        assert result.error_code == "runtime_credential_profile_required"
         meta = result.adapter_metadata or {}
-        assert meta.get("credential_source") == "container_default"
+        assert meta.get("credential_source") == "none"
         assert meta.get("fallback_used") is True
+        assert meta.get("fallback_reason") == "no_profile_configured"
+        mock_cli.run.assert_not_called()
 
     def test_codex_cli_automation_origin_fails_without_profile(self):
         """codex_cli shares the same automation credential guard."""
@@ -571,7 +583,7 @@ class TestIncompletePatchMetadata:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         ops = [{"op": "replace_file", "path": "main.py", "content": "code"}]
         skipped = []  # nothing skipped
@@ -599,7 +611,7 @@ class TestIncompletePatchMetadata:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         ops = [{"op": "replace_file", "path": "main.py", "content": "code"}]
         skipped = [{"path": "deleted.txt", "reason": "deleted"}]
@@ -628,7 +640,7 @@ class TestIncompletePatchMetadata:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -667,7 +679,7 @@ class TestIncompletePatchMetadata:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -697,7 +709,7 @@ class TestIncompletePatchMetadata:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         ops = [{"op": "replace_file", "path": "src.py", "content": "x=1"}]
         skipped = [{"path": "image.png", "reason": "binary"}]
@@ -726,7 +738,7 @@ class TestIncompletePatchMetadata:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         ops = [{"op": "replace_file", "path": "small.py", "content": "y=2"}]
         skipped = [{"path": "big_model.bin", "reason": "too_large"}]
@@ -922,7 +934,10 @@ class TestPreflightService:
         db.commit()
 
         req = PreflightRequest(agent_id=agent.id, workspace_id=ws.id)
-        result = PreflightService(db).check(req, space_id=space_id)
+        mock_broker = MagicMock()
+        mock_broker.list_profiles.return_value = [MagicMock(id="claude_code/default")]
+        with patch("app.credentials.broker.CredentialBroker", return_value=mock_broker):
+            result = PreflightService(db).check(req, space_id=space_id)
         assert result.executable is True
         assert result.adapter_type == "claude_code"
         assert result.required_sandbox_level == "worktree"
@@ -998,7 +1013,7 @@ class TestPreflightExecutionAgreement:
     """Preflight and RunExecutionService must resolve the same adapter_type and
     required_sandbox_level for any given AgentVersion configuration."""
 
-    def test_echo_low_risk_preflight_matches_execution(self, db):
+    def test_echo_low_risk_preflight_matches_execution(self, db, monkeypatch):
         """echo / low-risk: both preflight and execution resolve adapter=echo, sandbox=none."""
         from tests.support import factories
         from app.runs.preflight import PreflightRequest, PreflightService
@@ -1021,6 +1036,7 @@ class TestPreflightExecutionAgreement:
         assert preflight.required_sandbox_level == "none"
 
         # Execute the run and verify execution used the same adapter_type / sandbox_level
+        _patch_success_adapter_without_artifact(monkeypatch)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
         RunExecutionService(db).execute_run(run.id, space_id=space_id)
         db.refresh(run)
@@ -1108,7 +1124,7 @@ class TestCancellationRace:
         db.refresh(run)
         assert run.status == "cancelled"
 
-    def test_normal_completion_not_affected_by_cancellation_check(self, db):
+    def test_normal_completion_not_affected_by_cancellation_check(self, db, monkeypatch):
         """When no cancellation occurs the run should complete normally."""
         from tests.support import factories
         from app.runs.execution import RunExecutionService
@@ -1123,6 +1139,7 @@ class TestCancellationRace:
         version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
         db.commit()
 
+        _patch_success_adapter_without_artifact(monkeypatch)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
         result = RunExecutionService(db).execute_run(run.id, space_id=space_id)
 

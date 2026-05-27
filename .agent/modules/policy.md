@@ -59,7 +59,7 @@ PolicyActionDefinition:
   action, resource_type, default_risk_level, default_decision
   audit_required, approval_capability, default_required_approver_role
   current_enforcement_point, description
-  lifecycle_status: WIRED | RESERVED
+  lifecycle_status: WIRED_DIRECT | WIRED_VIA_PROPOSAL | RESERVED
 
 RiskLevel: low | medium | high | critical
 Decision: allow | deny | require_approval
@@ -75,18 +75,20 @@ actions must raise through `require_action_definition()` — they do not silentl
 through as allow.
 
 **PolicyGateway is the enforcement entry point.** `PolicyEngine` alone is not
-enforcement — it is the stateless rule evaluator inside `PolicyGateway`. All business
-code that performs sensitive actions must call `PolicyGateway.check_and_record()`.
+enforcement; it is the stateless rule evaluator inside `PolicyGateway`. Sensitive
+business actions use `PolicyGateway.enforce()` or
+`PolicyGateway.enforce_proposal_apply()`.
 
-The registry now contains two categories of actions, distinguished by `lifecycle_status`:
+The registry has three lifecycle categories:
 
-**Wired actions** (`lifecycle_status=WIRED`) — have a real `PolicyGateway.check_and_record()` call site.
-**Reserved actions** (`lifecycle_status=RESERVED`) — registered for registry completeness and
+**Direct actions** (`lifecycle_status=WIRED_DIRECT`) have a real preferred enforcement call site.
+**Proposal actions** (`lifecycle_status=WIRED_VIA_PROPOSAL`) are protected by `proposal.apply`.
+**Reserved actions** (`lifecycle_status=RESERVED`) are registered for registry completeness and
 fail-closed defence-in-depth. `current_enforcement_point="not_implemented"`. Not wired
 to any business code yet. `PolicyGateway` always denies reserved actions regardless of
 registry `default_decision`. Not full RBAC/ABAC — they express intent and default risk.
 
-### Wired actions (12)
+### Wired actions
 
 | Action | Resource | Risk | Default Decision | Enforcement |
 |---|---|---|---|---|
@@ -96,18 +98,25 @@ registry `default_decision`. Not full RBAC/ABAC — they express intent and defa
 | `context.render_for_runtime` | context | low | allow | `runs/execution.py` |
 | `workspace.write_patch` | workspace | high | require_approval | `memory/code_patch_apply.py` |
 | `artifact.persist` | artifact | low | allow (audit_required) | `runs/artifact_persistence.py` |
-| `proposal.create` | proposal | low | allow | `memory/proposals.py` + `runs/code_patch_collector.py` |
-| `proposal.apply` | proposal | medium | require_approval | `memory/proposals.py` |
+| `proposal.create` | proposal | low | allow | `memory/proposals.py` + `runs/code_patch_collector.py` via `enforce()` |
+| `proposal.apply` | proposal | medium | require_approval | `memory/proposals.py` via `enforce_proposal_apply()` |
+| `workspace.read` | workspace | low | allow | `workspace_console/api.py` via `enforce()` |
+| `agent.config_update` | agent | high | allow (audit_required) | `agents/agent_service.py` via `enforce()` before config proposal creation |
 | `memory.create` | memory | medium | require_approval | via `proposal.apply` |
 | `memory.update` | memory | medium | require_approval | via `proposal.apply` |
 | `memory.archive` | memory | medium | require_approval | via `proposal.apply` |
-| `policy.change` | policy | high | require_approval | `policy/rules.py` |
+| `policy.change` | policy | high | require_approval | via `proposal.apply` |
+| `automation.create` | automation | high | require_approval | `automation/service.py` via `enforce()` |
+| `automation.update` | automation | high | require_approval | `automation/service.py` via `enforce()` |
+| `automation.fire` | automation | medium | require_approval | `automation/service.py` via `enforce()` |
 
-`proposal.create` covers both user-created memory proposals and system-created
-code_patch proposals from CLI runs; the `proposal.apply` gate is the durable
-enforcement point for all memory mutations.
+`proposal.create` covers user-created memory proposals and system-created code_patch
+proposals from CLI runs. `agent.config_update` is the domain-specific creation gate
+for agent execution config proposals; accepted mutation still goes through
+`proposal.apply`. The `proposal.apply` gate is the durable enforcement point for all
+memory mutations and accepted config proposal application.
 
-### Reserved actions (15) — lifecycle_status=RESERVED
+### Reserved actions — lifecycle_status=RESERVED
 
 Registered for registry completeness and fail-closed defence-in-depth.
 `current_enforcement_point="not_implemented"`. `PolicyGateway` always denies these.
@@ -116,7 +125,6 @@ Not wired to business code. The registry is **not** full RBAC/ABAC.
 | Action | Resource | Risk | Default Decision |
 |---|---|---|---|
 | `context.use_personal_grant` | personal_memory_grant | high | require_approval |
-| `workspace.read` | workspace | low | allow |
 | `workspace.apply_patch` | workspace | high | require_approval |
 | `artifact.export` | artifact | high | require_approval |
 | `proposal.approve` | proposal | medium | require_approval |
@@ -125,9 +133,6 @@ Not wired to business code. The registry is **not** full RBAC/ABAC.
 | `capability.enable` | capability | high | require_approval |
 | `capability.update` | capability | high | require_approval |
 | `tool_binding.enable` | tool_binding | high | require_approval |
-| `automation.create` | automation | high | require_approval |
-| `automation.fire` | automation | medium | require_approval |
-| `automation.update` | automation | high | require_approval |
 | `deployment.propose` | deployment | high | require_approval |
 | `deployment.execute` | deployment | **critical** | require_approval |
 
@@ -178,20 +183,17 @@ Effective risk computation:
 
 At proposal accept time:
 - `allow` → proceed to `ProposalApplyService.apply()`
-- `require_approval` → actor lacks authority; raise `ProposalPolicyDeniedError`; proposal stays pending
-- `deny` → fail
-
-`ProposalPolicyDeniedError` carries: user_id, space_id, proposal_id, proposal_type, risk_level, decision, message, audit_code.
+- `require_approval` or `deny` → `PolicyGateway.enforce_proposal_apply()` raises `PolicyGateBlocked`; proposal stays pending
 
 ## Additional Enforcement Boundaries
 
 ### proposal.apply gate (wired)
 `ProposalService.accept()` in `app/memory/proposals.py` calls
-`check_proposal_apply_policy(...)` before any call to `ProposalApplyService.apply()`.
+`PolicyGateway.enforce_proposal_apply(...)` before any call to `ProposalApplyService.apply()`.
 
 - Accepted proposals represent the human approval event.
 - The acting user must have approval authority for the proposal type and effective risk level.
-- `ProposalPolicyDeniedError` is raised if denied; HTTP callers return 403.
+- `PolicyGateBlocked` is raised if denied or approval is required; the HTTP handler rolls back the request session, writes the blocking audit record independently, and returns 403.
 - No durable write (MemoryEntry, Policy, Task, code patch) occurs on denial.
 - `ProposalRiskLevelError` is raised for invalid proposal.risk_level; HTTP callers return 422.
 
@@ -205,22 +207,26 @@ At proposal accept time:
 
 ### PolicyGateway (enforcement entry point)
 
-`PolicyGateway(db).check_and_record(PolicyCheckRequest(...))` is the only enforcement
-entry point for sensitive policy decisions. Do not call `PolicyEngine` or
+`PolicyGateway.enforce(PolicyCheckRequest(...))` and
+`PolicyGateway.enforce_proposal_apply(...)` are the preferred enforcement entry
+points for sensitive policy decisions. Do not call `PolicyEngine` or
 `HardInvariantGuard` directly to authorize or perform sensitive actions.
-`PreflightService` alone may call `PolicyEngine` for a non-mutating dry-run
-simulation; it does not persist `PolicyDecisionRecord`, and actual runtime
-execution still uses `PolicyGateway`.
+The documented non-mutating simulation points may call `PolicyEngine`; they do
+not persist `PolicyDecisionRecord`, and actual runtime execution still uses
+`PolicyGateway`.
 
-`PolicyGateway.check_proposal_apply(user_id, space_id, proposal)` — consolidated gate
-for proposal.apply: runs HardInvariantGuard, role/risk matrix, persists record, returns
-decision. Called by `ProposalService.accept()`.
+`DurablePolicyAuditWriter` writes only `PolicyDecisionRecord` using an independent
+transaction. `PolicyGateBlocked` represents DENY and REQUIRE_APPROVAL. Local runtime
+blocked paths call `write_blocked_gate_audit()` once; `PolicyAuditPersistError`
+blocks a fail-closed action whose audit cannot be persisted. Business transactions
+are never committed just to commit audit or lock rows.
 
 ### Wired enforcement points
 
 `PolicyGateway` is the only enforcement entry point. `PolicyEngine` is internal to
-the policy package except for the documented non-mutating `PreflightService`
-simulation path.
+the policy package except for the documented non-mutating simulation paths:
+`PreflightService`, `RunService.create_run`, `AgentService._check_run`, and
+`AutomationPolicyPreflightService`.
 
 | Action | File | When |
 |---|---|---|
@@ -228,11 +234,11 @@ simulation path.
 | `runtime.use_credential` | `runs/execution.py` | Uses real `Credential.space_id` from DB; before secret resolution |
 | `context.inject_memory` | `runs/context_snapshot_populator.py` | Before ContextBuilder.build() |
 | `context.render_for_runtime` | `runs/execution.py` | After context snapshot, before adapter.execute() |
-| `artifact.persist` | `runs/artifact_persistence.py` | DENY and REQUIRE_APPROVAL both block write; before filesystem write |
-| `proposal.create` | `memory/proposals.py`, `runs/code_patch_collector.py` | User-created memory proposals and system-created code_patch proposals |
-| `proposal.apply` | `memory/proposals.py` via `PolicyGateway.check_proposal_apply` | Before ProposalApplyService.apply() |
-| `workspace.write_patch` | `memory/code_patch_apply.py` | Covered by workspace.write_patch rule |
-| `policy.change` | `policy/rules.py` | rule_policy_change — role check |
+| `artifact.persist` | `runs/artifact_persistence.py` via `enforce()` | Before egress guard and filesystem/row persistence; fail-closed audit |
+| `proposal.create` | `memory/proposals.py`, `runs/code_patch_collector.py` via `enforce()` | Code patch collection uses `force_record=True` |
+| `proposal.apply` | `memory/proposals.py` via `enforce_proposal_apply()` | Before ProposalApplyService.apply() |
+| `workspace.write_patch` | `memory/code_patch_apply.py` via `enforce()` | Before any workspace file writes |
+| `policy.change` | `memory/proposals.py` via `enforce_proposal_apply()` | Protected by the `proposal.apply` gate for `policy_change` proposals |
 
 **runtime.execute context fields**: Rule-relevant fields (`agent_status`, `agent_tool_permissions`,
 `tool_name`, `adapter_type`, `trigger_origin`, `risk_level`, etc.) are passed in
@@ -271,22 +277,21 @@ return DENY with `audit_code="unknown_policy_action"`. `BUILTIN_RULES` evaluated
 4. `rule_use_credential` — same-space manual ALLOW; cross-space DENY (CRITICAL); automation REQUIRE_APPROVAL
 5. `rule_tool_permission` — deny `runtime.execute` if tool/adapter not in agent allowlist
 6. `rule_workspace_write_patch` — `require_approval` without proposal_id; `allow` with valid proposal
-7. `rule_policy_change` — deny `policy.change` for roles below admin
+7. `rule_automation` — allow automation.create/update/fire for admin/owner; deny lower roles
+8. `rule_runtime_execute_risk_level` — reflect context risk level on `runtime.execute`
 
 Falls through to registry default only for **known** registered actions when no rule matches.
 
 ## Future Work
 
 - **Wiring placeholder actions**: Each placeholder action in the registry needs a
-  `PolicyGateway.check_and_record()` call site before it becomes enforceable. Until
+  preferred `PolicyGateway.enforce()` call site before it becomes enforceable. Until
   wired, unknown-action fail-closed still applies if they are called without a registry
   entry, but having them registered means callers can at least look up metadata.
 - `context.use_personal_grant` — add PolicyGateway call site in `personal_memory_grants/`
   when grant resolution merits its own policy audit trail; until then, egress guard is
   the enforcement boundary.
-- `workspace.read` — add PolicyGateway call site in workspace read APIs when access
-  control is needed.
-- `memory.create/update/archive` are WIRED_VIA_PROPOSAL — enforced only through `proposal.apply`. There is no direct `PolicyGateway.check_and_record()` call site for these actions and none should be added without explicit design.
+- `memory.create/update/archive` are WIRED_VIA_PROPOSAL — enforced only through `proposal.apply`.
 - Extend approval resolver with per-user/per-project approval capabilities when needed.
 - Space-level policy row overrides (currently domain-specific only).
 - Future multi-agent child-run creation: design as `run.spawn_child` / `run.create_child`

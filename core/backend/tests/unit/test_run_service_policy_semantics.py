@@ -2,8 +2,8 @@
 
 Invariant: RunService.create_run is a run-creation path, not an execution path.
 It must not persist PolicyDecisionRecord rows for runtime.execute.
-Real enforcement (with PolicyGateway.check_and_record and PolicyDecisionRecord)
-happens exclusively in RunExecutionService.
+Real enforcement through PolicyGateway and PolicyDecisionRecord happens in
+RunExecutionService.
 
 These tests verify:
   1. create_run succeeds for a valid active agent (no PolicyDecisionRecord created).
@@ -125,7 +125,7 @@ class TestCreateRunDoesNotPersistPolicyDecisionRecord:
 
 
 class TestCreateRunUsesEngineDirectly:
-    """Verify that create_run uses PolicyEngine, not PolicyGateway.check_and_record."""
+    """Verify that create_run uses PolicyEngine simulation, not durable gateway enforcement."""
 
     def test_validate_target_agent_calls_engine_not_gateway(self, db):
         space_id = "svc-policy-4"
@@ -157,32 +157,166 @@ class TestCreateRunUsesEngineDirectly:
             "(non-mutating preflight)"
         )
 
-    def test_gateway_check_and_record_not_called_during_create_run(self, db):
+    def test_create_run_preflight_does_not_write_runtime_execute_pdr(self, db):
         space_id = "svc-policy-5"
         factories.create_test_space(db, space_id=space_id, commit=True)
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
-        gateway_calls: list[str] = []
+        pdr_before = _count_pdr(db, space_id)
+        RunService(db).create_run(
+            agent_id=agent.id,
+            data=_make_run_create(),
+            space_id=space_id,
+            user_id=user.id,
+        )
+        pdr_after = _count_pdr(db, space_id)
 
-        from app.policy.gateway import PolicyGateway
-        original_check_and_record = PolicyGateway.check_and_record
+        assert pdr_after == pdr_before, (
+            "create_run preflight must not persist runtime.execute policy records. "
+            "Preflight uses PolicyEngine simulation; real enforcement is in RunExecutionService."
+        )
 
-        def spy_check_and_record(self_gw, req):
-            gateway_calls.append(req.action)
-            return original_check_and_record(self_gw, req)
 
-        with patch.object(PolicyGateway, "check_and_record", spy_check_and_record):
+class TestCreateRunRuntimeProviderDefaults:
+    """Runtime requirements decide whether RunService attaches ModelProvider defaults."""
+
+    def _make_agent_with_default_provider(self, db, space_id: str):
+        factories.create_test_space(db, space_id=space_id)
+        user = factories.create_test_user(db, space_id=space_id)
+        agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id)
+        provider = factories.create_test_model_provider(
+            db,
+            space_id=space_id,
+            is_default=True,
+            with_api_key=True,
+            commit=False,
+        )
+        db.flush()
+        return user, agent, provider
+
+    def test_space_default_provider_does_not_attach_to_echo_run(self, db):
+        space_id = "svc-runtime-provider-echo"
+        user, agent, provider = self._make_agent_with_default_provider(db, space_id)
+
+        run = RunService(db).create_run(
+            agent_id=agent.id,
+            data=_make_run_create(adapter_type="echo"),
+            space_id=space_id,
+            user_id=user.id,
+        )
+
+        assert provider.id is not None
+        assert run.model_provider_id is None
+        assert run.model_override_json is None
+
+    def test_explicit_provider_request_is_ignored_for_echo_run(self, db):
+        space_id = "svc-runtime-provider-echo-explicit"
+        user, agent, provider = self._make_agent_with_default_provider(db, space_id)
+
+        run = RunService(db).create_run(
+            agent_id=agent.id,
+            data=_make_run_create(adapter_type="echo", model_provider_id=provider.id),
+            space_id=space_id,
+            user_id=user.id,
+        )
+
+        assert run.model_provider_id is None
+        assert run.model_override_json is None
+
+    def test_unknown_runtime_requirements_raise_stable_create_error(self, db):
+        space_id = "svc-runtime-provider-unknown"
+        user, agent, _provider = self._make_agent_with_default_provider(db, space_id)
+        version = db.query(AgentVersion).filter(
+            AgentVersion.id == agent.current_version_id
+        ).first()
+        allowed = set((version.runtime_policy_json or {}).get("allowed_adapter_types") or [])
+        allowed.add("unknown_requirements_runtime")
+        version.runtime_policy_json = {
+            **(version.runtime_policy_json or {}),
+            "allowed_adapter_types": sorted(allowed),
+        }
+        db.flush()
+
+        with pytest.raises(HTTPException) as exc:
             RunService(db).create_run(
                 agent_id=agent.id,
-                data=_make_run_create(),
+                data=_make_run_create(adapter_type="unknown_requirements_runtime"),
                 space_id=space_id,
                 user_id=user.id,
             )
 
-        runtime_gateway_calls = [a for a in gateway_calls if a == "runtime.execute"]
-        assert not runtime_gateway_calls, (
-            f"create_run must not call PolicyGateway.check_and_record('runtime.execute'). "
-            f"Found {len(runtime_gateway_calls)} call(s). "
-            "Preflight uses PolicyEngine directly; real enforcement is in RunExecutionService."
+        assert exc.value.status_code == 400
+        assert "runtime_requirements_missing" in str(exc.value.detail)
+
+    @pytest.mark.parametrize("adapter_type", ["claude_code", "codex_cli"])
+    def test_space_default_provider_does_not_attach_to_cli_runs(self, db, adapter_type):
+        space_id = f"svc-runtime-provider-{adapter_type}"
+        user, agent, provider = self._make_agent_with_default_provider(db, space_id)
+        version = db.query(AgentVersion).filter(
+            AgentVersion.id == agent.current_version_id
+        ).first()
+        version.runtime_config_json = {"adapter_type": adapter_type}
+        db.flush()
+
+        run = RunService(db).create_run(
+            agent_id=agent.id,
+            data=_make_run_create(),
+            space_id=space_id,
+            user_id=user.id,
         )
+
+        assert provider.id is not None
+        assert run.model_provider_id is None
+        assert run.model_override_json is None
+
+    def test_api_runtime_inherits_valid_space_default_provider(self, db):
+        space_id = "svc-runtime-provider-api-default"
+        user, agent, provider = self._make_agent_with_default_provider(db, space_id)
+        version = db.query(AgentVersion).filter(
+            AgentVersion.id == agent.current_version_id
+        ).first()
+        version.runtime_config_json = {"adapter_type": "model_provider_api"}
+        db.flush()
+
+        run = RunService(db).create_run(
+            agent_id=agent.id,
+            data=_make_run_create(),
+            space_id=space_id,
+            user_id=user.id,
+        )
+
+        assert run.model_provider_id == provider.id
+        assert run.model_override_json["source"] == "space_default"
+
+    def test_runtime_scoped_provider_default_is_preferred_for_required_runtime(self, db):
+        space_id = "svc-runtime-provider-scoped-default"
+        user, agent, global_default = self._make_agent_with_default_provider(db, space_id)
+        runtime_default = factories.create_test_model_provider(
+            db,
+            space_id=space_id,
+            name="api-runtime-default",
+            with_api_key=True,
+            default_model="gpt-runtime-default",
+            commit=False,
+        )
+        runtime_default.config_json = {"runtime_default_for": "model_provider_api"}
+        version = db.query(AgentVersion).filter(
+            AgentVersion.id == agent.current_version_id
+        ).first()
+        version.runtime_config_json = {"adapter_type": "model_provider_api"}
+        db.flush()
+
+        run = RunService(db).create_run(
+            agent_id=agent.id,
+            data=_make_run_create(),
+            space_id=space_id,
+            user_id=user.id,
+        )
+
+        assert run.model_provider_id == runtime_default.id
+        assert run.model_provider_id != global_default.id
+        assert run.model_override_json == {
+            "model": "gpt-runtime-default",
+            "source": "runtime_default",
+        }

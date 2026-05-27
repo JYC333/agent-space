@@ -111,8 +111,7 @@ class RuntimePreflightService:
             )
 
         # 3. CLI adapters must have an explicit credential profile for automation.
-        #    Automation-origin runs must not rely on container-default credentials
-        #    (Option A fallback) because there is no human operator to re-authenticate.
+        #    Container-default credentials are not an allowed fallback for CLI runs.
         #    API-key-based adapters (echo, capability) are exempt — they authenticate
         #    via resolved_credentials and have no CLI login state.
         if requires_cli_credential_profile and not has_credential_profile:

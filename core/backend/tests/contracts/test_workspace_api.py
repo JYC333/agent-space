@@ -3,14 +3,57 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from app.config import settings
+from app.policy.decisions import Decision, PolicyDecision, RiskLevel
+from app.policy.exceptions import PolicyGateBlocked
 from tests.support import factories
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
     del user_id
     return {"space_id": space_id}
+
+
+def _fresh_policy_record(action: str, **filters):
+    from app.db import SessionLocal
+    from app.models import PolicyDecisionRecord
+
+    fresh = SessionLocal()
+    try:
+        query = fresh.query(PolicyDecisionRecord).filter(
+            PolicyDecisionRecord.action == action
+        )
+        for field, value in filters.items():
+            query = query.filter(getattr(PolicyDecisionRecord, field) == value)
+        return query.order_by(PolicyDecisionRecord.created_at.desc()).first()
+    finally:
+        fresh.close()
+
+
+def _blocked_workspace_read(*, user_id: str, space_id: str, workspace_id: str) -> PolicyGateBlocked:
+    return PolicyGateBlocked(
+        decision=PolicyDecision(
+            decision=Decision.DENY,
+            message="workspace read denied",
+            risk_level=RiskLevel.LOW,
+            reason_code="test_workspace_read_denied",
+            audit_code="test_workspace_read_denied",
+            policy_source="test",
+        ),
+        action="workspace.read",
+        actor_type="user",
+        actor_id=user_id,
+        actor_ref=None,
+        space_id=space_id,
+        resource_type="workspace",
+        resource_id=workspace_id,
+        run_id=None,
+        proposal_id=None,
+        metadata_json={"read_kind": "file", "relative_path": "readme.txt"},
+        http_status_code=403,
+    )
 
 
 def test_workspace_create_uses_backend_canonical_fields(api_client, db, cross_space_pair, tmp_path, monkeypatch):
@@ -116,6 +159,40 @@ def test_file_read_success_and_traversal_denied(api_client, db, cross_space_pair
     assert "LEAK_OUT" not in bad.text
 
 
+def test_workspace_read_policy_deny_blocks_file_content(api_client, db, cross_space_pair, tmp_path, monkeypatch):
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    ws_root = tmp_path / "wsroot"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "workspace_root", str(ws_root))
+
+    ws = factories.create_test_workspace(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        name="policy-denied",
+        commit=True,
+    )
+    disk = ws_root / ws.id
+    disk.mkdir(parents=True, exist_ok=True)
+    (disk / "readme.txt").write_text("DO_NOT_LEAK", encoding="utf-8")
+
+    with patch("app.workspace_console.api.PolicyGateway") as gateway:
+        gateway.return_value.enforce.side_effect = _blocked_workspace_read(
+            user_id=ua.id,
+            space_id=a,
+            workspace_id=ws.id,
+        )
+        r = cross_space_pair["client_a"].get(
+            f"/api/v1/workspace-console/workspaces/{ws.id}/file",
+            params={**_params(a, ua.id), "path": "readme.txt"},
+        )
+
+    assert r.status_code == 403
+    assert r.json().get("error") == "policy_denied"
+    assert "DO_NOT_LEAK" not in r.text
+
+
 def test_file_read_absolute_outside_root_rejected(api_client, db, cross_space_pair, tmp_path, monkeypatch):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
@@ -141,3 +218,141 @@ def test_file_read_absolute_outside_root_rejected(api_client, db, cross_space_pa
     )
     assert r.status_code in (403, 400, 404)
     assert "OUTSIDE_SECRET" not in r.text
+
+
+def test_git_diff_output_is_bounded(api_client, db, cross_space_pair, tmp_path, monkeypatch):
+    import app.workspace_console.api as workspace_api
+
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    ws_root = tmp_path / "wsroot"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "workspace_root", str(ws_root))
+
+    ws = factories.create_test_workspace(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        name="diff",
+        commit=True,
+    )
+    disk = ws_root / ws.id
+    disk.mkdir(parents=True, exist_ok=True)
+    huge_diff = "x" * (workspace_api._MAX_DIFF_BYTES + 1024)
+    monkeypatch.setattr(workspace_api, "_run_git", lambda *args, **kwargs: huge_diff)
+
+    r = cross_space_pair["client_a"].get(
+        f"/api/v1/workspace-console/workspaces/{ws.id}/git/diff",
+        params=_params(a, ua.id),
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["truncated"] is True
+    assert len(body["diff"].encode("utf-8")) <= workspace_api._MAX_DIFF_BYTES
+
+
+def test_full_diff_workspace_read_is_force_audited(api_client, db, cross_space_pair, tmp_path, monkeypatch):
+    import app.workspace_console.api as workspace_api
+
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    ws_root = tmp_path / "wsroot"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "workspace_root", str(ws_root))
+
+    ws = factories.create_test_workspace(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        name="system-core-read",
+        commit=True,
+    )
+    ws.workspace_type = "system_core"
+    ws.system_managed = True
+    db.commit()
+    disk = ws_root / ws.id
+    disk.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        workspace_api,
+        "_run_git",
+        lambda *args, **kwargs: "diff --git a/readme.txt b/readme.txt\n+safe\n",
+    )
+
+    r = cross_space_pair["client_a"].get(
+        f"/api/v1/workspace-console/workspaces/{ws.id}/git/diff",
+        params=_params(a, ua.id),
+    )
+
+    assert r.status_code == 200, r.text
+    record = _fresh_policy_record("workspace.read", resource_id=ws.id)
+    assert record is not None
+    assert record.decision == "allow"
+    assert set(record.metadata_json["audit_reasons"]) >= {"system_core", "full_diff"}
+
+
+def test_full_diff_secret_values_are_redacted(api_client, db, cross_space_pair, tmp_path, monkeypatch):
+    import app.workspace_console.api as workspace_api
+
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    ws_root = tmp_path / "wsroot"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "workspace_root", str(ws_root))
+
+    ws = factories.create_test_workspace(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        name="diff-redact",
+        commit=True,
+    )
+    (ws_root / ws.id).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        workspace_api,
+        "_run_git",
+        lambda *args, **kwargs: "diff --git a/app.txt b/app.txt\n+API_KEY=supersecret\n",
+    )
+
+    r = cross_space_pair["client_a"].get(
+        f"/api/v1/workspace-console/workspaces/{ws.id}/git/diff",
+        params=_params(a, ua.id),
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["redacted"] is True
+    assert "supersecret" not in body["diff"]
+    assert "[REDACTED]" in body["diff"]
+
+
+def test_full_diff_secret_like_paths_are_denied(api_client, db, cross_space_pair, tmp_path, monkeypatch):
+    import app.workspace_console.api as workspace_api
+
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    ws_root = tmp_path / "wsroot"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "workspace_root", str(ws_root))
+
+    ws = factories.create_test_workspace(
+        db,
+        space_id=a,
+        created_by_user_id=ua.id,
+        name="diff-secret-path",
+        commit=True,
+    )
+    (ws_root / ws.id).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        workspace_api,
+        "_run_git",
+        lambda *args, **kwargs: "diff --git a/.env.local b/.env.local\n+TOKEN=secret\n",
+    )
+
+    r = cross_space_pair["client_a"].get(
+        f"/api/v1/workspace-console/workspaces/{ws.id}/git/diff",
+        params=_params(a, ua.id),
+    )
+
+    assert r.status_code == 403
+    assert "secret" not in r.text.lower()

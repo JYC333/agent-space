@@ -10,8 +10,8 @@ for a Run.  It enforces:
 5. The resolved root is under ``settings.workspace_root`` unless the Workspace
    explicitly opts in via ``allow_external_root=True``.
 
-No legacy compatibility: workspaces whose root resolves outside
-``settings.workspace_root`` fail unless ``allow_external_root`` is set.
+Workspaces whose root resolves outside ``settings.workspace_root`` fail unless
+``allow_external_root`` is set.
 """
 
 from __future__ import annotations

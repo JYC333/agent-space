@@ -1,27 +1,22 @@
 from __future__ import annotations
 
-"""PolicyGateway — enforcement entry point for sensitive policy checks.
+"""PolicyGateway — production enforcement entry point for sensitive actions.
 
-Usage:
+Production services call ``PolicyGateway.enforce()`` for directly wired actions
+and ``PolicyGateway.enforce_proposal_apply()`` for proposal application. Both
+return ``PolicyDecision`` on ALLOW and raise ``PolicyGateBlocked`` for DENY or
+REQUIRE_APPROVAL. Blocking handlers write the durable audit record exactly once.
 
-    from app.policy.gateway import PolicyGateway, PolicyCheckRequest
+``PolicyAuditPersistError`` is raised when a fail-closed action requires a
+durable ALLOW audit record and that independent write fails. The sensitive
+action must not proceed in that case.
 
-    decision = PolicyGateway(db).check_and_record(
-        PolicyCheckRequest(
-            actor_type="user",
-            actor_id=user_id,
-            space_id=space_id,
-            action="runtime.execute",
-            resource_type="run",
-            resource_id=run_id,
-            run_id=run_id,
-        )
-    )
-    if decision.denied:
-        # ... handle denial
+``DurablePolicyAuditWriter`` writes only ``PolicyDecisionRecord`` in an
+independent transaction. Business transactions are not committed to persist
+policy audit.
 
 Stack:
-    HardInvariantGuard → PolicyEngine → PolicyDecisionRecord (persisted when needed)
+    HardInvariantGuard → PolicyEngine → PolicyDecisionRecord
 
 Field semantics for context vs metadata_json:
 
@@ -40,31 +35,29 @@ Field semantics for context vs metadata_json:
                     invariants that scan for approval-proof flags (proposal.apply,
                     policy.change).  Not a decision input for any other action.
 
-Action lifecycle:
-
-    wired_direct       — action has a real direct PolicyGateway.check_and_record() call
-                         site; HardInvariantGuard and PolicyEngine are run normally.
-    wired_via_proposal — action is protected via the proposal.apply gate only; must
-                         not be called directly through check_and_record(). Doing so
-                         always fails closed with reason_code="policy_action_via_proposal_only".
-    reserved           — action is registered for vocabulary completeness but has no
-                         enforcement point; PolicyGateway always denies reserved actions
-                         (fail-closed) before running HardInvariantGuard or PolicyEngine.
+Durable audit required when any of:
+    - action definition audit_required=True
+    - action definition record_failure_mode=FAIL_CLOSED
+    - force_record=True
+    - decision is DENY
+    - decision is REQUIRE_APPROVAL
+    - risk_level is CRITICAL
+    - trigger_origin == "automation"
 
 record_failure_mode (RecordFailureMode):
-
     BEST_EFFORT — if PolicyDecisionRecord persistence fails, log a warning and continue.
-    FAIL_CLOSED — if PolicyDecisionRecord persistence fails, raise
-                  PolicyDecisionRecordPersistError. The sensitive action must not
-                  proceed. Actions with FAIL_CLOSED: runtime.use_credential,
-                  workspace.write_patch, proposal.apply, policy.change.
+    FAIL_CLOSED — if durable audit persistence fails, raise
+                  PolicyAuditPersistError. The sensitive action must not proceed.
+                  Actions with FAIL_CLOSED: runtime.use_credential,
+                  workspace.write_patch, artifact.persist, proposal.apply, policy.change,
+                  automation.create, automation.update, automation.fire.
                   Additional dynamic escalation to FAIL_CLOSED:
                     - automation-origin (trigger_origin="automation") + audit_required=True,
                       regardless of ALLOW/DENY/REQUIRE_APPROVAL.
                     - CRITICAL risk level + audit_required=True,
                       regardless of ALLOW/DENY/REQUIRE_APPROVAL.
-                    - automation-origin + non-ALLOW (legacy rule for non-audit-required).
-                    - CRITICAL risk level + non-ALLOW (legacy rule for non-audit-required).
+                    - automation-origin + non-ALLOW on non-audit-required actions.
+                    - CRITICAL risk level + non-ALLOW on non-audit-required actions.
 """
 
 import logging
@@ -72,7 +65,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Optional
 
-from .actions import PolicyActionLifecycle, RecordFailureMode, get_action_definition, require_action_definition, UnknownPolicyActionError
+from .actions import PolicyActionLifecycle, RecordFailureMode, require_action_definition, UnknownPolicyActionError
 from .decisions import Decision, PolicyDecision, RiskLevel
 from .engine import PolicyEngine
 from .hard_invariants import HardInvariantGuard
@@ -84,25 +77,9 @@ _engine = PolicyEngine()
 _guard = HardInvariantGuard()
 
 
-class PolicyDecisionRecordPersistError(Exception):
-    """Raised when PolicyDecisionRecord persistence fails for a fail_closed action.
-
-    The sensitive action that triggered this check must not proceed when this is raised.
-    Callers should treat this as a hard policy error and surface it as a denial.
-    """
-
-    def __init__(self, action: str, actor_id: Optional[str] = None):
-        self.action = action
-        self.actor_id = actor_id
-        super().__init__(
-            f"PolicyDecisionRecord persistence failed for fail_closed action {action!r}. "
-            "Sensitive action must not proceed. audit_code='policy_decision_record_persist_failed'"
-        )
-
-
 @dataclass
 class PolicyCheckRequest:
-    """Structured request for PolicyGateway.check_and_record().
+    """Structured request for PolicyGateway.enforce().
 
     Field semantics:
 
@@ -143,13 +120,20 @@ class PolicyCheckRequest:
     force_record: bool = False
 
 
-def _should_record(defn, decision: PolicyDecision, force: bool) -> bool:
-    """Return True when the decision should be persisted as a PolicyDecisionRecord."""
-    if force:
+def _is_durable_audit_required(defn, decision: PolicyDecision, req: PolicyCheckRequest) -> bool:
+    """Return True when durable (independently committed) audit persistence is required."""
+    if req.force_record:
         return True
     if defn is not None and defn.audit_required:
         return True
+    if defn is not None and defn.record_failure_mode == RecordFailureMode.FAIL_CLOSED:
+        return True
     if decision.denied or decision.requires_approval:
+        return True
+    if decision.risk_level == RiskLevel.CRITICAL:
+        return True
+    trigger_origin = (req.context or {}).get("trigger_origin", "")
+    if trigger_origin == "automation":
         return True
     return False
 
@@ -176,14 +160,7 @@ def _build_engine_ctx(req: PolicyCheckRequest) -> dict[str, Any]:
 
 
 def _guard_ctx(req: PolicyCheckRequest) -> dict[str, Any]:
-    """Build the context dict passed to HardInvariantGuard.
-
-    Decision inputs come exclusively from req.context (flattened to top level
-    and also stored under the "context" key for invariants that need the
-    structured bag).  req.metadata_json is stored under "metadata_json" for
-    defensive sentinel checks only — it never grants permission or satisfies
-    approval.
-    """
+    """Build the context dict passed to HardInvariantGuard."""
     ctx: dict[str, Any] = {"action": req.action}
     if req.space_id:
         ctx["space_id"] = req.space_id
@@ -194,70 +171,9 @@ def _guard_ctx(req: PolicyCheckRequest) -> dict[str, Any]:
     if req.payload:
         ctx["payload"] = req.payload
     if req.context:
-        # Flatten decision inputs to top level so invariants read them as simple
-        # keys.  Also keep the structured bag under "context" for invariants that
-        # explicitly access it (e.g. _personal_context_block_not_persisted).
         ctx.update(req.context)
         ctx["context"] = req.context
     return ctx
-
-
-def _persist_record(
-    db: Any,
-    req: PolicyCheckRequest,
-    decision: PolicyDecision,
-    failure_mode: RecordFailureMode = RecordFailureMode.BEST_EFFORT,
-) -> None:
-    """Persist a PolicyDecisionRecord.
-
-    failure_mode=BEST_EFFORT — log warning and continue on error (never raises).
-    failure_mode=FAIL_CLOSED — raise PolicyDecisionRecordPersistError on error;
-                               callers must treat this as a hard policy error and
-                               not proceed with the sensitive action.
-    """
-    try:
-        from ..models import PolicyDecisionRecord
-
-        safe_meta = sanitize_policy_metadata(req.metadata_json)
-        record = PolicyDecisionRecord(
-            space_id=req.space_id,
-            actor_type=req.actor_type,
-            actor_id=req.actor_id,
-            actor_ref_json=req.actor_ref,
-            action=req.action,
-            resource_type=req.resource_type or decision.resource_type,
-            resource_id=req.resource_id or decision.resource_id,
-            decision=decision.decision.value,
-            risk_level=decision.risk_level.value,
-            required_approver_role=decision.required_approver_role,
-            approval_capability=decision.approval_capability,
-            policy_rule_id=decision.policy_rule_id,
-            policy_source=decision.policy_source,
-            policy_id=decision.policy_id,
-            audit_code=decision.audit_code,
-            run_id=req.run_id,
-            proposal_id=req.proposal_id or decision.resource_id,
-            metadata_json=safe_meta,
-            created_at=datetime.now(UTC),
-        )
-        db.add(record)
-        db.flush()
-    except Exception:
-        if failure_mode == RecordFailureMode.FAIL_CLOSED:
-            log.error(
-                "PolicyDecisionRecord persist failed (fail_closed) action=%s actor=%s — "
-                "sensitive action will not proceed",
-                req.action,
-                req.actor_id,
-                exc_info=True,
-            )
-            raise PolicyDecisionRecordPersistError(action=req.action, actor_id=req.actor_id)
-        log.warning(
-            "PolicyDecisionRecord persist failed (best-effort) action=%s actor=%s",
-            req.action,
-            req.actor_id,
-            exc_info=True,
-        )
 
 
 def _resolve_failure_mode(
@@ -265,21 +181,9 @@ def _resolve_failure_mode(
     decision: PolicyDecision,
     req: PolicyCheckRequest,
 ) -> RecordFailureMode:
-    """Resolve effective record_failure_mode for this (defn, decision, req) combination.
-
-    Priority (first match wins):
-      1. Per-action definition's record_failure_mode (already FAIL_CLOSED for
-         runtime.use_credential, workspace.write_patch, proposal.apply, policy.change).
-      2. Escalate to FAIL_CLOSED when trigger_origin="automation" and the action
-         has audit_required=True — applies regardless of ALLOW/DENY/REQUIRE_APPROVAL.
-      3. Escalate to FAIL_CLOSED when risk_level=CRITICAL and the action has
-         audit_required=True — applies regardless of ALLOW/DENY/REQUIRE_APPROVAL.
-      4. Escalate to FAIL_CLOSED when trigger_origin="automation" and decision is
-         non-ALLOW (legacy rule, covers non-audit-required automation actions).
-      5. Escalate to FAIL_CLOSED when risk_level=CRITICAL and decision is non-ALLOW
-         (legacy rule, covers non-audit-required critical actions).
-      6. Default: BEST_EFFORT.
-    """
+    """Resolve effective record_failure_mode for this (defn, decision, req) combination."""
+    if req.force_record:
+        return RecordFailureMode.FAIL_CLOSED
     if defn is not None and defn.record_failure_mode == RecordFailureMode.FAIL_CLOSED:
         return RecordFailureMode.FAIL_CLOSED
     _audit_required = defn is not None and defn.audit_required
@@ -298,10 +202,47 @@ def _resolve_failure_mode(
     return RecordFailureMode.BEST_EFFORT
 
 
+def _build_audit_envelope(
+    req: PolicyCheckRequest,
+    decision: PolicyDecision,
+    defn: Any = None,
+) -> "PolicyAuditEnvelope":
+    """Build a PolicyAuditEnvelope from a computed decision and request."""
+    from .audit import PolicyAuditEnvelope
+
+    resource_type = req.resource_type or (defn.resource_type if defn else None) or decision.resource_type
+    proposal_id = req.proposal_id
+    if proposal_id is None and resource_type == "proposal":
+        proposal_id = req.resource_id or decision.resource_id
+
+    return PolicyAuditEnvelope(
+        space_id=req.space_id or decision.space_id,
+        actor_type=req.actor_type or decision.actor_type,
+        actor_id=req.actor_id or decision.actor_id,
+        actor_ref_json=req.actor_ref or decision.actor_ref,
+        action=req.action,
+        resource_type=resource_type,
+        resource_id=req.resource_id or decision.resource_id,
+        decision=decision.decision.value,
+        risk_level=decision.risk_level.value,
+        required_approver_role=decision.required_approver_role,
+        approval_capability=decision.approval_capability,
+        policy_rule_id=decision.policy_rule_id,
+        policy_source=decision.policy_source,
+        policy_id=decision.policy_id,
+        audit_code=decision.audit_code,
+        run_id=req.run_id,
+        proposal_id=proposal_id,
+        metadata_json=sanitize_policy_metadata(req.metadata_json),
+        created_at=datetime.now(UTC),
+    )
+
+
 class PolicyGateway:
     """Main entry point for sensitive policy decisions.
 
-    Call check_and_record() from business code before performing a sensitive action.
+    Production entry points: enforce() and enforce_proposal_apply().
+
     Actual sensitive-action enforcement must not call PolicyEngine directly.
     PreflightService's non-mutating PolicyEngine simulation is not enforcement.
     """
@@ -309,182 +250,17 @@ class PolicyGateway:
     def __init__(self, db: Any):
         self.db = db
 
-    def _persist_record_from_decision(
-        self,
-        decision: PolicyDecision,
-        *,
-        actor_type: Optional[str] = None,
-        actor_id: Optional[str] = None,
-        actor_ref: Optional[dict[str, Any]] = None,
-        space_id: Optional[str] = None,
-        run_id: Optional[str] = None,
-        proposal_id: Optional[str] = None,
-        metadata_json: Optional[dict[str, Any]] = None,
-        failure_mode: RecordFailureMode = RecordFailureMode.BEST_EFFORT,
-    ) -> None:
-        """Persist a PolicyDecisionRecord from an already-computed PolicyDecision.
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
-        Use this when a policy check was done outside check_and_record() (e.g.
-        check_proposal_apply_policy) and you need to record its outcome.
+    def _compute_decision(
+        self, req: PolicyCheckRequest
+    ) -> tuple[Any, PolicyDecision]:
+        """Run guard + engine and return (defn, decision).
 
-        failure_mode=FAIL_CLOSED raises PolicyDecisionRecordPersistError on error.
-        """
-        action_label = decision.action or "proposal.apply"
-        try:
-            from ..models import PolicyDecisionRecord
-
-            safe_meta = sanitize_policy_metadata(metadata_json)
-            record = PolicyDecisionRecord(
-                space_id=space_id or decision.space_id,
-                actor_type=actor_type,
-                actor_id=actor_id or decision.actor_id,
-                actor_ref_json=actor_ref or decision.actor_ref,
-                action=action_label,
-                resource_type=decision.resource_type,
-                resource_id=decision.resource_id or proposal_id,
-                decision=decision.decision.value,
-                risk_level=decision.risk_level.value,
-                required_approver_role=decision.required_approver_role,
-                approval_capability=decision.approval_capability,
-                policy_rule_id=decision.policy_rule_id,
-                policy_source=decision.policy_source,
-                policy_id=decision.policy_id,
-                audit_code=decision.audit_code,
-                run_id=run_id,
-                proposal_id=proposal_id or decision.resource_id,
-                metadata_json=safe_meta,
-                created_at=datetime.now(UTC),
-            )
-            self.db.add(record)
-            self.db.flush()
-        except PolicyDecisionRecordPersistError:
-            raise
-        except Exception:
-            if failure_mode == RecordFailureMode.FAIL_CLOSED:
-                log.error(
-                    "PolicyDecisionRecord persist failed (fail_closed) action=%s actor=%s — "
-                    "sensitive action will not proceed",
-                    action_label,
-                    actor_id,
-                    exc_info=True,
-                )
-                raise PolicyDecisionRecordPersistError(action=action_label, actor_id=actor_id)
-            log.warning(
-                "PolicyDecisionRecord persist failed (best-effort) action=%s",
-                action_label,
-                exc_info=True,
-            )
-
-    def check_proposal_apply(
-        self,
-        user_id: str,
-        space_id: str,
-        proposal: Any,
-        metadata_json: Optional[dict[str, Any]] = None,
-    ) -> PolicyDecision:
-        """Evaluate the proposal.apply gate and persist the decision.
-
-        Steps:
-          1. Run HardInvariantGuard — payload flags or egress violations deny immediately.
-          2. Compute effective proposal risk.
-          3. Check user approval authority (role vs risk matrix).
-          4. Persist PolicyDecisionRecord.
-          5. Return PolicyDecision (ALLOW / REQUIRE_APPROVAL / DENY).
-
-        The returned decision always has actor_type="user", actor_id, space_id,
-        resource_type="proposal", resource_id, and proposal_type populated.
-
-        Never calls ProposalApplyService — this is a pure gate.
-        """
-        from .hard_invariants import HardInvariantGuard
-        from .proposal_apply import check_proposal_apply_policy
-
-        guard = HardInvariantGuard()
-        guard_ctx: dict[str, Any] = {
-            "action": "proposal.apply",
-            "space_id": space_id,
-            "payload": proposal.payload_json or {},
-        }
-        invariant_denial = guard.check(guard_ctx)
-        if invariant_denial is not None:
-            # Attach actor and resource fields to the returned decision object.
-            invariant_denial.actor_type = invariant_denial.actor_type or "user"
-            invariant_denial.actor_id = invariant_denial.actor_id or user_id
-            invariant_denial.space_id = invariant_denial.space_id or space_id
-            invariant_denial.resource_type = invariant_denial.resource_type or "proposal"
-            invariant_denial.resource_id = invariant_denial.resource_id or proposal.id
-            invariant_denial.proposal_type = invariant_denial.proposal_type or proposal.proposal_type
-            safe_meta = sanitize_policy_metadata({
-                **(metadata_json or {}),
-                "proposal_type": proposal.proposal_type,
-                "decision_source": "hard_invariant_guard",
-            })
-            # proposal.apply is fail_closed — invariant denial must be persisted or abort.
-            self._persist_record_from_decision(
-                invariant_denial,
-                actor_type="user",
-                actor_id=user_id,
-                space_id=space_id,
-                proposal_id=proposal.id,
-                metadata_json=safe_meta,
-                failure_mode=RecordFailureMode.FAIL_CLOSED,
-            )
-            return invariant_denial
-
-        decision = check_proposal_apply_policy(
-            self.db, user_id=user_id, space_id=space_id, proposal=proposal
-        )
-        # Ensure actor_type and resource fields are populated on returned object.
-        decision.actor_type = decision.actor_type or "user"
-        decision.actor_id = decision.actor_id or user_id
-        decision.space_id = decision.space_id or space_id
-        decision.resource_type = decision.resource_type or "proposal"
-        decision.resource_id = decision.resource_id or proposal.id
-        decision.proposal_type = decision.proposal_type or proposal.proposal_type
-        # proposal.apply is fail_closed — if record cannot be persisted, the apply must not proceed.
-        self._persist_record_from_decision(
-            decision,
-            actor_type="user",
-            actor_id=user_id,
-            space_id=space_id,
-            proposal_id=proposal.id,
-            metadata_json={
-                **(metadata_json or {}),
-                "proposal_type": proposal.proposal_type,
-                "decision_source": "check_proposal_apply_policy",
-            },
-            failure_mode="fail_closed",
-        )
-        return decision
-
-    def check_and_record(self, req: PolicyCheckRequest) -> PolicyDecision:
-        """Evaluate hard invariants, then PolicyEngine, then persist the record.
-
-        Steps:
-          1. Validate action is registered (unknown → DENY, record if needed).
-          2. RESERVED action → DENY, record, return.
-          3. WIRED_VIA_PROPOSAL action → DENY with reason_code="policy_action_via_proposal_only",
-             record, return.  These actions are enforced only via the proposal.apply gate.
-          4. WIRED_DIRECT: Run HardInvariantGuard — if denial, persist and return.
-          5. Call PolicyEngine.
-          6. Attach actor/resource fields to decision.
-          7. Persist PolicyDecisionRecord if audit_required, DENY, REQUIRE_APPROVAL, or forced,
-             using the resolved failure_mode for the action.
-          8. Return PolicyDecision.
-
-        failure_mode resolution (for step 7):
-          - Starts from defn.record_failure_mode (per-action default).
-          - Escalates to FAIL_CLOSED when trigger_origin="automation" and audit_required=True
-            (regardless of ALLOW/DENY/REQUIRE_APPROVAL).
-          - Escalates to FAIL_CLOSED when risk_level=CRITICAL and audit_required=True
-            (regardless of ALLOW/DENY/REQUIRE_APPROVAL).
-          - Escalates to FAIL_CLOSED when trigger_origin="automation" and non-ALLOW
-            (legacy rule for non-audit-required actions).
-          - Escalates to FAIL_CLOSED when risk_level=CRITICAL and non-ALLOW
-            (legacy rule for non-audit-required actions).
-
-        The returned decision always has actor_type, actor_id, actor_ref, space_id,
-        resource_type, and resource_id populated from req where not already set.
+        Handles unknown, RESERVED, and WIRED_VIA_PROPOSAL actions.
+        Does NOT write any audit record.
         """
         try:
             defn = require_action_definition(req.action)
@@ -505,8 +281,7 @@ class PolicyGateway:
                 resource_type=req.resource_type,
                 resource_id=req.resource_id,
             )
-            _persist_record(self.db, req, denial)
-            return denial
+            return None, denial
 
         if defn.lifecycle_status == PolicyActionLifecycle.RESERVED:
             reserved_denial = PolicyDecision(
@@ -531,18 +306,15 @@ class PolicyGateway:
                 required_approver_role=defn.default_required_approver_role,
                 approval_capability=defn.approval_capability,
             )
-            _persist_record(self.db, req, reserved_denial)
-            return reserved_denial
+            return defn, reserved_denial
 
         if defn.lifecycle_status == PolicyActionLifecycle.WIRED_VIA_PROPOSAL:
-            # WIRED_VIA_PROPOSAL actions must not be called directly.  They are enforced
-            # exclusively via check_proposal_apply() / proposal.apply gate.
             via_proposal_denial = PolicyDecision(
                 decision=Decision.DENY,
                 message=(
                     f"Policy action {req.action!r} is enforced via the proposal.apply gate "
-                    "and must not be called directly through check_and_record(). "
-                    "Use PolicyGateway.check_proposal_apply() instead."
+                    "and must not be enforced as a standalone action. "
+                    "Use PolicyGateway.enforce_proposal_apply() instead."
                 ),
                 risk_level=defn.default_risk_level,
                 reason_code="policy_action_via_proposal_only",
@@ -559,23 +331,21 @@ class PolicyGateway:
                 required_approver_role=defn.default_required_approver_role,
                 approval_capability=defn.approval_capability,
             )
-            _persist_record(self.db, req, via_proposal_denial)
-            return via_proposal_denial
+            return defn, via_proposal_denial
 
         # WIRED_DIRECT: run invariants then engine.
         guard_ctx = _guard_ctx(req)
         invariant_denial = _guard.check(guard_ctx)
         if invariant_denial is not None:
-            # Attach actor and resource fields to the returned decision object.
             invariant_denial.actor_type = invariant_denial.actor_type or req.actor_type
             invariant_denial.actor_id = invariant_denial.actor_id or req.actor_id
             invariant_denial.actor_ref = invariant_denial.actor_ref or req.actor_ref
             invariant_denial.space_id = invariant_denial.space_id or req.space_id
-            invariant_denial.resource_type = invariant_denial.resource_type or (defn.resource_type if defn else req.resource_type)
+            invariant_denial.resource_type = (
+                invariant_denial.resource_type or defn.resource_type or req.resource_type
+            )
             invariant_denial.resource_id = invariant_denial.resource_id or req.resource_id
-            failure_mode = _resolve_failure_mode(defn, invariant_denial, req)
-            _persist_record(self.db, req, invariant_denial, failure_mode=failure_mode)
-            return invariant_denial
+            return defn, invariant_denial
 
         engine_ctx = _build_engine_ctx(req)
         decision = _engine.check(engine_ctx)
@@ -584,10 +354,196 @@ class PolicyGateway:
         decision.actor_ref = decision.actor_ref or req.actor_ref
         decision.space_id = decision.space_id or req.space_id
         decision.resource_id = decision.resource_id or req.resource_id
-        decision.resource_type = decision.resource_type or (defn.resource_type if defn else None)
+        decision.resource_type = decision.resource_type or defn.resource_type
+        return defn, decision
 
-        if _should_record(defn, decision, req.force_record):
-            failure_mode = _resolve_failure_mode(defn, decision, req)
-            _persist_record(self.db, req, decision, failure_mode=failure_mode)
+    # ------------------------------------------------------------------
+    # Production enforcement entry point
+    # ------------------------------------------------------------------
+
+    def enforce(self, req: PolicyCheckRequest) -> PolicyDecision:
+        """Evaluate hard invariants, then PolicyEngine.
+
+        Returns PolicyDecision on ALLOW.
+        Raises PolicyGateBlocked on DENY or REQUIRE_APPROVAL (no audit write here;
+            the global exception handler writes the record via DurablePolicyAuditWriter).
+        Raises PolicyAuditPersistError if ALLOW + fail_closed audit write fails.
+
+        Steps:
+          1. Resolve action definition; fail closed for unknown/reserved/via-proposal-only.
+          2. Run HardInvariantGuard.
+          3. Run PolicyEngine.
+          4. If decision is ALLOW:
+             - If durable audit is required: write via DurablePolicyAuditWriter.
+             - If write fails and effective failure mode is FAIL_CLOSED:
+               raise PolicyAuditPersistError.
+             - Otherwise log and continue (BEST_EFFORT).
+             - Return decision.
+          5. If decision is DENY or REQUIRE_APPROVAL:
+             - Do not perform any business write.
+             - Do not commit the request db session.
+             - Raise PolicyGateBlocked carrying the decision and sanitized audit envelope.
+             - The global exception handler writes the durable audit record.
+        """
+        from .exceptions import PolicyAuditPersistError, PolicyGateBlocked
+        from .audit import DurablePolicyAuditWriter
+
+        defn, decision = self._compute_decision(req)
+        failure_mode = _resolve_failure_mode(defn, decision, req)
+
+        if decision.denied or decision.requires_approval:
+            envelope = _build_audit_envelope(req, decision, defn)
+            raise PolicyGateBlocked(
+                decision=decision,
+                action=req.action,
+                actor_type=req.actor_type,
+                actor_id=req.actor_id,
+                actor_ref=req.actor_ref,
+                space_id=req.space_id,
+                resource_type=req.resource_type or (defn.resource_type if defn else None),
+                resource_id=req.resource_id,
+                run_id=req.run_id,
+                proposal_id=req.proposal_id,
+                metadata_json=envelope.metadata_json,
+                http_status_code=403,
+            )
+
+        # ALLOW — write durable audit if required.
+        if _is_durable_audit_required(defn, decision, req):
+            envelope = _build_audit_envelope(req, decision, defn)
+            try:
+                DurablePolicyAuditWriter().write(envelope)
+            except Exception:
+                if failure_mode == RecordFailureMode.FAIL_CLOSED:
+                    log.error(
+                        "PolicyAuditPersistError (fail_closed ALLOW) action=%s actor=%s",
+                        req.action, req.actor_id, exc_info=True,
+                    )
+                    raise PolicyAuditPersistError(action=req.action, actor_id=req.actor_id)
+                log.warning(
+                    "PolicyDecisionRecord persist failed (best-effort ALLOW) action=%s actor=%s",
+                    req.action, req.actor_id, exc_info=True,
+                )
+
+        return decision
+
+    # ------------------------------------------------------------------
+    # Proposal apply gate — preferred
+    # ------------------------------------------------------------------
+
+    def enforce_proposal_apply(
+        self,
+        user_id: str,
+        space_id: str,
+        proposal: Any,
+        metadata_json: Optional[dict[str, Any]] = None,
+    ) -> PolicyDecision:
+        """Evaluate the proposal.apply gate.
+
+        Returns PolicyDecision on ALLOW (with durable audit record committed).
+        Raises PolicyGateBlocked on DENY or REQUIRE_APPROVAL (global handler writes record).
+        Raises PolicyAuditPersistError if ALLOW audit write fails (proposal.apply is FAIL_CLOSED).
+
+        Never calls ProposalApplyService — this is a pure gate.
+        """
+        from .exceptions import PolicyAuditPersistError, PolicyGateBlocked
+        from .audit import DurablePolicyAuditWriter, PolicyAuditEnvelope
+        from .hard_invariants import HardInvariantGuard
+        from .proposal_apply import check_proposal_apply_policy
+
+        guard = HardInvariantGuard()
+        guard_ctx: dict[str, Any] = {
+            "action": "proposal.apply",
+            "space_id": space_id,
+            "payload": proposal.payload_json or {},
+        }
+        invariant_denial = guard.check(guard_ctx)
+        if invariant_denial is not None:
+            invariant_denial.actor_type = invariant_denial.actor_type or "user"
+            invariant_denial.actor_id = invariant_denial.actor_id or user_id
+            invariant_denial.space_id = invariant_denial.space_id or space_id
+            invariant_denial.resource_type = invariant_denial.resource_type or "proposal"
+            invariant_denial.resource_id = invariant_denial.resource_id or proposal.id
+            invariant_denial.proposal_type = invariant_denial.proposal_type or proposal.proposal_type
+            safe_meta = sanitize_policy_metadata({
+                **(metadata_json or {}),
+                "proposal_type": proposal.proposal_type,
+                "decision_source": "hard_invariant_guard",
+            })
+            # Blocking — raise PolicyGateBlocked; handler writes record.
+            raise PolicyGateBlocked(
+                decision=invariant_denial,
+                action="proposal.apply",
+                actor_type="user",
+                actor_id=user_id,
+                actor_ref=None,
+                space_id=space_id,
+                resource_type="proposal",
+                resource_id=proposal.id,
+                run_id=None,
+                proposal_id=proposal.id,
+                metadata_json=safe_meta,
+                http_status_code=403,
+            )
+
+        decision = check_proposal_apply_policy(
+            self.db, user_id=user_id, space_id=space_id, proposal=proposal
+        )
+        decision.actor_type = decision.actor_type or "user"
+        decision.actor_id = decision.actor_id or user_id
+        decision.space_id = decision.space_id or space_id
+        decision.resource_type = decision.resource_type or "proposal"
+        decision.resource_id = decision.resource_id or proposal.id
+        decision.proposal_type = decision.proposal_type or proposal.proposal_type
+
+        safe_meta = sanitize_policy_metadata({
+            **(metadata_json or {}),
+            "proposal_type": proposal.proposal_type,
+            "decision_source": "check_proposal_apply_policy",
+        })
+
+        if not decision.allowed:
+            raise PolicyGateBlocked(
+                decision=decision,
+                action="proposal.apply",
+                actor_type="user",
+                actor_id=user_id,
+                actor_ref=None,
+                space_id=space_id,
+                resource_type="proposal",
+                resource_id=proposal.id,
+                run_id=None,
+                proposal_id=proposal.id,
+                metadata_json=safe_meta,
+                http_status_code=403,
+            )
+
+        # ALLOW — proposal.apply is FAIL_CLOSED + audit_required; must write durably.
+        envelope = PolicyAuditEnvelope(
+            space_id=space_id,
+            actor_type="user",
+            actor_id=user_id,
+            actor_ref_json=None,
+            action="proposal.apply",
+            resource_type="proposal",
+            resource_id=proposal.id,
+            decision=decision.decision.value,
+            risk_level=decision.risk_level.value,
+            required_approver_role=decision.required_approver_role,
+            approval_capability=decision.approval_capability,
+            policy_rule_id=decision.policy_rule_id,
+            policy_source=decision.policy_source,
+            policy_id=decision.policy_id,
+            audit_code=decision.audit_code,
+            run_id=None,
+            proposal_id=proposal.id,
+            metadata_json=safe_meta,
+            created_at=datetime.now(UTC),
+        )
+        try:
+            DurablePolicyAuditWriter().write(envelope)
+        except Exception:
+            # proposal.apply is FAIL_CLOSED — audit failure blocks the apply.
+            raise PolicyAuditPersistError(action="proposal.apply", actor_id=user_id)
 
         return decision

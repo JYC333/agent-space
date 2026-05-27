@@ -36,10 +36,10 @@ def test_user(db):
 
 
 @pytest.fixture
-def test_agent(db, test_user):
+def test_agent(db, test_user, test_space):
     return factories.create_test_agent(
         db,
-        space_id=test_user.space_id,
+        space_id=test_space.id,
         owner_user_id=test_user.id,
         name="fixture-agent",
     )
@@ -56,10 +56,10 @@ def test_runtime_adapter(db, test_space):
 
 
 @pytest.fixture
-def test_workspace(db, test_user):
+def test_workspace(db, test_user, test_space):
     return factories.create_test_workspace(
         db,
-        space_id=test_user.space_id,
+        space_id=test_space.id,
         created_by_user_id=test_user.id,
         name="fixture-workspace",
     )
@@ -73,6 +73,29 @@ def fake_runtime():
 @pytest.fixture
 def fake_provider():
     return DeterministicFakeProvider(FakeProviderConfig())
+
+
+@pytest.fixture
+def cross_space_pair_db(db):
+    """Lightweight cross-space fixture: two spaces + users, no HTTP client.
+
+    Use for pure-service tests that don't make HTTP requests. Avoids starting
+    the FastAPI lifespan (and its background worker), which eliminates SQLite
+    lock contention on teardown.
+    """
+    a = str(ULID())
+    b = str(ULID())
+    factories.create_test_space(db, space_id=a, name="Iso A", space_type="team")
+    factories.create_test_space(db, space_id=b, name="Iso B", space_type="team")
+    ua = factories.create_test_user(db, space_id=a, display_name="User A")
+    ub = factories.create_test_user(db, space_id=b, display_name="User B")
+    db.flush()
+    return {
+        "space_a_id": a,
+        "space_b_id": b,
+        "user_a": ua,
+        "user_b": ub,
+    }
 
 
 @pytest.fixture

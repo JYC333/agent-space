@@ -36,6 +36,7 @@ from ..schemas import (
     RunOut,
     RunStatusOut,
     RunStepOut,
+    RunTraceOut,
 )
 from ..auth import get_identity
 from ..artifacts.service import artifact_to_out
@@ -44,7 +45,7 @@ from ..memory.proposals import ProposalService
 from .execution import RunExecutionService
 from .finalization import NonTerminalRunError, PostRunFinalizationService, RunNotFoundError
 from .preflight import PreflightRequest, PreflightResult, PreflightService
-from .read_model import run_to_out
+from .read_model import build_run_trace, run_to_out
 from .run_service import RunService
 from .removed_runtime_token import is_obsolete_runtime_override_token
 from .steps import list_run_steps
@@ -186,6 +187,18 @@ def list_run_events(
         event_type=event_type, status=status,
     )
     return Page(items=[RunEventOut.model_validate(e) for e in items], total=total, limit=limit, offset=offset)
+
+
+@router.get("/{run_id}/trace", response_model=RunTraceOut)
+def get_run_trace(
+    run_id: str,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+):
+    """Return the safe replay spine for a run in one space-scoped response."""
+    space_id, user_id = ids
+    run = RunService(db).get_run(run_id, space_id, user_id=user_id)
+    return build_run_trace(db, run)
 
 
 @router.get("/{run_id}", response_model=RunOut)

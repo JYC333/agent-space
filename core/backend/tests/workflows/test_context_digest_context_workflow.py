@@ -42,7 +42,7 @@ def _setup_execution(monkeypatch, db, tmp_path, *, space_id: str, user_id: str):
     monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
     monkeypatch.setattr(settings, "workspace_root", str(tmp_path / "workspaces"))
     monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
-    fake = ConfigurableFakeRuntimeAdapter(FakeRuntimeConfig(output_text="ok"))
+    fake = ConfigurableFakeRuntimeAdapter(FakeRuntimeConfig(output_text=""))
     monkeypatch.setattr("app.runs.execution.instantiate_runtime_adapter", lambda _t: fake)
 
 
@@ -66,10 +66,10 @@ def _active_policy(db, *, space_id, name="digest-pol") -> Policy:
 # ---------------------------------------------------------------------------
 
 
-def test_active_digest_appears_in_stable_prefix(monkeypatch, db, tmp_path, cross_space_pair):
+def test_active_digest_appears_in_stable_prefix(monkeypatch, db, tmp_path, cross_space_pair_db):
     """When an active policy_bundle digest exists its content appears in compiled_prefix_text."""
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=space_id, user_id=ua.id)
 
     pol = _active_policy(db, space_id=space_id)
@@ -103,9 +103,9 @@ def test_active_digest_appears_in_stable_prefix(monkeypatch, db, tmp_path, cross
 # ---------------------------------------------------------------------------
 
 
-def test_context_snapshot_source_refs_includes_context_digest(monkeypatch, db, tmp_path, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_context_snapshot_source_refs_includes_context_digest(monkeypatch, db, tmp_path, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=space_id, user_id=ua.id)
 
     _active_policy(db, space_id=space_id)
@@ -135,9 +135,9 @@ def test_context_snapshot_source_refs_includes_context_digest(monkeypatch, db, t
     assert ref["section"] == "stable_prefix"
 
 
-def test_context_snapshot_source_refs_includes_source_memory_and_policy_ids(monkeypatch, db, tmp_path, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_context_snapshot_source_refs_includes_source_memory_and_policy_ids(monkeypatch, db, tmp_path, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=space_id, user_id=ua.id)
 
     pol = _active_policy(db, space_id=space_id)
@@ -175,9 +175,9 @@ def test_context_snapshot_source_refs_includes_source_memory_and_policy_ids(monk
 # ---------------------------------------------------------------------------
 
 
-def test_retrieval_trace_records_digest_used_true(monkeypatch, db, tmp_path, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_retrieval_trace_records_digest_used_true(monkeypatch, db, tmp_path, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=space_id, user_id=ua.id)
 
     _active_policy(db, space_id=space_id)
@@ -204,10 +204,10 @@ def test_retrieval_trace_records_digest_used_true(monkeypatch, db, tmp_path, cro
     assert trace.get("fallback_to_memory_retriever") is False
 
 
-def test_missing_digest_falls_back_to_memory_retriever(monkeypatch, db, tmp_path, cross_space_pair):
+def test_missing_digest_falls_back_to_memory_retriever(monkeypatch, db, tmp_path, cross_space_pair_db):
     """When no digest exists, retrieval_trace records fallback_to_memory_retriever=True."""
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=space_id, user_id=ua.id)
 
     # No digest generated.
@@ -236,10 +236,10 @@ def test_missing_digest_falls_back_to_memory_retriever(monkeypatch, db, tmp_path
     assert len(digest_refs) == 0
 
 
-def test_dirty_digest_recorded_in_retrieval_trace(monkeypatch, db, tmp_path, cross_space_pair):
+def test_dirty_digest_recorded_in_retrieval_trace(monkeypatch, db, tmp_path, cross_space_pair_db):
     """Dirty digest is used but retrieval_trace records dirty_digest_used=True."""
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=space_id, user_id=ua.id)
 
     _active_policy(db, space_id=space_id)
@@ -278,10 +278,10 @@ def test_dirty_digest_recorded_in_retrieval_trace(monkeypatch, db, tmp_path, cro
 # ---------------------------------------------------------------------------
 
 
-def test_public_memory_write_creates_proposal_not_memory_entry(db, cross_space_pair):
+def test_public_memory_write_creates_proposal_not_memory_entry(db, cross_space_pair_db):
     """Public memory write creates a pending Proposal, not an active MemoryEntry."""
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     before_mem = db.query(MemoryEntry).filter(
         MemoryEntry.space_id == space_id, MemoryEntry.status == "active"
@@ -316,10 +316,10 @@ def test_public_memory_write_creates_proposal_not_memory_entry(db, cross_space_p
 # ---------------------------------------------------------------------------
 
 
-def test_executed_run_has_prefix_and_tail_hash(monkeypatch, db, tmp_path, cross_space_pair):
+def test_executed_run_has_prefix_and_tail_hash(monkeypatch, db, tmp_path, cross_space_pair_db):
     """Executed run still has prefix_hash and tail_hash."""
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=space_id, user_id=ua.id)
 
     agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=ua.id)
@@ -348,12 +348,12 @@ def test_executed_run_has_prefix_and_tail_hash(monkeypatch, db, tmp_path, cross_
 # ---------------------------------------------------------------------------
 
 
-def test_digest_load_error_records_fallback_reason_in_retrieval_trace(monkeypatch, db, tmp_path, cross_space_pair):
+def test_digest_load_error_records_fallback_reason_in_retrieval_trace(monkeypatch, db, tmp_path, cross_space_pair_db):
     """Unexpected exception during digest load is recorded in retrieval_trace, not silently swallowed."""
     from app.runs import context_snapshot_populator as csp_mod
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=space_id, user_id=ua.id)
 
     def _exploding_load_bundle(db, **kwargs):
@@ -391,10 +391,10 @@ def test_digest_load_error_records_fallback_reason_in_retrieval_trace(monkeypatc
     assert run_row.status == "succeeded", "Run must succeed despite digest load failure"
 
 
-def test_missing_digest_records_fallback_reason_no_digest_available(monkeypatch, db, tmp_path, cross_space_pair):
+def test_missing_digest_records_fallback_reason_no_digest_available(monkeypatch, db, tmp_path, cross_space_pair_db):
     """When no digest exists, retrieval_trace records fallback_reason=no_digest_available (not an error)."""
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=space_id, user_id=ua.id)
 
     agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=ua.id)
@@ -422,10 +422,10 @@ def test_missing_digest_records_fallback_reason_no_digest_available(monkeypatch,
 # ---------------------------------------------------------------------------
 
 
-def test_compiler_version_is_context_digest_v1(monkeypatch, db, tmp_path, cross_space_pair):
+def test_compiler_version_is_context_digest_v1(monkeypatch, db, tmp_path, cross_space_pair_db):
     """compiler_version must be 'context_digest.v1' after digest integration."""
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _setup_execution(monkeypatch, db, tmp_path, space_id=space_id, user_id=ua.id)
 
     agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=ua.id)

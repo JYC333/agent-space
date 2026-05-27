@@ -9,8 +9,8 @@ Separation of concerns:
 
 Agent identity fields (name, description, visibility, status) live on Agent.
 Execution configuration lives on AgentVersion (append-only).
-PATCH with execution config fields creates a new AgentVersion and advances
-current_version_id. Prior versions are never modified.
+PATCH only changes identity fields; post-create execution configuration changes
+must be accepted through an agent_config_update proposal.
 Run execution reads runtime_policy from the current AgentVersion.
 
 run() and submit() create Runs via RunService (status=queued).
@@ -26,6 +26,7 @@ from fastapi import HTTPException
 from ..models import Agent, Run, AgentVersion, ModelProvider
 from ..schemas import (
     AgentCreate, AgentUpdate, RunRequest,
+    AgentConfigProposalCreate,
     AgentVersionCreate,
     RunCreate,
     AgentOut, AgentModelSummary,
@@ -202,69 +203,119 @@ class AgentService:
         return q.order_by(Agent.created_at.desc()).offset(offset).limit(limit).all()
 
     def update(self, agent_id: str, data: AgentUpdate) -> Agent | None:
-        from .version_service import AgentVersionService
         agent = self.get(agent_id)
         if not agent:
             return None
 
-        identity_fields = {}
         exec_field_names = {
-            "default_model_provider_id", "default_model",
-            "model_config_json", "memory_policy_json", "capabilities_json",
-            "tool_policy_json", "runtime_policy_json",
+            "default_model_provider_id",
+            "default_model",
+            "model_provider_id",
+            "model_name",
+            "runtime_adapter_id",
+            "system_prompt",
+            "model_config_json",
+            "runtime_config_json",
+            "context_policy_json",
+            "memory_policy_json",
+            "capabilities_json",
+            "tool_permissions_json",
+            "tool_policy_json",
+            "runtime_policy_json",
         }
 
         update_dict = data.model_dump(exclude_none=True)
+        if any(fn in update_dict for fn in exec_field_names):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Agent execution configuration changes require an "
+                    "agent_config_update proposal. Use POST /api/v1/agents/{agent_id}/config-proposals."
+                ),
+            )
+
         for field, value in update_dict.items():
-            if field not in exec_field_names:
-                identity_fields[field] = value
-
-        for field, value in identity_fields.items():
             setattr(agent, field, value)
-
-        model_fields = {"default_model_provider_id", "default_model"}
-        has_model_change = any(fn in update_dict for fn in model_fields)
-        has_exec_config = any(fn in update_dict for fn in exec_field_names)
-
-        if has_model_change:
-            pid = update_dict.get("default_model_provider_id")
-            if pid is None and agent.current_version_id:
-                current = self.db.query(AgentVersion).filter(
-                    AgentVersion.id == agent.current_version_id
-                ).first()
-                pid = current.model_provider_id if current else None
-            self._validate_model_provider(pid, agent.space_id)
-            model_name = update_dict.get("default_model")
-            if model_name and not pid:
-                raise HTTPException(
-                    status_code=400,
-                    detail="default_model_provider_id is required when default_model is set",
-                )
-
-        if has_exec_config:
-            version_svc = AgentVersionService(self.db)
-            version_dict = self._version_fields_from_current(agent)
-
-            if "default_model_provider_id" in update_dict:
-                version_dict["model_provider_id"] = update_dict["default_model_provider_id"]
-            if "default_model" in update_dict:
-                version_dict["model_name"] = update_dict["default_model"]
-            for field in ["model_config_json", "memory_policy_json", "capabilities_json",
-                          "tool_policy_json", "runtime_policy_json"]:
-                if field in update_dict and update_dict[field] is not None:
-                    if field == "tool_policy_json":
-                        version_dict["tool_permissions_json"] = update_dict[field]
-                    else:
-                        version_dict[field] = update_dict[field]
-
-            version_data = AgentVersionCreate(**version_dict)
-            new_version = version_svc.create(agent_id=agent.id, space_id=agent.space_id, data=version_data)
-            agent.current_version_id = new_version.id
 
         agent.updated_at = datetime.now(UTC)
         self.db.commit()
         self.db.refresh(agent)
         return agent
+
+    def create_config_update_proposal(
+        self,
+        agent_id: str,
+        data: AgentConfigProposalCreate,
+        *,
+        user_id: str,
+    ):
+        from ..memory.proposals import ProposalService
+
+        agent = self.get_or_404(agent_id)
+        base = self.db.query(AgentVersion).filter(
+            AgentVersion.id == data.base_version_id,
+            AgentVersion.agent_id == agent.id,
+            AgentVersion.space_id == agent.space_id,
+        ).first()
+        if base is None:
+            raise HTTPException(status_code=404, detail="base AgentVersion not found for this agent")
+
+        raw = data.model_dump(exclude_unset=True)
+        raw.pop("base_version_id", None)
+        changes = {k: v for k, v in raw.items()}
+        if not changes:
+            raise HTTPException(status_code=422, detail="No agent configuration changes provided")
+
+        provider_id = changes.get("model_provider_id", base.model_provider_id)
+        model_name = changes.get("model_name", base.model_name)
+        if model_name and not provider_id:
+            raise HTTPException(status_code=400, detail="model_provider_id is required when model_name is set")
+        if provider_id:
+            self._validate_model_provider(provider_id, agent.space_id)
+
+        runtime_adapter_id = changes.get("runtime_adapter_id")
+        if runtime_adapter_id:
+            from ..models import RuntimeAdapter
+
+            adapter = self.db.query(RuntimeAdapter).filter(
+                RuntimeAdapter.id == runtime_adapter_id,
+                RuntimeAdapter.space_id == agent.space_id,
+            ).first()
+            if adapter is None:
+                raise HTTPException(status_code=400, detail="runtime_adapter_id does not belong to this space")
+
+        payload = {
+            "agent_id": agent.id,
+            "base_version_id": data.base_version_id,
+            "changes": changes,
+        }
+        changed_fields = sorted(changes)
+        return ProposalService(self.db).create_user_proposal(
+            space_id=agent.space_id,
+            user_id=user_id,
+            proposal_type="agent_config_update",
+            title=f"Update agent config: {agent.name}",
+            payload_json=payload,
+            rationale="Agent configuration update requested via public API.",
+            risk_level="high",
+            urgency="normal",
+            policy_action="agent.config_update",
+            policy_resource_type="agent",
+            policy_resource_id=agent.id,
+            policy_context={
+                "agent_id": agent.id,
+                "agent_status": agent.status,
+                "base_version_id": data.base_version_id,
+                "changed_fields": changed_fields,
+            },
+            policy_metadata_json={
+                "agent_id": agent.id,
+                "base_version_id": data.base_version_id,
+                "changed_fields": changed_fields,
+                "model_provider_id": provider_id,
+                "runtime_adapter_id": changes.get("runtime_adapter_id"),
+            },
+        )
 
     def delete(self, agent_id: str) -> bool:
         agent = self.get(agent_id)
@@ -321,7 +372,7 @@ class AgentService:
         """Non-mutating preflight checks before creating a queued run.
 
         Uses PolicyEngine directly (no PolicyDecisionRecord persisted here).
-        Real enforcement with PolicyGateway.check_and_record runs in RunExecutionService.
+        Real enforcement with PolicyGateway.enforce runs in RunExecutionService.
         """
         from ..policy.engine import PolicyEngine
 
@@ -453,4 +504,3 @@ class AgentService:
         run.instructed_by_user_id = user_id
         self.db.commit()
         return run
-

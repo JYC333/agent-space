@@ -43,6 +43,9 @@ Rules:
 - Raw `Model.id == id` queries without a `space_id` filter are forbidden in authenticated
   service methods.
 - Space_id comes from `get_identity()`, not from a request body field or a fetched object.
+- User-space authority comes from `SpaceMembership`. `User.space_id`,
+  `User.default_space_id`, and global `User.role` are not part of the backend
+  schema.
 - Cross-space access fails closed (404) unless the route is an intentional exception
   documented in section 8.
 
@@ -202,6 +205,9 @@ throughout.
 - CLI credentials are stored as filesystem-managed paths; no secret material appears in API
   responses or SSE event streams.
 - `AgentVersionOut`, `RunOut`, and `ArtifactOut` schemas contain no credential fields.
+- Run trace exposes AgentVersion system prompt presence/hash metadata only; it
+  does not inline raw system prompt text, raw rendered context text, or artifact
+  content.
 - Agent/run/artifact/proposal outputs must not expose secret material.
 
 ---
@@ -210,7 +216,15 @@ throughout.
 
 **Workspace file access** (`workspace_console/api.py`):
 - `PathPolicy` (`workspace/path_policy.py`) is enforced before any disk access.
-- Forbidden fragments: `.ssh`, `.env`, `.aws`, `.gcp`, `credentials`, `.git/config`.
+- `workspace.read` policy is enforced before tree/file/status/diff reads.
+- system_core, external-root, protected/restricted, full-diff, and secret-like
+  path reads force a durable `PolicyDecisionRecord`.
+- Forbidden path patterns include `.ssh`, `.aws`, `.gcp`, `.azure`,
+  `credentials`, `instance/secrets`, `config/secrets`, `.git/config`,
+  `.env`, `.env.*` except template examples, private key filenames, and
+  `*.pem` / `*.key`.
+- Full git diff output is bounded; secret-like diff paths are denied and
+  secret-like key/value lines are redacted.
 - Forbidden write suffixes: `.py`, `.sh`, `.bash`, `.zsh`, `.fish`.
 - Paths resolved to absolute before validation; no symlink race conditions.
 

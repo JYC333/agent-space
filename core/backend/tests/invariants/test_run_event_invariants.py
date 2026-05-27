@@ -13,9 +13,10 @@ Tests verify structural and cross-cutting invariants:
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import CheckConstraint
 
 from app.models import RunEvent
-from app.runs.events import RunEventService
+from app.runs.events import RUN_EVENT_TYPES, RunEventService
 from app.runs.evaluation import RunEvaluationService, _gather_events_evidence
 from tests.support import factories
 
@@ -34,9 +35,60 @@ def _setup(db):
 # ---------------------------------------------------------------------------
 
 class TestOrmConstraints:
+    def test_run_event_type_definitions_do_not_drift(self):
+        """Service enum, ORM constraint, and canonical migration must stay aligned."""
+        import ast
+        import re
+        from pathlib import Path
+
+        def _constraint_values(sqltext: str) -> set[str]:
+            match = re.search(r"event_type\s+in\s*\((.*?)\)", sqltext, re.DOTALL)
+            assert match is not None, sqltext
+            return set(re.findall(r"'([^']+)'", match.group(1)))
+
+        orm_constraint = next(
+            c for c in RunEvent.__table__.constraints
+            if isinstance(c, CheckConstraint) and c.name == "ck_run_events_event_type"
+        )
+        orm_values = _constraint_values(str(orm_constraint.sqltext))
+
+        migration_path = (
+            Path(__file__).parents[2]
+            / "migrations"
+            / "versions"
+            / "0001_canonical_initial_schema.py"
+        )
+        migration_source = migration_path.read_text(encoding="utf-8")
+        migration_tree = ast.parse(migration_source)
+        migration_values: set[str] | None = None
+        for node in ast.walk(migration_tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr == "CheckConstraint"
+            ):
+                continue
+            has_name = any(
+                kw.arg == "name"
+                and isinstance(kw.value, ast.Constant)
+                and kw.value.value == "ck_run_events_event_type"
+                for kw in node.keywords
+            )
+            if has_name and node.args:
+                sql = ast.literal_eval(node.args[0])
+                migration_values = _constraint_values(sql)
+                break
+
+        assert migration_values is not None
+        assert "policy_checked" in RUN_EVENT_TYPES
+        assert set(RUN_EVENT_TYPES) == orm_values == migration_values
+
     def test_valid_event_can_be_created(self, db):
         _setup(db)
         run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
+        db.commit()
         from datetime import UTC, datetime
         from ulid import ULID
         ev = RunEvent(
@@ -371,7 +423,7 @@ class TestPatchCollectedWarningOnIncompleteProposal:
                 if ctx.sandbox_cwd:
                     (Path(ctx.sandbox_cwd) / "init.txt").write_text("changed", encoding="utf-8")
                 return RuntimeAdapterResult(
-                    success=True, stdout="ok", output_text="ok", exit_code=0,
+                    success=True, stdout="ok", output_text=None, exit_code=0,
                     started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
                 )
 
@@ -393,21 +445,19 @@ class TestPatchCollectedWarningOnIncompleteProposal:
         run.workspace_id = workspace.id
         db.commit()
 
-        # Patch collect_and_create_code_patch_proposal to return
-        # proposal_created=True AND incomplete_patch=True.
-        _fake_proposal_obj = factories.create_test_proposal(
-            db, space_id=_PATCH_SPACE, run_id=run.id,
-            payload_json={"incomplete_patch": True, "proposed_content": "diff"},
-        )
-        db.flush()
-
         def _fake_collect(_db, *, run=None, worktree_path=None, **kwargs):
+            # Create the proposal when collection runs, matching the production
+            # transaction order after runtime policy gates have completed.
+            fake_proposal = factories.create_test_proposal(
+                _db, space_id=_PATCH_SPACE, run_id=run.id,
+                payload_json={"incomplete_patch": True, "proposed_content": "diff"},
+            )
             return WorktreeCollectionResult(
                 proposal_created=True,
                 ops_count=2,
                 skipped=[{"path": "img.png", "reason": "binary"}],
                 incomplete_patch=True,
-                proposal=_fake_proposal_obj,
+                proposal=fake_proposal,
             )
 
         monkeypatch.setattr(
@@ -488,7 +538,7 @@ class TestPatchCollectedSkippedFilesWithoutProposal:
                 if ctx.sandbox_cwd:
                     (Path(ctx.sandbox_cwd) / "init.txt").write_text("changed", encoding="utf-8")
                 return RuntimeAdapterResult(
-                    success=True, stdout="ok", output_text="ok", exit_code=0,
+                    success=True, stdout="ok", output_text=None, exit_code=0,
                     started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
                 )
 
@@ -971,10 +1021,12 @@ class TestRuntimeOutputArtifactEvents:
 
     def test_runtime_output_artifact_success_emits_artifact_ingested(self, db, tmp_path, monkeypatch):
         from app.config import settings
-        from app.models import RunEvent
+        from app.models import Run, RunEvent
         from app.runtimes.base import BaseRuntimeAdapter, RuntimeAdapterResult, RuntimeExecutionContext
+        from app.runs.artifact_persistence import ArtifactPersistenceService
         from app.runs.execution import RunExecutionService
         from datetime import UTC, datetime
+        from sqlalchemy.orm import sessionmaker
 
         _space = "space-revi-rt-01"
         _user = "user-revi-rt-01"
@@ -1001,10 +1053,37 @@ class TestRuntimeOutputArtifactEvents:
         agent = factories.create_test_agent(db, space_id=_space, owner_user_id=_user)
         run = factories.create_test_run(db, space_id=_space, user_id=_user, agent=agent, commit=True)
 
+        # Policy audit durability is covered by dedicated policy tests. SQLite
+        # cannot run its independent audit write while this business transaction
+        # is intentionally kept open across artifact persistence and terminal state.
+        monkeypatch.setattr(
+            "app.policy.audit.DurablePolicyAuditWriter.write",
+            lambda _writer, _envelope: "stub-policy-audit",
+        )
+        original_persist = ArtifactPersistenceService.persist_text_file
+        visible_status_during_persist = []
+
+        def _persist_and_observe_committed_run(self, **kwargs):
+            FreshSession = sessionmaker(bind=db.get_bind())
+            fresh = FreshSession()
+            try:
+                visible_status_during_persist.append(
+                    fresh.query(Run).filter(Run.id == kwargs["run"].id).one().status
+                )
+            finally:
+                fresh.close()
+            return original_persist(self, **kwargs)
+
+        monkeypatch.setattr(ArtifactPersistenceService, "persist_text_file", _persist_and_observe_committed_run)
+
         RunExecutionService(db).execute_run(run.id, space_id=_space)
 
         db.refresh(run)
         assert run.status == "succeeded"
+        assert visible_status_during_persist
+        assert visible_status_during_persist[0] != "succeeded", (
+            "terminal run success must not commit before runtime_output artifact persistence"
+        )
 
         rt_events = (
             db.query(RunEvent)
@@ -1027,10 +1106,11 @@ class TestRuntimeOutputArtifactEvents:
     def test_runtime_output_artifact_failure_emits_artifact_ingested_failed(self, db, tmp_path, monkeypatch):
         """When persist_text_file raises, artifact_ingested failed must be emitted and run still commits."""
         from app.config import settings
-        from app.models import RunEvent
+        from app.models import Run, RunEvent
         from app.runtimes.base import BaseRuntimeAdapter, RuntimeAdapterResult, RuntimeExecutionContext
         from app.runs.execution import RunExecutionService
         from datetime import UTC, datetime
+        from sqlalchemy.orm import sessionmaker
 
         _space = "space-revi-rt-02"
         _user = "user-revi-rt-02"
@@ -1055,7 +1135,17 @@ class TestRuntimeOutputArtifactEvents:
         monkeypatch.setattr("app.runs.execution.instantiate_runtime_adapter", lambda _: OutputTextAdapter())
 
         # Force persist_text_file to raise
+        visible_status_during_persist = []
+
         def _failing_persist(*args, **kwargs):
+            FreshSession = sessionmaker(bind=db.get_bind())
+            fresh = FreshSession()
+            try:
+                visible_status_during_persist.append(
+                    fresh.query(Run).filter(Run.id == kwargs["run"].id).one().status
+                )
+            finally:
+                fresh.close()
             raise RuntimeError("disk full")
 
         monkeypatch.setattr(
@@ -1071,6 +1161,10 @@ class TestRuntimeOutputArtifactEvents:
         db.refresh(run)
         # Terminal run commit must not be poisoned
         assert run.status == "succeeded", f"Run terminal commit must not be poisoned; status={run.status!r}"
+        assert visible_status_during_persist
+        assert visible_status_during_persist[0] != "succeeded", (
+            "terminal run success must not commit before failed runtime_output artifact persistence"
+        )
 
         failed_rt_events = (
             db.query(RunEvent)

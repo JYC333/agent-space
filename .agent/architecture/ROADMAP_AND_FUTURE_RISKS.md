@@ -60,7 +60,10 @@ This document describes current capability lines and known future risks. It is o
 
 **Not supported yet (intentionally):** `risk_level=critical` → `one_shot_docker`. The Docker sandbox execution path is not implemented. Runs with `critical` risk fail early with error code `critical_runtime_requires_unimplemented_one_shot_docker`. Do not attempt to use critical risk level until Docker sandbox infrastructure is designed.
 
-**Automation-origin credential requirement:** Runs with `trigger_origin=automation` must use an explicit credential profile (CredentialBroker profile configured). Container-default fallback is not allowed for unattended execution — it could silently pick up stale or shared auth state. Manual runs may still use the container-default fallback for local dogfooding. Failure code: `runtime_credential_profile_required`.
+**CLI credential requirement:** Manual and automation CLI runs must use an explicit
+CredentialBroker profile. Container-default fallback is not allowed because it can
+silently pick up stale or shared auth state. Failure code:
+`runtime_credential_profile_required`.
 
 **Preflight:** `POST /api/v1/runs/preflight` validates all execution preconditions (agent, adapter, risk level, workspace, git repo, credential profile) without creating or starting a run. Use this before creating Automation entries.
 
@@ -87,38 +90,61 @@ This document describes current capability lines and known future risks. It is o
 - **`PolicyEngine.check()`** is fail-closed: unknown actions return `decision=deny` with
   `audit_code="unknown_policy_action"`. Only registered actions can fall through to allow.
   `BUILTIN_RULES` evaluated in order: space_boundary, agent_status, memory_scope,
-  use_credential, tool_permission, workspace_write_patch, policy_change.
+  use_credential, tool_permission, workspace_write_patch, policy_change, automation,
+  runtime_execute_risk_level.
 - `agent.delegate` is **not** a current action — agent-to-agent delegation is deferred.
 - Domain-specific persisted-policy enforcement in `policy/enforcement.py`
   (`memory.private_placement`, `run.user_private_scope`).
-- **Canonical action registry** (`policy/actions.py`): **12 wired sensitive actions** are
-  code-defined. `require_action_definition()` raises `UnknownPolicyActionError` for unregistered
-  actions. **Reserved actions** (15, `lifecycle_status=RESERVED`, including automation.create/fire,
-  capability.enable, tool_binding.enable, artifact.export, context.use_personal_grant, workspace.read)
-  are registered with `current_enforcement_point="not_implemented"`. `PolicyGateway` always denies
-  reserved actions; they are not wired to any `PolicyGateway.check_and_record()` call site yet.
+- **PolicyEffectCatalog** (`policy/effects.py`) is a lightweight effect contract,
+  not a full DSL. `policy_change` proposals may create active `Policy` rows only
+  for supported domains with real enforcement points. Reserved domains
+  (`runtime.execute`, `automation.fire`, `capability.enable`,
+  `tool_binding.enable`, `deployment.execute`) are vocabulary only and fail
+  closed until wired.
+- **Canonical action registry** (`policy/actions.py`): **13 WIRED_DIRECT + 4 WIRED_VIA_PROPOSAL
+  sensitive actions** are code-defined. `require_action_definition()` raises
+  `UnknownPolicyActionError` for unregistered actions. **Reserved actions** (11,
+  `lifecycle_status=RESERVED`, including capability.enable, tool_binding.enable, artifact.export,
+  context.use_personal_grant, deployment.propose, deployment.execute) are registered
+  with `current_enforcement_point="not_implemented"`. `PolicyGateway` always denies reserved actions.
+  `workspace.read`, `agent.config_update`, `automation.create`, `automation.update`,
+  and `automation.fire` are WIRED_DIRECT.
 - **Approval resolver** (`policy/approval.py`): `can_approve_policy_action()` calls
   `require_action_definition(action)` first, then checks SpaceMembership role against effective risk.
   - owner → can approve all supported actions including critical
   - admin → can approve low/medium/high; not critical
-  - member/guest/viewer → cannot approve by default
-- **`proposal.apply` gate** — consolidated in `PolicyGateway.check_proposal_apply()`. Called from
+  - reviewer → can approve low/medium; not high/critical
+  - member/guest → cannot approve by default
+- **`proposal.apply` gate** — consolidated in `PolicyGateway.enforce_proposal_apply()`. Called from
   `ProposalService.accept()`. Runs HardInvariantGuard first (payload flag check), then
   role/risk matrix, then persists PolicyDecisionRecord. Always recorded (audit_required=True).
   Effective risk = `max(type_default, proposal.risk_level)`.
-  Denial → HTTP 403; no durable write occurs.
-- **`runtime.execute` gate** — checked before credential resolution. DENY/REQUIRE_APPROVAL
+  Denial → raises `PolicyGateBlocked` → global exception handler writes durable audit record → HTTP 403.
+- **Preferred audit model** — `PolicyGateway.enforce()` and `enforce_proposal_apply()` write
+  ALLOW records through `DurablePolicyAuditWriter`, which writes only
+  `PolicyDecisionRecord` in an independent transaction. The HTTP
+  `PolicyGateBlocked` handler rolls back the request transaction and writes a
+  blocking record independently; runtime-local blocked paths call
+  `write_blocked_gate_audit()` once and fail the run. No business object is
+  committed merely to persist audit evidence.
+- **`runtime.execute` gate** — uses `enforce()` before credential resolution. DENY/REQUIRE_APPROVAL
   blocks adapter with `error_code=policy_denied_runtime_execute`.
-- **`runtime.use_credential` gate** — checked before secret fetch. Same-space manual/api → ALLOW.
+- **`runtime.use_credential` gate** — uses `enforce()` before secret fetch. Same-space manual/api → ALLOW.
   Cross-space → hard DENY (CRITICAL). Automation → REQUIRE_APPROVAL.
-- **`context.inject_memory` gate** — in ContextSnapshotPopulator before ContextBuilder.build().
+- **Runtime/automation policy input parity** — `RunExecutionService` and
+  `AutomationPolicyPreflightService` share `app.runs.policy_inputs` for
+  `runtime.execute` request construction and credential policy metadata
+  construction. Preflight remains simulation-only: no `PolicyGateway`, no
+  `PolicyDecisionRecord`, no business-row mutation.
+- **`context.inject_memory` gate** — uses `enforce()` in ContextSnapshotPopulator before ContextBuilder.build().
   Cross-space without grant → hard DENY. DENY raises RuntimeError blocking context population.
 - **`context.render_for_runtime` gate** — in execution.py before adapter.execute(). Cross-space
   without grant → hard DENY. DENY → `error_code=policy_denied_context_render_for_runtime`.
-- **`artifact.persist` gate** — in ArtifactPersistenceService before filesystem write and egress
-  guard. personal_context_block in metadata → hard DENY. Always recorded (audit_required=True).
-- **`proposal.create` gate** — in ProposalService and CodePatchCollector before Proposal insert.
-  force_record=True for high-risk types. DENY blocks proposal creation.
+- **`artifact.persist` gate** — uses `enforce()` in ArtifactPersistenceService before egress
+  guard or persistence. Blocked decisions write one durable audit record; audit
+  failure writes no artifact. Always recorded and fail closed.
+- **`proposal.create` gate** — uses `enforce()` in ProposalService and CodePatchCollector
+  before Proposal insert. CodePatchCollector passes `force_record=True`.
 - **PolicyDecisionRecord** — all sensitive decisions persisted. Metadata sanitized before storage:
   no credentials, prompts, patch bodies, stdout/stderr, raw memory, personal_context_block.
 - **ProposalApplyService defense-in-depth** — `apply()` requires `accept_context` in
@@ -133,11 +159,9 @@ This document describes current capability lines and known future risks. It is o
   HardInvariantGuard directly to authorize or perform a sensitive action.
   `PreflightService` may call PolicyEngine only for non-mutating dry-run simulation;
   it must not persist `PolicyDecisionRecord`, and real execution still uses PolicyGateway.
-- No enforcement point has legacy fallback paths or backward-compatibility wrappers.
 - No secret material is resolved before `runtime.use_credential` passes.
 - No context is injected before `context.inject_memory` passes.
 - No adapter is invoked before `runtime.execute` and `context.render_for_runtime` pass.
-- "Reviewer" is not a SpaceMembership role — it is a future approval capability.
 - "Forbidden" is `decision=deny`, not a risk level. Risk levels: low, medium, high, critical.
 - Unknown sensitive actions must not silently fall through as allow.
 - Proposal acceptance is the human approval event; the proposal.apply gate enforces this.
@@ -150,10 +174,9 @@ This document describes current capability lines and known future risks. It is o
 **Remaining gaps:**
 1. `memory.create/update/archive` enforcement points at MemoryStore level (currently only
    at proposal.apply gate).
-2. `workspace.read` enforcement point when workspace access control is built.
-3. `automation.create`, `automation.fire` — when Automation model is built.
-4. `capability.enable`, `tool_binding.enable` — when capability management API is built.
-5. Per-user approval capabilities table (extension point exists; table not built).
+2. `capability.enable`, `tool_binding.enable` — when capability management API is built.
+3. Automation credential allowance is not implemented; automation-origin credential use currently requires
+   explicit approval via `rule_use_credential`; explicit `CredentialAllowance` model deferred.
 
 **Not now:** Full enterprise RBAC/ABAC, user-facing policy editor, global route rewrite, policy DSL, lab/scientific identity roles, agent-to-agent delegation (deferred).
 
@@ -193,21 +216,45 @@ This document describes current capability lines and known future risks. It is o
 
 ### 8. Automation / Triggers
 
-**Current state:** Jobs exist and `Run.trigger_origin` reserves `automation`. No `Automation` or `Trigger` model. Runtime foundation for automation-safe execution is in place:
-  - `trigger_origin="automation"` is validated in `RunService.create_run()`
-  - Automation-origin CLI runs must use an explicit credential profile (no container fallback)
-  - `POST /api/v1/runs/preflight` must pass before any Automation entry can be created
-  - `incomplete_patch` is surfaced on proposals so partial changes are never silently accepted
+**Current state:** `Automation` and `AutomationRun` models and CRUD API are implemented
+(`app.automation`). `automation.create`, `automation.update`, and `automation.fire` are
+`WIRED_DIRECT` actions enforced via `PolicyGateway`. Key properties:
+
+- `Automation` carries `owner_user_id`, `agent_id`, `workspace_id`, `trigger_type` (manual only),
+  `status` (active/paused/archived), `preflight_snapshot_json`.
+- Automation creation requires `PreflightService` to pass with `trigger_origin="automation"`.
+  Preflight snapshot is persisted on the row.
+- Manual fire (`POST /spaces/{id}/automations/{id}/fire`) reruns preflight and creates a
+  **queued** `Run(trigger_origin="automation")` plus an `AutomationRun` link row.
+  The run is not executed automatically — the existing run worker picks it up.
+- `automation.create/update/fire` require `admin` or `owner` role (enforced by `rule_automation`
+  in `policy/rules.py`).
+- `automation.create` and `automation.fire` use `record_failure_mode=FAIL_CLOSED` so audit
+  records are mandatory.
+- `AutomationService` must not directly write `MemoryEntry`, `Policy`, `Workspace` files,
+  `Capability`, or `Credentials` — these invariants are tested.
+
+**Invariants:**
+  - Automation-origin credential use requires explicit approval (`rule_use_credential`).
+  - Automation-origin CLI runs must use an explicit credential profile (no container fallback).
+  - `incomplete_patch` is surfaced on proposals so partial changes are never silently accepted.
+
+**Not implemented:**
+  - Cron scheduler.
+  - External event triggers.
+  - Credential allowances for automation-origin runs.
+  - Docker sandbox for critical-risk automation runs.
+
+Automation schema is intentionally folded into canonical 0001 during foundation
+hardening. No 0002 migration is expected for this branch.
 
 **Why it matters:** Background work needs explicit ownership, policy, and audit. Hidden background mutations are dangerous.
 
-**Likely next steps:** Define `Automation` model (owner, trigger type, schedule, preflight snapshot, max_runs_per_day). Wire preflight as a creation gate. All automation runs must produce proposals (no direct memory writes).
-
-**What must be true first:** Preflight endpoint, automation-safe credential check, and RunStep audit are all stable. Runtime foundation hardening is complete.
-
-**Risks if built too early:** Hidden background memory or policy writes. Runaway cost. No ownership or review path. Credential fallback allowing automation to silently use wrong credentials.
-
-**Not now:** Cron scheduler, external source refresh triggers, broad event-driven automation. Docker sandbox for critical-risk automation runs.
+**Risks:**
+  - Credential fallback for automation-origin runs is blocked at preflight and at the
+    `runtime.use_credential` gate (REQUIRE_APPROVAL for automation origin).
+  - Runaway cost: no `max_runs_per_day` cap yet — deferred.
+  - Cron and event triggers must not bypass the preflight + policy gate path.
 
 ---
 
@@ -310,7 +357,9 @@ User request
 - `memory_update` (from reflection) — proposals created; apply uses the standard `memory_update` handler (target_memory_id required).
 - `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update` — proposals created by `ReflectionProposalBuilder`; accepting them raises `UnsupportedProposalTypeError`. Apply handlers are deferred.
 
-`RunReflection` is not automatically created by `RunEvaluationService` or `TaskEvaluationService`. Automation is not implemented.
+`RunReflection` is not automatically created by `RunEvaluationService` or
+`TaskEvaluationService`. Automation supports manual fire only; no scheduler or
+external trigger is implemented.
 
 **PostRunFinalizationService — canonical post-run boundary (implemented):**
 
@@ -352,7 +401,7 @@ User request
 - `RunRoutingPolicy` until routing rules outgrow service-level logic.
 - Separate `ContextBundle` table until one snapshot needs multiple rendered runtime bundles.
 - `ExternalCapability` / `CapabilityExport` until vendor plugin/skill export becomes real.
-- `Automation` / `Trigger` until managed run flow is stable.
+- Scheduled and external Automation triggers until managed run flow is stable.
 - Apply handlers for `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update` — deferred until dogfood validates payload shape.
 - Full native coding agent loop is not a current priority.
 - Cloud Codex / Claude managed integrations are not current priority.
@@ -374,12 +423,13 @@ User request
 | Postgres migration | Current SQLite-only patterns will require rewrite; migration of existing data is non-trivial | Postgres-compatible patterns enforced in new code; migration not yet planned |
 | Distributed multi-process locking | Current advisory lock is single-host only | Documented risk; single-process for now |
 | Cloud/offsite backup | No automated offsite replication | Manual GPG + offsite transfer documented; not automated |
+| TestClient lifespan fixture | Some policy/proposal tests that request `cross_space_pair` can block while constructing the test client in this environment | Test environment limitation only; not a product architecture boundary |
 | Full retention policy | Personal data retention and legal obligations | Lifecycle states defined; retention policy engine deferred |
-| Broader policy enforcement | Some enforcement points (memory.create at MemoryStore, workspace.read) still use local checks, not PolicyGateway | 8 enforcement points wired via PolicyGateway; memory/workspace remaining |
+| Broader policy enforcement | Some enforcement points are intentionally proposal-mediated or deferred | Memory create/update/archive are proposal-mediated; workspace.read is wired direct; capability/deployment/export actions remain deferred |
 | Credential access grants | No per-run/per-tool credential scope; credential resolver is a single boundary | Resolver boundary set; grants deferred |
 | Source/Evidence first-class schema | Current field mapping insufficient for broad external ingestion | Deferred behind ingestion gate |
 | Information Horizon ingestion safety | External data can pollute trusted Memory without trust gates | Candidate-only rule enforced by absence of implementation |
-| Automation scope creep | Background work without ownership/policy can silently mutate data | No Automation model; invariants documented |
+| Automation scope creep | Background work without ownership/policy can silently mutate data | `Automation`/`AutomationRun` models and CRUD API implemented; `automation.create/update/fire` WIRED_DIRECT via PolicyGateway.enforce() with durable audit; admin/owner role required; manual-only remains; credential allowances deferred |
 | Self-evolution scope creep | Agents expanding their own permissions or target domain | Disabled by default; deployer-only gate |
 | Code patch operational risk | Partial apply with rollback failure leaves filesystem inconsistent | Explicit compensation logic; partial-apply errors surfaced |
 | Frontend exposing disabled surfaces | Planned-but-not-built modules appearing interactive | Registry `planned: true` pattern; "soon" badges enforced |

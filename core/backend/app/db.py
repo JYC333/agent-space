@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from fastapi import Request
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from .config import settings
@@ -35,8 +36,18 @@ class Base(DeclarativeBase):
     pass
 
 
-def get_db():
+def get_db(request: Request):
+    """Yield a DB session for the current request.
+
+    The session is stored on request.state.db so the PolicyGateBlocked
+    exception handler can roll it back before writing the durable audit record
+    in an independent transaction.
+
+    The session is never auto-committed here — routes that need persistence
+    must commit explicitly.  The session is closed (not committed) in finally.
+    """
     db = SessionLocal()
+    request.state.db = db
     try:
         yield db
     finally:

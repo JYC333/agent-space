@@ -372,10 +372,8 @@ class PreflightService:
         if adapter_type not in _CLI_ADAPTERS:
             return
 
-        if req.trigger_origin != "automation":
-            return
-
-        # For automation runs, check if any credential profile is configured.
+        # CLI runs require an explicit credential profile for both manual and
+        # automation origins.
         try:
             from ..credentials.broker import CredentialBroker
             broker = CredentialBroker()
@@ -383,7 +381,7 @@ class PreflightService:
             if not profiles:
                 state.errors.append(
                     f"runtime_credential_profile_required: "
-                    f"Automation-origin runs with adapter_type='{adapter_type}' "
+                    f"CLI runs with adapter_type='{adapter_type}' "
                     "require an explicit credential profile. "
                     "No credential profile is configured."
                 )

@@ -168,7 +168,7 @@ def test_proposal_created_when_ops_exist(db, tmp_path):
     agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
     run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
     run.workspace_id = ws.id
-    db.flush()
+    db.commit()
 
     ops = [{"op": "replace_file", "path": "a.txt", "content": "new"}]
     skipped: list[dict] = []
@@ -202,7 +202,7 @@ def test_no_proposal_when_no_changes(db, tmp_path):
     agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
     run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
     run.workspace_id = ws.id
-    db.flush()
+    db.commit()
 
     with patch("app.runs.code_patch_collector.collect_worktree_changes", return_value=([], [])):
         result = collect_and_create_code_patch_proposal(db, run=run, worktree_path=tmp_path)
@@ -232,7 +232,7 @@ def test_no_proposal_when_all_changes_unsupported(db, tmp_path):
     agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
     run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
     run.workspace_id = ws.id
-    db.flush()
+    db.commit()
 
     skipped = [
         {"path": "deleted.txt", "reason": "deleted"},
@@ -268,7 +268,7 @@ def test_skipped_included_in_proposal_payload(db, tmp_path):
     agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
     run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
     run.workspace_id = ws.id
-    db.flush()
+    db.commit()
 
     ops = [{"op": "replace_file", "path": "main.py", "content": "code"}]
     skipped = [{"path": "big.bin", "reason": "binary"}]

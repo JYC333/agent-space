@@ -42,7 +42,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 ## Execution Boundaries
 
-**B13** — `_SANDBOXED_ADAPTERS` (claude_code, codex_cli, and future coding runtimes) are always sandboxed. The sandbox level is risk-based: `medium` (default) → git worktree + local executor; `high`/`critical` → one-shot Docker container. An agent can escalate `risk_level` but cannot remove an adapter from `_SANDBOXED_ADAPTERS`.
+**B13** — `_SANDBOXED_ADAPTERS` (claude_code, codex_cli, and future coding runtimes) are always sandboxed. Current implemented sandbox routing is git worktree + local executor for file-access CLI runs. one-shot Docker is not implemented in the backend product path yet; high/critical paths must fail closed rather than silently downgrading. An agent can escalate `risk_level` but cannot remove an adapter from `_SANDBOXED_ADAPTERS`.
 
 **B14** — Vendor context files (CLAUDE.md, AGENTS.md, Cursor rules) are generated artefacts written by ContextCompiler to the sandbox directory. They are not the source of truth and are never written directly to the real workspace by default.
 
@@ -59,6 +59,8 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 **B18** — Sandboxes are short-lived execution areas. Long-term records are: artifacts, diffs, logs, and approved proposals. Sandbox directories may be cleaned up after artifact collection.
 
 **B19** — Agents should not directly modify real workspaces. Preferred flow: `workspace → git worktree/sandbox → agent execution → validation → diff/artifacts → approval → apply patch`.
+
+**B19A** — Workspace console reads are policy-gated. `workspace.read` is enforced for tree, file, git status, and git diff. system_core, external-root, restricted/protected, full-diff, and secret-like reads force durable audit records.
 
 ---
 
@@ -144,9 +146,9 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 **B45** — CLI credential profiles are owned by agent-space. Sandboxes never receive the full backend container HOME or the full `instance/secrets/` directory.
 
-**B46** — Every credential grant is audited in `cli_credential_events`. Runs with no profile configured are recorded as `credential.skipped` (Option A).
+**B46** — Every CLI credential grant or denial is audited in `cli_credential_events`. Manual and automation CLI runs require an explicit CredentialBroker profile. Runs with no profile configured fail before adapter invocation and record `credential_source="none"` with `fallback_reason="no_profile_configured"`.
 
-**B47** — Docker sandboxes receive at most one credential profile dir, mounted read-only by default. Write access requires explicit `readonly: false` in the profile config.
+**B47** — Future Docker sandboxes may receive at most one credential profile dir, mounted read-only by default. Write access requires explicit `readonly: false` in the profile config. Until one-shot Docker is implemented, documentation must describe high/critical Docker paths as fail-closed, not available.
 
 **B48** — Credential profiles are never written back from the sandbox automatically. If a CLI updates its login state during a run, only the profile's source directory is affected (via symlink for worktree, via writable volume for Docker). No automatic propagation to other profiles.
 
@@ -162,7 +164,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 **B43** — The deployer accepts only allowlisted job types (`rebuild_agent_space`, `restart_agent_space`, `health_check`). It never executes arbitrary shell commands. Agent-generated code cannot trigger deployment without a human-approved proposal.
 
-**B44** — The Docker socket (`/var/run/docker.sock`) mounted in the backend container is for spawning high-risk agent sandbox containers only. It is not used for deployment control. Deployment goes through the deployer Unix socket.
+**B44** — The Docker socket (`/var/run/docker.sock`), if present, is not used for deployment control. Deployment goes through the deployer Unix socket. High-risk one-shot Docker sandboxing is not currently implemented in the backend product path and must not be represented as active isolation.
 
 ---
 

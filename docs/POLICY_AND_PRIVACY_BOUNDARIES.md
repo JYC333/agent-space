@@ -46,10 +46,11 @@ returns PolicyDecision.
 Location: `app/policy/gateway.py`
 
 Business code enforcing wired sensitive actions must use
-`PolicyGateway.check_and_record()`. Do not call PolicyEngine directly to
+`PolicyGateway.enforce()` or, for proposal application,
+`PolicyGateway.enforce_proposal_apply()`. Do not call PolicyEngine directly to
 authorize or perform a sensitive action.
 
-**Non-mutating simulation exceptions:** Three locations use `PolicyEngine` directly for
+**Non-mutating simulation exceptions:** Four locations use `PolicyEngine` directly for
 preflight simulation — they are not enforcement points and must not persist
 `PolicyDecisionRecord`. Real runtime execution still goes through `PolicyGateway`.
 - `PreflightService` (`app/runs/preflight.py`) — dry-run simulation before a run exists.
@@ -57,8 +58,13 @@ preflight simulation — they are not enforcement points and must not persist
   (`app/runs/run_service.py`) — lightweight preflight during run creation.
 - `AgentService._check_run` (`app/agents/agent_service.py`) — non-mutating preflight
   before queuing a run.
+- `AutomationPolicyPreflightService` (`app/automation/policy_preflight.py`) —
+  read-only policy preflight simulation for automation-origin runtime gates.
+  It uses runtime requirements to decide whether ModelProvider/API-key
+  credential policy simulation applies.
 
-All other business code performing enforcement must call `PolicyGateway.check_and_record()` —
+All other business code performing enforcement must call `PolicyGateway.enforce()` or
+`PolicyGateway.enforce_proposal_apply()` —
 direct `PolicyEngine` or `HardInvariantGuard` usage outside these allowed locations is a
 boundary violation detected by `tests/invariants/test_policy_gateway_boundary.py`.
 
@@ -100,6 +106,14 @@ Does **not** store `reason_code` — that is an ephemeral in-process field.
 **Never stores**: raw memory content, `personal_context_block`, credentials,
 API keys, prompts, patch bodies, stdout/stderr, full file content.
 Metadata is sanitized via `sanitize_policy_metadata()` before persistence.
+Records required by preferred enforcement paths are written exactly once through
+`DurablePolicyAuditWriter`, which writes only `PolicyDecisionRecord` in an
+independent transaction. Blocking decisions raise `PolicyGateBlocked`; the HTTP
+handler rolls back the request transaction before writing the blocking audit
+record. Runtime-local blocked paths call `write_blocked_gate_audit(exc)` once and
+fail the operation. A fail-closed durable write failure raises
+`PolicyAuditPersistError`, so the sensitive action cannot proceed. No business
+object is committed solely to commit policy audit evidence.
 
 ORM model: `app/models.PolicyDecisionRecord`
 
@@ -122,8 +136,8 @@ registry defines:
 
 | Value | Meaning |
 |-------|---------|
-| `WIRED_DIRECT` | Action has a direct `PolicyGateway.check_and_record()` call site in business code. |
-| `WIRED_VIA_PROPOSAL` | Action is protected via the `proposal.apply` gate only. There is **no direct `PolicyGateway.check_and_record()` call site** for these actions. Calling `check_and_record()` directly always fails closed (`reason_code="policy_action_via_proposal_only"`). The `record_failure_mode` on WIRED_VIA_PROPOSAL actions is declarative intent only — actual durable audit occurs through `proposal.apply`. |
+| `WIRED_DIRECT` | Action has a direct `PolicyGateway.enforce()` call site in business code. |
+| `WIRED_VIA_PROPOSAL` | Action is protected via `PolicyGateway.enforce_proposal_apply()` only. |
 | `RESERVED` | Registered for vocabulary completeness; no enforcement point. Always fails closed with DENY regardless of `default_decision`. |
 
 Unknown actions fail closed with DENY (`audit_code="unknown_policy_action"`).
@@ -133,19 +147,19 @@ Unknown actions fail closed with DENY (`audit_code="unknown_policy_action"`).
 | Value | Behavior when PolicyDecisionRecord persistence fails |
 |-------|-----------------------------------------------------|
 | `BEST_EFFORT` | Log a warning and continue — action is not blocked. |
-| `FAIL_CLOSED` | Raise `PolicyDecisionRecordPersistError` — the sensitive action must not proceed. Callers must treat this as a hard policy error. |
+| `FAIL_CLOSED` | Preferred enforcement raises `PolicyAuditPersistError` — the sensitive action must not proceed. |
 
-Actions with `FAIL_CLOSED`: `runtime.use_credential`, `workspace.write_patch`, `proposal.apply`, `policy.change`.
+Actions with `FAIL_CLOSED`: `runtime.use_credential`, `workspace.write_patch`, `artifact.persist`, `proposal.apply`, `policy.change`.
 
 Dynamic escalation to `FAIL_CLOSED` (regardless of per-action default):
 - `trigger_origin="automation"` + `audit_required=True` on the action — **regardless of ALLOW/DENY/REQUIRE_APPROVAL**.
 - `risk_level=CRITICAL` + `audit_required=True` on the action — **regardless of ALLOW/DENY/REQUIRE_APPROVAL**.
-- `trigger_origin="automation"` + non-ALLOW (legacy rule for non-audit-required actions).
-- `risk_level=CRITICAL` + non-ALLOW (legacy rule for non-audit-required actions).
+- `trigger_origin="automation"` + non-ALLOW on non-audit-required actions.
+- `risk_level=CRITICAL` + non-ALLOW on non-audit-required actions.
 
-**Business-boundary error conversion** — `PolicyDecisionRecordPersistError` must not leak as an unstructured exception:
+**Business-boundary error conversion** — durable audit failures must block sensitive operations:
 - `RunExecutionService`: converts to terminal failed run with `error_code="policy_decision_record_persist_failed"`. Run never reaches credential resolution, context rendering, or adapter invocation.
-- `ProposalService.accept`: converts to `ProposalPolicyDeniedError` with `audit_code="policy_decision_record_persist_failed"`. Proposal stays pending; `ProposalApplyService.apply()` is never called.
+- `ProposalService.accept`: propagates `PolicyAuditPersistError`. Proposal stays pending; `ProposalApplyService.apply()` is never called.
 - `apply_code_patch_payload`: converts to `CodePatchApplyError` with stable message containing `policy_decision_record_persist_failed`. No files written.
 - `ArtifactPersistenceService`: converts to `PersonalMemoryEgressError` with stable message containing `policy_decision_record_persist_failed`. No file or Artifact row written.
 
@@ -153,11 +167,11 @@ Dynamic escalation to `FAIL_CLOSED` (regardless of per-action default):
 
 `memory.create`, `memory.update`, `memory.archive`, and `policy.change` are **WIRED_VIA_PROPOSAL**. This means:
 
-- There is **no direct** `PolicyGateway.check_and_record("memory.create")` (or update/archive/policy.change) call site anywhere in the codebase.
-- Protection is achieved entirely through `PolicyGateway.check_proposal_apply()` in `ProposalService.accept()`.
+- There is **no direct** sensitive-action enforcement call for `memory.create`, `memory.update`, `memory.archive`, or `policy.change`.
+- Protection is achieved through `PolicyGateway.enforce_proposal_apply()` in `ProposalService.accept()`.
 - `proposal.apply` is the fail_closed audit and approval gate for all of these actions.
-- `RunService` and `AgentService` use `PolicyEngine` directly (non-mutating simulation) — they do not write `PolicyDecisionRecord` rows. Real enforcement is exclusively in `RunExecutionService`.
-- No Automation implementation exists. Automation-reserved actions always deny at the policy gateway.
+- `RunService`, `AgentService`, `PreflightService`, and `AutomationPolicyPreflightService` use `PolicyEngine` directly for non-mutating simulation — they do not write `PolicyDecisionRecord` rows. Real enforcement is exclusively in `RunExecutionService`.
+- Automation remains manual-only skeleton: its create/update/manual-fire service paths use `PolicyGateway.enforce()` for automation management; create/fire then run runtime preflight and policy preflight simulation. No scheduler, external event trigger, or credential allowance is implemented.
 
 ---
 
@@ -216,27 +230,83 @@ PolicyGateway section above for the allowed preflight-only sites.
 
 | Action | Enforcement Point | Decision inputs (context) | Behavior |
 |--------|------------------|-----------------------------|----------|
-| `runtime.execute` | `RunExecutionService` before `adapter.execute()` | `agent_status`, `tool_name`, `trigger_origin`, `adapter_type`, risk/sandbox fields | DENY/REQUIRE_APPROVAL prevents execution; records PolicyDecisionRecord + RunEvent |
-| `runtime.use_credential` | `RunExecutionService` before `resolve_runtime_credentials()` | `trigger_origin`, `instructed_by_user_id`; `resource_space_id` from Credential row | DENY/REQUIRE_APPROVAL prevents credential resolution. **fail_closed** — persistence failure blocks credential resolution. |
-| `context.inject_memory` | `ContextSnapshotPopulator` before `ContextBuilder.build()` | `trigger_origin` | Cross-space DENY; records PolicyDecisionRecord on DENY |
+| `runtime.execute` | `RunExecutionService.enforce()` before `adapter.execute()` | `agent_status`, `tool_name`, `trigger_origin`, `adapter_type`, risk/sandbox fields | DENY/REQUIRE_APPROVAL prevents execution; records PolicyDecisionRecord + RunEvent |
+| `runtime.use_credential` | `RunExecutionService.enforce()` before `resolve_runtime_credentials()` for runtimes whose credential mode is `model_provider_api_key` | `trigger_origin`, `instructed_by_user_id`; `resource_space_id` from Credential row | DENY/REQUIRE_APPROVAL prevents credential resolution. CLI-profile runtimes use the CLI CredentialBroker path, not ModelProvider API keys. **fail_closed**. |
+| `context.inject_memory` | `ContextSnapshotPopulator` via `enforce()` before `ContextBuilder.build()` | `trigger_origin` | Cross-space DENY; records PolicyDecisionRecord on DENY |
 | `context.render_for_runtime` | `RunExecutionService` before `adapter.execute()` | `has_personal_grant_context` | Cross-space DENY; records PolicyDecisionRecord on DENY |
-| `artifact.persist` | `ArtifactPersistenceService` before file write | `target_space_id`, `derived_from_personal_memory_grant`, `raw_private_memory_included` | DENY/REQUIRE_APPROVAL blocks file write and Artifact row; records PolicyDecisionRecord (audit_required=True) |
-| `proposal.create` | `ProposalService.create_proposal()` and `code_patch_collector.py` | `target_visibility`, `target_scope` | Audit gate for user-created memory proposals and system-created code_patch proposals (force_record=True for code_patch path) |
-| `proposal.apply` | `ProposalService.accept()` | `payload` scanned for approval-proof flags | Proposal types with no apply handler deny immediately (`audit_code="unsupported_proposal_type"`). Supported types: `check_proposal_apply_policy` evaluates role/risk matrix (owner=all, admin=low/medium/high, reviewer=low/medium, member/guest=none). PolicyDecisionRecord recorded (audit_required=True). **fail_closed** — persistence failure blocks apply. |
-| `workspace.write_patch` | `apply_code_patch_payload()` before any file writes | `proposal_id`, `proposal_type`, `proposal_apply_allowed` | PolicyDecisionRecord recorded; safe patch summary only (no patch body). **fail_closed**. |
+| `artifact.persist` | `ArtifactPersistenceService` via `enforce()` before egress guard/file write | `target_space_id`, `derived_from_personal_memory_grant`, `raw_private_memory_included` | DENY/REQUIRE_APPROVAL blocks file and Artifact row; **fail_closed** durable audit. |
+| `proposal.create` | `ProposalService.create_proposal()` and `code_patch_collector.py` via `enforce()` | `target_visibility`, `target_scope` | Code patch collection uses `force_record=True`. |
+| `proposal.apply` | `ProposalService.accept()` via `enforce_proposal_apply()` | `payload` scanned for approval-proof flags | Unsupported types deny; role/risk matrix determines supported actions. **fail_closed**. |
+| `workspace.write_patch` | `apply_code_patch_payload()` via `enforce()` before any file writes | `proposal_id`, `proposal_type`, `proposal_apply_allowed` | Safe patch summary only; **fail_closed**. |
+| `automation.create` | `AutomationService.create()` | membership role and manual trigger metadata | Skeleton-only create path; no scheduler. **fail_closed** audit before creation; then runtime preflight and policy preflight must pass before the Automation row is written. |
+| `automation.update` | `AutomationService.update()` | membership role | Skeleton-only update path. **fail_closed** audit before mutation. |
+| `automation.fire` | `AutomationService.fire()` | membership role and `trigger_origin="automation"` | Manually queues a run only; no credential allowance. **fail_closed** audit before queuing; reruns runtime preflight and policy preflight before creating the queued Run. |
+
+### Persisted Policy Effect Contract
+
+`PolicyEffectCatalog` (`app.policy.effects`) is a lightweight effect contract,
+not a full policy DSL and not an external policy engine. `PolicyEngine` remains
+stateless; persisted `Policy` rows are only read by domain-specific enforcement
+helpers that are already wired.
+
+Only supported domains may create active `Policy` rows through `policy_change`
+proposal application:
+
+| Domain | Enforcement point |
+|--------|-------------------|
+| `memory.private_placement` | `app.policy.enforcement.check_private_memory_placement` |
+| `run.user_private_scope` | `app.policy.enforcement.can_read_memory_in_run_context` |
+
+Reserved domains (`runtime.execute`, `automation.fire`, `capability.enable`,
+`tool_binding.enable`, `deployment.execute`) are vocabulary only. They cannot
+create active `Policy` rows and fail closed until a real enforcement point is
+wired.
+
+### Automation Policy Preflight
+
+`AutomationPolicyPreflightService` is a simulation-only preflight layer for the
+manual-only automation skeleton. It dry-runs the policy decisions that would be
+encountered before adapter invocation for `runtime.execute`,
+`runtime.use_credential`, `context.inject_memory`, and
+`context.render_for_runtime`.
+
+It does **not** call `PolicyGateway.enforce()`, does **not** write
+`PolicyDecisionRecord`, does **not** decrypt credentials, and does **not** mutate
+Run, Automation, MemoryEntry, Proposal, Policy, Credential, or Artifact rows.
+For `runtime.execute` and `runtime.use_credential`, preflight uses the same
+shared request builders and credential metadata resolver as real execution
+(`app.runs.policy_inputs`). Credential policy preflight inspects only
+ModelProvider/Credential metadata and uses the same source priority as execution:
+run model provider, runtime adapter provider, agent version provider, then
+runtime adapter credential.
+Runtime requirements decide whether ModelProvider metadata is relevant at all:
+`echo`, `capability`, `claude_code`, and `codex_cli` do not participate in
+ModelProvider/API-key credential checks. For parity with real execution,
+automation policy preflight does not treat space default ModelProviders as a
+credential source; the credential policy chain is only explicit run provider,
+runtime adapter provider, agent version provider, then runtime adapter
+credential. CLI-profile runtimes rely on runtime preflight and the CLI
+CredentialBroker, not `runtime.use_credential` simulation.
+Every wired runtime adapter must have an explicit runtime requirements entry.
+Unknown non-empty adapter types fail with a stable configuration error instead
+of silently using `model_provider_mode=none`.
+
+Policy preflight is not enforcement. Real runtime enforcement, durable audit, and
+terminal run failure semantics remain in `RunExecutionService`. Automation
+remains manual-only: it has no scheduler, external event trigger, credential
+allowance, or direct execution path.
 
 ### WIRED_VIA_PROPOSAL Actions
 
 These actions are enforced exclusively via the `proposal.apply` gate
-(`PolicyGateway.check_proposal_apply()`). Calling `check_and_record()` directly
-with them always fails closed (`reason_code="policy_action_via_proposal_only"`).
+(`PolicyGateway.enforce_proposal_apply()`).
 
 | Action | Protected via | Behavior |
 |--------|--------------|----------|
 | `memory.create` | `proposal.apply` gate | Memory writes require proposal approval |
 | `memory.update` | `proposal.apply` gate | Memory updates require proposal approval |
 | `memory.archive` | `proposal.apply` gate | Memory archive requires proposal approval |
-| `policy.change` | `proposal.apply` gate | Requires admin/owner role. `PolicyProposalApplier.apply()` enforces role check inline; no direct PolicyGateway call. **fail_closed**. |
+| `policy.change` | `proposal.apply` gate | Requires admin/owner role through `PolicyGateway.enforce_proposal_apply()`; no direct PolicyGateway call. **fail_closed**. |
 
 ---
 
@@ -253,9 +323,6 @@ They are **not** wired to any business code call site yet.
 | `capability.enable` | Capability lifecycle persistence not yet wired |
 | `capability.update` | Capability lifecycle persistence not yet wired |
 | `tool_binding.enable` | Tool binding lifecycle not yet wired |
-| `automation.create` | Automation model not yet wired |
-| `automation.fire` | Automation model not yet wired |
-| `automation.update` | Automation model not yet wired |
 | `context.use_personal_grant` | personal_memory_grants/ does not yet call PolicyGateway |
 | `workspace.read` | Workspace read APIs do not yet call PolicyGateway |
 | `workspace.apply_patch` | Direct workspace patch path not yet wired |

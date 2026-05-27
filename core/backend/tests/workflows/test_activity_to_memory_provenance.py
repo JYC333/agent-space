@@ -13,18 +13,17 @@ def _params(space_id: str, user_id: str) -> dict[str, str]:
     return {"space_id": space_id}
 
 
-def test_activity_proposal_accept_writes_provenance_links(api_client, db, cross_space_pair):
-    db.commit()
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_activity_proposal_accept_writes_provenance_links(db, workflow_http_pair):
+    a = workflow_http_pair["space_a_id"]
+    ua = workflow_http_pair["user_a"]
 
-    act_id = cross_space_pair["client_a"].post(
+    act_id = workflow_http_pair["client_a"].post(
         "/api/v1/activity",
         params=_params(a, ua.id),
         json={"source_type": "user_input", "content": "evidence body", "title": "ev-title"},
     ).json()["id"]
 
-    pid = cross_space_pair["client_a"].post(
+    pid = workflow_http_pair["client_a"].post(
         f"/api/v1/activity/{act_id}/consolidate",
         params=_params(a, ua.id),
     ).json()[0]["id"]
@@ -35,7 +34,7 @@ def test_activity_proposal_accept_writes_provenance_links(api_client, db, cross_
     assert any(e.get("source_type") == "activity" and e.get("source_id") == act_id for e in entries)
     assert_proposal_not_applied(db, proposal_id=pid, space_id=a)
 
-    r_acc = cross_space_pair["client_a"].post(f"/api/v1/proposals/{pid}/accept", params=_params(a, ua.id))
+    r_acc = workflow_http_pair["client_a"].post(f"/api/v1/proposals/{pid}/accept", params=_params(a, ua.id))
     assert r_acc.status_code == 200
     mem_id = r_acc.json().get("result", {}).get("memory", {}).get("id")
     assert mem_id

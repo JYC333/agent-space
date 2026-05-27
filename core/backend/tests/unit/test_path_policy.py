@@ -94,3 +94,30 @@ def test_trusted_code_patch_apply_bypasses_script_write_suffix_block(tmp_path):
         for_trusted_code_patch_apply=True,
     )
     assert resolved == script.resolve()
+
+
+def test_secret_like_read_paths_are_denied_but_env_example_is_allowed(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    policy = _policy(tmp_path)
+
+    denied = [
+        root / ".env",
+        root / ".env.local",
+        root / "id_rsa",
+        root / "id_ed25519",
+        root / "tls.pem",
+        root / "private.key",
+        root / ".ssh" / "config",
+        root / ".aws" / "credentials",
+        root / "config" / "secrets" / "app.json",
+    ]
+    for path in denied:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("secret", encoding="utf-8")
+        with pytest.raises(PathPolicyError):
+            policy.validate(str(path), allowed_root=str(root), mode="read")
+
+    env_example = root / ".env.example"
+    env_example.write_text("API_KEY=example", encoding="utf-8")
+    assert policy.validate(str(env_example), allowed_root=str(root), mode="read") == env_example.resolve()

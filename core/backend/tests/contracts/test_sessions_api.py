@@ -51,18 +51,18 @@ def _make_message(db, *, session_id: str, space_id: str, user_id: str, content: 
 # Unauthenticated → 401
 # ---------------------------------------------------------------------------
 
-def test_get_session_requires_auth(api_client, db, cross_space_pair):
-    space = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_get_session_requires_auth(api_client, db, cross_space_pair_db):
+    space = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     session = _make_session(db, space_id=space, user_id=ua.id)
 
     r = api_client.get(f"/api/v1/sessions/{session.id}", params={"space_id": space})
     assert r.status_code == 401
 
 
-def test_get_session_messages_requires_auth(api_client, db, cross_space_pair):
-    space = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_get_session_messages_requires_auth(api_client, db, cross_space_pair_db):
+    space = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     session = _make_session(db, space_id=space, user_id=ua.id)
     _make_message(db, session_id=session.id, space_id=space, user_id=ua.id)
 

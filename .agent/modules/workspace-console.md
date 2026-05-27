@@ -1,7 +1,7 @@
 # Module: Workspace Console
 
 ## Status
-**PLANNED** — UI views not yet implemented. Backend WorkspaceManager partially implemented.
+Backend workspace console read APIs are active. UI views are still partial/planned.
 
 ## Purpose
 Browser-based interface for browsing workspace files, reviewing agent run outputs, inspecting diffs, and approving proposals. All file access goes through server-side managers — the frontend never accesses the host filesystem directly.
@@ -12,7 +12,7 @@ Browser-based interface for browsing workspace files, reviewing agent run output
 - Agent run log viewer UI
 - Artifact browser UI
 - Proposal review and approval UI
-- `WorkspaceManager` backend service (file access, git operations)
+- Workspace console backend read APIs (tree, file content, git status, git diff)
 
 ## Does Not Own
 - Sandbox creation (sandbox module)
@@ -31,35 +31,40 @@ Browser-based interface for browsing workspace files, reviewing agent run output
   /{workspace_id}/proposals  — pending proposals for approval
 ```
 
-## Backend API (Planned)
+## Backend API
 
 ```
-GET  /api/v1/workspaces
-GET  /api/v1/workspaces/{id}/files?path=...
-GET  /api/v1/workspaces/{id}/git/status
-GET  /api/v1/workspaces/{id}/git/diff
-GET  /api/v1/workspaces/{id}/runs
-GET  /api/v1/workspaces/{id}/artifacts
-POST /api/v1/workspaces/{id}/proposals/{pid}/approve
-POST /api/v1/workspaces/{id}/proposals/{pid}/reject
+GET  /api/v1/workspace-console/workspaces
+GET  /api/v1/workspace-console/workspaces/{id}/tree?path=...
+GET  /api/v1/workspace-console/workspaces/{id}/file?path=...
+GET  /api/v1/workspace-console/workspaces/{id}/git/status
+GET  /api/v1/workspace-console/workspaces/{id}/git/diff?path=...
 ```
 
 ## Invariants
 - Frontend must not access arbitrary server paths — all file access via WorkspaceManager API
 - File browsing is always read-only for the UI; writes go through the agent + proposal flow
-- WorkspaceManager must validate all paths via PathPolicy before reading or writing
+- Workspace console tree/file/status/diff reads enforce `workspace.read` before data is returned
+- Workspace list remains membership-scoped and does not create one policy record per row
+- PathPolicy validates all requested paths and blocks traversal plus secret-like paths such
+  as `.env*` except `.env.example`/`.env.sample`/`.env.template`, private keys,
+  `.ssh`, `.aws`, and secrets directories
 - Git operations must be scoped to the workspace root; no `..` traversal allowed
+- Full git diff output is bounded. Full diff, system-managed, external-root,
+  protected/restricted, and secret-like read attempts force policy audit records.
+- Secret-like diff values are redacted. Diffs touching secret-like paths are denied.
+- `resource_space_id` for policy enforcement comes from the actual Workspace row,
+  not caller-supplied input.
 
 ## Related Files
 - `core/backend/app/models.py` — Workspace, WorkspaceMembership
 - `core/backend/app/schemas.py` — WorkspaceCreate, WorkspaceOut
-- `core/backend/app/workspace/` — WorkspaceManager (TODO), PathPolicy, SandboxManager
+- `core/backend/app/workspace_console/api.py` — workspace console read API
+- `core/backend/app/workspace/` — WorkspaceManager, PathPolicy, SandboxManager
 - `core/backend/app/workspace/path_policy.py` — PathPolicy enforcement
 - `frontend/src/pages/` — TODO: workspace console pages
 - `frontend/src/api/` — TODO: workspace API client
 
 ## TODO
-- WorkspaceManager file browsing API
-- Git status/diff API
 - Frontend workspace console pages
 - Artifact download UI

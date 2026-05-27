@@ -75,6 +75,8 @@ def load_active_policy_rows(
 
 
 def _row_matches_domain(row: Any, domain: str) -> bool:
+    if row.domain == domain:
+        return True
     if row.policy_key == domain:
         return True
     rule_json = _as_dict(row.rule_json)

@@ -14,8 +14,9 @@ def _params(space_id: str, user_id: str) -> dict[str, str]:
 
 
 def test_activity_to_memory_happy_path_provenance_and_idempotent_accept(
-    api_client, db, cross_space_pair
+    db, workflow_http_pair
 ):
+    cross_space_pair = workflow_http_pair
     db.commit()
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
@@ -110,8 +111,9 @@ def test_activity_to_memory_happy_path_provenance_and_idempotent_accept(
 
 
 def test_activity_memory_workflow_blocked_for_other_space(
-    api_client, db, cross_space_pair
+    db, workflow_http_pair
 ):
+    cross_space_pair = workflow_http_pair
     db.commit()
     a = cross_space_pair["space_a_id"]
     b = cross_space_pair["space_b_id"]

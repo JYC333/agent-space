@@ -94,7 +94,7 @@ may call it only for non-mutating dry-run simulation, which does not persist a
 
 Policy gates run in this order inside `RunExecutionService._execute_real_adapter_path()`:
 
-1. **`runtime.execute`** — `PolicyGateway.check_and_record()` called **before** credential resolution, context snapshot population, and adapter.execute(). Rule-relevant fields (`agent_status`, `agent_tool_permissions`, `tool_name`, `adapter_type`, `trigger_origin`, etc.) are passed in `PolicyCheckRequest.context` so `PolicyEngine` rules can evaluate them. Safe copies are kept in `metadata_json` for audit only. DENY/REQUIRE_APPROVAL → `error_code=policy_denied_runtime_execute` / `policy_requires_approval_runtime_execute`.
+1. **`runtime.execute`** — `PolicyGateway.enforce()` is called **before** credential resolution, context snapshot population, and `adapter.execute()`. Rule-relevant fields (`agent_status`, `agent_tool_permissions`, `tool_name`, `adapter_type`, `trigger_origin`, etc.) are passed in `PolicyCheckRequest.context`; safe audit copies remain in `metadata_json`. Blocking decisions raise `PolicyGateBlocked`, are written once through `write_blocked_gate_audit()`, and fail the run.
 
 2. **`runtime.use_credential`** — called after adapter type resolution but **before** any secret fetch. `resource_space_id` is resolved from the actual `Credential` row by ID — never inferred from `RuntimeAdapter.space_id`. If `credential_id` exists but the `Credential` row is missing, execution fails closed with `error_code=credential_metadata_missing`. Cross-space credential → hard DENY (CRITICAL). Automation origin → REQUIRE_APPROVAL. Same-space manual/api → ALLOW. DENY → `error_code=policy_denied_runtime_use_credential`.
 
@@ -104,7 +104,7 @@ Policy gates run in this order inside `RunExecutionService._execute_real_adapter
 
 None of these gates may be bypassed. No secret material is resolved before `runtime.use_credential` passes. No context is injected before `context.inject_memory` passes. No adapter is invoked before both `runtime.execute` and `context.render_for_runtime` pass.
 
-**artifact.persist** — both DENY and REQUIRE_APPROVAL block file write and Artifact row creation. Callers receive `PersonalMemoryEgressError` with a message distinguishing denial vs approval-required.
+**artifact.persist** — `ArtifactPersistenceService` calls `PolicyGateway.enforce()` before the egress guard, filesystem write, or Artifact row creation. DENY and REQUIRE_APPROVAL call `write_blocked_gate_audit()` once and then raise `PersonalMemoryEgressError`. `PolicyAuditPersistError` and blocked-decision audit write failures block artifact persistence.
 
 ## Runtime Credential Resolver
 
@@ -118,6 +118,13 @@ None of these gates may be bypassed. No secret material is resolved before `runt
 ## RunStep Replay and Failure Diagnosis
 
 `GET /api/v1/runs/{id}/steps` returns ordered RunStep records.
+
+`GET /api/v1/runs/{id}/trace` is the preferred reconstruction endpoint. It
+aggregates the safe replay spine for a run in one response: Run,
+AgentVersion, RuntimeAdapter, ModelProvider, ContextSnapshot metadata,
+RunSteps, RunEvents, Artifacts, Proposals, parent, and children. It does not
+inline artifact content, raw rendered context text, raw system prompt text, or
+secret material.
 
 This allows:
 - Identifying which step failed and reading the sanitized error.
@@ -313,7 +320,9 @@ Bridge rows do not create `TaskArtifact` rows as a side effect.
 **Unsupported apply types (remain pending-only):**
 - `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update` — accepted proposals raise `UnsupportedProposalTypeError`.
 
-Automation is not implemented. No proposal type auto-applies without user acceptance.
+Automation manual fire queues runs through the existing runtime gates. No scheduler,
+external trigger, or credential allowance is implemented. No proposal type
+auto-applies without user acceptance.
 
 ### Future Work
 

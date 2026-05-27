@@ -264,7 +264,7 @@ Never writes `MemoryEntry`, `Proposal`, or `Policy`.
 
 Called immediately before adapter execution. Builds and persists a `ContextSnapshot` row.
 
-**Policy gate:** `context.inject_memory` is checked via `PolicyGateway.check_and_record()` at the
+**Policy gate:** `context.inject_memory` is checked via `PolicyGateway.enforce()` at the
 start of `populate()`, before `ContextBuilder.build()`. Cross-space memory injection without a
 `PersonalMemoryGrant` fires `HardInvariantGuard._cross_space_memory_read` → DENY. A DENY raises
 `RuntimeError([error_code=policy_denied_context_inject_memory])` which stops context population
@@ -318,15 +318,15 @@ After applying `memory_create` / `memory_update` / `memory_archive`:
 | Per-run execution lock | `runs/execution_lock.py:RunExecutionLockService` | RunExecutionService |
 | **context.inject_memory** | `PolicyGateway` in `runs/context_snapshot_populator.py` | Before ContextBuilder.build() |
 | **context.render_for_runtime** | `PolicyGateway` in `runs/execution.py` | Before adapter.execute() |
-| **proposal.create** | `PolicyGateway` in `memory/proposals.py`, `runs/code_patch_collector.py` | Before Proposal row insert |
-| **proposal.apply** | `PolicyGateway.check_proposal_apply()` in `memory/proposals.py` | Before ProposalApplyService.apply() |
+| **proposal.create** | `PolicyGateway.enforce()` in `memory/proposals.py`, `runs/code_patch_collector.py` | Before Proposal row insert |
+| **proposal.apply** | `PolicyGateway.enforce_proposal_apply()` in `memory/proposals.py` | Before ProposalApplyService.apply() |
 | ProposalApplyService accept_context | `memory/apply_service.py` | Defense-in-depth at apply() entry |
 
 ---
 
 ## 11. Deferred capabilities
 
-- **Automation**: no AutomationTrigger, AutomationSchedule, or AutomationRun models. No automated run creation on schedule or event. See design direction below.
+- **Automation triggers**: `Automation` and `AutomationRun` support manual fire only. No scheduler, external event trigger, or credential allowance is implemented.
 - **Vector/embedding search**: MemoryRetriever embedding stage is a stub that delegates to keyword.
 - **Cross-space federation**: PersonalMemoryGrant exists but FederatedAccess / PublishProjection are not yet built.
 - **LLM-based condensing**: SessionCondenser is pattern-based (`condenser_version="pattern.v1"`). Future: `condenser_version="llm.v1"`.
@@ -334,15 +334,12 @@ After applying `memory_create` / `memory_update` / `memory_archive`:
 
 ---
 
-## 12. Automation design direction
+## 12. Automation boundary
 
-When Automation is built, the skeleton should:
+`AutomationService.create/update/fire()` use `PolicyGateway.enforce()`. Manual
+fire creates a queued `Run(trigger_origin="automation")` and an
+`AutomationRun` link; it does not execute the run synchronously or bypass
+existing runtime gates.
 
-1. **Models**: `AutomationTrigger` (type: manual / schedule / event), `AutomationRun` (FK to Run)
-2. **Trigger → Run**: `AutomationService.fire(trigger_id, space_id, user_id)` creates a `Run` with `trigger_origin="automation"`, enqueues it via `DatabaseQueueService`
-3. **ContextSnapshot**: populated by existing `ContextSnapshotPopulator` — no changes needed
-4. **Output routing**: adapter output → `Artifact` (existing path) + optional `Proposal` (memory_create, via existing `ProposalApplyService`)
-5. **Schedule**: cron-style schedule stored in `AutomationTrigger.schedule_json`; a lightweight scheduler job fires `AutomationService.fire()` at the right time
-6. **API**: `POST /api/v1/automations` (create), `POST /api/v1/automations/{id}/run` (manual fire), `GET /api/v1/automations/{id}/runs` (history)
-
-This path reuses Run / ContextSnapshot / ProposalApplyService entirely. No new agent workflow abstractions needed.
+Automation schema is intentionally folded into canonical 0001 during foundation
+hardening. No 0002 migration is expected for this branch.

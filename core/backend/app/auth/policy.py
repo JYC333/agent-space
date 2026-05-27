@@ -3,12 +3,13 @@ from __future__ import annotations
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from ..models import SpaceMembership
-
-_ROLE_RANK = {"viewer": 0, "guest": 1, "member": 1, "admin": 2, "owner": 3}
+from ..policy.roles import has_role_at_least, normalize_role
 
 
-def _get_rank(db: Session, user_id: str, space_id: str) -> int:
+def _get_role(db: Session, user_id: str, space_id: str) -> str | None:
+    """Return the normalized canonical role for user in space, or None if not a member."""
+    from ..models import SpaceMembership
+
     m = (
         db.query(SpaceMembership)
         .filter(
@@ -18,32 +19,43 @@ def _get_rank(db: Session, user_id: str, space_id: str) -> int:
         )
         .first()
     )
-    return _ROLE_RANK.get(m.role, -1) if m else -1
+    if m is None:
+        return None
+    return normalize_role(m.role)  # "viewer" and any unknown → "guest"
 
 
 def can_view_space(db: Session, user_id: str, space_id: str) -> bool:
-    return _get_rank(db, user_id, space_id) >= 0
+    return _get_role(db, user_id, space_id) is not None
 
 
 def can_use_space(db: Session, user_id: str, space_id: str) -> bool:
-    return _get_rank(db, user_id, space_id) >= _ROLE_RANK["member"]
+    role = _get_role(db, user_id, space_id)
+    return role is not None and has_role_at_least(role, "member")
 
 
 def can_manage_space_resources(db: Session, user_id: str, space_id: str) -> bool:
-    return _get_rank(db, user_id, space_id) >= _ROLE_RANK["admin"]
+    role = _get_role(db, user_id, space_id)
+    return role is not None and has_role_at_least(role, "admin")
 
 
 def can_invite_member(db: Session, user_id: str, space_id: str) -> bool:
-    return _get_rank(db, user_id, space_id) >= _ROLE_RANK["admin"]
+    role = _get_role(db, user_id, space_id)
+    return role is not None and has_role_at_least(role, "admin")
 
 
 def can_manage_space(db: Session, user_id: str, space_id: str) -> bool:
-    return _get_rank(db, user_id, space_id) >= _ROLE_RANK["owner"]
+    role = _get_role(db, user_id, space_id)
+    return role is not None and has_role_at_least(role, "owner")
 
 
 def require_view_space(db: Session, user_id: str, space_id: str) -> None:
     if not can_view_space(db, user_id, space_id):
         raise HTTPException(status_code=403, detail="Not a member of this space")
+
+
+def require_use_space(db: Session, user_id: str, space_id: str) -> None:
+    if not can_use_space(db, user_id, space_id):
+        raise HTTPException(status_code=403, detail="Requires member role or above")
 
 
 def require_manage_space_resources(db: Session, user_id: str, space_id: str) -> None:

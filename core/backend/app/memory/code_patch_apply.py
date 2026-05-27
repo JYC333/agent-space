@@ -4,7 +4,7 @@ File writes are staged through a narrow local file transaction. The proposal
 accept path commits DB state after file replacement; if that DB commit fails,
 callers can roll file changes back from captured preimages.
 
-Schema contract (strict — no backward compatibility):
+Schema contract:
   Every replace_file operation must include:
     op              = "replace_file"
     path            = non-empty string
@@ -29,7 +29,8 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from ..models import ActivityRecord, Workspace
-from ..policy.gateway import PolicyGateway, PolicyCheckRequest, PolicyDecisionRecordPersistError
+from ..policy.exceptions import PolicyAuditPersistError
+from ..policy.gateway import PolicyGateway, PolicyCheckRequest
 from ..workspace.path_policy import PathPolicy, PathPolicyError
 from ..workspace.disk_path import workspace_absolute_root
 
@@ -267,7 +268,7 @@ def apply_code_patch_payload(
         if isinstance(op, dict)
     ]
     try:
-        _patch_decision = PolicyGateway(db).check_and_record(
+        PolicyGateway(db).enforce(
             PolicyCheckRequest(
                 action="workspace.write_patch",
                 actor_type="user",
@@ -289,18 +290,10 @@ def apply_code_patch_payload(
                 force_record=True,
             )
         )
-    except PolicyDecisionRecordPersistError:
+    except PolicyAuditPersistError:
         raise CodePatchApplyError(
             "policy_decision_record_persist_failed: policy audit record persistence "
             "failed for workspace.write_patch. No files written."
-        )
-    if _patch_decision.denied:
-        raise CodePatchApplyError(
-            f"workspace.write_patch denied by policy: {_patch_decision.message}"
-        )
-    if _patch_decision.requires_approval:
-        raise CodePatchApplyError(
-            f"workspace.write_patch requires an accepted code_patch proposal: {_patch_decision.message}"
         )
 
     root = workspace_absolute_root(workspace)
@@ -310,7 +303,7 @@ def apply_code_patch_payload(
 
     # Validate and apply all operations inside a single try block so that any
     # failure (preimage mismatch, file-write error, or validation error) rolls
-    # back ALL previously applied operations before re-raising.  This makes the
+    # back ALL already-applied operations before re-raising.  This makes the
     # entire payload atomic: either every operation lands, or none do.
     try:
         for i, op in enumerate(ops):

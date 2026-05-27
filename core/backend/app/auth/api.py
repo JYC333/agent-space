@@ -209,7 +209,6 @@ def get_me(user: User = Depends(get_current_user)):
         "email": user.email,
         "display_name": user.display_name,
         "avatar_url": user.avatar_url,
-        "default_space_id": user.default_space_id,
         "created_at": user.created_at.isoformat(),
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
     }

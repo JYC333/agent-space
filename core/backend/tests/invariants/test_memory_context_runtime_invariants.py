@@ -83,9 +83,9 @@ def _active_policy(db, *, space_id, name="test-pol") -> Policy:
 # ---------------------------------------------------------------------------
 
 
-def test_condenser_condense_creates_no_memory_entry(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_condenser_condense_creates_no_memory_entry(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     # Create a session with messages via the factory
     from app.models import Session as SessionModel, Message
@@ -124,9 +124,9 @@ def test_condenser_condense_creates_no_memory_entry(db, cross_space_pair):
     assert after_proposal == before_proposal, "condense() must not create Proposal rows"
 
 
-def test_condenser_get_latest_creates_no_memory_entry(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_condenser_get_latest_creates_no_memory_entry(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     from app.models import Session as SessionModel
     session = SessionModel(
@@ -148,9 +148,9 @@ def test_condenser_get_latest_creates_no_memory_entry(db, cross_space_pair):
     assert after_memory == before_memory, "get_latest() must not create MemoryEntry rows"
 
 
-def test_condenser_versioning_supersedes_previous(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_condenser_versioning_supersedes_previous(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     from app.models import Session as SessionModel, Message
     session = SessionModel(id=_new_id(), space_id=space_id, user_id=ua.id, status="active")
@@ -172,14 +172,14 @@ def test_condenser_versioning_supersedes_previous(db, cross_space_pair):
     assert s1_row.status == "superseded", "Previous summary must be superseded"
 
 
-def test_condenser_filters_messages_by_space_id(db, cross_space_pair):
+def test_condenser_filters_messages_by_space_id(db, cross_space_pair_db):
     """condense() queries messages scoped to space_id — messages from other spaces not included."""
     from app.models import Session as SessionModel, Message, SessionSummary
 
-    space_a = cross_space_pair["space_a_id"]
-    space_b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
-    ub = cross_space_pair["user_b"]
+    space_a = cross_space_pair_db["space_a_id"]
+    space_b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
+    ub = cross_space_pair_db["user_b"]
 
     session_a = SessionModel(id=_new_id(), space_id=space_a, user_id=ua.id, status="active")
     session_b = SessionModel(id=_new_id(), space_id=space_b, user_id=ub.id, status="active")
@@ -206,12 +206,12 @@ def test_condenser_filters_messages_by_space_id(db, cross_space_pair):
     )
 
 
-def test_condenser_populates_source_range_fields(db, cross_space_pair):
+def test_condenser_populates_source_range_fields(db, cross_space_pair_db):
     """source_first_message_id, source_last_message_id, source_message_count are populated."""
     from app.models import Session as SessionModel, Message
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     session = SessionModel(id=_new_id(), space_id=space_id, user_id=ua.id, status="active")
     db.add(session)
@@ -233,12 +233,12 @@ def test_condenser_populates_source_range_fields(db, cross_space_pair):
     assert summary.source_last_message_id == msg3.id
 
 
-def test_condenser_populates_summary_json(db, cross_space_pair):
+def test_condenser_populates_summary_json(db, cross_space_pair_db):
     """summary_json is populated with structured metadata: role_counts, top_keywords, source_range."""
     from app.models import Session as SessionModel, Message
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     session = SessionModel(id=_new_id(), space_id=space_id, user_id=ua.id, status="active")
     db.add(session)
@@ -265,13 +265,13 @@ def test_condenser_populates_summary_json(db, cross_space_pair):
     assert sr["message_count"] == 1
 
 
-def test_context_builder_loads_only_active_session_summary(db, cross_space_pair):
+def test_context_builder_loads_only_active_session_summary(db, cross_space_pair_db):
     """ContextBuilder loads only the latest active SessionSummary, not superseded ones."""
     from app.models import Session as SessionModel, Message, SessionSummary
     from app.memory.context_builder import ContextBuilder
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     session = SessionModel(id=_new_id(), space_id=space_id, user_id=ua.id, status="active")
     db.add(session)
@@ -304,13 +304,13 @@ def test_context_builder_loads_only_active_session_summary(db, cross_space_pair)
     assert summary_refs[0]["derived_context"] is True
 
 
-def test_context_builder_retrieval_trace_records_session_summary_metadata(db, cross_space_pair):
+def test_context_builder_retrieval_trace_records_session_summary_metadata(db, cross_space_pair_db):
     """ContextBuilder retrieval_trace includes session_summary used/id/version when loaded."""
     from app.models import Session as SessionModel, Message
     from app.memory.context_builder import ContextBuilder
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     session = SessionModel(id=_new_id(), space_id=space_id, user_id=ua.id, status="active")
     db.add(session)
@@ -335,12 +335,12 @@ def test_context_builder_retrieval_trace_records_session_summary_metadata(db, cr
     assert ss_trace.get("session_summary_fallback_reason") is None
 
 
-def test_context_builder_no_session_id_reports_fallback_reason(db, cross_space_pair):
+def test_context_builder_no_session_id_reports_fallback_reason(db, cross_space_pair_db):
     """When no session_id is provided, retrieval_trace records session_summary_used=False."""
     from app.memory.context_builder import ContextBuilder
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     pkg = ContextBuilder(db).build(
         space_id=space_id,
@@ -352,13 +352,13 @@ def test_context_builder_no_session_id_reports_fallback_reason(db, cross_space_p
     assert ss_trace.get("session_summary_used") is False
 
 
-def test_context_builder_session_summary_appears_in_source_refs(db, cross_space_pair):
+def test_context_builder_session_summary_appears_in_source_refs(db, cross_space_pair_db):
     """ContextBuilder includes session_summary in source_refs, not just dynamic_tail_refs."""
     from app.models import Session as SessionModel, Message
     from app.memory.context_builder import ContextBuilder
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     session = SessionModel(id=_new_id(), space_id=space_id, user_id=ua.id, status="active")
     db.add(session)
@@ -382,12 +382,12 @@ def test_context_builder_session_summary_appears_in_source_refs(db, cross_space_
     assert tail_summary_refs[0]["source_id"] == summary.id
 
 
-def test_session_condenser_second_condense_supersedes_first(db, cross_space_pair):
+def test_session_condenser_second_condense_supersedes_first(db, cross_space_pair_db):
     """SessionCondenser.condense() marks the previous active summary as superseded."""
     from app.models import Session as SessionModel, Message, SessionSummary
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     session = SessionModel(id=_new_id(), space_id=space_id, user_id=ua.id, status="active")
     db.add(session)
@@ -420,13 +420,13 @@ def test_session_condenser_second_condense_supersedes_first(db, cross_space_pair
 # ---------------------------------------------------------------------------
 
 
-def test_memory_store_rejects_direct_active_memory_create(db, cross_space_pair):
+def test_memory_store_rejects_direct_active_memory_create(db, cross_space_pair_db):
     """MemoryStore.create() must raise PermissionError — not silently create active memory."""
     from app.memory.store import MemoryStore
     from app.schemas import MemoryCreate
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     mc = MemoryCreate(
         space_id=space_id,
@@ -441,12 +441,12 @@ def test_memory_store_rejects_direct_active_memory_create(db, cross_space_pair):
         store.create(mc, acting_user_id=ua.id)
 
 
-def test_proposal_apply_service_creates_active_memory_with_source_proposal_id(db, cross_space_pair):
+def test_proposal_apply_service_creates_active_memory_with_source_proposal_id(db, cross_space_pair_db):
     """ProposalApplyService.apply() creates active MemoryEntry with source_proposal_id set."""
     from app.memory.apply_service import ProposalApplyService
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws = factories.create_test_workspace(db, space_id=space_id, created_by_user_id=ua.id)
 
     prop = Proposal(
@@ -478,12 +478,12 @@ def test_proposal_apply_service_creates_active_memory_with_source_proposal_id(db
     )
 
 
-def test_memory_update_supersedes_old_memory_and_sets_source_proposal_id(db, cross_space_pair):
+def test_memory_update_supersedes_old_memory_and_sets_source_proposal_id(db, cross_space_pair_db):
     """memory_update creates a new active version, supersedes old, and links new row to proposal."""
     from app.memory.proposals import ProposalService
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     original = factories.create_test_memory_entry(
         db, space_id=space_id, content="original content", scope_type="user",
@@ -521,12 +521,12 @@ def test_memory_update_supersedes_old_memory_and_sets_source_proposal_id(db, cro
     assert old_row.deleted_at is None
 
 
-def test_memory_archive_requires_proposal_apply(db, cross_space_pair):
+def test_memory_archive_requires_proposal_apply(db, cross_space_pair_db):
     """Normal archive path goes through ProposalApplyService and does not hard-delete."""
     from app.memory.proposals import ProposalService
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     target = factories.create_test_memory_entry(
         db, space_id=space_id, content="to be archived", scope_type="user",
@@ -550,13 +550,13 @@ def test_memory_archive_requires_proposal_apply(db, cross_space_pair):
     assert row.deleted_at is None, "archive must not hard-delete"
 
 
-def test_system_seed_writer_is_explicit_and_not_public_memory_store_path(db, cross_space_pair):
+def test_system_seed_writer_is_explicit_and_not_public_memory_store_path(db, cross_space_pair_db):
     """Seed-created active memory is only possible through create_system_seed_memory()
     and carries source_trust='internal_system' provenance."""
     from app.memory.internal_writer import MemoryInternalWriter
     from app.schemas import MemoryCreate
 
-    space_id = cross_space_pair["space_a_id"]
+    space_id = cross_space_pair_db["space_a_id"]
 
     seed_data = MemoryCreate(
         space_id=space_id,
@@ -668,9 +668,9 @@ def test_mandatory_sections_constant_includes_task():
 # ---------------------------------------------------------------------------
 
 
-def test_dirty_digest_refreshed_to_active_via_refresh_service(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_dirty_digest_refreshed_to_active_via_refresh_service(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws = factories.create_test_workspace(db, space_id=space_id, created_by_user_id=ua.id)
     _active_memory(db, space_id=space_id, scope_type="workspace", workspace_id=ws.id)
 
@@ -696,9 +696,9 @@ def test_dirty_digest_refreshed_to_active_via_refresh_service(db, cross_space_pa
     assert refreshed.dirty_since is None, "dirty_since must be cleared after refresh"
 
 
-def test_refresh_all_dirty_clears_all_dirty_digests(db, cross_space_pair):
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_refresh_all_dirty_clears_all_dirty_digests(db, cross_space_pair_db):
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws = factories.create_test_workspace(db, space_id=space_id, created_by_user_id=ua.id)
     _active_policy(db, space_id=space_id)
     _active_memory(db, space_id=space_id, scope_type="workspace", workspace_id=ws.id)
@@ -720,9 +720,9 @@ def test_refresh_all_dirty_clears_all_dirty_digests(db, cross_space_pair):
     assert refresh_svc.get_dirty_count(space_id) == 0
 
 
-def test_refresh_noop_when_source_unchanged(db, cross_space_pair):
+def test_refresh_noop_when_source_unchanged(db, cross_space_pair_db):
     """Refreshing an active (non-dirty) digest with unchanged sources returns same digest."""
-    space_id = cross_space_pair["space_a_id"]
+    space_id = cross_space_pair_db["space_a_id"]
     _active_policy(db, space_id=space_id)
 
     digest_svc = ContextDigestService(db)
@@ -760,11 +760,11 @@ def test_no_automation_schedule_table_in_orm():
     )
 
 
-def test_no_automation_run_table_in_orm():
-    """AutomationRun is not yet implemented — table must not exist."""
+def test_automation_run_table_exists_in_orm():
+    """AutomationRun is implemented — table must exist."""
     from app.db import Base
 
     table_names = {t.lower() for t in Base.metadata.tables}
-    assert "automation_runs" not in table_names, (
-        "AutomationRun table must not exist — automation is deferred"
+    assert "automation_runs" in table_names, (
+        "AutomationRun table must exist — automation skeleton is now implemented"
     )

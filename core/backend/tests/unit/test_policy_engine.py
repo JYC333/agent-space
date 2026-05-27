@@ -178,38 +178,39 @@ def test_workspace_write_patch_without_proposal_id_requires_approval():
 
 
 # ---------------------------------------------------------------------------
-# rule_policy_change
+# policy.change is WIRED_VIA_PROPOSAL; direct gateway enforcement denies before
+# PolicyEngine. Engine-only simulation falls back to the registry default.
 # ---------------------------------------------------------------------------
 
 
-def test_policy_change_admin_role_allows():
+def test_policy_change_admin_role_uses_registry_default_in_engine_simulation():
     d = _engine().check({
         "action": "policy.change",
         "space_id": "personal",
         "membership_role": "admin",
     })
-    assert d.allowed
-    assert d.policy_rule_id == "policy_change_admin_allow"
+    assert d.requires_approval
+    assert d.policy_rule_id == "registry_default"
 
 
-def test_policy_change_owner_role_allows():
+def test_policy_change_owner_role_uses_registry_default_in_engine_simulation():
     d = _engine().check({
         "action": "policy.change",
         "space_id": "personal",
         "membership_role": "owner",
     })
-    assert d.allowed
-    assert d.policy_rule_id == "policy_change_admin_allow"
+    assert d.requires_approval
+    assert d.policy_rule_id == "registry_default"
 
 
-def test_policy_change_member_role_denies():
+def test_policy_change_member_role_uses_registry_default_in_engine_simulation():
     d = _engine().check({
         "action": "policy.change",
         "space_id": "personal",
         "membership_role": "member",
     })
-    assert d.denied
-    assert d.policy_rule_id == "policy_change_insufficient_role"
+    assert d.requires_approval
+    assert d.policy_rule_id == "registry_default"
 
 
 def test_policy_change_guest_role_denies():
@@ -218,7 +219,8 @@ def test_policy_change_guest_role_denies():
         "space_id": "personal",
         "membership_role": "guest",
     })
-    assert d.denied
+    assert d.requires_approval
+    assert d.policy_rule_id == "registry_default"
 
 
 def test_policy_change_no_role_denies():
@@ -227,4 +229,5 @@ def test_policy_change_no_role_denies():
         "action": "policy.change",
         "space_id": "personal",
     })
-    assert d.denied
+    assert d.requires_approval
+    assert d.policy_rule_id == "registry_default"

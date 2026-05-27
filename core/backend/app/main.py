@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from .config import settings, paths
 from .db import init_db
 from .modules.registry import register as register_modules, list_modules
+from .policy.exceptions import PolicyAuditPersistError, PolicyGateBlocked
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -137,21 +138,91 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+@app.exception_handler(PolicyGateBlocked)
+async def policy_gate_blocked_handler(request: Request, exc: PolicyGateBlocked):
+    """Roll back business work and independently persist one blocking decision."""
+    db = getattr(getattr(request, "state", None), "db", None)
+    if db is not None:
+        try:
+            db.rollback()
+        except Exception:
+            import logging
+            logging.getLogger("agent-space").warning(
+                "Failed to rollback request DB session after PolicyGateBlocked action=%s",
+                exc.action,
+            )
+
+    from .policy.audit import write_blocked_gate_audit
+    try:
+        record_id = write_blocked_gate_audit(exc)
+    except Exception:
+        import logging
+        logging.getLogger("agent-space").error(
+            "DurablePolicyAuditWriter failed after PolicyGateBlocked action=%s actor=%s",
+            exc.action, exc.actor_id, exc_info=True,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "policy_audit_persist_failed",
+                "message": "Policy decision audit could not be persisted; sensitive action was blocked.",
+                "audit_code": "policy_decision_record_persist_failed",
+            },
+        )
+
+    decision = exc.decision
     return JSONResponse(
-        status_code=422,
-        content={"error": "validation_error", "message": "Request validation failed", "detail": exc.errors()},
+        status_code=exc.http_status_code,
+        content={
+            "error": exc.error_code,
+            "message": decision.message,
+            "reason_code": decision.reason_code,
+            "audit_code": decision.audit_code,
+            "action": exc.action,
+            "risk_level": decision.risk_level.value,
+            "policy_decision_record_id": record_id,
+        },
+    )
+
+
+@app.exception_handler(PolicyAuditPersistError)
+async def policy_audit_persist_error_handler(request: Request, exc: PolicyAuditPersistError):
+    db = getattr(getattr(request, "state", None), "db", None)
+    if db is not None:
+        try:
+            db.rollback()
+        except Exception:
+            import logging
+            logging.getLogger("agent-space").warning(
+                "Failed to rollback request DB session after PolicyAuditPersistError action=%s",
+                exc.action,
+            )
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "policy_audit_persist_failed",
+            "message": "Policy decision audit could not be persisted; sensitive action was blocked.",
+            "audit_code": exc.audit_code,
+        },
     )
 
 
 @app.exception_handler(Exception)
-async def generic_exception_handler(request: Request, exc: Exception):
+async def unexpected_exception_handler(request: Request, exc: Exception):
     import logging
     logging.getLogger("agent-space").exception("Unhandled exception: %s", exc)
     return JSONResponse(
         status_code=500,
         content={"error": "internal_error", "message": "An unexpected error occurred."},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"error": "validation_error", "message": "Request validation failed", "detail": exc.errors()},
     )
 
 

@@ -79,6 +79,9 @@ def create_test_space(
     created_by_user_id: str | None = None,
     commit: bool = False,
 ) -> Space:
+    existing = db.query(Space).filter_by(id=space_id).one_or_none()
+    if existing is not None:
+        return existing
     row = Space(
         id=space_id,
         name=name or f"space-{space_id}",
@@ -99,20 +102,29 @@ def create_test_user(
     commit: bool = False,
 ) -> User:
     uid = user_id or _new_id()
-    row = User(
-        id=uid,
-        space_id=space_id,
-        email=email or f"{uid}@test.invalid",
-        display_name=display_name or uid,
+    row = db.query(User).filter_by(id=uid).one_or_none()
+    if row is None:
+        row = User(
+            id=uid,
+            email=email or f"{uid}@test.invalid",
+            display_name=display_name or uid,
+        )
+        db.add(row)
+    membership = (
+        db.query(SpaceMembership)
+        .filter_by(space_id=space_id, user_id=uid, role="owner", status="active")
+        .one_or_none()
     )
-    db.add(row)
-    db.add(SpaceMembership(
-        id=_new_id(),
-        space_id=space_id,
-        user_id=uid,
-        role="owner",
-        status="active",
-    ))
+    if membership is None:
+        db.add(
+            SpaceMembership(
+                id=_new_id(),
+                space_id=space_id,
+                user_id=uid,
+                role="owner",
+                status="active",
+            )
+        )
     return _finish(db, row, commit=commit)
 
 
@@ -277,7 +289,7 @@ def create_test_policy(
     *,
     space_id: str,
     name: str = "test-policy",
-    domain: str = "runtime",
+    domain: str = "memory.private_placement",
     policy_key: str | None = None,
     status: str = "active",
     enforcement_mode: str | None = None,

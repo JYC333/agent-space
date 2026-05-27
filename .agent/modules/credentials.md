@@ -20,7 +20,7 @@ The `CredentialBroker` (`app/credentials/broker.py`) manages:
 - **Profile discovery** — reads `instance/config/cli-credentials.yaml` + auto-discovers `instance/secrets/cli-credentials/<runtime>/<name>/` directories.
 - **Grants** — before each run, the broker issues a `CredentialGrant` scoped to one profile.
 - **Cleanup** — removes per-run temp HOME dirs after the run completes.
-- **Audit** — every grant (or skip) is recorded in `cli_credential_events`.
+- **Audit** — every grant, denied grant, or no-profile failure is recorded in `cli_credential_events`.
 
 ## Storage Layout
 
@@ -52,6 +52,8 @@ profiles:
 ```
 
 If a profile directory exists but is not listed in the config, the broker auto-discovers it.
+CLI runtimes do not fall back to the backend container's default HOME credentials.
+Manual and automation runs both require an explicit resolved profile.
 
 ## Execution Modes
 
@@ -70,10 +72,17 @@ The CLI finds its login state at the expected path without seeing the full conta
 └── (nothing else)
 ```
 
+If no explicit profile is resolved, runtime execution fails before the CLI adapter is
+invoked with `runtime_credential_profile_required`.
+
 ### Docker (high-risk)
 
-A one-shot Docker container is spawned. The broker returns `host_source_path` + `target_path`
-for a volume mount. The credential dir is mounted read-only by default:
+One-shot Docker credential mounting is the intended high-risk sandbox path, but it is
+not currently active in the backend product path. High/critical paths that require
+one-shot Docker must fail closed until that isolation path is implemented and tested.
+
+When enabled, the broker returns `host_source_path` + `target_path` for a volume
+mount. The credential dir is mounted read-only by default:
 
 ```
 docker run ...
@@ -84,18 +93,7 @@ docker run ...
 If the CLI needs write access (token refresh), set `readonly: false` in the config.
 The profile directory is then mounted writable into the container.
 
-## Option A vs Option B
-
-| | Option A (simplest MVP) | Option B (explicit profile) |
-|---|---|---|
-| Setup | Claude Code already logged in inside backend container | Credential dir copied to `instance/secrets/cli-credentials/claude-code/default/` |
-| Broker behavior | Returns `None` grant → uses container's default `~/.claude` | Returns grant with temp HOME symlink |
-| Security boundary | Backend container HOME is shared for all runs | Per-run temp HOME, only selected profile |
-| When to use | Personal MVP, single-user | Multi-profile, production |
-
-Both work. The broker is transparent about which path is taken (logged + audited).
-
-## Initializing a Profile (Option B)
+## Initializing a Profile
 
 ```bash
 # Step 1: log in inside the backend container
@@ -118,7 +116,7 @@ class ClaudeCLIAdapter(AgentAdapter):
     def get_credential_spec(self) -> CredentialSpec:
         return CredentialSpec(
             runtime="claude-code",
-            required=False,             # False → falls back to container default (Option A)
+            required=True,
             default_target_path="/home/agent/.claude",
             supports_read_only=False,   # Claude Code may refresh tokens
             env_auth_var=None,
@@ -132,8 +130,12 @@ Every credential usage writes a `CliCredentialEvent` record:
 | Action | When |
 |---|---|
 | `credential.grant` | A profile was found and a grant was issued |
-| `credential.skipped` | No profile configured; using container default (Option A) |
-| `credential.denied` | Grant failed (profile dir missing, policy, etc.) |
+| `credential.grant_denied` | No profile was configured; runtime fails with `runtime_credential_profile_required` |
+| `credential.grant_failed` | Grant failed after profile resolution, such as missing source path |
+
+No-profile failures use `credential_source="none"` and
+`fallback_reason="no_profile_configured"`. New successful
+`container_default` fallback events must not be emitted.
 
 ## What Sandboxes Must NOT See
 
@@ -156,10 +158,10 @@ POST /api/v1/credentials/cli/profiles/{id}/detect     — check if source_path e
 
 - `core/backend/app/credentials/broker.py` — CredentialBroker, CredentialProfile, CredentialGrant
 - `core/backend/app/credentials/api.py` — FastAPI routes
-- `core/backend/app/agents/base.py` — CredentialSpec dataclass
-- `core/backend/app/agents/claude_adapter.py` — get_credential_spec(), credential_grant usage
-- `core/backend/app/agents/runner.py` — broker integration, temp HOME cleanup
-- `core/backend/app/agents/cli_adapter.py` — LocalExecutor (HOME env), DockerExecutor (credential_volumes)
+- `core/backend/app/runtimes/base.py` — CredentialSpec dataclass
+- `core/backend/app/runtimes/adapters/cli_runtime.py` — CLI runtime bridge, no-profile failure behavior
+- `core/backend/app/agents/runner.py` — runtime execution integration
+- `core/backend/app/cli_adapters/executors.py` — LocalExecutor and DockerExecutor
 - `core/backend/app/workspace/sandbox_manager.py` — get_docker_adapter() credential mount
 - `core/backend/app/models.py` — CliCredentialEvent
 - `instance/config/cli-credentials.yaml` — profile config (private)

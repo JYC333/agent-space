@@ -14,11 +14,20 @@ def _params(space_id: str, user_id: str) -> dict[str, str]:
     return {"space_id": space_id}
 
 
+def _stub_durable_policy_audit(monkeypatch) -> None:
+    """Avoid SQLite nested-writer contention in artifact workflow coverage."""
+    monkeypatch.setattr(
+        "app.policy.audit.DurablePolicyAuditWriter.write",
+        lambda _writer, _envelope: "stub-policy-audit",
+    )
+
+
 def test_run_execute_success_leaves_audit_artifact_and_no_run_proposals(
     api_client, db, cross_space_pair, tmp_path, monkeypatch
 ):
     from app.config import settings
 
+    _stub_durable_policy_audit(monkeypatch)
     db.commit()
 
     art_root = tmp_path / "artifacts"

@@ -32,6 +32,8 @@ from .proposal_apply import (
 )
 from .hard_invariants import HardInvariantGuard
 from .gateway import PolicyGateway, PolicyCheckRequest
+from .exceptions import PolicyGateBlocked, PolicyAuditPersistError
+from .audit import PolicyAuditEnvelope, DurablePolicyAuditWriter
 from .roles import (
     CANONICAL_ROLES,
     normalize_role,
@@ -75,6 +77,10 @@ __all__ = [
     "HardInvariantGuard",
     "PolicyGateway",
     "PolicyCheckRequest",
+    "PolicyGateBlocked",
+    "PolicyAuditPersistError",
+    "PolicyAuditEnvelope",
+    "DurablePolicyAuditWriter",
     "CANONICAL_ROLES",
     "normalize_role",
     "role_rank",

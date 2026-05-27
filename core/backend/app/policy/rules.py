@@ -5,12 +5,14 @@ dict and returns a PolicyDecision | None. Returning None means the rule does
 not apply — the next rule is tried. The first non-None result wins.
 
 Built-in rules (in evaluation order):
-  1. space_boundary        — deny cross-space access
-  2. agent_status          — deny runtime.execute and memory.* for non-active agents
-  3. memory_scope          — require_approval for writes to protected memory scopes
-  4. tool_permission       — deny adapter/tool not in agent's allowed list
-  5. workspace_write_patch — allow workspace file writes only via accepted code_patch proposal
-  6. policy_change         — allow policy changes for admin/owner; deny lower roles
+  1. space_boundary             — deny cross-space access
+  2. agent_status               — deny runtime.execute and memory.* for non-active agents
+  3. memory_scope               — require_approval for writes to protected memory scopes
+  4. use_credential             — same-space manual allow; cross-space deny; automation require_approval
+  5. tool_permission            — deny adapter/tool not in agent's allowed list
+  6. workspace_write_patch      — allow workspace file writes only via accepted code_patch proposal
+  7. automation                 — allow automation.create/update/fire for admin/owner; deny lower roles
+  8. runtime_execute_risk_level — reflect context["risk_level"] in runtime.execute decision
 """
 
 from typing import Optional
@@ -74,10 +76,7 @@ def rule_memory_scope(ctx: PolicyContext) -> Optional[PolicyDecision]:
 
 
 def rule_use_credential(ctx: PolicyContext) -> Optional[PolicyDecision]:
-    """Allow same-space manual credential use; deny cross-space or unknown-space credential use.
-
-    automation-origin credential use falls through to registry default (REQUIRE_APPROVAL).
-    """
+    """Allow same-space manual credential use; require approval for automation."""
     action = ctx.get("action", "")
     if action != "runtime.use_credential":
         return None
@@ -174,29 +173,65 @@ def rule_workspace_write_patch(ctx: PolicyContext) -> Optional[PolicyDecision]:
     return None
 
 
-def rule_policy_change(ctx: PolicyContext) -> Optional[PolicyDecision]:
-    """ALLOW policy.change for admin/owner; DENY for lower roles."""
+_AUTOMATION_ACTIONS = frozenset({"automation.create", "automation.update", "automation.fire"})
+
+
+def rule_automation(ctx: PolicyContext) -> Optional[PolicyDecision]:
+    """ALLOW automation.create/update/fire for admin/owner; DENY for lower roles.
+
+    Automation management requires elevated authority. members and guests cannot
+    create, update, or fire automations.
+    """
     action = ctx.get("action", "")
-    if action != "policy.change":
+    if action not in _AUTOMATION_ACTIONS:
         return None
     role = ctx.get("membership_role") or "guest"
     from .roles import has_role_at_least
     if has_role_at_least(role, "admin"):
         return PolicyDecision(
             decision=Decision.ALLOW,
-            message=f"policy.change allowed for role={role}",
+            message=f"{action} allowed for role={role}",
             risk_level=RiskLevel.HIGH,
-            reason_code="policy_change_admin_allow",
-            policy_rule_id="policy_change_admin_allow",
-            audit_code="policy_change_allowed",
+            reason_code="automation_admin_allow",
+            policy_rule_id="automation_admin_allow",
+            audit_code="automation_allowed",
         )
     return PolicyDecision(
         decision=Decision.DENY,
-        message=f"policy.change requires admin or owner authority; role={role}",
+        message=f"{action} requires admin or owner authority; role={role}",
         risk_level=RiskLevel.HIGH,
-        reason_code="policy_change_insufficient_role",
-        policy_rule_id="policy_change_insufficient_role",
-        audit_code="policy_change_denied",
+        reason_code="automation_insufficient_role",
+        policy_rule_id="automation_insufficient_role",
+        audit_code="automation_denied",
+    )
+
+
+_VALID_RISK_LEVELS = {"low", "medium", "high", "critical"}
+
+
+def rule_runtime_execute_risk_level(ctx: PolicyContext) -> Optional[PolicyDecision]:
+    """Reflect context["risk_level"] in runtime.execute decisions when set.
+
+    When the caller passes a valid risk_level in context (low/medium/high/critical),
+    return an ALLOW decision whose risk_level matches that value so the
+    PolicyDecisionRecord captures the effective risk of this specific run.
+    Returning None when the key is absent or invalid falls through to the registry
+    default decision.
+    """
+    action = ctx.get("action", "")
+    if action != "runtime.execute":
+        return None
+    raw = ctx.get("risk_level")
+    if raw not in _VALID_RISK_LEVELS:
+        return None
+    risk = RiskLevel(raw)
+    return PolicyDecision(
+        decision=Decision.ALLOW,
+        message=f"runtime.execute allowed with effective risk_level={raw}",
+        risk_level=risk,
+        reason_code="runtime_execute_risk_level",
+        policy_rule_id="runtime_execute_risk_level",
+        audit_code="runtime_execute_risk_level",
     )
 
 
@@ -208,5 +243,6 @@ BUILTIN_RULES = [
     rule_use_credential,
     rule_tool_permission,
     rule_workspace_write_patch,
-    rule_policy_change,
+    rule_automation,
+    rule_runtime_execute_risk_level,
 ]

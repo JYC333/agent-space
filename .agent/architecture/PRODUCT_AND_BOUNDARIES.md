@@ -60,7 +60,8 @@ capture / trigger
 ### Sandbox and path policy boundary
 
 - All file access from agent execution is mediated by `WorkspaceManager` and `PathPolicy`.
-- Sandboxed adapters run inside a git worktree (default) or Docker container (high-risk).
+- Sandboxed file-access adapters currently run inside a git worktree. One-shot Docker
+  is planned for stricter process isolation and must fail closed until implemented.
 - Adapters must not access arbitrary host paths.
 
 ### Proposal-first for durable change

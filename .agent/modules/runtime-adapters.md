@@ -39,12 +39,8 @@ The agent-space core owns the Agent layer. CLI tools and providers are pluggable
 | `codex_cli`   | CLI wrapper | `AGENTS.md`  | active | Wraps `codex` CLI (OpenAI Codex CLI)     |
 
 Canonical adapter type names: `echo`, `capability`, `claude_code`, `codex_cli`.
-
-> Legacy notes:
-> - Configs may still say `claude_cli`; the runtime bridge (`cli_runtime.py`) maps that id to the same
->   adapter class as `claude_code`. Prefer `claude_code` in new manifests.
-> - `"codex"` (without `_cli`) is not a canonical adapter type. The credential broker retains
->   `"codex"` as a directory-scan alias for backward-compatible profile discovery only.
+Use these exact adapter type strings in manifests, run creation, runtime requirements,
+and credential profile directories.
 
 ## Planned / Future Adapters
 

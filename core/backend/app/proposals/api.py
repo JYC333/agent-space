@@ -13,7 +13,6 @@ from ..db import get_db
 from ..memory.code_patch_apply import CodePatchApplyError
 from ..memory.proposals import (
     ProposalAcceptResult,
-    ProposalPolicyDeniedError,
     ProposalService,
 )
 from ..policy.proposal_apply import ProposalRiskLevelError
@@ -66,6 +65,17 @@ def _build_proposal_accept_out(
             proposal=prop_out,
             result_type="follow_up_task",
             result={"task_id": result.task.id, "title": result.task.title},
+        )
+
+    if result.agent_version is not None:
+        return ProposalAcceptOut(
+            proposal=prop_out,
+            result_type="agent_version",
+            result={
+                "agent_id": result.agent_version.agent_id,
+                "agent_version_id": result.agent_version.id,
+                "version_label": result.agent_version.version_label,
+            },
         )
 
     # memory_create, memory_update, memory_archive all surface the MemoryEntry.
@@ -256,16 +266,6 @@ def accept_proposal(
                 "code": "invalid_proposal_risk_level",
                 "risk_value": exc.risk_value,
                 "message": str(exc),
-            },
-        ) from exc
-    except ProposalPolicyDeniedError as exc:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": exc.audit_code or "proposal_apply_denied",
-                "proposal_type": exc.proposal_type,
-                "risk_level": exc.risk_level,
-                "message": exc.message,
             },
         ) from exc
     except CodePatchApplyError as exc:

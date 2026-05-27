@@ -30,10 +30,10 @@ from tests.support import factories
 # ---------------------------------------------------------------------------
 
 
-def test_activity_create_does_not_produce_session(db, cross_space_pair):
+def test_activity_create_does_not_produce_session(db, cross_space_pair_db):
     """Creating an ActivityRecord directly never creates a Session row."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     before = db.query(func.count(Session.id)).filter(Session.space_id == a).scalar()
 
@@ -57,10 +57,10 @@ def test_activity_create_does_not_produce_session(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_raw_activity_cannot_become_active_memory_without_proposal(db, cross_space_pair):
+def test_raw_activity_cannot_become_active_memory_without_proposal(db, cross_space_pair_db):
     """A raw ActivityRecord in status='raw' must not produce active MemoryEntry directly."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     act = factories.create_test_activity(
         db,
@@ -99,7 +99,7 @@ def test_raw_activity_cannot_become_active_memory_without_proposal(db, cross_spa
 # ---------------------------------------------------------------------------
 
 
-def test_source_monitoring_rejects_agent_inferred_only_provenance(db, cross_space_pair):
+def test_source_monitoring_rejects_agent_inferred_only_provenance(db, cross_space_pair_db):
     """agent_inferred-only provenance cannot produce active semantic memory."""
     monitor = SourceMonitoringService()
 
@@ -123,7 +123,7 @@ def test_source_monitoring_rejects_agent_inferred_only_provenance(db, cross_spac
     assert out.reason_code == "agent_inferred_only"
 
 
-def test_source_monitoring_allows_user_confirmed_activity_provenance(db, cross_space_pair):
+def test_source_monitoring_allows_user_confirmed_activity_provenance(db, cross_space_pair_db):
     """user_confirmed provenance (from user_capture activity) is accepted by SourceMonitoring."""
     monitor = SourceMonitoringService()
 
@@ -146,7 +146,7 @@ def test_source_monitoring_allows_user_confirmed_activity_provenance(db, cross_s
     assert out.action == "allow"
 
 
-def test_source_monitoring_requires_user_accept_for_untrusted_external(db, cross_space_pair):
+def test_source_monitoring_requires_user_accept_for_untrusted_external(db, cross_space_pair_db):
     """untrusted_external-only provenance requires explicit_user_accept context."""
     monitor = SourceMonitoringService()
 
@@ -176,13 +176,13 @@ def test_source_monitoring_requires_user_accept_for_untrusted_external(db, cross
     assert out_user.action == "require_review"
 
 
-def test_proposal_apply_rejects_missing_provenance_for_semantic_memory(db, cross_space_pair):
+def test_proposal_apply_rejects_missing_provenance_for_semantic_memory(db, cross_space_pair_db):
     """ProposalApplyService rejects memory_create with no provenance_entries.
 
     Pass provenance_entries=[] explicitly so the factory does not auto-populate defaults.
     """
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     prop = factories.create_test_proposal(
         db,
@@ -308,10 +308,10 @@ def test_accepted_proposal_from_activity_preserves_provenance_in_memory(api_clie
 # ---------------------------------------------------------------------------
 
 
-def test_activity_record_status_progression_stays_in_inbox_states(db, cross_space_pair):
+def test_activity_record_status_progression_stays_in_inbox_states(db, cross_space_pair_db):
     """ActivityRecord status values are inbox/processing states, not execution replay states."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     act = factories.create_test_activity(
         db,
@@ -341,14 +341,14 @@ def test_activity_record_status_progression_stays_in_inbox_states(db, cross_spac
 # ---------------------------------------------------------------------------
 
 
-def test_no_direct_memory_write_from_raw_activity_payload(db, cross_space_pair):
+def test_no_direct_memory_write_from_raw_activity_payload(db, cross_space_pair_db):
     """No code path auto-creates active Memory from raw ActivityRecord.
 
     The boundary: raw capture → active Memory requires proposal/apply cycle.
     ActivityRecord factory must not auto-promote to active Memory.
     """
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     before = (
         db.query(func.count(MemoryEntry.id))

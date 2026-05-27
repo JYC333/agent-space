@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import pytest
 
-from app.memory.proposals import ProposalService, ProposalPolicyDeniedError
+from app.memory.proposals import ProposalService
+from app.policy.exceptions import PolicyGateBlocked
 from tests.support import factories
 
 
-def test_unsupported_proposal_type_denied_at_policy_gate(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_unsupported_proposal_type_denied_at_policy_gate(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -20,16 +21,16 @@ def test_unsupported_proposal_type_denied_at_policy_gate(db, cross_space_pair):
         proposal_type="unknown_dispatch_type",
         commit=True,
     )
-    with pytest.raises(ProposalPolicyDeniedError) as ei:
+    with pytest.raises(PolicyGateBlocked) as ei:
         ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
-    assert ei.value.proposal_type == "unknown_dispatch_type"
-    assert ei.value.audit_code == "unsupported_proposal_type"
+    assert ei.value.decision.proposal_type == "unknown_dispatch_type"
+    assert ei.value.decision.audit_code == "unsupported_proposal_type"
 
 
-def test_memory_create_accept_creates_memory_entry(db, cross_space_pair):
+def test_memory_create_accept_creates_memory_entry(db, cross_space_pair_db):
     """memory_create proposals create a new MemoryEntry on acceptance."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     # Factory default is now memory_create.
     prop = factories.create_test_proposal(db, space_id=a, created_by_user_id=ua.id, commit=True)
     assert prop.proposal_type == "memory_create"
@@ -39,10 +40,10 @@ def test_memory_create_accept_creates_memory_entry(db, cross_space_pair):
     assert out.proposal.status == "accepted"
 
 
-def test_memory_update_accept_creates_versioned_entry(db, cross_space_pair):
+def test_memory_update_accept_creates_versioned_entry(db, cross_space_pair_db):
     """memory_update proposals create a new versioned MemoryEntry and mark old as superseded."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     # Create an active memory entry to update.
     original = factories.create_test_memory_entry(
         db,
@@ -82,10 +83,10 @@ def test_memory_update_accept_creates_versioned_entry(db, cross_space_pair):
     assert old_row.status == "superseded"
 
 
-def test_memory_archive_accept_marks_status_archived(db, cross_space_pair):
+def test_memory_archive_accept_marks_status_archived(db, cross_space_pair_db):
     """memory_archive proposals mark the target MemoryEntry status='archived'."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     target = factories.create_test_memory_entry(
         db,
         space_id=a,
@@ -121,21 +122,21 @@ def test_memory_archive_accept_marks_status_archived(db, cross_space_pair):
     assert row.deleted_at is None
 
 
-def test_policy_change_accept_creates_policy(db, cross_space_pair):
+def test_policy_change_accept_creates_policy(db, cross_space_pair_db):
     """policy_change proposals create a new Policy version on acceptance."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
         created_by_user_id=ua.id,
         proposal_type="policy_change",
-        title="Allow agent reads",
+        title="Log agent reads",
         payload_json={
             "operation": "create",
-            "domain": "memory",
-            "policy_key": "agent_read_allow",
-            "rule_json": {"effect": "allow", "scope": "agent"},
+            "domain": "memory.private_placement",
+            "policy_key": "agent_read_log",
+            "rule_json": {"effect": "allow_with_log", "scope": "agent"},
         },
         commit=True,
     )
@@ -146,11 +147,11 @@ def test_policy_change_accept_creates_policy(db, cross_space_pair):
     assert out.policy.space_id == a
 
 
-def test_code_patch_accept_uses_code_patch_applier_path(db, cross_space_pair, tmp_path, monkeypatch):
+def test_code_patch_accept_uses_code_patch_applier_path(db, cross_space_pair_db, tmp_path, monkeypatch):
     from app.config import settings
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws_root = tmp_path / "wsroot"
     ws_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(settings, "workspace_root", str(ws_root))

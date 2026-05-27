@@ -25,9 +25,14 @@ _WIRED_DIRECT_ACTIONS = [
     "context.inject_memory",
     "context.render_for_runtime",
     "workspace.write_patch",
+    "workspace.read",
     "artifact.persist",
     "proposal.create",
     "proposal.apply",
+    "agent.config_update",
+    "automation.create",
+    "automation.update",
+    "automation.fire",
 ]
 
 # Wired via the proposal.apply gate only — must not be called directly.
@@ -39,11 +44,10 @@ _WIRED_VIA_PROPOSAL_ACTIONS = [
 ]
 
 # Reserved actions (lifecycle_status=RESERVED) — registered for registry completeness
-# and fail-closed defence-in-depth, but not yet wired to a real
-# PolicyGateway.check_and_record() call site.  current_enforcement_point="not_implemented".
+# and fail-closed defence-in-depth, but not yet wired to a preferred
+# PolicyGateway enforcement call site.  current_enforcement_point="not_implemented".
 _RESERVED_ACTIONS = [
     "context.use_personal_grant",
-    "workspace.read",
     "workspace.apply_patch",
     "artifact.export",
     "proposal.approve",
@@ -52,9 +56,6 @@ _RESERVED_ACTIONS = [
     "capability.enable",
     "capability.update",
     "tool_binding.enable",
-    "automation.create",
-    "automation.fire",
-    "automation.update",
     "deployment.propose",
     "deployment.execute",
 ]
@@ -224,6 +225,7 @@ def test_no_old_wired_lifecycle_in_registry():
 _FAIL_CLOSED_ACTIONS = [
     "runtime.use_credential",
     "workspace.write_patch",
+    "artifact.persist",
     "proposal.apply",
     "policy.change",
 ]
@@ -232,8 +234,8 @@ _BEST_EFFORT_ACTIONS = [
     "runtime.execute",
     "context.inject_memory",
     "context.render_for_runtime",
-    "artifact.persist",
     "proposal.create",
+    "agent.config_update",
 ]
 
 
@@ -268,13 +270,14 @@ def test_every_action_has_valid_record_failure_mode():
 
 
 # ---------------------------------------------------------------------------
-# WIRED_VIA_PROPOSAL gateway fail-closed: calling check_and_record() must DENY
+# WIRED_VIA_PROPOSAL gateway fail-closed: direct enforcement must DENY
 # ---------------------------------------------------------------------------
 
-def test_wired_via_proposal_denied_by_gateway_check_and_record():
-    """Calling check_and_record() on a WIRED_VIA_PROPOSAL action must DENY immediately."""
+def test_wired_via_proposal_denied_by_gateway_enforce():
+    """Direct enforcement of a WIRED_VIA_PROPOSAL action must DENY immediately."""
     from unittest.mock import MagicMock
     from app.policy.gateway import PolicyGateway, PolicyCheckRequest
+    from app.policy.exceptions import PolicyGateBlocked
 
     mock_db = MagicMock()
     mock_db.add = MagicMock()
@@ -282,14 +285,16 @@ def test_wired_via_proposal_denied_by_gateway_check_and_record():
 
     gateway = PolicyGateway(mock_db)
     for action in _WIRED_VIA_PROPOSAL_ACTIONS:
-        decision = gateway.check_and_record(PolicyCheckRequest(
-            action=action,
-            actor_type="user",
-            actor_id="u1",
-            space_id="s1",
-        ))
+        with pytest.raises(PolicyGateBlocked) as exc_info:
+            gateway.enforce(PolicyCheckRequest(
+                action=action,
+                actor_type="user",
+                actor_id="u1",
+                space_id="s1",
+            ))
+        decision = exc_info.value.decision
         assert decision.denied, (
-            f"{action}: WIRED_VIA_PROPOSAL must be denied when called via check_and_record()"
+            f"{action}: WIRED_VIA_PROPOSAL must be denied when called directly"
         )
         assert decision.reason_code == "policy_action_via_proposal_only", (
             f"{action}: expected reason_code='policy_action_via_proposal_only', "
@@ -389,6 +394,7 @@ def test_artifact_persist_is_audit_required():
     assert defn.audit_required is True
     assert defn.current_enforcement_point == "app.runs.artifact_persistence.ArtifactPersistenceService"
     assert defn.lifecycle_status == PolicyActionLifecycle.WIRED_DIRECT
+    assert defn.record_failure_mode == "fail_closed"
 
 
 def test_context_inject_memory_enforcement_point():
@@ -416,6 +422,18 @@ def test_proposal_create_covers_both_memory_and_code_patch():
     # Description must clarify both paths
     assert "memory" in defn.description.lower()
     assert "code_patch" in defn.description.lower() or "cli" in defn.description.lower()
+
+
+def test_agent_config_update_action_is_audited_direct_proposal_boundary():
+    defn = require_action_definition("agent.config_update")
+    assert defn.resource_type == "agent"
+    assert defn.default_risk_level == RiskLevel.HIGH
+    assert defn.default_decision == Decision.ALLOW
+    assert defn.audit_required is True
+    assert defn.lifecycle_status == PolicyActionLifecycle.WIRED_DIRECT
+    assert defn.record_failure_mode == "best_effort"
+    assert "config_update" in defn.description
+    assert "proposal.apply" in defn.description
 
 
 # ---------------------------------------------------------------------------
@@ -479,29 +497,34 @@ def test_workspace_read_is_low_risk_allow():
     assert defn.default_risk_level == RiskLevel.LOW
     assert defn.default_decision == Decision.ALLOW
     assert defn.audit_required is False
-    assert defn.current_enforcement_point == "not_implemented"
+    assert defn.lifecycle_status == PolicyActionLifecycle.WIRED_DIRECT
+    assert "workspace_console" in defn.current_enforcement_point
 
 
-def test_automation_create_reserved():
+def test_automation_create_wired():
     defn = require_action_definition("automation.create")
     assert defn.resource_type == "automation"
     assert defn.default_risk_level == RiskLevel.HIGH
-    assert defn.current_enforcement_point == "not_implemented"
-    assert defn.lifecycle_status == PolicyActionLifecycle.RESERVED
+    assert defn.lifecycle_status == PolicyActionLifecycle.WIRED_DIRECT
+    assert defn.audit_required is True
+    assert "AutomationService" in defn.current_enforcement_point
 
 
-def test_automation_fire_reserved():
+def test_automation_fire_wired():
     defn = require_action_definition("automation.fire")
     assert defn.resource_type == "automation"
-    assert defn.current_enforcement_point == "not_implemented"
-    assert defn.lifecycle_status == PolicyActionLifecycle.RESERVED
+    assert defn.lifecycle_status == PolicyActionLifecycle.WIRED_DIRECT
+    assert defn.audit_required is True
+    assert "AutomationService" in defn.current_enforcement_point
 
 
-def test_automation_update_reserved():
+def test_automation_update_wired():
     defn = require_action_definition("automation.update")
     assert defn.resource_type == "automation"
-    assert defn.current_enforcement_point == "not_implemented"
-    assert defn.lifecycle_status == PolicyActionLifecycle.RESERVED
+    assert defn.default_risk_level == RiskLevel.HIGH
+    assert defn.lifecycle_status == PolicyActionLifecycle.WIRED_DIRECT
+    assert defn.audit_required is True
+    assert "AutomationService" in defn.current_enforcement_point
 
 
 def test_capability_enable_reserved():

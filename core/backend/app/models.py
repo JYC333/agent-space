@@ -69,7 +69,6 @@ class Space(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
-    users: Mapped[list["User"]] = relationship("User", back_populates="space")
     memberships: Mapped[list["SpaceMembership"]] = relationship("SpaceMembership", back_populates="space")
     agents: Mapped[list["Agent"]] = relationship("Agent", back_populates="space")
     workspaces: Mapped[list["Workspace"]] = relationship("Workspace", back_populates="space")
@@ -83,23 +82,19 @@ class Space(Base):
 
 
 class User(Base):
-    """Human identity. Space membership can also be represented in SpaceMembership."""
+    """Human identity. Space access is represented only by SpaceMembership."""
 
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
-    space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=True, index=True)
     email: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(256), nullable=False)
     avatar_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    role: Mapped[str] = mapped_column(String(32), nullable=False, default="member")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
-    default_space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, nullable=True)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
-    space: Mapped[Optional[Space]] = relationship("Space", back_populates="users", foreign_keys=[space_id])
     memberships: Mapped[list["SpaceMembership"]] = relationship("SpaceMembership", back_populates="user")
 
 
@@ -519,6 +514,10 @@ class AgentVersion(Base):
     capabilities_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     tool_permissions_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     runtime_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Provenance for versions created by accepted agent_config_update proposals.
+    # Soft references avoid an AgentVersion <-> Proposal/Activity DDL ordering cycle.
+    source_proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    source_activity_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -1842,7 +1841,7 @@ class RunEvent(Base):
         CheckConstraint(
             "event_type in ("
             "'context_compiled', 'runtime_selected', 'credential_granted', "
-            "'sandbox_created', 'adapter_invoked', 'adapter_completed', "
+            "'sandbox_created', 'policy_checked', 'adapter_invoked', 'adapter_completed', "
             "'artifact_ingested', 'patch_collected', 'validation_started', "
             "'validation_completed', 'proposal_created', 'evaluation_created', "
             "'run_finalized')",
@@ -2402,7 +2401,8 @@ class CliCredentialEvent(Base):
     runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
     runtime_adapter_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     credential_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    # Source of the credential: "profile" | "container_default" | "none"
+    # Source of the credential: "profile" | "container_default" | "none".
+    # "container_default" is retained only for historical audit rows.
     credential_source: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
     trigger_origin: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -2410,7 +2410,7 @@ class CliCredentialEvent(Base):
     broker_error: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # "ok" | "failed" | "not_needed" | "pending"
     cleanup_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_needed")
-    # "grant" | "grant_failed" | "automation_denied" | "cleanup_failed"
+    # "grant" | "grant_denied" | "grant_failed" | "automation_denied" | "cleanup_failed"
     action: Mapped[str] = mapped_column(String(64), nullable=False, default="grant")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
@@ -2470,4 +2470,82 @@ class PolicyDecisionRecord(Base):
             "risk_level in ('low', 'medium', 'high', 'critical')",
             name="ck_policy_decision_records_risk_level",
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Automation
+# ---------------------------------------------------------------------------
+
+
+class Automation(Base):
+    """A user-defined automation rule that can trigger agent runs.
+
+    Automation creation and updates require PolicyGateway.enforce()
+    (automation.create / automation.update). Manual fire requires
+    automation.fire policy check. All automation-triggered runs carry
+    trigger_origin="automation".
+
+    Automation must not directly write Memory, Policy, Workspace files,
+    Capability, or Credentials. It may produce Runs which in turn create
+    proposals and artifacts via existing gates.
+
+    preflight_snapshot_json stores runtime preflight and policy preflight
+    snapshots at creation time. Manual fire reruns both before queuing a new Run.
+    """
+
+    __tablename__ = "automations"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    owner_user_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=False, index=True)
+    agent_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=False, index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    trigger_type: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    preflight_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    config_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    automation_runs: Mapped[list["AutomationRun"]] = relationship(
+        "AutomationRun", back_populates="automation", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "trigger_type in ('manual')",
+            name="ck_automations_trigger_type",
+        ),
+        CheckConstraint(
+            "status in ('active', 'paused', 'archived')",
+            name="ck_automations_status",
+        ),
+    )
+
+
+class AutomationRun(Base):
+    """Link record connecting an Automation to the Run it triggered.
+
+    Created by AutomationService.fire() alongside the Run row.
+    run_id is a soft reference (no DB FK) to match the pattern used in other
+    models where the runs table is created earlier in migration order.
+    """
+
+    __tablename__ = "automation_runs"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    automation_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("automations.id"), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(UUID_COL, nullable=False, index=True)
+    triggered_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    trigger_type: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
+    preflight_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    automation: Mapped["Automation"] = relationship("Automation", back_populates="automation_runs")
+
+    __table_args__ = (
+        Index("ix_automation_runs_automation_created", "automation_id", "created_at"),
     )

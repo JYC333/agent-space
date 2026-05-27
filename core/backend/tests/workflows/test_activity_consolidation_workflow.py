@@ -10,9 +10,9 @@ from app.memory.proposals import ProposalService
 from tests.support import factories
 
 
-def test_pending_activity_becomes_processed_with_episodic_proposal(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_pending_activity_becomes_processed_with_episodic_proposal(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(
         db,
         space_id=a,
@@ -34,9 +34,9 @@ def test_pending_activity_becomes_processed_with_episodic_proposal(db, cross_spa
     assert body.get("summary") == "hello"
 
 
-def test_consolidation_skipped_when_no_reviewable_candidates(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_consolidation_skipped_when_no_reviewable_candidates(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(
         db,
         space_id=a,
@@ -51,9 +51,9 @@ def test_consolidation_skipped_when_no_reviewable_candidates(db, cross_space_pai
     assert act.consolidation_status == "skipped"
 
 
-def test_accept_episodic_proposal_creates_memory_via_apply(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_accept_episodic_proposal_creates_memory_via_apply(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(
         db,
         space_id=a,
@@ -68,9 +68,9 @@ def test_accept_episodic_proposal_creates_memory_via_apply(db, cross_space_pair)
     assert out.memory is not None
 
 
-def test_semantic_lane_produces_memory_create_or_update_proposal(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_semantic_lane_produces_memory_create_or_update_proposal(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(
         db,
         space_id=a,
@@ -88,9 +88,9 @@ def test_semantic_lane_produces_memory_create_or_update_proposal(db, cross_space
     assert (prop.payload_json or {}).get("memory_type") == "semantic"
 
 
-def test_repeated_consolidation_idempotent(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_repeated_consolidation_idempotent(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(db, space_id=a, actor_user_id=ua.id, commit=True)
     svc = ActivityConsolidationService(db)
     r1 = svc.run_pending(space_id=a, acting_user_id=ua.id, activity_ids=[act.id])
@@ -104,9 +104,9 @@ def test_repeated_consolidation_idempotent(db, cross_space_pair):
     assert n1 >= 1
 
 
-def test_accepted_proposal_blocks_duplicate_dedupe(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_accepted_proposal_blocks_duplicate_dedupe(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(db, space_id=a, actor_user_id=ua.id, commit=True)
     svc = ActivityConsolidationService(db)
     r1 = svc.run_pending(space_id=a, acting_user_id=ua.id, activity_ids=[act.id])
@@ -120,16 +120,17 @@ def test_accepted_proposal_blocks_duplicate_dedupe(db, cross_space_pair):
     assert r2.proposals_created == []
 
 
-def test_http_consolidate_then_memory_batch_same_dedupe(api_client, db, cross_space_pair):
+def test_http_consolidate_then_memory_batch_same_dedupe(db, workflow_http_pair):
     """Single-activity HTTP path and batch path share ActivityConsolidationService dedupe."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
-    aid = cross_space_pair["client_a"].post(
+    a = workflow_http_pair["space_a_id"]
+    create_resp = workflow_http_pair["client_a"].post(
         "/api/v1/activity",
         params={"space_id": a},
         json={"source_type": "chat_message", "content": "c", "title": "t"},
-    ).json()["id"]
-    r1 = cross_space_pair["client_a"].post(
+    )
+    assert create_resp.status_code == 200, create_resp.json()
+    aid = create_resp.json()["id"]
+    r1 = workflow_http_pair["client_a"].post(
         f"/api/v1/activity/{aid}/consolidate",
         params={"space_id": a},
     )
@@ -139,7 +140,7 @@ def test_http_consolidate_then_memory_batch_same_dedupe(api_client, db, cross_sp
     row.consolidation_status = "pending"
     row.processed_at = None
     db.commit()
-    r2 = cross_space_pair["client_a"].post(
+    r2 = workflow_http_pair["client_a"].post(
         "/api/v1/memory/consolidation/run",
         params={"space_id": a},
         json={"batch_limit": 20, "activity_ids": [aid]},
@@ -148,16 +149,17 @@ def test_http_consolidate_then_memory_batch_same_dedupe(api_client, db, cross_sp
     assert r2.json().get("proposals_created") == []
 
 
-def test_activity_consolidate_ignores_json_body_proposal_fields(api_client, db, cross_space_pair):
+def test_activity_consolidate_ignores_json_body_proposal_fields(workflow_http_pair):
     """Unknown JSON keys are ignored; proposal content comes only from the consolidation pipeline."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
-    aid = cross_space_pair["client_a"].post(
+    a = workflow_http_pair["space_a_id"]
+    create_resp = workflow_http_pair["client_a"].post(
         "/api/v1/activity",
         params={"space_id": a},
         json={"source_type": "user_input", "content": "x", "title": "real-title"},
-    ).json()["id"]
-    r = cross_space_pair["client_a"].post(
+    )
+    assert create_resp.status_code == 200, create_resp.json()
+    aid = create_resp.json()["id"]
+    r = workflow_http_pair["client_a"].post(
         f"/api/v1/activity/{aid}/consolidate",
         params={"space_id": a},
         json={"proposed_title": "injected", "proposed_content": "injected-body"},
@@ -170,10 +172,10 @@ def test_activity_consolidate_ignores_json_body_proposal_fields(api_client, db, 
         assert "injected-body" not in (p.get("proposed_content") or "")
 
 
-def test_consolidation_does_not_create_active_memory(db, test_user):
+def test_consolidation_does_not_create_active_memory(db, test_user, test_space):
     from app.models import MemoryEntry
 
-    a = test_user.space_id
+    a = test_space.id
     act = factories.create_test_activity(
         db,
         space_id=a,
@@ -200,8 +202,8 @@ def test_consolidation_does_not_create_active_memory(db, test_user):
     ).count() == before
 
 
-def test_consolidation_proposal_preserves_activity_provenance(db, test_user):
-    a = test_user.space_id
+def test_consolidation_proposal_preserves_activity_provenance(db, test_user, test_space):
+    a = test_space.id
     act = factories.create_test_activity(
         db,
         space_id=a,
@@ -225,7 +227,7 @@ def test_consolidation_proposal_preserves_activity_provenance(db, test_user):
     )
 
 
-def test_consolidation_classifier_runs_without_open_transaction(db, test_user):
+def test_consolidation_classifier_runs_without_open_transaction(db, test_user, test_space):
     observed: list[bool] = []
 
     class ObservingClassifier:
@@ -235,14 +237,14 @@ def test_consolidation_classifier_runs_without_open_transaction(db, test_user):
 
     act = factories.create_test_activity(
         db,
-        space_id=test_user.space_id,
+        space_id=test_space.id,
         actor_user_id=test_user.id,
         activity_type="consolidation.no_candidate",
         commit=True,
     )
 
     ActivityConsolidationService(db, classifier=ObservingClassifier()).run_pending(
-        space_id=test_user.space_id,
+        space_id=test_space.id,
         acting_user_id=test_user.id,
         activity_ids=[act.id],
     )
@@ -250,12 +252,12 @@ def test_consolidation_classifier_runs_without_open_transaction(db, test_user):
     assert observed == [False]
 
 
-def test_consolidation_proposal_failure_rolls_back_partial_proposal(db, test_user, monkeypatch):
+def test_consolidation_proposal_failure_rolls_back_partial_proposal(db, test_user, test_space, monkeypatch):
     from app.memory.consolidation import proposal_producer
     from app.models import MemoryEntry
     from ulid import ULID
 
-    a = test_user.space_id
+    a = test_space.id
     ua = test_user
     act = factories.create_test_activity(
         db,

@@ -77,7 +77,7 @@ class WorktreeWritingAdapter(BaseRuntimeAdapter):
         return RuntimeAdapterResult(
             success=True,
             stdout="done",
-            output_text="done",
+            output_text="",
             exit_code=0,
             started_at=datetime.now(UTC),
             completed_at=datetime.now(UTC),
@@ -93,7 +93,7 @@ class FileAccessAdapter(BaseRuntimeAdapter):
 
     def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
         return RuntimeAdapterResult(
-            success=True, stdout="ok", output_text="ok", exit_code=0,
+            success=True, stdout="ok", output_text="", exit_code=0,
             started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
         )
 

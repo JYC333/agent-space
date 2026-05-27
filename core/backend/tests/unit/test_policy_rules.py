@@ -1,6 +1,6 @@
 """Unit tests for built-in policy rules (app/policy/rules.py).
 
-Covers new rules added in this task:
+Covers current built-in policy rules:
   - rule_use_credential: same-space manual allow, cross-space deny, automation require_approval
 """
 from __future__ import annotations
@@ -12,7 +12,6 @@ from app.policy.rules import (
     rule_agent_status,
     rule_tool_permission,
     rule_workspace_write_patch,
-    rule_policy_change,
     BUILTIN_RULES,
 )
 from app.policy.engine import PolicyEngine

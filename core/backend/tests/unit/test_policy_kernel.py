@@ -62,15 +62,15 @@ class TestPolicyEngineRegistryDefaults:
         assert d.requires_approval
         assert d.policy_rule_id == "registry_default"
 
-    def test_known_deny_rule_denies(self):
-        """policy.change is denied by rule for non-admin roles."""
+    def test_policy_change_direct_engine_simulation_uses_registry_default(self):
+        """policy.change is proposal-only; direct engine simulation has no production rule."""
         d = self._engine().check({
             "action": "policy.change",
             "space_id": "s1",
             "membership_role": "member",
         })
-        assert d.denied
-        assert d.policy_rule_id == "policy_change_insufficient_role"
+        assert d.requires_approval
+        assert d.policy_rule_id == "registry_default"
 
     def test_builtin_rule_overrides_registry_default(self):
         """space_boundary rule should fire before registry default on cross-space access."""
@@ -86,7 +86,6 @@ class TestPolicyEngineRegistryDefaults:
         """Registry default must carry the action's default_risk_level.
 
         workspace.write_patch without proposal_id falls to registry default REQUIRE_APPROVAL.
-        policy.change is intercepted by rule_policy_change and returns DENY for guest.
         """
         d = self._engine().check({
             "action": "workspace.write_patch",
@@ -96,16 +95,16 @@ class TestPolicyEngineRegistryDefaults:
         assert d.requires_approval
         assert d.risk_level == RiskLevel.HIGH
 
-    def test_policy_change_without_role_denied_by_rule(self):
-        """policy.change with no membership_role is intercepted by rule_policy_change and denied."""
+    def test_policy_change_without_role_uses_registry_default(self):
+        """policy.change is WIRED_VIA_PROPOSAL and has no production direct role rule."""
         d = self._engine().check({
             "action": "policy.change",
             "space_id": "s1",
             "resource_space_id": "s1",
         })
-        assert d.denied
+        assert d.requires_approval
         assert d.risk_level == RiskLevel.HIGH
-        assert d.policy_rule_id == "policy_change_insufficient_role"
+        assert d.policy_rule_id == "registry_default"
 
     def test_registry_default_carries_approver_role(self):
         """Registry default must carry default_required_approver_role."""

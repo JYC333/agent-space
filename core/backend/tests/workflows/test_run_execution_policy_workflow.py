@@ -45,12 +45,61 @@ def _setup_paths(monkeypatch, tmp_path):
 
 
 def _make_fake_adapter(monkeypatch, config: FakeRuntimeConfig | None = None):
-    fake = ConfigurableFakeRuntimeAdapter(config or FakeRuntimeConfig())
+    fake = ConfigurableFakeRuntimeAdapter(config or FakeRuntimeConfig(output_text=""))
+    monkeypatch.setattr(
+        "app.runs.adapter_resolution.is_adapter_type_implemented",
+        lambda adapter_type: adapter_type in {
+            "echo",
+            "capability",
+            "claude_code",
+            "codex_cli",
+            "model_provider_api",
+        },
+    )
     monkeypatch.setattr(
         "app.runs.execution.instantiate_runtime_adapter",
         lambda _adapter_type: fake,
     )
     return fake
+
+
+def _configure_model_provider_api_runtime(version) -> None:
+    version.runtime_config_json = {
+        **(version.runtime_config_json or {}),
+        "adapter_type": "model_provider_api",
+    }
+    allowed = set((version.runtime_policy_json or {}).get("allowed_adapter_types") or [])
+    allowed.add("model_provider_api")
+    version.runtime_policy_json = {
+        **(version.runtime_policy_json or {}),
+        "allowed_adapter_types": sorted(allowed),
+    }
+
+
+def _configure_runtime_adapter_type(version, adapter_type: str) -> None:
+    version.runtime_config_json = {
+        **(version.runtime_config_json or {}),
+        "adapter_type": adapter_type,
+    }
+    allowed = set((version.runtime_policy_json or {}).get("allowed_adapter_types") or [])
+    allowed.add(adapter_type)
+    version.runtime_policy_json = {
+        **(version.runtime_policy_json or {}),
+        "allowed_adapter_types": sorted(allowed),
+    }
+
+
+def _fresh_policy_records(run_id: str, action: str) -> list[PolicyDecisionRecord]:
+    from app.db import SessionLocal
+
+    fresh = SessionLocal()
+    try:
+        return fresh.query(PolicyDecisionRecord).filter(
+            PolicyDecisionRecord.run_id == run_id,
+            PolicyDecisionRecord.action == action,
+        ).all()
+    finally:
+        fresh.close()
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +128,7 @@ class TestRuntimeExecuteDisabledAgentBlocking:
 
         monkeypatch.setattr(
             "app.runs.execution.instantiate_runtime_adapter",
-            lambda _t: TrackingAdapter(),
+            lambda _t: TrackingAdapter(FakeRuntimeConfig(output_text="")),
         )
 
         space_id = PERSONAL_SPACE_ID
@@ -89,6 +138,7 @@ class TestRuntimeExecuteDisabledAgentBlocking:
         agent.status = "disabled"
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         svc = RunExecutionService(db)
         result = svc.execute_run(run.id, space_id=space_id)
 
@@ -127,6 +177,7 @@ class TestRuntimeExecuteDisabledAgentBlocking:
         agent.status = "disabled"
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         svc = RunExecutionService(db)
         result = svc.execute_run(run.id, space_id=space_id)
 
@@ -161,6 +212,7 @@ class TestRuntimeExecuteDisabledAgentBlocking:
         agent.status = "disabled"
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         svc = RunExecutionService(db)
         result = svc.execute_run(run.id, space_id=space_id)
 
@@ -181,16 +233,15 @@ class TestRuntimeExecuteDisabledAgentBlocking:
         agent.status = "disabled"
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         svc = RunExecutionService(db)
         result = svc.execute_run(run.id, space_id=space_id)
 
         assert result.error_code == "policy_denied_runtime_execute"
 
-        record = db.query(PolicyDecisionRecord).filter(
-            PolicyDecisionRecord.run_id == run.id,
-            PolicyDecisionRecord.action == "runtime.execute",
-        ).first()
-        assert record is not None, "PolicyDecisionRecord must be created for runtime.execute DENY"
+        records = _fresh_policy_records(run.id, "runtime.execute")
+        assert len(records) == 1, "runtime.execute DENY must have one durable audit record"
+        record = records[0]
         assert record.decision == "deny"
         assert record.policy_rule_id == "agent_status"
 
@@ -223,7 +274,7 @@ class TestRuntimeExecuteDisallowedToolBlocking:
 
         monkeypatch.setattr(
             "app.runs.execution.instantiate_runtime_adapter",
-            lambda _t: TrackingAdapter(),
+            lambda _t: TrackingAdapter(FakeRuntimeConfig(output_text="")),
         )
 
         space_id = PERSONAL_SPACE_ID
@@ -237,6 +288,7 @@ class TestRuntimeExecuteDisallowedToolBlocking:
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         svc = RunExecutionService(db)
         result = svc.execute_run(run.id, space_id=space_id)
 
@@ -261,7 +313,7 @@ class TestRuntimeExecuteDisallowedToolBlocking:
 
         monkeypatch.setattr(
             "app.runs.execution.instantiate_runtime_adapter",
-            lambda _t: TrackingAdapter(),
+            lambda _t: TrackingAdapter(FakeRuntimeConfig(output_text="")),
         )
 
         space_id = PERSONAL_SPACE_ID
@@ -299,7 +351,7 @@ class TestRuntimeExecuteDisallowedToolBlocking:
 
         monkeypatch.setattr(
             "app.runs.execution.instantiate_runtime_adapter",
-            lambda _t: TrackingAdapter(),
+            lambda _t: TrackingAdapter(FakeRuntimeConfig(output_text="")),
         )
 
         space_id = PERSONAL_SPACE_ID
@@ -317,6 +369,64 @@ class TestRuntimeExecuteDisallowedToolBlocking:
 
         assert result.success, f"Expected success with no tool restriction, got {result.error_code}"
         assert "called" in adapter_executed
+
+
+class TestRuntimeRequirementsMissingBlocking:
+    def test_missing_runtime_requirements_fail_before_credential_context_or_adapter(
+        self, db: Session, tmp_path, monkeypatch
+    ):
+        _setup_paths(monkeypatch, tmp_path)
+
+        adapter_calls: list[str] = []
+        credential_calls: list[str] = []
+        context_calls: list[str] = []
+
+        monkeypatch.setattr(
+            "app.runs.adapter_resolution.is_adapter_type_implemented",
+            lambda adapter_type: adapter_type == "missing_requirements_runtime",
+        )
+        monkeypatch.setattr(
+            "app.runs.execution.instantiate_runtime_adapter",
+            lambda _adapter_type: adapter_calls.append("called"),
+        )
+        monkeypatch.setattr(
+            "app.runs.execution.resolve_runtime_credentials",
+            lambda *a, **kw: credential_calls.append("called") or {},
+        )
+        monkeypatch.setattr(
+            "app.runs.execution.ContextSnapshotPopulator.populate",
+            lambda *a, **kw: context_calls.append("called"),
+        )
+
+        agent = factories.create_test_agent(
+            db,
+            space_id=PERSONAL_SPACE_ID,
+            owner_user_id=DEFAULT_USER_ID,
+            commit=False,
+        )
+        from app.models import AgentVersion
+
+        version = db.query(AgentVersion).filter(
+            AgentVersion.id == agent.current_version_id
+        ).first()
+        _configure_runtime_adapter_type(version, "missing_requirements_runtime")
+        run = factories.create_test_run(
+            db,
+            space_id=PERSONAL_SPACE_ID,
+            user_id=DEFAULT_USER_ID,
+            agent=agent,
+            commit=True,
+        )
+
+        db.commit()
+        result = RunExecutionService(db).execute_run(run.id, space_id=PERSONAL_SPACE_ID)
+
+        assert not result.success
+        assert result.error_code == "runtime_requirements_missing"
+        assert "runtime_requirements_missing" in result.error
+        assert credential_calls == []
+        assert context_calls == []
+        assert adapter_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +475,7 @@ class TestRuntimeUseCredentialCrossSpaceBlocking:
             db,
             space_id=space_a,
             name="cross-space-adapter",
-            adapter_type="echo",
+            adapter_type="model_provider_api",
             credential_id=cred.id,
             commit=True,
         )
@@ -373,10 +483,12 @@ class TestRuntimeUseCredentialCrossSpaceBlocking:
         agent = factories.create_test_agent(db, space_id=space_a, owner_user_id=user_id, commit=False)
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
+        _configure_model_provider_api_runtime(version)
         version.runtime_adapter_id = adapter_row.id
 
         run = factories.create_test_run(db, space_id=space_a, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         svc = RunExecutionService(db)
         result = svc.execute_run(run.id, space_id=space_a)
 
@@ -421,7 +533,7 @@ class TestRuntimeUseCredentialCrossSpaceBlocking:
             db,
             space_id=space_id,
             name="missing-cred-adapter",
-            adapter_type="echo",
+            adapter_type="model_provider_api",
             credential_id=cred.id,
             commit=True,
         )
@@ -429,10 +541,12 @@ class TestRuntimeUseCredentialCrossSpaceBlocking:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user_id, commit=False)
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
+        _configure_model_provider_api_runtime(version)
         version.runtime_adapter_id = adapter_row.id
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         # Patch the Credential query to return None — simulate a missing/deleted row
         real_query = db.query
 
@@ -473,8 +587,12 @@ class TestRuntimeUseCredentialCrossSpaceBlocking:
                 return super().execute(ctx)
 
         monkeypatch.setattr(
+            "app.runs.adapter_resolution.is_adapter_type_implemented",
+            lambda adapter_type: adapter_type in {"echo", "model_provider_api"},
+        )
+        monkeypatch.setattr(
             "app.runs.execution.instantiate_runtime_adapter",
-            lambda _t: TrackingAdapter(),
+            lambda _t: TrackingAdapter(FakeRuntimeConfig(output_text="")),
         )
 
         # Patch credential resolution to succeed without real secrets
@@ -494,7 +612,7 @@ class TestRuntimeUseCredentialCrossSpaceBlocking:
             db,
             space_id=space_id,
             name="same-space-adapter",
-            adapter_type="echo",
+            adapter_type="model_provider_api",
             credential_id=cred.id,
             commit=True,
         )
@@ -502,6 +620,7 @@ class TestRuntimeUseCredentialCrossSpaceBlocking:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user_id, commit=False)
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
+        _configure_model_provider_api_runtime(version)
         version.runtime_adapter_id = adapter_row.id
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
@@ -518,11 +637,9 @@ class TestRuntimeUseCredentialCrossSpaceBlocking:
         assert "called" in adapter_executed
 
         # Verify PolicyDecisionRecord for use_credential was created (audit_required=True)
-        record = db.query(PolicyDecisionRecord).filter(
-            PolicyDecisionRecord.run_id == run.id,
-            PolicyDecisionRecord.action == "runtime.use_credential",
-        ).first()
-        assert record is not None, "runtime.use_credential ALLOW must be audited"
+        records = _fresh_policy_records(run.id, "runtime.use_credential")
+        assert len(records) == 1, "runtime.use_credential ALLOW must have one durable audit record"
+        record = records[0]
         assert record.decision == "allow"
         # Metadata must not contain any secret material
         meta = record.metadata_json or {}
@@ -548,25 +665,25 @@ class TestRuntimeUseCredentialCrossSpaceBlocking:
             db, space_id=space_b, name="cross-cred-safety", commit=True
         )
         adapter_row = factories.create_test_runtime_adapter(
-            db, space_id=space_a, adapter_type="echo", credential_id=cred.id, commit=True
+            db, space_id=space_a, adapter_type="model_provider_api", credential_id=cred.id, commit=True
         )
 
         agent = factories.create_test_agent(db, space_id=space_a, owner_user_id=user_id, commit=False)
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
+        _configure_model_provider_api_runtime(version)
         version.runtime_adapter_id = adapter_row.id
         run = factories.create_test_run(db, space_id=space_a, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         svc = RunExecutionService(db)
         result = svc.execute_run(run.id, space_id=space_a)
 
         assert result.error_code == "policy_denied_runtime_use_credential"
 
-        record = db.query(PolicyDecisionRecord).filter(
-            PolicyDecisionRecord.run_id == run.id,
-            PolicyDecisionRecord.action == "runtime.use_credential",
-        ).first()
-        assert record is not None
+        records = _fresh_policy_records(run.id, "runtime.use_credential")
+        assert len(records) == 1, "runtime.use_credential DENY must have one durable audit record"
+        record = records[0]
         assert record.decision == "deny"
 
         meta = record.metadata_json or {}
@@ -610,6 +727,7 @@ class TestRuntimeUseCredentialProviderLevelBlocking:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user_id, commit=False)
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
+        _configure_model_provider_api_runtime(version)
         version.model_provider_id = provider.id
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
@@ -622,11 +740,9 @@ class TestRuntimeUseCredentialProviderLevelBlocking:
 
         assert result.success, f"Expected success with same-space provider credential, got {result.error_code}"
 
-        record = db.query(PolicyDecisionRecord).filter(
-            PolicyDecisionRecord.run_id == run.id,
-            PolicyDecisionRecord.action == "runtime.use_credential",
-        ).first()
-        assert record is not None, "runtime.use_credential ALLOW must be audited"
+        records = _fresh_policy_records(run.id, "runtime.use_credential")
+        assert len(records) == 1, "runtime.use_credential ALLOW must have one durable audit record"
+        record = records[0]
         assert record.decision == "allow"
         meta = record.metadata_json or {}
         assert meta.get("resolution_source") == "agent_version.model_provider_id"
@@ -662,10 +778,12 @@ class TestRuntimeUseCredentialProviderLevelBlocking:
         agent = factories.create_test_agent(db, space_id=space_a, owner_user_id=user_id, commit=False)
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
+        _configure_model_provider_api_runtime(version)
         version.model_provider_id = provider.id
 
         run = factories.create_test_run(db, space_id=space_a, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         svc = RunExecutionService(db)
         result = svc.execute_run(run.id, space_id=space_a)
 
@@ -700,16 +818,18 @@ class TestRuntimeUseCredentialProviderLevelBlocking:
         )
         adapter_row = factories.create_test_runtime_adapter(
             db, space_id=space_a, name="adapter-with-cross-provider",
-            adapter_type="echo", provider_id=provider.id, commit=True,
+            adapter_type="model_provider_api", provider_id=provider.id, commit=True,
         )
 
         agent = factories.create_test_agent(db, space_id=space_a, owner_user_id=user_id, commit=False)
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
+        _configure_model_provider_api_runtime(version)
         version.runtime_adapter_id = adapter_row.id
 
         run = factories.create_test_run(db, space_id=space_a, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         svc = RunExecutionService(db)
         result = svc.execute_run(run.id, space_id=space_a)
 
@@ -751,10 +871,12 @@ class TestRuntimeUseCredentialProviderLevelBlocking:
         agent = factories.create_test_agent(db, space_id=space_a, owner_user_id=user_id, commit=False)
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
+        _configure_model_provider_api_runtime(version)
         version.model_provider_id = provider.id
 
         run = factories.create_test_run(db, space_id=space_a, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         svc = RunExecutionService(db)
         result = svc.execute_run(run.id, space_id=space_a)
 
@@ -791,10 +913,12 @@ class TestRuntimeUseCredentialProviderLevelBlocking:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user_id, commit=False)
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
+        _configure_model_provider_api_runtime(version)
         version.model_provider_id = provider.id
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         svc = RunExecutionService(db)
         result = svc.execute_run(run.id, space_id=space_id)
 
@@ -822,6 +946,7 @@ class TestArtifactPersistRequireApprovalBlocking:
         from app.runs.artifact_persistence import ArtifactPersistenceService
         from app.personal_memory_grants.egress_guard import PersonalMemoryEgressError
         from app.policy.decisions import Decision, PolicyDecision, RiskLevel
+        from app.policy.exceptions import PolicyGateBlocked
 
         art_root = tmp_path / "artifacts"
         art_root.mkdir(parents=True, exist_ok=True)
@@ -842,10 +967,25 @@ class TestArtifactPersistRequireApprovalBlocking:
         require_approval_decision.resource_type = "artifact"
         require_approval_decision.resource_id = None
 
+        blocked_exc = PolicyGateBlocked(
+            decision=require_approval_decision,
+            action="artifact.persist",
+            actor_type="run",
+            actor_id=str(run_row.id),
+            actor_ref=None,
+            space_id=space_id,
+            resource_type="artifact",
+            resource_id=None,
+            run_id=str(run_row.id),
+            proposal_id=None,
+            metadata_json={"artifact_type": "runtime_output"},
+            http_status_code=403,
+        )
+
         with patch(
-            "app.runs.artifact_persistence.PolicyGateway.check_and_record",
-            return_value=require_approval_decision,
-        ) as check_and_record:
+            "app.runs.artifact_persistence.PolicyGateway.enforce",
+            side_effect=blocked_exc,
+        ) as mock_enforce:
             svc = ArtifactPersistenceService(db)
             with pytest.raises(PersonalMemoryEgressError) as exc_info:
                 svc.persist_text_file(
@@ -855,7 +995,7 @@ class TestArtifactPersistRequireApprovalBlocking:
                     artifact_type="runtime_output",
                 )
             assert "requires approval" in str(exc_info.value).lower()
-            request = check_and_record.call_args.args[0]
+            request = mock_enforce.call_args.args[0]
             assert request.context["target_space_id"] == space_id
 
         # Verify no Artifact row was created
@@ -872,6 +1012,7 @@ class TestArtifactPersistRequireApprovalBlocking:
         from app.runs.artifact_persistence import ArtifactPersistenceService
         from app.personal_memory_grants.egress_guard import PersonalMemoryEgressError
         from app.policy.decisions import Decision, PolicyDecision, RiskLevel
+        from app.policy.exceptions import PolicyGateBlocked
         import pathlib
 
         art_root = tmp_path / "artifacts"
@@ -897,10 +1038,25 @@ class TestArtifactPersistRequireApprovalBlocking:
         require_approval_decision.resource_type = "artifact"
         require_approval_decision.resource_id = None
 
+        blocked_exc = PolicyGateBlocked(
+            decision=require_approval_decision,
+            action="artifact.persist",
+            actor_type="run",
+            actor_id=str(run_row.id),
+            actor_ref=None,
+            space_id=space_id,
+            resource_type="artifact",
+            resource_id=None,
+            run_id=str(run_row.id),
+            proposal_id=None,
+            metadata_json={"artifact_type": "runtime_file"},
+            http_status_code=403,
+        )
+
         with patch(
-            "app.runs.artifact_persistence.PolicyGateway.check_and_record",
-            return_value=require_approval_decision,
-        ) as check_and_record:
+            "app.runs.artifact_persistence.PolicyGateway.enforce",
+            side_effect=blocked_exc,
+        ) as mock_enforce:
             svc = ArtifactPersistenceService(db)
             with pytest.raises(PersonalMemoryEgressError) as exc_info:
                 svc.persist_copied_file(
@@ -911,7 +1067,7 @@ class TestArtifactPersistRequireApprovalBlocking:
                     artifact_type="runtime_file",
                 )
             assert "requires approval" in str(exc_info.value).lower()
-            request = check_and_record.call_args.args[0]
+            request = mock_enforce.call_args.args[0]
             assert request.context["target_space_id"] == space_id
 
         arts = db.query(Artifact).filter(Artifact.run_id == run.id).all()
@@ -923,6 +1079,7 @@ class TestArtifactPersistRequireApprovalBlocking:
         from app.runs.artifact_persistence import ArtifactPersistenceService
         from app.personal_memory_grants.egress_guard import PersonalMemoryEgressError
         from app.policy.decisions import Decision, PolicyDecision, RiskLevel
+        from app.policy.exceptions import PolicyGateBlocked
 
         art_root = tmp_path / "artifacts"
         art_root.mkdir(parents=True, exist_ok=True)
@@ -943,9 +1100,24 @@ class TestArtifactPersistRequireApprovalBlocking:
         deny_decision.resource_type = "artifact"
         deny_decision.resource_id = None
 
+        blocked_exc = PolicyGateBlocked(
+            decision=deny_decision,
+            action="artifact.persist",
+            actor_type="run",
+            actor_id=str(run_row.id),
+            actor_ref=None,
+            space_id=space_id,
+            resource_type="artifact",
+            resource_id=None,
+            run_id=str(run_row.id),
+            proposal_id=None,
+            metadata_json={"artifact_type": "runtime_output"},
+            http_status_code=403,
+        )
+
         with patch(
-            "app.runs.artifact_persistence.PolicyGateway.check_and_record",
-            return_value=deny_decision,
+            "app.runs.artifact_persistence.PolicyGateway.enforce",
+            side_effect=blocked_exc,
         ):
             svc = ArtifactPersistenceService(db)
             with pytest.raises(PersonalMemoryEgressError) as exc_info:
@@ -1023,7 +1195,7 @@ class TestArtifactPersistRequireApprovalBlocking:
         # real path's normal deny scenario stores no content in the audit record.
         # Use force_record to get a record even on allow, then check metadata.
         gw = PolicyGateway(db)
-        gw.check_and_record(
+        gw.enforce(
             PolicyCheckRequest(
                 action="artifact.persist",
                 actor_id=user_id,
@@ -1041,10 +1213,16 @@ class TestArtifactPersistRequireApprovalBlocking:
             )
         )
 
-        record = db.query(PolicyDecisionRecord).filter(
-            PolicyDecisionRecord.run_id == run.id,
-            PolicyDecisionRecord.action == "artifact.persist",
-        ).first()
+        from app.db import SessionLocal
+
+        fresh = SessionLocal()
+        try:
+            record = fresh.query(PolicyDecisionRecord).filter(
+                PolicyDecisionRecord.run_id == run.id,
+                PolicyDecisionRecord.action == "artifact.persist",
+            ).first()
+        finally:
+            fresh.close()
         assert record is not None
         meta = record.metadata_json or {}
         for dangerous in ("file_content", "stdout", "stderr", "patch", "diff"):
@@ -1132,11 +1310,9 @@ class TestRuntimeExecuteActorSemantics:
         svc = RunExecutionService(db)
         svc.execute_run(run.id, space_id=space_id)
 
-        record = db.query(PolicyDecisionRecord).filter(
-            PolicyDecisionRecord.run_id == run.id,
-            PolicyDecisionRecord.action == "runtime.execute",
-        ).first()
-        assert record is not None, "PolicyDecisionRecord must be created for runtime.execute"
+        records = _fresh_policy_records(run.id, "runtime.execute")
+        assert len(records) == 1, "runtime.execute ALLOW must have one durable audit record"
+        record = records[0]
         assert record.actor_type == "user", (
             f"Manual run must record actor_type='user', got {record.actor_type!r}"
         )
@@ -1168,11 +1344,9 @@ class TestRuntimeExecuteActorSemantics:
         svc = RunExecutionService(db)
         svc.execute_run(run.id, space_id=space_id)
 
-        record = db.query(PolicyDecisionRecord).filter(
-            PolicyDecisionRecord.run_id == run.id,
-            PolicyDecisionRecord.action == "runtime.execute",
-        ).first()
-        assert record is not None, "PolicyDecisionRecord must be created for runtime.execute"
+        records = _fresh_policy_records(run.id, "runtime.execute")
+        assert len(records) == 1, "runtime.execute decision must have one durable audit record"
+        record = records[0]
         assert record.actor_type == "run", (
             f"Non-manual run must record actor_type='run', got {record.actor_type!r}"
         )
@@ -1198,7 +1372,7 @@ class TestRuntimeExecuteActorSemantics:
 
 
 class TestRunExecutionPdrFailure:
-    """PolicyDecisionRecordPersistError → terminal failed run with stable error_code.
+    """PolicyAuditPersistError → terminal failed run with stable error_code.
 
     These are REAL RunExecutionService path tests. They verify that when
     PolicyDecisionRecord persistence fails at a fail_closed gate, the service
@@ -1221,10 +1395,10 @@ class TestRunExecutionPdrFailure:
 
         monkeypatch.setattr(
             "app.runs.execution.instantiate_runtime_adapter",
-            lambda _t: TrackingAdapter(),
+            lambda _t: TrackingAdapter(FakeRuntimeConfig(output_text="")),
         )
 
-        from app.policy.gateway import PolicyDecisionRecordPersistError
+        from app.policy.exceptions import PolicyAuditPersistError
 
         space_id = PERSONAL_SPACE_ID
         user_id = DEFAULT_USER_ID
@@ -1233,7 +1407,7 @@ class TestRunExecutionPdrFailure:
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
 
         with patch("app.runs.execution.PolicyGateway") as MockGW:
-            MockGW.return_value.check_and_record.side_effect = PolicyDecisionRecordPersistError(
+            MockGW.return_value.enforce.side_effect = PolicyAuditPersistError(
                 action="runtime.execute"
             )
             svc = RunExecutionService(db)
@@ -1258,7 +1432,7 @@ class TestRunExecutionPdrFailure:
         _setup_paths(monkeypatch, tmp_path)
         _make_fake_adapter(monkeypatch)
 
-        from app.policy.gateway import PolicyDecisionRecordPersistError
+        from app.policy.exceptions import PolicyAuditPersistError
         from app.policy.decisions import PolicyDecision, Decision, RiskLevel
 
         credential_resolved = []
@@ -1282,7 +1456,7 @@ class TestRunExecutionPdrFailure:
             db,
             space_id=space_id,
             name="pdr-test-adapter",
-            adapter_type="echo",
+            adapter_type="model_provider_api",
             credential_id=cred.id,
             commit=True,
         )
@@ -1290,10 +1464,12 @@ class TestRunExecutionPdrFailure:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user_id, commit=False)
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
+        _configure_model_provider_api_runtime(version)
         version.runtime_adapter_id = adapter_row.id
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
 
+        db.commit()
         def _side_effect(req):
             if req.action == "runtime.execute":
                 return PolicyDecision(
@@ -1301,10 +1477,10 @@ class TestRunExecutionPdrFailure:
                     message="allowed by test mock",
                     risk_level=RiskLevel.MEDIUM,
                 )
-            raise PolicyDecisionRecordPersistError(action=req.action)
+            raise PolicyAuditPersistError(action=req.action)
 
         with patch("app.runs.execution.PolicyGateway") as MockGW:
-            MockGW.return_value.check_and_record.side_effect = _side_effect
+            MockGW.return_value.enforce.side_effect = _side_effect
             svc = RunExecutionService(db)
             result = svc.execute_run(run.id, space_id=space_id)
 
@@ -1321,3 +1497,154 @@ class TestRunExecutionPdrFailure:
         assert run_row.status == "failed"
         assert run_row.error_json is not None
         assert run_row.error_json.get("error_code") == "policy_decision_record_persist_failed"
+
+    def test_runtime_use_credential_durable_writer_failure_blocks_secret_resolution(
+        self, db: Session, tmp_path, monkeypatch
+    ):
+        """A real writer failure at runtime.use_credential fails before secret resolution."""
+        _setup_paths(monkeypatch, tmp_path)
+        _make_fake_adapter(monkeypatch)
+        credential_resolved: list[str] = []
+        monkeypatch.setattr(
+            "app.runs.execution.resolve_runtime_credentials",
+            lambda *args, **kwargs: credential_resolved.append("called") or {},
+        )
+
+        cred = factories.create_test_credential_stub(
+            db, space_id=PERSONAL_SPACE_ID, name="writer-fail-cred", commit=True
+        )
+        adapter_row = factories.create_test_runtime_adapter(
+            db,
+            space_id=PERSONAL_SPACE_ID,
+            adapter_type="model_provider_api",
+            credential_id=cred.id,
+            commit=True,
+        )
+        agent = factories.create_test_agent(
+            db, space_id=PERSONAL_SPACE_ID, owner_user_id=DEFAULT_USER_ID, commit=False
+        )
+        from app.models import AgentVersion
+        version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
+        _configure_model_provider_api_runtime(version)
+        version.runtime_adapter_id = adapter_row.id
+        run = factories.create_test_run(
+            db, space_id=PERSONAL_SPACE_ID, user_id=DEFAULT_USER_ID, agent=agent, commit=True
+        )
+
+        db.commit()
+        with patch("app.policy.audit.DurablePolicyAuditWriter.write", side_effect=RuntimeError("audit down")):
+            result = RunExecutionService(db).execute_run(run.id, space_id=PERSONAL_SPACE_ID)
+
+        assert result.error_code == "policy_decision_record_persist_failed"
+        assert credential_resolved == []
+
+
+class TestContextInjectMemoryBlocking:
+    """Context injection policy failures block adapter invocation at the execution boundary."""
+
+    @pytest.mark.parametrize(
+        ("blocked_decision", "expected_error_code"),
+        (
+            ("deny", "policy_denied_context_inject_memory"),
+            ("require_approval", "policy_requires_approval_context_inject_memory"),
+        ),
+    )
+    def test_blocked_context_inject_writes_one_durable_record_and_fails_run(
+        self, db: Session, tmp_path, monkeypatch, blocked_decision, expected_error_code
+    ):
+        from app.policy.decisions import Decision, PolicyDecision, RiskLevel
+        from app.policy.exceptions import PolicyGateBlocked
+
+        _setup_paths(monkeypatch, tmp_path)
+        adapter_called: list[str] = []
+
+        class TrackingAdapter(ConfigurableFakeRuntimeAdapter):
+            def execute(self, ctx):
+                adapter_called.append("called")
+                return super().execute(ctx)
+
+        class BlockingPopulator:
+            def __init__(self, _db):
+                pass
+
+            def populate(self, current_run, _version):
+                policy_decision = PolicyDecision(
+                    decision=Decision(blocked_decision),
+                    message="blocked context injection",
+                    risk_level=RiskLevel.LOW,
+                    reason_code="context_inject_test_block",
+                    audit_code="context_inject_test_block",
+                    action="context.inject_memory",
+                )
+                raise PolicyGateBlocked(
+                    decision=policy_decision,
+                    action="context.inject_memory",
+                    actor_type="run",
+                    actor_id=str(current_run.id),
+                    actor_ref=None,
+                    space_id=current_run.space_id,
+                    resource_type="memory",
+                    resource_id=None,
+                    run_id=str(current_run.id),
+                    proposal_id=None,
+                    metadata_json={"test": "context_inject_memory"},
+                )
+
+        monkeypatch.setattr(
+            "app.runs.execution.instantiate_runtime_adapter",
+            lambda _t: TrackingAdapter(FakeRuntimeConfig(output_text="")),
+        )
+        monkeypatch.setattr("app.runs.execution.ContextSnapshotPopulator", BlockingPopulator)
+
+        agent = factories.create_test_agent(
+            db, space_id=PERSONAL_SPACE_ID, owner_user_id=DEFAULT_USER_ID, commit=False
+        )
+        run = factories.create_test_run(
+            db, space_id=PERSONAL_SPACE_ID, user_id=DEFAULT_USER_ID, agent=agent, commit=True
+        )
+
+        db.commit()
+        result = RunExecutionService(db).execute_run(run.id, space_id=PERSONAL_SPACE_ID)
+
+        assert result.error_code == expected_error_code
+        assert adapter_called == []
+        records = _fresh_policy_records(run.id, "context.inject_memory")
+        assert len(records) == 1
+        assert records[0].decision == blocked_decision
+
+    def test_context_inject_audit_failure_blocks_adapter(self, db: Session, tmp_path, monkeypatch):
+        from app.policy.exceptions import PolicyAuditPersistError
+
+        _setup_paths(monkeypatch, tmp_path)
+        adapter_called: list[str] = []
+
+        class TrackingAdapter(ConfigurableFakeRuntimeAdapter):
+            def execute(self, ctx):
+                adapter_called.append("called")
+                return super().execute(ctx)
+
+        class FailingAuditPopulator:
+            def __init__(self, _db):
+                pass
+
+            def populate(self, _run, _version):
+                raise PolicyAuditPersistError(action="context.inject_memory")
+
+        monkeypatch.setattr(
+            "app.runs.execution.instantiate_runtime_adapter",
+            lambda _t: TrackingAdapter(),
+        )
+        monkeypatch.setattr("app.runs.execution.ContextSnapshotPopulator", FailingAuditPopulator)
+
+        agent = factories.create_test_agent(
+            db, space_id=PERSONAL_SPACE_ID, owner_user_id=DEFAULT_USER_ID, commit=False
+        )
+        run = factories.create_test_run(
+            db, space_id=PERSONAL_SPACE_ID, user_id=DEFAULT_USER_ID, agent=agent, commit=True
+        )
+
+        db.commit()
+        result = RunExecutionService(db).execute_run(run.id, space_id=PERSONAL_SPACE_ID)
+
+        assert result.error_code == "policy_decision_record_persist_failed"
+        assert adapter_called == []

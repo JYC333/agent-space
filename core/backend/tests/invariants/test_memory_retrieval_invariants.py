@@ -28,6 +28,7 @@ from ulid import ULID
 
 from app.models import MemoryEntry, MemoryRelation, Policy
 from app.memory.retriever import MemoryRetriever
+from tests.support import factories
 
 
 def _new_id() -> str:
@@ -72,11 +73,11 @@ def _make_memory(
 # ---------------------------------------------------------------------------
 
 
-def test_cross_space_memory_never_returned(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
-    ub = cross_space_pair["user_b"]
+def test_cross_space_memory_never_returned(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
+    ub = cross_space_pair_db["user_b"]
 
     # Memory belongs to space B
     _make_memory(db, space_id=b, user_id=ub.id, content="space B secret")
@@ -101,14 +102,13 @@ def test_cross_space_memory_never_returned(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_private_other_user_memory_not_returned(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_private_other_user_memory_not_returned(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
-    # Create a second user in space_a and give them a private memory.
-    from app.models import User as U
-    other_user_id = _new_id()
-    db.add(U(id=other_user_id, space_id=a, email=f"{other_user_id}@test.invalid", display_name="other"))
+    # Create a second member in space_a and give them a private memory.
+    other_user = factories.create_test_user(db, space_id=a, display_name="other")
+    other_user_id = other_user.id
     db.flush()  # ensure user FK is resolved before memory insert
 
     other_mem = MemoryEntry(
@@ -135,9 +135,9 @@ def test_private_other_user_memory_not_returned(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_archived_memory_excluded_by_default(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_archived_memory_excluded_by_default(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     archived = _make_memory(
         db, space_id=a, user_id=ua.id,
@@ -155,9 +155,9 @@ def test_archived_memory_excluded_by_default(db, cross_space_pair):
     assert active.id in ids, "active memory must be included"
 
 
-def test_superseded_memory_excluded_by_default(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_superseded_memory_excluded_by_default(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     sup = _make_memory(
         db, space_id=a, user_id=ua.id,
@@ -170,9 +170,9 @@ def test_superseded_memory_excluded_by_default(db, cross_space_pair):
     assert sup.id not in ids, "superseded memory must be excluded"
 
 
-def test_rejected_and_proposed_memory_excluded(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_rejected_and_proposed_memory_excluded(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     rejected = _make_memory(
         db, space_id=a, user_id=ua.id,
@@ -195,9 +195,9 @@ def test_rejected_and_proposed_memory_excluded(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_deleted_memory_excluded(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_deleted_memory_excluded(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     deleted = _make_memory(
         db, space_id=a, user_id=ua.id,
@@ -216,11 +216,11 @@ def test_deleted_memory_excluded(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_keyword_fallback_cannot_reintroduce_forbidden_memory(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
-    ub = cross_space_pair["user_b"]
+def test_keyword_fallback_cannot_reintroduce_forbidden_memory(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
+    ub = cross_space_pair_db["user_b"]
 
     # Cross-space memory that happens to match the keyword
     cross = MemoryEntry(
@@ -267,9 +267,9 @@ def test_keyword_fallback_cannot_reintroduce_forbidden_memory(db, cross_space_pa
 # ---------------------------------------------------------------------------
 
 
-def test_graph_expansion_cannot_reintroduce_forbidden_memory(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_graph_expansion_cannot_reintroduce_forbidden_memory(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     # Seed memory (active, passes hard filter)
     seed = _make_memory(db, space_id=a, user_id=ua.id, content="seed", importance=0.9)
@@ -306,9 +306,9 @@ def test_graph_expansion_cannot_reintroduce_forbidden_memory(db, cross_space_pai
 # ---------------------------------------------------------------------------
 
 
-def test_symbol_match_outranks_keyword_fallback(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_symbol_match_outranks_keyword_fallback(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     # Symbol match: memory owned by user_a (subject_user_id match)
     symbol_mem = _make_memory(
@@ -341,9 +341,9 @@ def test_symbol_match_outranks_keyword_fallback(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_graph_expansion_includes_related_memory(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_graph_expansion_includes_related_memory(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     seed = _make_memory(db, space_id=a, user_id=ua.id, content="seed memory", importance=0.9)
     # "related" must NOT be found by symbol_match: no owner/subject match to ua.id.
@@ -386,10 +386,10 @@ def test_graph_expansion_includes_related_memory(db, cross_space_pair):
     assert graph_ref is not None, "graph expansion must appear in source_refs"
 
 
-def test_graph_expansion_respects_hop_limit(db, cross_space_pair):
+def test_graph_expansion_respects_hop_limit(db, cross_space_pair_db):
     """Memory 3 hops from seed must not enter result set (max_hops=2)."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     # seed is found by symbol_match (owner matches ua.id).
     # hop1/hop2/hop3 have NO identity link to ua, so they're only reachable via graph.
@@ -438,9 +438,9 @@ def test_graph_expansion_respects_hop_limit(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_active_policies_in_source_refs_stable_prefix(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_active_policies_in_source_refs_stable_prefix(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     active_policy = Policy(
         id=_new_id(),
@@ -493,9 +493,9 @@ def test_active_policies_in_source_refs_stable_prefix(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_retrieval_trace_contains_hard_filter_and_stages(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_retrieval_trace_contains_hard_filter_and_stages(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     db.commit()
 
     result = MemoryRetriever(db).retrieve(space_id=a, user_id=ua.id, query="anything")

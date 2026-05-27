@@ -4,6 +4,29 @@ Date: 2026-05-14
 
 Runs are the durable execution record for agent work. A run must be auditable: request metadata, selected runtime, status, output, errors, activities, artifacts, and proposals must be inspectable after execution.
 
+## Trace Read Model
+
+`GET /api/v1/runs/{id}/trace` is the replay-oriented read model for failed and
+succeeded runs. It returns one space-scoped aggregate containing:
+
+- `Run`
+- safe `Agent` summary
+- immutable `AgentVersion` snapshot with system-prompt presence/hash metadata, not raw prompt text
+- `RuntimeAdapter` summary
+- `ModelProvider` summary without secrets
+- `ContextSnapshot` metadata, hashes, retrieval trace, source refs, and redaction metadata without raw rendered context text
+- ordered `RunStep`
+- ordered `RunEvent`
+- linked artifact summaries without artifact content
+- linked proposal summaries without raw proposal payload/content
+- parent run summary
+- child run summaries
+
+The trace endpoint is for reconstruction and debugging. Artifact content,
+export, and any raw context/prompt inspection remain separate gated reads.
+Cross-space trace reads return not found and must not reveal whether the run
+exists.
+
 ## Durable Outputs
 
 - A run may produce an `Artifact`.
@@ -39,9 +62,12 @@ Each Run may snapshot model provider + model name at creation. `RunOut.resolved_
 - `adapter_model_support` — `uses_model` | `not_applicable` | `unsupported` | `unknown`
 - `disclosure_note` — user-facing text when a model was recorded but not used (e.g. echo/capability adapters)
 
-Adapters that consume model config today: **`anthropic_messages` only**. `echo` and `capability` record model config but do not call an LLM.
+Adapters that consume model config today depend on runtime requirements.
+`claude_code` and `codex_cli` may receive model hints only when the underlying
+CLI supports them. `echo` and `capability` record model config but do not call
+an LLM. `anthropic_messages` is not a supported runtime path; Claude execution
+must go through the `claude_code` CLI adapter.
 
 ## ModelProvider secrets
 
 Provider API keys are write-only on the API. Storage uses `Credential.secret_ref` with scheme `model_provider_api_key:v1:` (encrypted payload + nonce). Runtime credential resolution decrypts via `Credential.secret_ref` through the canonical `runtimes.credentials` boundary. `ModelProvider.credential_id` is the single source of truth for provider API keys.
-

@@ -93,15 +93,15 @@ class TestWorktreeCollectionResultProposal:
 # ===========================================================================
 
 class TestLinkRunOutputsToTasks:
-    def test_proposal_linked_to_task_when_taskrun_exists(self, db, cross_space_pair):
+    def test_proposal_linked_to_task_when_taskrun_exists(self, db, cross_space_pair_db):
         """A run linked to a task via TaskRun gets a TaskProposal row for the code_patch proposal."""
         from ulid import ULID
         from app.models import Proposal, Task, TaskProposal, TaskRun, Run
         from app.runs.task_output_linkage import link_run_outputs_to_tasks
         from tests.support import factories
 
-        a = cross_space_pair["space_a_id"]
-        ua = cross_space_pair["user_a"]
+        a = cross_space_pair_db["space_a_id"]
+        ua = cross_space_pair_db["user_a"]
 
         agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
         run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
@@ -153,15 +153,15 @@ class TestLinkRunOutputsToTasks:
         assert tp.role == "code_patch"
         assert tp.space_id == a
 
-    def test_no_duplicate_task_proposal_on_repeated_call(self, db, cross_space_pair):
+    def test_no_duplicate_task_proposal_on_repeated_call(self, db, cross_space_pair_db):
         """Calling link_run_outputs_to_tasks twice for the same proposal does not create duplicate rows."""
         from ulid import ULID
         from app.models import Proposal, Task, TaskProposal, TaskRun, Run
         from app.runs.task_output_linkage import link_run_outputs_to_tasks
         from tests.support import factories
 
-        a = cross_space_pair["space_a_id"]
-        ua = cross_space_pair["user_a"]
+        a = cross_space_pair_db["space_a_id"]
+        ua = cross_space_pair_db["user_a"]
 
         agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
         run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
@@ -200,15 +200,15 @@ class TestLinkRunOutputsToTasks:
         )
         assert count == 1, f"Expected exactly 1 TaskProposal, got {count}"
 
-    def test_run_without_taskrun_creates_no_task_proposal(self, db, cross_space_pair):
+    def test_run_without_taskrun_creates_no_task_proposal(self, db, cross_space_pair_db):
         """A run with no TaskRun linkage produces no TaskProposal rows."""
         from ulid import ULID
         from app.models import Proposal, TaskProposal, Run
         from app.runs.task_output_linkage import link_run_outputs_to_tasks
         from tests.support import factories
 
-        a = cross_space_pair["space_a_id"]
-        ua = cross_space_pair["user_a"]
+        a = cross_space_pair_db["space_a_id"]
+        ua = cross_space_pair_db["user_a"]
 
         agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
         run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
@@ -237,16 +237,16 @@ class TestLinkRunOutputsToTasks:
         )
         assert count == 0
 
-    def test_cross_space_taskrun_not_linked(self, db, cross_space_pair):
+    def test_cross_space_taskrun_not_linked(self, db, cross_space_pair_db):
         """TaskRun rows from another space are not matched — cross-space linkage is impossible."""
         from ulid import ULID
         from app.models import Proposal, Task, TaskProposal, TaskRun, Run
         from app.runs.task_output_linkage import link_run_outputs_to_tasks
         from tests.support import factories
 
-        a = cross_space_pair["space_a_id"]
-        b = cross_space_pair["space_b_id"]
-        ua = cross_space_pair["user_a"]
+        a = cross_space_pair_db["space_a_id"]
+        b = cross_space_pair_db["space_b_id"]
+        ua = cross_space_pair_db["user_a"]
 
         # Run is in space A
         agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)

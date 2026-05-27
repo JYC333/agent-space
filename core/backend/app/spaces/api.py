@@ -37,7 +37,7 @@ class SpaceCreate(BaseModel):
 
 class InvitationCreate(BaseModel):
     email: EmailStr
-    role: Literal["admin", "member", "viewer"] = "member"
+    role: Literal["guest", "member", "reviewer", "admin"] = "member"
 
 
 def _space_out(space: Space, role: Optional[str] = None) -> dict:

@@ -4,7 +4,7 @@ These invariants must hold regardless of proposal type:
 - preview proposals cannot be accepted
 - rejected proposals cannot be accepted
 - already-accepted proposals cannot be accepted again
-- unknown proposal types are denied at the policy gate (ProposalPolicyDeniedError, audit_code="unsupported_proposal_type")
+- unknown proposal types are denied at the policy gate (PolicyGateBlocked, audit_code="unsupported_proposal_type")
 - memory_update without target_memory_id fails at apply time
 - memory_archive without target_memory_id fails at apply time
 - policy_change creates a new Policy linked by created_from_proposal_id
@@ -25,8 +25,9 @@ from app.memory.apply_service import (
     ProposalApplyError,
     ProposalApplyService,
 )
-from app.memory.proposals import ProposalService, ProposalPolicyDeniedError
+from app.memory.proposals import ProposalService
 from app.models import MemoryEntry, Policy, Proposal
+from app.policy.exceptions import PolicyGateBlocked
 from app.schemas import MemoryCreate
 from tests.support import factories
 
@@ -35,7 +36,7 @@ def _make_member(db, space_id):
     from app.models import SpaceMembership, User
     from ulid import ULID
     uid = str(ULID())
-    db.add(User(id=uid, space_id=space_id, display_name="member", email=f"{uid}@test.invalid"))
+    db.add(User(id=uid, display_name="member", email=f"{uid}@test.invalid"))
     db.add(SpaceMembership(id=str(ULID()), space_id=space_id, user_id=uid, role="member", status="active"))
     db.flush()
     return uid
@@ -46,9 +47,9 @@ def _make_member(db, space_id):
 # ---------------------------------------------------------------------------
 
 
-def test_preview_proposal_cannot_be_accepted(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_preview_proposal_cannot_be_accepted(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db, space_id=a, created_by_user_id=ua.id, preview=True, commit=False
     )
@@ -66,9 +67,9 @@ def test_preview_proposal_cannot_be_accepted(db, cross_space_pair):
     assert after == before
 
 
-def test_rejected_proposal_cannot_be_accepted(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_rejected_proposal_cannot_be_accepted(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(db, space_id=a, created_by_user_id=ua.id, commit=False)
     db.flush()
     ProposalService(db).reject(prop.id, space_id=a, user_id=ua.id)
@@ -76,9 +77,9 @@ def test_rejected_proposal_cannot_be_accepted(db, cross_space_pair):
     assert result is None
 
 
-def test_accepted_proposal_cannot_be_accepted_twice(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_accepted_proposal_cannot_be_accepted_twice(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(db, space_id=a, created_by_user_id=ua.id, commit=True)
     first = ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
     assert first is not None
@@ -86,17 +87,17 @@ def test_accepted_proposal_cannot_be_accepted_twice(db, cross_space_pair):
     assert second is None
 
 
-def test_unknown_proposal_type_denied_at_policy_gate(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_unknown_proposal_type_denied_at_policy_gate(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db, space_id=a, created_by_user_id=ua.id,
         proposal_type="completely_unknown_type", commit=True,
     )
-    with pytest.raises(ProposalPolicyDeniedError) as ei:
+    with pytest.raises(PolicyGateBlocked) as ei:
         ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
-    assert ei.value.proposal_type == "completely_unknown_type"
-    assert ei.value.audit_code == "unsupported_proposal_type"
+    assert ei.value.decision.proposal_type == "completely_unknown_type"
+    assert ei.value.decision.audit_code == "unsupported_proposal_type"
 
 
 # ---------------------------------------------------------------------------
@@ -104,9 +105,9 @@ def test_unknown_proposal_type_denied_at_policy_gate(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_memory_update_without_target_id_raises(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_memory_update_without_target_id_raises(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -122,7 +123,7 @@ def test_memory_update_without_target_id_raises(db, cross_space_pair):
         },
         commit=False,
     )
-    db.flush()
+    db.commit()
     with pytest.raises(Exception):
         ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
 
@@ -132,9 +133,9 @@ def test_memory_update_without_target_id_raises(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_memory_archive_without_target_id_raises(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_memory_archive_without_target_id_raises(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -150,7 +151,7 @@ def test_memory_archive_without_target_id_raises(db, cross_space_pair):
         },
         commit=False,
     )
-    db.flush()
+    db.commit()
     with pytest.raises(Exception):
         ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
 
@@ -160,9 +161,9 @@ def test_memory_archive_without_target_id_raises(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_memory_update_creates_new_row_and_supersedes_old(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_memory_update_creates_new_row_and_supersedes_old(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     original = factories.create_test_memory_entry(
         db, space_id=a, content="v1 content", scope_type="agent",
         namespace="ns.chain", owner_user_id=ua.id, commit=True,
@@ -205,9 +206,9 @@ def test_memory_update_creates_new_row_and_supersedes_old(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_memory_archive_sets_status_archived_no_delete(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_memory_archive_sets_status_archived_no_delete(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     target = factories.create_test_memory_entry(
         db, space_id=a, content="archive me", scope_type="agent",
         namespace="ns.arc", owner_user_id=ua.id, commit=True,
@@ -241,9 +242,9 @@ def test_memory_archive_sets_status_archived_no_delete(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_policy_change_creates_policy_with_proposal_link(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_policy_change_creates_policy_with_proposal_link(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -252,9 +253,9 @@ def test_policy_change_creates_policy_with_proposal_link(db, cross_space_pair):
         title="Test policy",
         payload_json={
             "operation": "create",
-            "domain": "memory",
+            "domain": "memory.private_placement",
             "policy_key": "test_key",
-            "rule_json": {"effect": "allow"},
+            "rule_json": {"effect": "allow_with_log"},
         },
         commit=True,
     )
@@ -266,9 +267,9 @@ def test_policy_change_creates_policy_with_proposal_link(db, cross_space_pair):
     assert result.policy.status == "active"
 
 
-def test_policy_change_supersedes_old_policy(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_policy_change_supersedes_old_policy(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     old_policy = factories.create_test_policy(
         db, space_id=a, name="old-policy", domain="memory", commit=True
     )
@@ -281,7 +282,7 @@ def test_policy_change_supersedes_old_policy(db, cross_space_pair):
         payload_json={
             "operation": "update",
             "target_policy_id": old_policy.id,
-            "domain": "memory",
+            "domain": "memory.private_placement",
             "rule_json": {"effect": "deny"},
         },
         commit=True,
@@ -302,10 +303,10 @@ def test_policy_change_supersedes_old_policy(db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_proposal_approved_memory_write_creates_active_memory(db, cross_space_pair):
+def test_proposal_approved_memory_write_creates_active_memory(db, cross_space_pair_db):
     """Accepting a memory_create proposal creates an active MemoryEntry linked to the proposal."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -328,10 +329,10 @@ def test_proposal_approved_memory_write_creates_active_memory(db, cross_space_pa
     assert result.memory.status == "active"
 
 
-def test_proposal_approved_archive_sets_status_archived(db, cross_space_pair):
+def test_proposal_approved_archive_sets_status_archived(db, cross_space_pair_db):
     """Accepting a memory_archive proposal sets status=archived without hard-deleting."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     # Use ORM insertion for test fixture setup (no direct write path needed)
     from app.models import MemoryEntry as ME
     from ulid import ULID
@@ -506,10 +507,10 @@ def test_memory_direct_write_bypass_is_not_generic_string_parameter():
 # ---------------------------------------------------------------------------
 
 
-def test_proposal_apply_service_used_memory_internal_writer(db, cross_space_pair):
+def test_proposal_apply_service_used_memory_internal_writer(db, cross_space_pair_db):
     """ProposalApplyService.apply creates memory via MemoryInternalWriter, not public API path."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db, space_id=a, created_by_user_id=ua.id, commit=True
     )
@@ -527,20 +528,23 @@ def test_proposal_apply_service_used_memory_internal_writer(db, cross_space_pair
 # ---------------------------------------------------------------------------
 
 
-def test_policy_change_owner_creates_policy_row(db, cross_space_pair):
+def test_policy_change_owner_creates_policy_row(db, cross_space_pair_db):
     """Owner applying policy_change via ProposalApplyService creates a Policy row.
 
     policy.change is WIRED_VIA_PROPOSAL: the PolicyDecisionRecord is created by
-    PolicyGateway.check_proposal_apply() in ProposalService.accept(), not by
+    PolicyGateway.enforce_proposal_apply() in ProposalService.accept(), not by
     PolicyProposalApplier.apply() itself. The direct ProposalApplyService.apply()
     path (used here with bypass_source_monitoring=True) is the inner applier called
     after the gate — it does not create a PDR for 'policy.change'.
     """
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db, space_id=a, created_by_user_id=ua.id, proposal_type="policy_change",
-        payload_json={"domain": "memory", "rule_json": {"effect": "allow"}},
+        payload_json={
+            "domain": "memory.private_placement",
+            "rule_json": {"effect": "allow_with_log"},
+        },
         commit=True,
     )
     before_policies = db.query(func.count(Policy.id)).filter(Policy.space_id == a).scalar()
@@ -550,20 +554,23 @@ def test_policy_change_owner_creates_policy_row(db, cross_space_pair):
     assert db.query(func.count(Policy.id)).filter(Policy.space_id == a).scalar() == before_policies + 1
 
 
-def test_policy_change_member_is_denied_and_no_policy_row(db, cross_space_pair):
+def test_policy_change_member_is_denied_and_no_policy_row(db, cross_space_pair_db):
     """Member applying policy_change gets ProposalApplyError; no Policy row created.
 
     policy.change is WIRED_VIA_PROPOSAL: the inline role check in
     PolicyProposalApplier.apply() rejects members. No PolicyDecisionRecord is
-    created here — that happens in PolicyGateway.check_proposal_apply() inside
+    created here — that happens in PolicyGateway.enforce_proposal_apply() inside
     ProposalService.accept() (the gate that this direct apply() path bypasses).
     """
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     member_id = _make_member(db, a)
     prop = factories.create_test_proposal(
         db, space_id=a, created_by_user_id=ua.id, proposal_type="policy_change",
-        payload_json={"domain": "memory", "rule_json": {"effect": "allow"}},
+        payload_json={
+            "domain": "memory.private_placement",
+            "rule_json": {"effect": "allow_with_log"},
+        },
         commit=True,
     )
     before_policies = db.query(func.count(Policy.id)).filter(Policy.space_id == a).scalar()

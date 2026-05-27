@@ -113,13 +113,13 @@ def test_digest_type_without_scope_type_is_rejected():
 # ---------------------------------------------------------------------------
 
 
-def test_refresh_all_dirty_never_writes_memory_entry_or_proposal(db, cross_space_pair):
+def test_refresh_all_dirty_never_writes_memory_entry_or_proposal(db, cross_space_pair_db):
     from app.memory.digest_refresh import ContextDigestRefreshService
     from app.memory.digest_service import ContextDigestService
     from app.models import SessionSummary
 
-    space_id = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    space_id = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws = factories.create_test_workspace(db, space_id=space_id, created_by_user_id=ua.id)
 
     # Seed a workspace memory and generate a digest

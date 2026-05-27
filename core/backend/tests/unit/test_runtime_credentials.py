@@ -92,8 +92,8 @@ class TestSanitizeRuntimeConfig:
 # ---------------------------------------------------------------------------
 
 class TestAssertNoInlineSecretConfig:
-    def test_raises_on_api_key_in_config(self, db, cross_space_pair):
-        a = cross_space_pair["space_a_id"]
+    def test_raises_on_api_key_in_config(self, db, cross_space_pair_db):
+        a = cross_space_pair_db["space_a_id"]
         ra = factories.create_test_runtime_adapter(db, space_id=a, commit=False)
         ra.config_json = {"api_key": "sk-raw-secret", "model": "gpt-4"}
         db.flush()
@@ -103,8 +103,8 @@ class TestAssertNoInlineSecretConfig:
         assert "inline secret" in str(exc_info.value).lower()
         assert "api_key" in str(exc_info.value)
 
-    def test_raises_on_secret_key_in_config(self, db, cross_space_pair):
-        a = cross_space_pair["space_a_id"]
+    def test_raises_on_secret_key_in_config(self, db, cross_space_pair_db):
+        a = cross_space_pair_db["space_a_id"]
         ra = factories.create_test_runtime_adapter(db, space_id=a, commit=False)
         ra.config_json = {"secret_key": "raw-secret"}
         db.flush()
@@ -112,16 +112,16 @@ class TestAssertNoInlineSecretConfig:
         with pytest.raises(CredentialResolutionError):
             assert_no_inline_secret_config(ra)
 
-    def test_passes_for_clean_config(self, db, cross_space_pair):
-        a = cross_space_pair["space_a_id"]
+    def test_passes_for_clean_config(self, db, cross_space_pair_db):
+        a = cross_space_pair_db["space_a_id"]
         ra = factories.create_test_runtime_adapter(db, space_id=a, commit=False)
         ra.config_json = {"model": "claude-3", "max_tokens": 256}
         db.flush()
         # Must not raise
         assert_no_inline_secret_config(ra)
 
-    def test_passes_for_empty_config(self, db, cross_space_pair):
-        a = cross_space_pair["space_a_id"]
+    def test_passes_for_empty_config(self, db, cross_space_pair_db):
+        a = cross_space_pair_db["space_a_id"]
         ra = factories.create_test_runtime_adapter(db, space_id=a, commit=False)
         ra.config_json = {}
         db.flush()
@@ -133,8 +133,8 @@ class TestAssertNoInlineSecretConfig:
 # ---------------------------------------------------------------------------
 
 class TestResolveCredentialsEchoAdapter:
-    def test_echo_adapter_without_provider_returns_empty(self, db, cross_space_pair):
-        a = cross_space_pair["space_a_id"]
+    def test_echo_adapter_without_provider_returns_empty(self, db, cross_space_pair_db):
+        a = cross_space_pair_db["space_a_id"]
         ra = factories.create_test_runtime_adapter(
             db, space_id=a, adapter_type="echo", commit=False
         )
@@ -158,8 +158,8 @@ class TestResolveCredentialsEchoAdapter:
 # ---------------------------------------------------------------------------
 
 class TestResolveCredentialsProviderPath:
-    def test_resolves_from_runtime_adapter_provider_id(self, db, cross_space_pair):
-        a = cross_space_pair["space_a_id"]
+    def test_resolves_from_runtime_adapter_provider_id(self, db, cross_space_pair_db):
+        a = cross_space_pair_db["space_a_id"]
         plaintext = "sk-test-provider-key-xyz"
         mp = _create_model_provider_with_key(db, space_id=a, plaintext_key=plaintext)
         ra = factories.create_test_runtime_adapter(
@@ -172,10 +172,10 @@ class TestResolveCredentialsProviderPath:
         assert result.get("api_key") == plaintext
 
     def test_resolves_from_agent_version_model_provider_id(
-        self, db, cross_space_pair
+        self, db, cross_space_pair_db
     ):
-        a = cross_space_pair["space_a_id"]
-        ua = cross_space_pair["user_a"]
+        a = cross_space_pair_db["space_a_id"]
+        ua = cross_space_pair_db["user_a"]
         plaintext = "sk-test-version-key-abc"
         mp = _create_model_provider_with_key(db, space_id=a, plaintext_key=plaintext)
         agent = factories.create_test_agent(
@@ -194,10 +194,10 @@ class TestResolveCredentialsProviderPath:
         assert result.get("api_key") == plaintext
 
     def test_runtime_adapter_provider_takes_priority_over_version_provider(
-        self, db, cross_space_pair
+        self, db, cross_space_pair_db
     ):
-        a = cross_space_pair["space_a_id"]
-        ua = cross_space_pair["user_a"]
+        a = cross_space_pair_db["space_a_id"]
+        ua = cross_space_pair_db["user_a"]
         key_ra = "sk-adapter-provider-key"
         key_ver = "sk-version-provider-key"
         mp_ra = _create_model_provider_with_key(db, space_id=a, plaintext_key=key_ra)
@@ -220,10 +220,10 @@ class TestResolveCredentialsProviderPath:
         assert result.get("api_key") == key_ra
 
     def test_run_model_provider_id_takes_priority_over_adapter_and_version(
-        self, db, cross_space_pair
+        self, db, cross_space_pair_db
     ):
-        a = cross_space_pair["space_a_id"]
-        ua = cross_space_pair["user_a"]
+        a = cross_space_pair_db["space_a_id"]
+        ua = cross_space_pair_db["user_a"]
         key_run = "sk-run-provider-key"
         key_ra = "sk-adapter-provider-key"
         key_ver = "sk-version-provider-key"
@@ -261,9 +261,9 @@ class TestResolveCredentialsProviderPath:
         assert "sk-" not in str(exc_info.value)
 
     def test_disabled_provider_raises_credential_resolution_error(
-        self, db, cross_space_pair
+        self, db, cross_space_pair_db
     ):
-        a = cross_space_pair["space_a_id"]
+        a = cross_space_pair_db["space_a_id"]
         plaintext = "sk-disabled-provider-key"
         mp = _create_model_provider_with_key(db, space_id=a, plaintext_key=plaintext)
         mp.enabled = False
@@ -278,8 +278,8 @@ class TestResolveCredentialsProviderPath:
             resolve_runtime_credentials(db, runtime_adapter_row=ra)
         assert "disabled" in str(exc_info.value).lower()
 
-    def test_provider_with_no_credential_raises(self, db, cross_space_pair):
-        a = cross_space_pair["space_a_id"]
+    def test_provider_with_no_credential_raises(self, db, cross_space_pair_db):
+        a = cross_space_pair_db["space_a_id"]
         mp = factories.create_test_model_provider(db, space_id=a, commit=False)
         mp.credential_id = None
         mp.config_json = {}
@@ -301,8 +301,8 @@ class TestResolveCredentialsProviderPath:
 # ---------------------------------------------------------------------------
 
 class TestResolveProviderApiKey:
-    def test_decrypts_and_returns_key(self, db, cross_space_pair):
-        a = cross_space_pair["space_a_id"]
+    def test_decrypts_and_returns_key(self, db, cross_space_pair_db):
+        a = cross_space_pair_db["space_a_id"]
         plaintext = "sk-test-direct-key-789"
         mp = _create_model_provider_with_key(db, space_id=a, plaintext_key=plaintext)
         db.flush()
@@ -318,7 +318,7 @@ class TestResolveProviderApiKey:
 
 class TestProviderCredentialSecretRef:
     def test_provider_create_stores_credential_secret_ref(
-        self, db, cross_space_pair, tmp_path, monkeypatch
+        self, db, cross_space_pair_db, tmp_path, monkeypatch
     ):
         from app.config import paths
         from app.models import Credential, ModelProvider
@@ -331,7 +331,7 @@ class TestProviderCredentialSecretRef:
         monkeypatch.setattr(paths, "home", home)
         paths.init_dirs()
 
-        a = cross_space_pair["space_a_id"]
+        a = cross_space_pair_db["space_a_id"]
         out = ModelService().create_config(
             db,
             a,
@@ -354,8 +354,8 @@ class TestProviderCredentialSecretRef:
         resolved = resolve_provider_api_key(db, row.id)
         assert resolved == "sk-cred-test-key"
 
-    def test_broken_secret_ref_fails_resolution(self, db, cross_space_pair):
-        a = cross_space_pair["space_a_id"]
+    def test_broken_secret_ref_fails_resolution(self, db, cross_space_pair_db):
+        a = cross_space_pair_db["space_a_id"]
         cred = factories.create_test_credential_stub(
             db,
             space_id=a,

@@ -113,7 +113,7 @@ class BaseRuntimeAdapter(ABC):
       contains an ``api_key.txt``, the env var (e.g. ``ANTHROPIC_API_KEY``) is
       injected via ``CredentialGrant.env`` into the subprocess only — it is
       never placed in ``ctx.resolved_credentials`` and never inherited from the
-      host environment.  For automation-origin runs the broker raises
+      host environment. CLI runtimes fail with
       ``runtime_credential_profile_required`` when no explicit profile exists.
     """
 

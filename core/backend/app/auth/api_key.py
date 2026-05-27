@@ -27,7 +27,7 @@ from ulid import ULID
 
 from ..db import get_db
 from ..feature_gates import API_KEYS_DB_PERSISTED, feature_not_implemented
-from ..models import SpaceMembership
+from ..models import Space, SpaceMembership
 from ..param_binding import wire_header
 
 
@@ -60,6 +60,34 @@ def _require_active_membership(db: Session, *, space_id: str, user_id: str) -> N
     )
     if membership is None:
         raise HTTPException(status_code=403, detail="Not a member of this space")
+
+
+def _select_default_space(db: Session, *, user_id: str) -> str | None:
+    """Select a membership-backed fallback space for session-authenticated requests."""
+    personal = (
+        db.query(SpaceMembership)
+        .join(Space, SpaceMembership.space_id == Space.id)
+        .filter(
+            SpaceMembership.user_id == user_id,
+            SpaceMembership.status == "active",
+            Space.type == "personal",
+        )
+        .order_by(SpaceMembership.created_at.asc(), SpaceMembership.id.asc())
+        .first()
+    )
+    if personal is not None:
+        return personal.space_id
+
+    membership = (
+        db.query(SpaceMembership)
+        .filter(
+            SpaceMembership.user_id == user_id,
+            SpaceMembership.status == "active",
+        )
+        .order_by(SpaceMembership.created_at.asc(), SpaceMembership.id.asc())
+        .first()
+    )
+    return membership.space_id if membership is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +150,7 @@ def get_identity(
 
     Priority:
       1. Valid Bearer token  → space_id/user_id from the API key record
-      2. Valid session cookie → user_id from session; space_id from query param or user default
+      2. Valid session cookie → user_id from session; space_id from query param or membership fallback
       3. No auth          → 401
     """
     if authorization and authorization.startswith("Bearer "):
@@ -137,7 +165,7 @@ def get_identity(
         if session:
             user = db.query(User).filter(User.id == session.user_id).first()
             if user:
-                effective_space = space_id or user.default_space_id
+                effective_space = space_id or _select_default_space(db, user_id=user.id)
                 if not effective_space:
                     raise HTTPException(status_code=403, detail="No active space selected")
                 _require_active_membership(db, space_id=effective_space, user_id=user.id)

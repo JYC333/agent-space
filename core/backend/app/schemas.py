@@ -120,6 +120,8 @@ class AgentVersionOut(BaseModel):
     capabilities_json: list
     tool_permissions_json: dict
     runtime_policy_json: dict
+    source_proposal_id: Optional[str] = None
+    source_activity_id: Optional[str] = None
     created_at: datetime
     published_at: Optional[datetime]
     archived_at: Optional[datetime]
@@ -149,6 +151,23 @@ class AgentVersionCreate(BaseModel):
     runtime_policy_json: dict = Field(default_factory=lambda: dict(DEFAULT_RUNTIME_POLICY))
 
 
+class AgentConfigProposalCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_version_id: str
+    model_provider_id: Optional[str] = None
+    model_name: Optional[str] = None
+    runtime_adapter_id: Optional[str] = None
+    system_prompt: Optional[str] = None
+    model_config_json: Optional[dict] = None
+    runtime_config_json: Optional[dict] = None
+    context_policy_json: Optional[dict] = None
+    memory_policy_json: Optional[dict] = None
+    capabilities_json: Optional[list[str]] = None
+    tool_permissions_json: Optional[dict] = None
+    runtime_policy_json: Optional[dict] = None
+
+
 class AgentCreate(BaseModel):
     name: str
     description: Optional[str] = None
@@ -167,6 +186,8 @@ class AgentCreate(BaseModel):
 
 
 class AgentUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: Optional[str] = None
     description: Optional[str] = None
     visibility: Optional[str] = None
@@ -174,11 +195,18 @@ class AgentUpdate(BaseModel):
     status: Optional[str] = None
     default_model_provider_id: Optional[str] = None
     default_model: Optional[str] = None
-    # Execution config fields create a new AgentVersion when provided.
+    model_provider_id: Optional[str] = None
+    model_name: Optional[str] = None
+    runtime_adapter_id: Optional[str] = None
+    system_prompt: Optional[str] = None
+    # Execution config fields require an agent_config_update proposal when provided.
     model_config_json: Optional[dict] = None
+    runtime_config_json: Optional[dict] = None
+    context_policy_json: Optional[dict] = None
     memory_policy_json: Optional[dict] = None
     capabilities_json: Optional[list[str]] = None
-    tool_policy_json: Optional[list[str]] = None
+    tool_permissions_json: Optional[dict] = None
+    tool_policy_json: Optional[dict] = None
     runtime_policy_json: Optional[dict] = None
 
 
@@ -432,7 +460,14 @@ class ProposalAcceptOut(BaseModel):
     # code_patch_apply — code_patch accepted
     # policy_version   — policy_change accepted
     # egress_review    — metadata-only grant egress review accepted
-    result_type: Literal["memory_entry", "code_patch_apply", "policy_version", "egress_review", "follow_up_task"]
+    result_type: Literal[
+        "memory_entry",
+        "code_patch_apply",
+        "policy_version",
+        "egress_review",
+        "follow_up_task",
+        "agent_version",
+    ]
     result: dict[str, Any]
 
 
@@ -971,12 +1006,115 @@ class RunResolvedModelOut(BaseModel):
     provider_name: Optional[str] = None
     provider_type: Optional[str] = None
     model: Optional[str] = None
-    source: Literal["request", "agent_default", "space_default", "none"] = "none"
+    source: Literal[
+        "request", "agent_default", "runtime_default", "space_default", "none"
+    ] = "none"
     used_by_adapter: bool = False
     adapter_model_support: Literal[
         "uses_model", "not_applicable", "unsupported", "unknown"
     ] = "unknown"
     disclosure_note: Optional[str] = None
+
+
+class RunTraceAgentVersionOut(BaseModel):
+    """Safe AgentVersion snapshot for run replay.
+
+    The trace endpoint exposes immutable execution configuration without
+    embedding raw system prompts. Prompt content can be inspected through
+    proposal/version review flows; trace returns only presence/hash metadata.
+    """
+
+    id: str
+    agent_id: str
+    space_id: str
+    version_label: str
+    model_provider_id: Optional[str] = None
+    model_name: Optional[str] = None
+    runtime_adapter_id: Optional[str] = None
+    system_prompt_present: bool = False
+    system_prompt_sha256: Optional[str] = None
+    model_config_json: dict = Field(default_factory=dict)
+    runtime_config_json: dict = Field(default_factory=dict)
+    context_policy_json: dict = Field(default_factory=dict)
+    memory_policy_json: dict = Field(default_factory=dict)
+    capabilities_json: list = Field(default_factory=list)
+    tool_permissions_json: dict = Field(default_factory=dict)
+    runtime_policy_json: dict = Field(default_factory=dict)
+    source_proposal_id: Optional[str] = None
+    source_activity_id: Optional[str] = None
+    created_at: datetime
+    published_at: Optional[datetime] = None
+    archived_at: Optional[datetime] = None
+
+
+class RunTraceRuntimeAdapterOut(BaseModel):
+    id: str
+    space_id: str
+    name: str
+    adapter_type: str
+    enabled: bool
+    provider_id: Optional[str] = None
+    credential_configured: bool = False
+    health_status: str = "unknown"
+    execution_plane_id: Optional[str] = None
+
+
+class RunTraceModelProviderOut(BaseModel):
+    id: str
+    space_id: str
+    name: str
+    provider_type: str
+    default_model: Optional[str] = None
+    enabled: bool
+    has_credential: bool = False
+
+
+class RunTraceContextSnapshotOut(BaseModel):
+    """ContextSnapshot replay metadata without raw rendered context text."""
+
+    id: str
+    space_id: str
+    source_refs_json: list = Field(default_factory=list)
+    token_estimate: Optional[int] = None
+    relevant_period_start: Optional[datetime] = None
+    relevant_period_end: Optional[datetime] = None
+    prefix_hash: Optional[str] = None
+    tail_hash: Optional[str] = None
+    compiler_version: Optional[str] = None
+    retrieval_trace_json: Optional[list] = None
+    token_budget_json: Optional[dict] = None
+    policy_bundle_version: Optional[str] = None
+    memory_digest_version: Optional[str] = None
+    workspace_digest_version: Optional[str] = None
+    target_runtime_adapter_id: Optional[str] = None
+    execution_plane_id: Optional[str] = None
+    included_memory_refs_json: Optional[list] = None
+    included_file_refs_json: Optional[list] = None
+    included_doc_refs_json: Optional[list] = None
+    redactions_json: Optional[dict] = None
+    data_exposure_level: Optional[str] = None
+    rendered_context_uri: Optional[str] = None
+    has_compiled_prefix_text: bool = False
+    has_compiled_tail_text: bool = False
+    has_rendered_context_text: bool = False
+    created_at: datetime
+
+
+class RunTraceLineageOut(BaseModel):
+    id: str
+    space_id: str
+    agent_id: str
+    agent_version_id: str
+    parent_run_id: Optional[str] = None
+    status: str
+    run_type: str
+    trigger_origin: str
+    mode: str
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
 
 
 class TaskRunListItem(BaseModel):
@@ -1284,6 +1422,21 @@ class RunEventOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class RunTraceOut(BaseModel):
+    run: RunOut
+    agent: Optional[AgentOut] = None
+    agent_version: Optional[RunTraceAgentVersionOut] = None
+    runtime_adapter: Optional[RunTraceRuntimeAdapterOut] = None
+    model_provider: Optional[RunTraceModelProviderOut] = None
+    context_snapshot: Optional[RunTraceContextSnapshotOut] = None
+    steps: list[RunStepOut] = Field(default_factory=list)
+    events: list[RunEventOut] = Field(default_factory=list)
+    artifacts: list[ArtifactSummaryOut] = Field(default_factory=list)
+    proposals: list[ProposalSummaryOut] = Field(default_factory=list)
+    parent: Optional[RunTraceLineageOut] = None
+    children: list[RunTraceLineageOut] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

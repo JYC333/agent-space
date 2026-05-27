@@ -12,9 +12,9 @@ from app.cli_adapters.service import CLIAdapterService
 from tests.support import factories
 
 
-def test_provider_config_update_does_not_mutate_runtime_adapter_row(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_provider_config_update_does_not_mutate_runtime_adapter_row(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     mp = factories.create_test_model_provider(db, space_id=a, commit=False)
     mp.config_json = {"api": "v1"}
     flag_modified(mp, "config_json")
@@ -36,9 +36,9 @@ def test_provider_config_update_does_not_mutate_runtime_adapter_row(db, cross_sp
     assert ra2.provider_id == mp_id
 
 
-def test_runtime_adapter_update_does_not_mutate_model_provider(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_runtime_adapter_update_does_not_mutate_model_provider(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     mp = factories.create_test_model_provider(db, space_id=a, commit=False)
     mp.config_json = {"stable": True}
     flag_modified(mp, "config_json")
@@ -58,9 +58,9 @@ def test_runtime_adapter_update_does_not_mutate_model_provider(db, cross_space_p
     assert mp2.config_json == {"stable": True}
 
 
-def test_disabled_runtime_adapter_cannot_resolve_for_execution(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_disabled_runtime_adapter_cannot_resolve_for_execution(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     v = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).one()
     bad = factories.create_test_runtime_adapter(
@@ -77,9 +77,9 @@ def test_disabled_runtime_adapter_cannot_resolve_for_execution(db, cross_space_p
     assert ei.value.error_code == "adapter_disabled"
 
 
-def test_model_provider_allowlist_rejects_disallowed_version_provider(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_model_provider_allowlist_rejects_disallowed_version_provider(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     mp = factories.create_test_model_provider(db, space_id=a, commit=False)
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     v = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).one()
@@ -97,8 +97,8 @@ def test_model_provider_allowlist_rejects_disallowed_version_provider(db, cross_
     assert "model_provider" in ei.value.message.lower()
 
 
-def test_cli_adapter_create_is_distinct_from_model_provider(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
+def test_cli_adapter_create_is_distinct_from_model_provider(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
     mp = factories.create_test_model_provider(db, space_id=a, name="p1", commit=False)
     db.flush()
     ra = CLIAdapterService(db).create(

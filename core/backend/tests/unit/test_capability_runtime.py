@@ -636,6 +636,7 @@ def test_enabled_external_capability_executes_through_run_service(
 def test_capability_run_executes_echo_and_materializes_artifact_activity(
     db,
     test_user,
+    test_space,
     tmp_path,
     monkeypatch,
 ):
@@ -643,7 +644,7 @@ def test_capability_run_executes_echo_and_materializes_artifact_activity(
     monkeypatch.setattr(settings, "workspace_root", str(tmp_path / "workspaces"))
     monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
 
-    space_id = test_user.space_id
+    space_id = test_space.id
     user = test_user
     project = factories.create_test_project(
         db,
@@ -713,8 +714,8 @@ def test_capability_run_executes_echo_and_materializes_artifact_activity(
     assert {"runtime_selected", "adapter_started", "completed"}.issubset(step_types)
 
 
-def test_capability_run_missing_capability_id_fails_clearly(db, test_user):
-    space_id = test_user.space_id
+def test_capability_run_missing_capability_id_fails_clearly(db, test_user, test_space):
+    space_id = test_space.id
     user = test_user
     agent = factories.create_test_agent(
         db,

@@ -15,10 +15,10 @@ from app.models import ActivityRecord, MemoryEntry, Policy, Proposal
 from tests.support import factories
 
 
-def test_cross_space_candidate_rejected(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
+def test_cross_space_candidate_rejected(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(db, space_id=a, actor_user_id=ua.id, commit=True)
     clf = DefaultRuleBasedMemoryCandidateClassifier()
     c = clf.classify(act, compiler_version="test")[0]
@@ -27,9 +27,9 @@ def test_cross_space_candidate_rejected(db, cross_space_pair):
     assert v.validate(c).decision == "reject"
 
 
-def test_classifier_output_alone_creates_no_memory_or_policy(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_classifier_output_alone_creates_no_memory_or_policy(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     before_m = db.query(func.count(MemoryEntry.id)).filter(MemoryEntry.space_id == a).scalar()
     before_p = db.query(func.count(Policy.id)).filter(Policy.space_id == a).scalar()
     act = factories.create_test_activity(
@@ -48,9 +48,9 @@ def test_classifier_output_alone_creates_no_memory_or_policy(db, cross_space_pai
     assert db.query(func.count(Policy.id)).filter(Policy.space_id == a).scalar() == before_p
 
 
-def test_invalid_scope_candidate_rejected(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_invalid_scope_candidate_rejected(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(db, space_id=a, actor_user_id=ua.id, commit=True)
     clf = DefaultRuleBasedMemoryCandidateClassifier()
     cands = clf.classify(act, compiler_version="test")
@@ -61,9 +61,9 @@ def test_invalid_scope_candidate_rejected(db, cross_space_pair):
     assert v.validate(c).decision == "reject"
 
 
-def test_candidate_without_provenance_rejected(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_candidate_without_provenance_rejected(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(db, space_id=a, actor_user_id=ua.id, commit=True)
     clf = DefaultRuleBasedMemoryCandidateClassifier()
     c = clf.classify(act, compiler_version="test")[0]
@@ -72,9 +72,9 @@ def test_candidate_without_provenance_rejected(db, cross_space_pair):
     assert v.validate(c).decision == "reject"
 
 
-def test_agent_inferred_semantic_rejected_by_validator(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_agent_inferred_semantic_rejected_by_validator(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = ActivityRecord(
         id=str(ULID()),
         space_id=a,
@@ -96,9 +96,9 @@ def test_agent_inferred_semantic_rejected_by_validator(db, cross_space_pair):
     assert v.validate(c).decision == "reject"
 
 
-def test_untrusted_external_episodic_is_high_risk_reviewable(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_untrusted_external_episodic_is_high_risk_reviewable(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(
         db,
         space_id=a,
@@ -115,9 +115,9 @@ def test_untrusted_external_episodic_is_high_risk_reviewable(db, cross_space_pai
     assert v.validate(c).decision == "create_review_proposal"
 
 
-def test_policy_candidate_produces_policy_change_proposal(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_policy_candidate_produces_policy_change_proposal(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(
         db,
         space_id=a,
@@ -137,9 +137,9 @@ def test_policy_candidate_produces_policy_change_proposal(db, cross_space_pair):
     assert prop.required_approver_role == "admin"
 
 
-def test_policy_candidate_does_not_auto_apply(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_policy_candidate_does_not_auto_apply(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(
         db,
         space_id=a,
@@ -158,9 +158,9 @@ def test_policy_candidate_does_not_auto_apply(db, cross_space_pair):
     assert db.query(func.count(Policy.id)).filter(Policy.space_id == a).scalar() == before
 
 
-def test_proposal_dedupe_blocks_second_proposal(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_proposal_dedupe_blocks_second_proposal(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     act = factories.create_test_activity(db, space_id=a, actor_user_id=ua.id, commit=True)
     svc = ActivityConsolidationService(db)
     r1 = svc.run_pending(space_id=a, acting_user_id=ua.id, activity_ids=[act.id])
@@ -173,9 +173,9 @@ def test_proposal_dedupe_blocks_second_proposal(db, cross_space_pair):
     assert r2.proposals_created == []
 
 
-def test_memory_evolver_does_not_directly_archive(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_memory_evolver_does_not_directly_archive(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     mem = factories.create_test_memory_entry(
         db,
         space_id=a,

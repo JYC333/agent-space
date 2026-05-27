@@ -108,7 +108,7 @@ class RunService:
 
     def _validate_run_target_agent(self, agent: Agent, space_id: str) -> None:
         # Non-mutating preflight simulation — must not persist PolicyDecisionRecord.
-        # Real enforcement (with PolicyGateway.check_and_record) happens in RunExecutionService.
+        # Real enforcement (with PolicyGateway.enforce) happens in RunExecutionService.
         from ..policy.engine import PolicyEngine
 
         d = PolicyEngine().check({
@@ -126,7 +126,7 @@ class RunService:
         if allowed is None or not isinstance(allowed, list) or len(allowed) == 0:
             return
         # Non-mutating preflight simulation — must not persist PolicyDecisionRecord.
-        # Real enforcement (with PolicyGateway.check_and_record) happens in RunExecutionService.
+        # Real enforcement (with PolicyGateway.enforce) happens in RunExecutionService.
         from ..policy.engine import PolicyEngine
 
         d = PolicyEngine().check({
@@ -180,6 +180,7 @@ class RunService:
         data: RunCreate,
         space_id: str,
         user_id: str,
+        commit: bool = True,
     ) -> Run:
         """
         Create a Run for the given Agent using its current AgentVersion.
@@ -278,14 +279,29 @@ class RunService:
             AgentVersion.id == agent.current_version_id
         ).first()
 
-        from .model_config_resolution import resolve_model_config_for_run
-        resolved_model = resolve_model_config_for_run(
+        from ..runtimes.requirements import (
+            UnknownRuntimeRequirementsError,
+            resolve_effective_adapter_type,
+        )
+        from .model_config_resolution import resolve_model_config_for_runtime
+
+        effective_adapter_type = resolve_effective_adapter_type(
             self.db,
             space_id=space_id,
-            request_provider_id=getattr(data, "model_provider_id", None),
-            request_model=getattr(data, "model", None),
             version=version,
+            run_adapter_type=data.adapter_type,
         )
+        try:
+            resolved_model = resolve_model_config_for_runtime(
+                self.db,
+                space_id=space_id,
+                adapter_type=effective_adapter_type,
+                request_provider_id=getattr(data, "model_provider_id", None),
+                request_model=getattr(data, "model", None),
+                version=version,
+            )
+        except UnknownRuntimeRequirementsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         model_provider_id = resolved_model.model_provider_id
 
         # Validate FK references belong to this space (prevent cross-space injection).
@@ -375,8 +391,11 @@ class RunService:
             externality_level=externality_level,
         )
         self.db.add(run)
-        self.db.commit()
-        self.db.refresh(run)
+        if commit:
+            self.db.commit()
+            self.db.refresh(run)
+        else:
+            self.db.flush()
         return run
 
     # ------------------------------------------------------------------
@@ -391,14 +410,14 @@ class RunService:
             .first()
         )
         if not run:
-            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found in this space")
+            raise HTTPException(status_code=404, detail="Run not found in this space")
         if user_id is not None and not can_read_scoped_object(
             visibility=run.visibility,
             owner_user_id=run.instructed_by_user_id,
             current_user_id=user_id,
             is_space_member=True,
         ):
-            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found in this space")
+            raise HTTPException(status_code=404, detail="Run not found in this space")
         return run
 
     def list_runs(

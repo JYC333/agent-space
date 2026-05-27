@@ -13,7 +13,7 @@ Provide risk-proportionate isolation for agent runs. Two distinct concerns:
 | low        | `none`            | nowhere (no adapter exec) | —                   | —                 | No             |
 | medium     | `dry_run`         | nowhere (no adapter exec) | —                   | —                 | No             |
 | high       | `worktree`        | backend process           | ✓ git worktree      | ✗                 | **No**         |
-| critical   | `one_shot_docker` | sandbox container         | ✓ volume mount      | ✓                 | Yes            |
+| critical   | `one_shot_docker` | not currently available   | planned             | planned           | Planned        |
 
 **File-access adapter requirement:** `claude_code` and `codex_cli` require `risk_level=high`.
 The execution service validates this before starting the adapter and fails the run with
@@ -28,10 +28,10 @@ so this works identically on bare-metal and in Docker Compose.
 Provides workspace isolation only — the process has the same access as the backend.
 Appropriate for trusted personal/family use where you control the deployment.
 
-**`one_shot_docker` (high/critical):**
-A new `agent-space-sandbox` container is spawned per run. Only the sandbox directory and
-(optionally) the workspace repo are visible. Full process containment.
-Required when you need hard resource limits or stricter filesystem boundaries.
+**`one_shot_docker` (critical/future):**
+One-shot Docker is the intended hard-isolation path, but it is not currently active in
+the backend product path. Critical/high paths that require Docker process isolation
+must fail closed rather than silently downgrading to worktree execution.
 
 ## Owns
 - `SandboxManager` — creates sandbox environments per run
@@ -56,7 +56,7 @@ diff / artifacts created in sandboxes/{run_id}/
 
 The workspace root must be a git repository; validation fails before sandbox creation if it is not.
 
-## Docker Sandbox Flow (high/critical risk)
+## Docker Sandbox Flow (planned)
 
 ```
 sandboxes/{run_id}/          ← writable sandbox dir
@@ -73,7 +73,7 @@ diff / artifacts in /workspace → visible on host via volume mount
 
 ## Sandbox Image
 
-Built separately (needed for high/critical risk only):
+Planned one-shot Docker runs use a separately built image:
 ```bash
 docker build --network=host -t agent-space-sandbox deployments/sandbox/
 ```
@@ -83,13 +83,14 @@ Both images install the same CLI tools; they serve different isolation purposes.
 
 ## Concurrency Control
 
-`threading.BoundedSemaphore(MAX_CONCURRENT_DOCKER_RUNS)` — limits simultaneous Docker containers.
-Worktree runs are not counted; they run as backend subprocesses.
+`threading.BoundedSemaphore(MAX_CONCURRENT_DOCKER_RUNS)` — intended to limit
+simultaneous one-shot Docker containers when that path is enabled. Worktree runs are
+not counted; they run as backend subprocesses.
 Default: 3. Configurable via `MAX_CONCURRENT_DOCKER_RUNS` env var.
 
 ## Docker-in-Docker Path Translation
 
-When spawning high-risk containers, volume paths must be HOST paths (Docker daemon interprets
+When spawning future one-shot Docker containers, volume paths must be HOST paths (Docker daemon interprets
 them relative to the host). `_resolve_host_path()` reads `/proc/self/mountinfo` to translate.
 
 ## Context File Injection
@@ -100,7 +101,7 @@ Adapters check `self.sandbox_dir is not None`:
 
 ## Cleanup
 
-- Docker container: removed immediately after run (`remove=True` in DockerExecutor)
+- Future Docker container: removed immediately after run (`remove=True` in DockerExecutor)
 - Sandbox dir: `SandboxContext.cleanup()` → `git worktree remove --force` or `shutil.rmtree`
 - Collect artifacts before cleanup
 
@@ -109,6 +110,7 @@ Adapters check `self.sandbox_dir is not None`:
 - `risk_level=high` → `required_sandbox_level=worktree`; the agent always receives a detached git worktree, never the real workspace directory
 - Workspace roots outside `settings.workspace_root` require `Workspace.allow_external_root=True`; validation fails before sandbox creation otherwise
 - High risk never spawns a new container — CLI runs as a backend subprocess inside the worktree
+- Critical one-shot Docker is fail-closed until the product path is implemented and tested
 - CLAUDE.md / AGENTS.md are written to the sandbox dir, never to the real workspace
 - File changes from the worktree become a `code_patch` proposal; real workspace mutation happens only after the proposal is accepted
 

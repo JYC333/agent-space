@@ -12,10 +12,10 @@ from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRunti
 
 
 def test_run_execute_materializes_memory_proposal_without_active_memory(
-    monkeypatch, db, cross_space_pair, tmp_path
+    monkeypatch, db, cross_space_pair_db, tmp_path
 ):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
     monkeypatch.setattr(settings, "workspace_root", str(tmp_path / "workspaces"))
     monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
@@ -55,6 +55,7 @@ def test_run_execute_materializes_memory_proposal_without_active_memory(
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "p"
     db.flush()
+    db.commit()
 
     RunExecutionService(db).execute_run(run.id, space_id=a)
     db.refresh(run)
@@ -72,10 +73,10 @@ def test_run_execute_materializes_memory_proposal_without_active_memory(
 
 
 def test_run_execute_code_patch_proposal_does_not_write_workspace_until_accept(
-    monkeypatch, db, cross_space_pair, tmp_path
+    monkeypatch, db, cross_space_pair_db, tmp_path
 ):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     ws_root = tmp_path / "wsroot"
     ws_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
@@ -118,6 +119,7 @@ def test_run_execute_code_patch_proposal_does_not_write_workspace_until_accept(
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "p"
     db.flush()
+    db.commit()
 
     RunExecutionService(db).execute_run(run.id, space_id=a)
     assert (disk / "f.txt").read_text(encoding="utf-8") == "ORIGINAL"

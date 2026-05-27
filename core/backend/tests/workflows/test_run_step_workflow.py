@@ -3,10 +3,21 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from app.models import RunStep
 from app.runs.steps import list_run_steps
 from app.runtimes.base import RuntimeAdapterResult
 from tests.support import factories
+
+
+@pytest.fixture(autouse=True)
+def _stub_durable_policy_audit(monkeypatch):
+    """This SQLite module verifies run-step behavior, not independent policy audit writes."""
+    monkeypatch.setattr(
+        "app.policy.audit.DurablePolicyAuditWriter.write",
+        lambda _writer, _envelope: "stub-policy-audit",
+    )
 
 
 def _setup_paths(monkeypatch, tmp_path, settings):
@@ -76,18 +87,19 @@ class _AssertingNoTransactionAdapter:
         )
 
 
-def test_successful_run_emits_coarse_step_sequence(db, cross_space_pair, tmp_path, monkeypatch):
+def test_successful_run_emits_coarse_step_sequence(db, cross_space_pair_db, tmp_path, monkeypatch):
     from app.config import settings
     from app.runs.execution import RunExecutionService
 
     _setup_paths(monkeypatch, tmp_path, settings)
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "hello-echo"
     db.flush()
+    db.commit()
 
     RunExecutionService(db).execute_run(run.id, space_id=a)
     db.expire_all()
@@ -108,18 +120,19 @@ def test_successful_run_emits_coarse_step_sequence(db, cross_space_pair, tmp_pat
         assert s.run_id == run.id
 
 
-def test_successful_run_steps_are_ordered_by_step_index(db, cross_space_pair, tmp_path, monkeypatch):
+def test_successful_run_steps_are_ordered_by_step_index(db, cross_space_pair_db, tmp_path, monkeypatch):
     from app.config import settings
     from app.runs.execution import RunExecutionService
 
     _setup_paths(monkeypatch, tmp_path, settings)
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "echo-test"
     db.flush()
+    db.commit()
 
     RunExecutionService(db).execute_run(run.id, space_id=a)
 
@@ -129,18 +142,19 @@ def test_successful_run_steps_are_ordered_by_step_index(db, cross_space_pair, tm
     assert indexes[0] == 0
 
 
-def test_failed_run_emits_failed_step(db, cross_space_pair, tmp_path, monkeypatch):
+def test_failed_run_emits_failed_step(db, cross_space_pair_db, tmp_path, monkeypatch):
     from app.config import settings
     from app.runs.execution import RunExecutionService
 
     _setup_paths(monkeypatch, tmp_path, settings)
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "simulate-fail"
     db.flush()
+    db.commit()
 
     RunExecutionService(db).execute_run(run.id, space_id=a, simulate_failure=True)
     db.expire_all()
@@ -153,18 +167,19 @@ def test_failed_run_emits_failed_step(db, cross_space_pair, tmp_path, monkeypatc
     assert len(failed_steps) >= 1, "Failed run must have at least one failed step"
 
 
-def test_run_with_output_emits_artifact_step(db, cross_space_pair, tmp_path, monkeypatch):
+def test_run_with_output_emits_artifact_step(db, cross_space_pair_db, tmp_path, monkeypatch):
     from app.config import settings
     from app.runs.execution import RunExecutionService
 
     _setup_paths(monkeypatch, tmp_path, settings)
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "hello-echo"
     db.flush()
+    db.commit()
 
     RunExecutionService(db).execute_run(run.id, space_id=a)
     db.expire_all()
@@ -178,19 +193,20 @@ def test_run_with_output_emits_artifact_step(db, cross_space_pair, tmp_path, mon
         assert s.artifact_id is not None
 
 
-def test_all_run_steps_have_non_null_actor_id(db, cross_space_pair, tmp_path, monkeypatch):
+def test_all_run_steps_have_non_null_actor_id(db, cross_space_pair_db, tmp_path, monkeypatch):
     """Invariant: every RunStep written by execution must carry actor_id (M3 contract)."""
     from app.config import settings
     from app.runs.execution import RunExecutionService
 
     _setup_paths(monkeypatch, tmp_path, settings)
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "actor-check"
     db.flush()
+    db.commit()
 
     RunExecutionService(db).execute_run(run.id, space_id=a)
 
@@ -200,15 +216,15 @@ def test_all_run_steps_have_non_null_actor_id(db, cross_space_pair, tmp_path, mo
         assert s.actor_id is not None, f"step {s.step_type!r} has null actor_id"
 
 
-def test_job_triggered_run_uses_job_actor_not_default_user(db, cross_space_pair, tmp_path, monkeypatch):
+def test_job_triggered_run_uses_job_actor_not_default_user(db, cross_space_pair_db, tmp_path, monkeypatch):
     """Job-triggered runs must use job actor, not default_user_id."""
     from app.config import settings
     from app.models import Actor
     from app.runs.execution import RunExecutionService
 
     _setup_paths(monkeypatch, tmp_path, settings)
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
@@ -217,6 +233,7 @@ def test_job_triggered_run_uses_job_actor_not_default_user(db, cross_space_pair,
     run.trigger_origin = "job"
     run.prompt = "job-actor-test"
     db.flush()
+    db.commit()
 
     RunExecutionService(db).execute_run(run.id, space_id=a)
     db.expire_all()
@@ -247,6 +264,7 @@ def test_run_terminal_failure_survives_run_step_create_db_failure(
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "create-step-failure"
     db.flush()
+    db.commit()
 
     def broken_create_step(db_arg, *, run, **kwargs):
         _poison_run_step_flush(db_arg, run)
@@ -282,6 +300,7 @@ def test_run_terminal_failure_survives_run_step_fail_db_failure(
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "fail-step-failure"
     db.flush()
+    db.commit()
 
     def broken_fail_step(db_arg, step, **kwargs):
         _poison_run_step_flush(db_arg, run)
@@ -315,6 +334,7 @@ def test_runtime_adapter_executes_outside_open_db_transaction(
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "transaction-boundary"
     db.flush()
+    db.commit()
 
     monkeypatch.setattr(
         execution_mod,

@@ -68,6 +68,13 @@ def _fake_cli_result(
     return r
 
 
+def _mock_grant(temp_home: str | None = None) -> MagicMock:
+    grant = MagicMock()
+    grant.profile_id = "claude_code/default"
+    grant.temp_home = temp_home
+    return grant
+
+
 # ===========================================================================
 # 1. Registration and class attributes
 # ===========================================================================
@@ -232,7 +239,7 @@ class TestCliRuntimeAdapterExecuteSuccess:
 
         with (
             patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
-            patch.object(adapter, "_resolve_credential_grant", return_value=None),
+            patch.object(adapter, "_resolve_credential_grant", return_value=_mock_grant()),
         ):
             result = adapter.execute(ctx)
 
@@ -254,7 +261,7 @@ class TestCliRuntimeAdapterExecuteSuccess:
 
         with (
             patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
-            patch.object(adapter, "_resolve_credential_grant", return_value=None),
+            patch.object(adapter, "_resolve_credential_grant", return_value=_mock_grant()),
         ):
             result = adapter.execute(ctx)
 
@@ -275,7 +282,7 @@ class TestCliRuntimeAdapterExecuteSuccess:
 
         with (
             patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
-            patch.object(adapter, "_resolve_credential_grant", return_value=None),
+            patch.object(adapter, "_resolve_credential_grant", return_value=_mock_grant()),
         ):
             adapter.execute(ctx)
 
@@ -294,7 +301,7 @@ class TestCliRuntimeAdapterExecuteSuccess:
 
         with (
             patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
-            patch.object(adapter, "_resolve_credential_grant", return_value=None),
+            patch.object(adapter, "_resolve_credential_grant", return_value=_mock_grant()),
         ):
             adapter.execute(ctx)
 
@@ -314,7 +321,7 @@ class TestCliRuntimeAdapterExecuteSuccess:
 
         with (
             patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
-            patch.object(adapter, "_resolve_credential_grant", return_value=None),
+            patch.object(adapter, "_resolve_credential_grant", return_value=_mock_grant()),
         ):
             adapter.execute(ctx)
 
@@ -338,7 +345,7 @@ class TestCliRuntimeAdapterNotAvailable:
 
         with (
             patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
-            patch.object(adapter, "_resolve_credential_grant", return_value=None),
+            patch.object(adapter, "_resolve_credential_grant", return_value=_mock_grant()),
         ):
             result = adapter.execute(ctx)
 
@@ -365,7 +372,7 @@ class TestCliRuntimeAdapterException:
 
         with (
             patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
-            patch.object(adapter, "_resolve_credential_grant", return_value=None),
+            patch.object(adapter, "_resolve_credential_grant", return_value=_mock_grant()),
         ):
             result = adapter.execute(ctx)
 
@@ -387,7 +394,7 @@ class TestCliRuntimeAdapterUnknownType:
         adapter.adapter_type = "unknown_cli_type"
         ctx = _make_ctx()
 
-        with patch.object(adapter, "_resolve_credential_grant", return_value=None):
+        with patch.object(adapter, "_resolve_credential_grant", return_value=_mock_grant()):
             result = adapter.execute(ctx)
 
         assert result.success is False
@@ -417,7 +424,7 @@ class TestCliRuntimeAdapterFailure:
 
         with (
             patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
-            patch.object(adapter, "_resolve_credential_grant", return_value=None),
+            patch.object(adapter, "_resolve_credential_grant", return_value=_mock_grant()),
         ):
             result = adapter.execute(ctx)
 
@@ -432,8 +439,8 @@ class TestCliRuntimeAdapterFailure:
 # ===========================================================================
 
 class TestCredentialGrantLifecycle:
-    def test_credential_grant_failure_does_not_abort_execution(self):
-        """If CredentialBroker.grant_for_run raises, execution proceeds without a grant."""
+    def test_credential_grant_failure_aborts_before_execution(self):
+        """If CredentialBroker.grant_for_run raises, execution fails before CLI invocation."""
         from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
 
         adapter = ClaudeCodeRuntimeAdapter()
@@ -453,8 +460,10 @@ class TestCredentialGrantLifecycle:
         ):
             result = adapter.execute(ctx)
 
-        # Must still succeed — broker failure is non-fatal
-        assert result.success is True
+        assert result.success is False
+        assert result.error_code == "runtime_credential_profile_required"
+        assert result.adapter_metadata["fallback_reason"] == "broker_error"
+        mock_cli.run.assert_not_called()
 
     def test_cleanup_temp_home_called_when_grant_has_temp_home(self):
         from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
@@ -524,7 +533,7 @@ class TestCodexCliRuntimeAdapter:
 
         with (
             patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
-            patch.object(adapter, "_resolve_credential_grant", return_value=None),
+            patch.object(adapter, "_resolve_credential_grant", return_value=_mock_grant()),
         ):
             result = adapter.execute(ctx)
 
@@ -543,7 +552,7 @@ class TestCodexCliRuntimeAdapter:
 
         with (
             patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
-            patch.object(adapter, "_resolve_credential_grant", return_value=None),
+            patch.object(adapter, "_resolve_credential_grant", return_value=_mock_grant()),
         ):
             result = adapter.execute(ctx)
 
@@ -609,7 +618,7 @@ class TestCredentialRiskPropagation:
         )
 
         mock_broker_instance = MagicMock()
-        mock_broker_instance.grant_for_run.return_value = None
+        mock_broker_instance.grant_for_run.return_value = _mock_grant()
 
         with patch("app.credentials.broker.CredentialBroker", return_value=mock_broker_instance):
             adapter._resolve_credential_grant(ctx)
@@ -640,7 +649,7 @@ class TestCredentialRiskPropagation:
         )
 
         mock_broker_instance = MagicMock()
-        mock_broker_instance.grant_for_run.return_value = None
+        mock_broker_instance.grant_for_run.return_value = _mock_grant()
         mock_cli = MagicMock()
         mock_cli.is_available.return_value = True
         mock_cli.run.return_value = _fake_cli_result()
@@ -703,8 +712,8 @@ class TestCredentialSourceMetadata:
         assert meta.get("credential_broker_used") is True
         assert meta.get("fallback_used") is False
 
-    def test_no_grant_records_container_default_fallback(self):
-        """When broker returns None (no profile), credential_source='container_default' and fallback_used=True."""
+    def test_no_grant_fails_without_container_default_fallback(self):
+        """When broker returns None (no profile), CLI execution fails before adapter invocation."""
         from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
 
         adapter = ClaudeCodeRuntimeAdapter()
@@ -720,12 +729,14 @@ class TestCredentialSourceMetadata:
         ):
             result = adapter.execute(ctx)
 
-        assert result.success is True
+        assert result.success is False
+        assert result.error_code == "runtime_credential_profile_required"
         meta = result.adapter_metadata or {}
-        assert meta.get("credential_source") == "container_default"
+        assert meta.get("credential_source") == "none"
         assert meta.get("credential_broker_used") is True
         assert meta.get("fallback_used") is True
         assert meta.get("fallback_reason") == "no_profile_configured"
+        mock_cli.run.assert_not_called()
 
     def test_temp_home_created_recorded_when_grant_has_temp_home(self):
         """When grant.temp_home is set, temp_home_created=True in adapter_metadata."""
@@ -825,11 +836,13 @@ class TestCredentialSourceMetadata:
         ):
             result = adapter.execute(ctx)
 
-        assert result.success is True  # execution proceeds
+        assert result.success is False
+        assert result.error_code == "runtime_credential_profile_required"
         meta = result.adapter_metadata or {}
         assert meta.get("fallback_used") is True
         assert meta.get("fallback_reason") == "broker_error"
-        assert meta.get("credential_source") == "container_default"
+        assert meta.get("credential_source") == "none"
+        mock_cli.run.assert_not_called()
 
 
 # ===========================================================================

@@ -30,9 +30,17 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
     from ..models import Run
 
+from ..policy.audit import write_blocked_gate_audit
+from ..policy.exceptions import PolicyAuditPersistError, PolicyGateBlocked
+from ..policy.gateway import PolicyCheckRequest, PolicyGateway
+
 log = logging.getLogger(__name__)
 
 _MAX_FILE_BYTES = 2 * 1024 * 1024  # 2 MiB per file; skip larger files
+_PROPOSAL_CREATE_AUDIT_FAILURE = (
+    "policy_decision_record_persist_failed: policy audit record persistence "
+    "failed for proposal.create. No proposal created."
+)
 
 
 def _preimage_info(worktree_path: Path, rel: str) -> tuple[str | None, bool]:
@@ -322,41 +330,64 @@ def collect_and_create_code_patch_proposal(
         else "medium"
     )
 
-    # Policy gate: proposal.create — audit for system-created code_patch proposals.
-    # force_record=True ensures HIGH-risk code_patch proposals are always recorded.
-    # Never stores patch content in metadata.
-    from ..policy.gateway import PolicyGateway, PolicyCheckRequest
-    _create_decision = PolicyGateway(db).check_and_record(
-        PolicyCheckRequest(
-            action="proposal.create",
-            actor_type="run",
-            actor_id=str(run.id),
-            space_id=run.space_id,
-            resource_type="proposal",
-            run_id=str(run.id),
-            force_record=True,
-            metadata_json={
-                "proposal_type": "code_patch",
-                "workspace_id": str(run.workspace_id) if run.workspace_id else None,
-                "source_run_id": str(run.id),
-                "risk_level": effective_risk_level,
-                "ops_count": len(ops),
-                "skipped_count": len(skipped),
-                "incomplete_patch": incomplete_patch,
-                "validation_status": validation_dict.get("status"),
-            },
+    try:
+        PolicyGateway(db).enforce(
+            PolicyCheckRequest(
+                action="proposal.create",
+                actor_type="run",
+                actor_id=str(run.id),
+                space_id=run.space_id,
+                resource_type="proposal",
+                run_id=str(run.id),
+                force_record=True,
+                metadata_json={
+                    "proposal_type": "code_patch",
+                    "workspace_id": str(run.workspace_id) if run.workspace_id else None,
+                    "source_run_id": str(run.id),
+                    "risk_level": effective_risk_level,
+                    "ops_count": len(ops),
+                    "skipped_count": len(skipped),
+                    "incomplete_patch": incomplete_patch,
+                    "validation_status": validation_dict.get("status"),
+                },
+            )
         )
-    )
-    if _create_decision.denied:
+    except PolicyGateBlocked as exc:
+        try:
+            write_blocked_gate_audit(exc)
+        except Exception:
+            log.error(
+                "code_patch proposal.create blocked audit failed for run=%s",
+                run.id,
+                exc_info=True,
+            )
+            return WorktreeCollectionResult(
+                proposal_created=False,
+                ops_count=len(ops),
+                skipped=skipped,
+                no_op_reason=_PROPOSAL_CREATE_AUDIT_FAILURE,
+            )
         log.warning(
             "code_patch proposal.create denied by policy for run=%s: %s",
-            run.id, _create_decision.message,
+            run.id, exc.decision.message,
         )
         return WorktreeCollectionResult(
             proposal_created=False,
             ops_count=len(ops),
             skipped=skipped,
-            no_op_reason=f"code_patch proposal.create denied by policy: {_create_decision.message}",
+            no_op_reason=f"code_patch proposal.create denied by policy: {exc.decision.message}",
+        )
+    except PolicyAuditPersistError:
+        log.error(
+            "code_patch proposal.create allow audit failed for run=%s",
+            run.id,
+            exc_info=True,
+        )
+        return WorktreeCollectionResult(
+            proposal_created=False,
+            ops_count=len(ops),
+            skipped=skipped,
+            no_op_reason=_PROPOSAL_CREATE_AUDIT_FAILURE,
         )
 
     proposal = Proposal(

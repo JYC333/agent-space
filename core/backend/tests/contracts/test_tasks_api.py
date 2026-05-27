@@ -55,9 +55,9 @@ def _make_task(
 # Authentication required
 # ---------------------------------------------------------------------------
 
-def test_patch_task_requires_auth(api_client, db, cross_space_pair):
-    space = cross_space_pair["space_a_id"]
-    owner = cross_space_pair["user_a"]
+def test_patch_task_requires_auth(api_client, db, cross_space_pair_db):
+    space = cross_space_pair_db["space_a_id"]
+    owner = cross_space_pair_db["user_a"]
     task = _make_task(db, space_id=space, owner_user_id=owner.id)
     r = api_client.patch(
         f"/api/v1/tasks/{task.id}",

@@ -192,22 +192,22 @@ def test_archive_memory_proposal_workflow(api_client, db, cross_space_pair):
 # ---------------------------------------------------------------------------
 
 
-def test_policy_change_proposal_workflow(db, cross_space_pair):
+def test_policy_change_proposal_workflow(db, cross_space_pair_db):
     """policy_change proposal → accept → active Policy linked to proposal."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     prop = factories.create_test_proposal(
         db,
         space_id=a,
         created_by_user_id=ua.id,
         proposal_type="policy_change",
-        title="Allow agent reads workflow",
+        title="Log agent reads workflow",
         payload_json={
             "operation": "create",
-            "domain": "memory",
-            "policy_key": "agent_read_allow_wf",
-            "rule_json": {"effect": "allow", "scope": "agent"},
+            "domain": "memory.private_placement",
+            "policy_key": "agent_read_log_wf",
+            "rule_json": {"effect": "allow_with_log", "scope": "agent"},
         },
         commit=True,
     )

@@ -76,7 +76,7 @@ class TestCliCredentialEventModel:
 class TestCredentialBrokerRecordUsage:
     """CredentialBroker.record_usage() writes CliCredentialEvent rows."""
 
-    def test_record_usage_with_no_grant_writes_container_default(self, db):
+    def test_record_usage_with_no_grant_writes_none_source(self, db):
         from app.credentials.broker import CredentialBroker
         from app.models import CliCredentialEvent
 
@@ -91,7 +91,7 @@ class TestCredentialBrokerRecordUsage:
             db,
             run.id,
             space_id,
-            None,  # no grant → container_default
+            None,  # no grant -> no credential source
             runtime_adapter_type="claude_code",
             trigger_origin="manual",
             fallback_used=True,
@@ -105,7 +105,7 @@ class TestCredentialBrokerRecordUsage:
         events = db.query(CliCredentialEvent).filter(CliCredentialEvent.run_id == run.id).all()
         assert len(events) == 1
         ev = events[0]
-        assert ev.credential_source == "container_default"
+        assert ev.credential_source == "none"
         assert ev.fallback_used is True
         assert ev.fallback_reason == "no_profile_configured"
         assert ev.broker_error is False
@@ -314,7 +314,7 @@ class TestCliRuntimeAdapterRecordUsageWired:
             db=db,
         )
         cred_meta = {
-            "credential_source": "container_default",
+            "credential_source": "none",
             "fallback_used": True,
             "fallback_reason": "no_profile_configured",
             "broker_error": False,
@@ -347,7 +347,7 @@ class TestCliRuntimeAdapterRecordUsageWired:
             db=None,  # no DB
         )
         cred_meta = {
-            "credential_source": "container_default",
+            "credential_source": "none",
             "fallback_used": True,
             "fallback_reason": "no_profile_configured",
             "broker_error": False,
@@ -362,7 +362,7 @@ class TestAutomationOriginCliRunFails:
     """Automation-origin CLI runs without explicit credential fail cleanly."""
 
     def test_automation_run_without_profile_fails_with_correct_error_code(self):
-        """CliRuntimeAdapter returns runtime_credential_profile_required for automation without grant."""
+        """CliRuntimeAdapter returns runtime_credential_profile_required without a grant."""
         from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
         from app.runtimes.base import RuntimeExecutionContext
 
@@ -386,7 +386,7 @@ class TestAutomationOriginCliRunFails:
 
         assert result.success is False
         assert result.error_code == "runtime_credential_profile_required"
-        assert "automation" in (result.error_text or "").lower()
+        assert "credential profile" in (result.error_text or "").lower()
 
     def test_automation_metadata_does_not_leak_paths_or_secrets(self):
         """Automation-denied failure metadata contains no file paths or secret values."""
@@ -688,7 +688,7 @@ class TestCodePatchProposalValidationEvidence:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -716,7 +716,7 @@ class TestCodePatchProposalValidationEvidence:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -751,7 +751,7 @@ class TestCodePatchProposalValidationEvidence:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -790,7 +790,7 @@ class TestCodePatchProposalValidationEvidence:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -823,7 +823,7 @@ class TestCodePatchProposalValidationEvidence:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=False)
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         # Worktree with a sentinel file
         repo = tmp_path / "worktree"
@@ -945,7 +945,7 @@ class TestValidationHomeIsolation:
             db, space_id=space_id, user_id=user.id, agent=agent, commit=False
         )
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -1117,7 +1117,7 @@ class TestValidationSecretRedaction:
             db, space_id=space_id, user_id=user.id, agent=agent, commit=False
         )
         run.workspace_id = ws.id
-        db.flush()
+        db.commit()
 
         repo = tmp_path / "repo"
         repo.mkdir()

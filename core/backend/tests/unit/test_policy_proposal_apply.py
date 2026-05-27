@@ -24,7 +24,7 @@ def _make_space_user(db, space_id: str, role: str):
     from app.models import SpaceMembership, User
 
     uid = _uid()
-    db.add(User(id=uid, space_id=space_id, display_name=role, email=f"{uid}@test.invalid"))
+    db.add(User(id=uid, display_name=role, email=f"{uid}@test.invalid"))
     db.add(SpaceMembership(id=_uid(), space_id=space_id, user_id=uid, role=role, status="active"))
     db.flush()
     return uid
@@ -82,9 +82,9 @@ class _FakeProposal:
         self.risk_level = risk_level
 
 
-def test_check_policy_owner_returns_allow(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_check_policy_owner_returns_allow(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = _FakeProposal("memory_create", "low")
     decision = check_proposal_apply_policy(db, user_id=ua.id, space_id=a, proposal=prop)
     assert decision.decision == Decision.ALLOW
@@ -97,8 +97,8 @@ def test_check_policy_owner_returns_allow(db, cross_space_pair):
     assert decision.risk_level == RiskLevel.MEDIUM
 
 
-def test_check_policy_admin_low_medium_high_returns_allow(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
+def test_check_policy_admin_low_medium_high_returns_allow(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
     for proposal_type, risk_level in [
         ("memory_create", None),
         ("memory_update", None),
@@ -112,8 +112,8 @@ def test_check_policy_admin_low_medium_high_returns_allow(db, cross_space_pair):
         assert decision.audit_code == "approved_admin"
 
 
-def test_check_policy_admin_cannot_approve_critical(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
+def test_check_policy_admin_cannot_approve_critical(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
     admin_id = _make_space_user(db, a, "admin")
     prop = _FakeProposal("memory_update", "critical")
     decision = check_proposal_apply_policy(db, user_id=admin_id, space_id=a, proposal=prop)
@@ -122,17 +122,17 @@ def test_check_policy_admin_cannot_approve_critical(db, cross_space_pair):
     assert decision.risk_level == RiskLevel.CRITICAL
 
 
-def test_check_policy_owner_can_approve_critical(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_check_policy_owner_can_approve_critical(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = _FakeProposal("memory_update", "critical")
     decision = check_proposal_apply_policy(db, user_id=ua.id, space_id=a, proposal=prop)
     assert decision.decision == Decision.ALLOW
     assert decision.risk_level == RiskLevel.CRITICAL
 
 
-def test_check_policy_member_returns_require_approval(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
+def test_check_policy_member_returns_require_approval(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
     member_id = _make_space_user(db, a, "member")
     prop = _FakeProposal("memory_create", None)
     decision = check_proposal_apply_policy(db, user_id=member_id, space_id=a, proposal=prop)
@@ -140,8 +140,8 @@ def test_check_policy_member_returns_require_approval(db, cross_space_pair):
     assert decision.audit_code == "insufficient_role"
 
 
-def test_check_policy_no_membership_returns_require_approval(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
+def test_check_policy_no_membership_returns_require_approval(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
     outsider_id = _uid()
     prop = _FakeProposal("memory_create", None)
     decision = check_proposal_apply_policy(db, user_id=outsider_id, space_id=a, proposal=prop)
@@ -149,17 +149,17 @@ def test_check_policy_no_membership_returns_require_approval(db, cross_space_pai
     assert decision.audit_code == "no_membership"
 
 
-def test_check_policy_invalid_risk_raises_before_role_check(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_check_policy_invalid_risk_raises_before_role_check(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = _FakeProposal("memory_create", "forbidden")
     with pytest.raises(ProposalRiskLevelError):
         check_proposal_apply_policy(db, user_id=ua.id, space_id=a, proposal=prop)
 
 
-def test_check_policy_decision_metadata_json_present(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_check_policy_decision_metadata_json_present(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = _FakeProposal("policy_change", "high")
     decision = check_proposal_apply_policy(db, user_id=ua.id, space_id=a, proposal=prop)
     assert decision.metadata_json is not None
@@ -172,9 +172,9 @@ def test_check_policy_decision_metadata_json_present(db, cross_space_pair):
     assert meta["supported_apply_type"] is True
 
 
-def test_check_policy_metadata_supported_apply_type_true_for_known_types(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_check_policy_metadata_supported_apply_type_true_for_known_types(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     for proposal_type in ["memory_create", "memory_update", "memory_archive", "follow_up_task",
                           "code_patch", "policy_change", "egress_review"]:
         prop = _FakeProposal(proposal_type, None)
@@ -184,10 +184,10 @@ def test_check_policy_metadata_supported_apply_type_true_for_known_types(db, cro
         )
 
 
-def test_check_policy_unsupported_type_returns_deny(db, cross_space_pair):
+def test_check_policy_unsupported_type_returns_deny(db, cross_space_pair_db):
     """Unsupported proposal types are denied at the policy gate before any role check."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = _FakeProposal("workspace_profile_update", None)
     decision = check_proposal_apply_policy(db, user_id=ua.id, space_id=a, proposal=prop)
     assert decision.decision == Decision.DENY
@@ -197,10 +197,10 @@ def test_check_policy_unsupported_type_returns_deny(db, cross_space_pair):
     assert decision.metadata_json["supported_apply_type"] is False
 
 
-def test_check_policy_unsupported_type_denied_even_for_owner(db, cross_space_pair):
+def test_check_policy_unsupported_type_denied_even_for_owner(db, cross_space_pair_db):
     """Owner role does not bypass the unsupported-type gate."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = _FakeProposal("publish_content", None)
     decision = check_proposal_apply_policy(db, user_id=ua.id, space_id=a, proposal=prop)
     assert decision.decision == Decision.DENY
@@ -211,11 +211,11 @@ def test_check_policy_unsupported_type_denied_even_for_owner(db, cross_space_pai
 # Stable machine-readable fields: reason_code, policy_rule_id, actor_type
 # ---------------------------------------------------------------------------
 
-def test_check_policy_all_decisions_carry_reason_code_actor_type(db, cross_space_pair):
+def test_check_policy_all_decisions_carry_reason_code_actor_type(db, cross_space_pair_db):
     """Every decision returned by check_proposal_apply_policy must carry reason_code,
     policy_rule_id, and actor_type='user'."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     outsider_id = _uid()
     admin_id = _make_space_user(db, a, "admin")
     reviewer_id = _make_space_user(db, a, "reviewer")
@@ -250,13 +250,14 @@ def test_check_policy_all_decisions_carry_reason_code_actor_type(db, cross_space
 # ProposalService.accept effective risk integration
 # ---------------------------------------------------------------------------
 
-def test_accept_with_critical_risk_level_denied_for_admin(db, cross_space_pair):
+def test_accept_with_critical_risk_level_denied_for_admin(db, cross_space_pair_db):
     """memory_update with risk_level=critical cannot be accepted by admin."""
-    from app.memory.proposals import ProposalPolicyDeniedError, ProposalService
+    from app.memory.proposals import ProposalService
+    from app.policy.exceptions import PolicyGateBlocked
     from tests.support.factories import create_test_memory_entry, create_test_proposal
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     admin_id = _make_space_user(db, a, "admin")
 
     target = create_test_memory_entry(
@@ -275,22 +276,22 @@ def test_accept_with_critical_risk_level_denied_for_admin(db, cross_space_pair):
     prop.risk_level = "critical"
     db.flush()
 
-    with pytest.raises(ProposalPolicyDeniedError) as exc_info:
+    with pytest.raises(PolicyGateBlocked) as exc_info:
         ProposalService(db).accept(prop.id, space_id=a, user_id=admin_id)
 
-    assert exc_info.value.risk_level == "critical"
-    assert exc_info.value.proposal_type == "memory_update"
+    assert exc_info.value.decision.risk_level.value == "critical"
+    assert exc_info.value.decision.proposal_type == "memory_update"
     db.refresh(prop)
     assert prop.status == "pending"
 
 
-def test_accept_with_critical_risk_level_allowed_for_owner(db, cross_space_pair):
+def test_accept_with_critical_risk_level_allowed_for_owner(db, cross_space_pair_db):
     """Owner can accept critical-risk proposal."""
     from app.memory.proposals import ProposalService
     from tests.support.factories import create_test_memory_entry, create_test_proposal
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     target = create_test_memory_entry(
         db, space_id=a, content="old", scope_type="agent", namespace="ns.critowner",
@@ -306,7 +307,7 @@ def test_accept_with_critical_risk_level_allowed_for_owner(db, cross_space_pair)
         commit=False,
     )
     prop.risk_level = "critical"
-    db.flush()
+    db.commit()
 
     result = ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
     assert result is not None
@@ -314,13 +315,14 @@ def test_accept_with_critical_risk_level_allowed_for_owner(db, cross_space_pair)
     assert prop.status == "accepted"
 
 
-def test_denied_proposal_error_carries_full_fields(db, cross_space_pair):
-    """ProposalPolicyDeniedError carries proposal_id, decision, reason, audit_code."""
-    from app.memory.proposals import ProposalPolicyDeniedError, ProposalService
+def test_denied_proposal_error_carries_full_fields(db, cross_space_pair_db):
+    """PolicyGateBlocked carries proposal context and decision fields."""
+    from app.memory.proposals import ProposalService
+    from app.policy.exceptions import PolicyGateBlocked
     from tests.support.factories import create_test_proposal
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     member_id = _make_space_user(db, a, "member")
 
     prop = create_test_proposal(
@@ -328,16 +330,16 @@ def test_denied_proposal_error_carries_full_fields(db, cross_space_pair):
         proposal_type="memory_create", commit=True,
     )
 
-    with pytest.raises(ProposalPolicyDeniedError) as exc_info:
+    with pytest.raises(PolicyGateBlocked) as exc_info:
         ProposalService(db).accept(prop.id, space_id=a, user_id=member_id)
 
     err = exc_info.value
     assert err.proposal_id == prop.id
-    assert err.proposal_type == "memory_create"
-    assert err.risk_level == "medium"
-    assert err.decision == "require_approval"
-    assert err.audit_code == "insufficient_role"
-    assert err.message
+    assert err.decision.proposal_type == "memory_create"
+    assert err.decision.risk_level.value == "medium"
+    assert err.decision.decision.value == "require_approval"
+    assert err.decision.audit_code == "insufficient_role"
+    assert err.decision.message
 
 
 # ---------------------------------------------------------------------------
@@ -359,8 +361,8 @@ def test_invalid_risk_level_raises_in_check_policy_before_any_side_effect():
 # Reviewer role — approves low and medium risk, not high or critical
 # ---------------------------------------------------------------------------
 
-def test_check_policy_reviewer_can_approve_medium_risk_memory(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
+def test_check_policy_reviewer_can_approve_medium_risk_memory(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
     reviewer_id = _make_space_user(db, a, "reviewer")
     prop = _FakeProposal("memory_create", None)  # default risk=medium
     decision = check_proposal_apply_policy(db, user_id=reviewer_id, space_id=a, proposal=prop)
@@ -369,8 +371,8 @@ def test_check_policy_reviewer_can_approve_medium_risk_memory(db, cross_space_pa
     assert decision.risk_level == RiskLevel.MEDIUM
 
 
-def test_check_policy_reviewer_can_approve_low_risk(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
+def test_check_policy_reviewer_can_approve_low_risk(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
     reviewer_id = _make_space_user(db, a, "reviewer")
     prop = _FakeProposal("memory_create", "low")  # declared low, type default medium → stays medium
     # effective risk is max(medium, low) = medium → reviewer can approve
@@ -379,8 +381,8 @@ def test_check_policy_reviewer_can_approve_low_risk(db, cross_space_pair):
     assert decision.audit_code == "approved_reviewer"
 
 
-def test_check_policy_reviewer_cannot_approve_high_risk_code_patch(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
+def test_check_policy_reviewer_cannot_approve_high_risk_code_patch(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
     reviewer_id = _make_space_user(db, a, "reviewer")
     prop = _FakeProposal("code_patch", None)  # default risk=high
     decision = check_proposal_apply_policy(db, user_id=reviewer_id, space_id=a, proposal=prop)
@@ -389,8 +391,8 @@ def test_check_policy_reviewer_cannot_approve_high_risk_code_patch(db, cross_spa
     assert decision.risk_level == RiskLevel.HIGH
 
 
-def test_check_policy_reviewer_cannot_approve_critical(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
+def test_check_policy_reviewer_cannot_approve_critical(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
     reviewer_id = _make_space_user(db, a, "reviewer")
     prop = _FakeProposal("memory_update", "critical")
     decision = check_proposal_apply_policy(db, user_id=reviewer_id, space_id=a, proposal=prop)

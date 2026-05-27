@@ -113,14 +113,14 @@ class CliRuntimeAdapter(BaseRuntimeAdapter):
         }
 
         # Resolve credential grant via CredentialBroker.
-        # Returns None if no profile is configured — adapter falls back to
-        # whatever CLI auth state exists in the execution environment.
+        # Returns None if no explicit profile is configured. CLI execution is
+        # denied below instead of falling back to ambient container credentials.
         credential_grant = None
         try:
             credential_grant = self._resolve_credential_grant(ctx)
         except Exception:
             log.warning(
-                "CredentialBroker.grant_for_run failed run=%s adapter=%s; proceeding without grant",
+                "CredentialBroker.grant_for_run failed run=%s adapter=%s; denying CLI run without grant",
                 ctx.run_id,
                 self.adapter_type,
                 exc_info=True,
@@ -130,7 +130,7 @@ class CliRuntimeAdapter(BaseRuntimeAdapter):
             cred_meta["fallback_reason"] = "broker_error"
 
         if credential_grant is None:
-            cred_meta["credential_source"] = "container_default"
+            cred_meta["credential_source"] = "none"
             cred_meta["fallback_used"] = True
             if cred_meta["fallback_reason"] is None:
                 cred_meta["fallback_reason"] = "no_profile_configured"
@@ -143,21 +143,21 @@ class CliRuntimeAdapter(BaseRuntimeAdapter):
             if cred_meta["temp_home_created"]:
                 cred_meta["cleanup_status"] = "pending"
 
-        # Automation-origin runs must use an explicit credential profile.
-        # Container-default fallback is not allowed for unattended execution —
-        # it could silently pick up stale or shared auth state.
+        # CLI runs must use an explicit credential profile.
+        # Container-default fallback is not allowed — it could silently pick up
+        # stale or shared auth state.
         # broker_error and no_profile_configured are exposed separately in
         # failure metadata so callers can distinguish configuration problems
         # from runtime broker failures.
-        if ctx.trigger_origin == "automation" and credential_grant is None:
+        if credential_grant is None:
             failure_reason = cred_meta["fallback_reason"] or "no_profile_configured"
-            self._record_credential_audit(ctx, cred_meta, action="automation_denied")
+            self._record_credential_audit(ctx, cred_meta, action="grant_denied")
             return _fail(
                 "runtime_credential_profile_required",
                 (
-                    "Automation-origin CLI runs require an explicit credential profile. "
+                    "CLI runs require an explicit credential profile. "
                     f"No credential profile is configured for adapter_type='{self.adapter_type}'. "
-                    "Configure a CredentialBroker profile before scheduling automation runs."
+                    "Configure a CredentialBroker profile before running this adapter."
                 ),
                 started=started,
                 adapter_type=self.adapter_type,
@@ -166,6 +166,10 @@ class CliRuntimeAdapter(BaseRuntimeAdapter):
                     "no_profile_configured": not cred_meta["broker_error"],
                     "failure_reason": failure_reason,
                     "credential_checked": True,
+                    "credential_broker_used": True,
+                    "credential_source": cred_meta["credential_source"],
+                    "fallback_used": cred_meta["fallback_used"],
+                    "fallback_reason": cred_meta["fallback_reason"],
                     "trigger_origin": ctx.trigger_origin,
                 },
             )

@@ -230,7 +230,7 @@ class ContextSnapshotPopulator:
         # Does not log memory content; safe metadata only.
         # Decision inputs go in context; audit-only identifiers stay in metadata_json.
         from ..policy.gateway import PolicyGateway, PolicyCheckRequest
-        _inject_decision = PolicyGateway(self.db).check_and_record(
+        PolicyGateway(self.db).enforce(
             PolicyCheckRequest(
                 action="context.inject_memory",
                 actor_type="run",
@@ -252,18 +252,6 @@ class ContextSnapshotPopulator:
                 },
             )
         )
-        if _inject_decision.denied:
-            raise RuntimeError(
-                f"context.inject_memory denied by policy for run {run.id}: "
-                f"{_inject_decision.message} "
-                f"[error_code=policy_denied_context_inject_memory]"
-            )
-        if _inject_decision.requires_approval:
-            raise RuntimeError(
-                f"context.inject_memory requires approval for run {run.id}: "
-                f"{_inject_decision.message} "
-                f"[error_code=policy_requires_approval_context_inject_memory]"
-            )
 
         builder = ContextBuilder(self.db)
         pkg = builder.build(

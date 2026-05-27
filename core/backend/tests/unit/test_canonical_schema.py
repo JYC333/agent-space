@@ -101,6 +101,12 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
     assert "provider_configs" not in inspector.get_table_names()
     assert "cli_adapter_configs" not in inspector.get_table_names()
 
+    user_columns = {column["name"] for column in inspector.get_columns("users")}
+    assert {"space_id", "default_space_id", "role"}.isdisjoint(user_columns)
+
+    agent_version_columns = {column["name"] for column in inspector.get_columns("agent_versions")}
+    assert {"source_proposal_id", "source_activity_id"}.issubset(agent_version_columns)
+
     run_column_defs = {column["name"]: column for column in inspector.get_columns("runs")}
     run_columns = set(run_column_defs)
     assert {
@@ -208,7 +214,7 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
     db = Session()
     try:
         space = models.Space(id="space-1", name="Personal")
-        user = models.User(id="user-1", space_id=space.id, email="u@example.com", display_name="User")
+        user = models.User(id="user-1", email="u@example.com", display_name="User")
         credential = models.Credential(
             id="cred-1",
             space_id=space.id,
@@ -418,10 +424,11 @@ def test_key_canonical_foreign_keys_exist(canonical_engine):
     assert ("current_version_id", "agent_versions", "id") not in _foreign_keys(inspector, "agents")
     # Intentionally service-enforced to avoid Space/User bootstrap ordering cycles.
     assert ("created_by_user_id", "users", "id") not in _foreign_keys(inspector, "spaces")
-    assert ("default_space_id", "spaces", "id") not in _foreign_keys(inspector, "users")
     assert ("invited_by_user_id", "users", "id") not in _foreign_keys(inspector, "space_invitations")
 
     assert ("agent_id", "agents", "id") in _foreign_keys(inspector, "agent_versions")
+    assert ("source_proposal_id", "proposals", "id") not in _foreign_keys(inspector, "agent_versions")
+    assert ("source_activity_id", "activity_records", "id") not in _foreign_keys(inspector, "agent_versions")
     assert ("task_id", "tasks", "id") not in _foreign_keys(inspector, "runs")
     assert ("source_task_id", "tasks", "id") not in _foreign_keys(inspector, "activity_records")
     assert ("agent_version_id", "agent_versions", "id") in _foreign_keys(inspector, "runs")
@@ -1346,7 +1353,7 @@ def test_control_plane_orm_relationships_navigate_correctly(canonical_conn):
     db = Session()
     try:
         space = models.Space(id="cp-space-1", name="CP Space")
-        user = models.User(id="cp-user-1", space_id=space.id, email="cp@example.com", display_name="CP User")
+        user = models.User(id="cp-user-1", email="cp@example.com", display_name="CP User")
         db.add_all([space, user])
         db.commit()
 
@@ -1461,7 +1468,7 @@ def test_on_space_created_seeds_execution_planes(canonical_conn):
     db = Session()
     try:
         space = models.Space(id="hook-space-1", name="Hook Space")
-        user = models.User(id="hook-user-1", space_id=space.id, email="hook@example.com", display_name="Hook User")
+        user = models.User(id="hook-user-1", email="hook@example.com", display_name="Hook User")
         db.add_all([space, user])
         db.commit()
 

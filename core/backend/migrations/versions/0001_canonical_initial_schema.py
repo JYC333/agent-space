@@ -135,25 +135,16 @@ def upgrade() -> None:
     op.create_index(op.f('ix_space_invitations_status'), 'space_invitations', ['status'], unique=False)
     op.create_table('users',
     sa.Column('id', sa.String(length=36), nullable=False),
-    sa.Column('space_id', sa.String(length=36), nullable=True),
     sa.Column('email', sa.String(length=256), nullable=True),
     sa.Column('display_name', sa.String(length=256), nullable=False),
     sa.Column('avatar_url', sa.Text(), nullable=True),
-    sa.Column('role', sa.String(length=32), nullable=False),
     sa.Column('status', sa.String(length=32), nullable=False),
-    sa.Column('default_space_id', sa.String(length=36), nullable=True),
     sa.Column('last_login_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.CheckConstraint(
-        "role in ('owner', 'admin', 'reviewer', 'member', 'guest')",
-        name='ck_users_role',
-    ),
-    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
-    op.create_index(op.f('ix_users_space_id'), 'users', ['space_id'], unique=False)
     op.create_index(op.f('ix_users_status'), 'users', ['status'], unique=False)
     op.create_table('agents',
     sa.Column('id', sa.String(length=36), nullable=False),
@@ -450,6 +441,8 @@ def upgrade() -> None:
     sa.Column('capabilities_json', sa.JSON(), nullable=False),
     sa.Column('tool_permissions_json', sa.JSON(), nullable=False),
     sa.Column('runtime_policy_json', sa.JSON(), nullable=False),
+    sa.Column('source_proposal_id', sa.String(length=36), nullable=True),
+    sa.Column('source_activity_id', sa.String(length=36), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('published_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('archived_at', sa.DateTime(timezone=True), nullable=True),
@@ -463,6 +456,8 @@ def upgrade() -> None:
     op.create_index(op.f('ix_agent_versions_agent_id'), 'agent_versions', ['agent_id'], unique=False)
     op.create_index(op.f('ix_agent_versions_model_provider_id'), 'agent_versions', ['model_provider_id'], unique=False)
     op.create_index(op.f('ix_agent_versions_runtime_adapter_id'), 'agent_versions', ['runtime_adapter_id'], unique=False)
+    op.create_index(op.f('ix_agent_versions_source_activity_id'), 'agent_versions', ['source_activity_id'], unique=False)
+    op.create_index(op.f('ix_agent_versions_source_proposal_id'), 'agent_versions', ['source_proposal_id'], unique=False)
     op.create_index(op.f('ix_agent_versions_space_id'), 'agent_versions', ['space_id'], unique=False)
     op.create_table('job_events',
     sa.Column('id', sa.String(length=36), nullable=False),
@@ -1830,11 +1825,67 @@ def upgrade() -> None:
     op.create_index('ix_policy_decision_records_run_created', 'policy_decision_records', ['run_id', 'created_at'], unique=False)
     op.create_index('ix_policy_decision_records_proposal_created', 'policy_decision_records', ['proposal_id', 'created_at'], unique=False)
     op.create_index('ix_policy_decision_records_audit_created', 'policy_decision_records', ['audit_code', 'created_at'], unique=False)
+
+    op.create_table('automations',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('space_id', sa.String(length=36), nullable=False),
+        sa.Column('owner_user_id', sa.String(length=36), nullable=False),
+        sa.Column('agent_id', sa.String(length=36), nullable=False),
+        sa.Column('workspace_id', sa.String(length=36), nullable=True),
+        sa.Column('name', sa.String(length=256), nullable=False),
+        sa.Column('description', sa.Text(), nullable=True),
+        sa.Column('trigger_type', sa.String(length=64), nullable=False, server_default='manual'),
+        sa.Column('status', sa.String(length=32), nullable=False, server_default='active'),
+        sa.Column('preflight_snapshot_json', sa.JSON(), nullable=True),
+        sa.Column('config_json', sa.JSON(), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint("trigger_type in ('manual')", name='ck_automations_trigger_type'),
+        sa.CheckConstraint("status in ('active', 'paused', 'archived')", name='ck_automations_status'),
+        sa.ForeignKeyConstraint(['agent_id'], ['agents.id']),
+        sa.ForeignKeyConstraint(['owner_user_id'], ['users.id']),
+        sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
+        sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id']),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index(op.f('ix_automations_space_id'), 'automations', ['space_id'], unique=False)
+    op.create_index(op.f('ix_automations_owner_user_id'), 'automations', ['owner_user_id'], unique=False)
+    op.create_index(op.f('ix_automations_agent_id'), 'automations', ['agent_id'], unique=False)
+    op.create_index(op.f('ix_automations_workspace_id'), 'automations', ['workspace_id'], unique=False)
+    op.create_index(op.f('ix_automations_status'), 'automations', ['status'], unique=False)
+
+    op.create_table('automation_runs',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('automation_id', sa.String(length=36), nullable=False),
+        sa.Column('run_id', sa.String(length=36), nullable=False),
+        sa.Column('triggered_by_user_id', sa.String(length=36), nullable=True),
+        sa.Column('trigger_type', sa.String(length=64), nullable=False, server_default='manual'),
+        sa.Column('preflight_snapshot_json', sa.JSON(), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(['automation_id'], ['automations.id']),
+        sa.ForeignKeyConstraint(['triggered_by_user_id'], ['users.id']),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index(op.f('ix_automation_runs_automation_id'), 'automation_runs', ['automation_id'], unique=False)
+    op.create_index(op.f('ix_automation_runs_run_id'), 'automation_runs', ['run_id'], unique=False)
+    op.create_index(op.f('ix_automation_runs_triggered_by_user_id'), 'automation_runs', ['triggered_by_user_id'], unique=False)
+    op.create_index('ix_automation_runs_automation_created', 'automation_runs', ['automation_id', 'created_at'], unique=False)
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_index('ix_automation_runs_automation_created', table_name='automation_runs')
+    op.drop_index(op.f('ix_automation_runs_triggered_by_user_id'), table_name='automation_runs')
+    op.drop_index(op.f('ix_automation_runs_run_id'), table_name='automation_runs')
+    op.drop_index(op.f('ix_automation_runs_automation_id'), table_name='automation_runs')
+    op.drop_table('automation_runs')
+    op.drop_index(op.f('ix_automations_status'), table_name='automations')
+    op.drop_index(op.f('ix_automations_workspace_id'), table_name='automations')
+    op.drop_index(op.f('ix_automations_agent_id'), table_name='automations')
+    op.drop_index(op.f('ix_automations_owner_user_id'), table_name='automations')
+    op.drop_index(op.f('ix_automations_space_id'), table_name='automations')
+    op.drop_table('automations')
     op.drop_index('ix_policy_decision_records_audit_created', table_name='policy_decision_records')
     op.drop_index('ix_policy_decision_records_proposal_created', table_name='policy_decision_records')
     op.drop_index('ix_policy_decision_records_run_created', table_name='policy_decision_records')
@@ -2120,6 +2171,8 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_job_events_job_id'), table_name='job_events')
     op.drop_table('job_events')
     op.drop_index(op.f('ix_agent_versions_space_id'), table_name='agent_versions')
+    op.drop_index(op.f('ix_agent_versions_source_proposal_id'), table_name='agent_versions')
+    op.drop_index(op.f('ix_agent_versions_source_activity_id'), table_name='agent_versions')
     op.drop_index(op.f('ix_agent_versions_runtime_adapter_id'), table_name='agent_versions')
     op.drop_index(op.f('ix_agent_versions_model_provider_id'), table_name='agent_versions')
     op.drop_index(op.f('ix_agent_versions_agent_id'), table_name='agent_versions')
@@ -2166,7 +2219,6 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_agents_current_version_id'), table_name='agents')
     op.drop_table('agents')
     op.drop_index(op.f('ix_users_status'), table_name='users')
-    op.drop_index(op.f('ix_users_space_id'), table_name='users')
     op.drop_index(op.f('ix_users_email'), table_name='users')
     op.drop_table('users')
     op.drop_index(op.f('ix_space_invitations_status'), table_name='space_invitations')

@@ -14,9 +14,9 @@ from app.models import Proposal, ProvenanceLink
 from tests.support import factories
 
 
-def test_semantic_memory_create_without_provenance_rejects(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_semantic_memory_create_without_provenance_rejects(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     now = datetime.now(UTC)
     prop = Proposal(
         id=str(ULID()),
@@ -49,9 +49,9 @@ def test_semantic_memory_create_without_provenance_rejects(db, cross_space_pair)
     assert ei.value.status_code == 422
 
 
-def test_policy_change_without_trusted_provenance_rejects(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_policy_change_without_trusted_provenance_rejects(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -60,8 +60,8 @@ def test_policy_change_without_trusted_provenance_rejects(db, cross_space_pair):
         title="p",
         payload_json={
             "operation": "create",
-            "domain": "memory",
-            "rule_json": {"effect": "allow"},
+            "domain": "memory.private_placement",
+            "rule_json": {"effect": "allow_with_log"},
             "provenance_entries": [
                 {
                     "source_type": "external_source",
@@ -76,9 +76,9 @@ def test_policy_change_without_trusted_provenance_rejects(db, cross_space_pair):
         ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
 
 
-def test_agent_inferred_only_semantic_rejects(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_agent_inferred_only_semantic_rejects(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -105,9 +105,9 @@ def test_agent_inferred_only_semantic_rejects(db, cross_space_pair):
         ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
 
 
-def test_untrusted_external_only_requires_explicit_accept(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_untrusted_external_only_requires_explicit_accept(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -139,9 +139,9 @@ def test_untrusted_external_only_requires_explicit_accept(db, cross_space_pair):
     assert sm.get("action") == "require_review"
 
 
-def test_direct_apply_rejects_untrusted_without_explicit_context(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_direct_apply_rejects_untrusted_without_explicit_context(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -168,9 +168,9 @@ def test_direct_apply_rejects_untrusted_without_explicit_context(db, cross_space
         ProposalApplyService(db).apply(prop, user_id=ua.id, accept_context="direct_apply")
 
 
-def test_internal_seed_bypasses_monitoring(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_internal_seed_bypasses_monitoring(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     now = datetime.now(UTC)
     prop = Proposal(
         id=str(ULID()),
@@ -181,8 +181,8 @@ def test_internal_seed_bypasses_monitoring(db, cross_space_pair):
         summary=None,
         payload_json={
             "operation": "create",
-            "domain": "memory",
-            "rule_json": {"effect": "allow"},
+            "domain": "memory.private_placement",
+            "rule_json": {"effect": "allow_with_log"},
         },
         rationale="seed",
         created_by_user_id=ua.id,
@@ -197,9 +197,9 @@ def test_internal_seed_bypasses_monitoring(db, cross_space_pair):
     assert res.policy is not None
 
 
-def test_trusted_external_preserves_identity_on_memory(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_trusted_external_preserves_identity_on_memory(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,

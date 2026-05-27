@@ -164,8 +164,8 @@ def test_memory_private_placement_domain_registered():
     assert DOMAIN_REGISTRY[MEMORY_PRIVATE_PLACEMENT].status == "enforced"
 
 
-def test_enforcement_helper_recognizes_private_placement_domain(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
+def test_enforcement_helper_recognizes_private_placement_domain(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
     decision = get_active_policy_decision(db, space_id=a, domain=MEMORY_PRIVATE_PLACEMENT)
     assert decision == ActivePolicyDecision.NO_POLICY
 
@@ -253,8 +253,8 @@ def test_run_user_private_scope_domain_registered():
     assert DOMAIN_REGISTRY[RUN_USER_PRIVATE_SCOPE].status == "enforced"
 
 
-def test_enforcement_helper_recognizes_user_private_scope_domain(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
+def test_enforcement_helper_recognizes_user_private_scope_domain(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
     decision = get_active_policy_decision(db, space_id=a, domain=RUN_USER_PRIVATE_SCOPE)
     assert decision == ActivePolicyDecision.NO_POLICY
 

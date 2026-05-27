@@ -48,6 +48,16 @@ def _init_git_repo(path: Path, filename: str = "hello.txt", content: str = "hi")
     )
 
 
+def _patch_success_adapter_without_artifact(monkeypatch) -> None:
+    """Execute successfully without entering unrelated runtime artifact persistence."""
+    from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRuntimeConfig
+
+    monkeypatch.setattr(
+        "app.runs.execution.instantiate_runtime_adapter",
+        lambda _adapter_type: ConfigurableFakeRuntimeAdapter(FakeRuntimeConfig(output_text="")),
+    )
+
+
 # ===========================================================================
 # Heartbeat prevents stale job reclaim
 # ===========================================================================
@@ -306,6 +316,34 @@ class TestExecutionLock:
         svc.release(run.id)
         db.commit()
 
+    def test_acquire_does_not_commit_pending_run_mutation(self, db):
+        from sqlalchemy.orm import sessionmaker
+
+        from app.models import Run
+        from app.runs.execution_lock import RunExecutionLockService
+        from tests.support import factories
+
+        space_id = "test-lock-no-business-commit"
+        factories.create_test_space(db, space_id=space_id, commit=True)
+        user = factories.create_test_user(db, space_id=space_id, commit=True)
+        agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
+        run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
+
+        run.status = "failed"  # pending in the caller session; do not flush
+        svc = RunExecutionLockService(db)
+        assert svc.try_acquire(run.id, worker_id="worker-no-commit") is True
+
+        FreshSession = sessionmaker(bind=db.bind)
+        fresh = FreshSession()
+        try:
+            persisted = fresh.query(Run).filter(Run.id == run.id).first()
+            assert persisted.status == "queued"
+        finally:
+            fresh.close()
+
+        db.rollback()
+        svc.release(run.id)
+
     def test_second_acquire_same_run_id_fails(self, db):
         """A second acquire on the same run_id while the first is held must return False."""
         from app.runs.execution_lock import RunExecutionLockService
@@ -363,6 +401,40 @@ class TestExecutionLock:
         assert acquired is True
         svc.release(run.id)
         db.commit()
+
+    def test_release_does_not_commit_pending_run_mutation(self, db):
+        from sqlalchemy.orm import sessionmaker
+
+        from app.models import Run, RunExecutionLock
+        from app.runs.execution_lock import RunExecutionLockService
+        from tests.support import factories
+
+        space_id = "test-lock-release-no-business-commit"
+        factories.create_test_space(db, space_id=space_id, commit=True)
+        user = factories.create_test_user(db, space_id=space_id, commit=True)
+        agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
+        run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
+
+        svc = RunExecutionLockService(db)
+        assert svc.try_acquire(run.id, worker_id="worker-release-no-commit") is True
+
+        run.status = "failed"  # pending in caller session; release must not persist it
+        svc.release(run.id)
+        db.rollback()
+
+        FreshSession = sessionmaker(bind=db.bind)
+        fresh = FreshSession()
+        try:
+            persisted = fresh.query(Run).filter(Run.id == run.id).first()
+            assert persisted.status == "queued"
+            assert (
+                fresh.query(RunExecutionLock)
+                .filter(RunExecutionLock.run_id == run.id)
+                .first()
+                is None
+            )
+        finally:
+            fresh.close()
 
     def test_release_is_idempotent(self, db):
         """Releasing a lock that doesn't exist is a no-op (no exception)."""
@@ -422,12 +494,13 @@ class TestExecutionLock:
         lock_svc.release(run.id)
         db.commit()
 
-    def test_lock_released_after_successful_run(self, db):
+    def test_lock_released_after_successful_run(self, db, monkeypatch):
         """After execute_run succeeds the lock row must be gone from the DB."""
         from app.runs.execution import RunExecutionService
         from app.models import AgentVersion, Run
         from app.models import RunExecutionLock
 
+        _patch_success_adapter_without_artifact(monkeypatch)
         space_id = "test-lock-cleanup-ok"
         factories.create_test_space(db, space_id=space_id, commit=True)
         user = factories.create_test_user(db, space_id=space_id, commit=True)
@@ -533,6 +606,7 @@ class TestNonUtf8FilesSkipped:
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=False)
         run.workspace_id = ws.id
         db.flush()
+        db.commit()
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -619,10 +693,11 @@ class TestDurableLockRelease:
     see no run_execution_locks row.  This proves the DELETE is committed durably,
     not just flushed in-session."""
 
-    def test_lock_absent_in_fresh_session_after_success(self, db):
+    def test_lock_absent_in_fresh_session_after_success(self, db, monkeypatch):
         from app.models import AgentVersion, RunExecutionLock
         from app.runs.execution import RunExecutionService
 
+        _patch_success_adapter_without_artifact(monkeypatch)
         space_id = "test-durable-lock-ok"
         factories.create_test_space(db, space_id=space_id, commit=True)
         user = factories.create_test_user(db, space_id=space_id, commit=True)

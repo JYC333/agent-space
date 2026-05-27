@@ -8,9 +8,17 @@ from app.runs.steps import list_run_steps
 from tests.support import factories
 
 
-def test_factory_run_has_context_snapshot(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def _stub_durable_policy_audit(monkeypatch) -> None:
+    """Keep SQLite execution tests focused on run artifacts, not independent audit I/O."""
+    monkeypatch.setattr(
+        "app.policy.audit.DurablePolicyAuditWriter.write",
+        lambda _writer, _envelope: "stub-policy-audit",
+    )
+
+
+def test_factory_run_has_context_snapshot(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, commit=False)
     db.flush()
     assert run.context_snapshot_id is not None
@@ -19,12 +27,13 @@ def test_factory_run_has_context_snapshot(db, cross_space_pair):
 
 
 def test_successful_execution_writes_run_steps_and_artifact(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
     from app.config import settings
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    _stub_durable_policy_audit(monkeypatch)
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     art_root = tmp_path / "artifacts"
     art_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(settings, "artifact_storage_root", str(art_root))
@@ -35,6 +44,7 @@ def test_successful_execution_writes_run_steps_and_artifact(
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "hello-echo"
     db.flush()
+    db.commit()
 
     RunExecutionService(db).execute_run(run.id, space_id=a)
     db.refresh(run)
@@ -58,12 +68,12 @@ def test_successful_execution_writes_run_steps_and_artifact(
 
 
 def test_failed_adapter_execution_writes_run_steps_with_failed_step(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
     from app.config import settings
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
     monkeypatch.setattr(settings, "workspace_root", str(tmp_path / "workspaces"))
     monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
@@ -73,6 +83,7 @@ def test_failed_adapter_execution_writes_run_steps_with_failed_step(
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "x"
     db.flush()
+    db.commit()
 
     RunExecutionService(db).execute_run(run.id, space_id=a, simulate_failure=True)
     db.refresh(run)
@@ -87,7 +98,7 @@ def test_failed_adapter_execution_writes_run_steps_with_failed_step(
 
 
 def test_snapshot_population_failure_blocks_adapter_and_marks_run_failed(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
     """
     Invariant: if ContextSnapshotPopulator raises, the runtime adapter must
@@ -115,12 +126,13 @@ def test_snapshot_population_failure_blocks_adapter_and_marks_run_failed(
         _make_failing_populator("snapshot population failed: db error"),
     )
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "test"
     db.flush()
+    db.commit()
 
     result = RunExecutionService(db).execute_run(run.id, space_id=a)
 
@@ -135,22 +147,24 @@ def test_snapshot_population_failure_blocks_adapter_and_marks_run_failed(
 
 
 def test_executed_run_always_has_auditable_snapshot(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
     """Invariant: every run that reaches succeeded/failed via normal execution has a non-empty snapshot."""
     from app.config import settings
 
+    _stub_durable_policy_audit(monkeypatch)
     (tmp_path / "artifacts").mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
     monkeypatch.setattr(settings, "workspace_root", str(tmp_path / "workspaces"))
     monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.prompt = "audit check"
     db.flush()
+    db.commit()
 
     RunExecutionService(db).execute_run(run.id, space_id=a)
     db.expire_all()

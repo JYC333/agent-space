@@ -41,7 +41,7 @@ def _patch_echo(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "workspace_root", str(tmp_path / "workspaces"))
     monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
 
-    fake = ConfigurableFakeRuntimeAdapter(FakeRuntimeConfig(output_text="ok"))
+    fake = ConfigurableFakeRuntimeAdapter(FakeRuntimeConfig(output_text=""))
     monkeypatch.setattr("app.runs.execution.instantiate_runtime_adapter", lambda _t: fake)
 
 
@@ -51,10 +51,10 @@ def _patch_echo(monkeypatch, tmp_path):
 
 
 def test_context_snapshot_populated_before_execution_completes(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _patch_echo(monkeypatch, tmp_path)
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
@@ -86,10 +86,10 @@ def test_context_snapshot_populated_before_execution_completes(
 
 
 def test_injected_memory_traced_in_snapshot_and_access_log(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _patch_echo(monkeypatch, tmp_path)
 
     # Space-shared memory visible to ua
@@ -145,10 +145,10 @@ def test_injected_memory_traced_in_snapshot_and_access_log(
 
 
 def test_archived_memory_not_in_snapshot_source_refs(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     _patch_echo(monkeypatch, tmp_path)
 
     archived = MemoryEntry(
@@ -199,12 +199,12 @@ def test_archived_memory_not_in_snapshot_source_refs(
 
 
 def test_filtered_memory_not_logged_as_accessed(
-    monkeypatch, db, tmp_path, cross_space_pair
+    monkeypatch, db, tmp_path, cross_space_pair_db
 ):
-    a = cross_space_pair["space_a_id"]
-    b = cross_space_pair["space_b_id"]
-    ua = cross_space_pair["user_a"]
-    ub = cross_space_pair["user_b"]
+    a = cross_space_pair_db["space_a_id"]
+    b = cross_space_pair_db["space_b_id"]
+    ua = cross_space_pair_db["user_a"]
+    ub = cross_space_pair_db["user_b"]
     _patch_echo(monkeypatch, tmp_path)
 
     foreign_mem = MemoryEntry(
@@ -240,9 +240,9 @@ def test_filtered_memory_not_logged_as_accessed(
 # ---------------------------------------------------------------------------
 
 
-def test_context_snapshot_populator_populates_all_fields(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_context_snapshot_populator_populates_all_fields(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
@@ -269,13 +269,13 @@ def test_context_snapshot_populator_populates_all_fields(db, cross_space_pair):
     assert snap.compiler_version == "context_digest.v1"
 
 
-def test_context_snapshot_source_refs_includes_session_summary(db, cross_space_pair):
+def test_context_snapshot_source_refs_includes_session_summary(db, cross_space_pair_db):
     """ContextSnapshot.source_refs_json contains source_type=session_summary when session is active."""
     from app.models import AgentVersion, Session as SessionModel, Message, SessionSummary
     from app.sessions.condenser import SessionCondenser
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     session = SessionModel(id=_new_id(), space_id=a, user_id=ua.id, status="active")
     db.add(session)
@@ -305,13 +305,13 @@ def test_context_snapshot_source_refs_includes_session_summary(db, cross_space_p
     assert summary_refs[0]["derived_context"] is True
 
 
-def test_activity_consolidation_still_produces_proposals(db, cross_space_pair):
+def test_activity_consolidation_still_produces_proposals(db, cross_space_pair_db):
     """Activity consolidation pipeline produces proposals independently of context snapshot changes."""
     from app.memory.consolidation.service import ActivityConsolidationService
     from app.models import ActivityRecord, Proposal
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     # Add a consolidatable activity using a valid source_kind value.
     now = datetime.now(UTC)
@@ -343,14 +343,14 @@ def test_activity_consolidation_still_produces_proposals(db, cross_space_pair):
     )
 
 
-def test_proposal_write_governance_enforced(db, cross_space_pair):
+def test_proposal_write_governance_enforced(db, cross_space_pair_db):
     """MemoryStore.create/update/delete are sentinel-guarded; only proposal-approved paths write."""
     from app.memory.store import MemoryStore
     from app.memory.internal_writer import MemoryInternalWriter
     from app.schemas import MemoryCreate
 
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
 
     # MemoryStore.create() without sentinel raises PermissionError.
     with pytest.raises(PermissionError):

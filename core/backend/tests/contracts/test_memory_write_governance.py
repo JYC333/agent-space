@@ -93,10 +93,10 @@ def test_post_memory_proposal_has_correct_payload(api_client, db, cross_space_pa
     assert any(e.get("source_type") == "user_confirmation" for e in entries)
 
 
-def test_accepting_private_memory_proposal_in_team_space_is_rejected(db, cross_space_pair):
+def test_accepting_private_memory_proposal_in_team_space_is_rejected(db, cross_space_pair_db):
     """Proposal apply path enforces private placement — clear error for callers."""
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -144,9 +144,9 @@ def test_accepting_private_memory_proposal_in_personal_space_allowed(db, test_sp
     assert result.memory.visibility == "private"
 
 
-def test_allow_with_log_space_shared_store_write_traces_and_succeeds(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_allow_with_log_space_shared_store_write_traces_and_succeeds(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     factories.create_test_policy(
         db,
         space_id=a,
@@ -184,9 +184,9 @@ def test_deny_policy_rejects_private_placement_in_personal_space(db, test_space,
         )
 
 
-def test_allow_policy_cannot_override_private_placement_in_team_space(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_allow_policy_cannot_override_private_placement_in_team_space(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     factories.create_test_policy(
         db,
         space_id=a,
@@ -200,9 +200,9 @@ def test_allow_policy_cannot_override_private_placement_in_team_space(db, cross_
         check_private_memory_placement(db, space_id=a, visibility="private", acting_user_id=ua.id)
 
 
-def test_accepting_space_shared_proposal_in_team_space_allowed(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_accepting_space_shared_proposal_in_team_space_allowed(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,

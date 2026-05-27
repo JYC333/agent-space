@@ -197,7 +197,7 @@ class TestAdapterConfigSanitization:
 
         monkeypatch.setattr(
             "app.runs.execution.instantiate_runtime_adapter",
-            lambda _t: CapturingFakeAdapter(FakeRuntimeConfig(output_text="ok")),
+            lambda _t: CapturingFakeAdapter(FakeRuntimeConfig(output_text="")),
         )
         db.commit()
 

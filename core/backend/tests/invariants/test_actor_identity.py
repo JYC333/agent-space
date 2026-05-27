@@ -158,7 +158,7 @@ def test_existing_null_user_agent_rows_remain_readable(db, test_space):
 
 
 # ---------------------------------------------------------------------------
-# Policy context compatibility: ActorRef can be passed without changing decisions
+# Policy context stability: ActorRef can be passed without changing decisions
 # ---------------------------------------------------------------------------
 
 def test_policy_context_accepts_actor_ref_without_changing_allow_decision():
@@ -213,13 +213,51 @@ def test_policy_context_actor_ref_field_is_stable_json():
 
 
 # ---------------------------------------------------------------------------
-# Auth: HTTP query/default identity fallback must remain absent
+# Auth: identity fallback must use session membership, never default_user/User.space_id
 # ---------------------------------------------------------------------------
 
 def test_no_default_user_fallback_in_get_identity(client):
     """get_identity must return 401 with no auth — not fall through to default_user."""
     resp = client.get("/api/v1/memory/", headers={})
     assert resp.status_code == 401
+
+
+def test_session_identity_without_space_id_selects_personal_membership(client, db):
+    """Session auth without ?space_id picks the user's active personal space first."""
+    from app.auth.session import SESSION_COOKIE, UserSessionService
+    from app.models import SpaceMembership
+
+    team_space = "identity-team-space"
+    personal_space = "identity-personal-space"
+    factories.create_test_space(db, space_id=team_space, name="Team", space_type="team")
+    factories.create_test_space(db, space_id=personal_space, name="Personal", space_type="personal")
+    user = factories.create_test_user(db, space_id=team_space, display_name="Identity User")
+    db.add(
+        SpaceMembership(
+            id="identity-personal-membership",
+            space_id=personal_space,
+            user_id=user.id,
+            role="owner",
+            status="active",
+        )
+    )
+    factories.create_test_workspace(db, space_id=team_space, created_by_user_id=user.id, name="team ws")
+    personal_ws = factories.create_test_workspace(
+        db,
+        space_id=personal_space,
+        created_by_user_id=user.id,
+        name="personal ws",
+    )
+    _, raw = UserSessionService(db).create(user.id)
+    db.commit()
+    client.cookies.set(SESSION_COOKIE, raw)
+
+    resp = client.get("/api/v1/workspaces")
+
+    assert resp.status_code == 200, resp.text
+    ids = {item["id"] for item in resp.json()["items"]}
+    assert personal_ws.id in ids
+    assert all(item["owner_space_id"] == personal_space for item in resp.json()["items"])
 
 
 # ---------------------------------------------------------------------------

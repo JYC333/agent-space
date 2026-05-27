@@ -14,6 +14,7 @@ Supported proposal types
   code_patch      — delegated back to CodePatchProposalApplier (file writes, not memory)
   egress_review   — metadata-only grant egress review marker
   follow_up_task  — create a Task row from an accepted follow-up task proposal
+  agent_config_update — create a new AgentVersion and advance the Agent pointer
 
 Callers
 -------
@@ -22,12 +23,13 @@ Callers
 """
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from ..models import MemoryEntry, Policy, Proposal, ProvenanceLink, Task
+from ..models import ActivityRecord, AgentVersion, MemoryEntry, Policy, Proposal, ProvenanceLink, Task
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +70,7 @@ class ApplyResult:
     code_patch_transaction: Optional[Any] = None
     egress_review: bool = False
     task: Optional[Task] = None
+    agent_version: Optional[AgentVersion] = None
 
 
 def _validate_grant_egress_approval_or_raise(db: Session, proposal: Proposal) -> None:
@@ -439,8 +442,7 @@ class PolicyProposalApplier:
         from ..policy.roles import get_space_role_normalized
 
         # policy.change is WIRED_VIA_PROPOSAL: enforcement is via proposal.apply gate only.
-        # The role check below is the canonical guard; calling PolicyGateway.check_and_record()
-        # here would fail closed (WIRED_VIA_PROPOSAL denial) and is intentionally removed.
+        # The role check below is the proposal-type authority guard.
         _role = get_space_role_normalized(self._db, user_id=user_id, space_id=proposal.space_id)
         if _role not in ("admin", "owner"):
             raise ProposalApplyError(
@@ -449,6 +451,13 @@ class PolicyProposalApplier:
             )
 
         payload = proposal.payload_json or {}
+        from ..policy.effects import PolicyEffectValidationError, validate_policy_change_payload
+
+        try:
+            normalized_payload = validate_policy_change_payload(payload)
+        except PolicyEffectValidationError as exc:
+            raise ProposalApplyError(str(exc)) from exc
+
         writer = PolicyInternalWriter(self._db)
         superseded_id: Optional[str] = None
 
@@ -458,11 +467,11 @@ class PolicyProposalApplier:
             if old is not None:
                 superseded_id = old.id
 
-        rule_json: Optional[dict] = payload.get("rule_json")
+        rule_json: Optional[dict] = normalized_payload.rule_json
         if rule_json is None and proposal.proposed_content:
             rule_json = {"content": proposal.proposed_content}
 
-        domain = payload.get("domain") or "memory"
+        domain = normalized_payload.domain
         name = proposal.title or "Policy from proposal"
 
         new_policy = writer.create(
@@ -472,10 +481,10 @@ class PolicyProposalApplier:
             policy_key=payload.get("policy_key"),
             policy_version=payload.get("policy_version") or 1,
             status="active",
-            enforcement_mode=payload.get("enforcement_mode"),
+            enforcement_mode=normalized_payload.enforcement_mode,
             priority=payload.get("priority") or 0,
             rule_json=rule_json,
-            applies_to_json=payload.get("applies_to_json"),
+            applies_to_json=normalized_payload.applies_to_json,
             supersedes_policy_id=superseded_id or payload.get("supersedes_policy_id"),
             created_from_proposal_id=proposal.id,
             commit=False,
@@ -716,6 +725,148 @@ class ProposalApplyService:
     def supported_types() -> frozenset[str]:
         return _SUPPORTED_TYPES
 
+    def _apply_agent_config_update(self, proposal: Proposal, *, user_id: str) -> AgentVersion:
+        from ..agents.version_service import AgentVersionService
+        from ..models import Agent, ModelProvider, RuntimeAdapter
+        from ..schemas import AgentVersionCreate, DEFAULT_MEMORY_POLICY, DEFAULT_MODEL_CONFIG, DEFAULT_RUNTIME_POLICY
+
+        payload = proposal.payload_json or {}
+        agent_id = payload.get("agent_id")
+        base_version_id = payload.get("base_version_id")
+        changes = payload.get("changes")
+        if not isinstance(agent_id, str) or not agent_id:
+            raise ProposalApplyError("agent_config_update missing agent_id")
+        if not isinstance(base_version_id, str) or not base_version_id:
+            raise ProposalApplyError("agent_config_update missing base_version_id")
+        if not isinstance(changes, dict) or not changes:
+            raise ProposalApplyError("agent_config_update missing changes")
+
+        agent = (
+            self._db.query(Agent)
+            .filter(Agent.id == agent_id, Agent.space_id == proposal.space_id)
+            .first()
+        )
+        if agent is None:
+            raise ProposalApplyError("agent not found for config proposal")
+        if agent.current_version_id != base_version_id:
+            raise ProposalApplyError("stale agent_config_update proposal: base_version_id is not current")
+
+        base = AgentVersionService(self._db).get_version_for_agent(
+            base_version_id,
+            agent.id,
+            proposal.space_id,
+        )
+
+        version_dict = {
+            "model_provider_id": base.model_provider_id,
+            "model_name": base.model_name,
+            "runtime_adapter_id": base.runtime_adapter_id,
+            "system_prompt": base.system_prompt,
+            "model_config_json": base.model_config_json or dict(DEFAULT_MODEL_CONFIG),
+            "runtime_config_json": base.runtime_config_json or dict(DEFAULT_RUNTIME_POLICY),
+            "context_policy_json": base.context_policy_json or {},
+            "memory_policy_json": base.memory_policy_json or dict(DEFAULT_MEMORY_POLICY),
+            "capabilities_json": base.capabilities_json or [],
+            "tool_permissions_json": base.tool_permissions_json or {},
+            "runtime_policy_json": base.runtime_policy_json or dict(DEFAULT_RUNTIME_POLICY),
+        }
+
+        allowed_fields = set(version_dict)
+        unknown = sorted(set(changes) - allowed_fields)
+        if unknown:
+            raise ProposalApplyError(f"agent_config_update contains unsupported field(s): {', '.join(unknown)}")
+        version_dict.update(changes)
+
+        provider_id = version_dict.get("model_provider_id")
+        model_name = version_dict.get("model_name")
+        if model_name and not provider_id:
+            raise ProposalApplyError("model_provider_id is required when model_name is set")
+        if provider_id:
+            provider = (
+                self._db.query(ModelProvider)
+                .filter(ModelProvider.id == provider_id, ModelProvider.space_id == proposal.space_id)
+                .first()
+            )
+            if provider is None:
+                raise ProposalApplyError("model_provider_id does not belong to this space")
+
+        runtime_adapter_id = version_dict.get("runtime_adapter_id")
+        if runtime_adapter_id:
+            adapter = (
+                self._db.query(RuntimeAdapter)
+                .filter(RuntimeAdapter.id == runtime_adapter_id, RuntimeAdapter.space_id == proposal.space_id)
+                .first()
+            )
+            if adapter is None:
+                raise ProposalApplyError("runtime_adapter_id does not belong to this space")
+
+        existing_labels = [
+            row[0]
+            for row in (
+                self._db.query(AgentVersion.version_label)
+                .filter(AgentVersion.agent_id == agent.id, AgentVersion.space_id == proposal.space_id)
+                .all()
+            )
+        ]
+        max_n = 0
+        for label in existing_labels:
+            if isinstance(label, str) and label.startswith("v"):
+                try:
+                    max_n = max(max_n, int(label[1:]))
+                except ValueError:
+                    continue
+        version_data = AgentVersionCreate(**version_dict)
+        new_version = AgentVersion(
+            agent_id=agent.id,
+            space_id=proposal.space_id,
+            version_label=f"v{max_n + 1}",
+            model_provider_id=version_data.model_provider_id,
+            model_name=version_data.model_name,
+            runtime_adapter_id=version_data.runtime_adapter_id,
+            system_prompt=version_data.system_prompt,
+            model_config_json=version_data.model_config_json,
+            runtime_config_json=version_data.runtime_config_json,
+            context_policy_json=version_data.context_policy_json,
+            memory_policy_json=version_data.memory_policy_json,
+            capabilities_json=version_data.capabilities_json,
+            tool_permissions_json=version_data.tool_permissions_json,
+            runtime_policy_json=version_data.runtime_policy_json,
+            source_proposal_id=proposal.id,
+        )
+        self._db.add(new_version)
+        self._db.flush()
+        activity = ActivityRecord(
+            space_id=proposal.space_id,
+            user_id=user_id,
+            agent_id=agent.id,
+            activity_type="agent_config_updated",
+            title=f"Agent config updated: {agent.name}",
+            content=None,
+            payload_json={
+                "proposal_id": proposal.id,
+                "agent_id": agent.id,
+                "base_version_id": base_version_id,
+                "new_version_id": new_version.id,
+                "changed_fields": sorted(changes),
+            },
+            status="processed",
+            source_kind="system_event",
+            source_trust="internal_system",
+            lifecycle_status="active",
+            consolidation_status="processed",
+        )
+        self._db.add(activity)
+        self._db.flush()
+        new_version.source_activity_id = activity.id
+        payload_with_result = dict(proposal.payload_json or {})
+        payload_with_result["resulting_agent_version_id"] = new_version.id
+        payload_with_result["source_activity_id"] = activity.id
+        proposal.payload_json = payload_with_result
+        flag_modified(proposal, "payload_json")
+        agent.current_version_id = new_version.id
+        agent.updated_at = datetime.now(UTC)
+        return new_version
+
     def _enforce_source_monitoring(
         self,
         proposal: Proposal,
@@ -847,6 +998,12 @@ class ProposalApplyService:
             self._mark_affected_digests_dirty(proposal, result)
             return result
 
+        if ptype == "agent_config_update":
+            version = self._apply_agent_config_update(proposal, user_id=user_id)
+            result = ApplyResult(proposal=proposal, agent_version=version)
+            self._mark_affected_digests_dirty(proposal, result)
+            return result
+
         if ptype == "code_patch":
             from .code_patch_apply import CodePatchApplyError, apply_code_patch_payload
             from ..models import Workspace
@@ -945,3 +1102,14 @@ class ProposalApplyService:
                 if "agent" in scope_types:
                     for sid in scope_ids:
                         svc.mark_digest_dirty(space_id, "agent", sid, "agent", reason=reason)
+
+        elif ptype == "agent_config_update":
+            version = result.agent_version
+            if version is not None:
+                svc.mark_digest_dirty(
+                    space_id,
+                    "agent",
+                    version.agent_id,
+                    "agent",
+                    reason=f"agent_config_update:{version.id}",
+                )

@@ -14,7 +14,7 @@ Profile discovery (in priority order):
 Canonical runtime names (adapter_type strings):
   claude_code, codex_cli, gemini_cli, opencode
   Credential directories on disk must use these exact names.
-  No aliases or legacy names (e.g. claude-code, codex) are accepted.
+  Noncanonical adapter names are rejected.
 
 Worktree runs (medium-risk):
   Creates a per-run temp HOME directory with a symlink to the credential dir.
@@ -27,9 +27,8 @@ Docker runs (high-risk):
   Mounted read-only by default. If the CLI needs write access (token refresh),
   the caller must copy the credential dir before mounting.
 
-If no profile is configured, returns None (adapter uses container default).
-The CLI continues working as long as it was already logged in inside the
-backend container — this is the Option A MVP path.
+If no profile is configured, returns None. CLI runtime adapters treat that as a
+fail-closed credential error rather than using ambient container login state.
 """
 
 import logging
@@ -224,8 +223,8 @@ class CredentialBroker:
         """
         Return a CredentialGrant for the given run, or None if no profile exists.
 
-        None means: use whatever credential state is already available in the
-        execution environment (Option A — backend container already logged in).
+        None means no explicit profile was resolved. CLI runtime adapters must
+        fail closed in that case.
         """
         profile = (
             self.get_profile(profile_id) if profile_id
@@ -233,7 +232,7 @@ class CredentialBroker:
         )
 
         if not profile:
-            log.debug("no credential profile for runtime=%s — using container default", runtime)
+            log.debug("no credential profile for runtime=%s", runtime)
             return None
 
         if not Path(profile.source_path).exists():
@@ -355,11 +354,11 @@ class CredentialBroker:
             if grant is not None:
                 credential_source = "profile"
                 credential_profile_id = grant.profile_id
-            elif broker_error:
+            elif broker_error or fallback_used:
                 credential_source = "none"
                 credential_profile_id = None
             else:
-                credential_source = "container_default"
+                credential_source = "none"
                 credential_profile_id = None
 
             event = CliCredentialEvent(

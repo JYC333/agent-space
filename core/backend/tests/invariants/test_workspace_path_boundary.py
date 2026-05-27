@@ -19,7 +19,7 @@ def _resolved_workspace_disk_root(ws: Workspace, workspace_root: Path) -> Path:
     return (root / ws.id).resolve()
 
 
-def test_workspace_console_path_glue_denies_traversal(monkeypatch, db, tmp_path, test_user):
+def test_workspace_console_path_glue_denies_traversal(monkeypatch, db, tmp_path, test_user, test_space):
     """Mirrors ``workspace_console`` file read path: ``root / user_path`` then PathPolicy.validate."""
     from app.config import settings
 
@@ -29,7 +29,7 @@ def test_workspace_console_path_glue_denies_traversal(monkeypatch, db, tmp_path,
 
     ws = Workspace(
         id="ws-inv-1",
-        space_id=test_user.space_id,
+        space_id=test_space.id,
         name="inv",
         root_path=None,
         created_by_user_id=test_user.id,

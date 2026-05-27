@@ -30,9 +30,18 @@ def _patch_execute(monkeypatch, tmp_path: Path):
     (tmp_path / "wsroot").mkdir(parents=True, exist_ok=True)
 
 
+def _stub_durable_policy_audit(monkeypatch) -> None:
+    """Keep SQLite materialization coverage in the business transaction."""
+    monkeypatch.setattr(
+        "app.policy.audit.DurablePolicyAuditWriter.write",
+        lambda _writer, _envelope: "stub-policy-audit",
+    )
+
+
 def test_workflow_output_text_only_no_proposals(
     api_client, db, cross_space_pair, tmp_path, monkeypatch
 ):
+    _stub_durable_policy_audit(monkeypatch)
     db.commit()
     _patch_execute(monkeypatch, tmp_path)
     a = cross_space_pair["space_a_id"]

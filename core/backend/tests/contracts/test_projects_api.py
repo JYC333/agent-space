@@ -29,41 +29,41 @@ def test_create_project_requires_auth(api_client):
     assert r.status_code == 401
 
 
-def test_get_project_requires_auth(api_client, db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_get_project_requires_auth(api_client, db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     proj = factories.create_test_project(db, space_id=a, owner_user_id=ua.id, commit=True)
     r = api_client.get(f"/api/v1/projects/{proj.id}", params=_params(a))
     assert r.status_code == 401
 
 
-def test_patch_project_requires_auth(api_client, db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_patch_project_requires_auth(api_client, db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     proj = factories.create_test_project(db, space_id=a, owner_user_id=ua.id, commit=True)
     r = api_client.patch(f"/api/v1/projects/{proj.id}", params=_params(a), json={"name": "x"})
     assert r.status_code == 401
 
 
-def test_archive_project_requires_auth(api_client, db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_archive_project_requires_auth(api_client, db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     proj = factories.create_test_project(db, space_id=a, owner_user_id=ua.id, commit=True)
     r = api_client.post(f"/api/v1/projects/{proj.id}/archive", params=_params(a))
     assert r.status_code == 401
 
 
-def test_get_project_summary_requires_auth(api_client, db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_get_project_summary_requires_auth(api_client, db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     proj = factories.create_test_project(db, space_id=a, owner_user_id=ua.id, commit=True)
     r = api_client.get(f"/api/v1/projects/{proj.id}/summary", params=_params(a))
     assert r.status_code == 401
 
 
-def test_list_project_workspaces_requires_auth(api_client, db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_list_project_workspaces_requires_auth(api_client, db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     proj = factories.create_test_project(db, space_id=a, owner_user_id=ua.id, commit=True)
     r = api_client.get(f"/api/v1/projects/{proj.id}/workspaces", params=_params(a))
     assert r.status_code == 401

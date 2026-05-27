@@ -31,7 +31,8 @@ def _new_id() -> str:
 
 
 def _authed_client(db, user_id: str, space_id: str) -> TestClient:
-    """Create a TestClient authenticated as user_id with default_space_id = space_id."""
+    """Create a TestClient authenticated as user_id; callers pass space_id as needed."""
+    del space_id
     _, raw = UserSessionService(db).create(user_id)
     return TestClient(_app, cookies={SESSION_COOKIE: raw}, raise_server_exceptions=True)
 
@@ -50,8 +51,6 @@ def _setup_grant_scenario(db):
     user = factories.create_test_user(db, space_id=personal_id, display_name="Grant User")
     # create_test_user already adds SpaceMembership(personal_id, user.id, role="owner")
 
-    # Set default_space_id so get_identity can resolve space without a query param
-    user.default_space_id = personal_id
     db.flush()
 
     team_id = _new_id()
@@ -285,7 +284,6 @@ def test_revoke_grant_by_other_user_rejected(db, client):
     b_personal_id = _new_id()
     factories.create_test_space(db, space_id=b_personal_id, name="B Personal", space_type="personal")
     user_b = factories.create_test_user(db, space_id=b_personal_id, display_name="User B")
-    user_b.default_space_id = b_personal_id
     db.commit()
 
     ac_b = _authed_client(db, user_b.id, b_personal_id)
@@ -395,7 +393,6 @@ def test_create_enforces_active_consuming_limit(db, client):
     personal_id = _new_id()
     factories.create_test_space(db, space_id=personal_id, name="Personal", space_type="personal")
     user = factories.create_test_user(db, space_id=personal_id, display_name="Rate User")
-    user.default_space_id = personal_id
 
     team_id = _new_id()
     factories.create_test_space(db, space_id=team_id, name="Team", space_type="team")
@@ -444,7 +441,6 @@ def test_create_enforces_hourly_limit(db, client):
     personal_id = _new_id()
     factories.create_test_space(db, space_id=personal_id, name="Personal H", space_type="personal")
     user = factories.create_test_user(db, space_id=personal_id, display_name="Hourly User")
-    user.default_space_id = personal_id
 
     team_id = _new_id()
     factories.create_test_space(db, space_id=team_id, name="Team H", space_type="team")

@@ -25,11 +25,12 @@ class PathPolicyError(PermissionError):
     """Raised when a path violates the access policy."""
 
 
-# Always-forbidden path fragments regardless of allowed root
-_FORBIDDEN_FRAGMENTS = {
-    ".ssh", ".env", ".aws", ".gcp", ".azure",
-    "instance/secrets", "credentials", ".git/config",
-}
+# Always-forbidden path patterns inside the allowed root.
+_FORBIDDEN_DIR_NAMES = {".ssh", ".aws", ".gcp", ".azure", "credentials"}
+_FORBIDDEN_DIR_SEQUENCES = {("instance", "secrets"), ("config", "secrets")}
+_FORBIDDEN_FILE_NAMES = {".env", "id_rsa", "id_ed25519"}
+_ALLOWED_ENV_TEMPLATE_NAMES = {".env.example", ".env.sample", ".env.template"}
+_FORBIDDEN_FILE_SUFFIXES = {".pem", ".key"}
 
 # Agents may not write these file types directly — must go through a patch proposal
 _FORBIDDEN_WRITE_SUFFIXES = {".py", ".sh", ".bash", ".zsh", ".fish"}
@@ -95,11 +96,24 @@ class PathPolicy:
                 f"Path traversal denied: '{resolved}' is not under '{root}'"
             )
 
-        # Forbidden fragment check
-        resolved_str = str(resolved)
-        for fragment in _FORBIDDEN_FRAGMENTS:
-            if fragment in resolved_str:
-                raise PathPolicyError(f"Access to '{fragment}' is forbidden")
+        # Sensitive path checks scoped to the resolved path inside allowed_root.
+        rel_parts = resolved.relative_to(root).parts
+        lower_parts = tuple(p.lower() for p in rel_parts)
+        for part in lower_parts:
+            if part in _FORBIDDEN_DIR_NAMES:
+                raise PathPolicyError(f"Access to '{part}' is forbidden")
+        for sequence in _FORBIDDEN_DIR_SEQUENCES:
+            if any(lower_parts[i : i + len(sequence)] == sequence for i in range(0, len(lower_parts) - len(sequence) + 1)):
+                raise PathPolicyError(f"Access to '{'/'.join(sequence)}' is forbidden")
+        if len(lower_parts) >= 2 and lower_parts[-2:] == (".git", "config"):
+            raise PathPolicyError("Access to '.git/config' is forbidden")
+        filename = resolved.name.lower()
+        if filename in _FORBIDDEN_FILE_NAMES:
+            raise PathPolicyError(f"Access to '{filename}' is forbidden")
+        if filename.startswith(".env.") and filename not in _ALLOWED_ENV_TEMPLATE_NAMES:
+            raise PathPolicyError(f"Access to '{filename}' is forbidden")
+        if resolved.suffix.lower() in _FORBIDDEN_FILE_SUFFIXES:
+            raise PathPolicyError(f"Access to '{resolved.suffix.lower()}' files is forbidden")
 
         # Write restrictions — applies to all workspaces (bypass for user-approved patch apply)
         if (
@@ -114,6 +128,7 @@ class PathPolicy:
 
         # system_core additionally forbids direct .git access (must use worktree)
         if workspace_type == "system_core":
+            resolved_str = str(resolved)
             if ".git" in resolved_str:
                 raise PathPolicyError(
                     "system_core workspace: direct access to .git is forbidden — "

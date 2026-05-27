@@ -4,12 +4,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from sqlalchemy import func
 
 from app.config import settings
 from app.models import AgentVersion, Artifact, Proposal, Run
 from tests.support import factories
 from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRuntimeConfig
+
+
+@pytest.fixture(autouse=True)
+def _stub_durable_policy_audit(monkeypatch):
+    """Keep SQLite path-ingestion coverage focused on artifact writes."""
+    monkeypatch.setattr(
+        "app.policy.audit.DurablePolicyAuditWriter.write",
+        lambda self, decision: None,
+    )
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:

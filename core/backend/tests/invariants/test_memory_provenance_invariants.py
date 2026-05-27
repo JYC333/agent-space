@@ -9,9 +9,9 @@ from app.models import ProvenanceLink
 from tests.support import factories
 
 
-def test_memory_update_keeps_prior_provenance_and_adds_proposal(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_memory_update_keeps_prior_provenance_and_adds_proposal(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     first = factories.create_test_proposal(db, space_id=a, created_by_user_id=ua.id, commit=True)
     out1 = ProposalService(db).accept(first.id, space_id=a, user_id=ua.id)
     assert out1.memory is not None
@@ -65,9 +65,9 @@ def test_memory_update_keeps_prior_provenance_and_adds_proposal(db, cross_space_
     )
 
 
-def test_memory_archive_writes_provenance(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_memory_archive_writes_provenance(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     mem = factories.create_test_memory_entry(
         db, space_id=a, scope_type="agent", namespace="ns.arc2", owner_user_id=ua.id, commit=True
     )
@@ -101,9 +101,9 @@ def test_memory_archive_writes_provenance(db, cross_space_pair):
     )
 
 
-def test_policy_change_writes_provenance_links(db, cross_space_pair):
-    a = cross_space_pair["space_a_id"]
-    ua = cross_space_pair["user_a"]
+def test_policy_change_writes_provenance_links(db, cross_space_pair_db):
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
     prop = factories.create_test_proposal(
         db,
         space_id=a,
@@ -112,9 +112,9 @@ def test_policy_change_writes_provenance_links(db, cross_space_pair):
         title="pol",
         payload_json={
             "operation": "create",
-            "domain": "memory",
+            "domain": "memory.private_placement",
             "policy_key": "k1",
-            "rule_json": {"effect": "allow"},
+            "rule_json": {"effect": "allow_with_log"},
         },
         commit=True,
     )

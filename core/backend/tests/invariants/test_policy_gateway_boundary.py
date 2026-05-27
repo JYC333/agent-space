@@ -8,6 +8,8 @@ is only permitted in:
       no PolicyDecisionRecord — real enforcement in RunExecutionService)
   - core/backend/app/agents/agent_service.py  (non-mutating preflight before
       queuing a run — no PolicyDecisionRecord — real enforcement in RunExecutionService)
+  - core/backend/app/automation/policy_preflight.py  (non-mutating automation
+      policy preflight simulation — no PolicyDecisionRecord)
   - tests/**
 
 Any other location that imports, instantiates, or accesses these directly is a
@@ -40,12 +42,13 @@ _FORBIDDEN_ATTRS = frozenset({"default_engine"})
 
 # Allowed paths (relative to _APP_ROOT).
 # Non-policy exceptions must be non-mutating simulations only (no PolicyDecisionRecord).
-# Real enforcement always goes through PolicyGateway.check_and_record() in execution paths.
+# Real sensitive-action enforcement goes through PolicyGateway.enforce() paths.
 _ALLOWED_RELATIVE = frozenset({
     "policy",                   # entire policy/ package
     "runs/preflight.py",        # dry-run simulation; no PolicyDecisionRecord persisted
     "runs/run_service.py",      # non-mutating preflight in create_run; no PolicyDecisionRecord
     "agents/agent_service.py",  # non-mutating preflight before queuing; no PolicyDecisionRecord
+    "automation/policy_preflight.py",  # non-mutating automation policy preflight simulation
 })
 
 
@@ -155,10 +158,11 @@ def test_no_direct_policy_engine_usage_outside_allowed_locations() -> None:
     report_lines = [
         "",
         "PolicyGateway enforcement boundary violations found.",
-        "Business enforcement code must call PolicyGateway.check_and_record().",
+        "Business enforcement code must call PolicyGateway.enforce() or enforce_proposal_apply().",
         "Direct PolicyEngine / HardInvariantGuard / default_engine is only allowed in:",
         "  app/policy/*, app/runs/preflight.py, app/runs/run_service.py (non-mutating),",
-        "  app/agents/agent_service.py (non-mutating preflight, no PolicyDecisionRecord).",
+        "  app/agents/agent_service.py, app/automation/policy_preflight.py",
+        "  (non-mutating preflight simulation, no PolicyDecisionRecord).",
         "",
         f"{'File':<60} {'Line':>5}  Symbol",
         "-" * 80,
@@ -169,3 +173,93 @@ def test_no_direct_policy_engine_usage_outside_allowed_locations() -> None:
     report_lines.append("")
 
     assert not all_violations, textwrap.dedent("\n".join(report_lines))
+
+
+def test_sensitive_services_use_current_policy_gateway_methods() -> None:
+    """Sensitive enforcement paths must call the current gateway methods."""
+    checks = (
+        (
+            "runs/execution.py",
+            "RunExecutionService",
+            None,
+            "enforce(",
+        ),
+        (
+            "memory/proposals.py",
+            "ProposalService",
+            "create_proposal",
+            "enforce(",
+        ),
+        (
+            "memory/proposals.py",
+            "ProposalService",
+            "accept",
+            "enforce_proposal_apply(",
+        ),
+        (
+            "automation/service.py",
+            "AutomationService",
+            "create",
+            "enforce(",
+        ),
+        (
+            "automation/service.py",
+            "AutomationService",
+            "update",
+            "enforce(",
+        ),
+        (
+            "automation/service.py",
+            "AutomationService",
+            "fire",
+            "enforce(",
+        ),
+        (
+            "runs/context_snapshot_populator.py",
+            "ContextSnapshotPopulator",
+            "populate",
+            "enforce(",
+        ),
+        (
+            "runs/artifact_persistence.py",
+            None,
+            None,
+            "enforce(",
+        ),
+        (
+            "memory/code_patch_apply.py",
+            None,
+            None,
+            "enforce(",
+        ),
+        (
+            "runs/code_patch_collector.py",
+            None,
+            None,
+            "enforce(",
+        ),
+    )
+
+    for rel_path, class_name, method_name, expected_call in checks:
+        source = (_APP_ROOT / rel_path).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        if class_name:
+            klass = next(
+                node for node in tree.body
+                if isinstance(node, ast.ClassDef) and node.name == class_name
+            )
+            if method_name:
+                nodes = [
+                    node for node in klass.body
+                    if isinstance(node, ast.FunctionDef) and node.name == method_name
+                ]
+            else:
+                nodes = [klass]
+        else:
+            nodes = []
+        scoped_source = (
+            "\n".join(ast.get_source_segment(source, node) or "" for node in nodes)
+            if nodes
+            else source
+        )
+        assert expected_call in scoped_source, f"{class_name} is missing {expected_call}"
