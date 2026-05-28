@@ -28,7 +28,7 @@ Today               — digest: recent activity, due cards, pending proposals
 Assistant           — chat / quick capture
 Activity Inbox      — raw activity_records
 Memory              — memory review and governance
-Wiki                — LLM-structured knowledge
+Knowledge           — structured knowledge
 Cards / Review      — spaced repetition queue
 Agents              — agent list, runs, capabilities
 Workspaces          — workspace console and file browser

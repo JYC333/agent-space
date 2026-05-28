@@ -12,7 +12,9 @@ Action counts (current):
                           workspace.write_patch, workspace.read, artifact.persist,
                           proposal.create, proposal.apply, agent.config_update,
                           automation.create, automation.update, automation.fire
-  WIRED_VIA_PROPOSAL (4): memory.create, memory.update, memory.archive, policy.change
+  WIRED_VIA_PROPOSAL (9): memory.create, memory.update, memory.archive, policy.change,
+                           knowledge.create, knowledge.update, knowledge.archive,
+                           knowledge.relation_create, knowledge.relation_delete
   RESERVED          (11): context.use_personal_grant, workspace.apply_patch,
                            artifact.export, proposal.approve,
                            memory.read_private, memory.promote_shared,
@@ -311,6 +313,84 @@ _reg(
         ),
         lifecycle_status=PolicyActionLifecycle.WIRED_VIA_PROPOSAL,
         record_failure_mode=RecordFailureMode.FAIL_CLOSED,
+    ),
+    # ------------------------------------------------------------------
+    PolicyActionDefinition(
+        action="knowledge.create",
+        resource_type="knowledge",
+        default_risk_level=RiskLevel.MEDIUM,
+        default_decision=Decision.REQUIRE_APPROVAL,
+        audit_required=True,
+        approval_capability="approve_knowledge_change",
+        default_required_approver_role="owner",
+        current_enforcement_point="app.memory.proposals.ProposalService.accept via proposal.apply",
+        description=(
+            "Create an active KnowledgeItem after an accepted knowledge_create "
+            "proposal. Protected via proposal.apply gate and ProposalApplyService."
+        ),
+        lifecycle_status=PolicyActionLifecycle.WIRED_VIA_PROPOSAL,
+    ),
+    PolicyActionDefinition(
+        action="knowledge.update",
+        resource_type="knowledge",
+        default_risk_level=RiskLevel.MEDIUM,
+        default_decision=Decision.REQUIRE_APPROVAL,
+        audit_required=True,
+        approval_capability="approve_knowledge_change",
+        default_required_approver_role="owner",
+        current_enforcement_point="app.memory.proposals.ProposalService.accept via proposal.apply",
+        description=(
+            "Create a new version of an existing KnowledgeItem after an accepted "
+            "knowledge_update proposal. Protected via proposal.apply gate and ProposalApplyService."
+        ),
+        lifecycle_status=PolicyActionLifecycle.WIRED_VIA_PROPOSAL,
+    ),
+    PolicyActionDefinition(
+        action="knowledge.archive",
+        resource_type="knowledge",
+        default_risk_level=RiskLevel.MEDIUM,
+        default_decision=Decision.REQUIRE_APPROVAL,
+        audit_required=True,
+        approval_capability="approve_knowledge_change",
+        default_required_approver_role="owner",
+        current_enforcement_point="app.memory.proposals.ProposalService.accept via proposal.apply",
+        description=(
+            "Archive a KnowledgeItem after an accepted knowledge_archive proposal. "
+            "Protected via proposal.apply gate and ProposalApplyService."
+        ),
+        lifecycle_status=PolicyActionLifecycle.WIRED_VIA_PROPOSAL,
+    ),
+    PolicyActionDefinition(
+        action="knowledge.relation_create",
+        resource_type="knowledge_relation",
+        default_risk_level=RiskLevel.MEDIUM,
+        default_decision=Decision.REQUIRE_APPROVAL,
+        audit_required=True,
+        approval_capability="approve_knowledge_change",
+        default_required_approver_role="owner",
+        current_enforcement_point="app.memory.proposals.ProposalService.accept via proposal.apply",
+        description=(
+            "Create a same-space KnowledgeRelation after an accepted "
+            "knowledge_relation_create proposal. Protected via proposal.apply gate "
+            "and ProposalApplyService."
+        ),
+        lifecycle_status=PolicyActionLifecycle.WIRED_VIA_PROPOSAL,
+    ),
+    PolicyActionDefinition(
+        action="knowledge.relation_delete",
+        resource_type="knowledge_relation",
+        default_risk_level=RiskLevel.MEDIUM,
+        default_decision=Decision.REQUIRE_APPROVAL,
+        audit_required=True,
+        approval_capability="approve_knowledge_change",
+        default_required_approver_role="owner",
+        current_enforcement_point="app.memory.proposals.ProposalService.accept via proposal.apply",
+        description=(
+            "Remove or archive a KnowledgeRelation after an accepted "
+            "knowledge_relation_delete proposal. Protected via proposal.apply gate "
+            "and ProposalApplyService."
+        ),
+        lifecycle_status=PolicyActionLifecycle.WIRED_VIA_PROPOSAL,
     ),
     # ------------------------------------------------------------------
     # RESERVED actions — registered for vocabulary completeness and

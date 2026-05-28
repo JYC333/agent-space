@@ -59,7 +59,7 @@ When commercialization becomes real, the system must satisfy:
 2. CLI tools are replaceable execution backends.
 3. An enterprise deployment can disable any runtime adapter without breaking core features.
 4. Enterprise deployments support BYO API keys and model endpoints.
-5. Core modules (LLM Wiki, flashcards, activity records, memory) work without any coding-agent runtime.
+5. Core modules (Knowledge Base, flashcards, activity records, memory) work without any coding-agent runtime.
 6. Runtime use is auditable (Run records are the audit trail).
 7. Provider and data policy is configurable per space.
 8. Do not assume Claude Code / Codex licenses allow commercial embedding without separate terms.
@@ -72,7 +72,7 @@ Build in this order:
 
 1. Activity capture (thoughts, life logs, notes)
 2. Memory proposal/review workflow
-3. LLM Wiki (structured knowledge)
+3. Knowledge Base (structured knowledge)
 4. Flashcards / spaced repetition
 5. Assistant chat (with memory context)
 6. Workspace file browser

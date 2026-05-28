@@ -1280,6 +1280,126 @@ class ProposalApproval(Base):
 
 
 # ---------------------------------------------------------------------------
+# Knowledge — human-browsable relational long-term content
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeItem(Base):
+    """Versioned, proposal-approved Knowledge content.
+
+    Knowledge is intentionally separate from Memory: these rows are not runtime
+    context entries and must not be injected into ContextBuilder automatically.
+    """
+
+    __tablename__ = "knowledge_items"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("projects.id"), nullable=True, index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
+    root_item_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    supersedes_item_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    item_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_format: Mapped[str] = mapped_column(String(32), nullable=False, default="markdown")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="space_shared", index=True)
+    verification_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unverified")
+    reflection_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unreviewed")
+    tags_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_refs_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    owner_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
+    created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)
+    created_by_run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=True)
+    source_activity_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("activity_records.id"), nullable=True)
+    source_artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("artifacts.id"), nullable=True)
+    created_from_proposal_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True
+    )
+    approved_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "item_type in ('knowledge', 'experience', 'lesson', 'procedure', 'decision', "
+            "'reflection', 'source', 'question', 'answer', 'summary')",
+            name="ck_knowledge_items_item_type",
+        ),
+        CheckConstraint("content_format in ('markdown', 'plain')", name="ck_knowledge_items_content_format"),
+        CheckConstraint(
+            "status in ('draft', 'active', 'superseded', 'archived')",
+            name="ck_knowledge_items_status",
+        ),
+        CheckConstraint(
+            "visibility in ('private', 'space_shared', 'workspace_shared', 'restricted')",
+            name="ck_knowledge_items_visibility",
+        ),
+        CheckConstraint(
+            "verification_status in ('unverified', 'needs_review', 'verified')",
+            name="ck_knowledge_items_verification_status",
+        ),
+        CheckConstraint(
+            "reflection_status in ('unreviewed', 'reviewed', 'distilled')",
+            name="ck_knowledge_items_reflection_status",
+        ),
+        CheckConstraint("confidence is null or (confidence >= 0 and confidence <= 1)", name="ck_knowledge_items_confidence"),
+    )
+
+
+class KnowledgeRelation(Base):
+    """Database-backed relation between two same-space KnowledgeItem rows."""
+
+    __tablename__ = "knowledge_relations"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    from_item_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("knowledge_items.id"), nullable=False, index=True)
+    to_item_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("knowledge_items.id"), nullable=False, index=True)
+    relation_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    evidence_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
+    created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)
+    created_from_assessment_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "relation_type in ('related', 'derived_from', 'example_of', 'supports', "
+            "'contradicts', 'part_of', 'prerequisite_of', 'applies_to', 'answers')",
+            name="ck_knowledge_relations_relation_type",
+        ),
+        CheckConstraint(
+            "status in ('candidate', 'active', 'rejected', 'archived')",
+            name="ck_knowledge_relations_status",
+        ),
+        CheckConstraint(
+            "confidence is null or (confidence >= 0 and confidence <= 1)",
+            name="ck_knowledge_relations_confidence",
+        ),
+        Index(
+            "ix_knowledge_relations_unique_active",
+            "space_id",
+            "from_item_id",
+            "to_item_id",
+            "relation_type",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Task board (product-level work items; not infrastructure jobs)
 # ---------------------------------------------------------------------------
 

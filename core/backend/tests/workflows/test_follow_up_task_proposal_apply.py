@@ -185,7 +185,7 @@ INVALID_PAYLOADS = [
         id="unknown_task_field",
     ),
     pytest.param(
-        {"task": {"title": "T", "priority": "galaxy_brain"}},
+        {"task": {"title": "T", "priority": "invalid_priority"}},
         id="invalid_priority",
     ),
     pytest.param(

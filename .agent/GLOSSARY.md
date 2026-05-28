@@ -61,7 +61,7 @@ Frozen ContextPackage captured at run-start. Immutable — memory writes during 
 Abstract interface for memory storage backends. `LocalMemoryProvider` (DB-backed) is the only enabled provider in MVP.
 
 **Knowledge Item**
-Structured wiki entry. *(Planned)*
+Structured, human-browsable Knowledge entry. *(Planned)*
 
 **Card**
 Spaced repetition review item generated from knowledge or activities. *(Planned)*

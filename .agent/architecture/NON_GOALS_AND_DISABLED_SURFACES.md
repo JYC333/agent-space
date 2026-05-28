@@ -29,7 +29,7 @@
 | Automatic memory promotion from horizon content | Blocked by absence of horizon implementation |
 
 **UI status of planned-but-not-built surfaces:**
-- `LLM Wiki` — registry entry with `planned: true`; "soon" badge; non-interactive.
+- `Knowledge` — registry entry with `planned: true`; "soon" badge; non-interactive.
 - `Cards` — registry entry with `planned: true`; "soon" badge; non-interactive.
 - `Time` — registry entry with `planned: true`; "soon" badge; non-interactive.
 
@@ -69,7 +69,7 @@ These will not be built until their prerequisite foundations are stable:
 - Cloud/multi-device sync.
 - Domain-specific integrations (health, finance, home automation) built into the kernel.
 - Publishing connectors or external CMS integrations.
-- Full wiki or cards as complete product surfaces with first-class backend domain models.
+- Full Knowledge or cards as complete product surfaces with first-class backend domain models.
 - Complex enterprise admin console or billing.
 - Public SaaS/multi-tenant launch.
 

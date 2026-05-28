@@ -23,7 +23,20 @@ _PROPOSAL_TYPE_RISK: dict[str, RiskLevel] = {
     "policy_change": RiskLevel.HIGH,
     "egress_review": RiskLevel.HIGH,
     "agent_config_update": RiskLevel.HIGH,
+    "knowledge_create": RiskLevel.MEDIUM,
+    "knowledge_update": RiskLevel.MEDIUM,
+    "knowledge_archive": RiskLevel.MEDIUM,
+    "knowledge_relation_create": RiskLevel.MEDIUM,
+    "knowledge_relation_delete": RiskLevel.MEDIUM,
 }
+
+KNOWLEDGE_PROPOSAL_TYPES: frozenset[str] = frozenset({
+    "knowledge_create",
+    "knowledge_update",
+    "knowledge_archive",
+    "knowledge_relation_create",
+    "knowledge_relation_delete",
+})
 
 # Single authoritative set of proposal types that have a real apply handler.
 # ProposalApplyService and apply_service._SUPPORTED_TYPES must match this set.

@@ -467,6 +467,8 @@ class ProposalAcceptOut(BaseModel):
         "egress_review",
         "follow_up_task",
         "agent_version",
+        "knowledge_item",
+        "knowledge_relation",
     ]
     result: dict[str, Any]
 

@@ -18,6 +18,7 @@ def test_execution_config_update_appends_new_version_preserves_old(db, cross_spa
     db.flush()
     v1_id = agent.current_version_id
     v1_before = deepcopy(db.query(AgentVersion).filter(AgentVersion.id == v1_id).one().model_config_json)
+    db.commit()
 
     proposal = AgentService(db).create_config_update_proposal(
         agent.id,
@@ -45,6 +46,7 @@ def test_existing_run_keeps_original_agent_version_pointer(db, cross_space_pair_
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     db.flush()
     run_version_id = run.agent_version_id
+    db.commit()
 
     proposal = AgentService(db).create_config_update_proposal(
         agent.id,

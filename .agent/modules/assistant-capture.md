@@ -37,11 +37,11 @@ API creates ActivityRecord(type=thought|life_log|...)
     ↓
 Memory Curator agent analyzes (async, in background)
     ↓
-Agent proposes: memory update, wiki item, card, or task
+Agent proposes: memory update, knowledge item, card, or task
     ↓
 User reviews and approves proposals
     ↓
-Proposals activate into memory / wiki / cards
+Proposals activate into memory / knowledge / cards
 ```
 
 ## Invariants

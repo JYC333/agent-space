@@ -9,6 +9,7 @@ import type {
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
   TaskArtifact, TaskProposal, Artifact, Proposal, ProposalAcceptOut, AgentOut, AgentCreateBody, AgentUpdateBody, RunCreateBody,
   ActivityRecord, ActivitySourceType,
+  KnowledgeCreateProposalBody, KnowledgeItem, KnowledgeItemSummary, KnowledgeRelation, KnowledgeRelationProposalBody, KnowledgeUpdateProposalBody,
   FileNode, FileContent, GitStatus, RuntimeInfo, ConsoleSession, WorkspaceInfo,
   HomeSummaryOut, MeSummaryOut, MeTimelineEntry, MeTaskItem, MePendingProposalItem,
   PersonalMemoryGrantPreviewRequest, PersonalMemoryGrantPreviewResponse,
@@ -124,6 +125,39 @@ export const memoryApi = {
     del<Proposal>(`/memory/${id}`),
   search: (data: { query: string; scope?: string; type?: string }) =>
     post<Memory[]>('/memory/search', { space_id: _spaceId, user_id: _userId, ...data }),
+}
+
+// ── Knowledge ─────────────────────────────────────────────────────────────
+export const knowledgeApi = {
+  list: (params: {
+    item_type?: string
+    status?: string
+    visibility?: string
+    q?: string
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.item_type !== undefined) q.item_type = params.item_type
+    if (params.status !== undefined) q.status = params.status
+    if (params.visibility !== undefined) q.visibility = params.visibility
+    if (params.q !== undefined) q.q = params.q
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<KnowledgeItemSummary>>('/knowledge/items?' + new URLSearchParams(q))
+  },
+  get: (id: string) => get<KnowledgeItem>(`/knowledge/items/${id}`),
+  relations: (id: string) => get<KnowledgeRelation[]>(`/knowledge/items/${id}/relations`),
+  proposeCreate: (body: KnowledgeCreateProposalBody) =>
+    post<Proposal>('/knowledge/items/proposals', body),
+  proposeUpdate: (id: string, body: KnowledgeUpdateProposalBody) =>
+    patch<Proposal>(`/knowledge/items/${id}/proposals`, body),
+  proposeArchive: (id: string) =>
+    del<Proposal>(`/knowledge/items/${id}`),
+  proposeRelation: (body: KnowledgeRelationProposalBody) =>
+    post<Proposal>('/knowledge/relations/proposals', body),
+  proposeRelationArchive: (id: string) =>
+    del<Proposal>(`/knowledge/relations/${id}`),
 }
 
 // ── Sessions ──────────────────────────────────────────────────────────────

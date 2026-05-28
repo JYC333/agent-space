@@ -136,7 +136,7 @@ Load only the module docs relevant to your task.
 | Runtime adapters | [modules/runtime-adapters.md](modules/runtime-adapters.md) |
 | Credentials | [modules/credentials.md](modules/credentials.md) |
 | Deployment | [modules/deployment.md](modules/deployment.md) |
-| Wiki / knowledge items | [modules/llm-wiki.md](modules/llm-wiki.md) |
+| Knowledge Base / knowledge items | [modules/knowledge-base.md](modules/knowledge-base.md) |
 | Spaced repetition / cards | [modules/spaced-repetition.md](modules/spaced-repetition.md) |
 | Media cards | [modules/media-cards.md](modules/media-cards.md) |
 | Sync and conflict model | [modules/sync-and-conflicts.md](modules/sync-and-conflicts.md) |

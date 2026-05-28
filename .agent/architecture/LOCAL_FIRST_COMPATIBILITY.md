@@ -26,7 +26,7 @@ Objects that can originate client-side and sync to the server:
 | Tasks | Last-write-wins acceptable initially; status/visibility changes need care |
 | Habit / check-in records | Low-conflict, append-friendly |
 | Card review state | Client-authoritative until server persists |
-| Wiki / note drafts | User resolves conflicts if diverged |
+| Knowledge / note drafts | User resolves conflicts if diverged |
 | Decision drafts | Becomes server record on submit |
 | User preferences | Low-conflict; server is source of truth on conflict |
 
@@ -34,7 +34,7 @@ Objects that can originate client-side and sync to the server:
 Objects that may have a client draft phase but whose accepted/published state lives on the server:
 
 - ActivityRecord (accepted by server)
-- Published Wiki / KnowledgeItem
+- Published KnowledgeItem
 - Active Memory
 - Proposal
 - ProposalApply
@@ -90,7 +90,7 @@ Tables that are server-authoritative or server-only do not need `device_id` or `
 
 ### Offline clients may create locally:
 - Captures (become ActivityDraft or Activity on sync)
-- Drafts (task, wiki, decision, note)
+- Drafts (task, knowledge, decision, note)
 - Task edits (title, description, local status)
 - Card reviews
 - Local notes
@@ -159,7 +159,7 @@ Agent execution remains server-side (or main-node-side in federated deployments)
 |---|---|
 | Personal captures | Append-only; conflicts are rare and low-stakes |
 | Tasks | Last-write-wins acceptable initially; visibility and status changes require careful merge or user prompt |
-| Drafts (wiki, decision, note) | User-resolved conflict if diverged; present a diff |
+| Drafts (knowledge, decision, note) | User-resolved conflict if diverged; present a diff |
 | Active memory / proposal apply / policy / workspace | No offline apply; queue and submit when online |
 
 Do not prematurely introduce CRDT or operational transform. The current user scale and sync surface do not justify the complexity. Start with version-based conflict detection and user-prompted resolution where needed.

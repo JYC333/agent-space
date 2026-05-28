@@ -41,6 +41,11 @@ _WIRED_VIA_PROPOSAL_ACTIONS = [
     "memory.update",
     "memory.archive",
     "policy.change",
+    "knowledge.create",
+    "knowledge.update",
+    "knowledge.archive",
+    "knowledge.relation_create",
+    "knowledge.relation_delete",
 ]
 
 # Reserved actions (lifecycle_status=RESERVED) — registered for registry completeness
@@ -132,6 +137,20 @@ def test_reserved_actions_have_not_implemented_enforcement_point():
             f"{action}: reserved actions must use current_enforcement_point='not_implemented'. "
             f"Got: {defn.current_enforcement_point!r}"
         )
+
+
+def test_knowledge_actions_are_wired_via_proposal_after_apply_handlers_exist():
+    for action in [
+        "knowledge.create",
+        "knowledge.update",
+        "knowledge.archive",
+        "knowledge.relation_create",
+        "knowledge.relation_delete",
+    ]:
+        defn = require_action_definition(action)
+        assert defn.lifecycle_status == PolicyActionLifecycle.WIRED_VIA_PROPOSAL
+        assert "proposal.apply" in defn.current_enforcement_point
+        assert defn.default_decision == Decision.REQUIRE_APPROVAL
 
 
 def test_wired_direct_actions_have_real_enforcement_points():

@@ -2,7 +2,7 @@
 
 ## Principle
 
-A **Space** is a collaboration boundary, not a shared brain. Members of a household or team space work together, but private cognition, restricted facts, and per-user context must remain enforceable at read time.
+A **Space** is a collaboration boundary, not a shared mind. Members of a household or team space work together, but private cognition, restricted facts, and per-user context must remain enforceable at read time.
 
 ## What lives in family space memory
 

@@ -61,6 +61,8 @@ REQUIRED_TABLES = {
     "job_events",
     "workspaces",
     "memory_entries",
+    "knowledge_items",
+    "knowledge_relations",
     "entity_refs",
     "memory_relations",
     "provenance_links",
@@ -98,6 +100,8 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
     assert REQUIRED_TABLES.issubset(set(inspector.get_table_names()))
     assert "agent_runs" not in inspector.get_table_names()
     assert "memories" not in inspector.get_table_names()
+    assert "".join(("wi", "ki_items")) not in inspector.get_table_names()
+    assert "".join(("llm_", "wi", "ki")) not in inspector.get_table_names()
     assert "provider_configs" not in inspector.get_table_names()
     assert "cli_adapter_configs" not in inspector.get_table_names()
 
@@ -192,6 +196,31 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
         "last_retrieved_at",
         "reconsolidation_due",
     }.issubset(memory_columns)
+
+    knowledge_columns = {column["name"] for column in inspector.get_columns("knowledge_items")}
+    assert {
+        "id", "space_id", "project_id", "workspace_id", "root_item_id",
+        "supersedes_item_id", "item_type", "title", "content", "content_format",
+        "status", "visibility", "verification_status", "reflection_status",
+        "tags_json", "confidence", "source_url", "source_refs_json",
+        "owner_user_id", "created_by_user_id", "created_by_agent_id", "created_by_run_id",
+        "source_activity_id", "source_artifact_id", "created_from_proposal_id",
+        "approved_by_user_id", "version", "created_at", "updated_at", "archived_at",
+    }.issubset(knowledge_columns)
+    knowledge_relation_columns = {column["name"] for column in inspector.get_columns("knowledge_relations")}
+    assert {
+        "id", "space_id", "from_item_id", "to_item_id", "relation_type", "status",
+        "confidence", "evidence_summary", "source_proposal_id", "created_by_user_id",
+        "created_by_agent_id", "created_from_assessment_id", "created_at", "updated_at",
+    }.issubset(knowledge_relation_columns)
+    knowledge_indexes = {tuple(i["column_names"]) for i in inspector.get_indexes("knowledge_items")}
+    assert ("space_id",) in knowledge_indexes
+    assert ("owner_user_id",) in knowledge_indexes
+    assert ("root_item_id",) in knowledge_indexes
+    relation_indexes = {tuple(i["column_names"]) for i in inspector.get_indexes("knowledge_relations")}
+    assert ("space_id",) in relation_indexes
+    assert ("from_item_id",) in relation_indexes
+    assert ("to_item_id",) in relation_indexes
 
     snapshot_columns = {column["name"] for column in inspector.get_columns("context_snapshots")}
     assert {
@@ -368,6 +397,45 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
         db.add(artifact)
         db.commit()
 
+        knowledge_item = models.KnowledgeItem(
+            id="knowledge-1",
+            space_id=space.id,
+            workspace_id=workspace.id,
+            root_item_id="knowledge-1",
+            item_type="knowledge",
+            title="Knowledge",
+            content="Approved knowledge",
+            content_format="markdown",
+            status="active",
+            visibility="space_shared",
+            verification_status="unverified",
+            reflection_status="unreviewed",
+            tags_json=[],
+            source_refs_json=[],
+            owner_user_id=user.id,
+            created_by_user_id=user.id,
+            created_by_run_id=run.id,
+            source_activity_id=activity.id,
+            source_artifact_id=artifact.id,
+            created_from_proposal_id=proposal.id,
+            approved_by_user_id=user.id,
+        )
+        db.add(knowledge_item)
+        db.commit()
+
+        knowledge_relation = models.KnowledgeRelation(
+            id="knowledge-relation-1",
+            space_id=space.id,
+            from_item_id=knowledge_item.id,
+            to_item_id=knowledge_item.id,
+            relation_type="related",
+            status="active",
+            source_proposal_id=proposal.id,
+            created_by_user_id=user.id,
+        )
+        db.add(knowledge_relation)
+        db.commit()
+
         memory.source_activity_id = activity.id
         memory.source_artifact_id = artifact.id
         db.add_all([job, memory, message])
@@ -409,6 +477,8 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
         assert db.get(models.Artifact, "artifact-1").run_id == "run-1"
         assert db.get(models.Proposal, "proposal-1").created_by_run_id == "run-1"
         assert db.get(models.ActivityRecord, "activity-1").source_run_id == "run-1"
+        assert db.get(models.KnowledgeItem, "knowledge-1").created_from_proposal_id == "proposal-1"
+        assert db.get(models.KnowledgeRelation, "knowledge-relation-1").relation_type == "related"
         assert db.get(models.EntityRef, "entity-1").entity_type == "person"
         assert db.get(models.MemoryRelation, "relation-1").relation_type == "related_to"
         assert db.get(models.ProvenanceLink, "provenance-1").source_trust == "internal_system"
@@ -450,6 +520,21 @@ def test_key_canonical_foreign_keys_exist(canonical_engine):
     assert ("source_activity_id", "activity_records", "id") in _foreign_keys(inspector, "memory_entries")
     assert ("source_artifact_id", "artifacts", "id") in _foreign_keys(inspector, "memory_entries")
     assert ("created_from_proposal_id", "proposals", "id") in _foreign_keys(inspector, "memory_entries")
+    assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "knowledge_items")
+    assert ("workspace_id", "workspaces", "id") in _foreign_keys(inspector, "knowledge_items")
+    assert ("project_id", "projects", "id") in _foreign_keys(inspector, "knowledge_items")
+    assert ("created_by_user_id", "users", "id") in _foreign_keys(inspector, "knowledge_items")
+    assert ("owner_user_id", "users", "id") in _foreign_keys(inspector, "knowledge_items")
+    assert ("created_by_agent_id", "agents", "id") in _foreign_keys(inspector, "knowledge_items")
+    assert ("created_by_run_id", "runs", "id") in _foreign_keys(inspector, "knowledge_items")
+    assert ("source_activity_id", "activity_records", "id") in _foreign_keys(inspector, "knowledge_items")
+    assert ("source_artifact_id", "artifacts", "id") in _foreign_keys(inspector, "knowledge_items")
+    assert ("created_from_proposal_id", "proposals", "id") in _foreign_keys(inspector, "knowledge_items")
+    assert ("approved_by_user_id", "users", "id") in _foreign_keys(inspector, "knowledge_items")
+    assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "knowledge_relations")
+    assert ("from_item_id", "knowledge_items", "id") in _foreign_keys(inspector, "knowledge_relations")
+    assert ("to_item_id", "knowledge_items", "id") in _foreign_keys(inspector, "knowledge_relations")
+    assert ("source_proposal_id", "proposals", "id") in _foreign_keys(inspector, "knowledge_relations")
     assert "memory_access_logs" in inspector.get_table_names()
     assert ("memory_id", "memory_entries", "id") in _foreign_keys(inspector, "memory_access_logs")
     assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "entity_refs")

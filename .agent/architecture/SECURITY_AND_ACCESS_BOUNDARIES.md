@@ -133,7 +133,7 @@ Activity does not directly become active memory:
 
 Additional invariants:
 - Proposal apply is space-scoped: `accept(id, space_id=…)` returns None on space mismatch.
-- Unsupported proposal types (`task_create`, `wiki_create`, `plan_create`, and any unknown
+- Unsupported proposal types (`task_create`, `plan_create`, and any unknown
   type) raise `UnsupportedProposalTypeError` and leave the proposal in `pending` status.
   The fail-closed behavior is tested.
 - Memory writes require policy/proposal gating: `MemoryStore` has no bypass path (no

@@ -205,7 +205,7 @@ export const MODULE_REGISTRY: Module[] = [
   {
     id: 'proposals', label: 'Proposals', path: '/proposals',
     section: 'knowledge', group: 'work', icon: 'check-circle',
-    description: 'Review memory, wiki, card, code, and system proposals.',
+    description: 'Review memory, knowledge, card, code, and system proposals.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
@@ -227,13 +227,14 @@ export const MODULE_REGISTRY: Module[] = [
 
   // ── Knowledge ─────────────────────────────────────────────────────────────
   {
-    id: 'wiki', label: 'LLM Wiki', path: '/wiki',
+    id: 'knowledge', label: 'Knowledge', path: '/knowledge',
     section: 'knowledge', group: 'knowledge', icon: 'book-open', accent: true,
     description: 'Structured knowledge — concepts, claims, sources, questions.',
     source: 'built_in', capabilityId: undefined,
-    enabled: false, visible: false, planned: true,
-    perspectiveType: 'neutral',
-    component: lazy(() => import('./wiki/WikiPage')),
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    hasSubRoutes: true,
+    component: lazy(() => import('./knowledge/KnowledgeModule')),
   },
   {
     id: 'cards', label: 'Cards', path: '/cards',

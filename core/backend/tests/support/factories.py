@@ -30,6 +30,8 @@ from app.models import (
     Artifact,
     ContextSnapshot,
     Credential,
+    KnowledgeItem,
+    KnowledgeRelation,
     MemoryEntry,
     ModelProvider,
     Policy,
@@ -532,6 +534,80 @@ def create_test_memory_entry(
         agent_id=agent_id,
         workspace_id=workspace_id,
         namespace=namespace,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_knowledge_item(
+    db: DBSession,
+    *,
+    space_id: str,
+    title: str = "Knowledge item",
+    content: str = "knowledge content",
+    item_type: str = "knowledge",
+    status: str = "active",
+    visibility: str = "space_shared",
+    project_id: str | None = None,
+    workspace_id: str | None = None,
+    created_from_proposal_id: str | None = None,
+    approved_by_user_id: str | None = None,
+    owner_user_id: str | None = None,
+    created_by_user_id: str | None = None,
+    version: int = 1,
+    root_item_id: str | None = None,
+    supersedes_item_id: str | None = None,
+    commit: bool = False,
+) -> KnowledgeItem:
+    row = KnowledgeItem(
+        id=_new_id(),
+        space_id=space_id,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        root_item_id=root_item_id,
+        supersedes_item_id=supersedes_item_id,
+        item_type=item_type,
+        title=title,
+        content=content,
+        content_format="markdown",
+        status=status,
+        visibility=visibility,
+        verification_status="unverified",
+        reflection_status="unreviewed",
+        tags_json=[],
+        source_refs_json=[],
+        owner_user_id=owner_user_id,
+        created_by_user_id=created_by_user_id,
+        created_from_proposal_id=created_from_proposal_id,
+        approved_by_user_id=approved_by_user_id,
+        version=version,
+    )
+    db.add(row)
+    db.flush()
+    if row.root_item_id is None:
+        row.root_item_id = row.id
+    return _finish(db, row, commit=commit)
+
+
+def create_test_knowledge_relation(
+    db: DBSession,
+    *,
+    space_id: str,
+    from_item_id: str,
+    to_item_id: str,
+    relation_type: str = "related",
+    status: str = "active",
+    source_proposal_id: str | None = None,
+    commit: bool = False,
+) -> KnowledgeRelation:
+    row = KnowledgeRelation(
+        id=_new_id(),
+        space_id=space_id,
+        from_item_id=from_item_id,
+        to_item_id=to_item_id,
+        relation_type=relation_type,
+        status=status,
+        source_proposal_id=source_proposal_id,
     )
     db.add(row)
     return _finish(db, row, commit=commit)

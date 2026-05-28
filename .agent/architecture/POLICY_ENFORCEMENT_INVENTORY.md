@@ -168,9 +168,11 @@ permission manifest that routes risk and enables unknown-action fail-closed beha
   `workspace.write_patch`, `workspace.read`, `artifact.persist`, `proposal.create`, `proposal.apply`,
   `agent.config_update`,
   `automation.create`, `automation.update`, `automation.fire`.
-- **WIRED_VIA_PROPOSAL** (4): `lifecycle_status=WIRED_VIA_PROPOSAL` — enforced exclusively via the `proposal.apply`
+- **WIRED_VIA_PROPOSAL** (9): `lifecycle_status=WIRED_VIA_PROPOSAL` — enforced exclusively via the `proposal.apply`
   gate (`PolicyGateway.enforce_proposal_apply()`).
-  Actions: `memory.create`, `memory.update`, `memory.archive`, `policy.change`.
+  Actions: `memory.create`, `memory.update`, `memory.archive`, `policy.change`,
+  `knowledge.create`, `knowledge.update`, `knowledge.archive`,
+  `knowledge.relation_create`, `knowledge.relation_delete`.
 - **RESERVED** (11): `lifecycle_status=RESERVED` — registered for vocabulary completeness and fail-closed
   defence-in-depth, but not wired to business code yet. `PolicyGateway` always denies reserved actions.
   `current_enforcement_point="not_implemented"` is a human-readable marker.
@@ -234,6 +236,38 @@ is the actual fail_closed audit and approval boundary for all of these actions.
 | `memory.update` | `proposal.apply` gate | Memory updates require proposal approval. No direct PolicyGateway call site. |
 | `memory.archive` | `proposal.apply` gate | Memory archive requires proposal approval. No direct PolicyGateway call site. |
 | `policy.change` | `proposal.apply` gate | Requires admin/owner role. No direct PolicyGateway call site. Durable audit occurs through `proposal.apply`. |
+| `knowledge.create` | `proposal.apply` gate | `knowledge_create` creates active KnowledgeItem rows only after proposal acceptance. No direct PolicyGateway call site. |
+| `knowledge.update` | `proposal.apply` gate | `knowledge_update` creates a new KnowledgeItem version and marks the previous row superseded. No direct PolicyGateway call site. |
+| `knowledge.archive` | `proposal.apply` gate | `knowledge_archive` archives an item. No direct PolicyGateway call site. |
+| `knowledge.relation_create` | `proposal.apply` gate | `knowledge_relation_create` creates a same-space database-backed relation. No direct PolicyGateway call site. |
+| `knowledge.relation_delete` | `proposal.apply` gate | `knowledge_relation_delete` archives a relation. No direct PolicyGateway call site. |
+
+### Knowledge policy and proposal boundary
+
+Knowledge durable writes are implemented through `ProposalApplyService` and
+protected by `proposal.apply`. The action registry marks `knowledge.create`,
+`knowledge.update`, `knowledge.archive`, `knowledge.relation_create`, and
+`knowledge.relation_delete` as `WIRED_VIA_PROPOSAL`.
+
+`SUPPORTED_PROPOSAL_TYPES` includes `knowledge_create`, `knowledge_update`,
+`knowledge_archive`, `knowledge_relation_create`, and
+`knowledge_relation_delete`. Unsupported proposal types still deny at the
+`proposal.apply` gate with `unsupported_proposal_type`.
+
+Knowledge read and proposal-creation endpoints enforce MVP visibility before
+creating proposals: `space_shared` and `workspace_shared` are readable to
+current-space members; `private` and `restricted` are owner-readable only.
+Relation reads omit rows unless both endpoints are visible to the viewer.
+`ProposalApplyService` also performs domain-specific Knowledge authorization
+after `proposal.apply` allows acceptance, so malformed proposals cannot mutate
+or relate another user's private or restricted Knowledge.
+
+Knowledge source monitoring is not complete. The apply service has an explicit
+Knowledge branch in source monitoring to document the boundary, but external or
+untrusted Activity/Artifact-derived Knowledge still needs a future evaluator.
+
+Knowledge must not automatically enter Memory or ContextBuilder. Promotion to
+Memory requires a separate future proposal flow.
 
 `PreflightService`, `RunService.create_run`, `AgentService._check_run`, and
 `AutomationPolicyPreflightService` use `PolicyEngine` directly (non-mutating
@@ -268,6 +302,7 @@ instead of silently using `model_provider_mode=none`.
 | `artifact.persist` | `runs/artifact_persistence.py` PolicyGateway (`target_space_id`, `derived_from_personal_memory_grant`, `raw_private_memory_included` in `context`; DENY+REQUIRE_APPROVAL block) | PolicyDecisionRecord (audit_required=True) |
 | `proposal.create` | `memory/proposals.py` + `runs/code_patch_collector.py` (`target_visibility`, `target_scope` in `context` for memory proposals) | PolicyDecisionRecord (force_record=True for code_patch) |
 | `proposal.apply` | `memory/proposals.py` PolicyGateway | PolicyDecisionRecord (audit_required=True). Unsupported proposal types deny at gate (`audit_code="unsupported_proposal_type"`) before any role check. Role matrix: owner=all, admin=low/medium/high, reviewer=low/medium. |
+| `knowledge.*` | `memory/proposals.py` + `knowledge/service.py` via `proposal.apply` | No direct write gate. Accepted `knowledge_*` proposals create/version/archive KnowledgeItem or archive/create KnowledgeRelation rows. |
 | `agent.config_update` | `agents/agent_service.py` PolicyGateway before `agent_config_update` proposal creation | PolicyDecisionRecord (audit_required=True, safe metadata only) |
 | `automation.create` | `automation/service.py` PolicyGateway | PolicyDecisionRecord (audit_required=True, fail_closed). `membership_role` in context; requires admin/owner. Runtime preflight + policy preflight snapshots are stored in `preflight_snapshot_json`. |
 | `automation.update` | `automation/service.py` PolicyGateway | PolicyDecisionRecord (audit_required=True, fail_closed). `membership_role` in context; requires admin/owner. |

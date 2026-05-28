@@ -693,6 +693,47 @@ def upgrade() -> None:
     op.create_index(op.f('ix_activity_records_lifecycle_status'), 'activity_records', ['lifecycle_status'], unique=False)
     op.create_index(op.f('ix_activity_records_consolidation_status'), 'activity_records', ['consolidation_status'], unique=False)
     op.create_index(op.f('ix_activity_records_owner_user_id'), 'activity_records', ['owner_user_id'], unique=False)
+    op.create_table('projects',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('owner_user_id', sa.String(length=36), nullable=True),
+    sa.Column('name', sa.String(length=256), nullable=False),
+    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('current_focus', sa.Text(), nullable=True),
+    sa.Column('settings_json', sa.JSON(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('archived_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
+    sa.CheckConstraint("status in ('active', 'archived', 'deleted')", name='ck_projects_status'),
+    sa.ForeignKeyConstraint(['owner_user_id'], ['users.id']),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_projects_space_id', 'projects', ['space_id'])
+    op.create_index('ix_projects_status', 'projects', ['status'])
+    op.create_index('ix_projects_owner_user_id', 'projects', ['owner_user_id'])
+
+    op.create_table('project_workspaces',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('project_id', sa.String(length=36), nullable=False),
+    sa.Column('workspace_id', sa.String(length=36), nullable=False),
+    sa.Column('role', sa.String(length=64), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint(
+        "role in ('primary_codebase', 'capability_library', 'docs', 'data', 'deployment', 'reference')",
+        name='ck_project_workspaces_role',
+    ),
+    sa.ForeignKeyConstraint(['project_id'], ['projects.id']),
+    sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id']),
+    sa.UniqueConstraint('project_id', 'workspace_id', 'role', name='uq_project_workspaces_project_workspace_role'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_project_workspaces_project_id', 'project_workspaces', ['project_id'])
+    op.create_index('ix_project_workspaces_workspace_id', 'project_workspaces', ['workspace_id'])
+
     op.create_table('proposals',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -776,6 +817,99 @@ def upgrade() -> None:
     op.create_index(op.f('ix_artifacts_source_runtime_adapter_id'), 'artifacts', ['source_runtime_adapter_id'], unique=False)
     op.create_index(op.f('ix_artifacts_source_execution_plane_id'), 'artifacts', ['source_execution_plane_id'], unique=False)
     op.create_index(op.f('ix_artifacts_space_id'), 'artifacts', ['space_id'], unique=False)
+    op.create_table('knowledge_items',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('project_id', sa.String(length=36), nullable=True),
+    sa.Column('workspace_id', sa.String(length=36), nullable=True),
+    sa.Column('root_item_id', sa.String(length=36), nullable=True),
+    sa.Column('supersedes_item_id', sa.String(length=36), nullable=True),
+    sa.Column('item_type', sa.String(length=32), nullable=False),
+    sa.Column('title', sa.String(length=512), nullable=False),
+    sa.Column('content', sa.Text(), nullable=False),
+    sa.Column('content_format', sa.String(length=32), nullable=False),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('visibility', sa.String(length=32), nullable=False),
+    sa.Column('verification_status', sa.String(length=32), nullable=False),
+    sa.Column('reflection_status', sa.String(length=32), nullable=False),
+    sa.Column('tags_json', sa.JSON(), nullable=False),
+    sa.Column('confidence', sa.Float(), nullable=True),
+    sa.Column('source_url', sa.Text(), nullable=True),
+    sa.Column('source_refs_json', sa.JSON(), nullable=False),
+    sa.Column('owner_user_id', sa.String(length=36), nullable=True),
+    sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
+    sa.Column('created_by_agent_id', sa.String(length=36), nullable=True),
+    sa.Column('created_by_run_id', sa.String(length=36), nullable=True),
+    sa.Column('source_activity_id', sa.String(length=36), nullable=True),
+    sa.Column('source_artifact_id', sa.String(length=36), nullable=True),
+    sa.Column('created_from_proposal_id', sa.String(length=36), nullable=True),
+    sa.Column('approved_by_user_id', sa.String(length=36), nullable=True),
+    sa.Column('version', sa.Integer(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('archived_at', sa.DateTime(timezone=True), nullable=True),
+    sa.CheckConstraint("confidence is null or (confidence >= 0 and confidence <= 1)", name='ck_knowledge_items_confidence'),
+    sa.CheckConstraint("content_format in ('markdown', 'plain')", name='ck_knowledge_items_content_format'),
+    sa.CheckConstraint("item_type in ('knowledge', 'experience', 'lesson', 'procedure', 'decision', 'reflection', 'source', 'question', 'answer', 'summary')", name='ck_knowledge_items_item_type'),
+    sa.CheckConstraint("reflection_status in ('unreviewed', 'reviewed', 'distilled')", name='ck_knowledge_items_reflection_status'),
+    sa.CheckConstraint("status in ('draft', 'active', 'superseded', 'archived')", name='ck_knowledge_items_status'),
+    sa.CheckConstraint("verification_status in ('unverified', 'needs_review', 'verified')", name='ck_knowledge_items_verification_status'),
+    sa.CheckConstraint("visibility in ('private', 'space_shared', 'workspace_shared', 'restricted')", name='ck_knowledge_items_visibility'),
+    sa.ForeignKeyConstraint(['approved_by_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['created_by_agent_id'], ['agents.id'], ),
+    sa.ForeignKeyConstraint(['created_by_run_id'], ['runs.id'], ),
+    sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['created_from_proposal_id'], ['proposals.id'], ),
+    sa.ForeignKeyConstraint(['owner_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['project_id'], ['projects.id'], ),
+    sa.ForeignKeyConstraint(['source_activity_id'], ['activity_records.id'], ),
+    sa.ForeignKeyConstraint(['source_artifact_id'], ['artifacts.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_knowledge_items_created_from_proposal_id'), 'knowledge_items', ['created_from_proposal_id'], unique=False)
+    op.create_index(op.f('ix_knowledge_items_item_type'), 'knowledge_items', ['item_type'], unique=False)
+    op.create_index(op.f('ix_knowledge_items_owner_user_id'), 'knowledge_items', ['owner_user_id'], unique=False)
+    op.create_index(op.f('ix_knowledge_items_project_id'), 'knowledge_items', ['project_id'], unique=False)
+    op.create_index(op.f('ix_knowledge_items_root_item_id'), 'knowledge_items', ['root_item_id'], unique=False)
+    op.create_index(op.f('ix_knowledge_items_space_id'), 'knowledge_items', ['space_id'], unique=False)
+    op.create_index(op.f('ix_knowledge_items_status'), 'knowledge_items', ['status'], unique=False)
+    op.create_index(op.f('ix_knowledge_items_supersedes_item_id'), 'knowledge_items', ['supersedes_item_id'], unique=False)
+    op.create_index(op.f('ix_knowledge_items_visibility'), 'knowledge_items', ['visibility'], unique=False)
+    op.create_index(op.f('ix_knowledge_items_workspace_id'), 'knowledge_items', ['workspace_id'], unique=False)
+    op.create_table('knowledge_relations',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('from_item_id', sa.String(length=36), nullable=False),
+    sa.Column('to_item_id', sa.String(length=36), nullable=False),
+    sa.Column('relation_type', sa.String(length=64), nullable=False),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('confidence', sa.Float(), nullable=True),
+    sa.Column('evidence_summary', sa.Text(), nullable=True),
+    sa.Column('source_proposal_id', sa.String(length=36), nullable=True),
+    sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
+    sa.Column('created_by_agent_id', sa.String(length=36), nullable=True),
+    sa.Column('created_from_assessment_id', sa.String(length=36), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("confidence is null or (confidence >= 0 and confidence <= 1)", name='ck_knowledge_relations_confidence'),
+    sa.CheckConstraint("relation_type in ('related', 'derived_from', 'example_of', 'supports', 'contradicts', 'part_of', 'prerequisite_of', 'applies_to', 'answers')", name='ck_knowledge_relations_relation_type'),
+    sa.CheckConstraint("status in ('candidate', 'active', 'rejected', 'archived')", name='ck_knowledge_relations_status'),
+    sa.ForeignKeyConstraint(['created_by_agent_id'], ['agents.id'], ),
+    sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['from_item_id'], ['knowledge_items.id'], ),
+    sa.ForeignKeyConstraint(['source_proposal_id'], ['proposals.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['to_item_id'], ['knowledge_items.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_knowledge_relations_from_item_id'), 'knowledge_relations', ['from_item_id'], unique=False)
+    op.create_index(op.f('ix_knowledge_relations_relation_type'), 'knowledge_relations', ['relation_type'], unique=False)
+    op.create_index(op.f('ix_knowledge_relations_space_id'), 'knowledge_relations', ['space_id'], unique=False)
+    op.create_index(op.f('ix_knowledge_relations_status'), 'knowledge_relations', ['status'], unique=False)
+    op.create_index(op.f('ix_knowledge_relations_to_item_id'), 'knowledge_relations', ['to_item_id'], unique=False)
+    op.create_index('ix_knowledge_relations_unique_active', 'knowledge_relations', ['space_id', 'from_item_id', 'to_item_id', 'relation_type'], unique=True, sqlite_where=sa.text("status = 'active'"))
     op.create_table('boards',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -1695,47 +1829,6 @@ def upgrade() -> None:
     op.create_index(op.f('ix_runtime_tool_bindings_execution_plane_id'), 'runtime_tool_bindings', ['execution_plane_id'], unique=False)
     op.create_index(op.f('ix_runtime_tool_bindings_enabled'), 'runtime_tool_bindings', ['enabled'], unique=False)
 
-    op.create_table('projects',
-    sa.Column('id', sa.String(length=36), nullable=False),
-    sa.Column('space_id', sa.String(length=36), nullable=False),
-    sa.Column('owner_user_id', sa.String(length=36), nullable=True),
-    sa.Column('name', sa.String(length=256), nullable=False),
-    sa.Column('description', sa.Text(), nullable=True),
-    sa.Column('status', sa.String(length=32), nullable=False),
-    sa.Column('current_focus', sa.Text(), nullable=True),
-    sa.Column('settings_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('archived_at', sa.DateTime(timezone=True), nullable=True),
-    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
-    sa.CheckConstraint("status in ('active', 'archived', 'deleted')", name='ck_projects_status'),
-    sa.ForeignKeyConstraint(['owner_user_id'], ['users.id']),
-    sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index('ix_projects_space_id', 'projects', ['space_id'])
-    op.create_index('ix_projects_status', 'projects', ['status'])
-    op.create_index('ix_projects_owner_user_id', 'projects', ['owner_user_id'])
-
-    op.create_table('project_workspaces',
-    sa.Column('id', sa.String(length=36), nullable=False),
-    sa.Column('project_id', sa.String(length=36), nullable=False),
-    sa.Column('workspace_id', sa.String(length=36), nullable=False),
-    sa.Column('role', sa.String(length=64), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.CheckConstraint(
-        "role in ('primary_codebase', 'capability_library', 'docs', 'data', 'deployment', 'reference')",
-        name='ck_project_workspaces_role',
-    ),
-    sa.ForeignKeyConstraint(['project_id'], ['projects.id']),
-    sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id']),
-    sa.UniqueConstraint('project_id', 'workspace_id', 'role', name='uq_project_workspaces_project_workspace_role'),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index('ix_project_workspaces_project_id', 'project_workspaces', ['project_id'])
-    op.create_index('ix_project_workspaces_workspace_id', 'project_workspaces', ['workspace_id'])
-
     op.add_column('runs', sa.Column('project_id', sa.String(length=36), nullable=True))
     op.create_index('ix_runs_project_id', 'runs', ['project_id'])
     op.add_column('activity_records', sa.Column('project_id', sa.String(length=36), nullable=True))
@@ -1916,13 +2009,6 @@ def downgrade() -> None:
     op.drop_column('activity_records', 'project_id')
     op.drop_index('ix_runs_project_id', table_name='runs')
     op.drop_column('runs', 'project_id')
-    op.drop_index('ix_project_workspaces_workspace_id', table_name='project_workspaces')
-    op.drop_index('ix_project_workspaces_project_id', table_name='project_workspaces')
-    op.drop_table('project_workspaces')
-    op.drop_index('ix_projects_owner_user_id', table_name='projects')
-    op.drop_index('ix_projects_status', table_name='projects')
-    op.drop_index('ix_projects_space_id', table_name='projects')
-    op.drop_table('projects')
     # Control plane: drop leaf tables first (no other table references these).
     op.drop_index(op.f('ix_runtime_tool_bindings_enabled'), table_name='runtime_tool_bindings')
     op.drop_index(op.f('ix_runtime_tool_bindings_execution_plane_id'), table_name='runtime_tool_bindings')
@@ -2107,6 +2193,31 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_boards_workspace_id'), table_name='boards')
     op.drop_index(op.f('ix_boards_space_id'), table_name='boards')
     op.drop_table('boards')
+    op.drop_index('ix_knowledge_relations_unique_active', table_name='knowledge_relations')
+    op.drop_index(op.f('ix_knowledge_relations_to_item_id'), table_name='knowledge_relations')
+    op.drop_index(op.f('ix_knowledge_relations_status'), table_name='knowledge_relations')
+    op.drop_index(op.f('ix_knowledge_relations_space_id'), table_name='knowledge_relations')
+    op.drop_index(op.f('ix_knowledge_relations_relation_type'), table_name='knowledge_relations')
+    op.drop_index(op.f('ix_knowledge_relations_from_item_id'), table_name='knowledge_relations')
+    op.drop_table('knowledge_relations')
+    op.drop_index(op.f('ix_knowledge_items_workspace_id'), table_name='knowledge_items')
+    op.drop_index(op.f('ix_knowledge_items_visibility'), table_name='knowledge_items')
+    op.drop_index(op.f('ix_knowledge_items_supersedes_item_id'), table_name='knowledge_items')
+    op.drop_index(op.f('ix_knowledge_items_status'), table_name='knowledge_items')
+    op.drop_index(op.f('ix_knowledge_items_space_id'), table_name='knowledge_items')
+    op.drop_index(op.f('ix_knowledge_items_root_item_id'), table_name='knowledge_items')
+    op.drop_index(op.f('ix_knowledge_items_project_id'), table_name='knowledge_items')
+    op.drop_index(op.f('ix_knowledge_items_owner_user_id'), table_name='knowledge_items')
+    op.drop_index(op.f('ix_knowledge_items_item_type'), table_name='knowledge_items')
+    op.drop_index(op.f('ix_knowledge_items_created_from_proposal_id'), table_name='knowledge_items')
+    op.drop_table('knowledge_items')
+    op.drop_index('ix_project_workspaces_workspace_id', table_name='project_workspaces')
+    op.drop_index('ix_project_workspaces_project_id', table_name='project_workspaces')
+    op.drop_table('project_workspaces')
+    op.drop_index('ix_projects_owner_user_id', table_name='projects')
+    op.drop_index('ix_projects_status', table_name='projects')
+    op.drop_index('ix_projects_space_id', table_name='projects')
+    op.drop_table('projects')
     op.drop_index(op.f('ix_artifacts_source_execution_plane_id'), table_name='artifacts')
     op.drop_index(op.f('ix_artifacts_source_runtime_adapter_id'), table_name='artifacts')
     op.drop_index(op.f('ix_artifacts_owner_user_id'), table_name='artifacts')

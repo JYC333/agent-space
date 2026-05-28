@@ -15,7 +15,7 @@ Anki-like review system. Cards are generated from knowledge items and activities
 - Review UI (web + mobile — swipe gestures on mobile)
 
 ## Does Not Own
-- Knowledge item content (llm-wiki module)
+- Knowledge item content (knowledge-base module)
 - Activity records (activity-inbox module)
 - Proposal approval (proposals module)
 - Media card rendering for rich types (media-cards module)
@@ -112,7 +112,7 @@ POST /api/v1/cards/{id}/review
 ## UI: Card Browser
 
 - List of all FlashCards for current space/user
-- Filter by: status, source (wiki/activity), workspace, due date
+- Filter by: status, source (knowledge/activity), workspace, due date
 - Bulk actions: suspend, archive, reset scheduling
 - Each row: front preview, due date, FSRS difficulty, review count
 
@@ -132,7 +132,7 @@ POST /api/v1/cards/{id}/review
 - `frontend/src/components/ReviewCard.tsx` — TODO: card component (swipe support)
 
 ## Related Modules
-- [llm-wiki.md](llm-wiki.md) — primary source of card content
+- [knowledge-base.md](knowledge-base.md) — primary source of card content
 - [activity-inbox.md](activity-inbox.md) — secondary source (captures → cards)
 - [media-cards.md](media-cards.md) — rich-media card extension
 - [proposals.md](proposals.md) — card generation always goes through proposals

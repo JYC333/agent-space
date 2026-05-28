@@ -10,7 +10,7 @@
 ├─────────────────────────────────────────────────────┤
 │  12. Product UI / Shell Layer  [PLANNED]             │
 │     Shell, NavRail, CommandPalette, PanelLayout     │
-│     Activity Inbox, Memory Review, Wiki, Cards UI   │
+│     Activity Inbox, Memory Review, Knowledge, Cards │
 │     frontend/src/                                   │
 ├─────────────────────────────────────────────────────┤
 │  11. Workspace Console Layer                         │
@@ -46,8 +46,8 @@
 │     Media cards (image occlusion, audio cloze)      │
 │     core/backend/app/cards/                         │
 ├─────────────────────────────────────────────────────┤
-│   5. Knowledge / Wiki Layer  [PLANNED]               │
-│     KnowledgeItem, KnowledgeRelation               │
+│   5. Knowledge Layer  [PLANNED]                      │
+│     KnowledgeItem, KnowledgeRelation                │
 │     Structured, agent-generated, proposal-gated     │
 │     core/backend/app/knowledge/                     │
 ├─────────────────────────────────────────────────────┤
@@ -58,7 +58,7 @@
 ├─────────────────────────────────────────────────────┤
 │   3. Activity Layer                                  │
 │     Raw inputs: user_input, web_capture, file_import │
-│     ActivityRecord → proposals → memory/wiki/card   │
+│     ActivityRecord -> proposals -> memory/knowledge │
 │     core/backend/app/activity/                      │
 ├─────────────────────────────────────────────────────┤
 │   2. User / Agent Layer                              │
@@ -100,7 +100,7 @@
 | New permission rule | Layer 8 | `app/policy/` |
 | New memory scope or type | Layer 4 | `app/memory/` |
 | New raw capture source | Layer 3 | `app/activity/` (planned) |
-| New structured knowledge type | Layer 5 | `app/knowledge/` (planned) |
+| New structured knowledge type | Layer 5 | `app/knowledge/` |
 | New review card type | Layer 6 | `app/cards/` (planned) |
 | New UI view (web) | Layer 12 | `frontend/src/modules/<name>/` |
 | New UI view (mobile-primary) | Layer 13 | `frontend/src/modules/<name>/` mobile variants |

@@ -6,8 +6,8 @@
 ## Context
 
 As the system grows it will target multiple deployment profiles:
-- **Personal** — all features enabled (memory, wiki, cards, media cards, activity inbox)
-- **Team** — memory, wiki, agents, workspaces; cards optional
+- **Personal** — all features enabled (memory, knowledge, cards, media cards, activity inbox)
+- **Team** — memory, knowledge, agents, workspaces; cards optional
 - **Enterprise** — memory, agents, workspaces; no cards, no media cards
 
 Before the codebase grew too large, we needed a structure that makes adding and excluding features mechanical — not a surgical restructuring.
@@ -40,7 +40,7 @@ app/
 
 Each module's HTTP routes live in `<module>/api.py` (and optionally additional `*_api.py` files). Modules are registered via `app/modules/registry.py` — `main.py` no longer imports individual routers.
 
-Optional modules (planned: `cards`, `wiki`, `activity`) are listed but commented out in the registry until their backends are implemented.
+Optional modules (planned: `cards`) are listed but commented out in the registry until their backends are implemented. Knowledge has a backend module and remains a hidden frontend stub until the browser UI is built.
 
 ### Frontend layout
 
@@ -55,7 +55,7 @@ src/
     sessions/       ← SessionsPage
     capabilities/   ← CapabilitiesPage
     activity/       ← ActivityInboxPage (planned stub)
-    wiki/           ← WikiPage (planned stub)
+    knowledge/      <- KnowledgePage (planned stub)
     cards/          ← CardReviewPage (planned stub)
   App.jsx           ← routes generated from MODULE_REGISTRY; React.lazy per module
 ```

@@ -34,7 +34,7 @@ Define the sync strategy for a future where agent-space can run on multiple devi
 | Memory content conflict | Create new version; surface both in memory review | Two devices edit the same memory |
 | Proposal status conflict | Last-writer-wins on `status`; log both events | Two devices accept/reject same proposal |
 | Activity record duplicate | Deduplicate by (space_id, source, created_at, hash) | Same file imported twice |
-| Wiki item conflict | Version branching; merge UI surfaced to user | Two devices edit same knowledge item |
+| Knowledge item conflict | Version branching; merge UI surfaced to user | Two devices edit same knowledge item |
 | Card scheduling conflict | Take later `next_review_at` (conservative) | Two devices review same card |
 | Agent run conflict | Runs are immutable; no conflict possible | — |
 

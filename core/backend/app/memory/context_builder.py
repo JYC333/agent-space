@@ -200,7 +200,7 @@ def resolve_attachment(att: dict, workspace_path: str | None = None) -> dict:
         content, error = _resolve_recent_commits(ref, workspace_path)
     elif att_type == "url":
         error = "url attachments must be pre-resolved by the caller"
-    elif att_type in ("memory_entry", "activity_record", "wiki_page", "proposal", "run_artifact"):
+    elif att_type in ("memory_entry", "activity_record", "knowledge_item", "proposal", "run_artifact"):
         pass
     else:
         error = f"unknown attachment_type: {att_type}"

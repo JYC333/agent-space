@@ -1,0 +1,220 @@
+import { useState } from 'react'
+import { Plus } from 'lucide-react'
+import { toast } from 'sonner'
+import { knowledgeApi } from '../../api/client'
+import { errMsg } from '../../lib/utils'
+import type {
+  KnowledgeContentFormat,
+  KnowledgeCreateProposalBody,
+  KnowledgeItemType,
+  KnowledgeVisibility,
+  Proposal,
+} from '../../types/api'
+import { Badge } from '../../components/ui/badge'
+import { Button } from '../../components/ui/button'
+import { Card, CardTitle } from '../../components/ui/card'
+import { Input } from '../../components/ui/input'
+import { Label } from '../../components/ui/label'
+import { Select } from '../../components/ui/select'
+import { Textarea } from '../../components/ui/textarea'
+import KnowledgeProposalNotice from './KnowledgeProposalNotice'
+import {
+  KNOWLEDGE_FORMATS,
+  KNOWLEDGE_ITEM_TYPES,
+  KNOWLEDGE_VISIBILITIES,
+  parseOptionalConfidence,
+  parseSourceRefs,
+  parseTags,
+  validateConfidence,
+} from './utils'
+
+interface CreateForm {
+  item_type: KnowledgeItemType
+  title: string
+  content: string
+  content_format: KnowledgeContentFormat
+  visibility: KnowledgeVisibility
+  tags: string
+  confidence: string
+  project_id: string
+  workspace_id: string
+  source_url: string
+  source_activity_id: string
+  source_run_id: string
+  source_artifact_id: string
+  source_refs: string
+  rationale: string
+}
+
+const EMPTY_CREATE_FORM: CreateForm = {
+  item_type: 'knowledge',
+  title: '',
+  content: '',
+  content_format: 'markdown',
+  visibility: 'space_shared',
+  tags: '',
+  confidence: '',
+  project_id: '',
+  workspace_id: '',
+  source_url: '',
+  source_activity_id: '',
+  source_run_id: '',
+  source_artifact_id: '',
+  source_refs: '',
+  rationale: '',
+}
+
+interface KnowledgeCreateProposalFormProps {
+  hasOperationalSpace: boolean
+}
+
+export default function KnowledgeCreateProposalForm({ hasOperationalSpace }: KnowledgeCreateProposalFormProps) {
+  const [form, setForm] = useState<CreateForm>(EMPTY_CREATE_FORM)
+  const [lastProposal, setLastProposal] = useState<Proposal | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  function setField<K extends keyof CreateForm>(key: K, value: CreateForm[K]) {
+    setForm(f => ({ ...f, [key]: value }))
+  }
+
+  async function submitCreateProposal() {
+    if (!hasOperationalSpace) {
+      toast.error('Select an operational space before proposing knowledge')
+      return
+    }
+    if (!form.title.trim() || !form.content.trim()) {
+      toast.error('Title and content are required')
+      return
+    }
+    const confidence = parseOptionalConfidence(form.confidence)
+    if (!validateConfidence(confidence)) {
+      toast.error('Confidence must be a number from 0 to 1')
+      return
+    }
+    let sourceRefs: Record<string, unknown>[]
+    try {
+      sourceRefs = parseSourceRefs(form.source_refs)
+    } catch (e) {
+      toast.error(errMsg(e))
+      return
+    }
+    const body: KnowledgeCreateProposalBody = {
+      item_type: form.item_type,
+      title: form.title.trim(),
+      content: form.content,
+      content_format: form.content_format,
+      visibility: form.visibility,
+      tags: parseTags(form.tags),
+      confidence,
+      project_id: form.project_id.trim() || null,
+      workspace_id: form.workspace_id.trim() || null,
+      source_url: form.source_url.trim() || null,
+      source_activity_id: form.source_activity_id.trim() || null,
+      source_run_id: form.source_run_id.trim() || null,
+      source_artifact_id: form.source_artifact_id.trim() || null,
+      source_refs: sourceRefs,
+      rationale: form.rationale.trim() || null,
+    }
+    setSubmitting(true)
+    try {
+      const p = await knowledgeApi.proposeCreate(body)
+      setLastProposal(p)
+      setForm(EMPTY_CREATE_FORM)
+      toast.success('Knowledge proposal created')
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <CardTitle>Propose Knowledge</CardTitle>
+        <Badge variant="outline">proposal only</Badge>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <Label>Title</Label>
+          <Input value={form.title} onChange={e => setField('title', e.target.value)} placeholder="Short title..." />
+        </div>
+        <div>
+          <Label>Item type</Label>
+          <Select value={form.item_type} onChange={v => setField('item_type', v as KnowledgeItemType)} options={KNOWLEDGE_ITEM_TYPES.map(t => ({ value: t, label: t }))} />
+        </div>
+        <div>
+          <Label>Content format</Label>
+          <Select value={form.content_format} onChange={v => setField('content_format', v as KnowledgeContentFormat)} options={KNOWLEDGE_FORMATS.map(f => ({ value: f, label: f }))} />
+        </div>
+        <div>
+          <Label>Visibility</Label>
+          <Select value={form.visibility} onChange={v => setField('visibility', v as KnowledgeVisibility)} options={KNOWLEDGE_VISIBILITIES.map(v => ({ value: v, label: v }))} />
+        </div>
+        <div>
+          <Label>Tags</Label>
+          <Input value={form.tags} onChange={e => setField('tags', e.target.value)} placeholder="comma, separated" />
+        </div>
+        <div>
+          <Label>Confidence</Label>
+          <Input value={form.confidence} onChange={e => setField('confidence', e.target.value)} placeholder="optional, 0 to 1" />
+        </div>
+        <div className="md:col-span-2">
+          <Label>Content</Label>
+          <Textarea value={form.content} onChange={e => setField('content', e.target.value)} placeholder="Knowledge content..." />
+        </div>
+        <div className="md:col-span-2">
+          <Label>Rationale</Label>
+          <Textarea value={form.rationale} onChange={e => setField('rationale', e.target.value)} placeholder="Optional. Backend will default if empty." />
+        </div>
+      </div>
+
+      <div className="mt-5 border-t border-border pt-4">
+        <CardTitle>Advanced Associations</CardTitle>
+        <div className="grid gap-3 md:grid-cols-2 mt-3">
+          <div>
+            <Label>project_id</Label>
+            <Input value={form.project_id} onChange={e => setField('project_id', e.target.value)} placeholder="optional project id" />
+          </div>
+          <div>
+            <Label>workspace_id</Label>
+            <Input value={form.workspace_id} onChange={e => setField('workspace_id', e.target.value)} placeholder="optional workspace id" />
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5 border-t border-border pt-4">
+        <CardTitle>Advanced Source</CardTitle>
+        <div className="grid gap-3 md:grid-cols-2 mt-3">
+          <div className="md:col-span-2">
+            <Label>source_url</Label>
+            <Input value={form.source_url} onChange={e => setField('source_url', e.target.value)} placeholder="optional" />
+          </div>
+          <div>
+            <Label>source_activity_id</Label>
+            <Input value={form.source_activity_id} onChange={e => setField('source_activity_id', e.target.value)} placeholder="optional activity id" />
+          </div>
+          <div>
+            <Label>source_run_id</Label>
+            <Input value={form.source_run_id} onChange={e => setField('source_run_id', e.target.value)} placeholder="optional run id" />
+          </div>
+          <div>
+            <Label>source_artifact_id</Label>
+            <Input value={form.source_artifact_id} onChange={e => setField('source_artifact_id', e.target.value)} placeholder="optional artifact id" />
+          </div>
+          <div className="md:col-span-2">
+            <Label>source_refs JSON</Label>
+            <Textarea value={form.source_refs} onChange={e => setField('source_refs', e.target.value)} placeholder='optional, e.g. [{"kind":"doc","id":"..."}]' />
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 mt-4">
+        <Button onClick={submitCreateProposal} disabled={submitting || !hasOperationalSpace}>
+          <Plus className="size-4 mr-1" />Submit proposal
+        </Button>
+      </div>
+      {lastProposal && <div className="mt-4"><KnowledgeProposalNotice proposal={lastProposal} /></div>}
+    </Card>
+  )
+}

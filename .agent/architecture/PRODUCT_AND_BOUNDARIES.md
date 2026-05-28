@@ -19,7 +19,7 @@ capture / trigger
 → Agent Run / Job
 → Artifact + Proposal
 → Human Review
-→ Memory / Wiki / Domain Object / Task / Action
+→ Memory / Knowledge / Domain Object / Task / Action
 ```
 
 ## Durable Product Boundaries
@@ -66,9 +66,20 @@ capture / trigger
 
 ### Proposal-first for durable change
 
-- Consequential durable changes (memory writes, code patches, policy changes) go through Proposal → human review → apply.
+- Consequential durable changes (memory writes, knowledge writes, code patches, policy changes) go through Proposal → human review → apply.
 - Agents do not directly write active memory.
+- Agents do not directly write active KnowledgeItem rows. Knowledge writes use `knowledge_*` proposals and accepted proposal apply handlers.
 - The public memory write API returns a `ProposalOut` with HTTP 202, not a direct memory mutation.
+
+### Knowledge is not Memory
+
+- Memory is agent context. Knowledge is human-browsable, reviewable, relational long-term content.
+- Knowledge items must not automatically enter ContextBuilder.
+- Promoting Knowledge into Memory must be a separate future proposal flow, not an implicit side effect.
+- Activity, Run, and Artifact are source inputs for Knowledge proposals.
+- Project and workspace are contextual associations for Knowledge, not Knowledge content types.
+- Knowledge reads enforce MVP visibility: shared rows are readable within the current space; private and restricted rows are owner-readable only.
+- Knowledge relations are database-backed and relation reads omit any row whose endpoints are not both readable by the viewer.
 
 ### PolicyEngine evaluates built-in runtime rules; persisted policy enforcement is domain-specific
 
@@ -96,6 +107,7 @@ capture / trigger
 | Memory write (public API) | Returns Proposal (HTTP 202), not direct write | Active |
 | Memory proposal apply | Proposal gate + SourceMonitoring gate | Active |
 | Memory write boundary | `_INTERNAL_WRITE_AUTHORITY` sentinel in `MemoryStore.create()`; structural, not policy-based | Active |
+| Knowledge write boundary | `knowledge.*` actions wired via `proposal.apply`; `knowledge_*` handlers in ProposalApplyService | Active |
 | Policy proposal apply | Proposal gate creates active Policy row | Active |
 | Runtime execution | Runtime policy JSON, adapter resolver, credential resolver | Active |
 | Runtime credential use | Credential resolver + secret redaction | Active |

@@ -83,7 +83,7 @@ not be navigable.
 | Runtime (CLI Adapters) | Enabled | Functional |
 | Personal View | Enabled | Cross-space aggregation |
 | **Today** | `planned: true` | Home serves the command-center role; Today shows "soon" badge |
-| **Wiki** | `enabled: false, visible: false` | Hidden until backend Wiki model exists |
+| **Knowledge** | `enabled: false, visible: false` | Hidden until the frontend browser exists; backend API/model exists |
 | **Cards** | `enabled: false, visible: false` | Hidden until backend spaced-repetition model exists |
 | Time | `planned: true` | Shows "soon" badge |
 
@@ -167,7 +167,7 @@ These are improvements to collect from real use, not pre-conditions for dogfoodi
 
 | Module | Backend prerequisite |
 |---|---|
-| Wiki | Wiki entity model + CRUD API |
+| Knowledge | KnowledgeItem / KnowledgeRelation model + CRUD API |
 | Cards | Spaced-repetition card model + review API |
 | Time | Time entry model + activity linkage |
 | Editor | File editor backend + save API |

@@ -67,8 +67,8 @@ _REGISTRY: list[Module] = [
     Module("runtime_tool_bindings", "Runtime Tool Bindings", "app.runtime_tool_bindings", always_on=True),
     Module("projects",              "Projects",              "app.projects",              always_on=True),
     Module("automation",            "Automation",            "app.automation",            always_on=True),
+    Module("knowledge",             "Knowledge",             "app.knowledge",             always_on=True),
     # Optional modules — not yet implemented; uncomment when ready.
-    # Module("wiki",     "Wiki",            "app.knowledge",  always_on=False),
     # Module("cards",    "Cards",           "app.cards",      always_on=False),
 ]
 

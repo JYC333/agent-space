@@ -74,9 +74,9 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 ## Frontend / UI Boundaries
 
-**B23** — The frontend is not an admin-only console. It is the primary user-facing product surface including personal use (capture, review, wiki reading, assistant chat). Design for non-technical users.
+**B23** — The frontend is not an admin-only console. It is the primary user-facing product surface including personal use (capture, review, knowledge reading, assistant chat). Design for non-technical users.
 
-**B24** — Raw user inputs (thoughts, life logs, file imports, chat captures) must enter via `ActivityRecord` first. The frontend must not write to Memory, KnowledgeItem, or FlashCard directly — always via proposals or the activity intake flow.
+**B24** — Raw user inputs (thoughts, life logs, file imports, chat captures) must enter via `ActivityRecord` first. The frontend must not write to Memory, KnowledgeItem, or FlashCard directly — always via proposals or the activity intake flow. KnowledgeItem rows must not automatically enter Memory or ContextBuilder.
 
 **B25** — The workspace console (file browser, diff viewer) is for workspace operators. It must not be shown as the primary entry point for personal-use features (capture, review, chat).
 
@@ -134,7 +134,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 ## Runtime Adapter Boundaries
 
-**B38** — The agent-space core is runtime-agnostic. OpenCode, Claude Code, Codex, Cursor, and any other vendor CLI are optional runtime adapters, not the foundation. Core features (memory, wiki, flashcards, activity capture, proposals, assistant chat) must work without any coding-agent runtime installed.
+**B38** — The agent-space core is runtime-agnostic. OpenCode, Claude Code, Codex, Cursor, and any other vendor CLI are optional runtime adapters, not the foundation. Core features (memory, knowledge, flashcards, activity capture, proposals, assistant chat) must work without any coding-agent runtime installed.
 
 **B39** — No vendor CLI or external runtime is the source of truth for memory, policy, permissions, or audit records. These always live in the agent-space database regardless of which runtime adapter is active.
 

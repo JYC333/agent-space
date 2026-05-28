@@ -15,6 +15,11 @@ Supported proposal types
   egress_review   — metadata-only grant egress review marker
   follow_up_task  — create a Task row from an accepted follow-up task proposal
   agent_config_update — create a new AgentVersion and advance the Agent pointer
+  knowledge_create — create an active KnowledgeItem
+  knowledge_update — append-only KnowledgeItem version update
+  knowledge_archive — archive a KnowledgeItem
+  knowledge_relation_create — create a same-space KnowledgeRelation
+  knowledge_relation_delete — archive a KnowledgeRelation
 
 Callers
 -------
@@ -29,7 +34,17 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from ..models import ActivityRecord, AgentVersion, MemoryEntry, Policy, Proposal, ProvenanceLink, Task
+from ..models import (
+    ActivityRecord,
+    AgentVersion,
+    KnowledgeItem,
+    KnowledgeRelation,
+    MemoryEntry,
+    Policy,
+    Proposal,
+    ProvenanceLink,
+    Task,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +86,8 @@ class ApplyResult:
     egress_review: bool = False
     task: Optional[Task] = None
     agent_version: Optional[AgentVersion] = None
+    knowledge_item: Optional[KnowledgeItem] = None
+    knowledge_relation: Optional[KnowledgeRelation] = None
 
 
 def _validate_grant_egress_approval_or_raise(db: Session, proposal: Proposal) -> None:
@@ -720,6 +737,8 @@ class ProposalApplyService:
         self._memory_applier = MemoryProposalApplier(db)
         self._policy_applier = PolicyProposalApplier(db)
         self._follow_up_task_applier = FollowUpTaskProposalApplier(db)
+        from ..knowledge.service import KnowledgeProposalApplier
+        self._knowledge_applier = KnowledgeProposalApplier(db)
 
     @staticmethod
     def supported_types() -> frozenset[str]:
@@ -889,6 +908,18 @@ class ProposalApplyService:
                 payload=payload,
                 accept_context=accept_context,  # type: ignore[arg-type]
             )
+        elif ptype in {
+            "knowledge_create",
+            "knowledge_update",
+            "knowledge_archive",
+            "knowledge_relation_create",
+            "knowledge_relation_delete",
+        }:
+            # TODO: Knowledge source monitoring. External or otherwise
+            # untrusted Activity/Artifact-derived Knowledge still needs a
+            # dedicated review evaluator. This branch documents the boundary;
+            # returning here does not mean those sources are intrinsically safe.
+            return
         else:
             return
 
@@ -1003,6 +1034,41 @@ class ProposalApplyService:
             result = ApplyResult(proposal=proposal, agent_version=version)
             self._mark_affected_digests_dirty(proposal, result)
             return result
+
+        if ptype == "knowledge_create":
+            try:
+                item = self._knowledge_applier.apply_create(proposal, user_id=user_id)
+            except Exception as exc:  # noqa: BLE001
+                raise ProposalApplyError(str(exc)) from exc
+            return ApplyResult(proposal=proposal, knowledge_item=item)
+
+        if ptype == "knowledge_update":
+            try:
+                item = self._knowledge_applier.apply_update(proposal, user_id=user_id)
+            except Exception as exc:  # noqa: BLE001
+                raise ProposalApplyError(str(exc)) from exc
+            return ApplyResult(proposal=proposal, knowledge_item=item)
+
+        if ptype == "knowledge_archive":
+            try:
+                item = self._knowledge_applier.apply_archive(proposal, user_id=user_id)
+            except Exception as exc:  # noqa: BLE001
+                raise ProposalApplyError(str(exc)) from exc
+            return ApplyResult(proposal=proposal, knowledge_item=item)
+
+        if ptype == "knowledge_relation_create":
+            try:
+                relation = self._knowledge_applier.apply_relation_create(proposal, user_id=user_id)
+            except Exception as exc:  # noqa: BLE001
+                raise ProposalApplyError(str(exc)) from exc
+            return ApplyResult(proposal=proposal, knowledge_relation=relation)
+
+        if ptype == "knowledge_relation_delete":
+            try:
+                relation = self._knowledge_applier.apply_relation_delete(proposal, user_id=user_id)
+            except Exception as exc:  # noqa: BLE001
+                raise ProposalApplyError(str(exc)) from exc
+            return ApplyResult(proposal=proposal, knowledge_relation=relation)
 
         if ptype == "code_patch":
             from .code_patch_apply import CodePatchApplyError, apply_code_patch_payload

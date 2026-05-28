@@ -182,7 +182,7 @@ Worktree is **acceptable** for:
 **Rule (B-RT-1):** No vendor CLI is the source of truth for memory, policy, permissions, or audit records.
 
 **Rule (B-RT-2):** An enterprise deployment must be able to disable any individual runtime adapter
-without breaking the core system (memory, wiki, cards, proposals, chat, activity capture).
+without breaking the core system (memory, knowledge, cards, proposals, chat, activity capture).
 
 ## Adding a New CLI Adapter
 

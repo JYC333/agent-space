@@ -5,7 +5,7 @@ from __future__ import annotations
 Canonical roles (in ascending authority order):
     guest     — read invited content only
     member    — create activity, artifacts, proposals; run low-risk allowed actions
-    reviewer  — approve medium-risk project/space proposals (memory/wiki/task updates)
+    reviewer  — approve medium-risk project/space proposals (memory/knowledge/task updates)
     admin     — approve high-risk policy/capability/credential/workspace actions
     owner     — full authority inside the space (hard invariants still apply)
 

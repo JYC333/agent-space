@@ -48,6 +48,33 @@ export type MemoryStatus     = 'active' | 'archived' | 'proposed' | 'rejected' |
 export type MemoryVisibility = 'private' | 'space_shared' | 'workspace_shared' | 'restricted' | 'public_template'
 export type ObjectVisibility = 'private' | 'space_shared' | 'restricted' | string
 export type ProposalStatus   = 'pending' | 'accepted' | 'rejected'
+export type KnowledgeItemType =
+  | 'knowledge'
+  | 'experience'
+  | 'lesson'
+  | 'procedure'
+  | 'decision'
+  | 'reflection'
+  | 'source'
+  | 'question'
+  | 'answer'
+  | 'summary'
+export type KnowledgeContentFormat = 'markdown' | 'plain'
+export type KnowledgeItemStatus = 'draft' | 'active' | 'superseded' | 'archived'
+export type KnowledgeVisibility = 'private' | 'space_shared' | 'workspace_shared' | 'restricted'
+export type KnowledgeVerificationStatus = 'unverified' | 'needs_review' | 'verified'
+export type KnowledgeReflectionStatus = 'unreviewed' | 'reviewed' | 'distilled'
+export type KnowledgeRelationType =
+  | 'related'
+  | 'derived_from'
+  | 'example_of'
+  | 'supports'
+  | 'contradicts'
+  | 'part_of'
+  | 'prerequisite_of'
+  | 'applies_to'
+  | 'answers'
+export type KnowledgeRelationStatus = 'candidate' | 'active' | 'rejected' | 'archived'
 export type ActivityStatus     = 'raw' | 'processed' | 'proposals_generated' | 'archived'
 export type ActivitySourceType =
   | 'user_capture'
@@ -232,6 +259,99 @@ export interface Memory {
   created_at: string
   updated_at: string
   deleted_at: string | null
+}
+
+export interface KnowledgeItemSummary {
+  id: string
+  space_id: string
+  project_id: string | null
+  workspace_id: string | null
+  item_type: KnowledgeItemType
+  title: string
+  content_preview: string
+  status: KnowledgeItemStatus
+  visibility: KnowledgeVisibility
+  verification_status: KnowledgeVerificationStatus
+  reflection_status: KnowledgeReflectionStatus
+  tags: string[]
+  confidence: number | null
+  version: number
+  updated_at: string
+}
+
+export interface KnowledgeItem extends KnowledgeItemSummary {
+  root_item_id: string | null
+  supersedes_item_id: string | null
+  content: string
+  content_format: KnowledgeContentFormat
+  source_url: string | null
+  source_refs: Record<string, unknown>[]
+  owner_user_id: string | null
+  created_by_user_id: string | null
+  created_by_agent_id: string | null
+  created_by_run_id: string | null
+  source_activity_id: string | null
+  source_artifact_id: string | null
+  created_from_proposal_id: string | null
+  approved_by_user_id: string | null
+  created_at: string
+  archived_at: string | null
+}
+
+export interface KnowledgeRelation {
+  id: string
+  space_id: string
+  from_item_id: string
+  to_item_id: string
+  relation_type: KnowledgeRelationType
+  status: KnowledgeRelationStatus
+  confidence: number | null
+  evidence_summary: string | null
+  source_proposal_id: string | null
+  created_by_user_id: string | null
+  created_by_agent_id: string | null
+  created_from_assessment_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface KnowledgeCreateProposalBody {
+  item_type: KnowledgeItemType
+  title: string
+  content: string
+  content_format: KnowledgeContentFormat
+  visibility: KnowledgeVisibility
+  project_id?: string | null
+  workspace_id?: string | null
+  tags: string[]
+  confidence?: number | null
+  source_url?: string | null
+  source_refs?: Record<string, unknown>[]
+  source_activity_id?: string | null
+  source_run_id?: string | null
+  source_artifact_id?: string | null
+  rationale?: string | null
+}
+
+export interface KnowledgeUpdateProposalBody {
+  title: string
+  content: string
+  content_format: KnowledgeContentFormat
+  tags: string[]
+  confidence?: number | null
+  rationale?: string | null
+  verification_status?: KnowledgeVerificationStatus
+  reflection_status?: KnowledgeReflectionStatus
+}
+
+export interface KnowledgeRelationProposalBody {
+  from_item_id: string
+  to_item_id: string
+  relation_type: KnowledgeRelationType
+  status: Extract<KnowledgeRelationStatus, 'candidate' | 'active'>
+  confidence?: number | null
+  evidence_summary?: string | null
+  rationale?: string | null
 }
 
 /** Activity inbox (`GET /activity`) — distinct from run-scoped activity records. */

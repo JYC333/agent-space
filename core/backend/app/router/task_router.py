@@ -38,7 +38,7 @@ _LIGHTWEIGHT_TASK_TYPES: frozenset[str] = frozenset({
     "digest",
     "activity_compress",
     "duplicate_detect",
-    "wiki_draft",
+    "knowledge_draft",
     "card_draft",
 })
 

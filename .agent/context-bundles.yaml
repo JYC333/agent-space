@@ -221,20 +221,20 @@ activity:
     - core/backend/app/activity
     - core/backend/app/models.py
 
-wiki:
+knowledge:
   docs:
-    - .agent/modules/llm-wiki.md
+    - .agent/modules/knowledge-base.md
     - .agent/modules/activity-inbox.md
     - .agent/modules/proposals.md
     - .agent/decisions/0007-plugin-module-architecture.md
   code_roots:
-    - core/backend/app/knowledge        # TODO: not yet created
-    - frontend/src/modules/wiki/WikiPage.jsx   # stub exists
+    - core/backend/app/knowledge
+    - frontend/src/modules/knowledge/KnowledgePage.tsx   # stub exists
 
 cards:
   docs:
     - .agent/modules/spaced-repetition.md
-    - .agent/modules/llm-wiki.md
+    - .agent/modules/knowledge-base.md
     - .agent/modules/media-cards.md
     - .agent/modules/proposals.md
     - .agent/decisions/0007-plugin-module-architecture.md

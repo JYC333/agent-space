@@ -31,7 +31,7 @@ Capability code lives in a Workspace; its outputs (digests, artifacts, proposals
 External information should enter the system through the canonical provenance chain:
 
 ```
-Activity → Artifact → Proposal → Wiki / Memory / Card
+Activity -> Artifact -> Proposal -> Knowledge / Memory / Card
 ```
 
 Do not write external information directly into active memory.
@@ -128,6 +128,8 @@ All five durable object list endpoints accept an optional `project_id` query par
 ## Non-goals
 
 - Project is not a task manager. Use the Task Board for work items.
-- Project does not auto-promote artifacts into memory or wiki.
+- Project does not auto-promote artifacts into memory or knowledge.
+- Project is not a Knowledge type; KnowledgeItem rows may reference `project_id`
+  as a contextual association only.
 - Project does not implement RBAC beyond current space-scoped access.
 - Research, paper, author, citation, or literature tables are not part of Project.

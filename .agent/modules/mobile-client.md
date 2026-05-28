@@ -26,7 +26,7 @@ Define the mobile client strategy. agent-space targets mobile as a thin client f
 | Activity inbox | Read + triage (archive, mark reviewed) | P1 |
 | Proposal review | Accept/reject with one tap | P1 |
 | Memory list | Read-only browse | P2 |
-| Wiki read | Read + highlight | P2 |
+| Knowledge read | Read + highlight | P2 |
 | Agent chat | Full (text-only, no file attach in v1) | P2 |
 | Workspace console | Not supported in v1 | — |
 | Diff review | Not supported in v1 | — |

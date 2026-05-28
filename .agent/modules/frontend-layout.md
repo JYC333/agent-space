@@ -17,7 +17,7 @@ Define the structural layout pattern for the product UI. The layout should be mo
 │  Panel     │  Panel                         │  Panel             │
 │            │                                │                    │
 │  Spaces    │  Main content:                 │  Assistant / chat  │
-│  Workspaces│  - Wiki page                   │  Context preview   │
+│  Workspaces│  - Knowledge page              │  Context preview   │
 │  Nav tree  │  - Card review                 │  Memory summary    │
 │  File tree │  - File viewer                 │  Proposal summary  │
 │  Activity  │  - Diff viewer                 │  Metadata / actions│

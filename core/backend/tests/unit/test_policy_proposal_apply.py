@@ -7,9 +7,12 @@ from __future__ import annotations
 import pytest
 from ulid import ULID
 
+from app.memory.apply_service import ProposalApplyService
 from app.policy.decisions import Decision, RiskLevel
 from app.policy.proposal_apply import (
+    KNOWLEDGE_PROPOSAL_TYPES,
     ProposalRiskLevelError,
+    SUPPORTED_PROPOSAL_TYPES,
     check_proposal_apply_policy,
     effective_proposal_risk,
 )
@@ -39,6 +42,7 @@ def test_effective_risk_uses_type_default_when_no_declared():
     assert effective_proposal_risk("code_patch", None) == RiskLevel.HIGH
     assert effective_proposal_risk("policy_change", None) == RiskLevel.HIGH
     assert effective_proposal_risk("follow_up_task", None) == RiskLevel.MEDIUM
+    assert effective_proposal_risk("knowledge_create", None) == RiskLevel.MEDIUM
 
 
 def test_effective_risk_uses_higher_of_type_and_declared():
@@ -176,7 +180,9 @@ def test_check_policy_metadata_supported_apply_type_true_for_known_types(db, cro
     a = cross_space_pair_db["space_a_id"]
     ua = cross_space_pair_db["user_a"]
     for proposal_type in ["memory_create", "memory_update", "memory_archive", "follow_up_task",
-                          "code_patch", "policy_change", "egress_review"]:
+                          "code_patch", "policy_change", "egress_review",
+                          "knowledge_create", "knowledge_update", "knowledge_archive",
+                          "knowledge_relation_create", "knowledge_relation_delete"]:
         prop = _FakeProposal(proposal_type, None)
         decision = check_proposal_apply_policy(db, user_id=ua.id, space_id=a, proposal=prop)
         assert decision.metadata_json["supported_apply_type"] is True, (
@@ -195,6 +201,33 @@ def test_check_policy_unsupported_type_returns_deny(db, cross_space_pair_db):
     assert decision.risk_level == RiskLevel.HIGH
     assert decision.audit_code == "unsupported_proposal_type"
     assert decision.metadata_json["supported_apply_type"] is False
+
+
+def test_knowledge_proposal_types_are_supported_after_apply_handlers_exist(db, cross_space_pair_db):
+    """Knowledge proposal names are supported because ProposalApplyService has handlers."""
+    expected = {
+        "knowledge_create",
+        "knowledge_update",
+        "knowledge_archive",
+        "knowledge_relation_create",
+        "knowledge_relation_delete",
+    }
+    assert KNOWLEDGE_PROPOSAL_TYPES == expected
+    assert KNOWLEDGE_PROPOSAL_TYPES.issubset(SUPPORTED_PROPOSAL_TYPES)
+    assert ProposalApplyService.supported_types() == SUPPORTED_PROPOSAL_TYPES
+
+    a = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
+    for proposal_type in sorted(KNOWLEDGE_PROPOSAL_TYPES):
+        decision = check_proposal_apply_policy(
+            db,
+            user_id=ua.id,
+            space_id=a,
+            proposal=_FakeProposal(proposal_type, None),
+        )
+        assert decision.decision == Decision.ALLOW
+        assert decision.audit_code == "approved_owner"
+        assert decision.metadata_json["supported_apply_type"] is True
 
 
 def test_check_policy_unsupported_type_denied_even_for_owner(db, cross_space_pair_db):

@@ -22,7 +22,7 @@ from sqlalchemy import and_, case, func, not_, or_
 from sqlalchemy.orm.attributes import flag_modified
 
 from ..db_uow import UnitOfWork
-from ..models import AgentVersion, MemoryEntry, Policy, Proposal, Run, Task, Workspace
+from ..models import AgentVersion, KnowledgeItem, KnowledgeRelation, MemoryEntry, Policy, Proposal, Run, Task, Workspace
 from ..param_binding import duplicate_mapper
 from ..policy.gateway import PolicyCheckRequest, PolicyGateway
 from ..projects.service import assert_project_in_space
@@ -47,6 +47,8 @@ class ProposalAcceptResult:
     egress_review: bool = False
     task: Optional[Task] = None
     agent_version: Optional[AgentVersion] = None
+    knowledge_item: Optional[KnowledgeItem] = None
+    knowledge_relation: Optional[KnowledgeRelation] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1002,6 +1004,17 @@ class ProposalService:
                 proposal.payload_json = data
                 flag_modified(proposal, "payload_json")
 
+            if result.knowledge_item is not None or result.knowledge_relation is not None:
+                payload = proposal.payload_json or {}
+                data = dict(payload)
+                if result.knowledge_item is not None:
+                    data["resulting_knowledge_item_id"] = result.knowledge_item.id
+                if result.knowledge_relation is not None:
+                    data["resulting_knowledge_relation_id"] = result.knowledge_relation.id
+                data["applied_at"] = datetime.now(UTC).isoformat()
+                proposal.payload_json = data
+                flag_modified(proposal, "payload_json")
+
             try:
                 UnitOfWork(self.db).commit()
             except Exception as exc:
@@ -1035,6 +1048,8 @@ class ProposalService:
             egress_review=result.egress_review,
             task=result.task,
             agent_version=result.agent_version,
+            knowledge_item=result.knowledge_item,
+            knowledge_relation=result.knowledge_relation,
         )
 
     def reject(

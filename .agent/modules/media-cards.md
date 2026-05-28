@@ -15,7 +15,7 @@ Extend the spaced repetition card system to support rich-media cards: image occl
 ## Does Not Own
 - Core FSRS scheduling (spaced-repetition module)
 - File storage / CDN (future storage module)
-- Card generation from wiki or memory (spaced-repetition module)
+- Card generation from knowledge or memory (spaced-repetition module)
 
 ## Card Types
 
@@ -92,5 +92,5 @@ Appears in review queue
 
 ## Related Modules
 - [spaced-repetition.md](spaced-repetition.md) — core FSRS scheduling
-- [llm-wiki.md](llm-wiki.md) — cards generated from wiki items
+- [knowledge-base.md](knowledge-base.md) — cards generated from knowledge items
 - [activity-inbox.md](activity-inbox.md) — file_import activity type
