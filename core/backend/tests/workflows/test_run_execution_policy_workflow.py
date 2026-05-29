@@ -44,7 +44,59 @@ def _setup_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
 
 
+def _install_model_provider_api_test_runtime(monkeypatch) -> None:
+    """Install a test-only API-key runtime contract without changing production specs."""
+    from app.runtimes.requirements import (
+        RuntimeRequirements,
+        get_runtime_requirements as real_get_runtime_requirements,
+    )
+    from app.runtimes.specs import (
+        CredentialsSpec,
+        ModelSpec,
+        OutputSpec,
+        RuntimeAdapterSpec,
+        SandboxSpec,
+        get_runtime_adapter_spec as real_get_runtime_adapter_spec,
+    )
+
+    test_spec = RuntimeAdapterSpec(
+        adapter_type="model_provider_api",
+        display_name="Model Provider API Test Runtime",
+        runtime_kind="managed_api",
+        implementation_status="implemented",
+        credentials=CredentialsSpec(credential_mode="model_provider_api_key"),
+        sandbox=SandboxSpec(requires_file_access=False, minimum_sandbox_level="none"),
+        model=ModelSpec(model_provider_mode="required"),
+        output=OutputSpec(output_parser_type="generic", patch_strategy="none"),
+    )
+    test_requirements = RuntimeRequirements(
+        model_provider_mode="required",
+        credential_mode="model_provider_api_key",
+        supports_model_override=False,
+    )
+
+    def _get_runtime_adapter_spec(adapter_type: str):
+        if adapter_type == "model_provider_api":
+            return test_spec
+        return real_get_runtime_adapter_spec(adapter_type)
+
+    def _get_runtime_requirements(adapter_type: str | None):
+        if adapter_type == "model_provider_api":
+            return test_requirements
+        return real_get_runtime_requirements(adapter_type)
+
+    monkeypatch.setattr(
+        "app.runs.adapter_resolution.get_runtime_adapter_spec",
+        _get_runtime_adapter_spec,
+    )
+    monkeypatch.setattr(
+        "app.runs.execution.get_runtime_requirements",
+        _get_runtime_requirements,
+    )
+
+
 def _make_fake_adapter(monkeypatch, config: FakeRuntimeConfig | None = None):
+    _install_model_provider_api_test_runtime(monkeypatch)
     fake = ConfigurableFakeRuntimeAdapter(config or FakeRuntimeConfig(output_text=""))
     monkeypatch.setattr(
         "app.runs.adapter_resolution.is_adapter_type_implemented",
@@ -371,8 +423,8 @@ class TestRuntimeExecuteDisallowedToolBlocking:
         assert "called" in adapter_executed
 
 
-class TestRuntimeRequirementsMissingBlocking:
-    def test_missing_runtime_requirements_fail_before_credential_context_or_adapter(
+class TestUnknownRuntimeSpecBlocking:
+    def test_unknown_runtime_spec_fails_before_credential_context_or_adapter(
         self, db: Session, tmp_path, monkeypatch
     ):
         _setup_paths(monkeypatch, tmp_path)
@@ -422,8 +474,8 @@ class TestRuntimeRequirementsMissingBlocking:
         result = RunExecutionService(db).execute_run(run.id, space_id=PERSONAL_SPACE_ID)
 
         assert not result.success
-        assert result.error_code == "runtime_requirements_missing"
-        assert "runtime_requirements_missing" in result.error
+        assert result.error_code == "adapter_type_unknown"
+        assert "RuntimeAdapterSpec catalog" in result.error
         assert credential_calls == []
         assert context_calls == []
         assert adapter_calls == []
@@ -578,6 +630,7 @@ class TestRuntimeUseCredentialCrossSpaceBlocking:
     ):
         """RuntimeAdapter and Credential both in same space → allowed with audit."""
         _setup_paths(monkeypatch, tmp_path)
+        _install_model_provider_api_test_runtime(monkeypatch)
 
         adapter_executed = []
 

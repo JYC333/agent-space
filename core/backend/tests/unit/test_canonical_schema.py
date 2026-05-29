@@ -1153,8 +1153,23 @@ def test_runtime_adapters_extended_with_execution_plane(canonical_engine):
     col_names = {c["name"] for c in inspector.get_columns("runtime_adapters")}
     assert "execution_plane_id" in col_names, "runtime_adapters.execution_plane_id missing"
     assert "capability_support_json" in col_names, "runtime_adapters.capability_support_json missing"
+    assert "credential_profile_id" in col_names
+    assert "quota_status" in col_names
     fks = _foreign_keys(inspector, "runtime_adapters")
     assert ("execution_plane_id", "execution_planes", "id") in fks
+
+
+def test_runtime_adapter_health_and_quota_constraints(canonical_engine):
+    """runtime_adapters validates health_status and quota_status enum values."""
+    from sqlalchemy import text as sa_text
+
+    with canonical_engine.connect() as conn:
+        rows = conn.execute(
+            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='runtime_adapters'")
+        ).fetchall()
+    ddl = rows[0][0] if rows else ""
+    assert "ck_runtime_adapters_health_status" in ddl
+    assert "ck_runtime_adapters_quota_status" in ddl
 
 
 def test_runs_extended_with_execution_plane_and_externality_fields(canonical_engine):

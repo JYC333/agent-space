@@ -23,13 +23,14 @@ intentionally absent from PreflightRequest.
 from __future__ import annotations
 
 import logging
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
+
+from ..runtimes.command_renderer import CommandRenderError, resolve_executable_for_detection
 
 log = logging.getLogger(__name__)
 
@@ -46,15 +47,11 @@ class PreflightRequest(BaseModel):
     and is passed separately to PreflightService.check(). Clients must not submit
     space_id in the body.
 
-    risk_level and runtime_adapter_id are NOT included here because execution
-    never accepts them as request-level overrides — execution reads risk_level
-    exclusively from AgentVersion.runtime_policy_json and runtime_adapter_id from
-    AgentVersion.runtime_adapter_id. Including them in preflight would produce
-    results that execution would not honour.
-
-    adapter_type serves as a proxy for what Run.adapter_type would be (the run-level
-    adapter fallback used only when neither version.runtime_config_json.adapter_type
-    nor policy.default_adapter_type is set).
+    risk_level and runtime_adapter_id are NOT included here. Preflight cannot
+    simulate a prospective Run.runtime_adapter_id because that field is not
+    accepted by this request schema. It can simulate prospective Run.adapter_type
+    through adapter_type, and otherwise uses AgentVersion/runtime policy fields
+    in the same order as execution.
 
     extra="forbid" ensures obsolete fields (space_id, risk_level, runtime_adapter_id)
     are rejected with 422 rather than silently ignored.
@@ -92,6 +89,9 @@ class _PreflightState:
     warnings: list[str] = field(default_factory=list)
     adapter_type: str | None = None
     required_sandbox_level: str | None = None
+    runtime_adapter_id: str | None = None
+    runtime_adapter_config_json: dict[str, Any] = field(default_factory=dict)
+    executable_path_override: str | None = None
 
 
 class PreflightService:
@@ -133,7 +133,7 @@ class PreflightService:
         )
 
     # ------------------------------------------------------------------
-    # Individual checks — resolution order mirrors RunExecutionService exactly
+    # Individual checks — resolution order mirrors the visible execution inputs
     # ------------------------------------------------------------------
 
     def _check_agent(self, req: PreflightRequest, state: _PreflightState) -> None:
@@ -175,19 +175,16 @@ class PreflightService:
             state.errors.append(f"AgentVersion '{agent.current_version_id}' not found")
 
     def _check_adapter(self, req: PreflightRequest, state: _PreflightState) -> None:
-        """Mirror resolve_runtime_adapter priority order exactly.
+        """Resolve the adapter using the same visible fields as execution.
 
-        Resolution (same order as resolve_runtime_adapter in adapter_resolution.py):
-          1. version.runtime_adapter_id → RuntimeAdapter row (version-configured adapter)
-          2. version.runtime_config_json.adapter_type
-          3. req.adapter_type (proxy for what run.adapter_type would be)
-          4. policy.default_adapter_type
-
-        Request-level runtime_adapter_id override is intentionally absent — execution
-        never accepts one and preflight must not produce a result execution won't honour.
+        Full execution can use Run.runtime_adapter_id first; PreflightRequest
+        intentionally has no runtime_adapter_id, so this check starts at
+        AgentVersion.runtime_adapter_id and then treats req.adapter_type as the
+        prospective Run.adapter_type.
         """
         from ..models import Agent, AgentVersion, RuntimeAdapter
         from ..runtimes.registry import is_adapter_type_implemented
+        from ..runtimes.specs import get_runtime_adapter_spec
 
         agent = (
             self.db.query(Agent)
@@ -208,7 +205,7 @@ class PreflightService:
         adapter_type: str | None = None
         row: RuntimeAdapter | None = None
 
-        # 1. AgentVersion.runtime_adapter_id (version-configured explicit adapter row)
+        # 1. AgentVersion.runtime_adapter_id (Run.runtime_adapter_id is not part of preflight input).
         if version.runtime_adapter_id:
             row = (
                 self.db.query(RuntimeAdapter)
@@ -220,37 +217,51 @@ class PreflightService:
             )
             if row is None:
                 state.errors.append(
-                    f"RuntimeAdapter '{version.runtime_adapter_id}' (from AgentVersion) "
-                    f"not found in space '{state.space_id}'"
+                    "adapter_not_configured: "
+                    f"RuntimeAdapter '{version.runtime_adapter_id}' from AgentVersion was not found"
                 )
                 return
+            state.runtime_adapter_id = row.id
+            state.runtime_adapter_config_json = dict(row.config_json or {})
+            raw_override = state.runtime_adapter_config_json.get("executable_path")
+            state.executable_path_override = str(raw_override) if raw_override else None
             if not row.enabled:
-                state.errors.append(
-                    f"RuntimeAdapter '{row.id}' (from AgentVersion) is disabled"
-                )
+                state.errors.append("adapter_disabled: RuntimeAdapter row is disabled")
                 return
             adapter_type = row.adapter_type
 
-        # 2–4. Fallback chain: runtime_config_json → req.adapter_type → policy default
+        # 2-5. Fallback chain visible to preflight: req.adapter_type, runtime_config_json, policy default, echo.
         if not adapter_type:
             rc = dict(version.runtime_config_json or {})
             policy = dict(version.runtime_policy_json or {})
             adapter_type = (
-                (rc.get("adapter_type") or "").strip()
-                or (req.adapter_type or "").strip()
+                (req.adapter_type or "").strip()
+                or (rc.get("adapter_type") or "").strip()
                 or (str(policy.get("default_adapter_type") or "").strip())
+                or "echo"
             )
 
-        if not adapter_type:
+        try:
+            spec = get_runtime_adapter_spec(adapter_type)
+        except KeyError:
             state.errors.append(
-                "No runtime adapter configured (AgentVersion.runtime_adapter_id, "
-                "runtime_config_json.adapter_type, or runtime_policy_json.default_adapter_type)"
+                f"adapter_type_unknown: Runtime adapter type '{adapter_type}' is not in the RuntimeAdapterSpec catalog"
             )
             return
 
+        if spec.implementation_status == "planned":
+            state.errors.append(
+                f"adapter_planned_not_executable: Runtime adapter type '{adapter_type}' is planned and cannot execute"
+            )
+            return
+        if spec.implementation_status == "disabled":
+            state.errors.append(
+                f"adapter_disabled: Runtime adapter type '{adapter_type}' is disabled by spec"
+            )
+            return
         if not is_adapter_type_implemented(adapter_type):
             state.errors.append(
-                f"adapter_type '{adapter_type}' is not registered in app.runtimes.registry"
+                f"adapter_not_implemented: Runtime adapter type '{adapter_type}' is not implemented"
             )
             return
 
@@ -266,7 +277,6 @@ class PreflightService:
         from .runtime_policy import (
             _norm_risk,
             required_sandbox_level_for_risk,
-            _FILE_ACCESS_ADAPTER_TYPES,
         )
 
         agent = (
@@ -299,10 +309,18 @@ class PreflightService:
             return
 
         adapter_type = state.adapter_type or ""
-        if adapter_type in _FILE_ACCESS_ADAPTER_TYPES and level != "worktree":
+        try:
+            from ..runtimes.specs import get_runtime_adapter_spec
+            spec = get_runtime_adapter_spec(adapter_type)
+            requires_file_access = spec.sandbox.requires_file_access
+            minimum_level = spec.sandbox.minimum_sandbox_level
+        except KeyError:
+            requires_file_access = False
+            minimum_level = "none"
+        if requires_file_access and level != minimum_level:
             state.errors.append(
                 f"file_access_adapter_requires_worktree_policy: "
-                f"adapter_type='{adapter_type}' requires worktree sandbox but "
+                f"adapter_type='{adapter_type}' requires {minimum_level} sandbox but "
                 f"risk_level='{risk}' resolves to required_sandbox_level='{level}'. "
                 "Set risk_level=high in runtime_policy_json."
             )
@@ -353,36 +371,64 @@ class PreflightService:
 
     def _check_cli_availability(self, req: PreflightRequest, state: _PreflightState) -> None:
         adapter_type = state.adapter_type or ""
-        if adapter_type == "claude_code":
-            if shutil.which("claude") is None:
-                state.warnings.append(
-                    "CLI tool 'claude' is not found in PATH. "
-                    "The run will fail unless the tool is installed before execution."
-                )
-        elif adapter_type == "codex_cli":
-            if shutil.which("codex") is None:
-                state.warnings.append(
-                    "CLI tool 'codex' is not found in PATH. "
-                    "The run will fail unless the tool is installed before execution."
-                )
+        try:
+            from ..runtimes.specs import get_runtime_adapter_spec
+            spec = get_runtime_adapter_spec(adapter_type)
+        except KeyError:
+            return
+        if spec.runtime_kind != "local_cli":
+            return
+        try:
+            resolve_executable_for_detection(spec, state.executable_path_override)
+        except CommandRenderError as exc:
+            state.warnings.append(
+                f"{exc.error_code}: {exc.message}. "
+                "The run will fail unless the executable is available before execution."
+            )
 
     def _check_credential_profile(self, req: PreflightRequest, state: _PreflightState) -> None:
         adapter_type = state.adapter_type or ""
-        _CLI_ADAPTERS = {"claude_code", "codex_cli"}
-        if adapter_type not in _CLI_ADAPTERS:
+        try:
+            from ..runtimes.specs import get_runtime_adapter_spec
+            spec = get_runtime_adapter_spec(adapter_type)
+        except KeyError:
+            return
+        if spec.credentials.credential_mode != "cli_profile":
             return
 
-        # CLI runs require an explicit credential profile for both manual and
-        # automation origins.
+        runtime = spec.credentials.credential_runtime_name or adapter_type
         try:
+            from ..models import Agent, AgentVersion, RuntimeAdapter
             from ..credentials.broker import CredentialBroker
             broker = CredentialBroker()
-            profiles = broker.list_profiles(runtime=adapter_type)
-            if not profiles:
+            profile_id = None
+            agent = (
+                self.db.query(Agent)
+                .filter(Agent.id == req.agent_id, Agent.space_id == state.space_id)
+                .first()
+            )
+            if agent and agent.current_version_id:
+                version = (
+                    self.db.query(AgentVersion)
+                    .filter(AgentVersion.id == agent.current_version_id)
+                    .first()
+                )
+                if version and version.runtime_adapter_id:
+                    row = (
+                        self.db.query(RuntimeAdapter)
+                        .filter(
+                            RuntimeAdapter.id == version.runtime_adapter_id,
+                            RuntimeAdapter.space_id == state.space_id,
+                        )
+                        .first()
+                    )
+                    profile_id = getattr(row, "credential_profile_id", None) if row else None
+            ready = broker.profile_ready(runtime, profile_id)
+            if not ready:
                 state.errors.append(
                     f"runtime_credential_profile_required: "
-                    f"CLI runs with adapter_type='{adapter_type}' "
-                    "require an explicit credential profile. "
+                    f"Runtime adapter '{adapter_type}' "
+                    "requires an explicit credential profile. "
                     "No credential profile is configured."
                 )
         except Exception as exc:
@@ -392,10 +438,14 @@ class PreflightService:
             )
 
     def _check_code_patch_possible(self, req: PreflightRequest, state: _PreflightState) -> None:
-        from .runtime_policy import _FILE_ACCESS_ADAPTER_TYPES
-
         adapter_type = state.adapter_type or ""
-        if adapter_type not in _FILE_ACCESS_ADAPTER_TYPES:
+        try:
+            from ..runtimes.specs import get_runtime_adapter_spec
+            requires_file_access = get_runtime_adapter_spec(adapter_type).sandbox.requires_file_access
+        except KeyError:
+            requires_file_access = False
+
+        if not requires_file_access:
             return
 
         if state.required_sandbox_level != "worktree":

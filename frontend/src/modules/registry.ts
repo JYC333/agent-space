@@ -257,13 +257,13 @@ export const MODULE_REGISTRY: Module[] = [
 
   // ── Agents (execution & infrastructure) ─────────────────────────────────────
   {
-    id: 'cli_adapters', label: 'Runtime', path: '/cli-tools',
+    id: 'runtime_adapters', label: 'Runtime', path: '/runtime-adapters',
     section: 'agents', group: 'agents', icon: 'activity',
     description: 'Monitor runtime adapters, queues, and execution health.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
-    component: lazy(() => import('./cli_adapters/CLIStatusPage')),
+    component: lazy(() => import('./runtime_adapters/RuntimeAdaptersPage')),
   },
   {
     id: 'job_queue', label: 'Job Queue', path: '/jobs',

@@ -69,7 +69,7 @@ npm run preview
 
 ## Sandbox Image
 
-The sandbox image must be built before running `claude_cli` or `codex_cli` adapters:
+The sandbox image must be built before running local CLI runtimes such as `claude_code` or `codex_cli`:
 
 ```bash
 docker build --network=host -t agent-space-sandbox deployments/sandbox/
@@ -99,8 +99,8 @@ See `deployments/local/.env.example` for the full list. Key vars:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | Required for claude_cli adapter |
-| `OPENAI_API_KEY` | — | Required for codex_cli adapter |
+| `ANTHROPIC_API_KEY` | — | Optional credential-broker API-key file env for `claude_code` |
+| `OPENAI_API_KEY` | — | Optional credential-broker API-key file env for `codex_cli` |
 | `DATABASE_URL` | sqlite:// | Set by docker-compose |
 | `DEFAULT_SPACE_ID` | `personal` | |
 | `DEFAULT_USER_ID` | `default_user` | |

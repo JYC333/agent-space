@@ -99,7 +99,8 @@ cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants
 - `core/backend/app/proposals/api.py` — proposal review API
 - `core/backend/app/memory/reflector.py` — session → memory proposals
 - `core/backend/app/runs/execution.py` — RunExecutionService (canonical run orchestration)
-- `core/backend/app/cli_adapters/` — CLI adapter detection, executor infrastructure, sandbox support
+- `core/backend/app/runtimes/specs.py` — RuntimeAdapterSpec catalog
+- `core/backend/app/runtimes/adapters/cli_runtime.py` — GenericCliRuntimeAdapter local CLI execution
 - `core/backend/app/capabilities/registry.py` — capability loader
 - `frontend/src/modules/registry.js` — frontend module loader (nav + lazy routes)
 
@@ -134,15 +135,9 @@ DEFAULT_USER_ID=default_user
 1. Create `core/capabilities/<your-id>/capability.yaml`
 2. `POST /api/v1/capabilities/reload` or restart the server
 
-## Adding a new runtime adapter (canonical path)
+## Adding a new runtime adapter
 
-1. Subclass `BaseRuntimeAdapter` in `core/backend/app/runtimes/`
-2. Implement `execute(ctx: RuntimeExecutionContext) → RuntimeAdapterResult`; read credentials from `ctx.resolved_credentials`, never env vars
-3. Register in `core/backend/app/runtimes/registry.py:_RUNTIME_ADAPTER_CLASSES`
-
-## Adding a new CLI integration (CLI adapter path)
-
-1. Subclass `AgentAdapter` in `core/backend/app/cli_adapters/` (see `adapter_base.py`)
-2. Implement `adapter_type`, `is_available()`, `detect()`, and `run()`
-3. Register the class in `cli_adapters/service.py:_get_adapter_instance()` for detection probes
-4. To make it executable via `RunExecutionService`, also add a `BaseRuntimeAdapter` wrapper in `core/backend/app/runtimes/`
+1. For a local CLI tool, add a `RuntimeAdapterSpec` in `core/backend/app/runtimes/specs.py`
+2. Use `runtime_kind="local_cli"` and define executable, invocation, credentials, sandbox, usage, and output semantics
+3. Do not add a vendor-specific runtime class unless the adapter truly needs native behavior beyond `GenericCliRuntimeAdapter`
+4. For a native adapter, subclass `BaseRuntimeAdapter` and register it in `core/backend/app/runtimes/registry.py`

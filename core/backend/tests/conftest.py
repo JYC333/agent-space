@@ -44,6 +44,7 @@ import atexit
 import os
 import shutil
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 _SESSION_HOME: Path | None = None
@@ -91,17 +92,33 @@ def _configure_agent_space_home_for_pytest() -> None:
 _configure_agent_space_home_for_pytest()
 
 import pytest
+import anyio.to_thread
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from fastapi import Request
-from fastapi.testclient import TestClient
+import fastapi.testclient as _fastapi_testclient
+import starlette.testclient as _starlette_testclient
 from alembic import command
 from alembic.config import Config
+
+
+async def _inline_anyio_run_sync(func, *args, **kwargs):
+    kwargs.pop("abandon_on_cancel", None)
+    kwargs.pop("cancellable", None)
+    kwargs.pop("limiter", None)
+    return func(*args)
+
+
+anyio.to_thread.run_sync = _inline_anyio_run_sync
 
 from app.db import get_db
 from app.main import app
 from app.models import Space, SpaceMembership, User
 from tests.support.ids import DEFAULT_USER_ID, PERSONAL_SPACE_ID
+from tests.support.http_client import SyncASGITestClient as TestClient
+
+_fastapi_testclient.TestClient = TestClient
+_starlette_testclient.TestClient = TestClient
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_INI = BACKEND_ROOT / "alembic.ini"
@@ -142,6 +159,13 @@ def db_engine(tmp_path_factory):
         cursor.close()
 
     Session = sessionmaker(bind=engine)
+    import app.db as app_db
+
+    previous_engine = app_db.engine
+    previous_session_local = app_db.SessionLocal
+    app_db.engine = engine
+    app_db.SessionLocal = Session
+
     session = Session()
     try:
         session.add(Space(id=SPACE, name="Personal"))
@@ -165,8 +189,12 @@ def db_engine(tmp_path_factory):
     finally:
         session.close()
 
-    yield engine
-    engine.dispose()
+    try:
+        yield engine
+    finally:
+        app_db.engine = previous_engine
+        app_db.SessionLocal = previous_session_local
+        engine.dispose()
 
 
 @pytest.fixture(scope="function")
@@ -180,7 +208,7 @@ def db(db_engine):
 
 
 @pytest.fixture(scope="function")
-def client(db_engine):
+def app_db_override(db_engine):
     Session = sessionmaker(bind=db_engine)
 
     def override_get_db(request: Request):
@@ -191,7 +219,29 @@ def client(db_engine):
         finally:
             session.close()
 
+    from app.jobs.queue import DatabaseQueueService, init_queue
+    import app.db as app_db
+
+    @asynccontextmanager
+    async def test_lifespan(_app):
+        yield
+
+    previous_lifespan = app.router.lifespan_context
+    previous_session_local = app_db.SessionLocal
     app.dependency_overrides[get_db] = override_get_db
+    app.router.lifespan_context = test_lifespan
+    app_db.SessionLocal = Session
+    init_queue(DatabaseQueueService(Session))
+    try:
+        yield
+    finally:
+        app_db.SessionLocal = previous_session_local
+        app.router.lifespan_context = previous_lifespan
+        app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture(scope="function")
+def client(app_db_override):
+    """FastAPI client for tests without app lifespan/background worker startup."""
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c
-    app.dependency_overrides.clear()

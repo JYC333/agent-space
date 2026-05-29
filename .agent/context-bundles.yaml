@@ -116,7 +116,7 @@ workspace-artifact:
   code_roots:
     - core/backend/app/workspace
     - core/backend/app/artifacts
-    - core/backend/app/agents/cli_adapter.py
+    - core/backend/app/runtimes/adapters/cli_runtime.py
     - deployments/sandbox
 
 local-first-compatibility:
@@ -198,7 +198,7 @@ sandbox:
     - .agent/decisions/0004-context-wrapper.md
   code_roots:
     - core/backend/app/workspace
-    - core/backend/app/agents/cli_adapter.py
+    - core/backend/app/runtimes/adapters/cli_runtime.py
     - deployments/sandbox
 
 workspace_console:
@@ -309,24 +309,20 @@ credentials:
     - .agent/BOUNDARIES.md
   code_roots:
     - core/backend/app/credentials/
-    - core/backend/app/agents/base.py
-    - core/backend/app/agents/claude_adapter.py
-    - core/backend/app/agents/runner.py
-    - core/backend/app/agents/cli_adapter.py
+    - core/backend/app/runtimes/
+    - core/backend/app/runs/execution.py
     - core/backend/app/workspace/sandbox_manager.py
 
-cli_adapters:
+runtime_adapters:
   docs:
     - .agent/modules/runtime-adapters.md
     - .agent/decisions/0008-multi-cli-mvp.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/cli_adapters/
-    - core/backend/app/agents/base.py
-    - core/backend/app/agents/claude_adapter.py
-    - core/backend/app/agents/codex_adapter.py
-    - core/backend/app/agents/runner.py
-    - frontend/src/modules/cli_adapters/
+    - core/backend/app/runtimes/
+    - core/backend/app/runtime_adapters/
+    - core/backend/app/runs/
+    - frontend/src/modules/runtime_adapters/
 
 deployment:
   docs:

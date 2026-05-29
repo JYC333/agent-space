@@ -53,11 +53,6 @@ class TestCliRuntimeRegistry:
         from app.runtimes.registry import is_adapter_type_implemented
         assert is_adapter_type_implemented("echo")
 
-    def test_anthropic_direct_not_in_registry(self):
-        from app.runtimes.registry import is_adapter_type_implemented
-        assert not is_adapter_type_implemented("anthropic_messages")
-        assert not is_adapter_type_implemented("anthropic_api")
-
     def test_claude_code_has_file_access_flag(self):
         from app.runtimes.registry import instantiate_runtime_adapter
         adapter = instantiate_runtime_adapter("claude_code")
@@ -99,9 +94,9 @@ def _make_ctx(
 class TestAutomationCredentialCheck:
     def test_automation_origin_with_no_profile_fails(self):
         """CLI run with no credential grant must fail with runtime_credential_profile_required."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         ctx = _make_ctx(trigger_origin="automation")
 
         with (
@@ -115,24 +110,20 @@ class TestAutomationCredentialCheck:
 
     def test_automation_origin_with_profile_proceeds(self):
         """Automation run with a valid credential grant must proceed past the credential check."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+        from app.runtimes.local_executor import ExecutionResult
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         ctx = _make_ctx(trigger_origin="automation")
 
         mock_grant = MagicMock()
         mock_grant.temp_home = None
-
-        mock_cli = MagicMock()
-        mock_cli.is_available.return_value = True
-        mock_cli.run.return_value = MagicMock(
-            success=True, output="done", error=None, exit_code=0,
-            started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
-        )
+        mock_grant.env = {}
 
         with (
-            patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
             patch.object(adapter, "_resolve_credential_grant", return_value=mock_grant),
+            patch.object(adapter, "_render_context", return_value=None),
+            patch.object(adapter.executor, "run_command", return_value=ExecutionResult(0, "done", "")),
         ):
             result = adapter.execute(ctx)
 
@@ -141,20 +132,12 @@ class TestAutomationCredentialCheck:
 
     def test_manual_origin_with_no_profile_fails(self):
         """Manual-origin CLI runs require the same explicit credential profile."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         ctx = _make_ctx(trigger_origin="manual")
 
-        mock_cli = MagicMock()
-        mock_cli.is_available.return_value = True
-        mock_cli.run.return_value = MagicMock(
-            success=True, output="done", error=None, exit_code=0,
-            started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
-        )
-
         with (
-            patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
             patch.object(adapter, "_resolve_credential_grant", return_value=None),
         ):
             result = adapter.execute(ctx)
@@ -165,13 +148,12 @@ class TestAutomationCredentialCheck:
         assert meta.get("credential_source") == "none"
         assert meta.get("fallback_used") is True
         assert meta.get("fallback_reason") == "no_profile_configured"
-        mock_cli.run.assert_not_called()
 
     def test_codex_cli_automation_origin_fails_without_profile(self):
         """codex_cli shares the same automation credential guard."""
-        from app.runtimes.adapters.cli_runtime import CodexCliRuntimeAdapter
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = CodexCliRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("codex_cli")
         ctx = _make_ctx(trigger_origin="automation", adapter_type="codex_cli")
 
         with patch.object(adapter, "_resolve_credential_grant", return_value=None):
@@ -182,23 +164,20 @@ class TestAutomationCredentialCheck:
 
     def test_trigger_origin_recorded_in_adapter_metadata(self):
         """trigger_origin is recorded in cred_meta for audit purposes."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+        from app.runtimes.local_executor import ExecutionResult
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         ctx = _make_ctx(trigger_origin="automation")
 
         mock_grant = MagicMock()
         mock_grant.temp_home = None
-        mock_cli = MagicMock()
-        mock_cli.is_available.return_value = True
-        mock_cli.run.return_value = MagicMock(
-            success=True, output="ok", error=None, exit_code=0,
-            started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
-        )
+        mock_grant.env = {}
 
         with (
-            patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
             patch.object(adapter, "_resolve_credential_grant", return_value=mock_grant),
+            patch.object(adapter, "_render_context", return_value=None),
+            patch.object(adapter.executor, "run_command", return_value=ExecutionResult(0, "ok", "")),
         ):
             result = adapter.execute(ctx)
 
@@ -389,7 +368,7 @@ class TestProcessRegistry:
 
     def test_local_executor_registers_and_deregisters(self, tmp_path):
         """LocalExecutor registers the subprocess PID and deregisters after completion."""
-        from app.cli_adapters.executors import LocalExecutor
+        from app.runtimes.local_executor import LocalExecutor
         from app.runs.process_registry import get_pid
 
         run_id = "proc-exec-test-001"
@@ -407,7 +386,7 @@ class TestProcessRegistry:
 
     def test_local_executor_without_run_id_does_not_register(self):
         """When run_id is not provided, nothing is added to the registry."""
-        from app.cli_adapters.executors import LocalExecutor
+        from app.runtimes.local_executor import LocalExecutor
         from app.runs.process_registry import list_active
 
         before = set(list_active().keys())
@@ -796,7 +775,7 @@ class TestPreflightService:
         )
         assert records == [], "dry-run preflight policy simulation must not create audit records"
 
-    def test_preflight_no_adapter_configured_returns_error(self, db):
+    def test_preflight_no_adapter_configured_defaults_to_echo(self, db):
         from tests.support import factories
         from app.runs.preflight import PreflightRequest, PreflightService
         from app.models import AgentVersion
@@ -806,7 +785,7 @@ class TestPreflightService:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
-        # Clear adapter config so no adapter can be resolved
+        # Clear adapter config so preflight follows execution's system fallback.
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
         version.runtime_policy_json = {}
         version.runtime_config_json = {}
@@ -814,8 +793,9 @@ class TestPreflightService:
 
         req = PreflightRequest(agent_id=agent.id)
         result = PreflightService(db).check(req, space_id=space_id)
-        assert result.executable is False
-        assert any("adapter" in e.lower() for e in result.errors)
+        assert result.executable is True
+        assert result.adapter_type == "echo"
+        assert result.errors == []
 
     def test_preflight_echo_adapter_succeeds(self, db):
         from tests.support import factories
@@ -936,6 +916,7 @@ class TestPreflightService:
         req = PreflightRequest(agent_id=agent.id, workspace_id=ws.id)
         mock_broker = MagicMock()
         mock_broker.list_profiles.return_value = [MagicMock(id="claude_code/default")]
+        mock_broker.profile_ready.return_value = True
         with patch("app.credentials.broker.CredentialBroker", return_value=mock_broker):
             result = PreflightService(db).check(req, space_id=space_id)
         assert result.executable is True
@@ -955,11 +936,11 @@ class TestPreflightService:
 
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
         version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
-        # Use echo so risk/workspace checks pass; echo is not a CLI adapter so credential check skips
+        # Use echo so risk/workspace checks pass; echo is native, so credential checks skip
         db.commit()
 
         req = PreflightRequest(agent_id=agent.id, trigger_origin="automation")
-        # Echo adapter — credential check doesn't apply (not a CLI adapter)
+        # Echo runtime does not require a CLI credential profile
         result = PreflightService(db).check(req, space_id=space_id)
         assert result.executable is True
 
@@ -995,6 +976,7 @@ class TestPreflightService:
         with patch("app.credentials.broker.CredentialBroker") as MockBroker:
             mock_instance = MagicMock()
             mock_instance.list_profiles.return_value = []
+            mock_instance.profile_ready.return_value = False
             MockBroker.return_value = mock_instance
             result = PreflightService(db).check(req, space_id=space_id)
 
@@ -1159,7 +1141,7 @@ class TestProcessGroupTermination:
         process group) so that SIGTERM to the group kills all child processes."""
         import subprocess as _sp
         from unittest.mock import call as _call
-        from app.cli_adapters.executors import LocalExecutor
+        from app.runtimes.local_executor import LocalExecutor
 
         popen_calls = []
         original_popen = _sp.Popen
@@ -1250,23 +1232,20 @@ class TestProcessGroupTermination:
 class TestCredentialCheckedObservability:
     def test_credential_checked_in_adapter_metadata_on_success(self):
         """credential_checked=True must appear in adapter_metadata after a successful run."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+        from app.runtimes.local_executor import ExecutionResult
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         ctx = _make_ctx(trigger_origin="manual")
 
         mock_grant = MagicMock()
         mock_grant.temp_home = None
-        mock_cli = MagicMock()
-        mock_cli.is_available.return_value = True
-        mock_cli.run.return_value = MagicMock(
-            success=True, output="ok", error=None, exit_code=0,
-            started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
-        )
+        mock_grant.env = {}
 
         with (
-            patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
             patch.object(adapter, "_resolve_credential_grant", return_value=mock_grant),
+            patch.object(adapter, "_render_context", return_value=None),
+            patch.object(adapter.executor, "run_command", return_value=ExecutionResult(0, "ok", "")),
         ):
             result = adapter.execute(ctx)
 
@@ -1276,9 +1255,9 @@ class TestCredentialCheckedObservability:
 
     def test_credential_checked_in_adapter_metadata_on_failure(self):
         """credential_checked=True must appear in adapter_metadata even when automation fails."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         ctx = _make_ctx(trigger_origin="automation")
 
         with patch.object(adapter, "_resolve_credential_grant", return_value=None):
@@ -1290,23 +1269,21 @@ class TestCredentialCheckedObservability:
 
     def test_no_sensitive_fields_in_cred_meta(self):
         """adapter_metadata must not contain HOME paths, token paths, or secret values."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+        from app.runtimes.local_executor import ExecutionResult
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         ctx = _make_ctx(trigger_origin="manual")
 
         mock_grant = MagicMock()
         mock_grant.temp_home = "/secret/home/path"
-        mock_cli = MagicMock()
-        mock_cli.is_available.return_value = True
-        mock_cli.run.return_value = MagicMock(
-            success=True, output="ok", error=None, exit_code=0,
-            started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
-        )
+        mock_grant.env = {}
 
         with (
-            patch("app.runtimes.adapters.cli_runtime._resolve_cli_adapter", return_value=mock_cli),
             patch.object(adapter, "_resolve_credential_grant", return_value=mock_grant),
+            patch.object(adapter, "_render_context", return_value=None),
+            patch.object(adapter.executor, "run_command", return_value=ExecutionResult(0, "ok", "")),
+            patch("app.credentials.broker.CredentialBroker.cleanup_temp_home", return_value=None),
         ):
             result = adapter.execute(ctx)
 
@@ -1545,9 +1522,9 @@ class TestIncompletePatchConfirmation:
 class TestBrokerErrorReason:
     def test_broker_exception_sets_broker_error_true_in_metadata(self):
         """When CredentialBroker.grant_for_run raises, adapter_metadata.broker_error must be True."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         ctx = _make_ctx(trigger_origin="automation")
 
         with patch.object(adapter, "_resolve_credential_grant", side_effect=RuntimeError("broker down")):
@@ -1557,13 +1534,13 @@ class TestBrokerErrorReason:
         assert result.error_code == "runtime_credential_profile_required"
         meta = result.adapter_metadata or {}
         assert meta.get("broker_error") is True
-        assert meta.get("no_profile_configured") is False
+        assert meta.get("fallback_reason") == "broker_error"
 
     def test_no_profile_sets_broker_error_false_in_metadata(self):
         """When no profile is configured (no exception), adapter_metadata.broker_error is False."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         ctx = _make_ctx(trigger_origin="automation")
 
         with patch.object(adapter, "_resolve_credential_grant", return_value=None):
@@ -1573,21 +1550,21 @@ class TestBrokerErrorReason:
         assert result.error_code == "runtime_credential_profile_required"
         meta = result.adapter_metadata or {}
         assert meta.get("broker_error") is False
-        assert meta.get("no_profile_configured") is True
+        assert meta.get("fallback_reason") == "no_profile_configured"
 
     def test_failure_reason_in_metadata_is_secret_safe(self):
         """failure_reason and related metadata fields must not contain paths or secrets."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         ctx = _make_ctx(trigger_origin="automation")
 
         with patch.object(adapter, "_resolve_credential_grant", side_effect=RuntimeError("/home/user/.claude token expired")):
             result = adapter.execute(ctx)
 
         meta = result.adapter_metadata or {}
-        # failure_reason must be a plain enum-like string, never the exception message
-        reason = meta.get("failure_reason", "")
+        # fallback_reason must be a plain enum-like string, never the exception message
+        reason = meta.get("fallback_reason", "")
         assert "/home" not in reason
         assert "token" not in reason
         assert reason in ("broker_error", "no_profile_configured", "")

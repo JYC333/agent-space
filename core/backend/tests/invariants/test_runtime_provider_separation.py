@@ -7,8 +7,8 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import AgentVersion, ModelProvider, RuntimeAdapter
 from app.runs.adapter_resolution import AdapterResolutionError, resolve_runtime_adapter
-from app.schemas import CLIAdapterConfigCreate, CLIAdapterConfigUpdate
-from app.cli_adapters.service import CLIAdapterService
+from app.runtime_adapters.service import RuntimeAdapterService
+from app.schemas import RuntimeAdapterCreate, RuntimeAdapterUpdate
 from tests.support import factories
 
 
@@ -48,11 +48,11 @@ def test_runtime_adapter_update_does_not_mutate_model_provider(db, cross_space_p
     flag_modified(ra, "config_json")
     db.flush()
 
-    svc = CLIAdapterService(db)
+    svc = RuntimeAdapterService(db)
     svc.update(
         ra.id,
         a,
-        CLIAdapterConfigUpdate(notes="changed-only-adapter", display_name="new-name"),
+        RuntimeAdapterUpdate(notes="changed-only-adapter", name="new-name"),
     )
     mp2 = db.query(ModelProvider).filter_by(id=mp.id).one()
     assert mp2.config_json == {"stable": True}
@@ -97,12 +97,12 @@ def test_model_provider_allowlist_rejects_disallowed_version_provider(db, cross_
     assert "model_provider" in ei.value.message.lower()
 
 
-def test_cli_adapter_create_is_distinct_from_model_provider(db, cross_space_pair_db):
+def test_runtime_adapter_create_is_distinct_from_model_provider(db, cross_space_pair_db):
     a = cross_space_pair_db["space_a_id"]
     mp = factories.create_test_model_provider(db, space_id=a, name="p1", commit=False)
     db.flush()
-    ra = CLIAdapterService(db).create(
-        CLIAdapterConfigCreate(adapter_id="echo", display_name="Echo cfg", enabled=True),
+    ra = RuntimeAdapterService(db).create(
+        RuntimeAdapterCreate(adapter_type="echo", name="Echo cfg", enabled=True),
         space_id=a,
     )
     assert ra.id != mp.id

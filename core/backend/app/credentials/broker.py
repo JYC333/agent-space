@@ -208,6 +208,29 @@ class CredentialBroker:
 
         return None
 
+    def resolve_profile(
+        self,
+        runtime: str,
+        profile_id: str | None = None,
+        *,
+        require_existing: bool = True,
+    ) -> CredentialProfile | None:
+        """Resolve an explicit or default profile using execution-time rules.
+
+        This is the single readiness source for preflight, runtime status, and
+        grants.  When ``require_existing`` is true, a profile row whose
+        ``source_path`` no longer exists is treated the same as no profile.
+        """
+        profile = self.get_profile(profile_id) if profile_id else self.get_default_profile(runtime)
+        if profile is None:
+            return None
+        if require_existing and not Path(profile.source_path).exists():
+            return None
+        return profile
+
+    def profile_ready(self, runtime: str, profile_id: str | None = None) -> bool:
+        return self.resolve_profile(runtime, profile_id, require_existing=True) is not None
+
     # ------------------------------------------------------------------
     # Grant
     # ------------------------------------------------------------------
@@ -226,20 +249,10 @@ class CredentialBroker:
         None means no explicit profile was resolved. CLI runtime adapters must
         fail closed in that case.
         """
-        profile = (
-            self.get_profile(profile_id) if profile_id
-            else self.get_default_profile(runtime)
-        )
+        profile = self.resolve_profile(runtime, profile_id, require_existing=True)
 
         if not profile:
             log.debug("no credential profile for runtime=%s", runtime)
-            return None
-
-        if not Path(profile.source_path).exists():
-            log.warning(
-                "credential profile %s source_path does not exist: %s",
-                profile.id, profile.source_path,
-            )
             return None
 
         # Check for an API key file inside the profile dir — takes priority over

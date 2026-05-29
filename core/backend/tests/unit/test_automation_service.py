@@ -770,14 +770,10 @@ class TestAutomationPolicyPreflight:
         assert exc.value.decision.denied
         assert exc.value.decision.policy_rule_id == "automation_insufficient_role"
 
-    def test_create_fails_when_credential_policy_preflight_requires_approval(
+    def test_create_fails_when_runtime_requirements_are_unknown(
         self, db, test_agent, monkeypatch
     ):
-        monkeypatch.setattr(
-            "app.runtimes.registry.is_adapter_type_implemented",
-            lambda adapter_type: adapter_type == "model_provider_api",
-        )
-        _set_agent_runtime_adapter_type(db, test_agent, "model_provider_api")
+        _set_agent_runtime_adapter_type(db, test_agent, "unknown_requirements_runtime")
         _attach_version_model_provider(db, test_agent, with_api_key=True)
         db.commit()
 
@@ -790,20 +786,12 @@ class TestAutomationPolicyPreflight:
 
         assert exc.value.status_code == 422
         detail = exc.value.detail
-        assert detail["error"] == "policy_preflight_failed"
-        assert any("runtime.use_credential" in e for e in detail["errors"])
-        checks = detail["checks"]
-        credential_checks = [c for c in checks if c["action"] == "runtime.use_credential"]
-        assert credential_checks
-        assert credential_checks[0]["decision"] == "require_approval"
+        assert detail["error"] == "preflight_failed"
+        assert any("adapter_type_unknown" in e for e in detail["errors"])
 
     def test_fire_reruns_policy_preflight_and_fails_if_policy_changed_since_creation(
         self, db, test_agent, monkeypatch
     ):
-        monkeypatch.setattr(
-            "app.runtimes.registry.is_adapter_type_implemented",
-            lambda adapter_type: adapter_type in {"echo", "model_provider_api"},
-        )
         svc = AutomationService(db)
         auto = svc.create(
             space_id=PERSONAL_SPACE_ID,
@@ -812,7 +800,7 @@ class TestAutomationPolicyPreflight:
         )
         db.commit()
 
-        _set_agent_runtime_adapter_type(db, test_agent, "model_provider_api")
+        _set_agent_runtime_adapter_type(db, test_agent, "unknown_requirements_runtime")
         _attach_version_model_provider(db, test_agent, with_api_key=True)
         db.commit()
 
@@ -824,8 +812,8 @@ class TestAutomationPolicyPreflight:
             )
 
         assert exc.value.status_code == 422
-        assert exc.value.detail["error"] == "policy_preflight_failed"
-        assert any("runtime.use_credential" in e for e in exc.value.detail["errors"])
+        assert exc.value.detail["error"] == "preflight_failed"
+        assert any("adapter_type_unknown" in e for e in exc.value.detail["errors"])
 
     def test_policy_preflight_does_not_write_policy_decision_record(self, db, test_agent):
         from unittest.mock import patch
@@ -885,7 +873,7 @@ class TestAutomationPolicyPreflight:
         assert [c for c in result.checks if c.action == "runtime.use_credential"] == []
         assert _count(db, PolicyDecisionRecord) == before
 
-    def test_api_runtime_policy_preflight_ignores_space_default_for_execution_parity(
+    def test_cli_runtime_policy_preflight_ignores_space_default_for_execution_parity(
         self, db, test_agent
     ):
         from tests.support import factories
@@ -897,7 +885,7 @@ class TestAutomationPolicyPreflight:
             is_default=True,
             commit=False,
         )
-        _set_agent_runtime_adapter_type(db, test_agent, "model_provider_api")
+        _set_agent_runtime_adapter_type(db, test_agent, "claude_code")
 
         result = AutomationPolicyPreflightService(db).check(
             space_id=PERSONAL_SPACE_ID,
@@ -912,7 +900,7 @@ class TestAutomationPolicyPreflight:
         assert result.executable is True
         assert credential_checks == []
 
-    def test_manual_api_runtime_policy_preflight_ignores_space_default_for_execution_parity(
+    def test_manual_cli_runtime_policy_preflight_ignores_space_default_for_execution_parity(
         self, db, test_agent
     ):
         from tests.support import factories
@@ -924,7 +912,7 @@ class TestAutomationPolicyPreflight:
             is_default=True,
             commit=False,
         )
-        _set_agent_runtime_adapter_type(db, test_agent, "model_provider_api")
+        _set_agent_runtime_adapter_type(db, test_agent, "claude_code")
 
         result = AutomationPolicyPreflightService(db).check(
             space_id=PERSONAL_SPACE_ID,
@@ -939,7 +927,7 @@ class TestAutomationPolicyPreflight:
         assert result.executable is True
         assert credential_checks == []
 
-    def test_policy_preflight_fails_for_cross_space_agent_version_provider(self, db, test_agent):
+    def test_cli_policy_preflight_ignores_cross_space_agent_version_provider(self, db, test_agent):
         from tests.support import factories
 
         other_space = "policy-preflight-other-provider-space"
@@ -950,7 +938,7 @@ class TestAutomationPolicyPreflight:
             with_api_key=True,
             commit=False,
         )
-        _set_agent_runtime_adapter_type(db, test_agent, "model_provider_api")
+        _set_agent_runtime_adapter_type(db, test_agent, "claude_code")
         _set_agent_version_provider(db, test_agent, provider.id)
         before = _count(db, PolicyDecisionRecord)
 
@@ -961,11 +949,11 @@ class TestAutomationPolicyPreflight:
             trigger_origin="automation",
         )
 
-        assert result.executable is False
-        assert any("credential_metadata_cross_space" in e for e in result.errors)
+        assert result.executable is True
+        assert [c for c in result.checks if c.action == "runtime.use_credential"] == []
         assert _count(db, PolicyDecisionRecord) == before
 
-    def test_policy_preflight_fails_for_disabled_model_provider(self, db, test_agent):
+    def test_cli_policy_preflight_ignores_disabled_model_provider(self, db, test_agent):
         from tests.support import factories
 
         provider = factories.create_test_model_provider(
@@ -975,7 +963,7 @@ class TestAutomationPolicyPreflight:
             enabled=False,
             commit=False,
         )
-        _set_agent_runtime_adapter_type(db, test_agent, "model_provider_api")
+        _set_agent_runtime_adapter_type(db, test_agent, "claude_code")
         _set_agent_version_provider(db, test_agent, provider.id)
         before = _count(db, PolicyDecisionRecord)
 
@@ -986,11 +974,11 @@ class TestAutomationPolicyPreflight:
             trigger_origin="automation",
         )
 
-        assert result.executable is False
-        assert any("credential_metadata_disabled_provider" in e for e in result.errors)
+        assert result.executable is True
+        assert [c for c in result.checks if c.action == "runtime.use_credential"] == []
         assert _count(db, PolicyDecisionRecord) == before
 
-    def test_policy_preflight_fails_for_cross_space_provider_credential(self, db, test_agent):
+    def test_cli_policy_preflight_ignores_cross_space_provider_credential(self, db, test_agent):
         from tests.support import factories
 
         other_space = "policy-preflight-other-credential-space"
@@ -1006,7 +994,7 @@ class TestAutomationPolicyPreflight:
             credential_id=credential.id,
             commit=False,
         )
-        _set_agent_runtime_adapter_type(db, test_agent, "model_provider_api")
+        _set_agent_runtime_adapter_type(db, test_agent, "claude_code")
         _set_agent_version_provider(db, test_agent, provider.id)
         before = _count(db, PolicyDecisionRecord)
 
@@ -1017,14 +1005,11 @@ class TestAutomationPolicyPreflight:
             trigger_origin="automation",
         )
 
-        assert result.executable is False
+        assert result.executable is True
         credential_checks = [
             c for c in result.checks if c.action == "runtime.use_credential"
         ]
-        assert credential_checks
-        assert credential_checks[0].decision == "deny"
-        assert credential_checks[0].policy_rule_id == "space_boundary"
-        assert any("runtime.use_credential" in e for e in result.errors)
+        assert credential_checks == []
         assert _count(db, PolicyDecisionRecord) == before
 
 

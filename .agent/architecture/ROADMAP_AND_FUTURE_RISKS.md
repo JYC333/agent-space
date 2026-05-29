@@ -52,11 +52,11 @@ This document describes current capability lines and known future risks. It is o
 
 ### 4. Runtime / Adapter Expansion
 
-**Current state:** `app.runtimes` is canonical. Registered adapters: `echo` (test), `capability`, `claude_code`, `codex_cli`. Direct Anthropic API adapters (`anthropic_messages`) are intentionally not registered — Claude execution goes through the `claude_code` CLI integration only. `app.agents` contains Agent/AgentVersion CRUD and built-in seeder; new runtime adapters must go in `app.runtimes`.
+**Current state:** `app.runtimes` is canonical. Registered adapters: `echo` (test), `capability`, `claude_code`, `codex_cli`. Claude execution goes through the `claude_code` RuntimeAdapterSpec. `app.agents` contains Agent/AgentVersion CRUD and built-in seeder; new local CLI runtimes should start as RuntimeAdapterSpec entries.
 
 `RunEvent` evidence spine is fully implemented. `RunExecutionService` emits structured event types covering the full execution lifecycle: context_compiled, runtime_selected, sandbox_created, adapter_invoked, adapter_completed, artifact_ingested (produced paths, output_json artifacts, runtime_output text), patch_collected, validation_started/completed, proposal_created (worktree code_patch and output_json proposals), evaluation_created. `RunEvaluationService` consumes RunEvent as the sole structured evidence source — `output_json.materialization_errors` is a debug field and is never parsed as classifier evidence. `GET /api/v1/runs/{id}/events` returns paginated RunEvent records with DB-level event_type/status filtering.
 
-**Supported mutating CLI path:** `risk_level=high` → `required_sandbox_level=worktree`. This is the only supported path for file-writing CLI adapters (`claude_code`, `codex_cli`). All changes are collected as a `code_patch` Proposal and require human review before being applied to the real workspace.
+**Supported mutating CLI path:** `risk_level=high` → `required_sandbox_level=worktree`. This is the only supported path for file-writing local CLI runtimes (`claude_code`, `codex_cli`). All changes are collected as a `code_patch` Proposal and require human review before being applied to the real workspace.
 
 **Not supported yet (intentionally):** `risk_level=critical` → `one_shot_docker`. The Docker sandbox execution path is not implemented. Runs with `critical` risk fail early with error code `critical_runtime_requires_unimplemented_one_shot_docker`. Do not attempt to use critical risk level until Docker sandbox infrastructure is designed.
 
@@ -79,7 +79,7 @@ silently pick up stale or shared auth state. Failure code:
 
 **Risks if built too early:** New adapters may duplicate policy, sandbox, and credential behavior, or bypass the credential resolver.
 
-**Not now:** Broad CLI adapter deletion, Docker sandbox pool, production container infrastructure, cross-process subprocess termination.
+**Not now:** Docker sandbox pool, production container infrastructure, cross-process subprocess termination.
 
 ---
 

@@ -355,8 +355,10 @@ def upgrade() -> None:
     sa.Column('enabled', sa.Boolean(), nullable=False),
     sa.Column('provider_id', sa.String(length=36), nullable=True),
     sa.Column('credential_id', sa.String(length=36), nullable=True),
+    sa.Column('credential_profile_id', sa.String(length=128), nullable=True),
     sa.Column('config_json', sa.JSON(), nullable=False),
     sa.Column('health_status', sa.String(length=32), nullable=False),
+    sa.Column('quota_status', sa.String(length=32), nullable=False, server_default='unknown'),
     sa.Column('execution_plane_id', sa.String(length=36), nullable=True),
     sa.Column('capability_support_json', sa.JSON(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
@@ -365,9 +367,18 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['execution_plane_id'], ['execution_planes.id'], ),
     sa.ForeignKeyConstraint(['provider_id'], ['model_providers.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.CheckConstraint(
+        "health_status in ('unknown', 'ok', 'warning', 'error', 'unimplemented', 'disabled')",
+        name='ck_runtime_adapters_health_status',
+    ),
+    sa.CheckConstraint(
+        "quota_status in ('unknown', 'enough', 'medium', 'low', 'exhausted')",
+        name='ck_runtime_adapters_quota_status',
+    ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_runtime_adapters_credential_id'), 'runtime_adapters', ['credential_id'], unique=False)
+    op.create_index(op.f('ix_runtime_adapters_credential_profile_id'), 'runtime_adapters', ['credential_profile_id'], unique=False)
     op.create_index(op.f('ix_runtime_adapters_execution_plane_id'), 'runtime_adapters', ['execution_plane_id'], unique=False)
     op.create_index(op.f('ix_runtime_adapters_provider_id'), 'runtime_adapters', ['provider_id'], unique=False)
     op.create_index(op.f('ix_runtime_adapters_space_id'), 'runtime_adapters', ['space_id'], unique=False)
@@ -549,7 +560,7 @@ def upgrade() -> None:
     sa.Column('task_id', sa.String(length=36), nullable=True),
     sa.Column('adapter_type', sa.String(length=64), nullable=True),
     sa.Column('capability_id', sa.String(length=128), nullable=True),
-    sa.Column('model_selection_mode', sa.String(length=32), nullable=False),
+    sa.Column('model_selection_mode', sa.String(length=32), nullable=False, server_default='cli_default'),
     sa.Column('model_override_json', sa.JSON(), nullable=True),
     sa.Column('permission_snapshot_json', sa.JSON(), nullable=True),
     sa.Column('required_sandbox_level', sa.String(length=32), nullable=False, server_default='none'),
@@ -2297,6 +2308,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_runtime_adapters_execution_plane_id'), table_name='runtime_adapters')
     op.drop_index(op.f('ix_runtime_adapters_space_id'), table_name='runtime_adapters')
     op.drop_index(op.f('ix_runtime_adapters_provider_id'), table_name='runtime_adapters')
+    op.drop_index(op.f('ix_runtime_adapters_credential_profile_id'), table_name='runtime_adapters')
     op.drop_index(op.f('ix_runtime_adapters_credential_id'), table_name='runtime_adapters')
     op.drop_table('runtime_adapters')
     op.drop_index(op.f('ix_execution_planes_enabled'), table_name='execution_planes')

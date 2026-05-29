@@ -1,6 +1,6 @@
 """Invariants for file-access runtime adapter policy enforcement.
 
-These tests prove the hard policy rules that prevent file-access CLI adapters
+These tests prove the hard policy rules that prevent file-access local CLI runtimes
 from executing without proper sandbox isolation.  They are invariants — they
 must hold across all code changes.
 
@@ -10,10 +10,8 @@ Invariants covered:
   3. high/worktree can execute a file-access CLI runtime — permitted.
   4. critical/one_shot_docker returns the explicit unsupported error, not silent fallback.
   5. No runtime silently falls back to echo.
-  6. Direct Anthropic API adapter types (anthropic_api, anthropic_messages) are rejected
-     by the canonical registry and cannot be instantiated.
-  7. failed git diff/status collection produces materialization_error, not silent no-op.
-  8. "codex_cli" is canonical; "codex" alone does not instantiate a runtime adapter.
+  6. failed git diff/status collection produces materialization_error, not silent no-op.
+  7. "codex_cli" is canonical; "codex" alone does not instantiate a runtime adapter.
 """
 
 from __future__ import annotations
@@ -36,7 +34,7 @@ def _decision(risk_level: str):
 
 
 # ---------------------------------------------------------------------------
-# 1. File-access adapters require worktree (validate_file_access_adapter_policy)
+# 1. File-access runtimes require worktree (validate_file_access_adapter_policy)
 # ---------------------------------------------------------------------------
 
 class TestFileAccessAdapterRequiresWorktree:
@@ -59,10 +57,11 @@ class TestFileAccessAdapterRequiresWorktree:
         assert msg is not None
         assert "codex_cli" in msg
 
-    def test_claude_cli_is_not_a_known_file_access_adapter(self):
-        """claude_cli is not a canonical adapter type; it must not appear in _FILE_ACCESS_ADAPTER_TYPES."""
-        from app.runs.runtime_policy import _FILE_ACCESS_ADAPTER_TYPES
-        assert "claude_cli" not in _FILE_ACCESS_ADAPTER_TYPES
+    def test_file_access_policy_derives_from_runtime_adapter_spec(self):
+        from app.runtimes.specs import get_runtime_adapter_spec
+        assert get_runtime_adapter_spec("claude_code").sandbox.requires_file_access is True
+        assert get_runtime_adapter_spec("codex_cli").sandbox.requires_file_access is True
+        assert get_runtime_adapter_spec("echo").sandbox.requires_file_access is False
 
     def test_claude_code_high_risk_allowed(self):
         from app.runs.runtime_policy import validate_file_access_adapter_policy
@@ -169,31 +168,7 @@ class TestNoSilentFallbackToEcho:
 
 
 # ---------------------------------------------------------------------------
-# 6. Direct Anthropic API adapter types are rejected by the registry
-# ---------------------------------------------------------------------------
-
-class TestDirectAnthropicAdaptersRejected:
-    def test_anthropic_api_not_instantiable(self):
-        from app.runtimes.registry import instantiate_runtime_adapter
-        with pytest.raises(KeyError):
-            instantiate_runtime_adapter("anthropic_api")
-
-    def test_anthropic_messages_not_instantiable(self):
-        from app.runtimes.registry import instantiate_runtime_adapter
-        with pytest.raises(KeyError):
-            instantiate_runtime_adapter("anthropic_messages")
-
-    def test_anthropic_api_not_in_registry(self):
-        from app.runtimes.registry import is_adapter_type_implemented
-        assert not is_adapter_type_implemented("anthropic_api")
-
-    def test_anthropic_messages_not_in_registry(self):
-        from app.runtimes.registry import is_adapter_type_implemented
-        assert not is_adapter_type_implemented("anthropic_messages")
-
-
-# ---------------------------------------------------------------------------
-# 7. Failed git diff/status collection is materialization error, not silent no-op
+# 6. Failed git diff/status collection is materialization error, not silent no-op
 #    (structural test — execution.py catches GitCommandError and appends to
 #    code_patch_warnings, which lands in output_json.materialization_errors)
 # ---------------------------------------------------------------------------
@@ -240,15 +215,15 @@ class TestGitFailureBecomesError:
 
 
 # ---------------------------------------------------------------------------
-# 8. "codex_cli" is canonical; "codex" alone is not a runtime adapter
+# 7. "codex_cli" is canonical; "codex" alone is not a runtime adapter
 # ---------------------------------------------------------------------------
 
 class TestCodexCliIsCanonical:
     def test_codex_cli_instantiates_successfully(self):
         from app.runtimes.registry import instantiate_runtime_adapter
-        from app.runtimes.adapters.cli_runtime import CodexCliRuntimeAdapter
+        from app.runtimes.adapters.cli_runtime import GenericCliRuntimeAdapter
         adapter = instantiate_runtime_adapter("codex_cli")
-        assert isinstance(adapter, CodexCliRuntimeAdapter)
+        assert isinstance(adapter, GenericCliRuntimeAdapter)
         assert adapter.adapter_type == "codex_cli"
 
     def test_codex_alone_does_not_instantiate(self):
@@ -261,13 +236,7 @@ class TestCodexCliIsCanonical:
         from app.runtimes.registry import is_adapter_type_implemented
         assert not is_adapter_type_implemented("codex")
 
-    def test_codex_cli_adapter_type_on_instance(self):
-        """CodexCliRuntimeAdapter.adapter_type must be exactly 'codex_cli'."""
-        from app.runtimes.adapters.cli_runtime import CodexCliRuntimeAdapter
-        adapter = CodexCliRuntimeAdapter()
-        assert adapter.adapter_type == "codex_cli"
-
-    def test_codex_cli_class_adapter_declares_file_access(self):
-        """codex_cli is a file-access adapter (requires_file_access=True)."""
-        from app.runtimes.adapters.cli_runtime import CodexCliRuntimeAdapter
-        assert CodexCliRuntimeAdapter.requires_file_access is True
+    def test_codex_cli_spec_declares_file_access(self):
+        """codex_cli is a file-access runtime (requires_file_access=True)."""
+        from app.runtimes.specs import get_runtime_adapter_spec
+        assert get_runtime_adapter_spec("codex_cli").sandbox.requires_file_access is True

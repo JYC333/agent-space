@@ -391,8 +391,10 @@ class RuntimeAdapter(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     provider_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("model_providers.id"), nullable=True, index=True)
     credential_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("credentials.id"), nullable=True, index=True)
+    credential_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     health_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    quota_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown", server_default=text("'unknown'"))
     execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
     capability_support_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
@@ -402,10 +404,16 @@ class RuntimeAdapter(Base):
     credential: Mapped[Optional[Credential]] = relationship("Credential")
     execution_plane: Mapped[Optional[ExecutionPlane]] = relationship("ExecutionPlane")
 
-    # Field name aliases for CLI adapter config API (adapter_id, display_name, quota_status).
-    adapter_id = synonym("adapter_type")
-    display_name = synonym("name")
-    quota_status = synonym("health_status")
+    __table_args__ = (
+        CheckConstraint(
+            "health_status in ('unknown', 'ok', 'warning', 'error', 'unimplemented', 'disabled')",
+            name="ck_runtime_adapters_health_status",
+        ),
+        CheckConstraint(
+            "quota_status in ('unknown', 'enough', 'medium', 'low', 'exhausted')",
+            name="ck_runtime_adapters_quota_status",
+        ),
+    )
 
     @property
     def executable_path(self) -> Optional[str]:
@@ -864,10 +872,9 @@ class Run(Base):
     # table without full rebuild). Project scoping is enforced at the service layer.
     project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
     user_id = synonym("instructed_by_user_id")
-    cli_adapter_config_id = synonym("runtime_adapter_id")
     adapter_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     capability_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    model_selection_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="agent_space_provider")
+    model_selection_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="cli_default", server_default=text("'cli_default'"))
     model_override_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     permission_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     # Policy-derived minimum sandbox class for future real runtimes (no sandbox created here).

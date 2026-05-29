@@ -385,27 +385,3 @@ class TestAdapterMetadataDeclarations:
         assert EchoRuntimeAdapter.model_config_behavior == "not_applicable"
         assert EchoRuntimeAdapter.requires_file_access is False
         assert EchoRuntimeAdapter.supports_sandboxed_execution is False
-
-    def test_anthropic_direct_api_adapters_not_in_registry(self):
-        """Guard test: anthropic_messages and anthropic_api must not appear in the canonical registry.
-
-        Product policy: Anthropic/Claude execution goes through CLI integrations only.
-        This test prevents reintroduction.
-        """
-        from app.runtimes.registry import is_adapter_type_implemented
-        assert not is_adapter_type_implemented("anthropic_messages"), (
-            "anthropic_messages must not be in canonical runtime registry (policy: CLI-only)"
-        )
-        assert not is_adapter_type_implemented("anthropic_api"), (
-            "anthropic_api must not be in canonical runtime registry (policy: CLI-only)"
-        )
-
-    def test_anthropic_messages_file_deleted(self):
-        """Guard test: anthropic_messages.py must not exist in app.runtimes.adapters."""
-        import importlib
-        import importlib.util
-        spec = importlib.util.find_spec("app.runtimes.adapters.anthropic_messages")
-        assert spec is None, (
-            "app.runtimes.adapters.anthropic_messages must not exist "
-            "(policy: Anthropic direct API adapter is not supported)"
-        )

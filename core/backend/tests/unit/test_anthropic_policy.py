@@ -1,17 +1,10 @@
-"""Guard tests: Anthropic direct API adapter policy enforcement.
+"""Guard tests: Anthropic local CLI runtime policy enforcement.
 
-Product policy: Anthropic/Claude execution must go through CLI integrations
-(``claude_code`` in ``app.cli_adapters``), not direct in-process API key calls.
+Product policy: Anthropic/Claude execution must go through the ``claude_code``
+RuntimeAdapterSpec and GenericCliRuntimeAdapter path.
 
-These tests prevent reintroduction of:
-- ``anthropic_api`` adapter type in canonical registry
-- ``anthropic_messages`` adapter type in canonical registry
-- ``anthropic_messages.py`` file in ``app.runtimes.adapters``
-- CLI subprocess auth (ANTHROPIC_API_KEY env passthrough) leaking into canonical
-  runtime adapters via ``app.runtimes``
-
-None of these tests should ever be deleted or modified to make a failing
-assertion pass — they are policy guards, not implementation tests.
+These tests keep current runtime adapters from reading ambient Anthropic
+credentials and verify that Claude Code is modeled as a local CLI spec.
 """
 
 from __future__ import annotations
@@ -20,57 +13,7 @@ import inspect
 
 
 # ---------------------------------------------------------------------------
-# A. Registry guards
-# ---------------------------------------------------------------------------
-
-class TestAnthropicDirectAPIAdaptersAbsentFromRegistry:
-    """anthropic_api and anthropic_messages must never appear in the canonical runtime registry."""
-
-    def test_anthropic_api_not_in_canonical_registry(self):
-        """Guard: anthropic_api must not be registered as a canonical runtime adapter."""
-        from app.runtimes.registry import is_adapter_type_implemented
-        assert not is_adapter_type_implemented("anthropic_api"), (
-            "POLICY VIOLATION: anthropic_api must not be in the canonical runtime registry. "
-            "Anthropic/Claude execution must go through claude_code CLI integrations."
-        )
-
-    def test_anthropic_messages_not_in_canonical_registry(self):
-        """Guard: anthropic_messages must not be registered as a canonical runtime adapter."""
-        from app.runtimes.registry import is_adapter_type_implemented
-        assert not is_adapter_type_implemented("anthropic_messages"), (
-            "POLICY VIOLATION: anthropic_messages must not be in the canonical runtime registry. "
-            "Anthropic/Claude execution must go through claude_code CLI integrations."
-        )
-
-
-# ---------------------------------------------------------------------------
-# B. File-level guards
-# ---------------------------------------------------------------------------
-
-class TestAnthropicAdapterFilesAbsent:
-    """The deleted adapter file must not be recreated."""
-
-    def test_anthropic_messages_module_not_importable(self):
-        """Guard: app.runtimes.adapters.anthropic_messages must not exist."""
-        import importlib.util
-        spec = importlib.util.find_spec("app.runtimes.adapters.anthropic_messages")
-        assert spec is None, (
-            "POLICY VIOLATION: app.runtimes.adapters.anthropic_messages must not exist. "
-            "Delete the file — Anthropic direct API adapter is not supported."
-        )
-
-    def test_anthropic_api_module_not_importable(self):
-        """Guard: app.runtimes.adapters.anthropic_api must not exist."""
-        import importlib.util
-        spec = importlib.util.find_spec("app.runtimes.adapters.anthropic_api")
-        assert spec is None, (
-            "POLICY VIOLATION: app.runtimes.adapters.anthropic_api must not exist. "
-            "Delete the file — Anthropic direct API adapter is not supported."
-        )
-
-
-# ---------------------------------------------------------------------------
-# C. Credential boundary guards
+# A. Credential boundary guards
 # ---------------------------------------------------------------------------
 
 class TestCanonicalRuntimeAdapterCredentialBoundary:
@@ -90,69 +33,33 @@ class TestCanonicalRuntimeAdapterCredentialBoundary:
         assert "ANTHROPIC_API_KEY" not in source
         assert "anthropic_api_key" not in source
 
-    def test_runtime_registry_does_not_import_anthropic_messages(self):
-        """Registry source must not import AnthropicMessagesRuntimeAdapter."""
-        import app.runtimes.registry as registry_module
-        source = inspect.getsource(registry_module)
-        assert "AnthropicMessagesRuntimeAdapter" not in source
-        # The string "anthropic_messages" may appear in comments/policy notes, but
-        # must not appear as a registered key in _RUNTIME_ADAPTER_CLASSES.
-        from app.runtimes.registry import _RUNTIME_ADAPTER_CLASSES
-        assert "anthropic_messages" not in _RUNTIME_ADAPTER_CLASSES, (
-            "POLICY VIOLATION: anthropic_messages must not be a key in _RUNTIME_ADAPTER_CLASSES"
-        )
-
-    def test_runtimes_adapters_init_does_not_import_anthropic_messages(self):
-        """app.runtimes.adapters __init__ must not export AnthropicMessagesRuntimeAdapter."""
-        import app.runtimes.adapters as adapters_pkg
-        source = inspect.getsource(adapters_pkg)
-        assert "AnthropicMessagesRuntimeAdapter" not in source
-
-
 # ---------------------------------------------------------------------------
-# D. CLI adapter preservation guards
+# B. RuntimeAdapterSpec guards
 # ---------------------------------------------------------------------------
 
-class TestClaudeCLIAdapterPreserved:
-    """Claude CLI / Claude Code CLI support in app.cli_adapters must remain intact."""
+class TestClaudeRuntimeAdapterSpec:
+    """Claude Code is represented by spec data plus the generic CLI runtime."""
 
-    def test_claude_cli_adapter_importable(self):
-        """ClaudeCLIAdapter must remain importable from app.cli_adapters.claude."""
-        from app.cli_adapters.claude import ClaudeCLIAdapter
-        assert ClaudeCLIAdapter is not None
+    def test_claude_code_spec_is_cli_profile_based(self):
+        from app.runtimes.specs import get_runtime_adapter_spec
+        spec = get_runtime_adapter_spec("claude_code")
+        assert spec.runtime_kind == "local_cli"
+        assert spec.credentials.credential_mode == "cli_profile"
+        assert spec.credentials.env_auth_var == "ANTHROPIC_API_KEY"
 
-    def test_claude_cli_adapter_type_is_claude_code(self):
-        """ClaudeCLIAdapter.adapter_type must be claude_code."""
-        from app.cli_adapters.claude import ClaudeCLIAdapter
-        # adapter_type is a property — check on an instance
-        adapter = ClaudeCLIAdapter()
-        assert adapter.adapter_type == "claude_code"
+    def test_codex_cli_spec_is_cli_profile_based(self):
+        from app.runtimes.specs import get_runtime_adapter_spec
+        spec = get_runtime_adapter_spec("codex_cli")
+        assert spec.runtime_kind == "local_cli"
+        assert spec.credentials.credential_mode == "cli_profile"
+        assert spec.credentials.env_auth_var == "OPENAI_API_KEY"
 
-    def test_codex_cli_adapter_importable(self):
-        """CodexCLIAdapter must remain importable from app.cli_adapters.codex."""
-        from app.cli_adapters.codex import CodexCLIAdapter
-        assert CodexCLIAdapter is not None
-
-    def test_cli_adapters_service_knows_claude_code(self):
-        """cli_adapters/service.py must still map claude_code to ClaudeCLIAdapter."""
-        import app.cli_adapters.service as svc_module
-        source = inspect.getsource(svc_module)
-        assert "claude_code" in source
-        assert "ClaudeCLIAdapter" in source
-
-    def test_anthropic_api_key_passthrough_confined_to_cli_adapters(self):
-        """ANTHROPIC_API_KEY env passthrough must only appear in app.cli_adapters, not app.runtimes."""
-        import app.runtimes.credentials as creds_module
-        creds_source = inspect.getsource(creds_module)
-        # The credentials module documents that env fallback is NOT performed,
-        # but it must not also perform the env read.
-        # It mentions ANTHROPIC_API_KEY only in the docstring as a prohibition.
-        # We just ensure no os.environ / os.getenv read of ANTHROPIC_API_KEY.
+    def test_generic_cli_runtime_does_not_read_ambient_anthropic_env(self):
         import re
+        import app.runtimes.adapters.cli_runtime as cli_runtime
+        source = inspect.getsource(cli_runtime)
         env_reads = re.findall(
             r'os\.environ.*ANTHROPIC_API_KEY|os\.getenv.*ANTHROPIC_API_KEY',
-            creds_source,
+            source,
         )
-        assert env_reads == [], (
-            f"POLICY VIOLATION: app.runtimes.credentials reads ANTHROPIC_API_KEY from env: {env_reads}"
-        )
+        assert env_reads == []

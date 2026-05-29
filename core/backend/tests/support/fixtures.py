@@ -99,7 +99,7 @@ def cross_space_pair_db(db):
 
 
 @pytest.fixture
-def cross_space_pair(db, client):
+def cross_space_pair(db, app_db_override):
     """Two distinct spaces each with a user — for isolation / ACL tests.
 
     ``client_a`` and ``client_b`` are TestClient instances with session cookies
@@ -124,22 +124,23 @@ def cross_space_pair(db, client):
     # An open write transaction here would block inserts (sqlite "database is locked").
     db.commit()
 
-    # Create per-identity clients with cookies set at construction time (no
-    # lifespan call — the main ``client`` fixture already ran startup).
-    # app.dependency_overrides is global so these clients use the test DB.
-    client_a = TestClient(_app, cookies={SESSION_COOKIE: raw_a}, raise_server_exceptions=True)
-    client_b = TestClient(_app, cookies={SESSION_COOKIE: raw_b}, raise_server_exceptions=True)
-
-    return {
-        "space_a_id": a,
-        "space_b_id": b,
-        "user_a": ua,
-        "user_b": ub,
-        "cookies_a": {SESSION_COOKIE: raw_a},
-        "cookies_b": {SESSION_COOKIE: raw_b},
-        "client_a": client_a,
-        "client_b": client_b,
-    }
+    # Create per-identity clients with cookies set at construction time. Tests
+    # do not need app lifespan/background worker startup; app_db_override wires
+    # routes to the migrated test DB and a non-running queue service.
+    with (
+        TestClient(_app, cookies={SESSION_COOKIE: raw_a}, raise_server_exceptions=True) as client_a,
+        TestClient(_app, cookies={SESSION_COOKIE: raw_b}, raise_server_exceptions=True) as client_b,
+    ):
+        yield {
+            "space_a_id": a,
+            "space_b_id": b,
+            "user_a": ua,
+            "user_b": ub,
+            "cookies_a": {SESSION_COOKIE: raw_a},
+            "cookies_b": {SESSION_COOKIE: raw_b},
+            "client_a": client_a,
+            "client_b": client_b,
+        }
 
 
 @pytest.fixture
@@ -149,7 +150,7 @@ def two_spaces(cross_space_pair):
 
 
 @pytest.fixture
-def same_space_pair(db, client):
+def same_space_pair(db, app_db_override):
     """Two users in the same space — for intra-space visibility / mutation tests.
 
     Both users are active members of the same space. ``client_a`` is authenticated
@@ -169,16 +170,17 @@ def same_space_pair(db, client):
     _, raw_b = session_svc.create(ub.id)
     db.commit()
 
-    client_a = TestClient(_app, cookies={SESSION_COOKIE: raw_a}, raise_server_exceptions=True)
-    client_b = TestClient(_app, cookies={SESSION_COOKIE: raw_b}, raise_server_exceptions=True)
-
-    return {
-        "space_id": space,
-        "user_a": ua,
-        "user_b": ub,
-        "client_a": client_a,
-        "client_b": client_b,
-    }
+    with (
+        TestClient(_app, cookies={SESSION_COOKIE: raw_a}, raise_server_exceptions=True) as client_a,
+        TestClient(_app, cookies={SESSION_COOKIE: raw_b}, raise_server_exceptions=True) as client_b,
+    ):
+        yield {
+            "space_id": space,
+            "user_a": ua,
+            "user_b": ub,
+            "client_a": client_a,
+            "client_b": client_b,
+        }
 
 
 @pytest.fixture

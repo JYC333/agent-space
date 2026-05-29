@@ -36,7 +36,8 @@ cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants
 - `backend/app/proposals/api.py` — proposal review API
 - `backend/app/memory/reflector.py` — session → memory proposals
 - `backend/app/runs/execution.py` — RunExecutionService (canonical run orchestration)
-- `backend/app/cli_adapters/` — CLI adapter detection, executor infrastructure, sandbox support
+- `backend/app/runtimes/specs.py` — RuntimeAdapterSpec catalog
+- `backend/app/runtimes/adapters/cli_runtime.py` — GenericCliRuntimeAdapter local CLI execution
 - `backend/app/capabilities/registry.py` — capability loader
 - `backend/app/main.py` — FastAPI app entry point
 
@@ -62,22 +63,16 @@ DEFAULT_USER_ID=default_user
 1. Create `capabilities/<your-id>/capability.yaml` with required fields (id, name, version, description)
 2. `POST /api/v1/capabilities/reload` or restart the server
 
-## Adding a new runtime adapter (canonical path)
+## Adding a new runtime adapter
 
-1. Subclass `BaseRuntimeAdapter` in `backend/app/runtimes/`
-2. Implement `execute(ctx: RuntimeExecutionContext) → RuntimeAdapterResult`; read credentials from `ctx.resolved_credentials`, never env vars
-3. Register in `backend/app/runtimes/registry.py:_RUNTIME_ADAPTER_CLASSES`
-
-## Adding a new CLI integration (CLI adapter path)
-
-1. Subclass `AgentAdapter` in `backend/app/cli_adapters/` (see `adapter_base.py`)
-2. Implement `adapter_type`, `is_available()`, `detect()`, and `run()`
-3. Register the class in `cli_adapters/service.py:_get_adapter_instance()` for detection probes
-4. To make it executable via `RunExecutionService`, also add a `BaseRuntimeAdapter` wrapper in `backend/app/runtimes/`
+1. For a local CLI tool, add a `RuntimeAdapterSpec` in `backend/app/runtimes/specs.py`
+2. Use `runtime_kind="local_cli"` and define executable, invocation, credentials, sandbox, usage, and output semantics
+3. Do not add a vendor-specific runtime class unless the adapter truly needs native behavior beyond `GenericCliRuntimeAdapter`
+4. For a native adapter, subclass `BaseRuntimeAdapter` and register it in `backend/app/runtimes/registry.py`
 
 ## Run execution
 
 - `RunExecutionService` (`backend/app/runs/execution.py`) drives queued Runs through **real** runtime adapters resolved from `AgentVersion` / `RuntimeAdapter` rows / `runtime_policy_json` (`default_adapter_type`, `allowed_adapter_types`, `allowed_model_providers`).
-- Built-in runtime adapter implementations live under `backend/app/runtimes/` (`echo` for zero-dependency tests, `capability` for capability-based execution). Direct Anthropic API adapters are intentionally not registered — Anthropic/Claude execution uses the `claude_code` / `claude_cli` CLI integrations in `app.cli_adapters`.
-- Obsolete **runtime query / job payload overrides** from removed in-process tooling are not executed. `POST .../runs/{id}/execute` may return **410 Gone** when such an override is supplied; the job handler rejects obsolete overrides with `ValueError` (prefix `runtime_removed:`); `RunExecutionService` returns `error_code=runtime_removed` **without** mutating the Run row. There is **no** synthetic adapter fallback when a real adapter fails.
+- Built-in runtime adapter implementations live under `backend/app/runtimes/` (`echo` for zero-dependency tests, `capability` for capability-based execution). Anthropic/Claude execution uses the `claude_code` RuntimeAdapterSpec through the generic local CLI runtime path.
+- Unsupported runtime query / job payload overrides are rejected. `POST .../runs/{id}/execute` may return **410 Gone** when such an override is supplied; the job handler rejects unsupported overrides with `ValueError` (prefix `runtime_removed:`); `RunExecutionService` returns `error_code=runtime_removed` **without** mutating the Run row. There is **no** synthetic adapter fallback when a real adapter fails.
 - Text outputs are persisted with `ArtifactPersistenceService` under `artifact_storage_root`; ephemeral work uses `sandbox_root` (worktree isolation for high-risk policy) and is removed after the run while persisted artifact files remain.

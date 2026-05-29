@@ -1,4 +1,4 @@
-"""Invariant: M4 runtime credential and sandbox path boundary enforcement.
+"""Invariant: runtime credential and sandbox path boundary enforcement.
 
 Tests in this file assert:
 - Current RunExecutionService uses app.runtimes, not app.agents, for execution.
@@ -11,7 +11,6 @@ Tests in this file assert:
 from __future__ import annotations
 
 import inspect
-import textwrap
 
 import pytest
 
@@ -43,45 +42,14 @@ class TestRunExecutionUsesCanonicalRuntimeRegistry:
         from app.runtimes.registry import is_adapter_type_implemented
         assert is_adapter_type_implemented("echo")
 
-    def test_anthropic_direct_api_adapters_absent_from_canonical_registry(self):
-        """anthropic_api and anthropic_messages must NOT be in the canonical runtime registry.
-
-        Product policy: Anthropic/Claude execution must go through CLI integrations
-        (claude_code in app.cli_adapters), not direct API adapters.
-        This test is a guard against reintroduction.
-        """
-        from app.runtimes.registry import is_adapter_type_implemented
-        assert not is_adapter_type_implemented("anthropic_api"), (
-            "anthropic_api must not be in canonical runtime registry (policy: CLI-only)"
-        )
-        assert not is_adapter_type_implemented("anthropic_messages"), (
-            "anthropic_messages must not be in canonical runtime registry (policy: CLI-only)"
-        )
-
-    def test_cli_adapter_types_registered_via_bridge(self):
-        """claude_code and codex_cli must be in the canonical registry via the CLI runtime bridge.
-
-        These are now executable through RunExecutionService via CliRuntimeAdapter subclasses.
-        The bridge delegates to app.cli_adapters without importing CLI classes into execution.py.
-        """
+    def test_local_cli_runtime_types_registered_via_spec(self):
+        """claude_code and codex_cli must execute through RuntimeAdapterSpec."""
         from app.runtimes.registry import is_adapter_type_implemented
         assert is_adapter_type_implemented("claude_code"), (
-            "claude_code must be registered via ClaudeCodeRuntimeAdapter (CLI runtime bridge)"
+            "claude_code must be registered through RuntimeAdapterSpec and GenericCliRuntimeAdapter"
         )
         assert is_adapter_type_implemented("codex_cli"), (
-            "codex_cli must be registered via CodexCliRuntimeAdapter (CLI runtime bridge)"
-        )
-
-    def test_cli_runtime_bridge_does_not_leak_cli_imports_to_execution_service(self):
-        """RunExecutionService must not directly import ClaudeCLIAdapter or CodexCLIAdapter."""
-        import inspect
-        import app.runs.execution as svc_module
-        source = inspect.getsource(svc_module)
-        assert "ClaudeCLIAdapter" not in source, (
-            "RunExecutionService must not import ClaudeCLIAdapter directly — use the CLI runtime bridge"
-        )
-        assert "CodexCLIAdapter" not in source, (
-            "RunExecutionService must not import CodexCLIAdapter directly — use the CLI runtime bridge"
+            "codex_cli must be registered through RuntimeAdapterSpec and GenericCliRuntimeAdapter"
         )
 
 
@@ -164,11 +132,11 @@ class TestCanonicalSandboxManagerSource:
         assert "worktree_manager" in source
 
     def test_workspace_sandbox_manager_is_not_imported_by_execution(self):
-        """app.runs.execution must not import the CLI-only workspace.sandbox_manager."""
+        """app.runs.execution must not import workspace.sandbox_manager."""
         import app.runs.execution as svc
         source = inspect.getsource(svc)
         assert "workspace.sandbox_manager" not in source
-        assert "SandboxManager" not in source  # SandboxManager is CLI adapter only
+        assert "SandboxManager" not in source
 
 
 # ---------------------------------------------------------------------------

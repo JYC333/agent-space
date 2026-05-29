@@ -258,6 +258,7 @@ def _create_and_execute_agent_run(job, payload: dict, agent_id: str) -> dict:
                 instruction=payload.get("instruction"),
                 parent_run_id=payload.get("parent_run_id"),
                 adapter_type=payload.get("adapter_type"),
+                runtime_adapter_id=payload.get("runtime_adapter_id"),
             ),
             space_id=space_id,
             user_id=user_id,

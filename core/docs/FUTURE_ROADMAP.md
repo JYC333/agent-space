@@ -8,7 +8,7 @@
 - [x] Memory reflector (placeholder + LLM mode)
 - [x] Context builder
 - [x] Capability registry
-- [x] Agent run logging (echo, Claude CLI, Codex CLI adapters)
+- [x] Agent run logging (echo, Claude Code, Codex CLI RuntimeAdapterSpec paths)
 - [x] Minimal admin UI (vanilla HTML)
 - [x] Multi-tenant-ready schema (ULID IDs, soft deletes, tenant/user/workspace fields)
 

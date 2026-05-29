@@ -138,7 +138,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 **B39** — No vendor CLI or external runtime is the source of truth for memory, policy, permissions, or audit records. These always live in the agent-space database regardless of which runtime adapter is active.
 
-**B40** — An enterprise or commercial deployment must be able to disable any runtime adapter (e.g. remove `claude_cli`) without breaking the rest of the system. Adapter availability is checked at run time via `is_available()`; unavailability must be surfaced as a clear error, not a silent fallback to unsandboxed execution.
+**B40** — An enterprise or commercial deployment must be able to disable any runtime adapter (for example `claude_code`) without breaking the rest of the system. Adapter availability is checked at run time via runtime-generic status/detection; unavailability must be surfaced as a clear error, not a silent fallback to unsandboxed execution.
 
 ---
 

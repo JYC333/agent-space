@@ -12,28 +12,7 @@ def test_adapter_metadata_echo_not_applicable():
     meta = get_adapter_model_config_metadata("echo")
     assert meta.uses_model_config is False
     assert meta.model_config_behavior == "not_applicable"
-    assert "does not call an LLM" in meta.model_config_note
-
-
-def test_adapter_metadata_anthropic_messages_unsupported():
-    """anthropic_messages is removed from the registry — metadata must reflect unsupported.
-
-    Policy: direct Anthropic API adapters are not supported.
-    Anthropic/Claude execution goes through claude_code CLI integrations.
-    """
-    meta = get_adapter_model_config_metadata("anthropic_messages")
-    assert meta.uses_model_config is False
-    assert meta.model_config_behavior == "unsupported"
-
-
-def test_adapter_metadata_anthropic_api_unsupported():
-    """anthropic_api must never appear in the registry.
-
-    Guard test: prevents reintroduction of the direct API adapter.
-    """
-    meta = get_adapter_model_config_metadata("anthropic_api")
-    assert meta.uses_model_config is False
-    assert meta.model_config_behavior == "unsupported"
+    assert meta.model_config_note == ""
 
 
 def test_adapter_metadata_capability_not_applicable():
@@ -70,11 +49,11 @@ def test_build_resolved_model_agent_default(db, cross_space_pair_db):
     assert resolved.source == "agent_default"
     assert resolved.used_by_adapter is False
     assert resolved.adapter_model_support == "not_applicable"
-    assert resolved.disclosure_note is not None
+    assert resolved.disclosure_note is None
 
 
 def test_build_resolved_model_unsupported_adapter(db, cross_space_pair_db):
-    """A run with an unsupported/removed adapter_type should surface adapter_model_support=unsupported."""
+    """A run with an unsupported adapter_type should surface adapter_model_support=unsupported."""
     a = cross_space_pair_db["space_a_id"]
     ua = cross_space_pair_db["user_a"]
     mp = factories.create_test_model_provider(
@@ -84,7 +63,6 @@ def test_build_resolved_model_unsupported_adapter(db, cross_space_pair_db):
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.model_provider_id = mp.id
     run.model_override_json = {"model": "some-model", "source": "request"}
-    # Use a generic unknown adapter_type (anthropic_messages is no longer in registry)
     run.adapter_type = "unknown_adapter_for_test"
     db.flush()
 

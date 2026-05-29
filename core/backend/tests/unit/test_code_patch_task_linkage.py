@@ -48,7 +48,7 @@ class TestWorktreeCollectionResultProposal:
         subprocess.run(["git", "add", "a.txt"], check=True, capture_output=True, cwd=str(repo))
         subprocess.run(["git", "commit", "-m", "init"], check=True, capture_output=True, cwd=str(repo))
 
-        # Modify the file (simulates what the CLI adapter would do)
+        # Modify the file (simulates what a local CLI runtime would do)
         (repo / "a.txt").write_text("modified", encoding="utf-8")
 
         from app.runs.code_patch_collector import collect_and_create_code_patch_proposal

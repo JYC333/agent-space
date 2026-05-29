@@ -111,24 +111,6 @@ class TestExecutionPlaneService:
             assert plane.name == "agent_space_native_local"
             assert plane.type == "native"
 
-    def test_anthropic_direct_api_adapter_not_mapped_to_plane(self, db, test_space):
-        """anthropic_api and anthropic_messages must not map to any execution plane.
-
-        Product policy: direct API adapters are not supported.
-        """
-        from app.execution_planes.seeder import seed_default_execution_planes
-        from app.execution_planes.service import ExecutionPlaneService
-
-        seed_default_execution_planes(db, test_space.id)
-        svc = ExecutionPlaneService(db)
-
-        assert svc.get_default_execution_plane(test_space.id, "anthropic_api") is None, (
-            "anthropic_api must not map to a plane (policy: CLI-only)"
-        )
-        assert svc.get_default_execution_plane(test_space.id, "anthropic_messages") is None, (
-            "anthropic_messages must not map to a plane (policy: CLI-only)"
-        )
-
     def test_resolve_plane_for_runtime_with_linked_plane(self, db, test_space):
         """resolve_execution_plane_for_runtime returns the plane linked on the adapter."""
         from app.execution_planes.service import ExecutionPlaneService

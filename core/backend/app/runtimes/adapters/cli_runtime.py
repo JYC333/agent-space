@@ -1,34 +1,4 @@
-"""CLI runtime bridge — delegates execution to app.cli_adapters implementations.
-
-This module provides the canonical runtime path for CLI-based adapter types
-(claude_code, codex_cli) through BaseRuntimeAdapter and RunExecutionService.
-
-Architecture
-------------
-RunExecutionService
-    → instantiate_runtime_adapter("claude_code")
-    → ClaudeCodeRuntimeAdapter(CliRuntimeAdapter).execute(ctx)
-    → _resolve_cli_adapter("claude_code", ...)    # this module, only import point
-    → ClaudeCLIAdapter.run(...)                   # subprocess via LocalExecutor
-    → convert RuntimeExecutionResult → RuntimeAdapterResult
-
-This is the ONLY place in app.runtimes that imports ClaudeCLIAdapter /
-CodexCLIAdapter. RunExecutionService and the registry never import them directly.
-
-Credential flow
----------------
-CLI adapters authenticate via CredentialBroker (login-state grants), not via
-ModelProvider / Credential.secret_ref API keys. ctx.resolved_credentials is
-ignored here; the broker injects subprocess env vars from credential profile
-directories. This is consistent with ADR 0009 (Anthropic CLI-only policy).
-
-Context compilation
--------------------
-ctx.context_package carries the serialised ContextPackage dict assembled by
-ContextSnapshotPopulator in RunExecutionService. CLI adapters pass it to
-ContextCompiler inside their run() method, which writes CLAUDE.md / AGENTS.md
-into the sandbox directory before the CLI subprocess starts.
-"""
+"""Spec-driven local CLI runtime adapter."""
 
 from __future__ import annotations
 
@@ -36,7 +6,12 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from ...memory.context_compiler import ContextCompiler, TargetFormat
 from ..base import BaseRuntimeAdapter, RuntimeAdapterResult, RuntimeExecutionContext
+from ..command_renderer import CommandRenderError, render_command
+from ..local_executor import LocalExecutor
+from ..output_parsers import get_output_parser
+from ..specs import RuntimeAdapterSpec
 
 log = logging.getLogger(__name__)
 
@@ -50,12 +25,12 @@ def _fail(
     error_text: str,
     *,
     started: datetime,
-    adapter_type: str = "",
+    adapter_type: str,
     extra_metadata: dict | None = None,
 ) -> RuntimeAdapterResult:
-    meta: dict = {"adapter_type": adapter_type, "cli_bridge": True}
+    metadata = {"adapter_type": adapter_type, "runtime_kind": "local_cli"}
     if extra_metadata:
-        meta.update(extra_metadata)
+        metadata.update(extra_metadata)
     return RuntimeAdapterResult(
         success=False,
         stdout="",
@@ -66,234 +41,253 @@ def _fail(
         error_text=error_text,
         started_at=started,
         completed_at=_now(),
-        adapter_metadata=meta,
+        adapter_metadata=metadata,
     )
 
 
-class CliRuntimeAdapter(BaseRuntimeAdapter):
-    """Generic bridge: executes a CLI adapter and normalises the result.
+class GenericCliRuntimeAdapter(BaseRuntimeAdapter):
+    """Executes a local CLI from RuntimeAdapterSpec without shell=True."""
 
-    Subclasses set ``adapter_type`` to the CLI adapter_type string.
-    All execution logic lives here; subclasses carry zero additional code.
-
-    Credential note:
-        CLI adapters use CredentialBroker (login-state grants), not
-        ModelProvider / Credential.secret_ref. ctx.resolved_credentials is
-        ignored; the broker handles subprocess env injection.
-    """
-
-    adapter_type: str  # set by subclass
-
-    requires_credentials = False    # broker-based, not ModelProvider API key
-    requires_file_access = True     # CLI reads/writes workspace files
-    supports_sandboxed_execution = True
-    uses_cli_credentials = True     # authenticates via CredentialBroker login-state
-    uses_model_config = False
-    model_config_behavior = "not_applicable"
-    model_config_note = (
-        "CLI adapter uses the tool's own model selection. "
-        "Model config is passed as --model flag if the tool supports it."
-    )
+    def __init__(self, spec: RuntimeAdapterSpec, executor: LocalExecutor | None = None):
+        if spec.runtime_kind != "local_cli":
+            raise ValueError(f"GenericCliRuntimeAdapter requires local_cli spec, got {spec.runtime_kind}")
+        self.spec = spec
+        self.adapter_type = spec.adapter_type
+        self.executor = executor or LocalExecutor()
+        self.requires_credentials = spec.credentials.credential_mode == "model_provider_api_key"
+        self.requires_file_access = spec.sandbox.requires_file_access
+        self.supports_sandboxed_execution = spec.sandbox.supports_worktree
+        self.uses_cli_credentials = spec.credentials.credential_mode == "cli_profile"
+        self.uses_model_config = spec.model.supports_model_override
+        self.model_config_behavior = spec.model.model_config_behavior
+        self.model_config_note = "Model override is rendered only when RuntimeAdapterSpec allows it."
 
     def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
         started = _now()
-
-        # Non-sensitive credential source metadata recorded for audit.
-        # No keys, paths, session tokens, HOME paths, or raw profile paths captured here.
-        cred_meta: dict[str, Any] = {
-            "credential_checked": True,   # durable marker that broker check ran
-            "credential_broker_used": True,
-            "credential_source": "none",
-            "temp_home_created": False,
-            "fallback_used": False,
-            "fallback_reason": None,
-            "broker_error": False,        # True when broker raised, not just no-profile
-            "cleanup_status": "not_needed",
-            "trigger_origin": ctx.trigger_origin,
-        }
-
-        # Resolve credential grant via CredentialBroker.
-        # Returns None if no explicit profile is configured. CLI execution is
-        # denied below instead of falling back to ambient container credentials.
         credential_grant = None
+        cred_meta = self._credential_metadata(ctx)
+        permission_requested = bool(ctx.adapter_config.get("permission_bypass"))
+        permission_allowed = False
+        if permission_requested:
+            allowed_error = self._permission_bypass_error(ctx)
+            if allowed_error:
+                return _fail(
+                    "permission_bypass_not_allowed",
+                    allowed_error,
+                    started=started,
+                    adapter_type=self.adapter_type,
+                    extra_metadata={
+                        "permission_bypass_requested": True,
+                        "permission_bypass_allowed": False,
+                        "permission_bypass_used": False,
+                    },
+                )
+            permission_allowed = True
+
+        if self.uses_cli_credentials:
+            try:
+                credential_grant = self._resolve_credential_grant(ctx)
+            except Exception:
+                log.warning("CredentialBroker grant failed run=%s adapter=%s", ctx.run_id, self.adapter_type, exc_info=True)
+                cred_meta.update({"broker_error": True, "fallback_used": True, "fallback_reason": "broker_error"})
+            if credential_grant is None:
+                if not cred_meta.get("fallback_reason"):
+                    cred_meta["fallback_reason"] = "no_profile_configured"
+                cred_meta["fallback_used"] = True
+                self._record_credential_audit(ctx, cred_meta, action="grant_denied")
+                return _fail(
+                    "runtime_credential_profile_required",
+                    f"Runtime adapter '{self.adapter_type}' requires an explicit credential profile.",
+                    started=started,
+                    adapter_type=self.adapter_type,
+                    extra_metadata={
+                        **cred_meta,
+                        "permission_bypass_requested": permission_requested,
+                        "permission_bypass_allowed": permission_allowed,
+                        "permission_bypass_used": False,
+                    },
+                )
+            cred_meta.update({
+                "credential_source": "profile",
+                "credential_profile_id": getattr(credential_grant, "profile_id", None),
+                "profile_id": getattr(credential_grant, "profile_id", None),
+                "temp_home_created": bool(getattr(credential_grant, "temp_home", None)),
+                "cleanup_status": "pending" if getattr(credential_grant, "temp_home", None) else "not_needed",
+            })
+
+        compiled_context = self._render_context(ctx)
+        if compiled_context is not None:
+            self._record_context_render_event(ctx, compiled_context)
+
         try:
-            credential_grant = self._resolve_credential_grant(ctx)
-        except Exception:
-            log.warning(
-                "CredentialBroker.grant_for_run failed run=%s adapter=%s; denying CLI run without grant",
-                ctx.run_id,
-                self.adapter_type,
-                exc_info=True,
+            rendered = render_command(
+                spec=self.spec,
+                prompt=ctx.prompt,
+                mode=ctx.mode,
+                model=ctx.model_name if self.spec.model.supports_model_override else None,
+                permission_bypass=permission_requested,
+                executable_path=ctx.adapter_config.get("executable_path"),
             )
-            cred_meta["broker_error"] = True
-            cred_meta["fallback_used"] = True
-            cred_meta["fallback_reason"] = "broker_error"
-
-        if credential_grant is None:
-            cred_meta["credential_source"] = "none"
-            cred_meta["fallback_used"] = True
-            if cred_meta["fallback_reason"] is None:
-                cred_meta["fallback_reason"] = "no_profile_configured"
-        else:
-            cred_meta["credential_source"] = "profile"
-            cred_meta["profile_id"] = getattr(credential_grant, "profile_id", None)
-            cred_meta["temp_home_created"] = bool(
-                getattr(credential_grant, "temp_home", None)
-            )
-            if cred_meta["temp_home_created"]:
-                cred_meta["cleanup_status"] = "pending"
-
-        # CLI runs must use an explicit credential profile.
-        # Container-default fallback is not allowed — it could silently pick up
-        # stale or shared auth state.
-        # broker_error and no_profile_configured are exposed separately in
-        # failure metadata so callers can distinguish configuration problems
-        # from runtime broker failures.
-        if credential_grant is None:
-            failure_reason = cred_meta["fallback_reason"] or "no_profile_configured"
-            self._record_credential_audit(ctx, cred_meta, action="grant_denied")
+        except CommandRenderError as exc:
             return _fail(
-                "runtime_credential_profile_required",
-                (
-                    "CLI runs require an explicit credential profile. "
-                    f"No credential profile is configured for adapter_type='{self.adapter_type}'. "
-                    "Configure a CredentialBroker profile before running this adapter."
-                ),
+                exc.error_code,
+                exc.message,
                 started=started,
                 adapter_type=self.adapter_type,
                 extra_metadata={
-                    "broker_error": cred_meta["broker_error"],
-                    "no_profile_configured": not cred_meta["broker_error"],
-                    "failure_reason": failure_reason,
-                    "credential_checked": True,
-                    "credential_broker_used": True,
-                    "credential_source": cred_meta["credential_source"],
-                    "fallback_used": cred_meta["fallback_used"],
-                    "fallback_reason": cred_meta["fallback_reason"],
-                    "trigger_origin": ctx.trigger_origin,
+                    "permission_bypass_requested": permission_requested,
+                    "permission_bypass_allowed": permission_allowed,
+                    "permission_bypass_used": False,
                 },
             )
 
-        # Instantiate the CLI adapter via the internal factory.
+        timeout = int(ctx.adapter_config.get("timeout") or self.spec.limits.default_timeout_seconds)
+        timeout = min(timeout, self.spec.limits.max_timeout_seconds)
         try:
-            cli_adapter = _resolve_cli_adapter(
-                adapter_type=self.adapter_type,
-                sandbox_dir=ctx.sandbox_cwd,
-                credential_grant=credential_grant,
-                model=ctx.model_name or ctx.adapter_config.get("model"),
-            )
-        except KeyError:
-            return _fail(
-                "cli_adapter_not_registered",
-                f"No CLI adapter factory is registered for adapter_type='{self.adapter_type}'",
-                started=started,
-                adapter_type=self.adapter_type,
-            )
-
-        if not cli_adapter.is_available():
-            return _fail(
-                "cli_adapter_not_available",
-                (
-                    f"CLI tool for '{self.adapter_type}' is not installed or not reachable. "
-                    "Install the tool and ensure it is in PATH."
-                ),
-                started=started,
-                adapter_type=self.adapter_type,
-            )
-
-        timeout = int(ctx.adapter_config.get("timeout", 300))
-        try:
-            result = cli_adapter.run(
-                prompt=ctx.prompt,
-                context=ctx.context_package,
-                workspace_path=ctx.sandbox_cwd,
+            result = self.executor.run_command(
+                command=rendered.argv,
+                cwd=ctx.sandbox_cwd,
                 timeout=timeout,
+                env=getattr(credential_grant, "env", None) if credential_grant else None,
                 run_id=ctx.run_id,
-            )
-        except Exception as exc:
-            log.exception(
-                "CLI adapter raised an exception run=%s adapter=%s",
-                ctx.run_id,
-                self.adapter_type,
-            )
-            return _fail(
-                "cli_adapter_exception",
-                str(exc)[:2000],
-                started=started,
-                adapter_type=self.adapter_type,
+                stdin=rendered.stdin,
             )
         finally:
-            # Clean up the per-run temp HOME the broker may have created.
             if credential_grant is not None and getattr(credential_grant, "temp_home", None):
                 try:
                     from ...credentials.broker import CredentialBroker
                     CredentialBroker().cleanup_temp_home(ctx.run_id)
                     cred_meta["cleanup_status"] = "ok"
                 except Exception:
-                    log.warning(
-                        "CredentialBroker.cleanup_temp_home failed run=%s", ctx.run_id
-                    )
                     cred_meta["cleanup_status"] = "failed"
                     self._record_credential_audit(ctx, cred_meta, action="cleanup_failed")
 
-        # Record durable credential usage audit event.
-        action = "grant_failed" if not result.success else "grant"
-        self._record_credential_audit(ctx, cred_meta, action=action)
-
-        completed = result.completed_at or _now()
+        self._record_credential_audit(ctx, cred_meta, action="grant" if result.returncode == 0 else "grant_failed")
+        parser = get_output_parser(self.spec.output.output_parser_type)
+        parsed = parser.parse(stdout=result.stdout, stderr=result.stderr, exit_code=result.returncode)
+        completed = _now()
+        success = result.returncode == 0 and not result.timed_out
+        error_code = "cli_adapter_timeout" if result.timed_out else parsed.error_code
+        permission_used = bool(rendered.permission_bypass_used)
         return RuntimeAdapterResult(
-            success=result.success,
-            stdout=result.output or "",
-            stderr=result.error or "",
-            output_text=result.output or "",
-            exit_code=result.exit_code,
-            error_text=result.error if not result.success else None,
-            error_code="cli_adapter_failed" if not result.success else None,
-            started_at=result.started_at or started,
+            success=success,
+            stdout=parsed.redacted_stdout,
+            stderr=parsed.redacted_stderr,
+            output_text=parsed.output_text,
+            output_json=parsed.output_json,
+            exit_code=result.returncode,
+            error_code=None if success else (error_code or "cli_adapter_failed"),
+            error_text=None if success else (parsed.error_text or result.stderr),
+            started_at=started,
             completed_at=completed,
+            produced_artifact_paths=parsed.produced_artifact_paths,
             adapter_metadata={
                 "adapter_type": self.adapter_type,
-                "cli_bridge": True,
+                "runtime_kind": "local_cli",
+                "permission_bypass_requested": permission_requested,
+                "permission_bypass_allowed": permission_allowed,
+                "permission_bypass_used": permission_used,
+                "context_file_type": self.spec.context.context_file_type,
+                "rendered_in_sandbox": bool(compiled_context),
                 **cred_meta,
             },
             adapter_log_json={
-                "cli_adapter_type": self.adapter_type,
-                "sandbox_cwd": ctx.sandbox_cwd,
-                "exit_code": result.exit_code,
+                "adapter_type": self.adapter_type,
+                "command": rendered.redacted_argv,
+                "exit_code": result.returncode,
+                "timeout_seconds": timeout,
             },
         )
+
+    def _render_context(self, ctx: RuntimeExecutionContext):
+        if not self.spec.context.writes_vendor_context_file:
+            return None
+        if not ctx.sandbox_cwd:
+            raise RuntimeError("CLI context rendering requires a sandbox/worktree directory")
+        target = TargetFormat(self.spec.context.context_target_format)
+        return ContextCompiler().compile(
+            context=ctx.context_package,
+            target=target,
+            task_goal=ctx.prompt,
+            sandbox_dir=ctx.sandbox_cwd,
+        )
+
+    def _permission_bypass_error(self, ctx: RuntimeExecutionContext) -> str | None:
+        if not self.spec.permissions.supports_permission_bypass:
+            return f"Runtime adapter '{self.adapter_type}' does not support permission bypass."
+        policy = ctx.adapter_config.get("runtime_policy_json") or {}
+        policy_key = self.spec.permissions.permission_bypass_policy_key or "allow_permission_bypass"
+        if not isinstance(policy, dict) or policy.get(policy_key) is not True:
+            return f"runtime_policy_json.{policy_key}=true is required for permission bypass."
+        if ctx.risk_level not in {"high", "critical"}:
+            return "Permission bypass requires risk_level high or critical."
+        if ctx.executor_mode != "worktree" or not ctx.workspace_id or not ctx.sandbox_cwd:
+            return "Permission bypass requires an existing worktree workspace."
+        return None
 
     def _resolve_credential_grant(self, ctx: RuntimeExecutionContext):
         from ...credentials.broker import CredentialBroker
         broker = CredentialBroker()
+        profile_id = ctx.adapter_config.get("credential_profile_id")
         return broker.grant_for_run(
             run_id=ctx.run_id,
-            runtime=self.adapter_type,
+            runtime=self.spec.credentials.credential_runtime_name or self.adapter_type,
             risk_level=ctx.risk_level,
             executor_mode=ctx.executor_mode,
+            profile_id=profile_id,
         )
 
-    def _record_credential_audit(
-        self,
-        ctx: RuntimeExecutionContext,
-        cred_meta: dict,
-        *,
-        action: str,
-    ) -> None:
-        """Write a CliCredentialEvent row when ctx.db is available (best-effort)."""
+    def _credential_metadata(self, ctx: RuntimeExecutionContext) -> dict[str, Any]:
+        return {
+            "credential_checked": self.uses_cli_credentials,
+            "credential_broker_used": self.uses_cli_credentials,
+            "credential_source": "none",
+            "credential_profile_id": ctx.adapter_config.get("credential_profile_id"),
+            "temp_home_created": False,
+            "fallback_used": False,
+            "fallback_reason": None,
+            "broker_error": False,
+            "cleanup_status": "not_needed",
+            "trigger_origin": ctx.trigger_origin,
+        }
+
+    def _record_context_render_event(self, ctx: RuntimeExecutionContext, compiled: Any) -> None:
         if ctx.db is None:
             return
         try:
-            from ...credentials.broker import CredentialBroker
-            # Reconstruct a minimal grant object for record_usage only when source=profile.
-            # We pass None for grant when fallback was used — broker.record_usage handles it.
+            from ...runs.events import safe_append_run_event
+            safe_append_run_event(
+                ctx.db,
+                run_id=ctx.run_id,
+                space_id=ctx.space_id,
+                event_type="runtime_context_rendered",
+                status="succeeded",
+                runtime_adapter_id=ctx.runtime_adapter_id,
+                workspace_id=ctx.workspace_id,
+                metadata_json={
+                    "context_snapshot_id": ctx.adapter_config.get("context_snapshot_id"),
+                    "adapter_type": self.adapter_type,
+                    "context_file_type": self.spec.context.context_file_type,
+                    "context_target_format": self.spec.context.context_target_format,
+                    "rendered_in_sandbox": True,
+                    "instruction_file_path": getattr(compiled, "instruction_file_path", None),
+                },
+                log_context="runtime_context_rendered",
+            )
+        except Exception:
+            log.warning("context render event failed run=%s", ctx.run_id, exc_info=True)
+
+    def _record_credential_audit(self, ctx: RuntimeExecutionContext, cred_meta: dict, *, action: str) -> None:
+        if not self.uses_cli_credentials or ctx.db is None:
+            return
+        try:
+            from ...credentials.broker import CredentialBroker, CredentialGrant
             grant = None
-            if cred_meta.get("credential_source") == "profile":
-                # Build a minimal object so record_usage can read profile_id.
-                from ...credentials.broker import CredentialGrant
+            profile_id = cred_meta.get("credential_profile_id") or cred_meta.get("profile_id")
+            if cred_meta.get("credential_source") == "profile" and profile_id:
                 grant = CredentialGrant(
-                    profile_id=cred_meta.get("profile_id", "unknown"),
-                    runtime=self.adapter_type,
+                    profile_id=profile_id,
+                    runtime=self.spec.credentials.credential_runtime_name or self.adapter_type,
                     executor_mode=ctx.executor_mode,
                     readonly=False,
                 )
@@ -312,53 +306,4 @@ class CliRuntimeAdapter(BaseRuntimeAdapter):
                 action=action,
             )
         except Exception:
-            log.warning(
-                "credential audit write failed (best-effort) run=%s", ctx.run_id, exc_info=True
-            )
-
-
-# ---------------------------------------------------------------------------
-# Concrete subclasses — one per CLI adapter type, adapter_type only
-# ---------------------------------------------------------------------------
-
-class ClaudeCodeRuntimeAdapter(CliRuntimeAdapter):
-    """Canonical runtime bridge for the claude_code CLI adapter."""
-    adapter_type = "claude_code"
-
-
-class CodexCliRuntimeAdapter(CliRuntimeAdapter):
-    """Canonical runtime bridge for the codex_cli adapter."""
-    adapter_type = "codex_cli"
-
-
-# ---------------------------------------------------------------------------
-# Internal CLI adapter factory
-# The ONLY place in app.runtimes that imports CLI adapter implementations.
-# RunExecutionService and the registry never import them directly.
-# ---------------------------------------------------------------------------
-
-def _resolve_cli_adapter(
-    *,
-    adapter_type: str,
-    sandbox_dir: str | None,
-    credential_grant: Any,
-    model: str | None,
-):
-    """Return an instantiated AgentAdapter for the given adapter_type.
-
-    Raises KeyError if the adapter_type is not registered here.
-    """
-    if adapter_type == "claude_code":
-        from ...cli_adapters.claude import ClaudeCLIAdapter
-        return ClaudeCLIAdapter(
-            sandbox_dir=sandbox_dir,
-            credential_grant=credential_grant,
-            model=model,
-        )
-    if adapter_type == "codex_cli":
-        from ...cli_adapters.codex import CodexCLIAdapter
-        return CodexCLIAdapter(
-            sandbox_dir=sandbox_dir,
-            credential_grant=credential_grant,
-        )
-    raise KeyError(adapter_type)
+            log.warning("credential audit write failed run=%s", ctx.run_id, exc_info=True)

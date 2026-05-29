@@ -102,57 +102,117 @@ export type WorkspaceStatus  = 'active' | 'archived'
 export type WorkspaceType    = 'project' | 'repo' | 'knowledge_base' | 'personal' | 'team' | 'system_core'
 export type WorkspaceCreateType = Exclude<WorkspaceType, 'system_core'>
 
-// CLI Adapters
-export type CLIAdapterId =
+// Runtime Adapters
+export type RuntimeAdapterType =
   | 'claude_code'
   | 'codex_cli'
   | 'opencode'
   | 'gemini_cli'
   | 'custom'
   | 'echo'
+  | 'capability'
 
-export type QuotaStatus = 'enough' | 'medium' | 'low' | 'exhausted' | 'unknown'
+export type RuntimeQuotaStatus = 'unknown' | 'enough' | 'medium' | 'low' | 'exhausted'
+export type RuntimeHealthStatus = 'unknown' | 'ok' | 'warning' | 'error' | 'unimplemented' | 'disabled'
 
 export type ModelSelectionMode = 'cli_default' | 'cli_model_override' | 'agent_space_provider'
 
-export interface CLIAdapterCapabilities {
-  supportsHeadlessRun: boolean
-  supportsInteractiveRun: boolean
-  supportsStreamingLogs: boolean
-  supportsModelOverride: boolean
-  supportsUsageOutput: boolean
-  supportsPatchOutput: boolean
-  contextFileType: 'CLAUDE.md' | 'AGENTS.md' | 'prompt.md' | 'custom'
-  usageAccuracy: 'precise' | 'estimated' | 'unknown'
+export interface RuntimeAdapterSpec {
+  adapter_type: RuntimeAdapterType
+  display_name: string
+  runtime_kind: 'native' | 'local_cli' | 'remote_cli' | 'managed_api' | 'custom'
+  implementation_status: 'implemented' | 'planned' | 'disabled'
+  enabled_by_default: boolean
+  executable: {
+    command: string | null
+    version_command: string[] | null
+    detect_command: string[] | null
+    allow_path_override: boolean
+  }
+  context: {
+    context_file_type: 'CLAUDE.md' | 'AGENTS.md' | 'prompt.md' | 'custom'
+    context_target_format: string
+    writes_vendor_context_file: boolean
+  }
+  credentials: {
+    credential_mode: 'none' | 'cli_profile' | 'model_provider_api_key'
+    credential_runtime_name: string | null
+    default_target_path: string | null
+    env_auth_var: string | null
+  }
+  sandbox: {
+    requires_file_access: boolean
+    minimum_sandbox_level: 'none' | 'dry_run' | 'worktree' | 'one_shot_docker'
+    supports_worktree: boolean
+    supports_one_shot_docker: boolean
+    requires_workspace_for_execution: boolean
+  }
+  model: {
+    model_provider_mode: 'none' | 'optional' | 'required'
+    supports_model_override: boolean
+    model_config_behavior: 'uses_model' | 'not_applicable' | 'unsupported'
+  }
+  permissions: {
+    supports_permission_bypass: boolean
+  }
+  usage: {
+    usage_accuracy: 'precise' | 'estimated' | 'unknown'
+    supports_usage_probe: boolean
+    usage_probe_kind: string | null
+    usage_parser_type: string
+  }
+  output: {
+    output_parser_type: 'generic' | 'plain_text'
+    patch_strategy: string
+    artifact_path_strategy: string
+  }
 }
 
-export interface CLIStatus {
-  adapter_id: string
-  available: boolean
+export interface RuntimeAdapterStatus {
+  runtime_adapter_id: string | null
+  adapter_type: string
+  implementation_status: 'implemented' | 'planned' | 'disabled'
+  configured_count: number
+  configured: boolean
+  enabled: boolean
+  installed: boolean
   version: string | null
   executable_path: string | null
-  login_detected: boolean | null
-  status_message: string | null
-  capabilities: CLIAdapterCapabilities | null
+  credential_required: boolean
+  credential_profile_id: string | null
+  credential_ready: boolean
+  model_provider_required: boolean
+  model_provider_ready: boolean
+  supports_headless: boolean
+  supports_interactive: boolean
+  supports_model_override: boolean
+  supports_usage_probe: boolean
+  usage_accuracy: 'precise' | 'estimated' | 'unknown'
+  minimum_sandbox_level: 'none' | 'dry_run' | 'worktree' | 'one_shot_docker'
+  last_run_status: string | null
+  last_error_code: string | null
+  health_status: RuntimeHealthStatus
+  quota_status: RuntimeQuotaStatus
+  warnings: string[]
 }
 
-export interface CLIAdapterConfig {
+export interface RuntimeAdapter {
   id: string
   space_id: string
-  adapter_id: CLIAdapterId
-  display_name: string
+  adapter_type: RuntimeAdapterType
+  name: string
   enabled: boolean
+  provider_id: string | null
+  credential_id: string | null
+  credential_profile_id: string | null
+  config_json: Record<string, unknown>
   executable_path: string | null
   default_mode: 'interactive' | 'headless'
-  quota_status: QuotaStatus
+  health_status: RuntimeHealthStatus
+  quota_status: RuntimeQuotaStatus
   notes: string | null
   created_at: string
   updated_at: string
-}
-
-export interface BuiltinAdapter {
-  id: string
-  display_name: string
 }
 
 // CLI Credentials / Login

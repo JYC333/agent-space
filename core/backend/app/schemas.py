@@ -5,6 +5,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ItemT = TypeVar('ItemT')
 
+RuntimeHealthStatus = Literal["unknown", "ok", "warning", "error", "unimplemented", "disabled"]
+RuntimeQuotaStatus = Literal["unknown", "enough", "medium", "low", "exhausted"]
+
 
 class Page(BaseModel, Generic[ItemT]):
     items: list[ItemT]
@@ -235,17 +238,13 @@ class RunRequest(BaseModel):
     prompt: str
     workspace_id: Optional[str] = None
     workspace_path: Optional[str] = None
-    # Prefer cli_adapter_config_id; adapter_type is used when no config id is supplied.
-    cli_adapter_config_id: Optional[str] = None
+    runtime_adapter_id: Optional[str] = None
     adapter_type: str = "echo"
     # cli_default | cli_model_override | agent_space_provider
     model_selection_mode: str = "cli_default"
     model_override_json: Optional[dict] = None
     risk_level: str = "medium"  # low | medium | high | critical
     # Task routing signals — used by TaskRouter to choose the right adapter.
-    # CLI adapters are only used when at least one of the requires_* flags is True
-    # or the task_type maps to a heavy task. Lightweight tasks are redirected to
-    # the direct Anthropic API adapter (no subprocess, no sandbox).
     task_type: Optional[str] = None  # e.g. summarize | classify | code_modify | maintenance
     requires_filesystem: bool = False
     requires_terminal: bool = False
@@ -1057,7 +1056,7 @@ class RunTraceRuntimeAdapterOut(BaseModel):
     enabled: bool
     provider_id: Optional[str] = None
     credential_configured: bool = False
-    health_status: str = "unknown"
+    health_status: RuntimeHealthStatus = "unknown"
     execution_plane_id: Optional[str] = None
 
 
@@ -1141,39 +1140,53 @@ class RunStatusOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# CLI Adapter Configs
+# Runtime Adapters
 # ---------------------------------------------------------------------------
 
-class CLIAdapterConfigCreate(BaseModel):
-    # claude_code | codex_cli | opencode | gemini_cli | custom | echo
-    adapter_id: str
-    display_name: str
+class RuntimeAdapterCreate(BaseModel):
+    adapter_type: str
+    name: str
     enabled: bool = True
     executable_path: Optional[str] = None
-    default_mode: str = "headless"  # interactive | headless
-    quota_status: str = "unknown"   # enough | medium | low | exhausted | unknown
+    default_mode: str = "headless"
+    health_status: RuntimeHealthStatus = "unknown"
+    quota_status: RuntimeQuotaStatus = "unknown"
+    credential_id: Optional[str] = None
+    credential_profile_id: Optional[str] = None
+    provider_id: Optional[str] = None
+    config_json: dict = Field(default_factory=dict)
     notes: Optional[str] = None
-    space_id: Optional[str] = None
 
 
-class CLIAdapterConfigUpdate(BaseModel):
-    display_name: Optional[str] = None
+class RuntimeAdapterUpdate(BaseModel):
+    name: Optional[str] = None
     enabled: Optional[bool] = None
     executable_path: Optional[str] = None
     default_mode: Optional[str] = None
-    quota_status: Optional[str] = None
+    health_status: Optional[RuntimeHealthStatus] = None
+    quota_status: Optional[RuntimeQuotaStatus] = None
+    credential_id: Optional[str] = None
+    credential_profile_id: Optional[str] = None
+    provider_id: Optional[str] = None
+    config_json: Optional[dict] = None
     notes: Optional[str] = None
+    permission_bypass: Optional[bool] = None
 
 
-class CLIAdapterConfigOut(BaseModel):
+class RuntimeAdapterOut(BaseModel):
     id: str
     space_id: str
-    adapter_id: str
-    display_name: str
+    adapter_type: str
+    name: str
     enabled: bool
+    provider_id: Optional[str] = None
+    credential_id: Optional[str] = None
+    credential_profile_id: Optional[str] = None
+    config_json: dict
     executable_path: Optional[str]
     default_mode: str
-    quota_status: str
+    health_status: RuntimeHealthStatus
+    quota_status: RuntimeQuotaStatus
     notes: Optional[str]
     created_at: datetime
     updated_at: datetime
@@ -1181,32 +1194,32 @@ class CLIAdapterConfigOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class CLIStatusOut(BaseModel):
-    """Detection result for a single CLI tool."""
-    adapter_id: str
-    available: bool
-    version: Optional[str] = None
+class RuntimeAdapterStatusOut(BaseModel):
+    runtime_adapter_id: Optional[str] = None
+    adapter_type: str
+    implementation_status: str
+    configured_count: int = 0
+    configured: bool = False
+    enabled: bool = False
+    installed: bool = False
     executable_path: Optional[str] = None
-    login_detected: Optional[bool] = None
-    status_message: Optional[str] = None
-    capabilities: Optional[dict] = None
-
-
-class UsageEventOut(BaseModel):
-    id: str
-    run_id: str
-    space_id: str
-    user_id: str
-    cli_adapter_config_id: Optional[str]
-    event_type: str
-    accuracy: str
-    input_tokens: Optional[int]
-    output_tokens: Optional[int]
-    estimated_cost: Optional[float]
-    runtime_seconds: Optional[float]
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
+    version: Optional[str] = None
+    credential_required: bool = False
+    credential_profile_id: Optional[str] = None
+    credential_ready: bool = False
+    model_provider_required: bool = False
+    model_provider_ready: bool = False
+    supports_headless: bool = False
+    supports_interactive: bool = False
+    supports_model_override: bool = False
+    supports_usage_probe: bool = False
+    usage_accuracy: str = "unknown"
+    minimum_sandbox_level: str = "none"
+    last_run_status: Optional[str] = None
+    last_error_code: Optional[str] = None
+    health_status: RuntimeHealthStatus = "unknown"
+    quota_status: RuntimeQuotaStatus = "unknown"
+    warnings: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

@@ -16,16 +16,14 @@ Model Provider   — underlying LLM (Anthropic, OpenAI, Ollama, …)
 
 See `runtime-adapters.md` for the full adapter registry and license notes.
 
-> **Note:** configs may still say `claude_cli`; the backend maps that id to the same adapter implementation as `claude_code`. Prefer `claude_code` in new manifests.
-
 ## Owns
 
 - `Agent` ORM model and CRUD
 - `AgentVersion` model (immutable execution config snapshot per `Run`)
 - `Run` rows created through `RunService` (queued work, lifecycle, delegation links)
-- Adapter implementations: `echo`, `claude_code`, `codex_cli`
+- Runtime adapter selection fields on `AgentVersion`
 - Agent seeding (built-in system agents)
-- Adapter registry and post-run hooks in `app/agents/runner.py`
+- Agent seeding and product-level agent configuration
 
 ## Does Not Own
 
@@ -143,10 +141,9 @@ the affected agent digest dirty.
 - `core/backend/app/runs/execution.py` — `RunExecutionService` (canonical orchestrator)
 - `core/backend/app/runs/runtime_policy.py` — risk→sandbox mapping, file-access adapter validation
 - `core/backend/app/runtimes/registry.py` — adapter registration
-- `core/backend/app/runtimes/adapters/cli_runtime.py` — CLI bridge (CliRuntimeAdapter)
-- `core/backend/app/cli_adapters/claude.py` — ClaudeCLIAdapter (subprocess wrapper)
-- `core/backend/app/cli_adapters/codex.py` — CodexCLIAdapter (subprocess wrapper)
-- `core/backend/app/cli_adapters/executors.py` — LocalExecutor, DockerExecutor
+- `core/backend/app/runtimes/specs.py` — RuntimeAdapterSpec catalog
+- `core/backend/app/runtimes/adapters/cli_runtime.py` — GenericCliRuntimeAdapter local CLI execution
+- `core/backend/app/runtimes/local_executor.py` — local subprocess execution
 - `core/backend/app/agents/seeder.py` — built-in agent definitions
 
 ## Related Decisions

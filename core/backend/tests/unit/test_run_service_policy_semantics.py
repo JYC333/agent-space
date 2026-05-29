@@ -270,13 +270,13 @@ class TestCreateRunRuntimeProviderDefaults:
         assert run.model_provider_id is None
         assert run.model_override_json is None
 
-    def test_api_runtime_inherits_valid_space_default_provider(self, db):
+    def test_cli_runtime_ignores_valid_space_default_provider(self, db):
         space_id = "svc-runtime-provider-api-default"
         user, agent, provider = self._make_agent_with_default_provider(db, space_id)
         version = db.query(AgentVersion).filter(
             AgentVersion.id == agent.current_version_id
         ).first()
-        version.runtime_config_json = {"adapter_type": "model_provider_api"}
+        version.runtime_config_json = {"adapter_type": "claude_code"}
         db.flush()
 
         run = RunService(db).create_run(
@@ -286,10 +286,11 @@ class TestCreateRunRuntimeProviderDefaults:
             user_id=user.id,
         )
 
-        assert run.model_provider_id == provider.id
-        assert run.model_override_json["source"] == "space_default"
+        assert provider.id is not None
+        assert run.model_provider_id is None
+        assert run.model_override_json is None
 
-    def test_runtime_scoped_provider_default_is_preferred_for_required_runtime(self, db):
+    def test_cli_runtime_ignores_runtime_scoped_provider_default(self, db):
         space_id = "svc-runtime-provider-scoped-default"
         user, agent, global_default = self._make_agent_with_default_provider(db, space_id)
         runtime_default = factories.create_test_model_provider(
@@ -300,11 +301,11 @@ class TestCreateRunRuntimeProviderDefaults:
             default_model="gpt-runtime-default",
             commit=False,
         )
-        runtime_default.config_json = {"runtime_default_for": "model_provider_api"}
+        runtime_default.config_json = {"runtime_default_for": "claude_code"}
         version = db.query(AgentVersion).filter(
             AgentVersion.id == agent.current_version_id
         ).first()
-        version.runtime_config_json = {"adapter_type": "model_provider_api"}
+        version.runtime_config_json = {"adapter_type": "claude_code"}
         db.flush()
 
         run = RunService(db).create_run(
@@ -314,9 +315,7 @@ class TestCreateRunRuntimeProviderDefaults:
             user_id=user.id,
         )
 
-        assert run.model_provider_id == runtime_default.id
-        assert run.model_provider_id != global_default.id
-        assert run.model_override_json == {
-            "model": "gpt-runtime-default",
-            "source": "runtime_default",
-        }
+        assert runtime_default.id is not None
+        assert global_default.id is not None
+        assert run.model_provider_id is None
+        assert run.model_override_json is None

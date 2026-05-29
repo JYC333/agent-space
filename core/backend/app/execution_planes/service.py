@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 #
 # Policy note: ``anthropic_api`` and ``anthropic_messages`` are intentionally
 # absent. Anthropic/Claude usage must go through CLI integrations
-# (``claude_code``), not direct API adapters.
+# (``claude_code``), not in-process Anthropic runtime types.
 _ADAPTER_TO_PLANE: dict[str, str] = {
     "echo":        "agent_space_native_local",
     "capability":  "agent_space_native_local",

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from .registry import _RUNTIME_ADAPTER_CLASSES
+from .specs import get_runtime_adapter_spec
 
 
 @dataclass(frozen=True)
@@ -29,8 +29,9 @@ def get_adapter_model_config_metadata(
 ) -> AdapterModelConfigMetadata:
     if not adapter_type:
         return _UNKNOWN
-    cls = _RUNTIME_ADAPTER_CLASSES.get(adapter_type)
-    if cls is None:
+    try:
+        spec = get_runtime_adapter_spec(adapter_type)
+    except KeyError:
         return AdapterModelConfigMetadata(
             uses_model_config=False,
             model_config_behavior="unsupported",
@@ -39,11 +40,14 @@ def get_adapter_model_config_metadata(
                 "model config cannot be applied."
             ),
         )
-    behavior = getattr(cls, "model_config_behavior", "not_applicable")
+    behavior = spec.model.model_config_behavior
     if behavior not in ("uses_model", "not_applicable", "unsupported"):
         behavior = "unknown"
     return AdapterModelConfigMetadata(
-        uses_model_config=bool(getattr(cls, "uses_model_config", False)),
+        uses_model_config=bool(spec.model.supports_model_override),
         model_config_behavior=behavior,
-        model_config_note=str(getattr(cls, "model_config_note", "") or ""),
+        model_config_note=(
+            "Model override is rendered only when RuntimeAdapterSpec supports it."
+            if spec.model.supports_model_override else ""
+        ),
     )

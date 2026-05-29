@@ -120,7 +120,8 @@ Adapters check `self.sandbox_dir is not None`:
 - `core/backend/app/runs/worktree_manager.py` — isolated_run_workdir (plain temp dir fallback)
 - `core/backend/app/workspace/root_validation.py` — validate_workspace_root_for_execution
 - `core/backend/app/runs/runtime_policy.py` — validate_file_access_adapter_policy, risk→sandbox mapping
-- `core/backend/app/cli_adapters/executors.py` — LocalExecutor, DockerExecutor
+- `core/backend/app/runtimes/local_executor.py` — local subprocess execution
+- `core/backend/app/runtimes/adapters/cli_runtime.py` — generic local CLI runtime path
 - `core/backend/Dockerfile` — installs claude + codex for high-risk worktree runs
 - `deployments/sandbox/Dockerfile` — sandbox image for critical-risk one_shot_docker runs
 - `deployments/local/docker-compose.yml` — mounts Docker socket for critical-risk container spawning

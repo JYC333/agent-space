@@ -16,11 +16,6 @@ from ..models import AgentVersion, Run
 
 _VALID_SANDBOX_LEVELS = frozenset({"none", "dry_run", "worktree", "one_shot_docker"})
 
-# Adapter types that require file-system access and therefore must execute in a
-# worktree sandbox.  Validated before execution so the error surfaces before the
-# adapter is started, not only at runtime.
-_FILE_ACCESS_ADAPTER_TYPES = frozenset({"claude_code", "codex_cli"})
-
 
 @dataclass(frozen=True)
 class RuntimePolicyDecision:
@@ -144,13 +139,19 @@ def validate_file_access_adapter_policy(
     caught early rather than failing mid-execution or silently mutating the
     workspace.
     """
-    if (
-        adapter_type in _FILE_ACCESS_ADAPTER_TYPES
-        and decision.required_sandbox_level != "worktree"
-    ):
+    try:
+        from ..runtimes.specs import get_runtime_adapter_spec
+        spec = get_runtime_adapter_spec(adapter_type)
+        requires_file_access = spec.sandbox.requires_file_access
+        minimum_level = spec.sandbox.minimum_sandbox_level
+    except KeyError:
+        requires_file_access = False
+        minimum_level = "none"
+
+    if requires_file_access and decision.required_sandbox_level != minimum_level:
         return (
             f"Adapter '{adapter_type}' requires file-system access and must run in a "
-            f"worktree sandbox, but required_sandbox_level='{decision.required_sandbox_level}' "
+            f"{minimum_level} sandbox, but required_sandbox_level='{decision.required_sandbox_level}' "
             f"(derived from risk_level='{decision.risk_level}'). "
             "Set risk_level=high in runtime_policy_json to enable worktree isolation for "
             "file-access adapters."

@@ -1,11 +1,11 @@
 """Unit tests for RuntimePreflightService (automation-origin preflight).
 
 Invariants verified:
-  1.  ok=True when all conditions are satisfied (CLI adapter).
+  1.  ok=True when all conditions are satisfied (local CLI runtime).
   2.  Fails with automation_preflight_no_adapter when adapter type is None.
   3.  Fails with automation_preflight_critical_risk when risk_level=critical.
-  4.  Fails with automation_preflight_no_credential_profile when CLI adapter has no profile.
-  5.  Non-CLI adapter (requires_cli_credential_profile=False) passes even without profile.
+  4.  Fails with automation_preflight_no_credential_profile when local CLI runtime has no profile.
+  5.  Native runtime (requires_cli_credential_profile=False) passes even without profile.
   6.  Fails with automation_preflight_no_workspace when file-access adapter lacks workspace_id.
   7.  Non-file-access adapter without workspace_id passes.
   8.  Fails with automation_preflight_workspace_not_git_repo when no HEAD commit.
@@ -61,7 +61,7 @@ SVC = RuntimePreflightService()
 
 
 # ===========================================================================
-# 1. All conditions satisfied (CLI adapter) → ok=True
+# 1. All conditions satisfied (local CLI runtime) -> ok=True
 # ===========================================================================
 
 
@@ -119,11 +119,11 @@ def test_critical_risk_fails():
 
 
 # ===========================================================================
-# 4. CLI adapter with no credential profile → fails
+# 4. Local CLI runtime with no credential profile -> fails
 # ===========================================================================
 
 
-def test_cli_adapter_no_credential_profile_fails():
+def test_local_cli_runtime_no_credential_profile_fails():
     result = SVC.check_automation_run(
         resolved_adapter_type="claude_code",
         requires_file_access=True,
@@ -139,18 +139,18 @@ def test_cli_adapter_no_credential_profile_fails():
 
 
 # ===========================================================================
-# 5. Non-CLI adapter with no credential profile → passes (check is skipped)
+# 5. Native runtime with no credential profile -> passes (check is skipped)
 # ===========================================================================
 
 
-def test_non_cli_adapter_no_credential_profile_ok():
-    """echo / capability adapters use API keys, not CLI login state — no profile needed."""
+def test_native_runtime_no_credential_profile_ok():
+    """echo / capability adapters do not use CLI login state, so no profile is needed."""
     result = SVC.check_automation_run(
         resolved_adapter_type="echo",
         requires_file_access=False,
-        requires_cli_credential_profile=False,   # ← API-key adapter
+        requires_cli_credential_profile=False,
         risk_level="low",
-        has_credential_profile=False,            # no CLI profile exists
+        has_credential_profile=False,
         workspace_id=None,
         workspace_preflight=None,
     )

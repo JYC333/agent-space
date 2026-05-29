@@ -23,7 +23,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from app.cli_adapters.executors import LocalExecutor, _build_subprocess_env
+from app.runtimes.local_executor import LocalExecutor, build_subprocess_env as _build_subprocess_env
 
 
 # ---------------------------------------------------------------------------

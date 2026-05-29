@@ -72,9 +72,9 @@ Existing Run and Proposal rows use separate nullable `*_user_id` and `*_agent_id
 
 ## Canonical Runtime Path
 
-- **Canonical for new adapters:** `core/backend/app/runtimes/` (subclass `BaseRuntimeAdapter`, register in `registry.py`)
-- **CLI subprocess wrappers:** `core/backend/app/cli_adapters/` (detection, probing, subprocess execution via `LocalExecutor`/`DockerExecutor`)
-- **CLI bridge:** `core/backend/app/runtimes/adapters/cli_runtime.py` — the only point that imports CLI adapter classes and converts their output to `RuntimeAdapterResult`
+- **Canonical adapter catalog:** `RuntimeAdapterSpec` entries in `core/backend/app/runtimes/specs.py`
+- **Configured runtime instances:** `RuntimeAdapter` rows scoped to a space
+- **Generic local CLI execution:** `core/backend/app/runtimes/adapters/cli_runtime.py` renders commands, grants CLI credential profiles, invokes `LocalExecutor`, and parses output
 
 Do not add new adapters to `app.agents` — it contains Agent/AgentVersion CRUD only.
 
@@ -203,7 +203,7 @@ Calling `POST /finalize` on a non-terminal run (queued, running, waiting_for_rev
 - **Harness-boundary evidence only.** Uses Run.status/error_json/output_json/exit_code, ordered RunSteps, RunEvents, ContextSnapshot metadata, Artifacts, Proposals, ValidationRecipe, and linked Task/TaskRun. No LLM-as-judge. No parsing of vendor CLI internal tool calls.
 - **RunEvent as primary classification source.** RunEvent structured `error_code` fields are the canonical classification input for patch, artifact, adapter, and materialization event evidence. `output_json.materialization_errors` is never parsed as classifier evidence — it is a debug/summary field only.
 - **Materialization outcomes are RunEvent-covered.** `RunOutputMaterializer` returns a `MaterializationResult` (artifact_items, proposal_items, failed_items). `RunExecutionService` emits `artifact_ingested` / `proposal_created` RunEvents for each output JSON artifact and proposal success and failure. Runtime output text persistence emits `artifact_ingested` on success and failure. All materialization error codes map to the `tool` failure_layer via `_EXACT_ERROR_CODE_MAP`. Activity materialization failures are represented as artifact_ingested warning events with metadata_json.kind="activity" to avoid expanding the RunEvent enum.
-- **Evidence-only for CLI runtimes.** CLI adapters are black-box at the harness. No internal tool-call trajectory is reconstructed from stdout/stderr.
+- **Evidence-only for CLI runtimes.** Local CLI runtimes are black-box at the harness. No internal tool-call trajectory is reconstructed from stdout/stderr.
 
 ### RunStep adapter_started semantics
 

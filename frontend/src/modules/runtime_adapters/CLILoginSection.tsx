@@ -215,7 +215,7 @@ function LoginCard({ status, method, onRefresh, onLoginSuccess }: {
           setNeedsCode(false)
           if (event.exit_code === 0) {
             onRefresh()
-            // Trigger quota refresh ~8s after login — gives credentials time to sync
+            // Re-read usage ~8s after login — gives credentials time to sync
             setTimeout(() => onLoginSuccess?.(), 8000)
           }
         }

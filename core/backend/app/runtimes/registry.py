@@ -1,41 +1,31 @@
-"""Maps ``adapter_type`` strings to runtime adapter classes.
-
-Policy note:
-  ``anthropic_messages`` (direct Anthropic Messages API adapter) has been
-  intentionally removed from this registry per product policy.
-  Anthropic/Claude usage must go through CLI integrations only
-  (``claude_code`` via ``app.cli_adapters``).
-  Do NOT re-add ``anthropic_messages`` or ``anthropic_api`` here.
-"""
+"""Resolve RuntimeAdapterSpec entries to executable runtime adapters."""
 
 from __future__ import annotations
 
-from typing import Type
-
-from .adapters import (
-    CapabilityRuntimeAdapter,
-    ClaudeCodeRuntimeAdapter,
-    CodexCliRuntimeAdapter,
-    EchoRuntimeAdapter,
-)
+from .adapters import CapabilityRuntimeAdapter, EchoRuntimeAdapter, GenericCliRuntimeAdapter
 from .base import BaseRuntimeAdapter
+from .specs import get_runtime_adapter_spec
 
-_RUNTIME_ADAPTER_CLASSES: dict[str, Type[BaseRuntimeAdapter]] = {
+_NATIVE_RUNTIME_ADAPTER_CLASSES: dict[str, type[BaseRuntimeAdapter]] = {
     EchoRuntimeAdapter.adapter_type: EchoRuntimeAdapter,
     CapabilityRuntimeAdapter.adapter_type: CapabilityRuntimeAdapter,
-    # CLI runtime bridge — delegates to app.cli_adapters implementations.
-    # See app.runtimes.adapters.cli_runtime for the bridge design.
-    ClaudeCodeRuntimeAdapter.adapter_type: ClaudeCodeRuntimeAdapter,
-    CodexCliRuntimeAdapter.adapter_type: CodexCliRuntimeAdapter,
 }
 
 
 def is_adapter_type_implemented(adapter_type: str) -> bool:
-    return adapter_type in _RUNTIME_ADAPTER_CLASSES
+    try:
+        return get_runtime_adapter_spec(adapter_type).implementation_status == "implemented"
+    except KeyError:
+        return False
 
 
 def instantiate_runtime_adapter(adapter_type: str) -> BaseRuntimeAdapter:
-    cls = _RUNTIME_ADAPTER_CLASSES.get(adapter_type)
-    if cls is None:
+    spec = get_runtime_adapter_spec(adapter_type)
+    if spec.implementation_status != "implemented":
         raise KeyError(adapter_type)
-    return cls()
+    cls = _NATIVE_RUNTIME_ADAPTER_CLASSES.get(adapter_type)
+    if cls is not None:
+        return cls()
+    if spec.runtime_kind == "local_cli":
+        return GenericCliRuntimeAdapter(spec)
+    raise KeyError(adapter_type)

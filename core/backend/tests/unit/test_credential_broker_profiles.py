@@ -9,8 +9,8 @@ Invariants verified:
   6.  Canonical exact-match takes priority over any other profile under the same runtime.
   7.  RunExecutionService / preflight does NOT manually probe aliases
       (tested via broker returning the right profile with one exact-match call).
-  8.  uses_cli_credentials attribute on adapter classes.
-  9.  Non-CLI adapters do not use CLI credentials.
+  8.  uses_cli_credentials attribute on local CLI runtime instances.
+  9.  Native runtime adapters do not use CLI credentials.
 """
 
 from __future__ import annotations
@@ -151,29 +151,25 @@ def test_default_profile_preferred_over_other_named_profile(tmp_path):
 
 
 # ===========================================================================
-# 7. uses_cli_credentials attribute on adapter classes
+# 7. uses_cli_credentials attribute on local CLI runtime instances
 # ===========================================================================
 
 
 def test_cli_runtime_adapter_uses_cli_credentials():
-    """CliRuntimeAdapter subclasses declare uses_cli_credentials=True."""
-    from app.runtimes.adapters.cli_runtime import (
-        ClaudeCodeRuntimeAdapter,
-        CodexCliRuntimeAdapter,
-        CliRuntimeAdapter,
-    )
-    assert CliRuntimeAdapter.uses_cli_credentials is True
-    assert ClaudeCodeRuntimeAdapter.uses_cli_credentials is True
-    assert CodexCliRuntimeAdapter.uses_cli_credentials is True
+    """Spec-driven local CLI runtime instances declare uses_cli_credentials=True."""
+    from app.runtimes.registry import instantiate_runtime_adapter
+
+    assert instantiate_runtime_adapter("claude_code").uses_cli_credentials is True
+    assert instantiate_runtime_adapter("codex_cli").uses_cli_credentials is True
 
 
 # ===========================================================================
-# 8 & 9. Non-CLI adapters do not use CLI credentials
+# 8 & 9. Native runtime adapters do not use CLI credentials
 # ===========================================================================
 
 
-def test_non_cli_adapters_do_not_use_cli_credentials():
-    """echo and capability adapters do NOT use CLI login-state credentials."""
+def test_native_runtime_adapters_do_not_use_cli_credentials():
+    """echo and capability adapters do not use CLI login-state credentials."""
     from app.runtimes.adapters.echo import EchoRuntimeAdapter
     from app.runtimes.adapters.capability import CapabilityRuntimeAdapter
     from app.runtimes.base import BaseRuntimeAdapter

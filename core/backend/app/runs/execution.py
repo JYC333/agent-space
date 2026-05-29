@@ -864,9 +864,17 @@ class RunExecutionService:
             _has_cred_profile = False
             try:
                 from ..credentials.broker import CredentialBroker
-                _has_cred_profile = (
-                    CredentialBroker().get_default_profile(resolved.adapter_type) is not None
-                )
+                _profile_id = resolved.merged_config.get("credential_profile_id")
+                _credential_runtime = resolved.adapter_type
+                try:
+                    from ..runtimes.specs import get_runtime_adapter_spec
+                    _credential_runtime = (
+                        get_runtime_adapter_spec(resolved.adapter_type).credentials.credential_runtime_name
+                        or resolved.adapter_type
+                    )
+                except KeyError:
+                    pass
+                _has_cred_profile = CredentialBroker().profile_ready(_credential_runtime, _profile_id)
             except Exception:
                 log.warning(
                     "automation preflight credential check failed run=%s; "
@@ -992,6 +1000,8 @@ class RunExecutionService:
                 # Sanitize merged_config: strip raw secret fields so adapter_config
                 # is safe to log and inspect.  Credentials flow via resolved_credentials.
                 safe_config = sanitize_runtime_config(resolved.merged_config)
+                safe_config["runtime_policy_json"] = dict(version.runtime_policy_json or {})
+                safe_config["context_snapshot_id"] = str(run.context_snapshot_id) if run.context_snapshot_id else None
                 runtime_prompt = _build_runtime_prompt(
                     user_prompt=user_prompt,
                     personal_context_block=context_pkg.personal_context_block,
@@ -999,13 +1009,18 @@ class RunExecutionService:
                 resolved_model_name = version.model_name
                 if run.model_override_json and run.model_override_json.get("model"):
                     resolved_model_name = run.model_override_json["model"]
+                adapter_model_name = (
+                    resolved_model_name
+                    if run.model_selection_mode == "cli_model_override"
+                    else None
+                )
                 ctx = RuntimeExecutionContext(
                     run_id=run_id,
                     space_id=run_space_id,
                     prompt=runtime_prompt,
                     mode=run_mode,
                     sandbox_cwd=workdir,
-                    model_name=resolved_model_name,
+                    model_name=adapter_model_name,
                     system_prompt=version.system_prompt,
                     adapter_config=safe_config,
                     instruction=run.instruction,
@@ -1123,6 +1138,7 @@ class RunExecutionService:
                         "adapter_type": resolved.adapter_type,
                         "executor_mode": "worktree" if decision.required_sandbox_level == "worktree" else "local",
                         "model_name": resolved_model_name,
+                        "permission_bypass_requested": bool(safe_config.get("permission_bypass")),
                     },
                     log_context="adapter_invoked",
                 )
@@ -1148,9 +1164,24 @@ class RunExecutionService:
                     metadata_json={
                         "adapter_type": resolved.adapter_type,
                         "exit_code": raw.exit_code if raw else None,
+                        "permission_bypass_requested": bool(
+                            (raw.adapter_metadata or {}).get("permission_bypass_requested")
+                        ) if raw else False,
+                        "permission_bypass_allowed": bool(
+                            (raw.adapter_metadata or {}).get("permission_bypass_allowed")
+                        ) if raw else False,
+                        "permission_bypass_used": bool(
+                            (raw.adapter_metadata or {}).get("permission_bypass_used")
+                        ) if raw else False,
                     },
                     log_context="adapter_completed",
                 )
+                # Artifact persistence performs fail-closed policy audit writes in
+                # an independent session. Commit adapter completion evidence first
+                # so SQLite does not hold a writer lock while the audit record is
+                # inserted.
+                self.db.commit()
+                self.db.refresh(run)
                 if (
                     raw is not None
                     and raw.success
@@ -1467,6 +1498,88 @@ class RunExecutionService:
                 raw.adapter_metadata,
                 context_pkg.personal_context_block,
             )
+            artifacts_out: list[dict[str, Any]] = []
+            runtime_output_artifact_errors: list[str] = []
+            if raw.output_text:
+                # Persist the runtime-output artifact before marking the run
+                # terminal. Its policy gate writes an independent audit record,
+                # so the execution session must not yet hold terminal-state
+                # writes on SQLite.
+                safe_output_text = redact_artifact_content(safe_output_text_for_run) or ""
+                try:
+                    art = ArtifactPersistenceService(self.db).persist_text_file(
+                        run=run,
+                        text=safe_output_text,
+                        title=f"Run output ({resolved.adapter_type})",
+                        artifact_type="runtime_output",
+                        preview=run.mode == "dry_run",
+                    )
+                except PersonalMemoryEgressError as exc:
+                    _safe_rt_exc = redact_error(str(exc)[:512]) or ""
+                    runtime_output_artifact_errors.append(f"runtime_output_artifact: {_safe_rt_exc}")
+                    _egress_proposal_id: Optional[str] = None
+                    _exc_msg = str(exc)
+                    if "egress_review_proposal_id=" in _exc_msg:
+                        try:
+                            _egress_proposal_id = _exc_msg.split("egress_review_proposal_id=")[1].split(";")[0].strip()
+                        except Exception:
+                            pass
+                    safe_append_run_event(
+                        self.db,
+                        run_id=run_id, space_id=run_space_id,
+                        event_type="artifact_ingested", status="failed",
+                        error_code="runtime_output_artifact",
+                        error_message=_safe_rt_exc,
+                        workspace_id=run.workspace_id,
+                        metadata_json={
+                            "artifact_type": "runtime_output",
+                            "source": "runtime_output_text",
+                            "egress_review_required": True,
+                            "egress_review_proposal_id": _egress_proposal_id,
+                        },
+                        log_context="artifact_ingested.runtime_output.egress",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _safe_rt_exc = redact_error(str(exc)[:512]) or ""
+                    runtime_output_artifact_errors.append(f"runtime_output_artifact: {_safe_rt_exc}")
+                    safe_append_run_event(
+                        self.db,
+                        run_id=run_id, space_id=run_space_id,
+                        event_type="artifact_ingested", status="failed",
+                        error_code="runtime_output_artifact",
+                        error_message=_safe_rt_exc,
+                        workspace_id=run.workspace_id,
+                        metadata_json={
+                            "artifact_type": "runtime_output",
+                            "source": "runtime_output_text",
+                            "egress_review_required": False,
+                        },
+                        log_context="artifact_ingested.runtime_output.error",
+                    )
+                else:
+                    link_run_outputs_to_tasks(self.db, run=run, artifact=art, proposal=None)
+                    artifacts_out = [{"id": art.id, "title": art.title, "storage_path": art.storage_path}]
+                    safe_append_run_event(
+                        self.db,
+                        run_id=run_id, space_id=run_space_id,
+                        event_type="artifact_ingested", status="succeeded",
+                        artifact_id=art.id, workspace_id=run.workspace_id,
+                        metadata_json={
+                            "artifact_type": "runtime_output",
+                            "source": "runtime_output_text",
+                        },
+                        log_context="artifact_ingested.runtime_output",
+                    )
+                    if actor_id is not None:
+                        try:
+                            with UnitOfWork(self.db).savepoint():
+                                record_artifact_step(
+                                    self.db, run=run, actor_id=actor_id,
+                                    artifact_id=art.id, title=art.title,
+                                )
+                        except Exception:
+                            log.warning("RunStep record_artifact_step failed (best-effort)", exc_info=True)
+
             run.status = "succeeded"
             run.error_message = None
             run.error_json = None
@@ -1593,7 +1706,12 @@ class RunExecutionService:
                         log_context="artifact_ingested.output.activity.failed",
                     )
 
-            merged_errors = [*path_ingest_errors, *mat_result.errors, *code_patch_warnings]
+            merged_errors = [
+                *path_ingest_errors,
+                *mat_result.errors,
+                *code_patch_warnings,
+                *runtime_output_artifact_errors,
+            ]
             if merged_errors:
                 merged = dict(run.output_json or {})
                 merged["materialization_errors"] = merged_errors
@@ -1601,98 +1719,6 @@ class RunExecutionService:
                 # but output_json must always be fully sanitized before persistence.
                 run.output_json = redact_runtime_output(merged)
                 self.db.flush()
-
-            if raw.output_text:
-                # Redact artifact content before persistence — adapter output text
-                # must not carry raw credentials into artifact storage.
-                safe_output_text = redact_artifact_content(safe_output_text_for_run) or ""
-                try:
-                    art = ArtifactPersistenceService(self.db).persist_text_file(
-                        run=run,
-                        text=safe_output_text,
-                        title=f"Run output ({resolved.adapter_type})",
-                        artifact_type="runtime_output",
-                        preview=run.mode == "dry_run",
-                    )
-                except PersonalMemoryEgressError as exc:
-                    _safe_rt_exc = redact_error(str(exc)[:512]) or ""
-                    merged = dict(run.output_json or {})
-                    existing_errors = list(merged.get("materialization_errors") or [])
-                    existing_errors.append(f"runtime_output_artifact: {_safe_rt_exc}")
-                    merged["materialization_errors"] = existing_errors
-                    run.output_json = redact_runtime_output(merged)
-                    self.db.flush()
-                    _egress_proposal_id: Optional[str] = None
-                    _exc_msg = str(exc)
-                    if "egress_review_proposal_id=" in _exc_msg:
-                        try:
-                            _egress_proposal_id = _exc_msg.split("egress_review_proposal_id=")[1].split(";")[0].strip()
-                        except Exception:
-                            pass
-                    safe_append_run_event(
-                        self.db,
-                        run_id=run_id, space_id=run_space_id,
-                        event_type="artifact_ingested", status="failed",
-                        error_code="runtime_output_artifact",
-                        error_message=_safe_rt_exc,
-                        workspace_id=run.workspace_id,
-                        metadata_json={
-                            "artifact_type": "runtime_output",
-                            "source": "runtime_output_text",
-                            "egress_review_required": True,
-                            "egress_review_proposal_id": _egress_proposal_id,
-                        },
-                        log_context="artifact_ingested.runtime_output.egress",
-                    )
-                    artifacts_out = []
-                except Exception as exc:  # noqa: BLE001
-                    _safe_rt_exc = redact_error(str(exc)[:512]) or ""
-                    merged = dict(run.output_json or {})
-                    existing_errors = list(merged.get("materialization_errors") or [])
-                    existing_errors.append(f"runtime_output_artifact: {_safe_rt_exc}")
-                    merged["materialization_errors"] = existing_errors
-                    run.output_json = redact_runtime_output(merged)
-                    self.db.flush()
-                    safe_append_run_event(
-                        self.db,
-                        run_id=run_id, space_id=run_space_id,
-                        event_type="artifact_ingested", status="failed",
-                        error_code="runtime_output_artifact",
-                        error_message=_safe_rt_exc,
-                        workspace_id=run.workspace_id,
-                        metadata_json={
-                            "artifact_type": "runtime_output",
-                            "source": "runtime_output_text",
-                            "egress_review_required": False,
-                        },
-                        log_context="artifact_ingested.runtime_output.error",
-                    )
-                    artifacts_out = []
-                else:
-                    link_run_outputs_to_tasks(self.db, run=run, artifact=art, proposal=None)
-                    artifacts_out = [{"id": art.id, "title": art.title, "storage_path": art.storage_path}]
-                    safe_append_run_event(
-                        self.db,
-                        run_id=run_id, space_id=run_space_id,
-                        event_type="artifact_ingested", status="succeeded",
-                        artifact_id=art.id, workspace_id=run.workspace_id,
-                        metadata_json={
-                            "artifact_type": "runtime_output",
-                            "source": "runtime_output_text",
-                        },
-                        log_context="artifact_ingested.runtime_output",
-                    )
-                    if actor_id is not None:
-                        try:
-                            with UnitOfWork(self.db).savepoint():
-                                record_artifact_step(
-                                    self.db, run=run, actor_id=actor_id,
-                                    artifact_id=art.id, title=art.title,
-                                )
-                        except Exception:
-                            log.warning("RunStep record_artifact_step failed (best-effort)", exc_info=True)
-            else:
-                artifacts_out = []
 
             _emit("completed", "succeeded", title="Run completed successfully")
             self.db.commit()

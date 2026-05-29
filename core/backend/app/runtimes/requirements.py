@@ -12,6 +12,7 @@ from typing import Literal
 from sqlalchemy.orm import Session
 
 from ..models import AgentVersion, ModelProvider, RuntimeAdapter
+from .specs import get_runtime_adapter_spec
 
 ModelProviderMode = Literal["none", "optional", "required"]
 CredentialMode = Literal["none", "model_provider_api_key", "cli_profile"]
@@ -35,45 +36,23 @@ class UnknownRuntimeRequirementsError(ValueError):
         )
 
 
-_NONE = RuntimeRequirements(
-    model_provider_mode="none",
-    credential_mode="none",
-    supports_model_override=False,
-)
-_CLI = RuntimeRequirements(
-    model_provider_mode="none",
-    credential_mode="cli_profile",
-    supports_model_override=False,
-)
-_API = RuntimeRequirements(
-    model_provider_mode="required",
-    credential_mode="model_provider_api_key",
-    supports_model_override=True,
-)
-
-
-_REQUIREMENTS: dict[str, RuntimeRequirements] = {
-    "echo": _NONE,
-    "capability": _NONE,
-    "claude_code": _CLI,
-    "codex_cli": _CLI,
-    # Not registered as canonical adapters today; kept here so future API
-    # runtimes get the safe default semantics before they are wired.
-    "model_provider_api": _API,
-    "openai_chat": _API,
-    "openai_responses": _API,
-    "litellm": _API,
-}
-
-
 def get_runtime_requirements(adapter_type: str | None) -> RuntimeRequirements:
     normalized = (adapter_type or "").strip()
     if not normalized:
-        return _NONE
-    requirements = _REQUIREMENTS.get(normalized)
-    if requirements is None:
+        return RuntimeRequirements(
+            model_provider_mode="none",
+            credential_mode="none",
+            supports_model_override=False,
+        )
+    try:
+        spec = get_runtime_adapter_spec(normalized)
+    except KeyError as exc:
         raise UnknownRuntimeRequirementsError(normalized)
-    return requirements
+    return RuntimeRequirements(
+        model_provider_mode=spec.model.model_provider_mode,
+        credential_mode=spec.credentials.credential_mode,
+        supports_model_override=spec.model.supports_model_override,
+    )
 
 
 def resolve_effective_adapter_type(

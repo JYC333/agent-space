@@ -72,7 +72,7 @@ def test_default_provider_is_not_resolved_for_non_model_provider_runtimes(db):
         assert resolve_default_provider_for_runtime(db, space_id, adapter_type) is None
 
 
-def test_required_runtime_uses_runtime_scoped_default_before_space_default(db):
+def test_cli_runtime_ignores_runtime_scoped_default_provider(db):
     space_id = "model-config-runtime-default"
     factories.create_test_space(db, space_id=space_id)
     user = factories.create_test_user(db, space_id=space_id)
@@ -93,35 +93,37 @@ def test_required_runtime_uses_runtime_scoped_default_before_space_default(db):
         default_model="gpt-runtime",
         commit=False,
     )
-    runtime_default.config_json = {"runtime_default_for": "model_provider_api"}
+    runtime_default.config_json = {"runtime_default_for": "claude_code"}
     db.flush()
 
-    default = resolve_default_provider_for_runtime(db, space_id, "model_provider_api")
+    default = resolve_default_provider_for_runtime(db, space_id, "claude_code")
     resolved = resolve_model_config_for_runtime(
         db,
         space_id=space_id,
-        adapter_type="model_provider_api",
+        adapter_type="claude_code",
         request_provider_id=None,
         request_model=None,
         version=version,
     )
 
-    assert default.id == runtime_default.id
-    assert resolved.model_provider_id == runtime_default.id
+    assert default is None
+    assert resolved.model_provider_id is None
     assert resolved.model_provider_id != global_default.id
-    assert resolved.model_name == "gpt-runtime"
-    assert resolved.source == "runtime_default"
+    assert resolved.model_name is None
+    assert resolved.source == "none"
 
 
 def test_every_registered_runtime_adapter_has_explicit_requirements():
-    from app.runtimes.registry import _RUNTIME_ADAPTER_CLASSES
+    from app.runtimes.specs import list_runtime_adapter_specs
 
     missing: list[str] = []
-    for adapter_type in _RUNTIME_ADAPTER_CLASSES:
+    for spec in list_runtime_adapter_specs():
+        if spec.implementation_status != "implemented":
+            continue
         try:
-            get_runtime_requirements(adapter_type)
+            get_runtime_requirements(spec.adapter_type)
         except UnknownRuntimeRequirementsError:
-            missing.append(adapter_type)
+            missing.append(spec.adapter_type)
 
     assert missing == []
 

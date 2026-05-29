@@ -23,7 +23,7 @@ Runtime execution
   complete via BackgroundTask. Callers poll GET /sessions/{id} until the status
   changes to "completed" or "failed".
 
-Policy: anthropic_api / anthropic_messages direct API adapters are not supported.
+Policy: anthropic_api / anthropic_messages in-process Anthropic runtime types are not supported.
   Anthropic/Claude execution must go through the claude_code CLI integration.
 """
 from __future__ import annotations
@@ -292,13 +292,13 @@ _RUNTIME_SPECS: list[dict] = [
 
 def _is_available(runtime: str) -> bool:
     try:
-        if runtime == "claude_code":
-            from ..cli_adapters.claude import ClaudeCLIAdapter
-            return ClaudeCLIAdapter().is_available()
-        if runtime == "codex_cli":
-            from ..cli_adapters.codex import CodexCLIAdapter
-            return CodexCLIAdapter().is_available()
-        return False
+        from ..runtimes.command_renderer import resolve_executable_for_detection
+        from ..runtimes.specs import get_runtime_adapter_spec
+        spec = get_runtime_adapter_spec(runtime)
+        if spec.runtime_kind == "native":
+            return True
+        resolve_executable_for_detection(spec)
+        return True
     except Exception:
         return False
 

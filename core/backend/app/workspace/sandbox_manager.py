@@ -193,10 +193,9 @@ class SandboxManager:
     """
     Creates isolated sandbox environments for agent runs.
 
-    Default usage (high risk / worktree — required for file-access CLI adapters):
+    Default usage (high risk / worktree — required for file-access runtime adapters):
         mgr = SandboxManager()
         ctx = mgr.create_worktree(run_id, workspace_path)
-        adapter = ClaudeCLIAdapter(executor=LocalExecutor(), sandbox_dir=str(ctx.sandbox_dir))
 
     High-risk Docker usage:
         mgr = SandboxManager()
@@ -284,10 +283,6 @@ class SandboxManager:
         and executor_mode=="docker", its host_source_path/target_path are added as a
         volume mount into the container.
         """
-        from ..cli_adapters.executors import DockerExecutor
-        from ..cli_adapters.claude import ClaudeCLIAdapter
-        from ..cli_adapters.codex import CodexCLIAdapter
-
         sandbox_dir = self.sandbox_root / run_id
         sandbox_dir.mkdir(parents=True, exist_ok=True)
 
@@ -324,23 +319,9 @@ class SandboxManager:
 
         network_mode = "bridge" if adapter_type in _BRIDGE_NETWORK_ADAPTERS else "none"
 
-        executor = DockerExecutor(
-            image=self.image,
-            sandbox_dir=host_sandbox_dir,
-            extra_volumes=extra_volumes,
-            network_mode=network_mode,
-            extra_env=extra_env,
-            credential_volumes=credential_volumes,
+        raise NotImplementedError(
+            "one_shot_docker runtime execution is not implemented for spec-driven runtime adapters"
         )
-        # In Docker mode, sandbox_dir inside the container is always /workspace
-        docker_sandbox_dir = "/workspace"
-
-        if adapter_type == "claude_code":
-            return ClaudeCLIAdapter(executor=executor, sandbox_dir=docker_sandbox_dir)
-        elif adapter_type == "codex_cli":
-            return CodexCLIAdapter(executor=executor, sandbox_dir=docker_sandbox_dir)
-        else:
-            raise ValueError(f"Adapter '{adapter_type}' does not support Docker sandbox execution.")
 
     def sandbox_path(self, run_id: str) -> Path:
         return self.sandbox_root / run_id

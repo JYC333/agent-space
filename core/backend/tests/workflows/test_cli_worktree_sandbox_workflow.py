@@ -1,15 +1,15 @@
 """CLI worktree sandbox hardening — end-to-end workflow tests.
 
 Covers:
-1. CLI run (requires_file_access=True) with a git workspace creates a real git
+1. Local CLI run (requires_file_access=True) with a git workspace creates a real git
    worktree, not an empty sandbox directory.
-2. Mock CLI modifies a file inside the worktree sandbox.
+2. Fake local CLI runtime modifies a file inside the worktree sandbox.
 3. Real workspace root is unchanged after the run.
 4. A pending code_patch proposal is created capturing the diff.
 5. Accepting the proposal applies the change to the real workspace.
 6. runs with requires_file_access=True and sandbox_level<=dry_run fail with
    error_code=sandbox_required (guard enforcement).
-7. CLI run with no file changes does NOT create a code_patch proposal; the run
+7. Local CLI run with no file changes does NOT create a code_patch proposal; the run
    succeeds and no-op reason is visible in run.output_json.
 8. code_patch collector failure is captured in run.output_json.materialization_errors.
 9. External root without allow_external_root fails with workspace_root_untrusted_external.
@@ -57,7 +57,7 @@ def _init_git_repo(path: Path, filename: str = "hello.txt", content: str = "orig
 
 
 class WorktreeWritingAdapter(BaseRuntimeAdapter):
-    """Fake CLI adapter that modifies a file inside the worktree sandbox."""
+    """Fake local CLI runtime that modifies a file inside the worktree sandbox."""
 
     adapter_type = "claude_code"
     requires_file_access = True
@@ -85,7 +85,7 @@ class WorktreeWritingAdapter(BaseRuntimeAdapter):
 
 
 class FileAccessAdapter(BaseRuntimeAdapter):
-    """Fake CLI adapter that declares requires_file_access but makes no writes."""
+    """Fake local CLI runtime that declares requires_file_access but makes no writes."""
 
     adapter_type = "claude_code"
     requires_file_access = True
@@ -111,7 +111,7 @@ def test_cli_worktree_run_creates_code_patch_proposal_and_leaves_workspace_uncha
     api_client, db, cross_space_pair, tmp_path, monkeypatch,
 ):
     """
-    A CLI run against a git workspace:
+    A local CLI run against a git workspace:
     - runs in a real git worktree (not an empty sandbox)
     - does NOT touch the real workspace during execution
     - creates a pending code_patch proposal with the worktree diff
@@ -227,7 +227,7 @@ def test_cli_worktree_run_creates_code_patch_proposal_and_leaves_workspace_uncha
 # ---------------------------------------------------------------------------
 
 
-def test_cli_adapter_with_file_access_fails_when_sandbox_level_is_none(
+def test_local_cli_runtime_with_file_access_fails_when_sandbox_level_is_none(
     api_client, db, cross_space_pair, tmp_path, monkeypatch,
 ):
     """

@@ -71,8 +71,8 @@ Each Run may snapshot model provider + model name at creation. `RunOut.resolved_
 Adapters that consume model config today depend on runtime requirements.
 `claude_code` and `codex_cli` may receive model hints only when the underlying
 CLI supports them. `echo` and `capability` record model config but do not call
-an LLM. `anthropic_messages` is not a supported runtime path; Claude execution
-must go through the `claude_code` CLI adapter.
+an LLM. Claude execution must go through the `claude_code`
+RuntimeAdapterSpec and `GenericCliRuntimeAdapter`.
 
 ## ModelProvider secrets
 

@@ -1,209 +1,137 @@
 # Module: Runtime Adapters
 
-## MVP Design Statement
+Agent-space owns agents, runs, context snapshots, policy, credential gating,
+worktree governance, artifacts, proposals, audit records, and events.
+Vendor CLIs are runtime adapters only.
 
-**Agent-space focuses on managed multi-CLI usage, not direct multi-provider model orchestration.**
+## Canonical Standard
 
-Users subscribe to multiple AI CLI tools. Each has its own monthly quota. Agent-space provides
-one unified workspace to switch between CLI tools while maintaining shared context, run history,
-artifacts, proposals, usage awareness, and sandbox governance.
+`RuntimeAdapterSpec` is the source of truth for adapter behavior. Built-in specs
+live in `core/backend/app/runtimes/specs.py` and define:
 
-Each CLI tool continues using its own account, model, and subscription. Agent-space is the
-control layer, not the billing or routing layer.
+- runtime kind and implementation status
+- executable detection and version probes
+- safe argv invocation templates
+- context target file and compiler target
+- credential mode and credential profile runtime name
+- sandbox and workspace requirements
+- model override support
+- permission bypass capability and policy key
+- usage probe and parser type
+- output parser and artifact strategy
+- frontend catalog metadata
 
-See [ADR 0008](../decisions/0008-multi-cli-mvp.md) for the full rationale.
+`RuntimeAdapter` database rows are per-space configuration:
 
-## Three-Way Separation
+- enabled/disabled state
+- optional executable override
+- optional `credential_profile_id`
+- optional `credential_id` for DB/vault credentials
+- optional provider binding for future API-backed runtimes
+- adapter-specific non-secret config
 
-```
-Agent            — product-level actor (space-scoped, policy-governed, memory-owning)
-    ↓ dispatches via
-Runtime Adapter  — CLI tool or execution backend (replaceable)
-    ↓ optionally calls
-Model Provider   — underlying LLM API (OpenAI-compatible, …) [future direct mode]
-```
+The row never defines adapter semantics. The spec does.
 
-> Anthropic/Claude is **CLI-only** for this product. No direct Anthropic API adapter exists or
-> will be added to `app.runtimes`. See [ADR 0009](../decisions/0009-anthropic-cli-only-policy.md).
+## Built-In Adapter Types
 
-These are three distinct concerns. Mixing them (e.g. "Claude IS the agent") is a design error.
-The agent-space core owns the Agent layer. CLI tools and providers are pluggable.
+| adapter_type | kind | status | credentials | context | sandbox |
+|---|---|---|---|---|---|
+| `echo` | native | implemented | none | none | none |
+| `capability` | native | implemented | none | none | none |
+| `claude_code` | local_cli | implemented | `cli_profile` | `CLAUDE.md` | worktree |
+| `codex_cli` | local_cli | implemented | `cli_profile` | `AGENTS.md` | worktree |
+| `opencode` | local_cli | planned | disabled | prompt/custom | worktree |
+| `gemini_cli` | local_cli | planned | disabled | prompt/custom | worktree |
+| `custom` | custom | planned | disabled | custom | custom |
 
-## Current Adapters
+Planned adapters may appear in the catalog but cannot be enabled or executed.
+No adapter currently supports `one_shot_docker`; critical-risk execution fails
+before adapter invocation until that sandbox mode is implemented.
 
-| Adapter ID    | Type        | Vendor file  | Status | Notes                                    |
-|---------------|-------------|-------------|--------|------------------------------------------|
-| `echo`        | local       | none         | active | Deterministic test adapter, no LLM       |
-| `capability`  | local       | none         | active | Executes enabled local capability manifests |
-| `claude_code` | CLI wrapper | `CLAUDE.md`  | active | Wraps `claude` CLI (Claude Code)         |
-| `codex_cli`   | CLI wrapper | `AGENTS.md`  | active | Wraps `codex` CLI (OpenAI Codex CLI)     |
+## API Surface
 
-Canonical adapter type names: `echo`, `capability`, `claude_code`, `codex_cli`.
-Use these exact adapter type strings in manifests, run creation, runtime requirements,
-and credential profile directories.
+Product-facing runtime adapter endpoints are:
 
-## Planned / Future Adapters
+- `GET /api/v1/runtime-adapters/catalog`
+- `GET /api/v1/runtime-adapters`
+- `POST /api/v1/runtime-adapters`
+- `GET /api/v1/runtime-adapters/{id}`
+- `PATCH /api/v1/runtime-adapters/{id}`
+- `DELETE /api/v1/runtime-adapters/{id}`
+- `GET /api/v1/runtime-adapters/detect`
+- `GET /api/v1/runtime-adapters/{id}/detect`
+- `GET /api/v1/runtime-adapters/{id}/status`
+- `POST /api/v1/runtime-adapters/{id}/probe`
+- `GET /api/v1/runtime-adapters/{id}/usage`
+- `POST /api/v1/runtime-adapters/{id}/usage/refresh`
 
-| Adapter ID    | Notes                                                            |
-|---------------|------------------------------------------------------------------|
-| `opencode`    | Open-source, provider-agnostic; preferred future candidate       |
-| `gemini_cli`  | Google Gemini CLI                                                |
-| `custom`      | Custom executable or script                                      |
+## Generic CLI Lifecycle
 
-## Model Selection Modes
+1. `RunExecutionService` resolves the final adapter type.
+2. `RuntimeAdapterSpecCatalog` validates that the adapter exists and is implemented.
+3. Native adapters instantiate their native class (`echo`, `capability`).
+4. Local CLI runtime specs instantiate `GenericCliRuntimeAdapter(spec)`.
+5. Credential profiles are granted through `CredentialBroker.grant_for_run()`.
+6. `ContextCompiler` writes vendor context files only inside the sandbox/worktree.
+7. `CommandRenderer` renders `list[str]` argv and never uses `shell=True`.
+8. `LocalExecutor` starts the subprocess and registers its process for cancellation.
+9. The output parser normalizes stdout/stderr, errors, usage estimates, and artifacts.
+10. Run events, proposals, artifacts, validation, and audit stay owned by agent-space.
 
-Runs carry a `model_selection_mode` field:
+## Credential Profile Binding
 
-| Mode | Meaning | Status |
-|---|---|---|
-| `cli_default` | CLI uses its own configured model/account/subscription | Active |
-| `cli_model_override` | Agent-space passes `--model` flag to the CLI | Future |
-| `agent_space_provider` | Agent-space calls model API directly | Future |
+`runtime_adapters.credential_profile_id` binds CLI login state such as:
 
-Default is always `cli_default`.
+- `claude_code/default`
+- `codex_cli/default`
 
-## Backend Adapter Contract
+`credential_id` remains reserved for DB/vault credentials and model-provider API
+keys. CLI runs fail closed with `runtime_credential_profile_required` when a
+required profile is missing. No ambient HOME or inherited API-key fallback is
+allowed.
 
-Backend Run execution uses `app.runtimes`, not the older `app.agents.runner` registry. Product runtime adapters subclass `BaseRuntimeAdapter` in `core/backend/app/runtimes/base.py`, return `RuntimeAdapterResult`, and are registered in `core/backend/app/runtimes/registry.py`.
+Credential audit rows record metadata only: runtime adapter id, adapter type,
+credential profile id, trigger origin, fallback flags/reason, and cleanup status.
+Raw tokens, HOME paths, and credential file content are never stored.
 
-The `capability` adapter is a local runtime adapter. It resolves `Run.capability_id`, loads the installed manifest from builtin registry roots or explicitly configured local capability-library workspaces, checks the enabled flag and v1 permission guardrails, calls a local `python_module` entrypoint, and returns normalized `output_json` for the standard Run materializer. Remote repositories are future install sources, not runtime scan targets.
+## Permission Bypass
 
-## CLI Adapter Runner Contract
+Permission bypass is disabled by default. It can be used only when:
 
-All CLI adapters subclass `AgentAdapter` (`cli_adapters/adapter_base.py`) and implement:
+- the spec declares support
+- `RuntimeAdapter.config_json.permission_bypass` requests it
+- `AgentVersion.runtime_policy_json.allow_permission_bypass` is true
+- the run is high or critical risk
+- execution uses a worktree workspace
 
-```python
-@property
-def adapter_type(self) -> str: ...     # stable ID used in cli_adapters/service.py
+Blocked requests fail before invocation with `permission_bypass_not_allowed`.
 
-def is_available(self) -> bool: ...    # check if CLI/SDK is installed
+## Isolation Limits
 
-def run(self, prompt, context, workspace_path, timeout) -> RuntimeExecutionResult: ...
+Worktree isolation protects repository state and proposal review flow. It does
+not provide OS, process, network, or resource isolation. Vendor context files
+are generated into the worktree only so real workspace files such as
+`CLAUDE.md`, `AGENTS.md`, or `prompt.md` are never mutated by runtime context
+rendering.
 
-# Optional (have defaults in base class):
-def detect(self) -> CLIStatus: ...              # probe version, executable path
-def get_capabilities(self) -> CLIAdapterCapabilities: ...  # static capability flags
-```
+`one_shot_docker` is a policy level but is not implemented by any current
+runtime adapter. Runtime status must not advertise Docker support.
 
-`detect()` and `get_capabilities()` drive the CLI Tool Status page.
+## Usage And Output Parsing
 
-## Context Compilation
+Usage is exposed through runtime-generic endpoints. This build reports fallback
+usage (`run_count`, `last_run_at`, `runtime_seconds`) for adapters without a
+real probe. Claude Code quota refresh is cached-only; no live PTY quota probe is
+implemented in this build.
 
-The ContextCompiler is the source of truth. Vendor context files are generated
-per run inside the sandbox directory — they are never written to the real workspace:
+Output parsing is intentionally generic unless a parser performs real
+adapter-specific parsing. Current CLI specs use the generic/plain-text parser
+behavior: normalized output text, redacted stdout/stderr, stable nonzero/timeout
+error codes, and no artifact paths unless explicitly parseable.
 
-| CLI | Vendor file |
-|---|---|
-| Claude Code | `sandbox/CLAUDE.md` |
-| Codex CLI | `sandbox/AGENTS.md` |
-| OpenCode / custom | `sandbox/prompt.md` |
+## Adding an Adapter
 
-## Usage Tracking
-
-Because monthly subscription CLIs don't expose token counts programmatically,
-tracking uses an accuracy hierarchy:
-
-| Accuracy | Source |
-|---|---|
-| `precise` | Provider API (future: agent_space_provider mode) |
-| `estimated` | Parsed from CLI stdout |
-| `unknown` | Runtime seconds + run count only (MVP default) |
-
-The `Run` table carries `runtime_seconds`, `usage_accuracy`, `estimated_input_tokens`,
-`estimated_output_tokens`. A `UsageEvent` table records per-run events.
-
-## CLIAdapterConfig
-
-A `cli_adapter_configs` table stores per-space CLI tool configurations:
-- `adapter_id` — which CLI tool (claude_code, codex_cli, etc.)
-- `quota_status` — manually set: enough / medium / low / exhausted / unknown
-- `enabled` — whether this tool is available for new runs
-- `executable_path` — optional custom path override
-
-The frontend "CLI Tools" page shows the Monthly Quota Board and detection status.
-
-## Sandbox Routing
-
-See `sandbox.md`. Short version:
-
-| risk_level | required_sandbox_level | File-access adapters allowed? |
-|------------|------------------------|-------------------------------|
-| `low`      | `none`                 | No — blocked before execution |
-| `medium`   | `dry_run`              | No — blocked before execution |
-| `high`     | `worktree`             | Yes — git worktree isolation  |
-| `critical` | `one_shot_docker`      | Future — not yet implemented  |
-
-- `echo`, `capability` — never sandboxed; no filesystem access.
-- `claude_code`, `codex_cli` — **require** `risk_level=high` (worktree).
-  Runs at lower risk levels fail pre-execution with
-  `error_code=file_access_adapter_requires_worktree_policy`.
-- `one_shot_docker` — intentionally not implemented. Returns
-  `error_code=sandbox_one_shot_docker_not_implemented`.
-
-### Worktree isolation semantics
-
-A **worktree sandbox** means **code-state isolation**, not OS/process/network isolation.
-
-What it provides:
-- The CLI subprocess operates in an ephemeral `git worktree` copy of the workspace.
-- The real workspace directory is never directly written during execution.
-- All file changes are collected via `git diff HEAD` after execution and emitted
-  as a pending `code_patch` Proposal. The real workspace is only mutated when a
-  human accepts the proposal.
-- The worktree is destroyed after the run; artifacts are persisted separately.
-
-What it does NOT provide:
-- No OS-level process isolation. The CLI subprocess can access the host filesystem
-  beyond the sandbox directory.
-- No network isolation. The CLI subprocess can make arbitrary outbound requests.
-- No resource limits. CPU, memory, and disk are shared with the backend process.
-
-Worktree is **acceptable** for:
-- Trusted personal repositories.
-- Normal coding tasks where the repository owner controls the code being executed.
-
-`one_shot_docker` should be required (when implemented) for:
-- Untrusted code or unknown dependency installation.
-- Database migrations with destructive potential.
-- Third-party repositories where the code content is not pre-reviewed.
-- Runs that modify sandbox, policy, or capability manifests.
-
-## License & Compliance Notes
-
-> These notes document known risks. They are NOT legal advice.
-
-| Adapter       | License     | Commercial Use Risk |
-|---------------|-------------|---------------------|
-| `claude_code` | Proprietary | Claude Code terms do not explicitly permit embedding in a commercial product. Verify before shipping. |
-| `codex_cli`   | Proprietary | OpenAI terms apply. May not be redistributable as part of a commercial product. Verify. |
-| `opencode`    | Open source | Check specific license before commercial use. |
-| `echo`        | Internal    | No risk — deterministic no-LLM test adapter. |
-
-**Rule (B-RT-1):** No vendor CLI is the source of truth for memory, policy, permissions, or audit records.
-
-**Rule (B-RT-2):** An enterprise deployment must be able to disable any individual runtime adapter
-without breaking the core system (memory, knowledge, cards, proposals, chat, activity capture).
-
-## Adding a New CLI Adapter
-
-1. Subclass `AgentAdapter` in `core/backend/app/cli_adapters/` (see `adapter_base.py`)
-2. Implement `adapter_type`, `is_available()`, `detect()`, and `run()`
-3. Register in `cli_adapters/service.py:_get_adapter_instance()` for detection probes
-4. To make it executable via `RunExecutionService`, also add a `BaseRuntimeAdapter` wrapper
-   in `core/backend/app/runtimes/` and register it in `runtimes/registry.py`
-5. Update this doc's adapter table
-
-> Do NOT add a direct Anthropic API adapter. See ADR 0009.
-
-## Related Files
-
-- `core/backend/app/cli_adapters/adapter_base.py` — AgentAdapter, CLIStatus, CLIAdapterCapabilities
-- `core/backend/app/cli_adapters/claude.py` — ClaudeCLIAdapter
-- `core/backend/app/cli_adapters/codex.py` — CodexCLIAdapter
-- `core/backend/app/cli_adapters/executors.py` — LocalExecutor, DockerExecutor, EchoAgentAdapter
-- `core/backend/app/cli_adapters/service.py` — detection CRUD, `_get_adapter_instance()`
-- `core/backend/app/runtimes/base.py` — BaseRuntimeAdapter (canonical execution contract)
-- `core/backend/app/runtimes/registry.py` — canonical adapter registry
-- `core/backend/app/memory/context_compiler.py` — ContextCompiler (writes CLAUDE.md, AGENTS.md)
-- `.agent/decisions/0008-multi-cli-mvp.md` — ADR: managed multi-CLI MVP focus
-- `.agent/decisions/0009-anthropic-cli-only-policy.md` — ADR: Anthropic CLI-only policy
+To add a new local CLI runtime, add a validated `RuntimeAdapterSpec` with
+executable, invocation, context, credentials, sandbox, model, permission, usage,
+and output sections. If existing parsers are sufficient, no Python runtime class
+or hardcoded factory change is required.

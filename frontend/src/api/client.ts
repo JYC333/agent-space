@@ -2,7 +2,7 @@ import type {
   Memory, Session, Message, Task,
   Capability, ContextPackage, Feature, Workspace, WorkspaceCreateBody, WorkspaceUpdateBody, Page,
   CapabilitiesReloadResult, ReflectResult, ApiError,
-  CLIAdapterConfig, CLIStatus, BuiltinAdapter,
+  RuntimeAdapter, RuntimeAdapterStatus, RuntimeAdapterSpec,
   CredentialLoginMethod, CredentialStatus, LoginEvent,
   CurrentUser, SpaceWithMembership, SpaceMember, SpaceInvitationOut,
   Job, JobEvent, ActivityInboxRecord,
@@ -398,22 +398,20 @@ export const contextApi = {
     post<ContextPackage>('/context/build', data),
 }
 
-// ── CLI Adapters ──────────────────────────────────────────────────────────
-export const cliAdaptersApi = {
-  claudeUsage:        () => get<Record<string, unknown>>('/cli-adapters/usage/claude'),
-  refreshClaudeQuota: () => post<Record<string, unknown>>('/cli-adapters/usage/claude/quota/refresh', {}),
-
-  // Per-space config CRUD
-  listConfigs:  ()                                                     => get<CLIAdapterConfig[]>('/cli-adapters'),
-  createConfig: (data: Partial<CLIAdapterConfig>)                      => post<CLIAdapterConfig>('/cli-adapters', data),
-  updateConfig: (id: string, data: Partial<CLIAdapterConfig>)          => patch<CLIAdapterConfig>(`/cli-adapters/${id}`, data),
-  deleteConfig: (id: string)                                           => del<null>(`/cli-adapters/${id}`),
-  detectConfig: (id: string)                                           => get<CLIStatus>(`/cli-adapters/${id}/detect`),
-
-  // Detection (no space scope — probes the host CLI tools)
-  catalog:    () => get<BuiltinAdapter[]>('/cli-adapters/catalog'),
-  detectAll:  () => get<CLIStatus[]>('/cli-adapters/detect'),
-  detectOne:  (adapterId: string) => get<CLIStatus>(`/cli-adapters/detect/${adapterId}`),
+// ── Runtime Adapters ──────────────────────────────────────────────────────
+export const runtimeAdaptersApi = {
+  list:   () => get<RuntimeAdapter[]>('/runtime-adapters'),
+  create: (data: Partial<RuntimeAdapter>) => post<RuntimeAdapter>('/runtime-adapters', data),
+  update: (id: string, data: Partial<RuntimeAdapter>) => patch<RuntimeAdapter>(`/runtime-adapters/${id}`, data),
+  delete: (id: string) => del<null>(`/runtime-adapters/${id}`),
+  get:    (id: string) => get<RuntimeAdapter>(`/runtime-adapters/${id}`),
+  status: (id: string) => get<RuntimeAdapterStatus>(`/runtime-adapters/${id}/status`),
+  probe:  (id: string) => post<RuntimeAdapterStatus>(`/runtime-adapters/${id}/probe`, {}),
+  usage:  (id: string) => get<Record<string, unknown>>(`/runtime-adapters/${id}/usage`),
+  refreshUsage: (id: string) => post<Record<string, unknown>>(`/runtime-adapters/${id}/usage/refresh`, {}),
+  catalog: () => get<RuntimeAdapterSpec[]>('/runtime-adapters/catalog'),
+  detectAll: () => get<RuntimeAdapterStatus[]>('/runtime-adapters/detect'),
+  detectOne: (adapterId: string) => get<RuntimeAdapterStatus>(`/runtime-adapters/${adapterId}/detect`),
 }
 
 // ── Credentials / Login ───────────────────────────────────────────────────

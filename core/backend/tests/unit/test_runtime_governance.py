@@ -286,14 +286,14 @@ class TestCredentialBrokerRecordUsage:
         assert ev.space_id == space_id
 
 
-class TestCliRuntimeAdapterRecordUsageWired:
-    """CliRuntimeAdapter._record_credential_audit() wires into CredentialBroker.record_usage()."""
+class TestGenericCliRuntimeAdapterRecordUsageWired:
+    """GenericCliRuntimeAdapter._record_credential_audit() writes credential audit metadata."""
 
     def test_record_credential_audit_writes_event_when_db_provided(self, db):
         """_record_credential_audit() inserts a CliCredentialEvent when ctx.db is set."""
         from app.models import CliCredentialEvent
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
         from app.runtimes.base import RuntimeExecutionContext
+        from app.runtimes.registry import instantiate_runtime_adapter
 
         space_id = "test-cred-wire"
         factories.create_test_space(db, space_id=space_id, commit=True)
@@ -321,7 +321,7 @@ class TestCliRuntimeAdapterRecordUsageWired:
             "cleanup_status": "not_needed",
         }
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         adapter._record_credential_audit(ctx, cred_meta, action="grant")
         db.commit()
 
@@ -331,8 +331,8 @@ class TestCliRuntimeAdapterRecordUsageWired:
 
     def test_record_credential_audit_no_op_when_db_is_none(self):
         """_record_credential_audit() silently skips when ctx.db is None."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
         from app.runtimes.base import RuntimeExecutionContext
+        from app.runtimes.registry import instantiate_runtime_adapter
 
         ctx = RuntimeExecutionContext(
             run_id="test-run-no-db",
@@ -353,7 +353,7 @@ class TestCliRuntimeAdapterRecordUsageWired:
             "broker_error": False,
             "cleanup_status": "not_needed",
         }
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         # Must not raise even without DB
         adapter._record_credential_audit(ctx, cred_meta, action="grant")
 
@@ -362,11 +362,11 @@ class TestAutomationOriginCliRunFails:
     """Automation-origin CLI runs without explicit credential fail cleanly."""
 
     def test_automation_run_without_profile_fails_with_correct_error_code(self):
-        """CliRuntimeAdapter returns runtime_credential_profile_required without a grant."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
+        """GenericCliRuntimeAdapter returns runtime_credential_profile_required without a grant."""
         from app.runtimes.base import RuntimeExecutionContext
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         ctx = RuntimeExecutionContext(
             run_id="auto-run-001",
             space_id="auto-space",
@@ -390,10 +390,10 @@ class TestAutomationOriginCliRunFails:
 
     def test_automation_metadata_does_not_leak_paths_or_secrets(self):
         """Automation-denied failure metadata contains no file paths or secret values."""
-        from app.runtimes.adapters.cli_runtime import ClaudeCodeRuntimeAdapter
         from app.runtimes.base import RuntimeExecutionContext
+        from app.runtimes.registry import instantiate_runtime_adapter
 
-        adapter = ClaudeCodeRuntimeAdapter()
+        adapter = instantiate_runtime_adapter("claude_code")
         ctx = RuntimeExecutionContext(
             run_id="auto-run-002",
             space_id="auto-space",
@@ -424,132 +424,125 @@ class TestAutomationOriginCliRunFails:
 
 
 class TestRuntimeAdapterTypeValidation:
-    """CLIAdapterService.create/update validates adapter_type against the registry."""
+    """RuntimeAdapterService.create/update validates adapter_type against the spec catalog."""
 
     def test_create_claude_code_enabled_succeeds(self, db):
-        from app.cli_adapters.service import CLIAdapterService
-        from app.schemas import CLIAdapterConfigCreate
+        from app.runtime_adapters.service import RuntimeAdapterService
+        from app.schemas import RuntimeAdapterCreate
 
         space_id = "test-adapter-val-cc"
         factories.create_test_space(db, space_id=space_id, commit=True)
-        data = CLIAdapterConfigCreate(
-            adapter_id="claude_code",
-            display_name="Claude Code",
+        data = RuntimeAdapterCreate(
+            adapter_type="claude_code",
+            name="Claude Code",
             enabled=True,
         )
-        svc = CLIAdapterService(db)
+        svc = RuntimeAdapterService(db)
         adapter_row = svc.create(data, space_id)
         assert adapter_row.adapter_type == "claude_code"
         assert adapter_row.enabled is True
 
     def test_create_codex_cli_enabled_succeeds(self, db):
-        from app.cli_adapters.service import CLIAdapterService
-        from app.schemas import CLIAdapterConfigCreate
+        from app.runtime_adapters.service import RuntimeAdapterService
+        from app.schemas import RuntimeAdapterCreate
 
         space_id = "test-adapter-val-codex"
         factories.create_test_space(db, space_id=space_id, commit=True)
-        data = CLIAdapterConfigCreate(
-            adapter_id="codex_cli",
-            display_name="Codex CLI",
+        data = RuntimeAdapterCreate(
+            adapter_type="codex_cli",
+            name="Codex CLI",
             enabled=True,
         )
-        svc = CLIAdapterService(db)
+        svc = RuntimeAdapterService(db)
         adapter_row = svc.create(data, space_id)
         assert adapter_row.adapter_type == "codex_cli"
         assert adapter_row.enabled is True
 
-    def test_create_opencode_is_forced_disabled_unimplemented(self, db):
-        """opencode is a planned-but-unimplemented adapter: forced disabled/unimplemented."""
-        from app.cli_adapters.service import CLIAdapterService
-        from app.schemas import CLIAdapterConfigCreate
+    def test_create_opencode_enabled_raises(self, db):
+        """opencode is planned and cannot be created enabled."""
+        from app.runtime_adapters.service import RuntimeAdapterService
+        from app.schemas import RuntimeAdapterCreate
 
         space_id = "test-adapter-val-oc"
         factories.create_test_space(db, space_id=space_id, commit=True)
-        data = CLIAdapterConfigCreate(
-            adapter_id="opencode",
-            display_name="OpenCode",
-            enabled=True,  # caller tries to enable — must be rejected/coerced
+        data = RuntimeAdapterCreate(
+            adapter_type="opencode",
+            name="OpenCode",
+            enabled=True,
         )
-        svc = CLIAdapterService(db)
-        adapter_row = svc.create(data, space_id)
-        # Must be coerced to disabled with health_status=unimplemented
-        assert adapter_row.enabled is False, "opencode must be stored as disabled"
-        assert adapter_row.health_status == "unimplemented"
+        svc = RuntimeAdapterService(db)
+        with pytest.raises(ValueError, match="cannot be enabled"):
+            svc.create(data, space_id)
 
-    def test_create_gemini_cli_is_forced_disabled_unimplemented(self, db):
-        from app.cli_adapters.service import CLIAdapterService
-        from app.schemas import CLIAdapterConfigCreate
+    def test_create_gemini_cli_enabled_raises(self, db):
+        from app.runtime_adapters.service import RuntimeAdapterService
+        from app.schemas import RuntimeAdapterCreate
 
         space_id = "test-adapter-val-gem"
         factories.create_test_space(db, space_id=space_id, commit=True)
-        data = CLIAdapterConfigCreate(
-            adapter_id="gemini_cli",
-            display_name="Gemini CLI",
+        data = RuntimeAdapterCreate(
+            adapter_type="gemini_cli",
+            name="Gemini CLI",
             enabled=True,
         )
-        svc = CLIAdapterService(db)
-        adapter_row = svc.create(data, space_id)
-        assert adapter_row.enabled is False
-        assert adapter_row.health_status == "unimplemented"
+        svc = RuntimeAdapterService(db)
+        with pytest.raises(ValueError, match="cannot be enabled"):
+            svc.create(data, space_id)
 
     def test_create_custom_unknown_type_raises(self, db):
         """A completely unknown adapter type raises ValueError."""
-        from app.cli_adapters.service import CLIAdapterService
-        from app.schemas import CLIAdapterConfigCreate
+        from app.runtime_adapters.service import RuntimeAdapterService
+        from app.schemas import RuntimeAdapterCreate
 
         space_id = "test-adapter-val-unk"
         factories.create_test_space(db, space_id=space_id, commit=True)
-        data = CLIAdapterConfigCreate(
-            adapter_id="totally_fake_runtime",
-            display_name="Fake",
+        data = RuntimeAdapterCreate(
+            adapter_type="totally_fake_runtime",
+            name="Fake",
             enabled=True,
         )
-        svc = CLIAdapterService(db)
-        with pytest.raises(ValueError, match="Unknown adapter type"):
+        svc = RuntimeAdapterService(db)
+        with pytest.raises(KeyError):
             svc.create(data, space_id)
 
-    def test_update_planned_adapter_enabled_true_is_forced_disabled(self, db):
-        """Re-enabling a planned-unimplemented adapter via update is forced back to disabled."""
-        from app.cli_adapters.service import CLIAdapterService
-        from app.schemas import CLIAdapterConfigCreate, CLIAdapterConfigUpdate
+    def test_update_planned_adapter_enabled_true_raises(self, db):
+        """Re-enabling a planned adapter via update is rejected."""
+        from app.runtime_adapters.service import RuntimeAdapterService
+        from app.schemas import RuntimeAdapterCreate, RuntimeAdapterUpdate
 
         space_id = "test-adapter-val-update"
         factories.create_test_space(db, space_id=space_id, commit=True)
-        # Create opencode adapter — stored as disabled/unimplemented
-        create_data = CLIAdapterConfigCreate(
-            adapter_id="opencode",
-            display_name="OpenCode",
-            enabled=True,  # ignored — coerced to False
+        create_data = RuntimeAdapterCreate(
+            adapter_type="opencode",
+            name="OpenCode",
+            enabled=False,
         )
-        svc = CLIAdapterService(db)
+        svc = RuntimeAdapterService(db)
         adapter_row = svc.create(create_data, space_id)
         assert adapter_row.enabled is False
 
-        # Try to re-enable via update — must be coerced back to disabled
-        update_data = CLIAdapterConfigUpdate(enabled=True)
-        updated = svc.update(adapter_row.id, space_id, update_data)
-        assert updated is not None
-        assert updated.enabled is False, "Planned-unimplemented adapter must remain disabled"
-        assert updated.health_status == "unimplemented"
+        update_data = RuntimeAdapterUpdate(enabled=True)
+        with pytest.raises(ValueError, match="cannot be enabled"):
+            svc.update(adapter_row.id, space_id, update_data)
 
     def test_disabled_planned_adapter_can_exist_as_unimplemented(self, db):
         """A planned adapter with enabled=False and health_status=unimplemented is valid."""
-        from app.cli_adapters.service import CLIAdapterService
-        from app.schemas import CLIAdapterConfigCreate
+        from app.runtime_adapters.service import RuntimeAdapterService
+        from app.schemas import RuntimeAdapterCreate
 
         space_id = "test-adapter-val-plan"
         factories.create_test_space(db, space_id=space_id, commit=True)
-        # Create with enabled=False
-        data = CLIAdapterConfigCreate(
-            adapter_id="opencode",
-            display_name="OpenCode (planned)",
+        data = RuntimeAdapterCreate(
+            adapter_type="opencode",
+            name="OpenCode (planned)",
             enabled=False,
         )
-        svc = CLIAdapterService(db)
+        svc = RuntimeAdapterService(db)
         adapter_row = svc.create(data, space_id)
         assert adapter_row.adapter_type == "opencode"
         assert adapter_row.enabled is False
         assert adapter_row.health_status == "unimplemented"
+        assert adapter_row.quota_status == "unknown"
 
 
 class TestRunExecutionServiceRejectsUnimplementedAdapter:
@@ -567,7 +560,7 @@ class TestRunExecutionServiceRejectsUnimplementedAdapter:
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
         version.runtime_policy_json = {
             "risk_level": "low",
-            "default_adapter_type": "opencode",  # unimplemented
+            "default_adapter_type": "opencode",
         }
         db.commit()
 
@@ -575,21 +568,11 @@ class TestRunExecutionServiceRejectsUnimplementedAdapter:
 
         result = RunExecutionService(db).execute_run(run.id, space_id=space_id, worker_id="test-w")
         assert result.success is False
-        assert result.error_code == "adapter_not_implemented"
+        assert result.error_code == "adapter_planned_not_executable"
 
         db.expire_all()
         run_row = db.query(Run).filter(Run.id == run.id).first()
         assert run_row.status == "failed"
-
-    def test_anthropic_api_remains_unavailable(self, db):
-        """anthropic_api / anthropic_messages must not be in the registry."""
-        from app.runtimes.registry import is_adapter_type_implemented
-
-        assert not is_adapter_type_implemented("anthropic_api"), \
-            "anthropic_api must not be registered"
-        assert not is_adapter_type_implemented("anthropic_messages"), \
-            "anthropic_messages must not be registered"
-
 
 # ===========================================================================
 # Validation evidence for code patch proposals

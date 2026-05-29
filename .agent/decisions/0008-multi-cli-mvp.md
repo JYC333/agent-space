@@ -1,4 +1,4 @@
-# ADR 0008 — Managed Multi-CLI Usage as MVP Focus
+# ADR 0008 - Managed Multi-CLI Runtime Usage
 
 ## Status
 
@@ -6,79 +6,83 @@ Accepted — 2026-05-06
 
 ## Context
 
-The original system contained a `model_config_json` field on the `Agent` model and `DEFAULT_MODEL_CONFIG` in schemas, implying that agent-space would act as a direct model-provider API gateway in the first milestone. This is incorrect for the personal/family-first use case.
-
-The actual motivation:
+Agent-space is the governance and context layer for users who work across
+multiple AI/agent CLI tools.
 
 - Users subscribe to multiple AI/agent CLI tools (Claude Code, Codex CLI, OpenCode, Gemini CLI, etc.).
 - Each subscription has a monthly quota that may run out before month end.
 - The user wants one unified workspace to switch between CLI tools without losing workspace context, run history, artifacts, proposals, or approval flows.
 - Each CLI tool continues using its own account, model selection, and subscription.
-- Agent-space is the governance and context layer, not a model-provider router.
+- Agent-space is not a model-provider router.
 
 ## Decision
 
-**Agent-space MVP focuses on managed multi-CLI usage, not direct multi-provider model orchestration.**
+Agent-space focuses on managed multi-CLI runtime usage, not direct
+multi-provider model orchestration.
 
-### Architecture
+## Architecture
 
 ```
 AgentSpace Core
-├── WorkspaceManager      — workspace isolation and path policy
-├── SandboxManager        — worktree / Docker execution environments
-├── ContextCompiler       — compiles unified context into vendor-specific files
-├── CLIAdapterRegistry    — which CLIs are installed, enabled, and available
-├── RunManager            — orchestrates run lifecycle + delegation chain
-├── UsageTracker          — approximate usage per run (accuracy-first)
-├── ArtifactStore         — diffs, logs, validation results
-└── ProposalSystem        — human-in-the-loop approval for agent changes
+├── WorkspaceManager      - workspace isolation and path policy
+├── SandboxManager        - worktree execution environments
+├── ContextCompiler       - compiles unified context into vendor-specific files
+├── RuntimeAdapterSpecCatalog — which runtime adapters exist and how they behave
+├── RunManager            - orchestrates run lifecycle + delegation chain
+├── UsageTracker          - fallback/cached runtime usage
+├── ArtifactStore         - diffs, logs, validation results
+└── ProposalSystem        - human-in-the-loop approval for agent changes
 ```
 
-CLI Tools are adapters to the core, not the foundation.
+Runtime Adapters are adapters to the core, not the foundation.
 
-### Three-layer separation (preserved)
+## Three-Layer Separation
 
 | Layer | What it is | Examples |
 |---|---|---|
 | Agent (product layer) | Configured actor with policy, memory, delegation rules | system.coding-agent |
-| Runtime Adapter | CLI tool that executes the task | claude_code, codex_cli, opencode |
+| Runtime Adapter | Execution backend selected for a run | claude_code, codex_cli, echo |
 | Model Provider | LLM API (future optional) | Anthropic, OpenAI, Google |
 
-### Model selection modes
+## Model Selection Modes
 
 Runs carry a `model_selection_mode` field:
 
 | Mode | Meaning | When |
 |---|---|---|
-| `cli_default` | CLI uses its own configured model/account | **MVP** |
-| `cli_model_override` | Agent-space passes `--model` flag to the CLI | Future (CLI must support it) |
+| `cli_default` | CLI uses its own configured model/account | default |
+| `cli_model_override` | Agent-space passes a model flag to the CLI | only when the spec supports it |
 | `agent_space_provider` | Agent-space calls model API directly | Future |
 
-The default is `cli_default` for all MVP runs.
+The default is `cli_default`.
 
-### CLIAdapterConfig
+## RuntimeAdapterSpec And RuntimeAdapter
 
-A new per-space table (`cli_adapter_configs`) stores:
-- Which CLI tools the user has configured for this space
-- Manual quota status (enough / medium / low / exhausted / unknown)
-- Optional custom executable path
-- Enabled/disabled flag
+`RuntimeAdapterSpec` is the source of truth for adapter behavior. Per-space
+`RuntimeAdapter` rows store configuration such as enabled state, executable
+override, credential profile id, and health/usage status. There is no separate
+configured-adapter product model.
 
-This is the source of truth for the "Monthly Quota Board" UI.
+Implemented local CLI specs execute through `GenericCliRuntimeAdapter`.
+Native adapters are `echo` and `capability`.
 
-### Usage tracking (accuracy-first)
+## Usage Tracking
 
-Because monthly subscription CLIs do not expose token counts programmatically, usage tracking uses an accuracy hierarchy:
+Usage tracking uses an accuracy hierarchy:
 
 1. `precise` — provider API returns token counts (future: agent_space_provider mode)
 2. `estimated` — CLI output contains parseable usage lines
-3. `unknown` — runtime seconds + run count only (default for MVP)
+3. `unknown` — runtime seconds + run count only
 
 The `Run` table carries `runtime_seconds`, `usage_accuracy`, `estimated_input_tokens`, `estimated_output_tokens`.
 
-A separate `UsageEvent` table records per-run events for quota dashboards.
+Runtime adapter rows also carry `quota_status` as a separate manual/cached
+status. It is not overloaded into `health_status`.
 
-### Context compilation
+Claude Code quota is cached-only in this build; no live quota probe is
+implemented.
+
+## Context Compilation
 
 The ContextCompiler remains the source of truth. Vendor context files are generated per run inside the sandbox directory:
 
@@ -92,21 +96,9 @@ Vendor files are never the source of truth and are never written to the real wor
 
 ## Consequences
 
-**Positive:**
-- The personal/family MVP does not require building a model-provider billing gateway.
 - Users can switch CLI tools on a per-run basis without losing context.
 - Quota awareness is manual but practical (no API access to subscription data needed).
-- Architecture stays clean for a future milestone where agent_space_provider mode adds direct API calls.
-
-**Negative:**
-- Precise token accounting is not available in the MVP slice.
-- The `model_config_json` field on the `Agent` model is now forward-looking (used in cli_model_override and agent_space_provider modes only).
-
-## Out of scope (deferred)
-
-- Full ModelProviderRegistry
-- Provider billing / cost accounting
-- Automatic reading of subscription quota from vendors
-- Complex model router
-- Enterprise billing and multi-tenant SaaS admin
-- Tool recommendation engine (basic heuristics only, optional)
+- Precise token accounting is not available for subscription CLI runtimes.
+- `one_shot_docker` is not implemented.
+- Adding a new CLI adapter should usually mean adding a RuntimeAdapterSpec, not
+  a new runtime class.

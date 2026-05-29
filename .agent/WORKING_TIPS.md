@@ -55,33 +55,29 @@ Proposal. Read access is allowed. The forbidden write suffixes are declared in
 
 ## Workspace Console — Runtime Execution
 
-**Console sessions use CLI adapters only (async background tasks).**
+**Console sessions use local CLI runtimes only (async background tasks).**
 
 | Runtime       | Path       | How it works |
 |---------------|------------|--------------|
 | `claude_code` | Async (BG) | Saves status="running", dispatches `BackgroundTask`, returns immediately |
-| `codex`       | Async (BG) | Same as claude_code |
+| `codex_cli`   | Async (BG) | Same as claude_code |
 
-Policy: `anthropic_api` / `anthropic_messages` direct API adapters are not
-supported. Anthropic/Claude execution must go through the `claude_code` CLI
-integration (subprocess wrapping the `claude` binary).
+Policy: Anthropic/Claude execution must go through the `claude_code`
+RuntimeAdapterSpec and `GenericCliRuntimeAdapter`.
 
 Frontend polls `GET /workspace-console/sessions/{id}` every 2 s while
 `session.status === "running"`, then replays events with animation once done.
 
-**`ClaudeCLIAdapter` now accepts a `model` kwarg.**
+**RuntimeAdapterSpec owns local CLI command semantics.**
 
-Pass `ClaudeCLIAdapter(model="claude-opus-4-7")` and it adds `--model` to the
-CLI command. Without a model, the CLI uses its configured default.
-
-**Runtime availability is checked live on every `GET /runtimes` call.**
-
-Each adapter's `is_available()` is called at request time. For `claude_code` this
-checks `shutil.which("claude")`.
+Model flags, permission bypass flags, executable detection, and output parser
+selection are declared in `core/backend/app/runtimes/specs.py`. Host detection
+uses `/api/v1/runtime-adapters/detect`; configured instance status uses
+`/api/v1/runtime-adapters/{id}/status`.
 
 **Console sessions run in the workspace directory — no sandbox.**
 
-CLI adapters are called with `sandbox_dir=None` and `workspace_path=<ws.path>`.
+Local CLI runtimes are called with `sandbox_dir=None` and `workspace_path=<ws.path>`.
 This means they execute directly in the workspace (no git worktree, no Docker).
 For production use with untrusted prompts, wire through the sandbox
 infrastructure instead.
