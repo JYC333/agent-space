@@ -117,6 +117,16 @@ class HomeSuggestedActionItem(BaseModel):
     priority: PriorityLevel
 
 
+class HomeIntakeSummarySection(BaseModel):
+    open_items: int
+    new_items_today: int
+    pending_extraction_jobs: int
+    failed_extraction_jobs: int
+    candidate_evidence: int
+    active_evidence: int
+    due_connections: int = 0
+
+
 class HomeSummaryOut(BaseModel):
     recent_runs: list[HomeRunSummaryItem]
     active_runs: list[HomeRunSummaryItem]
@@ -130,3 +140,4 @@ class HomeSummaryOut(BaseModel):
     runtime_status: HomeRuntimeStatusSection
     model_provider_status: HomeModelProviderStatusSection
     suggested_actions: list[HomeSuggestedActionItem]
+    intake_summary: HomeIntakeSummarySection

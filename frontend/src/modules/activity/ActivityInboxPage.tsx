@@ -26,6 +26,7 @@ const SOURCE_COLORS: Record<ActivitySourceType, string> = {
   workspace_event: 'muted',
   system_event:    'muted',
   external_source: 'secondary',
+  intake:          'secondary',
 }
 
 export default function ActivityInboxPage() {
@@ -60,11 +61,11 @@ export default function ActivityInboxPage() {
 
   useEffect(() => { load() }, [load])
 
-  async function doProcess(id: string) {
+  async function doReview(id: string) {
     setBusy(id)
     try {
-      await activityApi.process(id)
-      toast.success('Marked as processed')
+      await activityApi.review(id)
+      toast.success('Marked as reviewed')
       await load()
     } catch (e) { toast.error(errMsg(e)) }
     finally { setBusy(null) }
@@ -99,7 +100,7 @@ export default function ActivityInboxPage() {
           </div>
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Activity Inbox</h1>
-            <p className="text-sm text-muted-foreground">Raw input records before they become memory proposals.</p>
+            <p className="text-sm text-muted-foreground">Saved as activity first. Nothing becomes memory or changes files without review.</p>
             <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
             {projectFilter && (
               <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-accent/40 text-xs text-accent-foreground">
@@ -115,7 +116,7 @@ export default function ActivityInboxPage() {
         <div className="flex gap-1.5">
           {STATUS_FILTERS.map(s => (
             <Button key={s} size="sm" variant={filter === s ? 'default' : 'ghost'} onClick={() => setFilter(s)}>
-              {s.replace('_', ' ')}
+              {s === 'proposals_generated' ? 'proposals generated' : s.replace('_', ' ')}
             </Button>
           ))}
         </div>
@@ -133,7 +134,7 @@ export default function ActivityInboxPage() {
           />
         ) : filter === 'raw' ? (
           <EmptyState
-            title="Nothing to process"
+            title="No captures yet"
             description="Capture a thought, paste a link, or save a snippet to get started."
             action={
               <Button variant="outline" asChild>
@@ -146,7 +147,7 @@ export default function ActivityInboxPage() {
             title={`No ${filter.replace(/_/g, ' ')} activity`}
             description={filter === 'archived'
               ? 'Archived records appear here after you dismiss them.'
-              : 'Records that have been processed appear here.'}
+              : 'Records with proposals generated appear here.'}
           />
         )
       )}
@@ -168,11 +169,18 @@ export default function ActivityInboxPage() {
                   <Button
                     size="sm" variant="secondary"
                     disabled={busy === r.id}
-                    onClick={() => doProcess(r.id)}
+                    onClick={() => doReview(r.id)}
                   >
-                    Mark processed
+                    Mark reviewed
                   </Button>
                 )}
+                <Button
+                  size="sm" variant="default"
+                  disabled={busy === r.id}
+                  asChild
+                >
+                  <Link to={`/activity/${r.id}`}>Generate proposals</Link>
+                </Button>
                 <Button
                   size="sm" variant="ghost"
                   disabled={busy === r.id}

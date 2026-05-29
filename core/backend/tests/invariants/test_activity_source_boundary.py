@@ -9,7 +9,7 @@ These invariants protect the following product rules:
 4. Memory proposal generated via consolidation preserves activity_id and source provenance.
 5. Accepted memory proposal preserves provenance into MemoryEntry and ProvenanceLink rows.
 6. ActivityRecord is the product activity/inbox layer; it does not produce active memory directly.
-7. Information Horizon: no code path creates active Memory from raw capture without proposal.
+7. Intake/Evidence: no code path creates active Memory from raw capture without proposal.
 8. Public memory writes remain proposal-first (POST /memory → 202 Proposal, never 200 MemoryEntry).
 """
 
@@ -327,7 +327,7 @@ def test_activity_record_status_progression_stays_in_inbox_states(db, cross_spac
     from app.activity.service import ActivityService
 
     svc = ActivityService(db)
-    svc.mark_processed(act.id, a)
+    svc.mark_reviewed(act.id, a)
     db.refresh(act)
     assert act.status == "processed"
 
@@ -337,7 +337,7 @@ def test_activity_record_status_progression_stays_in_inbox_states(db, cross_spac
 
 
 # ---------------------------------------------------------------------------
-# 7. Information Horizon guardrail: no direct horizon-to-memory path
+# 7. Intake/Evidence guardrail: no direct candidate-to-memory path
 # ---------------------------------------------------------------------------
 
 
@@ -361,7 +361,7 @@ def test_no_direct_memory_write_from_raw_activity_payload(db, cross_space_pair_d
         space_id=a,
         actor_user_id=ua.id,
         activity_type="user_capture",
-        title="horizon candidate",
+        title="intake candidate",
         content="raw content that must not bypass proposal",
         commit=True,
     )
@@ -416,5 +416,4 @@ def test_public_memory_write_returns_proposal_not_memory(api_client, db, cross_s
         .scalar()
     )
     assert after == before, "public memory write must not create active MemoryEntry"
-
 

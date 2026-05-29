@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
     from .feature_gates import API_KEYS_DB_PERSISTED
     from .models import Space, SpaceMembership
     from .jobs import handlers as _job_handlers  # noqa: F401 — registers job handlers
+    from .daily_reports import handlers as _daily_report_handlers  # noqa: F401 — registers daily_capture_report handler
     from .jobs.queue import DatabaseQueueService, init_queue
     from .jobs.worker import start_worker
 
@@ -72,6 +73,41 @@ async def lifespan(app: FastAPI):
     init_queue(queue)
     worker_task = await start_worker(queue)
 
+    # ── Daily Capture Report scheduler ───────────────────────────────────────
+    import logging as _logging
+    _dr_log = _logging.getLogger(__name__)
+
+    _dr_scheduler_task: asyncio.Task | None = None
+
+    if settings.daily_report_scheduler_enabled:
+        from .daily_reports.scheduler import DailyCaptureReportScheduler
+
+        async def _daily_report_scheduler_loop() -> None:
+            # Scan immediately on startup, then sleep between subsequent scans.
+            while True:
+                try:
+                    db_scan = SessionLocal()
+                    try:
+                        scheduler = DailyCaptureReportScheduler(db_scan)
+                        enqueued = await scheduler.scan_and_enqueue(queue)
+                        if enqueued:
+                            _dr_log.info(
+                                "daily_report_scheduler: scan enqueued %d job(s)", enqueued
+                            )
+                    finally:
+                        db_scan.close()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _dr_log.exception("daily_report_scheduler: scan loop error")
+
+                try:
+                    await asyncio.sleep(settings.daily_report_scheduler_interval_seconds)
+                except asyncio.CancelledError:
+                    raise
+
+        _dr_scheduler_task = asyncio.create_task(_daily_report_scheduler_loop())
+
     # ── Backup scheduler ──────────────────────────────────────────────────────
     _backup_scheduler = None
     if settings.backup_enabled:
@@ -100,6 +136,13 @@ async def lifespan(app: FastAPI):
         await worker_task
     except asyncio.CancelledError:
         pass
+
+    if _dr_scheduler_task is not None:
+        _dr_scheduler_task.cancel()
+        try:
+            await _dr_scheduler_task
+        except asyncio.CancelledError:
+            pass
 
     if _backup_scheduler is not None:
         from .backups.scheduler import set_scheduler

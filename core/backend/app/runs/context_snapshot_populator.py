@@ -184,6 +184,12 @@ def _render_dynamic_tail(pkg: ContextPackage, run: Run) -> str:
     if run.prompt:
         parts.append(f"[prompt]\n{run.prompt.strip()}")
 
+    for ev in getattr(pkg, "evidence_items", []) or []:
+        title = ev.get("title") or ev.get("id") or "evidence"
+        excerpt = ev.get("content_excerpt") or ""
+        if excerpt:
+            parts.append(f"[evidence:{ev.get('id')}:{title}]\n{excerpt}")
+
     return "\n\n".join(parts)
 
 
@@ -258,6 +264,7 @@ class ContextSnapshotPopulator:
             space_id=run.space_id,
             user_id=user_id,
             workspace_id=workspace_id,
+            project_id=run.project_id,
             session_id=run.session_id or None,
             agent_id=run.agent_id,
             run_id=run.id,
@@ -444,6 +451,9 @@ class ContextSnapshotPopulator:
         snap.prefix_hash = prefix_hash
         snap.tail_hash = tail_hash
         snap.source_refs_json = source_refs
+        snap.included_evidence_refs_json = [
+            r for r in source_refs if r.get("source_type") == "evidence"
+        ]
         snap.retrieval_trace_json = [retrieval_trace]
         snap.token_budget_json = token_budget
         snap.compiler_version = _COMPILER_VERSION

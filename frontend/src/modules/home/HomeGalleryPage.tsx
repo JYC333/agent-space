@@ -15,6 +15,7 @@ import type {
   HomeRuntimeStatusSection,
   HomeModelProviderStatusSection,
   HomeSuggestedActionItem,
+  HomeIntakeSummarySection,
   Project,
 } from '../../types/api'
 import { PreviewBadge, UrgencyBadge } from '../../components/PreviewBadge'
@@ -40,7 +41,7 @@ function Greeting({ name }: { name: string }) {
         <span className="text-accent-foreground">{name}</span>.
       </h1>
       <p className="text-[13px] text-muted-foreground">
-        Choose a capability or ask an agent. Nothing changes memory or files without review.
+        Capture thoughts, ask agents, or review proposed changes. Nothing becomes memory or changes files without your review.
       </p>
     </div>
   )
@@ -81,7 +82,7 @@ function TodaySummaryCard({ stats }: { stats: Stat[] }) {
 }
 
 /* ── Quick-capture composer ──────────────────────────────────────────────────── */
-type CaptureMode = 'capture' | 'ask' | 'process'
+type CaptureMode = 'capture' | 'ask' | 'open_inbox'
 
 function QuickCapture() {
   const navigate = useNavigate()
@@ -90,14 +91,18 @@ function QuickCapture() {
   const [mode, setMode] = useState<CaptureMode>('capture')
   const [busy, setBusy] = useState(false)
 
-  const modeMap: { id: CaptureMode; label: string; route: string }[] = [
-    { id: 'capture', label: 'capture',   route: 'Activity Inbox' },
-    { id: 'ask',     label: 'ask agent', route: 'Sessions'        },
-    { id: 'process', label: 'process',   route: 'Activity Inbox · save for later processing' },
+  const modeMap: { id: CaptureMode; label: string; hint: string }[] = [
+    { id: 'capture',      label: 'Capture',       hint: 'Saves to Activity Inbox' },
+    { id: 'ask',          label: 'Ask agent',      hint: 'Starts a new session'   },
+    { id: 'open_inbox', label: 'Open Inbox',   hint: 'Go to Activity Inbox'    },
   ]
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (mode === 'open_inbox') {
+      navigate('/activity')
+      return
+    }
     if (!text.trim()) return
     setBusy(true)
     try {
@@ -123,6 +128,8 @@ function QuickCapture() {
     }
   }
 
+  const activeMode = modeMap.find(m => m.id === mode)
+
   return (
     <form
       onSubmit={handleSubmit}
@@ -137,7 +144,7 @@ function QuickCapture() {
               key={m.id}
               type="button"
               onClick={() => setMode(m.id)}
-              className="px-2.5 py-1 rounded-md text-[11px] font-semibold tracking-[.04em] lowercase transition-colors"
+              className="px-2.5 py-1 rounded-md text-[11px] font-semibold tracking-[.04em] transition-colors"
               style={active ? {
                 background: 'color-mix(in oklch, var(--primary) 12%, transparent)',
                 border: '1px solid color-mix(in oklch, var(--primary) 35%, transparent)',
@@ -156,29 +163,35 @@ function QuickCapture() {
           className="ml-auto text-[10px] text-muted-foreground hidden sm:block"
           style={{ fontFamily: 'var(--font-mono)' }}
         >
-          → routes to {modeMap.find(m => m.id === mode)?.route}
+          → {activeMode?.hint}
         </span>
       </div>
 
-      <WriteTargetPicker compact />
+      {mode !== 'open_inbox' && <WriteTargetPicker compact />}
 
-      {/* Text area */}
-      <textarea
-        value={text}
-        onChange={e => setText(e.target.value)}
-        placeholder={
-          mode === 'capture'
-            ? 'Capture a thought, paste a link, or drop a snippet…'
-            : mode === 'ask'
-              ? 'Ask an agent. Mention @space, @workspace, or @capability to scope.'
-              : 'Paste content to save for later processing…'
-        }
-        rows={2}
-        className="w-full resize-none bg-transparent border-none outline-none text-[14px] leading-relaxed text-foreground placeholder:text-muted-foreground"
-        onKeyDown={e => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSubmit(e as unknown as React.FormEvent)
-        }}
-      />
+      {/* Text area — hidden for open_inbox since no text is needed */}
+      {mode !== 'open_inbox' && (
+        <textarea
+          value={text}
+          onChange={e => setText(e.target.value)}
+          placeholder={
+            mode === 'capture'
+              ? 'Capture a thought, paste a link, or drop a snippet…'
+              : 'Ask an agent. Mention @space, @workspace, or @capability to scope.'
+          }
+          rows={2}
+          className="w-full resize-none bg-transparent border-none outline-none text-[14px] leading-relaxed text-foreground placeholder:text-muted-foreground"
+          onKeyDown={e => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSubmit(e as unknown as React.FormEvent)
+          }}
+        />
+      )}
+
+      {mode === 'open_inbox' && (
+        <p className="text-[12px] text-muted-foreground">
+          Open your Activity Inbox to review, generate proposals, or summarize captures.
+        </p>
+      )}
 
       {/* Footer */}
       <div className="flex items-center justify-between gap-2">
@@ -186,16 +199,16 @@ function QuickCapture() {
           className="text-[10px] text-muted-foreground"
           style={{ fontFamily: 'var(--font-mono)' }}
         >
-          {text.length} chars · nothing commits without review
+          {mode !== 'open_inbox' ? `${text.length} chars · ` : ''}Saved as activity first. Nothing becomes memory or changes files until you review and accept proposals.
         </span>
         <button
           type="submit"
-          disabled={!text.trim() || busy || !hasWriteTarget}
+          disabled={mode !== 'open_inbox' && (!text.trim() || busy || !hasWriteTarget)}
           className="flex items-center gap-1.5 h-7 px-3 rounded-md text-[12px] font-medium transition-opacity disabled:opacity-40 disabled:pointer-events-none"
           style={{ background: 'var(--primary)', border: '1px solid var(--primary)', color: 'var(--primary-foreground)' }}
         >
           <Send className="size-3" />
-          {mode === 'capture' ? 'Capture' : mode === 'ask' ? 'Ask' : 'Save'}
+          {mode === 'capture' ? 'Capture' : mode === 'ask' ? 'Ask' : 'Open Inbox'}
         </button>
       </div>
     </form>
@@ -526,22 +539,57 @@ function SuggestedActionsCard({ actions }: { actions: HomeSuggestedActionItem[] 
   )
 }
 
-/* ── Right sidebar: Recent sessions ─────────────────────────────────────────── */
-function RecentCard({ sessions }: { sessions: Session[] }) {
+/* ── Right sidebar: Recent (sessions + summary/daily-report artifacts) ────────── */
+function RecentCard({
+  sessions,
+  artifacts,
+}: {
+  sessions: Session[]
+  artifacts: import('../../types/api').HomeArtifactSummaryItem[]
+}) {
   const navigate = useNavigate()
+  const recentArtifacts = artifacts
+    .filter(a => a.artifact_type === 'summary' || a.artifact_type === 'daily_capture_report')
+    .slice(0, 3)
+  const hasContent = sessions.length > 0 || recentArtifacts.length > 0
   return (
     <div className="bg-card border border-border rounded-lg p-4 flex flex-col gap-3">
       <span className="text-[11px] font-bold tracking-[.1em] uppercase text-muted-foreground">Recent</span>
-      {sessions.length === 0 ? (
-        <p className="text-[12px] text-muted-foreground">No recent sessions.</p>
+      {!hasContent ? (
+        <p className="text-[12px] text-muted-foreground">Nothing yet.</p>
       ) : (
         <div className="flex flex-col">
+          {recentArtifacts.map((a, i) => (
+            <button
+              key={a.id}
+              onClick={() => navigate(`/artifacts/${a.id}`)}
+              className="flex items-center gap-2.5 py-2 text-left w-full hover:bg-accent rounded transition-colors -mx-1 px-1"
+              style={{ borderTop: i === 0 ? 'none' : '1px solid color-mix(in oklch, var(--border) 50%, transparent)' }}
+            >
+              <div
+                className="w-6 h-6 rounded flex items-center justify-center shrink-0"
+                style={{ background: 'color-mix(in oklch, var(--primary) 12%, transparent)', border: '1px solid color-mix(in oklch, var(--primary) 30%, transparent)' }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" className="text-accent-foreground">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <line x1="3" y1="9" x2="21" y2="9" />
+                  <line x1="9" y1="21" x2="9" y2="9" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] text-accent-foreground truncate">{a.title}</div>
+                <div className="text-[10px] text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
+                  {a.artifact_type === 'daily_capture_report' ? 'daily report' : 'summary'} · {new Date(a.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </div>
+              </div>
+            </button>
+          ))}
           {sessions.slice(0, 5).map((s, i) => (
             <button
               key={s.id}
               onClick={() => navigate('/sessions', { state: { openSessionId: s.id } })}
               className="flex items-center gap-2.5 py-2 text-left w-full hover:bg-accent rounded transition-colors -mx-1 px-1"
-              style={{ borderTop: i === 0 ? 'none' : '1px solid color-mix(in oklch, var(--border) 50%, transparent)' }}
+              style={{ borderTop: (i === 0 && recentArtifacts.length === 0) ? 'none' : '1px solid color-mix(in oklch, var(--border) 50%, transparent)' }}
             >
               <div
                 className="w-6 h-6 rounded flex items-center justify-center shrink-0"
@@ -614,6 +662,44 @@ function ProjectsCard({ projects }: { projects: Project[] }) {
   )
 }
 
+/* ── Intake attention card (sidebar) ────────────────────────────────────── */
+function IntakeAttentionCard({ intake }: { intake: HomeIntakeSummarySection }) {
+  const needsAttention = intake.open_items > 0 || intake.candidate_evidence > 0
+    || intake.pending_extraction_jobs > 0 || intake.failed_extraction_jobs > 0
+    || intake.due_connections > 0
+  if (!needsAttention) return null
+  return (
+    <div className="bg-card border border-border rounded-lg p-4 flex flex-col gap-2">
+      <div className="flex items-baseline justify-between">
+        <span className="text-[11px] font-bold tracking-[.1em] uppercase text-muted-foreground">Intake</span>
+        <Link to="/intake" className="text-[11px] text-accent-foreground flex items-center gap-1 hover:underline">
+          Review <ChevronRight className="size-3" />
+        </Link>
+      </div>
+      <div className="flex flex-col gap-1 text-[12px]">
+        {intake.due_connections > 0 && (
+          <span style={{ color: 'var(--warning)' }}>{intake.due_connections} connection{intake.due_connections !== 1 ? 's' : ''} due for scan</span>
+        )}
+        {intake.open_items > 0 && (
+          <span className="text-muted-foreground">{intake.open_items} open item{intake.open_items !== 1 ? 's' : ''}</span>
+        )}
+        {intake.candidate_evidence > 0 && (
+          <span className="text-muted-foreground">{intake.candidate_evidence} evidence candidate{intake.candidate_evidence !== 1 ? 's' : ''}</span>
+        )}
+        {intake.pending_extraction_jobs > 0 && (
+          <span className="text-muted-foreground">{intake.pending_extraction_jobs} pending extraction{intake.pending_extraction_jobs !== 1 ? 's' : ''}</span>
+        )}
+        {intake.failed_extraction_jobs > 0 && (
+          <span style={{ color: 'var(--destructive)' }}>{intake.failed_extraction_jobs} failed extraction{intake.failed_extraction_jobs !== 1 ? 's' : ''}</span>
+        )}
+      </div>
+      <Link to="/intake" className="text-[11px] text-accent-foreground hover:underline self-start mt-1">
+        Go to Intake →
+      </Link>
+    </div>
+  )
+}
+
 function emptyHomeSummary(): HomeSummaryOut {
   return {
     recent_runs: [],
@@ -645,6 +731,15 @@ function emptyHomeSummary(): HomeSummaryOut {
       message: '',
     },
     suggested_actions: [],
+    intake_summary: {
+      open_items: 0,
+      new_items_today: 0,
+      pending_extraction_jobs: 0,
+      failed_extraction_jobs: 0,
+      candidate_evidence: 0,
+      active_evidence: 0,
+      due_connections: 0,
+    },
   }
 }
 
@@ -709,7 +804,10 @@ export default function HomeGalleryPage() {
     },
     { value: s.task_summary.total_open, label: 'open tasks', warn: s.task_summary.blocked_count > 0 },
     { value: s.run_stats_today.created, label: 'runs today', warn: s.run_stats_today.failed > 0 },
-    { value: s.activity_summary.today_count, label: 'activity today' },
+    { value: s.activity_summary.raw_count, label: 'raw activities', warn: s.activity_summary.raw_count > 0 },
+    { value: s.intake_summary.open_items, label: 'intake items', warn: s.intake_summary.failed_extraction_jobs > 0 },
+    { value: s.intake_summary.candidate_evidence, label: 'evidence candidates' },
+    { value: s.intake_summary.due_connections, label: 'connections due', warn: s.intake_summary.due_connections > 0 },
   ]
 
   const displayName = currentUser?.display_name
@@ -762,11 +860,12 @@ export default function HomeGalleryPage() {
       {/* ── Right column ──────────────────────────────────────────────── */}
       <div className="flex flex-col gap-3 min-w-0">
         <ProposalStatusCard proposals={sidebarProposals} onDecide={decide} />
+        <IntakeAttentionCard intake={s.intake_summary} />
         <ProjectsCard projects={activeProjects} />
         <ModelProviderStatusCard status={s.model_provider_status} />
         <RuntimeStatusCard status={s.runtime_status} />
         <SuggestedActionsCard actions={s.suggested_actions} />
-        <RecentCard sessions={sessions} />
+        <RecentCard sessions={sessions} artifacts={s.recent_artifacts} />
       </div>
     </div>
   )

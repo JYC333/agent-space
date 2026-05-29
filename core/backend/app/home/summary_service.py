@@ -8,13 +8,14 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.memory.proposals import ProposalService
-from app.models import ActivityRecord, Artifact, Job, ModelProvider, Run, RuntimeAdapter, Task
+from app.models import ActivityRecord, Artifact, ExtractedEvidence, ExtractionJob, IntakeItem, Job, ModelProvider, Run, RuntimeAdapter, SourceConnection, Task
 from app.proposals.read_model import compute_proposal_expired
 
 from .schemas import (
     HomeActiveTaskItem,
     HomeActivitySummarySection,
     HomeArtifactSummaryItem,
+    HomeIntakeSummarySection,
     HomeJobQueueStatusSection,
     HomeModelProviderStatusSection,
     HomePendingProposalItem,
@@ -110,6 +111,12 @@ def _suggested_actions(
     needs_review_tasks: int,
     real_adapters: int,
     enabled_providers: int,
+    raw_activities: int = 0,
+    open_intake_items: int = 0,
+    pending_extraction_jobs: int = 0,
+    failed_extraction_jobs: int = 0,
+    candidate_evidence: int = 0,
+    due_connections: int = 0,
 ) -> list[HomeSuggestedActionItem]:
     actions: list[HomeSuggestedActionItem] = []
     if pending_proposals > 0:
@@ -132,6 +139,16 @@ def _suggested_actions(
                 priority="high",
             )
         )
+    if raw_activities > 0:
+        actions.append(
+            HomeSuggestedActionItem(
+                id="process-activity-inbox",
+                label="Process Activity Inbox",
+                reason=f"{raw_activities} raw activity record(s) need attention.",
+                target_path="/activity",
+                priority="normal",
+            )
+        )
     if needs_review_tasks > 0:
         actions.append(
             HomeSuggestedActionItem(
@@ -140,6 +157,43 @@ def _suggested_actions(
                 reason=f"{needs_review_tasks} task(s) need review.",
                 target_path="/tasks?status=needs_review",
                 priority="normal",
+            )
+        )
+    if failed_extraction_jobs > 0:
+        actions.append(
+            HomeSuggestedActionItem(
+                id="review-failed-extractions",
+                label="Review failed extractions",
+                reason=f"{failed_extraction_jobs} extraction job(s) failed.",
+                target_path="/intake",
+                priority="normal",
+            )
+        )
+    if due_connections > 0:
+        actions.append(
+            HomeSuggestedActionItem(
+                id="check-due-connections",
+                label="Scan due connections",
+                reason=f"{due_connections} source connection(s) are due for a check.",
+                target_path="/intake",
+                priority="normal",
+            )
+        )
+    if open_intake_items > 0 or candidate_evidence > 0 or pending_extraction_jobs > 0:
+        reason_parts: list[str] = []
+        if open_intake_items > 0:
+            reason_parts.append(f"{open_intake_items} open item(s)")
+        if candidate_evidence > 0:
+            reason_parts.append(f"{candidate_evidence} evidence candidate(s)")
+        if pending_extraction_jobs > 0:
+            reason_parts.append(f"{pending_extraction_jobs} pending extraction(s)")
+        actions.append(
+            HomeSuggestedActionItem(
+                id="review-intake",
+                label="Review Intake",
+                reason=", ".join(reason_parts) + " need attention.",
+                target_path="/intake",
+                priority="low",
             )
         )
     if enabled_providers == 0:
@@ -393,6 +447,82 @@ def build_home_summary(
         recent_error_preview=_clip(err_row, 240) if err_row else None,
     )
 
+    # Intake summary
+    open_intake = (
+        db.query(func.count(IntakeItem.id))
+        .filter(
+            IntakeItem.space_id == space_id,
+            IntakeItem.status.in_(("new", "triaged", "selected")),
+            IntakeItem.deleted_at.is_(None),
+        )
+        .scalar()
+        or 0
+    )
+    new_intake_today = (
+        db.query(func.count(IntakeItem.id))
+        .filter(
+            IntakeItem.space_id == space_id,
+            IntakeItem.created_at >= day_start,
+            IntakeItem.created_at < day_end,
+            IntakeItem.deleted_at.is_(None),
+        )
+        .scalar()
+        or 0
+    )
+    pending_extract_jobs = (
+        db.query(func.count(ExtractionJob.id))
+        .filter(ExtractionJob.space_id == space_id, ExtractionJob.status == "pending")
+        .scalar()
+        or 0
+    )
+    failed_extract_jobs = (
+        db.query(func.count(ExtractionJob.id))
+        .filter(ExtractionJob.space_id == space_id, ExtractionJob.status == "failed")
+        .scalar()
+        or 0
+    )
+    candidate_ev = (
+        db.query(func.count(ExtractedEvidence.id))
+        .filter(
+            ExtractedEvidence.space_id == space_id,
+            ExtractedEvidence.status == "candidate",
+            ExtractedEvidence.deleted_at.is_(None),
+        )
+        .scalar()
+        or 0
+    )
+    active_ev = (
+        db.query(func.count(ExtractedEvidence.id))
+        .filter(
+            ExtractedEvidence.space_id == space_id,
+            ExtractedEvidence.status == "active",
+            ExtractedEvidence.deleted_at.is_(None),
+        )
+        .scalar()
+        or 0
+    )
+    due_conn = (
+        db.query(func.count(SourceConnection.id))
+        .filter(
+            SourceConnection.space_id == space_id,
+            SourceConnection.status == "active",
+            SourceConnection.next_check_at.isnot(None),
+            SourceConnection.next_check_at <= now,
+            SourceConnection.deleted_at.is_(None),
+        )
+        .scalar()
+        or 0
+    )
+    intake_summary = HomeIntakeSummarySection(
+        open_items=int(open_intake),
+        new_items_today=int(new_intake_today),
+        pending_extraction_jobs=int(pending_extract_jobs),
+        failed_extraction_jobs=int(failed_extract_jobs),
+        candidate_evidence=int(candidate_ev),
+        active_evidence=int(active_ev),
+        due_connections=int(due_conn),
+    )
+
     runtime_status = _runtime_section(db, space_id)
     model_provider_status = _model_provider_section(db, space_id)
     suggested = _suggested_actions(
@@ -401,6 +531,12 @@ def build_home_summary(
         needs_review_tasks=needs_review_count,
         real_adapters=runtime_status.real_adapters_configured_count,
         enabled_providers=model_provider_status.enabled_model_providers_count,
+        raw_activities=int(raw_count),
+        open_intake_items=int(open_intake),
+        pending_extraction_jobs=int(pending_extract_jobs),
+        failed_extraction_jobs=int(failed_extract_jobs),
+        candidate_evidence=int(candidate_ev),
+        due_connections=int(due_conn),
     )
 
     return HomeSummaryOut(
@@ -416,4 +552,5 @@ def build_home_summary(
         runtime_status=runtime_status,
         model_provider_status=model_provider_status,
         suggested_actions=suggested,
+        intake_summary=intake_summary,
     )

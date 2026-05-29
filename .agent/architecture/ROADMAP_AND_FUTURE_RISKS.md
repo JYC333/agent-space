@@ -101,14 +101,14 @@ silently pick up stale or shared auth state. Failure code:
   (`runtime.execute`, `automation.fire`, `capability.enable`,
   `tool_binding.enable`, `deployment.execute`) are vocabulary only and fail
   closed until wired.
-- **Canonical action registry** (`policy/actions.py`): **13 WIRED_DIRECT + 4 WIRED_VIA_PROPOSAL
+- **Canonical action registry** (`policy/actions.py`): **21 WIRED_DIRECT + 9 WIRED_VIA_PROPOSAL
   sensitive actions** are code-defined. `require_action_definition()` raises
-  `UnknownPolicyActionError` for unregistered actions. **Reserved actions** (11,
+  `UnknownPolicyActionError` for unregistered actions. **Reserved actions** (12,
   `lifecycle_status=RESERVED`, including capability.enable, tool_binding.enable, artifact.export,
   context.use_personal_grant, deployment.propose, deployment.execute) are registered
   with `current_enforcement_point="not_implemented"`. `PolicyGateway` always denies reserved actions.
   `workspace.read`, `agent.config_update`, `automation.create`, `automation.update`,
-  and `automation.fire` are WIRED_DIRECT.
+  `automation.fire`, Intake/Evidence actions, and `context.select_evidence` are WIRED_DIRECT.
 - **Approval resolver** (`policy/approval.py`): `can_approve_policy_action()` calls
   `require_action_definition(action)` first, then checks SpaceMembership role against effective risk.
   - owner → can approve all supported actions including critical
@@ -184,33 +184,35 @@ silently pick up stale or shared auth state. Failure code:
 
 ### 6. Memory / Provenance / Source-Evidence Maturation
 
-**Current state:** `ActivityRecord`, `ProvenanceLink`, `Proposal.payload_json` provenance entries, and `MemoryEntry.source_*` fields form the current provenance chain. `context_sources` is not in the canonical schema. No first-class `Source` or `Evidence` table exists yet.
+**Current state:** `ActivityRecord`, `ProvenanceLink`, `Proposal.payload_json` provenance entries, and `MemoryEntry.source_*` fields form the durable accepted-object provenance chain. `context_sources` is not in the canonical schema. Intake/Evidence now has first-class candidate tables (`IntakeItem`, `SourceSnapshot`, `ExtractedEvidence`, and `EvidenceLink`), but these are not accepted Memory/Knowledge.
 
 **Why it matters:** Trustworthy memory depends on a complete provenance chain. Future external ingestion depends on knowing where data came from and whether it was reviewed.
 
-**Likely next steps:** Define minimal `Source`/`Evidence` objects when the current field mapping becomes insufficient. Add trust vocabulary tests for all capture paths.
+**Current state:** Canonical Intake/Evidence tables exist for source connectors, source connections, intake items, source snapshots, extraction jobs, extracted evidence, workspace intake profiles, and workspace source bindings. Workspace source bindings are workspace-scoped; projects consume evidence through links rather than owning raw intake.
+
+**Likely next steps:** Extend connector-specific ingestion behind the same Intake/Evidence lifecycle. Add trust vocabulary tests for new capture paths.
 
 **What must be true first:** ActivityRecord-based provenance is tested for all current capture paths. Trust resolution for all current `activity_type` values is correct.
 
-**Risks if built too early:** First-class Source/Evidence schema without lifecycle definitions creates premature ingestion risk.
+**Risks if extended too broadly:** Connector-specific behavior can bypass candidate lifecycle, retention bounds, or proposal review.
 
-**Not now:** Broad Source/Evidence ontology, vector retrieval over external corpus.
+**Not now:** Broad ontology, web crawling, vector retrieval over external corpus.
 
 ---
 
-### 7. Information Horizon
+### 7. Intake and Evidence
 
-**Current state:** No `InformationItem`, `DiscoveryQueue`, or `ReadingState` table. Candidate-only rule is enforced by the absence of implementation.
+**Current state:** Intake/Evidence is implemented as a candidate-only substrate. Evidence can be selected into context snapshots through active relevance/context `EvidenceLink` rows (`context_candidate`, `supports`, `mentions`, `provenance`), and selected evidence receives an auditable `used_in_context` link to the run. `used_in_context` is audit-only, not a selector input. Internal ActivityRecord/Artifact/RunEvent normalization is item/evidence-idempotent; repeated manual normalization may add skipped audit jobs for traceability but does not duplicate active/candidate evidence. Evidence cannot become active Memory without proposal review.
 
-**Why it matters:** Reachable-but-unread information management is a core product differentiator. Done wrong, it pollutes trusted memory.
+**Why it matters:** External and internal source material needs provenance, trust, retention, and explicit promotion boundaries. Done wrong, it pollutes trusted memory.
 
-**Likely next steps:** Keep documentation-only. Define `SourceProfile` / `InformationItem` minimal schema when Activity/Source/Evidence foundation is stable.
+**Likely next steps:** Add connector-specific adapters and extraction workers behind `SourceConnection`, `IntakeItem`, `ExtractionJob`, and `ExtractedEvidence`. Keep the current connector family narrow unless a concrete product workflow requires expansion.
 
-**What must be true first:** ActivityRecord-first capture, Source/Evidence trust vocabulary, and proposal-gated memory are all stable and tested.
+**What must be true first:** Intake/Evidence trust vocabulary, context selection, retention, and proposal-gated memory remain stable and tested.
 
-**Risks if built too early:** External source ingestion without trust gates will pollute trusted Memory with unreviewed content. Attention overload without bounded discovery queue.
+**Risks if extended too early:** External source ingestion without trust gates will pollute trusted Memory with unreviewed content. Attention overload without bounded queues and filters. Intake artifact writes now clean up the written file if the immediate Artifact DB row creation fails after the file write; a future transaction-aware storage pass should still handle process failure or full transaction rollback after a file is promoted.
 
-**Not now:** Crawler, RSS/external feed ingestion, broad metadata indexing, embeddings, auto-promotion of horizon content.
+**Not now:** Area, web crawler, broad metadata indexing, embeddings, auto-promotion of intake/evidence content.
 
 ---
 
@@ -427,12 +429,11 @@ external trigger is implemented.
 | Full retention policy | Personal data retention and legal obligations | Lifecycle states defined; retention policy engine deferred |
 | Broader policy enforcement | Some enforcement points are intentionally proposal-mediated or deferred | Memory create/update/archive are proposal-mediated; workspace.read is wired direct; capability/deployment/export actions remain deferred |
 | Credential access grants | No per-run/per-tool credential scope; credential resolver is a single boundary | Resolver boundary set; grants deferred |
-| Source/Evidence first-class schema | Current field mapping insufficient for broad external ingestion | Deferred behind ingestion gate |
-| Information Horizon ingestion safety | External data can pollute trusted Memory without trust gates | Candidate-only rule enforced by absence of implementation |
+| Broad Intake/Evidence ingestion | External data can pollute trusted Memory without trust gates | Candidate-only lifecycle implemented; broad crawling/indexing deferred |
 | Automation scope creep | Background work without ownership/policy can silently mutate data | `Automation`/`AutomationRun` models and CRUD API implemented; `automation.create/update/fire` WIRED_DIRECT via PolicyGateway.enforce() with durable audit; admin/owner role required; manual-only remains; credential allowances deferred |
 | Self-evolution scope creep | Agents expanding their own permissions or target domain | Disabled by default; deployer-only gate |
 | Code patch operational risk | Partial apply with rollback failure leaves filesystem inconsistent | Explicit compensation logic; partial-apply errors surfaced |
 | Frontend exposing disabled surfaces | Planned-but-not-built modules appearing interactive | Registry `planned: true` pattern; "soon" badges enforced |
-| External connector privacy risk | External data ingested without lifecycle/trust bounds | No connector model; Source/Evidence design required first |
+| External connector privacy risk | External data ingested without lifecycle/trust bounds | SourceConnection/IntakeItem/Evidence lifecycle exists; connector marketplace deferred |
 | Actor identity migration cost | Many historical nullable user/agent fields across core tables | New surfaces use `actor_ref`; fields not migrated in bulk; actor_ref used for new records |
 | Workspace console sessions / API keys | Feature-gated; operators cannot manage them through UI | 501-gated; manual operator action required |

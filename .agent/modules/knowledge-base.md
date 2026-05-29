@@ -172,6 +172,11 @@ Relation creation must enforce same-space endpoints.
 - No legacy route compatibility is provided.
 - No historical data migration compatibility is required.
 
+**Enforced by tests:**
+- `test_knowledge_ingestion_boundary.py` — raw/article/file captures create no KnowledgeItem; agent-generated proposals stay pending; rejecting a proposal creates no KnowledgeItem or KnowledgeRelation; accepted KnowledgeItem creates no MemoryEntry; KnowledgeRelation creation requires proposal accept.
+- `test_knowledge_api.py` — accepting a proposal creates active KnowledgeItem; KnowledgeItem does not auto-inject as Memory; KnowledgeRelation requires proposal accept; cross-space relation rejected; ownership and visibility enforcement.
+- Payload validation is enforced at apply time in `KnowledgeProposalApplier`: `item_type`, `content_format`, `visibility`, `verification_status`, `reflection_status`, and `confidence` for items; `relation_type`, `status`, and `confidence` for relations.
+
 ## Related Files
 - `core/backend/app/knowledge/` - API, service, schemas, read models
 - `core/backend/app/models.py` - `KnowledgeItem`, `KnowledgeRelation`
@@ -180,6 +185,8 @@ Relation creation must enforce same-space endpoints.
 - `core/backend/app/policy/proposal_apply.py` - supported Knowledge proposal type names
 - `core/backend/app/modules/registry.py` - active backend module registry entry
 - `frontend/src/modules/knowledge/KnowledgePage.tsx` - planned frontend stub
+- `core/backend/tests/invariants/test_knowledge_ingestion_boundary.py` - ingestion/review boundary invariant tests
+- `core/backend/tests/contracts/test_knowledge_api.py` - API contract tests (accept, versioning, visibility, relations)
 
 ## Related Modules
 - [memory.md](memory.md) - Memory is agent context, not the Knowledge browser

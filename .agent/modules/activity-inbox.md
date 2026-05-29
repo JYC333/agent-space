@@ -44,7 +44,7 @@ ActivityRecord:
 POST   /api/v1/activity                    — ingest
 GET    /api/v1/activity                    — list (filter: source_type, status, workspace)
 GET    /api/v1/activity/{id}
-PATCH  /api/v1/activity/{id}/process
+PATCH  /api/v1/activity/{id}/review        — mark as reviewed (status-only; no proposals)
 PATCH  /api/v1/activity/{id}/archive
 POST   /api/v1/activity/{id}/consolidate   — run consolidation for this activity only (no body)
 ```

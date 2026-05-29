@@ -225,7 +225,7 @@ Reducing manual overhead through scheduled background work:
 - Scheduled consolidation runs (batch process accumulated Activity into candidates)
 - Scheduled digest refresh (regenerate stale digests during off-peak hours)
 - Stale memory review reminders (surface MemoryEntry records past `reconsolidation_due`)
-- Source horizon refresh (pull new documents from followed sources on a schedule)
+- Intake source refresh (pull new candidate items from configured source connections on a schedule)
 - Review queue batching (group related proposals for a single review session)
 - User-configurable automation policies (set thresholds for when automation runs)
 

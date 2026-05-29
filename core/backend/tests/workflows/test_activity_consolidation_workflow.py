@@ -26,7 +26,7 @@ def test_pending_activity_becomes_processed_with_episodic_proposal(db, cross_spa
     res = svc.run_pending(space_id=a, acting_user_id=ua.id, activity_ids=[act.id])
     assert res.proposals_created
     db.refresh(act)
-    assert act.consolidation_status == "processed"
+    assert act.consolidation_status == "proposals_generated"
     prop = db.query(Proposal).filter(Proposal.id == res.proposals_created[0]).one()
     pc = prop.payload_json.get("proposed_content") or ""
     assert "secret raw body" not in pc

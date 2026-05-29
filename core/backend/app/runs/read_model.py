@@ -214,6 +214,7 @@ def _context_snapshot_to_trace(snapshot: ContextSnapshot | None) -> RunTraceCont
         target_runtime_adapter_id=snapshot.target_runtime_adapter_id,
         execution_plane_id=snapshot.execution_plane_id,
         included_memory_refs_json=snapshot.included_memory_refs_json,
+        included_evidence_refs_json=snapshot.included_evidence_refs_json,
         included_file_refs_json=snapshot.included_file_refs_json,
         included_doc_refs_json=snapshot.included_doc_refs_json,
         redactions_json=snapshot.redactions_json,

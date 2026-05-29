@@ -79,7 +79,7 @@ class ActivityConsolidationService:
                     record, compiler_version=CONSOLIDATION_COMPILER_VERSION
                 )
                 if not candidates:
-                    self._mark_activity_status(aid, "skipped")
+                    self._mark_activity_consolidation(aid, "skipped")
                     result.activities_skipped.append(aid)
                     continue
 
@@ -100,27 +100,39 @@ class ActivityConsolidationService:
                         created_ids.append(prop.id)
 
                 if not created_ids:
-                    self._mark_activity_status(aid, "skipped")
+                    self._mark_activity_consolidation(aid, "skipped")
                     result.activities_skipped.append(aid)
                     continue
 
-                self._mark_activity_status(aid, "processed")
+                self._mark_activity_consolidation(aid, "proposals_generated")
 
                 result.proposals_created.extend(created_ids)
                 result.activities_processed.append(aid)
             except Exception:
                 log.exception("activity consolidation failed for %s", aid)
                 UnitOfWork(self._db).rollback()
-                self._mark_activity_status(aid, "failed")
+                self._mark_activity_consolidation(aid, "failed")
                 result.activities_failed.append(aid)
 
         return result
 
-    def _mark_activity_status(self, activity_id: str, status: str) -> None:
+    def _mark_activity_consolidation(self, activity_id: str, consolidation_status: str) -> None:
+        """Update consolidation_status and keep user-visible status in sync.
+
+        consolidation_status values and their status mapping:
+          proposals_generated → status = proposals_generated
+          skipped             → status = processed (no proposals but processing ran cleanly)
+          failed              → status unchanged
+        """
         row = self._db.query(ActivityRecord).filter(ActivityRecord.id == activity_id).first()
         if row:
-            row.consolidation_status = status
+            row.consolidation_status = consolidation_status
             row.processed_at = datetime.now(UTC)
+            if consolidation_status == "proposals_generated":
+                row.status = "proposals_generated"
+            elif consolidation_status == "skipped":
+                if row.status not in ("proposals_generated", "archived"):
+                    row.status = "processed"
             UnitOfWork(self._db).commit()
 
     @staticmethod

@@ -344,6 +344,7 @@ class ContextBuilder:
         space_id: str,
         user_id: str,
         workspace_id: str | None = None,
+        project_id: str | None = None,
         task_type: str | None = None,
         capability_id: str | None = None,
         session_id: str | None = None,
@@ -504,6 +505,65 @@ class ContextBuilder:
         retrieval_trace = dict(retrieval_trace) if retrieval_trace else {}
         retrieval_trace["session_summary"] = session_summary_trace
 
+        # ── Linked evidence selection ───────────────────────────────────
+        evidence_items: list[dict] = []
+        evidence_refs: list[dict] = []
+        from ..intake.evidence_selector import EvidenceSelector, evidence_ref
+        from ..intake.service import IntakeService
+        from ..policy.gateway import PolicyCheckRequest, PolicyGateway
+
+        PolicyGateway(self.db).enforce(
+            PolicyCheckRequest(
+                action="context.select_evidence",
+                actor_type="run" if run_id else "user",
+                actor_id=run_id or user_id,
+                space_id=space_id,
+                resource_type="evidence",
+                run_id=run_id,
+                context={"workspace_id": workspace_id, "project_id": project_id},
+                metadata_json={"workspace_id": workspace_id, "project_id": project_id},
+            )
+        )
+        selected_evidence = EvidenceSelector(self.db).select_for_context(
+            space_id=space_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            run_id=run_id,
+        )
+        intake_service = IntakeService(self.db)
+        for selected in selected_evidence:
+            ev = selected.evidence
+            if run_id:
+                intake_service.create_evidence_link(
+                    space_id=space_id,
+                    evidence_id=ev.id,
+                    target_type="run",
+                    target_id=run_id,
+                    link_type="used_in_context",
+                    status="active",
+                    created_by_run_id=run_id,
+                )
+            ref = evidence_ref(selected, section="dynamic_tail")
+            evidence_refs.append(ref)
+            dynamic_tail_refs.append(ref)
+            source_refs.append(ref)
+            evidence_items.append({
+                "id": ev.id,
+                "title": ev.title,
+                "content_excerpt": ev.content_excerpt,
+                "evidence_type": ev.evidence_type,
+                "trust_level": ev.trust_level,
+                "source_uri": ev.source_uri,
+                "artifact_id": ev.artifact_id,
+                "link_id": selected.link.id,
+                "target_type": selected.link.target_type,
+                "target_id": selected.link.target_id,
+            })
+        retrieval_trace["evidence_selection"] = {
+            "selected_count": len(evidence_items),
+            "evidence_refs": evidence_refs,
+        }
+
         return ContextPackage(
             user_memory=_to_out_list(user_memory, include_system=False),
             workspace_memory=_to_out_list(workspace_memory, include_system=False),
@@ -512,6 +572,7 @@ class ContextBuilder:
             system_policy=_to_out_list(system_policy_mem, include_system=True),
             recent_session_summary=recent_session_summary,
             relevant_episodes=_to_out_list(relevant_episodes, include_system=False),
+            evidence_items=evidence_items,
             attachments=resolved_attachments,
             active_policies=active_policy_dicts,
             stable_prefix_refs=stable_prefix_refs,

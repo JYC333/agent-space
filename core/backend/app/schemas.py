@@ -598,6 +598,7 @@ class ContextPackage(BaseModel):
     system_policy: list[MemoryOut] = []
     recent_session_summary: list[dict] = []
     relevant_episodes: list[MemoryOut] = []
+    evidence_items: list[dict] = []
     # Resolved context attachments (file, git_diff, memory_entry, etc.)
     attachments: list[dict] = []
 
@@ -1090,6 +1091,7 @@ class RunTraceContextSnapshotOut(BaseModel):
     target_runtime_adapter_id: Optional[str] = None
     execution_plane_id: Optional[str] = None
     included_memory_refs_json: Optional[list] = None
+    included_evidence_refs_json: Optional[list] = None
     included_file_refs_json: Optional[list] = None
     included_doc_refs_json: Optional[list] = None
     redactions_json: Optional[dict] = None

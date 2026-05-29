@@ -7,6 +7,7 @@
 - Proposal-first memory and policy write boundaries
 - Memory ACL, read traces, source monitoring, and provenance chain
 - Activity-first non-chat capture; consolidation → proposal pipeline
+- Canonical Intake/Evidence foundation: source connectors/connections, intake items, snapshots, extraction jobs, evidence links, and context evidence refs
 - `Run` as central execution object; `RunStep` replay spine
 - Runtime adapter abstraction (`app.runtimes` canonical); credential resolver
 - Artifact persistence, export, and path safety
@@ -33,11 +34,9 @@
 - Full mobile app (PWA stubs only)
 - Full desktop app (Tauri scaffold; see [0005](decisions/0005-desktop-runtime.md))
 - Full local-first sync
-- Information Horizon ingestion
-- Automation/Trigger engine
-- Connectors/Integrations platform
+- Broad autonomous discovery, crawling, and external corpus indexing
+- Connector marketplace / integration lifecycle
 - Self-evolution execution (disabled by default)
-- First-class Source/Evidence tables
 - Postgres migration
 - Cloud/offsite backup sync
 - Deployment job persistence

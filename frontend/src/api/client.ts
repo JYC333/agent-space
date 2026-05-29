@@ -17,6 +17,11 @@ import type {
   PersonalMemoryGrantAuditResponse,
   EgressApprovalRequest, ProposalApprovalResponse,
   Project, ProjectCreate, ProjectUpdate, ProjectWorkspaceLinkCreate, ProjectWorkspaceLinkOut, ProjectSummary,
+  SourceConnector, SourceConnection, SourceConnectionCreate, IntakeItem, ExtractionJob,
+  ExtractedEvidence, EvidenceLink, WorkspaceIntakeProfile, WorkspaceSourceBinding,
+  SummaryRunRequest, SummaryRunOut,
+  DailyCaptureReportSettingOut, DailyCaptureReportSettingUpdate,
+  DailyReportRunRequest, DailyReportRunResponse, DailyReportArtifactItem,
 } from '../types/api'
 
 const BASE = '/api/v1'
@@ -488,10 +493,133 @@ export const activityApi = {
   ) =>
     post<ActivityInboxRecord>('/activity', data, { spaceId: options.spaceId }),
   get:    (id: string) => get<ActivityInboxRecord>(`/activity/${id}`),
-  process:(id: string) => patch<ActivityInboxRecord>(`/activity/${id}/process`),
+  review: (id: string) => patch<ActivityInboxRecord>(`/activity/${id}/review`),
   archive:(id: string) => patch<ActivityInboxRecord>(`/activity/${id}/archive`),
   consolidate: (id: string) =>
     post<Proposal[]>(`/activity/${id}/consolidate`),
+  summarize: (body: SummaryRunRequest) =>
+    post<SummaryRunOut>('/activity/summary-runs', body),
+}
+
+// ── Intake / Evidence ────────────────────────────────────────────────────
+export const intakeApi = {
+  connectors: () =>
+    get<SourceConnector[]>('/intake/connectors'),
+
+  connections: (params: { status?: string; limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<SourceConnection>>('/intake/connections?' + new URLSearchParams(q))
+  },
+  createConnection: (body: SourceConnectionCreate) =>
+    post<SourceConnection>('/intake/connections', body),
+  updateConnection: (id: string, body: Partial<SourceConnectionCreate> & { status?: string }) =>
+    patch<SourceConnection>(`/intake/connections/${id}`, body),
+  scanConnection: (id: string) =>
+    post<ExtractionJob>(`/intake/connections/${id}/scan`),
+
+  items: (params: {
+    status?: string
+    connection_id?: string
+    content_state?: string
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    if (params.connection_id !== undefined) q.connection_id = params.connection_id
+    if (params.content_state !== undefined) q.content_state = params.content_state
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<IntakeItem>>('/intake/items?' + new URLSearchParams(q))
+  },
+  createManualUrl: (body: { url: string; title?: string; connection_id?: string | null; queue_content?: boolean }) =>
+    post<IntakeItem>('/intake/items/manual-url', body),
+  itemAction: (id: string, action: string) =>
+    post<IntakeItem>(`/intake/items/${id}/actions`, { action }),
+  jobs: (params: {
+    status?: string
+    intake_item_id?: string
+    connection_id?: string
+    job_type?: string
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    if (params.intake_item_id !== undefined) q.intake_item_id = params.intake_item_id
+    if (params.connection_id !== undefined) q.connection_id = params.connection_id
+    if (params.job_type !== undefined) q.job_type = params.job_type
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<ExtractionJob>>('/intake/jobs?' + new URLSearchParams(q))
+  },
+  runJob: (id: string) =>
+    post<ExtractionJob>(`/intake/jobs/${id}/run`),
+
+  evidence: (params: { status?: string; evidence_type?: string; intake_item_id?: string; limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    if (params.evidence_type !== undefined) q.evidence_type = params.evidence_type
+    if (params.intake_item_id !== undefined) q.intake_item_id = params.intake_item_id
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<ExtractedEvidence>>('/intake/evidence?' + new URLSearchParams(q))
+  },
+  updateEvidence: (id: string, body: { status?: string; confidence?: number; metadata?: Record<string, unknown> }) =>
+    patch<ExtractedEvidence>(`/intake/evidence/${id}`, body),
+  createEvidenceLink: (body: {
+    evidence_id: string
+    target_type: string
+    target_id?: string | null
+    link_type?: string
+    status?: string
+    confidence?: number
+    reason?: string
+  }) => post<EvidenceLink>('/intake/evidence-links', body),
+  evidenceLinks: (params: { evidence_id?: string; target_type?: string; target_id?: string; status?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.evidence_id !== undefined) q.evidence_id = params.evidence_id
+    if (params.target_type !== undefined) q.target_type = params.target_type
+    if (params.target_id !== undefined) q.target_id = params.target_id
+    if (params.status !== undefined) q.status = params.status
+    return get<Page<EvidenceLink>>('/intake/evidence-links?' + new URLSearchParams(q))
+  },
+
+  workspaceProfiles: (params: { workspace_id?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
+    return get<WorkspaceIntakeProfile[]>('/intake/workspace-profiles?' + new URLSearchParams(q))
+  },
+  createWorkspaceProfile: (body: {
+    workspace_id: string
+    name?: string
+    observation_policy?: string
+    routing_policy?: Record<string, unknown>
+    filters?: Record<string, unknown>
+    extraction_policy?: Record<string, unknown>
+    context_policy?: Record<string, unknown>
+  }) => post<WorkspaceIntakeProfile>('/intake/workspace-profiles', body),
+  workspaceBindings: (params: { workspace_id?: string; source_connection_id?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
+    if (params.source_connection_id !== undefined) q.source_connection_id = params.source_connection_id
+    return get<WorkspaceSourceBinding[]>('/intake/workspace-source-bindings?' + new URLSearchParams(q))
+  },
+  createWorkspaceBinding: (body: {
+    workspace_id: string
+    source_connection_id: string
+    binding_key?: string
+    project_id?: string | null
+    priority?: number
+    filters?: Record<string, unknown>
+    routing_policy?: Record<string, unknown>
+    extraction_policy?: Record<string, unknown>
+  }) => post<WorkspaceSourceBinding>('/intake/workspace-source-bindings', body),
+  summarize: (body: SummaryRunRequest) =>
+    post<SummaryRunOut>('/intake/summary-runs', body),
 }
 
 // ── Workspace Console ─────────────────────────────────────────────────────
@@ -680,4 +808,18 @@ export const providersApi = {
   catalog: () => get<CatalogInfo>('/providers/catalog'),
 
   chat: (data: ChatRequest) => post<ChatResponse>('/providers/chat', data),
+}
+
+export const dailyReportApi = {
+  getSettings: () =>
+    get<DailyCaptureReportSettingOut>('/daily-capture-report/settings'),
+
+  updateSettings: (data: DailyCaptureReportSettingUpdate) =>
+    patch<DailyCaptureReportSettingOut>('/daily-capture-report/settings', data),
+
+  run: (data: DailyReportRunRequest) =>
+    post<DailyReportRunResponse>('/daily-capture-report/run', data),
+
+  listReports: (limit = 10) =>
+    get<DailyReportArtifactItem[]>(`/daily-capture-report/reports?limit=${limit}`),
 }

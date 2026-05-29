@@ -17,7 +17,7 @@ only concrete friction discovered during use.
 
 - Reintroducing singular `/tasks/{id}/run` routes or product Task = Job shortcuts
 - Synthetic runtime fallbacks in production execution paths
-- Information Horizon ingestion before Activity/Source/Evidence provenance is stable
+- Broad automated intake/connectors before Intake/Evidence provenance and proposal boundaries are stable
 - Self-evolution before evaluation gates and deployment job persistence exist
 
 ## Quick Links

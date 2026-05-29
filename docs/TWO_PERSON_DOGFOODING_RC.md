@@ -21,7 +21,7 @@ deployment control — is hardened and tested.
 
 - Public launch.
 - SaaS or remote multi-tenant deployment.
-- A test of all future ambitions (Automation, Connectors, Information Horizon,
+- A test of all future ambitions (Automation, connector marketplace, crawler,
   self-evolution, marketplace, mobile client).
 
 **Rule:** Only allowed surfaces may be used for daily dogfood workflows. Disabled surfaces
@@ -44,6 +44,10 @@ The following surfaces are allowed after all release gates pass:
 - Activity Inbox for non-chat capture: thoughts, notes, snippets, links.
 - All non-chat capture enters Activity first via `POST /api/v1/activity`.
 - Explicit chat sessions only for real conversations with agents (`POST /api/v1/sessions`).
+
+**Intake and evidence**
+- Source connections, manual URL intake, candidate item triage, extraction jobs, and citable evidence.
+- Intake content remains candidate material; active Memory still requires proposal review.
 
 **Memory**
 - Memory proposal creation, review, acceptance, rejection, and archive.
@@ -86,13 +90,12 @@ Do not rely on any of these for daily dogfood workflows.
 
 | Surface | Status |
 |---|---|
-| Broad Information Horizon ingestion | Not implemented |
+| Broad autonomous discovery / crawling | Not implemented |
 | External chat/media/file import pipelines | Not implemented |
 | Web crawler | Not implemented |
 | Vector index over external corpus | Not implemented |
 | Automation/Trigger engine | Not implemented |
-| Connectors/Integrations platform | Not implemented |
-| Full Source/Evidence schema and ingestion | Deferred (field mapping only) |
+| Connector marketplace / integration lifecycle | Not implemented |
 | Full capability marketplace or install/discovery UX | Not implemented |
 | Self-evolution behavior changes | Disabled (`ENABLE_SYSTEM_EVOLUTION=false`) |
 | Self-evolution execution | Disabled by default |
@@ -117,7 +120,7 @@ Do not rely on any of these for daily dogfood workflows.
 - `Cards` — registry entry with `planned: true`; displays "soon" badge; non-interactive.
 - `Time` — registry entry with `planned: true`; displays "soon" badge; non-interactive.
 
-No automation, connector, horizon, or self-evolution controls appear in the frontend.
+No automation, connector marketplace, crawler, or self-evolution controls appear in the frontend.
 
 ---
 
@@ -547,7 +550,7 @@ curl -s "http://localhost:8000/api/v1/deployments/jobs" \
 ```
 
 In the frontend:
-- Navigate to all gallery cards; confirm no automation, connector, horizon, or
+- Navigate to all gallery cards; confirm no automation, connector marketplace, crawler, or
   self-evolution controls are visible.
 - Wiki, Cards, and Time cards show "soon" badge and are non-interactive.
 
@@ -883,5 +886,3 @@ Backup manifest inspected: <yes / no>
 | `context_sources` table removed from schema | A future first-class Source model would be a new table |
 | QuickCapture `ask` mode still routes to `/sessions` | Correct for real conversations; UX deferred |
 | QuickCapture `process` mode creates new Activity | Acceptable; product refinement deferred |
-| First-class Source/Evidence tables deferred | Pre-external-ingestion gate; not needed for dogfooding |
-| `source_confidence` / `source_reliability` may be absent from canonical migration | Verify before depending on these fields |

@@ -342,6 +342,23 @@ class KnowledgeService:
         )
 
 
+_VALID_ITEM_TYPES: frozenset[str] = frozenset({
+    "knowledge", "experience", "lesson", "procedure", "decision",
+    "reflection", "source", "question", "answer", "summary",
+})
+_VALID_CONTENT_FORMATS: frozenset[str] = frozenset({"markdown", "plain"})
+_VALID_VISIBILITY: frozenset[str] = frozenset({
+    "private", "space_shared", "workspace_shared", "restricted",
+})
+_VALID_VERIFICATION_STATUS: frozenset[str] = frozenset({"unverified", "needs_review", "verified"})
+_VALID_REFLECTION_STATUS: frozenset[str] = frozenset({"unreviewed", "reviewed", "distilled"})
+_VALID_RELATION_TYPES: frozenset[str] = frozenset({
+    "related", "derived_from", "example_of", "supports",
+    "contradicts", "part_of", "prerequisite_of", "applies_to", "answers",
+})
+_VALID_RELATION_CREATE_STATUS: frozenset[str] = frozenset({"candidate", "active"})
+
+
 class KnowledgeProposalApplier:
     def __init__(self, db: Session) -> None:
         self._db = db
@@ -349,7 +366,22 @@ class KnowledgeProposalApplier:
     def apply_create(self, proposal: Proposal, *, user_id: str) -> KnowledgeItem:
         payload = proposal.payload_json or {}
         self._expect_operation(payload, "create")
+        item_type = self._required_str(payload, "item_type")
+        if item_type not in _VALID_ITEM_TYPES:
+            raise KnowledgeValidationError(f"invalid item_type: {item_type!r}")
+        content_format = payload.get("content_format") or "markdown"
+        if content_format not in _VALID_CONTENT_FORMATS:
+            raise KnowledgeValidationError(f"invalid content_format: {content_format!r}")
         visibility = payload.get("visibility") or "space_shared"
+        if visibility not in _VALID_VISIBILITY:
+            raise KnowledgeValidationError(f"invalid visibility: {visibility!r}")
+        verification_status = payload.get("verification_status") or "unverified"
+        if verification_status not in _VALID_VERIFICATION_STATUS:
+            raise KnowledgeValidationError(f"invalid verification_status: {verification_status!r}")
+        reflection_status = payload.get("reflection_status") or "unreviewed"
+        if reflection_status not in _VALID_REFLECTION_STATUS:
+            raise KnowledgeValidationError(f"invalid reflection_status: {reflection_status!r}")
+        self._validate_confidence(payload)
         requested_owner_user_id = payload.get("owner_user_id")
         if requested_owner_user_id is not None and requested_owner_user_id != proposal.created_by_user_id:
             raise KnowledgeValidationError("Knowledge owner must be the proposal creator")
@@ -359,14 +391,14 @@ class KnowledgeProposalApplier:
             space_id=proposal.space_id,
             project_id=payload.get("project_id"),
             workspace_id=payload.get("workspace_id"),
-            item_type=self._required_str(payload, "item_type"),
+            item_type=item_type,
             title=self._required_str(payload, "title"),
             content=self._required_str(payload, "content"),
-            content_format=payload.get("content_format") or "markdown",
+            content_format=content_format,
             status="active",
             visibility=visibility,
-            verification_status=payload.get("verification_status") or "unverified",
-            reflection_status=payload.get("reflection_status") or "unreviewed",
+            verification_status=verification_status,
+            reflection_status=reflection_status,
             tags_json=list(payload.get("tags") or []),
             confidence=payload.get("confidence"),
             source_url=payload.get("source_url"),
@@ -395,6 +427,13 @@ class KnowledgeProposalApplier:
             raise KnowledgeValidationError("Knowledge item not found or not editable")
         if target.status not in {"active", "draft"}:
             raise KnowledgeValidationError("target Knowledge item is not active")
+        if payload.get("content_format") and payload["content_format"] not in _VALID_CONTENT_FORMATS:
+            raise KnowledgeValidationError(f"invalid content_format: {payload['content_format']!r}")
+        if payload.get("verification_status") and payload["verification_status"] not in _VALID_VERIFICATION_STATUS:
+            raise KnowledgeValidationError(f"invalid verification_status: {payload['verification_status']!r}")
+        if payload.get("reflection_status") and payload["reflection_status"] not in _VALID_REFLECTION_STATUS:
+            raise KnowledgeValidationError(f"invalid reflection_status: {payload['reflection_status']!r}")
+        self._validate_confidence(payload)
         now = datetime.now(UTC)
         root_id = target.root_item_id or target.id
         target.root_item_id = root_id
@@ -450,14 +489,21 @@ class KnowledgeProposalApplier:
     def apply_relation_create(self, proposal: Proposal, *, user_id: str) -> KnowledgeRelation:
         payload = proposal.payload_json or {}
         self._expect_operation(payload, "relation_create")
+        relation_type = self._required_str(payload, "relation_type")
+        if relation_type not in _VALID_RELATION_TYPES:
+            raise KnowledgeValidationError(f"invalid relation_type: {relation_type!r}")
+        status = payload.get("status") or "active"
+        if status not in _VALID_RELATION_CREATE_STATUS:
+            raise KnowledgeValidationError(
+                f"invalid relation status for creation: {status!r}; must be 'candidate' or 'active'"
+            )
+        self._validate_confidence(payload)
         from_item = self._get_item_or_raise(proposal.space_id, self._required_str(payload, "from_item_id"))
         to_item = self._get_item_or_raise(proposal.space_id, self._required_str(payload, "to_item_id"))
         if from_item.space_id != to_item.space_id or from_item.space_id != proposal.space_id:
             raise KnowledgeValidationError("Knowledge relation endpoints must be in the same space")
         if not can_apply_knowledge_mutation(from_item, proposal) or not can_apply_knowledge_mutation(to_item, proposal):
             raise KnowledgeValidationError("Knowledge item not found")
-        status = payload.get("status") or "active"
-        relation_type = self._required_str(payload, "relation_type")
         if status == "active":
             existing = (
                 self._db.query(KnowledgeRelation)
@@ -534,3 +580,13 @@ class KnowledgeProposalApplier:
         if not isinstance(value, str) or not value.strip():
             raise KnowledgeValidationError(f"missing required {key!r}")
         return value
+
+    @staticmethod
+    def _validate_confidence(payload: dict[str, Any]) -> None:
+        confidence = payload.get("confidence")
+        if confidence is None:
+            return
+        if not isinstance(confidence, (int, float)) or not (0.0 <= float(confidence) <= 1.0):
+            raise KnowledgeValidationError(
+                f"confidence must be a number between 0 and 1, got {confidence!r}"
+            )

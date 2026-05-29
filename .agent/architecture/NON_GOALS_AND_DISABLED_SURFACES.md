@@ -4,13 +4,12 @@
 
 | Surface | Status |
 |---|---|
-| Broad Information Horizon ingestion | Not implemented |
+| Broad autonomous discovery / crawling | Not implemented |
 | External chat / media / file import pipelines | Not implemented |
 | Web crawler | Not implemented |
 | Vector index over external corpus | Not implemented |
 | Automation / Trigger engine | Not implemented (`Run.trigger_origin` reserves enum values only) |
-| Connectors / Integrations platform | Not implemented |
-| Full first-class Source / Evidence schema | Deferred — field mapping only (`ActivityRecord`, `ProvenanceLink`, proposal provenance entries) |
+| Connector marketplace / integration lifecycle | Not implemented |
 | Capability marketplace or install/discovery UX | Not implemented (file-defined registry; local workspace roots; external enable state in `config/settings.yaml`; no remote install) |
 | Self-evolution behavior execution | Disabled (`ENABLE_SYSTEM_EVOLUTION=false` by default) |
 | App-container self-deployment | Blocked by deployer allowlist |
@@ -26,14 +25,14 @@
 | Runtime adapter bypassing credential resolver | Blocked by `RunExecutionService` design |
 | Runtime adapter bypassing sandbox/path policy | Blocked by `execution_workspace` contract |
 | File mutation without approved proposal + PathPolicy | Blocked by code patch apply |
-| Automatic memory promotion from horizon content | Blocked by absence of horizon implementation |
+| Automatic memory promotion from intake/evidence content | Blocked by proposal/apply boundary |
 
 **UI status of planned-but-not-built surfaces:**
 - `Knowledge` — registry entry with `planned: true`; "soon" badge; non-interactive.
 - `Cards` — registry entry with `planned: true`; "soon" badge; non-interactive.
 - `Time` — registry entry with `planned: true`; "soon" badge; non-interactive.
 
-No automation, connector, horizon, or self-evolution controls appear in the frontend.
+No automation, connector marketplace, crawler, or self-evolution controls appear in the frontend.
 
 ## What Is Allowed for Current Use
 
@@ -41,6 +40,7 @@ No automation, connector, horizon, or self-evolution controls appear in the fron
 - Explicit two-user membership and space switching.
 - Auth via session cookies or API keys. No dev-identity fallback.
 - Activity Inbox for non-chat capture (thoughts, notes, snippets, links) via `POST /api/v1/activity`.
+- Intake for source connections, manual URL intake, candidate items, extraction jobs, and citable evidence via `/api/v1/intake/*`.
 - Explicit chat sessions for conversations with agents (`POST /api/v1/sessions`).
 - Memory proposal creation, review, acceptance, rejection, and archive.
 - Memory consolidation producing proposals from Activity.
@@ -61,34 +61,31 @@ These will not be built until their prerequisite foundations are stable:
 - Full enterprise RBAC/ABAC.
 - Generic `DomainObject` registry or schema editor.
 - Full plugin or provider marketplace.
-- Broad connector/integration platform.
+- Broad connector marketplace / integration lifecycle.
 - Full vector search or external search index.
-- Full Information Horizon ingestion pipeline.
+- Broad autonomous discovery and crawling pipeline.
 - Unconstrained self-evolution.
 - Direct app-container self-deployment.
 - Cloud/multi-device sync.
 - Domain-specific integrations (health, finance, home automation) built into the kernel.
 - Publishing connectors or external CMS integrations.
-- Full Knowledge or cards as complete product surfaces with first-class backend domain models.
+- Full cards as a complete product surface with first-class backend domain models.
 - Complex enterprise admin console or billing.
 - Public SaaS/multi-tenant launch.
 
 ## What Must Be True Before Building Disabled Surfaces
 
-**Before Information Horizon ingestion:**
-Activity-first capture, Source/Evidence trust vocabulary, and candidate-to-Memory proposal path must be fully tested. No auto-promotion of horizon content to trusted Memory.
+**Before broad automated intake / crawling:**
+Intake/Evidence trust vocabulary, retention semantics, and candidate-to-Memory proposal path must stay fully tested. No auto-promotion of external evidence to trusted Memory.
 
 **Before Automation / Trigger:**
 Policy engine, ownership model, actor identity, and proposal-safe automation invariants must be documented and tested.
 
-**Before Connectors / Integrations:**
-Source/Evidence design must be stable. All connector data must enter Activity/Source first. No direct-to-Memory connector writes.
+**Before connector marketplace / integrations:**
+All connector data must enter Intake or Activity first. No direct-to-Memory connector writes.
 
 **Before self-evolution execution:**
 Evaluation gates, sandboxed experiment runs, deployment job persistence, capability lifecycle persistence, and rollback path must all be tested.
 
-**Before full Source/Evidence schema:**
-Trust vocabulary and lifecycle must be stable for existing ActivityRecord/ProvenanceLink/Proposal provenance. Current field mapping must be tested.
-
 **Before any broad external ingestion:**
-Retention/deletion semantics, Information Horizon candidate-only boundary, and trust gate must be enforced and tested.
+Retention/deletion semantics, Intake/Evidence candidate-only boundary, and trust gate must be enforced and tested.

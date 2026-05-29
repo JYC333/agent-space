@@ -3,12 +3,13 @@ from __future__ import annotations
 Activity Inbox API
 
 Routes:
-  POST   /activity              — ingest a new activity record
-  GET    /activity              — list activity records for the current space
-  GET    /activity/{id}         — get a single activity record
-  PATCH  /activity/{id}/process — mark a record as processed
-  PATCH  /activity/{id}/archive — archive a record
-  POST   /activity/{id}/consolidate — run consolidation for this activity only (no body)
+  POST   /activity                — ingest a new activity record
+  GET    /activity                — list activity records for the current space
+  GET    /activity/{id}           — get a single activity record
+  PATCH  /activity/{id}/review    — mark a record as reviewed (status-only; no proposals)
+  PATCH  /activity/{id}/archive   — archive a record
+  POST   /activity/{id}/consolidate — generate proposals for this activity
+  POST   /activity/summary-runs   — summarize selected activities into an Artifact
 
 Space and authenticated user come from ``get_identity`` (same as Memory/Runs).
 Optional query ``for_user_id`` limits the list to that user and must equal the
@@ -29,6 +30,13 @@ from ..participation.service import try_record_participation
 from ..schemas import ProposalOut
 from ..proposals.read_model import proposal_to_out
 from .service import ActivityService
+from .input_summary_service import (
+    InputSummaryProviderMissingError,
+    InputSummaryProviderCallError,
+    InputSummaryNoContentError,
+    InputSummaryCrossSpaceError,
+    InputSummaryService,
+)
 
 router = APIRouter(prefix="/activity", tags=["activity"])
 
@@ -206,16 +214,17 @@ def get_activity(
     return ActivityOut.from_orm_model(record)
 
 
-@router.patch("/{activity_id}/process", response_model=ActivityOut)
-def mark_processed(
+@router.patch("/{activity_id}/review", response_model=ActivityOut)
+def mark_reviewed(
     activity_id: str,
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ) -> ActivityOut:
+    """Mark as reviewed (status-only, no proposal generation)."""
     space_id, user_id = ids
     svc = ActivityService(db)
     try:
-        record = svc.mark_processed(activity_id, space_id, viewer_user_id=user_id)
+        record = svc.mark_reviewed(activity_id, space_id, viewer_user_id=user_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return ActivityOut.from_orm_model(record)
@@ -242,7 +251,7 @@ def consolidate_activity(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ) -> list[ProposalOut]:
-    """Run consolidation for exactly one activity; same pipeline as ``POST /memory/consolidation/run``."""
+    """Generate proposals for one activity (rule-based consolidation pipeline)."""
     space_id, auth_user_id = ids
     svc = ActivityService(db)
     if not svc.get(activity_id, space_id, viewer_user_id=auth_user_id):
@@ -254,3 +263,70 @@ def consolidate_activity(
         acting_user_id=auth_user_id,
     )
     return [proposal_to_out(p) for p in created]
+
+
+# ---------------------------------------------------------------------------
+# Summary-runs: LLM-powered summarization into Artifact + optional proposals
+# ---------------------------------------------------------------------------
+
+class SummaryRunRequest(BaseModel):
+    activity_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    intake_item_ids: list[str] = Field(default_factory=list)
+    summary_goal: Optional[str] = None
+    create_memory_proposal: bool = False
+    create_knowledge_proposal: bool = False
+
+
+class SummaryRunOut(BaseModel):
+    run_id: str
+    artifact_id: str
+    proposal_ids: list[str]
+    status: str
+    summary_preview: str
+
+
+@router.post("/summary-runs", response_model=SummaryRunOut, status_code=201)
+def create_activity_summary_run(
+    body: SummaryRunRequest,
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+) -> SummaryRunOut:
+    """Summarize selected activity records (and optional evidence/intake items) into an Artifact.
+
+    The summary is stored as an Artifact with artifact_type=summary. Optional proposals
+    are created for review; no Memory or Knowledge is written directly.
+    """
+    space_id, auth_user_id = ids
+    if not body.activity_ids and not body.evidence_ids and not body.intake_item_ids:
+        raise HTTPException(
+            status_code=422,
+            detail="At least one of activity_ids, evidence_ids, or intake_item_ids is required.",
+        )
+    svc = InputSummaryService(db)
+    try:
+        result = svc.run(
+            space_id=space_id,
+            user_id=auth_user_id,
+            activity_ids=body.activity_ids,
+            evidence_ids=body.evidence_ids,
+            intake_item_ids=body.intake_item_ids,
+            summary_goal=body.summary_goal,
+            create_memory_proposal=body.create_memory_proposal,
+            create_knowledge_proposal=body.create_knowledge_proposal,
+        )
+    except InputSummaryProviderMissingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except InputSummaryProviderCallError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except InputSummaryNoContentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except InputSummaryCrossSpaceError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return SummaryRunOut(
+        run_id=result.run_id,
+        artifact_id=result.artifact_id,
+        proposal_ids=result.proposal_ids,
+        status=result.status,
+        summary_preview=result.summary_preview,
+    )

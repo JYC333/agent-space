@@ -102,6 +102,14 @@ registry `default_decision`. Not full RBAC/ABAC — they express intent and defa
 | `proposal.apply` | proposal | medium | require_approval | `memory/proposals.py` via `enforce_proposal_apply()` |
 | `workspace.read` | workspace | low | allow | `workspace_console/api.py` via `enforce()` |
 | `agent.config_update` | agent | high | allow (audit_required) | `agents/agent_service.py` via `enforce()` before config proposal creation |
+| `intake.connection_manage` | source_connection | medium | allow (audit_required) | `intake/api.py` via `enforce()` |
+| `intake.item_create` | intake_item | low | allow (audit_required) | `intake/api.py` via `enforce()` |
+| `intake.item_update` | intake_item | low | allow (audit_required) | `intake/api.py` via `enforce()` |
+| `evidence.create` | evidence | low | allow (audit_required) | `intake/api.py` via `enforce()` |
+| `evidence.update` | evidence | low | allow (audit_required) | `intake/api.py` via `enforce()` |
+| `evidence.link` | evidence | low | allow (audit_required) | `intake/api.py` via `enforce()` |
+| `workspace_intake.configure` | workspace_intake | medium | allow (audit_required) | `intake/api.py` via `enforce()` |
+| `context.select_evidence` | evidence | low | allow | `memory/context_builder.py` via `enforce()` |
 | `memory.create` | memory | medium | require_approval | via `proposal.apply` |
 | `memory.update` | memory | medium | require_approval | via `proposal.apply` |
 | `memory.archive` | memory | medium | require_approval | via `proposal.apply` |
@@ -133,6 +141,7 @@ Not wired to business code. The registry is **not** full RBAC/ABAC.
 | `capability.enable` | capability | high | require_approval |
 | `capability.update` | capability | high | require_approval |
 | `tool_binding.enable` | tool_binding | high | require_approval |
+| `evidence.export` | evidence | high | require_approval |
 | `deployment.propose` | deployment | high | require_approval |
 | `deployment.execute` | deployment | **critical** | require_approval |
 

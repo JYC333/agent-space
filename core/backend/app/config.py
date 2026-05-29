@@ -2,7 +2,7 @@ import os
 import stat
 from pathlib import Path
 from typing import Optional
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 # Agent Space local data root.
@@ -237,6 +237,22 @@ class Settings(BaseSettings):
 
     # Agent Space environment (dev, test, prod)
     agent_space_env: str = "dev"
+
+    # ── Daily Capture Report scheduler ───────────────────────────────────────
+    # Set daily_report_scheduler_enabled=false to disable the background scheduler
+    # (e.g., in environments where a separate cron process drives report generation).
+    # Minimum interval is 30 seconds; values below 30 are rejected at startup.
+    daily_report_scheduler_enabled: bool = True
+    daily_report_scheduler_interval_seconds: int = 60
+
+    @field_validator("daily_report_scheduler_interval_seconds")
+    @classmethod
+    def validate_daily_report_scheduler_interval(cls, v: int) -> int:
+        if v < 30:
+            raise ValueError(
+                f"daily_report_scheduler_interval_seconds must be at least 30, got {v}"
+            )
+        return v
 
     # ── Backup ────────────────────────────────────────────────────────────────
     # Primary backup is BackupService (automatic, scheduled).

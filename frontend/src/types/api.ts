@@ -86,6 +86,7 @@ export type ActivitySourceType =
   | 'workspace_event'
   | 'system_event'
   | 'external_source'
+  | 'intake'
 export type SessionStatus    = 'active' | 'closed'
 /** Canonical run lifecycle (Run API). */
 export type RunLifecycleStatus =
@@ -255,6 +256,189 @@ export interface Page<T> {
   total: number
   limit: number
   offset: number
+}
+
+export interface SourceConnector {
+  id: string
+  connector_key: string
+  display_name: string
+  connector_type: string
+  ingestion_mode: string
+  status: string
+  capabilities_json: Record<string, unknown>
+  config_schema_json: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SourceConnection {
+  id: string
+  space_id: string
+  connector_id: string
+  owner_user_id: string
+  credential_id: string | null
+  name: string
+  endpoint_url: string | null
+  status: 'active' | 'paused' | 'archived'
+  fetch_frequency: 'manual' | 'hourly' | 'daily' | 'weekly'
+  capture_policy: string
+  trust_level: 'trusted' | 'normal' | 'untrusted'
+  topic_hints_json: string[] | null
+  consent_json: Record<string, unknown>
+  policy_json: Record<string, unknown>
+  config_json: Record<string, unknown>
+  last_checked_at: string | null
+  next_check_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SourceConnectionCreate {
+  connector_key: string
+  name: string
+  endpoint_url?: string | null
+  credential_id?: string | null
+  fetch_frequency?: 'manual' | 'hourly' | 'daily' | 'weekly'
+  capture_policy?: string
+  trust_level?: 'trusted' | 'normal' | 'untrusted'
+  topic_hints?: string[] | null
+  consent?: Record<string, unknown>
+  policy?: Record<string, unknown>
+  config?: Record<string, unknown>
+}
+
+export interface IntakeItem {
+  id: string
+  space_id: string
+  connection_id: string | null
+  item_type: string
+  source_object_type: string | null
+  source_object_id: string | null
+  title: string
+  source_uri: string | null
+  canonical_uri: string | null
+  source_domain: string | null
+  source_external_id: string | null
+  author: string | null
+  occurred_at: string | null
+  first_seen_at: string
+  last_seen_at: string
+  content_hash: string | null
+  excerpt: string | null
+  status: 'new' | 'triaged' | 'selected' | 'ignored' | 'archived'
+  read_status: 'unread' | 'skimmed' | 'read' | 'discussed'
+  content_state: string
+  retention_policy: string
+  relevance_score: number | null
+  novelty_score: number | null
+  raw_artifact_id: string | null
+  extracted_artifact_id: string | null
+  summary_artifact_id: string | null
+  search_index_ref: string | null
+  embedding_index_ref: string | null
+  metadata_json: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ExtractionJob {
+  id: string
+  space_id: string
+  connection_id: string | null
+  intake_item_id: string | null
+  source_snapshot_id: string | null
+  source_object_type: string | null
+  source_object_id: string | null
+  job_type: string
+  status: string
+  started_at: string | null
+  completed_at: string | null
+  items_seen: number | null
+  items_created: number | null
+  items_updated: number | null
+  error_code: string | null
+  error_message: string | null
+  metadata_json: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface ExtractedEvidence {
+  id: string
+  space_id: string
+  intake_item_id: string | null
+  extraction_job_id: string | null
+  source_snapshot_id: string | null
+  source_object_type: string | null
+  source_object_id: string | null
+  evidence_type: string
+  title: string
+  content_excerpt: string | null
+  content_hash: string | null
+  artifact_id: string | null
+  source_uri: string | null
+  source_title: string | null
+  source_author: string | null
+  occurred_at: string | null
+  trust_level: 'trusted' | 'normal' | 'untrusted'
+  extraction_method: string
+  confidence: number | null
+  status: 'candidate' | 'active' | 'rejected' | 'archived'
+  metadata_json: Record<string, unknown> | null
+  created_by_user_id: string | null
+  created_by_agent_id: string | null
+  created_by_run_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface EvidenceLink {
+  id: string
+  space_id: string
+  evidence_id: string
+  target_type: string
+  target_id: string | null
+  link_type: string
+  status: 'candidate' | 'active' | 'rejected' | 'archived'
+  confidence: number | null
+  reason: string | null
+  created_by_user_id: string | null
+  created_by_agent_id: string | null
+  created_by_run_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkspaceIntakeProfile {
+  id: string
+  space_id: string
+  workspace_id: string
+  name: string
+  status: string
+  observation_policy: string
+  routing_policy_json: Record<string, unknown>
+  filters_json: Record<string, unknown>
+  extraction_policy_json: Record<string, unknown>
+  context_policy_json: Record<string, unknown>
+  created_by_user_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkspaceSourceBinding {
+  id: string
+  space_id: string
+  workspace_id: string
+  project_id: string | null
+  source_connection_id: string
+  binding_key: string
+  status: string
+  priority: number
+  filters_json: Record<string, unknown>
+  routing_policy_json: Record<string, unknown>
+  extraction_policy_json: Record<string, unknown>
+  created_by_user_id: string | null
+  created_at: string
+  updated_at: string
 }
 
 export type JobStatus    = 'pending' | 'claimed' | 'running' | 'completed' | 'failed' | 'cancelled'
@@ -757,6 +941,18 @@ export type ProposalAcceptOut = {
   proposal: Proposal
   result_type: 'follow_up_task'
   result: { task_id: string; title: string }
+} | {
+  proposal: Proposal
+  result_type: 'agent_version'
+  result: { agent_id: string; agent_version_id: string }
+} | {
+  proposal: Proposal
+  result_type: 'knowledge_item'
+  result: { knowledge_item: KnowledgeItem }
+} | {
+  proposal: Proposal
+  result_type: 'knowledge_relation'
+  result: { knowledge_relation: KnowledgeRelation }
 }
 
 export interface PersonalMemoryGrantSafeMemoryFilter {
@@ -1184,6 +1380,16 @@ export interface HomeSuggestedActionItem {
   priority: HomeSuggestedActionPriority
 }
 
+export interface HomeIntakeSummarySection {
+  open_items: number
+  new_items_today: number
+  pending_extraction_jobs: number
+  failed_extraction_jobs: number
+  candidate_evidence: number
+  active_evidence: number
+  due_connections: number
+}
+
 export interface HomeSummaryOut {
   recent_runs: HomeRunSummaryItem[]
   active_runs: HomeRunSummaryItem[]
@@ -1197,6 +1403,89 @@ export interface HomeSummaryOut {
   runtime_status: HomeRuntimeStatusSection
   model_provider_status: HomeModelProviderStatusSection
   suggested_actions: HomeSuggestedActionItem[]
+  intake_summary: HomeIntakeSummarySection
+}
+
+// ── Daily Capture Report ──────────────────────────────────────────────────
+
+export interface DailyCaptureReportSettingOut {
+  id: string
+  space_id: string
+  user_id: string
+  enabled: boolean
+  local_time: string
+  timezone: string
+  include_source_types: string[]
+  create_experience_proposals: boolean
+  create_memory_proposals: boolean
+  experience_confidence_threshold: number
+  memory_confidence_threshold: number
+  max_experience_proposals_per_day: number
+  max_memory_proposals_per_day: number
+  last_report_date: string | null
+  next_run_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DailyCaptureReportSettingUpdate {
+  enabled?: boolean | null
+  local_time?: string | null
+  timezone?: string | null
+  include_source_types?: string[] | null
+  create_experience_proposals?: boolean | null
+  create_memory_proposals?: boolean | null
+  experience_confidence_threshold?: number | null
+  memory_confidence_threshold?: number | null
+  max_experience_proposals_per_day?: number | null
+  max_memory_proposals_per_day?: number | null
+}
+
+export interface DailyReportRunRequest {
+  local_date?: string | null
+  force?: boolean
+  create_experience_proposals?: boolean | null
+  create_memory_proposals?: boolean | null
+}
+
+export interface DailyReportRunResponse {
+  run_id: string
+  artifact_id: string | null
+  proposal_ids: string[]
+  experience_proposal_ids: string[]
+  memory_proposal_ids: string[]
+  capture_count: number
+  status: string
+  summary_preview: string
+}
+
+export interface DailyReportArtifactItem {
+  id: string
+  title: string
+  artifact_type: string
+  run_id: string | null
+  created_at: string
+  report_date: string | null
+  capture_count: number
+}
+
+// ── Input Summary (POST /activity/summary-runs, POST /intake/summary-runs) ──
+
+export interface SummaryRunRequest {
+  activity_ids?: string[]
+  evidence_ids?: string[]
+  intake_item_ids?: string[]
+  summary_goal?: string | null
+  create_memory_proposal?: boolean
+  create_knowledge_proposal?: boolean
+}
+
+export interface SummaryRunOut {
+  run_id: string
+  artifact_id: string
+  proposal_ids: string[]
+  status: string
+  summary_preview: string
 }
 
 // ── Personal perspective (`GET /api/v1/me/*`) ─────────────────────────────

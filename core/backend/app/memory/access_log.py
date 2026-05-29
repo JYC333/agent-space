@@ -1,9 +1,8 @@
 """Persist memory read audit rows and bump MemoryEntry aggregate counters.
 
-Memory follow-up TODOs (see also read_auth, Proposal, context_api):
-- Review transaction boundary: this module does not commit; callers own the
-  Session lifecycle—uncommitted work stays in the same transaction as the log row.
-- Consider reducing search_hit (and similar) access log volume later if tables grow.
+This module does not commit. Callers own the Session lifecycle; uncommitted
+work stays in the same transaction as the log row. If search_hit volume grows
+large, consider reducing log frequency at the call sites.
 """
 
 from __future__ import annotations

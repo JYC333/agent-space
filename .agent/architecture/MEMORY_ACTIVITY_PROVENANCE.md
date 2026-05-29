@@ -52,11 +52,20 @@ a new table, not a revival of this removed table.
 
 | Field | Responsibility |
 |---|---|
-| `source_type` | Kind of producing object: `activity`, `proposal`, `memory`, `artifact`, `run_step`, `external_source`, `user_confirmation`. |
+| `source_type` | Kind of producing object: `activity`, `proposal`, `memory`, `artifact`, `run_step`, `run_event`, `external_source`, `user_confirmation`, `intake_item`, `source_snapshot`, `extracted_evidence`. |
 | `source_id` | ID of the producing object. |
 | `source_trust` | Trust level of this provenance link. |
 | `evidence_json` | Structured evidence at this link in the chain. |
 | `target_type` / `target_id` | What this link is attached to (memory, policy, etc.). |
+
+`ProvenanceLink` is for the durable accepted-object audit chain. It records the
+source of truth behind an accepted memory, policy, or other durable object,
+especially after a proposal is applied.
+
+`EvidenceLink` is separate: it links candidate `ExtractedEvidence` to a space,
+workspace, project, run, or other target for relevance, context selection, and
+provenance eligibility. It does not by itself mean that evidence has been
+accepted into Memory or Knowledge.
 
 ### Proposal Provenance Fields
 
@@ -92,6 +101,13 @@ Canonical values for `source_trust` across ActivityRecord, ProvenanceLink, and p
 
 Trust is resolved from `ActivityRecord.activity_type` by `_resolved_trust_from_activity` in `consolidation/classifier.py` if `source_trust` is not explicitly set. Unrecognized `activity_type` values default to `untrusted_external`.
 
+Intake/Evidence provenance trust is a separate, smaller vocabulary:
+`trusted`, `normal`, and `untrusted`. Source connection trust maps explicitly to
+that vocabulary. Activity `source_trust` maps explicitly before becoming
+evidence trust. Runtime/run/artifact trust values (`high`, `medium`, `low`,
+`unknown`) describe execution/runtime confidence and are stored as metadata
+when useful; they are not silently reused as evidence trust.
+
 ## SourceMonitoring Trust Gate
 
 `SourceMonitoringService` (`core/backend/app/memory/source_monitoring.py`) is the deterministic trust gate before any durable memory or policy apply.
@@ -112,18 +128,25 @@ Active `MemoryEntry` creation requires the `_INTERNAL_WRITE_AUTHORITY` sentinel 
 
 Approved proposal apply uses proposal-validated writer methods. Ordinary callers cannot pass a generic bypass reason string.
 
-## Information Horizon — Candidate-Only Rule
+## Intake/Evidence — Candidate-Only Rule
 
-Information Horizon content is **candidate-only**. It must not become active Memory without a proposal/review cycle.
+Intake and extracted evidence content is **candidate-only**. It may be cited in a runtime context snapshot, but it must not become active Memory without a proposal/review cycle.
 
 Current enforcement:
-- No `InformationItem`, `DiscoveryQueue`, or `ReadingState` table exists. These are deferred.
-- Future horizon content must enter as `ActivityRecord` (or future `Source`) first.
+- External and internal source material enters `IntakeItem`, `SourceSnapshot`, `ExtractionJob`, and `ExtractedEvidence` rows.
+- `EvidenceLink` controls which active evidence can be selected into a `ContextSnapshot`.
+  Selector input link types are limited to `context_candidate`, `supports`,
+  `mentions`, and `provenance`.
+- `used_in_context` links are audit-only records of prior context use. They are
+  not selector inputs.
+- Internal run/activity/artifact records are valid intake sources via
+  `source_object_type`/`source_object_id`, not fake internal URLs.
+- `source_uri` remains external HTTP/HTTPS only.
 - `ActivityConsolidationService` → `MemoryProposalProducer` is the only pipeline that creates Proposal rows from Activity. Proposals remain `pending` until explicitly accepted.
 - `ProposalApplyService.apply` is the only path that creates active `MemoryEntry` from a proposal.
-- No code path creates active Memory from horizon/candidate payload without proposal.
+- No code path creates active Memory from intake/evidence payload without proposal.
 
-Future Information Horizon work must enter the Activity/Source → proposal path before Memory.
+Future automated intake work must enter the Intake/Activity → proposal path before Memory.
 
 ## Provenance Questions Answerable from Durable Records
 

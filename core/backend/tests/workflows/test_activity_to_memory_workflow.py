@@ -136,9 +136,10 @@ def test_activity_memory_workflow_blocked_for_other_space(
         .json()[0]["id"]
     )
 
+    # /activity/{id}/process was removed; verify review endpoint is also cross-space safe
     assert (
         cross_space_pair["client_b"].patch(
-            f"/api/v1/activity/{act}/process",
+            f"/api/v1/activity/{act}/review",
             params=_params(b, ub.id),
         ).status_code
         == 404

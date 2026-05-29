@@ -112,7 +112,7 @@ Activity records enforce visibility on read, mutation, and consolidation paths.
 
 - `GET /activity` and `GET /activity/{id}`: `can_read_scoped_object()` applied with
   `viewer_user_id`.
-- `PATCH /activity/{id}/process` and `PATCH /activity/{id}/archive`: `viewer_user_id`
+- `PATCH /activity/{id}/review` and `PATCH /activity/{id}/archive`: `viewer_user_id`
   forwarded to the service; non-owners of a private record receive 404.
 - `POST /activity/{id}/consolidate`: `svc.get(activity_id, space_id, viewer_user_id=…)` is
   called before consolidation begins; non-owners of a private record receive 404.

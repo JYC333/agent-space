@@ -8,7 +8,7 @@ memory proposals, but they must never become active memory directly.
 ``activity_type`` (API field ``source_type``) uses the same canonical vocabulary
 as ``ActivityRecord.source_kind``:
   user_capture | chat_message | external_chat | file_import | web_capture |
-  run_event | workspace_event | system_event | external_source
+  run_event | workspace_event | system_event | external_source | intake
 
 Consolidation runs via ``ActivityConsolidationService`` from
 ``POST /api/v1/activity/{id}/consolidate`` and ``POST /api/v1/memory/consolidation/run`` — not from ``ActivityService``.
@@ -49,6 +49,7 @@ CANONICAL_SOURCE_TYPES = frozenset({
     "workspace_event",
     "system_event",
     "external_source",
+    "intake",
 })
 
 
@@ -198,12 +199,20 @@ class ActivityService:
     # Status transitions
     # ------------------------------------------------------------------
 
-    def mark_processed(
+    def mark_reviewed(
         self, activity_id: str, space_id: str, *, viewer_user_id: str | None = None
     ) -> ActivityRecord:
+        """Mark as reviewed (status-only transition; does not generate proposals).
+
+        Sets consolidation_status="skipped" so run_pending consolidation ignores this record.
+        """
         record = self._require(activity_id, space_id, viewer_user_id=viewer_user_id)
+        now = datetime.now(UTC)
         record.status = "processed"
-        record.updated_at = datetime.now(UTC)
+        # skipped: consolidation was bypassed by explicit user review
+        record.consolidation_status = "skipped"
+        record.processed_at = now
+        record.updated_at = now
         self.db.commit()
         self.db.refresh(record)
         return record

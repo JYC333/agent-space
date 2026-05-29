@@ -739,6 +739,7 @@ class ContextSnapshot(Base):
     target_runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
     execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
     included_memory_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    included_evidence_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     included_file_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     included_doc_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     redactions_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
@@ -1045,7 +1046,8 @@ class ActivityRecord(Base):
         CheckConstraint(
             "source_kind is null or source_kind in ("
             "'user_capture', 'chat_message', 'external_chat', 'file_import', "
-            "'web_capture', 'run_event', 'workspace_event', 'system_event', 'external_source')",
+            "'web_capture', 'run_event', 'workspace_event', 'system_event', "
+            "'external_source', 'intake')",
             name="ck_activity_records_source_kind",
         ),
         CheckConstraint(
@@ -2008,7 +2010,8 @@ class ProvenanceLink(Base):
     __table_args__ = (
         CheckConstraint(
             "source_type in ('activity', 'proposal', 'memory', 'artifact', "
-            "'run_step', 'external_source', 'user_confirmation')",
+            "'run_step', 'external_source', 'user_confirmation', "
+            "'intake_item', 'source_snapshot', 'extracted_evidence', 'run_event')",
             name="ck_provenance_links_source_type",
         ),
         CheckConstraint(
@@ -2675,4 +2678,474 @@ class AutomationRun(Base):
 
     __table_args__ = (
         Index("ix_automation_runs_automation_created", "automation_id", "created_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Intake and Evidence
+# ---------------------------------------------------------------------------
+
+
+class SourceConnector(Base):
+    """Catalog entry describing a supported external or internal intake connector."""
+
+    __tablename__ = "source_connectors"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    connector_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    connector_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    ingestion_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    capabilities_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    config_schema_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "connector_type in ('external_feed', 'external_url', 'internal_activity', 'internal_artifact', 'internal_run', 'file', 'document')",
+            name="ck_source_connectors_connector_type",
+        ),
+        CheckConstraint(
+            "ingestion_mode in ('pull', 'manual', 'internal')",
+            name="ck_source_connectors_ingestion_mode",
+        ),
+        CheckConstraint(
+            "status in ('active', 'disabled')",
+            name="ck_source_connectors_status",
+        ),
+    )
+
+
+class SourceConnection(Base):
+    """A configured, space-scoped source connection.
+
+    Connections bind a connector to endpoint/config/credential/consent policy.
+    Intake items and extraction jobs reference this object instead of encoding
+    connector-specific subscription semantics directly on the item rows.
+    """
+
+    __tablename__ = "source_connections"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    connector_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("source_connectors.id"), nullable=False, index=True)
+    owner_user_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=False, index=True)
+    credential_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("credentials.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(512), nullable=False)
+    endpoint_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    fetch_frequency: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    capture_policy: Mapped[str] = mapped_column(String(64), nullable=False, default="metadata_only")
+    trust_level: Mapped[str] = mapped_column(String(32), nullable=False, default="normal")
+    topic_hints_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    consent_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_check_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('active', 'paused', 'archived')",
+            name="ck_source_connections_status",
+        ),
+        CheckConstraint(
+            "fetch_frequency in ('manual', 'hourly', 'daily', 'weekly')",
+            name="ck_source_connections_fetch_frequency",
+        ),
+        CheckConstraint(
+            "capture_policy in ('metadata_only', 'excerpt_only', 'auto_extract_relevant', 'auto_extract_all_text', 'archive_all_snapshots')",
+            name="ck_source_connections_capture_policy",
+        ),
+        CheckConstraint(
+            "trust_level in ('trusted', 'normal', 'untrusted')",
+            name="ck_source_connections_trust_level",
+        ),
+        Index("ix_source_connections_space_status", "space_id", "status"),
+        Index("ix_source_connections_due", "status", "next_check_at"),
+        Index(
+            "uq_source_connections_active_endpoint",
+            "space_id", "connector_id", "endpoint_url",
+            unique=True,
+            sqlite_where=text("endpoint_url IS NOT NULL AND deleted_at IS NULL AND status != 'archived'"),
+        ),
+    )
+
+
+class IntakeItem(Base):
+    """A raw external or internal item that has entered a space's intake pool.
+
+    IntakeItem is candidate material. Raw content and extracted text live in
+    artifacts/snapshots/evidence rows. Intake does not directly mutate Memory,
+    Knowledge, policy, tasks, files, or capabilities.
+    """
+
+    __tablename__ = "intake_items"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    connection_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("source_connections.id"), nullable=True, index=True)
+    item_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_object_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    source_object_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source_uri: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    canonical_uri: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_domain: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, index=True)
+    source_external_id: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, index=True)
+    author: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    occurred_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    excerpt: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="new", index=True)
+    read_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unread")
+    content_state: Mapped[str] = mapped_column(String(64), nullable=False, default="metadata_only")
+    retention_policy: Mapped[str] = mapped_column(String(32), nullable=False, default="metadata_only")
+    relevance_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    novelty_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    raw_artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    extracted_artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    summary_artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    search_index_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    embedding_index_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('new', 'triaged', 'selected', 'ignored', 'archived')",
+            name="ck_intake_items_status",
+        ),
+        CheckConstraint(
+            "read_status in ('unread', 'skimmed', 'read', 'discussed')",
+            name="ck_intake_items_read_status",
+        ),
+        CheckConstraint(
+            "item_type in ('external_url', 'feed_entry', 'activity_record', 'artifact', 'run_event', 'file', 'document', 'log')",
+            name="ck_intake_items_item_type",
+        ),
+        CheckConstraint(
+            "content_state in ('metadata_only', 'excerpt_saved', 'content_queued', 'content_saved', 'snapshot_queued', 'snapshot_saved', 'extraction_failed', 'content_unavailable')",
+            name="ck_intake_items_content_state",
+        ),
+        CheckConstraint(
+            "retention_policy in ('metadata_only', 'summary_only', 'full_text', 'full_snapshot', 'archived')",
+            name="ck_intake_items_retention_policy",
+        ),
+        Index("ix_intake_items_space_status", "space_id", "status"),
+        Index("ix_intake_items_space_connection", "space_id", "connection_id"),
+        Index("ix_intake_items_space_domain", "space_id", "source_domain"),
+        Index("ix_intake_items_canonical_uri", "space_id", "canonical_uri"),
+        Index("ix_intake_items_source_object", "space_id", "source_object_type", "source_object_id"),
+        Index(
+            "uq_intake_items_active_canonical_uri",
+            "space_id", "canonical_uri",
+            unique=True,
+            sqlite_where=text("canonical_uri IS NOT NULL AND deleted_at IS NULL"),
+        ),
+        Index(
+            "uq_intake_items_active_source_uri",
+            "space_id", "source_uri",
+            unique=True,
+            sqlite_where=text("source_uri IS NOT NULL AND deleted_at IS NULL"),
+        ),
+    )
+
+
+class SourceSnapshot(Base):
+    """Immutable metadata for source snapshots captured into Artifact storage."""
+
+    __tablename__ = "source_snapshots"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    intake_item_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("intake_items.id"), nullable=True, index=True)
+    connection_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("source_connections.id"), nullable=True, index=True)
+    snapshot_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("artifacts.id"), nullable=True, index=True)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    source_uri: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    capture_method: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
+    trust_level: Mapped[str] = mapped_column(String(32), nullable=False, default="normal")
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "snapshot_type in ('metadata', 'raw', 'extracted', 'summary')",
+            name="ck_source_snapshots_snapshot_type",
+        ),
+        CheckConstraint(
+            "capture_method in ('manual', 'connection_scan', 'full_text', 'snapshot', 'internal')",
+            name="ck_source_snapshots_capture_method",
+        ),
+        CheckConstraint(
+            "trust_level in ('trusted', 'normal', 'untrusted')",
+            name="ck_source_snapshots_trust_level",
+        ),
+        Index("ix_source_snapshots_space_item", "space_id", "intake_item_id"),
+    )
+
+
+class ExtractionJob(Base):
+    """Durable audit record for intake scan/extraction work."""
+
+    __tablename__ = "extraction_jobs"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    connection_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("source_connections.id"), nullable=True, index=True)
+    intake_item_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("intake_items.id"), nullable=True, index=True)
+    source_snapshot_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("source_snapshots.id"), nullable=True, index=True)
+    source_object_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    source_object_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    job_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    items_seen: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    items_created: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    items_updated: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Sanitized short error description — never raw HTTP response body.
+    error_message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "job_type in ('connection_scan', 'manual_url', 'extract_text', 'snapshot', 'normalize_activity', 'normalize_artifact', 'normalize_run_event')",
+            name="ck_extraction_jobs_job_type",
+        ),
+        CheckConstraint(
+            "status in ('pending', 'running', 'succeeded', 'failed', 'skipped')",
+            name="ck_extraction_jobs_status",
+        ),
+        Index("ix_extraction_jobs_space_status", "space_id", "status"),
+        Index("ix_extraction_jobs_space_created", "space_id", "created_at"),
+        Index("ix_extraction_jobs_source_object", "space_id", "source_object_type", "source_object_id"),
+    )
+
+
+class ExtractedEvidence(Base):
+    """A citable evidence unit derived from intake, activity, artifacts, or runs."""
+
+    __tablename__ = "extracted_evidence"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    intake_item_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("intake_items.id"), nullable=True, index=True)
+    extraction_job_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("extraction_jobs.id"), nullable=True, index=True)
+    source_snapshot_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("source_snapshots.id"), nullable=True, index=True)
+    source_object_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    source_object_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    evidence_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_excerpt: Mapped[Optional[str]] = mapped_column(String(4096), nullable=True)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("artifacts.id"), nullable=True, index=True)
+    source_uri: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_title: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    source_author: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    occurred_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    trust_level: Mapped[str] = mapped_column(String(32), nullable=False, default="normal", index=True)
+    extraction_method: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate", index=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True, index=True)
+    created_by_run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "evidence_type in ('document', 'excerpt', 'event', 'log', 'artifact', 'claim', 'summary')",
+            name="ck_extracted_evidence_evidence_type",
+        ),
+        CheckConstraint(
+            "trust_level in ('trusted', 'normal', 'untrusted')",
+            name="ck_extracted_evidence_trust_level",
+        ),
+        CheckConstraint(
+            "status in ('candidate', 'active', 'rejected', 'archived')",
+            name="ck_extracted_evidence_status",
+        ),
+        Index("ix_extracted_evidence_source_object", "space_id", "source_object_type", "source_object_id"),
+        Index("ix_extracted_evidence_space_status", "space_id", "status"),
+    )
+
+
+class EvidenceLink(Base):
+    """Multi-target evidence link used for provenance and context eligibility."""
+
+    __tablename__ = "evidence_links"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("extracted_evidence.id"), nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    link_type: Mapped[str] = mapped_column(String(64), nullable=False, default="context_candidate", index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate", index=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True, index=True)
+    created_by_run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "target_type in ('space', 'workspace', 'project', 'user', 'agent', 'run', 'proposal', 'artifact', 'knowledge', 'memory', 'task')",
+            name="ck_evidence_links_target_type",
+        ),
+        CheckConstraint(
+            "link_type in ('supports', 'contradicts', 'derived_from', 'mentions', 'context_candidate', 'used_in_context', 'provenance')",
+            name="ck_evidence_links_link_type",
+        ),
+        CheckConstraint(
+            "status in ('candidate', 'active', 'rejected', 'archived')",
+            name="ck_evidence_links_status",
+        ),
+        Index("ix_evidence_links_target", "space_id", "target_type", "target_id"),
+        Index("ix_evidence_links_evidence_target", "evidence_id", "target_type", "target_id"),
+    )
+
+
+class WorkspaceIntakeProfile(Base):
+    """Workspace-specific intake observation, routing, and context policy."""
+
+    __tablename__ = "workspace_intake_profiles"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    observation_policy: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    routing_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    filters_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    extraction_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    context_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('active', 'paused', 'archived')",
+            name="ck_workspace_intake_profiles_status",
+        ),
+        CheckConstraint(
+            "observation_policy in ('disabled', 'manual', 'auto_select', 'auto_extract')",
+            name="ck_workspace_intake_profiles_observation_policy",
+        ),
+        UniqueConstraint("space_id", "workspace_id", name="uq_workspace_intake_profiles_workspace"),
+    )
+
+
+class WorkspaceSourceBinding(Base):
+    """Workspace-scoped filter over a space-level source connection."""
+
+    __tablename__ = "workspace_source_bindings"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=False, index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("projects.id"), nullable=True, index=True)
+    source_connection_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("source_connections.id"), nullable=False, index=True)
+    binding_key: Mapped[str] = mapped_column(String(128), nullable=False, default="default", server_default=text("'default'"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    filters_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    routing_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    extraction_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('active', 'paused', 'archived')",
+            name="ck_workspace_source_bindings_status",
+        ),
+        Index("ix_workspace_source_bindings_workspace_status", "workspace_id", "status"),
+        UniqueConstraint(
+            "space_id",
+            "workspace_id",
+            "source_connection_id",
+            "binding_key",
+            name="uq_workspace_source_bindings_connection",
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Daily Capture Report — built-in optional feature
+# ---------------------------------------------------------------------------
+
+
+class DailyCaptureReportSetting(Base):
+    """Per-user/per-space settings for the Daily Capture Report feature.
+
+    Constraints:
+    - unique(space_id, user_id): one setting per user per space.
+    - enabled controls scheduled execution; manual runs are always allowed.
+    - local_time is HH:MM in the user's configured timezone.
+    - Thresholds are 0..1; max counts are bounded at the service layer.
+    - Memory proposals are off by default; experience proposals are on by default.
+    """
+
+    __tablename__ = "daily_capture_report_settings"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=False, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    local_time: Mapped[str] = mapped_column(String(5), nullable=False, default="08:00")
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
+    include_source_types_json: Mapped[list] = mapped_column(JSON, nullable=False, default=lambda: ["user_capture"])
+    create_experience_proposals: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    create_memory_proposals: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    experience_confidence_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.75)
+    memory_confidence_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.85)
+    max_experience_proposals_per_day: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    max_memory_proposals_per_day: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    last_report_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "experience_confidence_threshold >= 0.0 and experience_confidence_threshold <= 1.0",
+            name="ck_daily_capture_report_settings_experience_threshold",
+        ),
+        CheckConstraint(
+            "memory_confidence_threshold >= 0.0 and memory_confidence_threshold <= 1.0",
+            name="ck_daily_capture_report_settings_memory_threshold",
+        ),
+        CheckConstraint(
+            "max_experience_proposals_per_day >= 0 and max_experience_proposals_per_day <= 20",
+            name="ck_daily_capture_report_settings_max_experience",
+        ),
+        CheckConstraint(
+            "max_memory_proposals_per_day >= 0 and max_memory_proposals_per_day <= 10",
+            name="ck_daily_capture_report_settings_max_memory",
+        ),
+        UniqueConstraint("space_id", "user_id", name="uq_daily_capture_report_settings_space_user"),
     )

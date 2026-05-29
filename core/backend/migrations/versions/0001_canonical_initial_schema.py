@@ -54,6 +54,7 @@ def upgrade() -> None:
     sa.Column('target_runtime_adapter_id', sa.String(length=36), nullable=True),
     sa.Column('execution_plane_id', sa.String(length=36), nullable=True),
     sa.Column('included_memory_refs_json', sa.JSON(), nullable=True),
+    sa.Column('included_evidence_refs_json', sa.JSON(), nullable=True),
     sa.Column('included_file_refs_json', sa.JSON(), nullable=True),
     sa.Column('included_doc_refs_json', sa.JSON(), nullable=True),
     sa.Column('redactions_json', sa.JSON(), nullable=True),
@@ -671,7 +672,8 @@ def upgrade() -> None:
     sa.CheckConstraint(
         "source_kind is null or source_kind in ("
         "'user_capture', 'chat_message', 'external_chat', 'file_import', "
-        "'web_capture', 'run_event', 'workspace_event', 'system_event', 'external_source')",
+        "'web_capture', 'run_event', 'workspace_event', 'system_event', "
+        "'external_source', 'intake')",
         name='ck_activity_records_source_kind',
     ),
     sa.CheckConstraint(
@@ -1330,7 +1332,8 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint(
         "source_type in ('activity', 'proposal', 'memory', 'artifact', "
-        "'run_step', 'external_source', 'user_confirmation')",
+        "'run_step', 'external_source', 'user_confirmation', "
+        "'intake_item', 'source_snapshot', 'extracted_evidence', 'run_event')",
         name='ck_provenance_links_source_type',
     ),
     sa.CheckConstraint(
@@ -1974,11 +1977,521 @@ def upgrade() -> None:
     op.create_index(op.f('ix_automation_runs_run_id'), 'automation_runs', ['run_id'], unique=False)
     op.create_index(op.f('ix_automation_runs_triggered_by_user_id'), 'automation_runs', ['triggered_by_user_id'], unique=False)
     op.create_index('ix_automation_runs_automation_created', 'automation_runs', ['automation_id', 'created_at'], unique=False)
+
+    # Intake and Evidence
+    op.create_table('source_connectors',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('connector_key', sa.String(length=128), nullable=False),
+        sa.Column('display_name', sa.String(length=256), nullable=False),
+        sa.Column('connector_type', sa.String(length=64), nullable=False),
+        sa.Column('ingestion_mode', sa.String(length=32), nullable=False),
+        sa.Column('status', sa.String(length=32), nullable=False),
+        sa.Column('capabilities_json', sa.JSON(), nullable=False),
+        sa.Column('config_schema_json', sa.JSON(), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint("connector_type in ('external_feed', 'external_url', 'internal_activity', 'internal_artifact', 'internal_run', 'file', 'document')", name='ck_source_connectors_connector_type'),
+        sa.CheckConstraint("ingestion_mode in ('pull', 'manual', 'internal')", name='ck_source_connectors_ingestion_mode'),
+        sa.CheckConstraint("status in ('active', 'disabled')", name='ck_source_connectors_status'),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('connector_key'),
+    )
+    op.create_index('ix_source_connectors_connector_key', 'source_connectors', ['connector_key'], unique=True)
+    op.create_index('ix_source_connectors_connector_type', 'source_connectors', ['connector_type'])
+    op.create_index('ix_source_connectors_status', 'source_connectors', ['status'])
+
+    op.create_table('source_connections',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('space_id', sa.String(length=36), nullable=False),
+        sa.Column('connector_id', sa.String(length=36), nullable=False),
+        sa.Column('owner_user_id', sa.String(length=36), nullable=False),
+        sa.Column('credential_id', sa.String(length=36), nullable=True),
+        sa.Column('name', sa.String(length=512), nullable=False),
+        sa.Column('endpoint_url', sa.Text(), nullable=True),
+        sa.Column('status', sa.String(length=32), nullable=False),
+        sa.Column('fetch_frequency', sa.String(length=32), nullable=False),
+        sa.Column('capture_policy', sa.String(length=64), nullable=False),
+        sa.Column('trust_level', sa.String(length=32), nullable=False),
+        sa.Column('topic_hints_json', sa.JSON(), nullable=True),
+        sa.Column('consent_json', sa.JSON(), nullable=False),
+        sa.Column('policy_json', sa.JSON(), nullable=False),
+        sa.Column('config_json', sa.JSON(), nullable=False),
+        sa.Column('last_checked_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('next_check_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint("status in ('active', 'paused', 'archived')", name='ck_source_connections_status'),
+        sa.CheckConstraint("fetch_frequency in ('manual', 'hourly', 'daily', 'weekly')", name='ck_source_connections_fetch_frequency'),
+        sa.CheckConstraint("capture_policy in ('metadata_only', 'excerpt_only', 'auto_extract_relevant', 'auto_extract_all_text', 'archive_all_snapshots')", name='ck_source_connections_capture_policy'),
+        sa.CheckConstraint("trust_level in ('trusted', 'normal', 'untrusted')", name='ck_source_connections_trust_level'),
+        sa.ForeignKeyConstraint(['connector_id'], ['source_connectors.id']),
+        sa.ForeignKeyConstraint(['credential_id'], ['credentials.id']),
+        sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
+        sa.ForeignKeyConstraint(['owner_user_id'], ['users.id']),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index('ix_source_connections_space_id', 'source_connections', ['space_id'])
+    op.create_index('ix_source_connections_connector_id', 'source_connections', ['connector_id'])
+    op.create_index('ix_source_connections_owner_user_id', 'source_connections', ['owner_user_id'])
+    op.create_index('ix_source_connections_credential_id', 'source_connections', ['credential_id'])
+    op.create_index('ix_source_connections_status', 'source_connections', ['status'])
+    op.create_index('ix_source_connections_next_check_at', 'source_connections', ['next_check_at'])
+    op.create_index('ix_source_connections_deleted_at', 'source_connections', ['deleted_at'])
+    op.create_index('ix_source_connections_space_status', 'source_connections', ['space_id', 'status'])
+    op.create_index('ix_source_connections_due', 'source_connections', ['status', 'next_check_at'])
+    op.create_index(
+        'uq_source_connections_active_endpoint', 'source_connections', ['space_id', 'connector_id', 'endpoint_url'],
+        unique=True, sqlite_where=sa.text("endpoint_url IS NOT NULL AND deleted_at IS NULL AND status != 'archived'"),
+    )
+
+    op.create_table('intake_items',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('space_id', sa.String(length=36), nullable=False),
+        sa.Column('connection_id', sa.String(length=36), nullable=True),
+        sa.Column('item_type', sa.String(length=64), nullable=False),
+        sa.Column('source_object_type', sa.String(length=64), nullable=True),
+        sa.Column('source_object_id', sa.String(length=36), nullable=True),
+        sa.Column('title', sa.String(length=1024), nullable=False),
+        sa.Column('source_uri', sa.Text(), nullable=True),
+        sa.Column('canonical_uri', sa.Text(), nullable=True),
+        sa.Column('source_domain', sa.String(length=256), nullable=True),
+        sa.Column('source_external_id', sa.String(length=512), nullable=True),
+        sa.Column('author', sa.String(length=512), nullable=True),
+        sa.Column('occurred_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('first_seen_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('last_seen_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('content_hash', sa.String(length=128), nullable=True),
+        sa.Column('excerpt', sa.String(length=2048), nullable=True),
+        sa.Column('status', sa.String(length=32), nullable=False),
+        sa.Column('read_status', sa.String(length=32), nullable=False),
+        sa.Column('content_state', sa.String(length=64), nullable=False),
+        sa.Column('retention_policy', sa.String(length=32), nullable=False),
+        sa.Column('relevance_score', sa.Float(), nullable=True),
+        sa.Column('novelty_score', sa.Float(), nullable=True),
+        sa.Column('raw_artifact_id', sa.String(length=36), nullable=True),
+        sa.Column('extracted_artifact_id', sa.String(length=36), nullable=True),
+        sa.Column('summary_artifact_id', sa.String(length=36), nullable=True),
+        sa.Column('search_index_ref', sa.String(length=1024), nullable=True),
+        sa.Column('embedding_index_ref', sa.String(length=1024), nullable=True),
+        sa.Column('metadata_json', sa.JSON(), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint("status in ('new', 'triaged', 'selected', 'ignored', 'archived')", name='ck_intake_items_status'),
+        sa.CheckConstraint("read_status in ('unread', 'skimmed', 'read', 'discussed')", name='ck_intake_items_read_status'),
+        sa.CheckConstraint("item_type in ('external_url', 'feed_entry', 'activity_record', 'artifact', 'run_event', 'file', 'document', 'log')", name='ck_intake_items_item_type'),
+        sa.CheckConstraint("content_state in ('metadata_only', 'excerpt_saved', 'content_queued', 'content_saved', 'snapshot_queued', 'snapshot_saved', 'extraction_failed', 'content_unavailable')", name='ck_intake_items_content_state'),
+        sa.CheckConstraint("retention_policy in ('metadata_only', 'summary_only', 'full_text', 'full_snapshot', 'archived')", name='ck_intake_items_retention_policy'),
+        sa.ForeignKeyConstraint(['connection_id'], ['source_connections.id']),
+        sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index('ix_intake_items_space_id', 'intake_items', ['space_id'])
+    op.create_index('ix_intake_items_connection_id', 'intake_items', ['connection_id'])
+    op.create_index('ix_intake_items_item_type', 'intake_items', ['item_type'])
+    op.create_index('ix_intake_items_source_object_type', 'intake_items', ['source_object_type'])
+    op.create_index('ix_intake_items_source_object_id', 'intake_items', ['source_object_id'])
+    op.create_index('ix_intake_items_source_domain', 'intake_items', ['source_domain'])
+    op.create_index('ix_intake_items_source_external_id', 'intake_items', ['source_external_id'])
+    op.create_index('ix_intake_items_occurred_at', 'intake_items', ['occurred_at'])
+    op.create_index('ix_intake_items_content_hash', 'intake_items', ['content_hash'])
+    op.create_index('ix_intake_items_status', 'intake_items', ['status'])
+    op.create_index('ix_intake_items_raw_artifact_id', 'intake_items', ['raw_artifact_id'])
+    op.create_index('ix_intake_items_extracted_artifact_id', 'intake_items', ['extracted_artifact_id'])
+    op.create_index('ix_intake_items_summary_artifact_id', 'intake_items', ['summary_artifact_id'])
+    op.create_index('ix_intake_items_deleted_at', 'intake_items', ['deleted_at'])
+    op.create_index('ix_intake_items_space_status', 'intake_items', ['space_id', 'status'])
+    op.create_index('ix_intake_items_space_connection', 'intake_items', ['space_id', 'connection_id'])
+    op.create_index('ix_intake_items_space_domain', 'intake_items', ['space_id', 'source_domain'])
+    op.create_index('ix_intake_items_canonical_uri', 'intake_items', ['space_id', 'canonical_uri'])
+    op.create_index('ix_intake_items_source_object', 'intake_items', ['space_id', 'source_object_type', 'source_object_id'])
+    op.create_index(
+        'uq_intake_items_active_canonical_uri', 'intake_items', ['space_id', 'canonical_uri'],
+        unique=True, sqlite_where=sa.text("canonical_uri IS NOT NULL AND deleted_at IS NULL"),
+    )
+    op.create_index(
+        'uq_intake_items_active_source_uri', 'intake_items', ['space_id', 'source_uri'],
+        unique=True, sqlite_where=sa.text("source_uri IS NOT NULL AND deleted_at IS NULL"),
+    )
+
+    op.create_table('source_snapshots',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('space_id', sa.String(length=36), nullable=False),
+        sa.Column('intake_item_id', sa.String(length=36), nullable=True),
+        sa.Column('connection_id', sa.String(length=36), nullable=True),
+        sa.Column('snapshot_type', sa.String(length=32), nullable=False),
+        sa.Column('artifact_id', sa.String(length=36), nullable=True),
+        sa.Column('content_hash', sa.String(length=128), nullable=True),
+        sa.Column('source_uri', sa.Text(), nullable=True),
+        sa.Column('capture_method', sa.String(length=64), nullable=False),
+        sa.Column('trust_level', sa.String(length=32), nullable=False),
+        sa.Column('metadata_json', sa.JSON(), nullable=True),
+        sa.Column('captured_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint("snapshot_type in ('metadata', 'raw', 'extracted', 'summary')", name='ck_source_snapshots_snapshot_type'),
+        sa.CheckConstraint("capture_method in ('manual', 'connection_scan', 'full_text', 'snapshot', 'internal')", name='ck_source_snapshots_capture_method'),
+        sa.CheckConstraint("trust_level in ('trusted', 'normal', 'untrusted')", name='ck_source_snapshots_trust_level'),
+        sa.ForeignKeyConstraint(['artifact_id'], ['artifacts.id']),
+        sa.ForeignKeyConstraint(['connection_id'], ['source_connections.id']),
+        sa.ForeignKeyConstraint(['intake_item_id'], ['intake_items.id']),
+        sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index('ix_source_snapshots_space_id', 'source_snapshots', ['space_id'])
+    op.create_index('ix_source_snapshots_intake_item_id', 'source_snapshots', ['intake_item_id'])
+    op.create_index('ix_source_snapshots_connection_id', 'source_snapshots', ['connection_id'])
+    op.create_index('ix_source_snapshots_snapshot_type', 'source_snapshots', ['snapshot_type'])
+    op.create_index('ix_source_snapshots_artifact_id', 'source_snapshots', ['artifact_id'])
+    op.create_index('ix_source_snapshots_content_hash', 'source_snapshots', ['content_hash'])
+    op.create_index('ix_source_snapshots_space_item', 'source_snapshots', ['space_id', 'intake_item_id'])
+
+    op.create_table('extraction_jobs',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('space_id', sa.String(length=36), nullable=False),
+        sa.Column('connection_id', sa.String(length=36), nullable=True),
+        sa.Column('intake_item_id', sa.String(length=36), nullable=True),
+        sa.Column('source_snapshot_id', sa.String(length=36), nullable=True),
+        sa.Column('source_object_type', sa.String(length=64), nullable=True),
+        sa.Column('source_object_id', sa.String(length=36), nullable=True),
+        sa.Column('job_type', sa.String(length=64), nullable=False),
+        sa.Column('status', sa.String(length=32), nullable=False),
+        sa.Column('started_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('items_seen', sa.Integer(), nullable=True),
+        sa.Column('items_created', sa.Integer(), nullable=True),
+        sa.Column('items_updated', sa.Integer(), nullable=True),
+        sa.Column('error_code', sa.String(length=64), nullable=True),
+        sa.Column('error_message', sa.String(length=512), nullable=True),
+        sa.Column('metadata_json', sa.JSON(), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint("job_type in ('connection_scan', 'manual_url', 'extract_text', 'snapshot', 'normalize_activity', 'normalize_artifact', 'normalize_run_event')", name='ck_extraction_jobs_job_type'),
+        sa.CheckConstraint("status in ('pending', 'running', 'succeeded', 'failed', 'skipped')", name='ck_extraction_jobs_status'),
+        sa.ForeignKeyConstraint(['connection_id'], ['source_connections.id']),
+        sa.ForeignKeyConstraint(['intake_item_id'], ['intake_items.id']),
+        sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
+        sa.ForeignKeyConstraint(['source_snapshot_id'], ['source_snapshots.id']),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index('ix_extraction_jobs_space_id', 'extraction_jobs', ['space_id'])
+    op.create_index('ix_extraction_jobs_connection_id', 'extraction_jobs', ['connection_id'])
+    op.create_index('ix_extraction_jobs_intake_item_id', 'extraction_jobs', ['intake_item_id'])
+    op.create_index('ix_extraction_jobs_source_snapshot_id', 'extraction_jobs', ['source_snapshot_id'])
+    op.create_index('ix_extraction_jobs_source_object_type', 'extraction_jobs', ['source_object_type'])
+    op.create_index('ix_extraction_jobs_source_object_id', 'extraction_jobs', ['source_object_id'])
+    op.create_index('ix_extraction_jobs_status', 'extraction_jobs', ['status'])
+    op.create_index('ix_extraction_jobs_space_status', 'extraction_jobs', ['space_id', 'status'])
+    op.create_index('ix_extraction_jobs_space_created', 'extraction_jobs', ['space_id', 'created_at'])
+    op.create_index('ix_extraction_jobs_source_object', 'extraction_jobs', ['space_id', 'source_object_type', 'source_object_id'])
+
+    op.create_table('extracted_evidence',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('space_id', sa.String(length=36), nullable=False),
+        sa.Column('intake_item_id', sa.String(length=36), nullable=True),
+        sa.Column('extraction_job_id', sa.String(length=36), nullable=True),
+        sa.Column('source_snapshot_id', sa.String(length=36), nullable=True),
+        sa.Column('source_object_type', sa.String(length=64), nullable=True),
+        sa.Column('source_object_id', sa.String(length=36), nullable=True),
+        sa.Column('evidence_type', sa.String(length=64), nullable=False),
+        sa.Column('title', sa.String(length=1024), nullable=False),
+        sa.Column('content_excerpt', sa.String(length=4096), nullable=True),
+        sa.Column('content_hash', sa.String(length=128), nullable=True),
+        sa.Column('artifact_id', sa.String(length=36), nullable=True),
+        sa.Column('source_uri', sa.Text(), nullable=True),
+        sa.Column('source_title', sa.String(length=1024), nullable=True),
+        sa.Column('source_author', sa.String(length=512), nullable=True),
+        sa.Column('occurred_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('trust_level', sa.String(length=32), nullable=False),
+        sa.Column('extraction_method', sa.String(length=64), nullable=False),
+        sa.Column('confidence', sa.Float(), nullable=True),
+        sa.Column('status', sa.String(length=32), nullable=False),
+        sa.Column('metadata_json', sa.JSON(), nullable=True),
+        sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
+        sa.Column('created_by_agent_id', sa.String(length=36), nullable=True),
+        sa.Column('created_by_run_id', sa.String(length=36), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint("evidence_type in ('document', 'excerpt', 'event', 'log', 'artifact', 'claim', 'summary')", name='ck_extracted_evidence_evidence_type'),
+        sa.CheckConstraint("trust_level in ('trusted', 'normal', 'untrusted')", name='ck_extracted_evidence_trust_level'),
+        sa.CheckConstraint("status in ('candidate', 'active', 'rejected', 'archived')", name='ck_extracted_evidence_status'),
+        sa.ForeignKeyConstraint(['artifact_id'], ['artifacts.id']),
+        sa.ForeignKeyConstraint(['created_by_agent_id'], ['agents.id']),
+        sa.ForeignKeyConstraint(['created_by_run_id'], ['runs.id']),
+        sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id']),
+        sa.ForeignKeyConstraint(['extraction_job_id'], ['extraction_jobs.id']),
+        sa.ForeignKeyConstraint(['intake_item_id'], ['intake_items.id']),
+        sa.ForeignKeyConstraint(['source_snapshot_id'], ['source_snapshots.id']),
+        sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index('ix_extracted_evidence_space_id', 'extracted_evidence', ['space_id'])
+    op.create_index('ix_extracted_evidence_intake_item_id', 'extracted_evidence', ['intake_item_id'])
+    op.create_index('ix_extracted_evidence_extraction_job_id', 'extracted_evidence', ['extraction_job_id'])
+    op.create_index('ix_extracted_evidence_source_snapshot_id', 'extracted_evidence', ['source_snapshot_id'])
+    op.create_index('ix_extracted_evidence_source_object_type', 'extracted_evidence', ['source_object_type'])
+    op.create_index('ix_extracted_evidence_source_object_id', 'extracted_evidence', ['source_object_id'])
+    op.create_index('ix_extracted_evidence_evidence_type', 'extracted_evidence', ['evidence_type'])
+    op.create_index('ix_extracted_evidence_content_hash', 'extracted_evidence', ['content_hash'])
+    op.create_index('ix_extracted_evidence_artifact_id', 'extracted_evidence', ['artifact_id'])
+    op.create_index('ix_extracted_evidence_occurred_at', 'extracted_evidence', ['occurred_at'])
+    op.create_index('ix_extracted_evidence_trust_level', 'extracted_evidence', ['trust_level'])
+    op.create_index('ix_extracted_evidence_status', 'extracted_evidence', ['status'])
+    op.create_index('ix_extracted_evidence_created_by_user_id', 'extracted_evidence', ['created_by_user_id'])
+    op.create_index('ix_extracted_evidence_created_by_agent_id', 'extracted_evidence', ['created_by_agent_id'])
+    op.create_index('ix_extracted_evidence_created_by_run_id', 'extracted_evidence', ['created_by_run_id'])
+    op.create_index('ix_extracted_evidence_deleted_at', 'extracted_evidence', ['deleted_at'])
+    op.create_index('ix_extracted_evidence_source_object', 'extracted_evidence', ['space_id', 'source_object_type', 'source_object_id'])
+    op.create_index('ix_extracted_evidence_space_status', 'extracted_evidence', ['space_id', 'status'])
+
+    op.create_table('evidence_links',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('space_id', sa.String(length=36), nullable=False),
+        sa.Column('evidence_id', sa.String(length=36), nullable=False),
+        sa.Column('target_type', sa.String(length=64), nullable=False),
+        sa.Column('target_id', sa.String(length=36), nullable=True),
+        sa.Column('link_type', sa.String(length=64), nullable=False),
+        sa.Column('status', sa.String(length=32), nullable=False),
+        sa.Column('confidence', sa.Float(), nullable=True),
+        sa.Column('reason', sa.String(length=1024), nullable=True),
+        sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
+        sa.Column('created_by_agent_id', sa.String(length=36), nullable=True),
+        sa.Column('created_by_run_id', sa.String(length=36), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint("target_type in ('space', 'workspace', 'project', 'user', 'agent', 'run', 'proposal', 'artifact', 'knowledge', 'memory', 'task')", name='ck_evidence_links_target_type'),
+        sa.CheckConstraint("link_type in ('supports', 'contradicts', 'derived_from', 'mentions', 'context_candidate', 'used_in_context', 'provenance')", name='ck_evidence_links_link_type'),
+        sa.CheckConstraint("status in ('candidate', 'active', 'rejected', 'archived')", name='ck_evidence_links_status'),
+        sa.ForeignKeyConstraint(['created_by_agent_id'], ['agents.id']),
+        sa.ForeignKeyConstraint(['created_by_run_id'], ['runs.id']),
+        sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id']),
+        sa.ForeignKeyConstraint(['evidence_id'], ['extracted_evidence.id']),
+        sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index('ix_evidence_links_space_id', 'evidence_links', ['space_id'])
+    op.create_index('ix_evidence_links_evidence_id', 'evidence_links', ['evidence_id'])
+    op.create_index('ix_evidence_links_target_type', 'evidence_links', ['target_type'])
+    op.create_index('ix_evidence_links_target_id', 'evidence_links', ['target_id'])
+    op.create_index('ix_evidence_links_link_type', 'evidence_links', ['link_type'])
+    op.create_index('ix_evidence_links_status', 'evidence_links', ['status'])
+    op.create_index('ix_evidence_links_created_by_user_id', 'evidence_links', ['created_by_user_id'])
+    op.create_index('ix_evidence_links_created_by_agent_id', 'evidence_links', ['created_by_agent_id'])
+    op.create_index('ix_evidence_links_created_by_run_id', 'evidence_links', ['created_by_run_id'])
+    op.create_index('ix_evidence_links_target', 'evidence_links', ['space_id', 'target_type', 'target_id'])
+    op.create_index('ix_evidence_links_evidence_target', 'evidence_links', ['evidence_id', 'target_type', 'target_id'])
+
+    op.create_table('workspace_intake_profiles',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('space_id', sa.String(length=36), nullable=False),
+        sa.Column('workspace_id', sa.String(length=36), nullable=False),
+        sa.Column('name', sa.String(length=256), nullable=False),
+        sa.Column('status', sa.String(length=32), nullable=False),
+        sa.Column('observation_policy', sa.String(length=32), nullable=False),
+        sa.Column('routing_policy_json', sa.JSON(), nullable=False),
+        sa.Column('filters_json', sa.JSON(), nullable=False),
+        sa.Column('extraction_policy_json', sa.JSON(), nullable=False),
+        sa.Column('context_policy_json', sa.JSON(), nullable=False),
+        sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint("status in ('active', 'paused', 'archived')", name='ck_workspace_intake_profiles_status'),
+        sa.CheckConstraint("observation_policy in ('disabled', 'manual', 'auto_select', 'auto_extract')", name='ck_workspace_intake_profiles_observation_policy'),
+        sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id']),
+        sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
+        sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id']),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('space_id', 'workspace_id', name='uq_workspace_intake_profiles_workspace'),
+    )
+    op.create_index('ix_workspace_intake_profiles_space_id', 'workspace_intake_profiles', ['space_id'])
+    op.create_index('ix_workspace_intake_profiles_workspace_id', 'workspace_intake_profiles', ['workspace_id'])
+    op.create_index('ix_workspace_intake_profiles_status', 'workspace_intake_profiles', ['status'])
+    op.create_index('ix_workspace_intake_profiles_created_by_user_id', 'workspace_intake_profiles', ['created_by_user_id'])
+
+    op.create_table('workspace_source_bindings',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('space_id', sa.String(length=36), nullable=False),
+        sa.Column('workspace_id', sa.String(length=36), nullable=False),
+        sa.Column('project_id', sa.String(length=36), nullable=True),
+        sa.Column('source_connection_id', sa.String(length=36), nullable=False),
+        sa.Column('binding_key', sa.String(length=128), server_default=sa.text("'default'"), nullable=False),
+        sa.Column('status', sa.String(length=32), nullable=False),
+        sa.Column('priority', sa.Integer(), nullable=False),
+        sa.Column('filters_json', sa.JSON(), nullable=False),
+        sa.Column('routing_policy_json', sa.JSON(), nullable=False),
+        sa.Column('extraction_policy_json', sa.JSON(), nullable=False),
+        sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint("status in ('active', 'paused', 'archived')", name='ck_workspace_source_bindings_status'),
+        sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id']),
+        sa.ForeignKeyConstraint(['project_id'], ['projects.id']),
+        sa.ForeignKeyConstraint(['source_connection_id'], ['source_connections.id']),
+        sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
+        sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id']),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('space_id', 'workspace_id', 'source_connection_id', 'binding_key', name='uq_workspace_source_bindings_connection'),
+    )
+    op.create_index('ix_workspace_source_bindings_space_id', 'workspace_source_bindings', ['space_id'])
+    op.create_index('ix_workspace_source_bindings_workspace_id', 'workspace_source_bindings', ['workspace_id'])
+    op.create_index('ix_workspace_source_bindings_project_id', 'workspace_source_bindings', ['project_id'])
+    op.create_index('ix_workspace_source_bindings_source_connection_id', 'workspace_source_bindings', ['source_connection_id'])
+    op.create_index('ix_workspace_source_bindings_status', 'workspace_source_bindings', ['status'])
+    op.create_index('ix_workspace_source_bindings_created_by_user_id', 'workspace_source_bindings', ['created_by_user_id'])
+    op.create_index('ix_workspace_source_bindings_workspace_status', 'workspace_source_bindings', ['workspace_id', 'status'])
+
+    # Daily Capture Report — built-in optional feature
+    op.create_table(
+        'daily_capture_report_settings',
+        sa.Column('id', sa.String(36), primary_key=True),
+        sa.Column('space_id', sa.String(36), sa.ForeignKey('spaces.id'), nullable=False),
+        sa.Column('user_id', sa.String(36), sa.ForeignKey('users.id'), nullable=False),
+        sa.Column('enabled', sa.Boolean(), nullable=False, default=False),
+        sa.Column('local_time', sa.String(5), nullable=False, default='08:00'),
+        sa.Column('timezone', sa.String(64), nullable=False, default='UTC'),
+        sa.Column('include_source_types_json', sa.JSON(), nullable=False, default=list),
+        sa.Column('create_experience_proposals', sa.Boolean(), nullable=False, default=True),
+        sa.Column('create_memory_proposals', sa.Boolean(), nullable=False, default=False),
+        sa.Column('experience_confidence_threshold', sa.Float(), nullable=False, default=0.75),
+        sa.Column('memory_confidence_threshold', sa.Float(), nullable=False, default=0.85),
+        sa.Column('max_experience_proposals_per_day', sa.Integer(), nullable=False, default=5),
+        sa.Column('max_memory_proposals_per_day', sa.Integer(), nullable=False, default=3),
+        sa.Column('last_report_date', sa.String(10), nullable=True),
+        sa.Column('next_run_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint(
+            'experience_confidence_threshold >= 0.0 and experience_confidence_threshold <= 1.0',
+            name='ck_daily_capture_report_settings_experience_threshold',
+        ),
+        sa.CheckConstraint(
+            'memory_confidence_threshold >= 0.0 and memory_confidence_threshold <= 1.0',
+            name='ck_daily_capture_report_settings_memory_threshold',
+        ),
+        sa.CheckConstraint(
+            'max_experience_proposals_per_day >= 0 and max_experience_proposals_per_day <= 20',
+            name='ck_daily_capture_report_settings_max_experience',
+        ),
+        sa.CheckConstraint(
+            'max_memory_proposals_per_day >= 0 and max_memory_proposals_per_day <= 10',
+            name='ck_daily_capture_report_settings_max_memory',
+        ),
+        sa.UniqueConstraint('space_id', 'user_id', name='uq_daily_capture_report_settings_space_user'),
+    )
+    op.create_index('ix_daily_capture_report_settings_space_id', 'daily_capture_report_settings', ['space_id'])
+    op.create_index('ix_daily_capture_report_settings_user_id', 'daily_capture_report_settings', ['user_id'])
+    op.create_index('ix_daily_capture_report_settings_next_run_at', 'daily_capture_report_settings', ['next_run_at'])
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_index('ix_daily_capture_report_settings_next_run_at', table_name='daily_capture_report_settings')
+    op.drop_index('ix_daily_capture_report_settings_user_id', table_name='daily_capture_report_settings')
+    op.drop_index('ix_daily_capture_report_settings_space_id', table_name='daily_capture_report_settings')
+    op.drop_table('daily_capture_report_settings')
+
+    # Intake and Evidence
+    op.drop_index('ix_workspace_source_bindings_workspace_status', table_name='workspace_source_bindings')
+    op.drop_index('ix_workspace_source_bindings_created_by_user_id', table_name='workspace_source_bindings')
+    op.drop_index('ix_workspace_source_bindings_status', table_name='workspace_source_bindings')
+    op.drop_index('ix_workspace_source_bindings_source_connection_id', table_name='workspace_source_bindings')
+    op.drop_index('ix_workspace_source_bindings_project_id', table_name='workspace_source_bindings')
+    op.drop_index('ix_workspace_source_bindings_workspace_id', table_name='workspace_source_bindings')
+    op.drop_index('ix_workspace_source_bindings_space_id', table_name='workspace_source_bindings')
+    op.drop_table('workspace_source_bindings')
+    op.drop_index('ix_workspace_intake_profiles_created_by_user_id', table_name='workspace_intake_profiles')
+    op.drop_index('ix_workspace_intake_profiles_status', table_name='workspace_intake_profiles')
+    op.drop_index('ix_workspace_intake_profiles_workspace_id', table_name='workspace_intake_profiles')
+    op.drop_index('ix_workspace_intake_profiles_space_id', table_name='workspace_intake_profiles')
+    op.drop_table('workspace_intake_profiles')
+    op.drop_index('ix_evidence_links_evidence_target', table_name='evidence_links')
+    op.drop_index('ix_evidence_links_target', table_name='evidence_links')
+    op.drop_index('ix_evidence_links_created_by_run_id', table_name='evidence_links')
+    op.drop_index('ix_evidence_links_created_by_agent_id', table_name='evidence_links')
+    op.drop_index('ix_evidence_links_created_by_user_id', table_name='evidence_links')
+    op.drop_index('ix_evidence_links_status', table_name='evidence_links')
+    op.drop_index('ix_evidence_links_link_type', table_name='evidence_links')
+    op.drop_index('ix_evidence_links_target_id', table_name='evidence_links')
+    op.drop_index('ix_evidence_links_target_type', table_name='evidence_links')
+    op.drop_index('ix_evidence_links_evidence_id', table_name='evidence_links')
+    op.drop_index('ix_evidence_links_space_id', table_name='evidence_links')
+    op.drop_table('evidence_links')
+    op.drop_index('ix_extracted_evidence_space_status', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_source_object', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_deleted_at', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_created_by_run_id', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_created_by_agent_id', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_created_by_user_id', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_status', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_trust_level', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_occurred_at', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_artifact_id', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_content_hash', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_evidence_type', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_source_object_id', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_source_object_type', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_source_snapshot_id', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_extraction_job_id', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_intake_item_id', table_name='extracted_evidence')
+    op.drop_index('ix_extracted_evidence_space_id', table_name='extracted_evidence')
+    op.drop_table('extracted_evidence')
+    op.drop_index('ix_extraction_jobs_source_object', table_name='extraction_jobs')
+    op.drop_index('ix_extraction_jobs_space_created', table_name='extraction_jobs')
+    op.drop_index('ix_extraction_jobs_space_status', table_name='extraction_jobs')
+    op.drop_index('ix_extraction_jobs_status', table_name='extraction_jobs')
+    op.drop_index('ix_extraction_jobs_source_object_id', table_name='extraction_jobs')
+    op.drop_index('ix_extraction_jobs_source_object_type', table_name='extraction_jobs')
+    op.drop_index('ix_extraction_jobs_source_snapshot_id', table_name='extraction_jobs')
+    op.drop_index('ix_extraction_jobs_intake_item_id', table_name='extraction_jobs')
+    op.drop_index('ix_extraction_jobs_connection_id', table_name='extraction_jobs')
+    op.drop_index('ix_extraction_jobs_space_id', table_name='extraction_jobs')
+    op.drop_table('extraction_jobs')
+    op.drop_index('ix_source_snapshots_space_item', table_name='source_snapshots')
+    op.drop_index('ix_source_snapshots_content_hash', table_name='source_snapshots')
+    op.drop_index('ix_source_snapshots_artifact_id', table_name='source_snapshots')
+    op.drop_index('ix_source_snapshots_snapshot_type', table_name='source_snapshots')
+    op.drop_index('ix_source_snapshots_connection_id', table_name='source_snapshots')
+    op.drop_index('ix_source_snapshots_intake_item_id', table_name='source_snapshots')
+    op.drop_index('ix_source_snapshots_space_id', table_name='source_snapshots')
+    op.drop_table('source_snapshots')
+    op.drop_index('uq_intake_items_active_source_uri', table_name='intake_items')
+    op.drop_index('uq_intake_items_active_canonical_uri', table_name='intake_items')
+    op.drop_index('ix_intake_items_source_object', table_name='intake_items')
+    op.drop_index('ix_intake_items_canonical_uri', table_name='intake_items')
+    op.drop_index('ix_intake_items_space_domain', table_name='intake_items')
+    op.drop_index('ix_intake_items_space_connection', table_name='intake_items')
+    op.drop_index('ix_intake_items_space_status', table_name='intake_items')
+    op.drop_index('ix_intake_items_deleted_at', table_name='intake_items')
+    op.drop_index('ix_intake_items_summary_artifact_id', table_name='intake_items')
+    op.drop_index('ix_intake_items_extracted_artifact_id', table_name='intake_items')
+    op.drop_index('ix_intake_items_raw_artifact_id', table_name='intake_items')
+    op.drop_index('ix_intake_items_status', table_name='intake_items')
+    op.drop_index('ix_intake_items_content_hash', table_name='intake_items')
+    op.drop_index('ix_intake_items_occurred_at', table_name='intake_items')
+    op.drop_index('ix_intake_items_source_external_id', table_name='intake_items')
+    op.drop_index('ix_intake_items_source_domain', table_name='intake_items')
+    op.drop_index('ix_intake_items_source_object_id', table_name='intake_items')
+    op.drop_index('ix_intake_items_source_object_type', table_name='intake_items')
+    op.drop_index('ix_intake_items_item_type', table_name='intake_items')
+    op.drop_index('ix_intake_items_connection_id', table_name='intake_items')
+    op.drop_index('ix_intake_items_space_id', table_name='intake_items')
+    op.drop_table('intake_items')
+    op.drop_index('uq_source_connections_active_endpoint', table_name='source_connections')
+    op.drop_index('ix_source_connections_due', table_name='source_connections')
+    op.drop_index('ix_source_connections_space_status', table_name='source_connections')
+    op.drop_index('ix_source_connections_deleted_at', table_name='source_connections')
+    op.drop_index('ix_source_connections_next_check_at', table_name='source_connections')
+    op.drop_index('ix_source_connections_status', table_name='source_connections')
+    op.drop_index('ix_source_connections_credential_id', table_name='source_connections')
+    op.drop_index('ix_source_connections_owner_user_id', table_name='source_connections')
+    op.drop_index('ix_source_connections_connector_id', table_name='source_connections')
+    op.drop_index('ix_source_connections_space_id', table_name='source_connections')
+    op.drop_table('source_connections')
+    op.drop_index('ix_source_connectors_status', table_name='source_connectors')
+    op.drop_index('ix_source_connectors_connector_type', table_name='source_connectors')
+    op.drop_index('ix_source_connectors_connector_key', table_name='source_connectors')
+    op.drop_table('source_connectors')
     op.drop_index('ix_automation_runs_automation_created', table_name='automation_runs')
     op.drop_index(op.f('ix_automation_runs_triggered_by_user_id'), table_name='automation_runs')
     op.drop_index(op.f('ix_automation_runs_run_id'), table_name='automation_runs')

@@ -24,6 +24,7 @@ _WIRED_DIRECT_ACTIONS = [
     "runtime.use_credential",
     "context.inject_memory",
     "context.render_for_runtime",
+    "context.select_evidence",
     "workspace.write_patch",
     "workspace.read",
     "artifact.persist",
@@ -33,6 +34,13 @@ _WIRED_DIRECT_ACTIONS = [
     "automation.create",
     "automation.update",
     "automation.fire",
+    "intake.connection_manage",
+    "intake.item_create",
+    "intake.item_update",
+    "evidence.create",
+    "evidence.update",
+    "evidence.link",
+    "workspace_intake.configure",
 ]
 
 # Wired via the proposal.apply gate only — must not be called directly.
@@ -61,6 +69,7 @@ _RESERVED_ACTIONS = [
     "capability.enable",
     "capability.update",
     "tool_binding.enable",
+    "evidence.export",
     "deployment.propose",
     "deployment.execute",
 ]
@@ -428,6 +437,36 @@ def test_context_render_for_runtime_enforcement_point():
     assert defn.default_decision == Decision.ALLOW
     assert defn.current_enforcement_point == "app.runs.execution.RunExecutionService.execute"
     assert defn.lifecycle_status == PolicyActionLifecycle.WIRED_DIRECT
+
+
+def test_intake_and_evidence_actions_are_wired():
+    for action in [
+        "intake.connection_manage",
+        "intake.item_create",
+        "intake.item_update",
+        "evidence.create",
+        "evidence.update",
+        "evidence.link",
+        "workspace_intake.configure",
+        "context.select_evidence",
+    ]:
+        defn = require_action_definition(action)
+        assert defn.default_decision == Decision.ALLOW
+        assert defn.lifecycle_status == PolicyActionLifecycle.WIRED_DIRECT
+        assert defn.current_enforcement_point != "not_implemented"
+
+    assert require_action_definition("intake.item_update").audit_required is True
+    assert require_action_definition("evidence.update").audit_required is True
+    assert require_action_definition("workspace_intake.configure").default_risk_level == RiskLevel.MEDIUM
+    assert require_action_definition("workspace_intake.configure").audit_required is True
+
+
+def test_context_select_evidence_enforced_by_context_builder():
+    defn = require_action_definition("context.select_evidence")
+    assert defn.default_risk_level == RiskLevel.LOW
+    assert defn.default_decision == Decision.ALLOW
+    assert defn.audit_required is False
+    assert defn.current_enforcement_point == "app.memory.context_builder.ContextBuilder.build"
 
 
 def test_proposal_create_covers_both_memory_and_code_patch():

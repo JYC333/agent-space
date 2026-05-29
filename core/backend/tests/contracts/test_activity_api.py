@@ -202,7 +202,7 @@ def test_post_activity_consolidate_returns_proposals_without_active_memory(api_c
     assert after == before
 
 
-def test_patch_process_does_not_create_active_memory(api_client, db, cross_space_pair):
+def test_patch_review_does_not_create_active_memory(api_client, db, cross_space_pair):
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
     act = factories.create_test_activity(
@@ -219,7 +219,7 @@ def test_patch_process_does_not_create_active_memory(api_client, db, cross_space
         .scalar()
     )
     r = cross_space_pair["client_a"].patch(
-        f"/api/v1/activity/{act.id}/process",
+        f"/api/v1/activity/{act.id}/review",
         params=_params(a, ua.id),
     )
     assert r.status_code == 200
@@ -246,7 +246,7 @@ def test_process_activity_cross_space_returns_404(api_client, db, cross_space_pa
         commit=True,
     )
     r = cross_space_pair["client_b"].patch(
-        f"/api/v1/activity/{act.id}/process",
+        f"/api/v1/activity/{act.id}/review",
         params=_params(b, ub.id),
     )
     assert r.status_code == 404
@@ -352,28 +352,28 @@ def _make_private_activity(db, *, space_id: str, owner_user_id: str) -> Activity
 
 
 # ---------------------------------------------------------------------------
-# PATCH /activity/{id}/process — visibility enforcement
+# PATCH /activity/{id}/review — visibility enforcement
 # ---------------------------------------------------------------------------
 
-def test_process_private_activity_non_owner_returns_404(api_client, db, same_space_pair):
+def test_review_private_activity_non_owner_returns_404(api_client, db, same_space_pair):
     space = same_space_pair["space_id"]
     ua = same_space_pair["user_a"]
     act = _make_private_activity(db, space_id=space, owner_user_id=ua.id)
 
     r = same_space_pair["client_b"].patch(
-        f"/api/v1/activity/{act.id}/process",
+        f"/api/v1/activity/{act.id}/review",
         params={"space_id": space},
     )
     assert r.status_code == 404
 
 
-def test_process_private_activity_non_owner_db_unchanged(api_client, db, same_space_pair):
+def test_review_private_activity_non_owner_db_unchanged(api_client, db, same_space_pair):
     space = same_space_pair["space_id"]
     ua = same_space_pair["user_a"]
     act = _make_private_activity(db, space_id=space, owner_user_id=ua.id)
 
     same_space_pair["client_b"].patch(
-        f"/api/v1/activity/{act.id}/process",
+        f"/api/v1/activity/{act.id}/review",
         params={"space_id": space},
     )
 
@@ -388,7 +388,7 @@ def test_process_private_activity_owner_succeeds(api_client, db, same_space_pair
     act = _make_private_activity(db, space_id=space, owner_user_id=ua.id)
 
     r = same_space_pair["client_a"].patch(
-        f"/api/v1/activity/{act.id}/process",
+        f"/api/v1/activity/{act.id}/review",
         params={"space_id": space},
     )
     assert r.status_code == 200
@@ -407,7 +407,7 @@ def test_process_space_shared_activity_any_member_succeeds(api_client, db, same_
     )
 
     r = same_space_pair["client_b"].patch(
-        f"/api/v1/activity/{act.id}/process",
+        f"/api/v1/activity/{act.id}/review",
         params={"space_id": space},
     )
     assert r.status_code == 200

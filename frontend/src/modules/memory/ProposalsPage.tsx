@@ -65,6 +65,12 @@ export default function ProposalsPage() {
         } else if (out.result_type === 'code_patch_apply') {
           const n = out.result.updated_paths.length
           toast.success(`Accepted — ${n} file${n === 1 ? '' : 's'} updated.`)
+        } else if (out.result_type === 'knowledge_item') {
+          toast.success('Accepted — knowledge item created.')
+        } else if (out.result_type === 'knowledge_relation') {
+          toast.success('Accepted — knowledge relation created.')
+        } else if (out.result_type === 'agent_version') {
+          toast.success('Accepted — agent version updated.')
         } else {
           toast.success('Proposal accepted.')
         }

@@ -68,6 +68,8 @@ _REGISTRY: list[Module] = [
     Module("projects",              "Projects",              "app.projects",              always_on=True),
     Module("automation",            "Automation",            "app.automation",            always_on=True),
     Module("knowledge",             "Knowledge",             "app.knowledge",             always_on=True),
+    Module("intake",                "Intake",                "app.intake",                api_modules=["api"], always_on=True),
+    Module("daily_reports",        "Daily Capture Report",  "app.daily_reports",         always_on=True),
     # Optional modules — not yet implemented; uncomment when ready.
     # Module("cards",    "Cards",           "app.cards",      always_on=False),
 ]

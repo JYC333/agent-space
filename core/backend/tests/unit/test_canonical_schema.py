@@ -80,6 +80,16 @@ REQUIRED_TABLES = {
     "run_finalizations",
     "runtime_tool_bindings",
     "policy_decision_records",
+    # Intake/evidence foundation
+    "source_connectors",
+    "source_connections",
+    "intake_items",
+    "source_snapshots",
+    "extraction_jobs",
+    "extracted_evidence",
+    "evidence_links",
+    "workspace_intake_profiles",
+    "workspace_source_bindings",
 }
 
 
@@ -104,6 +114,12 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
     assert "".join(("llm_", "wi", "ki")) not in inspector.get_table_names()
     assert "provider_configs" not in inspector.get_table_names()
     assert "cli_adapter_configs" not in inspector.get_table_names()
+    for removed_table in [
+        "source_" + "subscriptions",
+        "source_" + "items",
+        "source_" + "fetches",
+    ]:
+        assert removed_table not in inspector.get_table_names()
 
     user_columns = {column["name"] for column in inspector.get_columns("users")}
     assert {"space_id", "default_space_id", "role"}.isdisjoint(user_columns)
@@ -136,6 +152,7 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
     assert run_column_defs["agent_version_id"]["nullable"] is False
     context_snapshot_columns = {column["name"] for column in inspector.get_columns("context_snapshots")}
     assert "run_id" not in context_snapshot_columns
+    assert "included_evidence_refs_json" in context_snapshot_columns
 
     proposal_columns = {column["name"] for column in inspector.get_columns("proposals")}
     assert {"urgency", "review_deadline", "expires_at", "preview"}.issubset(proposal_columns)
@@ -547,6 +564,20 @@ def test_key_canonical_foreign_keys_exist(canonical_engine):
     assert ("run_evaluation_id", "run_evaluations", "id") in _foreign_keys(inspector, "task_evaluations")
     assert ("run_evaluation_id", "run_evaluations", "id") in _foreign_keys(inspector, "run_finalizations")
     assert ("task_evaluation_id", "task_evaluations", "id") in _foreign_keys(inspector, "run_finalizations")
+    assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "source_connections")
+    assert ("connector_id", "source_connectors", "id") in _foreign_keys(inspector, "source_connections")
+    assert ("owner_user_id", "users", "id") in _foreign_keys(inspector, "source_connections")
+    assert ("credential_id", "credentials", "id") in _foreign_keys(inspector, "source_connections")
+    assert ("connection_id", "source_connections", "id") in _foreign_keys(inspector, "intake_items")
+    assert ("intake_item_id", "intake_items", "id") in _foreign_keys(inspector, "source_snapshots")
+    assert ("artifact_id", "artifacts", "id") in _foreign_keys(inspector, "source_snapshots")
+    assert ("intake_item_id", "intake_items", "id") in _foreign_keys(inspector, "extraction_jobs")
+    assert ("source_snapshot_id", "source_snapshots", "id") in _foreign_keys(inspector, "extraction_jobs")
+    assert ("intake_item_id", "intake_items", "id") in _foreign_keys(inspector, "extracted_evidence")
+    assert ("extraction_job_id", "extraction_jobs", "id") in _foreign_keys(inspector, "extracted_evidence")
+    assert ("evidence_id", "extracted_evidence", "id") in _foreign_keys(inspector, "evidence_links")
+    assert ("workspace_id", "workspaces", "id") in _foreign_keys(inspector, "workspace_intake_profiles")
+    assert ("source_connection_id", "source_connections", "id") in _foreign_keys(inspector, "workspace_source_bindings")
 
 
 def test_initial_migration_has_no_forward_table_references():
@@ -750,6 +781,26 @@ def test_source_pointers_fks_exist(canonical_engine):
     assert ("owner_space_id", "spaces", "id") in fks
     assert ("source_space_id", "spaces", "id") in fks
     assert ("granted_by_user_id", "users", "id") in fks
+
+
+def test_workspace_source_bindings_binding_key_schema(canonical_engine):
+    inspector = inspect(canonical_engine)
+    columns = {c["name"]: c for c in inspector.get_columns("workspace_source_bindings")}
+    assert "binding_key" in columns
+    assert columns["binding_key"]["nullable"] is False
+
+    uniques = {
+        tuple(constraint["column_names"])
+        for constraint in inspector.get_unique_constraints("workspace_source_bindings")
+    }
+    assert ("space_id", "workspace_id", "source_connection_id", "binding_key") in uniques
+
+
+def test_provenance_links_accept_intake_source_types(canonical_engine):
+    migration = next((BACKEND_ROOT / "migrations" / "versions").glob("*_canonical_initial_schema.py"))
+    text = migration.read_text()
+    for source_type in ["intake_item", "source_snapshot", "extracted_evidence", "run_event"]:
+        assert source_type in text
 
 
 # ---------------------------------------------------------------------------
@@ -1212,6 +1263,7 @@ def test_context_snapshots_has_runtime_facing_fields(canonical_engine):
         "target_runtime_adapter_id",
         "execution_plane_id",
         "included_memory_refs_json",
+        "included_evidence_refs_json",
         "included_file_refs_json",
         "included_doc_refs_json",
         "redactions_json",
