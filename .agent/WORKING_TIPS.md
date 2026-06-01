@@ -11,9 +11,9 @@ These are facts the codebase doesn't make obvious at a glance.
 
 `POST /api/v1/workspaces` now calls `Path.mkdir()` on `workspace_root/<id>/`
 when no explicit `path` is supplied. This only works if the container can write
-to the workspaces mount. In `deployments/local/docker-compose.yml` the mount
-was originally `:ro` (read-only), which silently blocked mkdir; the `:ro` flag
-has been removed. PathPolicy still enforces read-only access at the API layer
+to the workspaces mount. In the `deployments/local/docker-compose.<mode>.yml`
+files the workspaces mount must not be `:ro` (read-only), which would silently
+block mkdir. PathPolicy still enforces read-only access at the API layer
 for the file browser — the `:ro` Docker flag was redundant.
 
 If an explicit `path` is passed, the directory is assumed to already exist

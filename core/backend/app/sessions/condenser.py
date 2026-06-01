@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 """
 SessionCondenser — pattern-based MVP for session → derived summary.
 
@@ -15,7 +16,6 @@ from collections import Counter
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session as DBSession
-from ulid import ULID
 
 from ..models import Message, SessionSummary
 
@@ -33,7 +33,7 @@ _MAX_SUMMARY_CHARS = 1_200
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _extract_keywords(text: str, top_n: int = 8) -> list[str]:

@@ -18,6 +18,7 @@ Rules:
 """
 
 from __future__ import annotations
+import uuid
 
 import hashlib
 import logging
@@ -276,7 +277,6 @@ def collect_and_create_code_patch_proposal(
 
     Returns :class:`WorktreeCollectionResult` describing what happened.
     """
-    from ulid import ULID
     from ..models import Proposal
 
     ops, skipped = collect_worktree_changes(worktree_path)
@@ -391,7 +391,7 @@ def collect_and_create_code_patch_proposal(
         )
 
     proposal = Proposal(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=run.space_id,
         created_by_run_id=run.id,
         created_by_user_id=run.instructed_by_user_id,

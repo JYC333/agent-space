@@ -16,17 +16,17 @@ Safety invariants:
 - Deduplication: returns an existing open egress_review proposal if one already
   exists for the same (created_by_run_id, target_space_id, target_object_type,
   operation, grant_id) tuple. A deterministic ``egress_review_dedupe_key`` is
-  stored in the payload and matched in Python — no SQLite JSON path dependency.
+  stored in the payload and matched in Python to avoid JSON path query complexity.
 """
 
 from __future__ import annotations
+import uuid
 
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Optional
 
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ _FORBIDDEN_PAYLOAD_KEYS = frozenset({
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _utcnow() -> datetime:
@@ -149,7 +149,7 @@ def _find_existing_open_proposal(
 
     Queries using only stable non-JSON-path columns (created_by_run_id, proposal_type,
     status), then filters candidates in Python by egress_review_dedupe_key. This avoids
-    any SQLite JSON path dependency that may not be available on older SQLite versions.
+    complex JSON path queries; Python filtering keeps the query simple and portable.
     """
     from ..models import Proposal
 

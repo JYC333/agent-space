@@ -1,15 +1,15 @@
 from __future__ import annotations
+import uuid
 from datetime import datetime, UTC
 from typing import Optional
 
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..models import AuthAccount, Space, SpaceMembership, User
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 class UserService:

@@ -1,5 +1,5 @@
 """Workflow-test isolation for independent durable policy audit sessions."""
-from unittest.mock import patch
+import uuid
 
 from fastapi import Request
 import pytest
@@ -7,10 +7,8 @@ from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture(autouse=True)
-def use_test_engine_for_durable_writer(db_engine):
-    TestSession = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
-    with patch("app.db.SessionLocal", TestSession):
-        yield
+def use_test_engine_for_durable_writer(test_sessionlocal_patch):
+    yield
 
 
 @pytest.fixture
@@ -19,7 +17,12 @@ def workflow_app_db_override(db):
     from app.db import get_db
     from app.main import app
 
-    Session = sessionmaker(bind=db.get_bind())
+    Session = sessionmaker(
+        bind=db.get_bind(),
+        autocommit=False,
+        autoflush=False,
+        join_transaction_mode="create_savepoint",
+    )
 
     def override_get_db(request: Request):
         session = Session()
@@ -92,9 +95,8 @@ def same_space_pair(db, workflow_app_db_override):
     from app.main import app
     from starlette.testclient import TestClient
     from tests.support import factories
-    from ulid import ULID
 
-    space = str(ULID())
+    space = str(uuid.uuid4())
     factories.create_test_space(db, space_id=space, name="Shared Space", space_type="team")
     ua = factories.create_test_user(db, space_id=space, display_name="Owner A")
     ub = factories.create_test_user(db, space_id=space, display_name="Member B")

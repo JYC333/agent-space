@@ -11,9 +11,9 @@ Test structure:
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
-from ulid import ULID
 
 from app.memory.internal_writer import MemoryInternalWriter
 from app.memory.read_auth import can_read_memory
@@ -24,7 +24,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------

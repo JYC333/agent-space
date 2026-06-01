@@ -1,9 +1,9 @@
 from __future__ import annotations
+import uuid
 
 from pathlib import Path
 
 import pytest
-from ulid import ULID
 
 from app.capabilities.enabled_store import load_enabled_external_capabilities
 from app.capabilities.registry import CapabilityRegistry
@@ -127,7 +127,7 @@ def _create_external_capability_workspace(
 
 
 def _fresh_space_user(db, label: str):
-    space_id = str(ULID())
+    space_id = str(uuid.uuid4())
     factories.create_test_space(db, space_id=space_id, name=label)
     user = factories.create_test_user(db, space_id=space_id, display_name=f"{label} user")
     return space_id, user
@@ -744,8 +744,8 @@ def test_capability_run_missing_capability_id_fails_clearly(db, test_user, test_
 
 
 def test_run_service_rejects_cross_space_project_for_capability_run(db):
-    space_a = str(ULID())
-    space_b = str(ULID())
+    space_a = str(uuid.uuid4())
+    space_b = str(uuid.uuid4())
     factories.create_test_space(db, space_id=space_a, name="Capability A")
     factories.create_test_space(db, space_id=space_b, name="Capability B")
     user_a = factories.create_test_user(db, space_id=space_a, display_name="Capability User A")

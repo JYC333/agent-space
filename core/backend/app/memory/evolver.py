@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 """
 MemoryEvolver — fitness-based memory lifecycle management.
 
@@ -13,7 +14,6 @@ import math
 from datetime import datetime, UTC
 from typing import Optional
 
-from ulid import ULID
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -98,7 +98,7 @@ class MemoryEvolver:
         proposal_ids: list[str] = []
         if not dry_run and candidates:
             producer = MemoryProposalProducer(self.db)
-            run_id = str(ULID())
+            run_id = str(uuid.uuid4())
             for mid in candidates:
                 mem = (
                     self.db.query(MemoryEntry)

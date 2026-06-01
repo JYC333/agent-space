@@ -63,32 +63,81 @@ Required pattern:
 
 ## Backup and Restore Consistency
 
-- `BackupService` uses an independent SQLite connection/snapshot mechanism, not a request/job ORM Session.
-- Backup uses `sqlite3.Connection.backup()` (WAL-safe, live-database snapshot).
-- Raw file-copy fallback is not used — it may miss WAL tail and produce a misleading successful archive.
-- Long-running app transactions must be avoided so backups stay fresh and SQLite lock contention stays low.
+- `BackupService` uses `pg_dump -Fc` (custom format) for a consistent PostgreSQL database snapshot, independent from the ORM Session. `db_snapshot_method` is `"pg_dump_custom"` in the manifest.
+- If `pg_dump` fails, the backup fails closed — no partial archive is produced.
+- Full-system backup also copies file data. The database dump and file copies are not one cross-resource transaction, so restore verification checks artifact rows against restored files.
+- Run `scripts/system/verify-restore.sh` after restore to verify Alembic state, core table counts, and `artifacts.storage_path` file consistency.
+- Long-running app transactions must be avoided so backups stay fresh.
 - Backup metadata and manifests must not contain raw secrets.
 - `backups/` is always excluded from backup archives (recursion prevention).
+- **`db/postgres` is the live PostgreSQL data directory — it is never copied into a backup
+  archive.** The database is captured logically with `pg_dump -Fc`; copying the live data
+  directory is not a supported backup. The manifest records `db/postgres/ (live PostgreSQL data)`
+  in its excluded paths.
+- **Manifest version metadata.** Every manifest (online `BackupService` and offline
+  `scripts/system/backup.sh`) records `backup_format`, `app_version`, `git_commit`,
+  `alembic_revision`, `postgres_server_version`, and `pg_dump_version`. Each value is
+  best-effort and may be `null`; gathering it never aborts a backup.
+- **Restore preflight validates version metadata.** `scripts/system/restore.sh` reads the
+  manifest, prints the recorded versions, and warns clearly on `backup_format` or PostgreSQL
+  major-version mismatch. Manifest metadata is never silently ignored.
 
-## SQLite Current Assumptions
+## Database: PostgreSQL
 
-- SQLite allows only one writer at a time; long write transactions block other writes and can make backups stale.
-- WAL mode plus sqlite backup API is acceptable for current local single-process use.
-- Savepoints are available and isolate best-effort writes.
-- Loose typing must not be relied on in new infrastructure.
+- **PostgreSQL is the server database.** `DATABASE_URL` accepts
+  `postgresql+psycopg://...` and normalizes `postgresql://...` to the canonical
+  psycopg form. The app rejects non-PostgreSQL URLs at startup.
+- **Local compose/env resolution** is shared by `scripts/start.sh`, `scripts/db/*.sh`,
+  and `scripts/system/*.sh` through `scripts/lib/local-compose.sh`: mode validation,
+  `ASPACE_ROOT`, `$ASPACE_ROOT/<mode>`, `$MODE_ROOT/.env`, `AGENT_SPACE_MODE_ROOT`,
+  compose project/file, and `docker compose --env-file "$ENV_FILE"` are one path.
+- Local PostgreSQL containers have stable mode-specific names:
+  `agent-space-dev-postgres`, `agent-space-test-postgres`, and `agent-space-prod-postgres`.
+- Schema is owned by Alembic migrations (`core/backend/migrations/`); application startup runs
+  `alembic upgrade head` (`app.db.init_db`) and never creates schema via `create_all()`.
+- Boolean defaults are PostgreSQL-native (`true`/`false`).
+- **Migration command path** (`scripts/db/migrate.sh`): defaults to Docker-native — it runs
+  Alembic *inside the backend service* via Compose, so it uses the in-network `postgres` host
+  (Postgres is not published to the host) and the matching client/deps from the backend image.
+  `--host` runs Alembic on the host only against an explicitly configured, reachable external
+  Postgres, with a connectivity preflight. `scripts/db/reset-postgres.sh` reuses this path so a
+  freshly dropped/created DB is always migrated (never left empty/unmigrated).
+  If Docker-native migration starts the compose `postgres` service, it stops that service on
+  exit; DB-only dump/restore/reset and offline system backup/restore/verify use the same
+  start/stop ownership rule. They leave a pre-existing running database untouched.
+- **Pre-migration backup safety** (`scripts/db/migrate.sh`): `--mode prod` requires a
+  pre-migration `pg_dump -Fc` backup before Alembic runs, written to
+  `$ASPACE_ROOT/<mode>/db/dumps/pre-migrate-<timestamp>.dump`. If that dump fails, migration
+  aborts before Alembic touches the schema. Non-prod modes skip it for convenience; opt in with
+  `PRE_MIGRATION_BACKUP=1` or `--pre-migration-backup`.
+- **Fresh-instance bootstrap** (`app.bootstrap.bootstrap_instance`, called from lifespan): on an
+  empty migrated DB it idempotently ensures the default personal space, the default owner user +
+  active membership, and the default execution planes — the usable initial state.
+- PostgreSQL data lives under `$ASPACE_ROOT/<mode>/db/postgres` (bind-mounted into the postgres container).
+- Database dumps live under `$ASPACE_ROOT/<mode>/db/dumps`.
+- Local test mode keeps host API `localhost:8100`, but the backend container listens on
+  internal port `8000` and compose-internal clients use `http://backend:8000`.
+- Job queue uses `SELECT ... FOR UPDATE SKIP LOCKED` for safe concurrent claim. `jobs.scheduled_at`
+  is NOT NULL with a server default, and DB CHECK constraints enforce the allowed `status` set,
+  `attempts >= 0`, and `max_attempts > 0`.
 - `RunStep` has DB-level `UniqueConstraint(run_id, step_index)`.
-- `BackupService` uses a local advisory lock file (`backups/.backup.lock`, fcntl-based) and fails closed when the sqlite backup API fails.
+- `BackupService` uses a local advisory lock file (`backups/.backup.lock`, fcntl-based) and fails closed when `pg_dump` fails.
+- Backup/restore uses `pg_dump -Fc --no-owner --no-acl` (custom format) and `pg_restore`. The
+  backend image pins `postgresql-client-${PG_MAJOR}` to the `postgres:<major>` server so the
+  online `pg_dump` client is never older than the server. Backups are disabled by default; prod
+  fails fast at startup unless `BACKUP_ENABLED=true` or `BACKUP_ACCEPT_NO_BACKUP=true`.
 
-## Postgres Compatibility Rules
+## Deployment Topology Assumption
 
-Do not introduce patterns that block a future Postgres migration:
-- No SQLite-only SQL in new infrastructure.
-- No reliance on SQLite loose typing or implicit constraint behavior.
-- Use explicit FK, index, and unique constraints where needed.
-- Timestamps must be UTC.
+Current local deployment assumes one backend process owns startup migration/bootstrap/schedulers. Multi-backend deployment is out of current scope and requires separate migration/bootstrap and scheduler leadership.
+
+## Rules
+
+- Use explicit FK, index, and unique constraints.
+- Timestamps must be UTC with timezone.
 - Store large files in storage; store metadata and relative paths in DB.
 - Avoid long transactions and transaction-spanning external calls.
-- Do not rely on application-only `MAX()+1` ordering for distributed writers without a future lock/constraint note. Current `RunStep.step_index` uses `MAX()+1` for local SQLite — a documented distributed-runner risk.
+- Do not rely on application-only `MAX()+1` ordering for distributed writers without a future lock/constraint note. Current `RunStep.step_index` uses `MAX()+1` — a documented distributed-runner risk.
 
 ## Anti-Patterns
 
@@ -121,6 +170,5 @@ Do not introduce patterns that block a future Postgres migration:
 
 ## Known Future Work
 
-- **Postgres migration** — requires removing SQLite-only patterns, ensuring UTC timestamps everywhere, FK constraint review, and migration of existing data.
 - **Distributed multi-host locking** — current single-process advisory lock does not extend to multi-host. Requires a real distributed lock service.
 - **Stronger RunStep ordering under distributed writers** — current `MAX()+1` approach is not safe under concurrent writers. Requires DB sequence or distributed counter.

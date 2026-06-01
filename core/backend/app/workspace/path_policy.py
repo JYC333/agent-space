@@ -29,7 +29,14 @@ class PathPolicyError(PermissionError):
 _FORBIDDEN_DIR_NAMES = {".ssh", ".aws", ".gcp", ".azure", "credentials"}
 _FORBIDDEN_DIR_SEQUENCES = {("instance", "secrets"), ("config", "secrets")}
 _FORBIDDEN_FILE_NAMES = {".env", "id_rsa", "id_ed25519"}
-_ALLOWED_ENV_TEMPLATE_NAMES = {".env.example", ".env.sample", ".env.template"}
+_ALLOWED_ENV_TEMPLATE_NAMES = {
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+    ".env.dev.example",
+    ".env.test.example",
+    ".env.prod.example",
+}
 _FORBIDDEN_FILE_SUFFIXES = {".pem", ".key"}
 
 # Agents may not write these file types directly — must go through a patch proposal

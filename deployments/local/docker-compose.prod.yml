@@ -1,9 +1,28 @@
 services:
+  postgres:
+    container_name: agent-space-prod-postgres
+    image: postgres:${POSTGRES_MAJOR:-18}
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-agent_space}
+      - POSTGRES_USER=${POSTGRES_USER:-agent_space}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required for production}
+      - PGDATA=/var/lib/postgresql/data
+    volumes:
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/prod}/db/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_space} -d ${POSTGRES_DB:-agent_space}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   backend:
     build:
       context: ../../core/backend
       dockerfile: Dockerfile
       network: host
+      args:
+        PG_MAJOR: ${POSTGRES_MAJOR:-18}
     volumes:
       - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/prod}:/aspace
       - claude-home:/home/agentspace/.claude
@@ -16,10 +35,15 @@ services:
       - INSTANCE_ROOT=/aspace
       - STORAGE_ROOT=/aspace/storage
       - LOG_ROOT=/aspace/logs
-      - DATABASE_URL=sqlite:////aspace/db/agent_space.sqlite
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-agent_space}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required for production}@postgres:5432/${POSTGRES_DB:-agent_space}}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
       - DEPLOYER_SOCKET_PATH=/aspace/run/deployer.sock
       - CLAUDE_HOME=/home/agentspace/.claude
       - AGENT_SPACE_ENV=prod
+    depends_on:
+      postgres:
+        condition: service_healthy
     working_dir: /app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 

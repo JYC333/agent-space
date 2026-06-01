@@ -1,11 +1,11 @@
 """Workflow tests for the RunEvaluation -> TaskEvaluation bridge."""
 
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime
 
 import pytest
-from ulid import ULID
 
 from app.models import (
     Artifact,
@@ -28,7 +28,7 @@ from tests.support import factories
 
 
 def _id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _setup(db, *, space_id: str | None = None, user_id: str | None = None) -> tuple[str, str]:

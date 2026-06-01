@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 """
 DailyCaptureReportService — generates a Daily Capture Report for one
 space/user/date.
@@ -22,7 +23,6 @@ from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..config import settings
 from ..memory.provider_client import (
@@ -59,7 +59,7 @@ _VALID_MEMORY_TYPES = frozenset({"semantic", "episodic", "preference", "procedur
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _truncate(text: str, max_chars: int) -> str:
@@ -126,7 +126,6 @@ def _ensure_system_agent(db: Session, space_id: str) -> tuple[str, str]:
         name=_NAME,
         description="System agent for daily capture report generation.",
         status="active",
-        current_version_id=version_id,
     )
     version = AgentVersion(
         id=version_id,
@@ -140,7 +139,10 @@ def _ensure_system_agent(db: Session, space_id: str) -> tuple[str, str]:
         runtime_policy_json=dict(DEFAULT_RUNTIME_POLICY),
     )
     db.add(agent)
+    db.flush()
     db.add(version)
+    db.flush()
+    agent.current_version_id = version_id
     db.flush()
     return agent_id, version_id
 

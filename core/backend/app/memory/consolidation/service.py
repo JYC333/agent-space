@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 
 import logging
 from dataclasses import dataclass, field
@@ -6,7 +7,6 @@ from datetime import datetime, UTC
 from types import SimpleNamespace
 from typing import Sequence
 
-from ulid import ULID
 from sqlalchemy.orm import Session
 
 from ...db_uow import UnitOfWork
@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 
 def _new_run_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 @dataclass

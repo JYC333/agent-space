@@ -11,6 +11,7 @@ Covers:
 """
 
 from __future__ import annotations
+import uuid
 
 import asyncio
 import subprocess
@@ -20,7 +21,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from ulid import ULID
 
 from tests.support import factories
 
@@ -64,23 +64,23 @@ def _patch_success_adapter_without_artifact(monkeypatch) -> None:
 
 
 def _make_queue_svc(db):
-    """Build a DatabaseQueueService backed by the test session's engine."""
-    from app.jobs.queue import DatabaseQueueService
+    """Build a PostgresQueueService backed by the test session's engine."""
+    from app.jobs.queue import PostgresQueueService
     from sqlalchemy.orm import sessionmaker
 
     Session = sessionmaker(bind=db.bind)
-    return DatabaseQueueService(db_factory=Session)
+    return PostgresQueueService(db_factory=Session)
 
 
 def _dt(dt: datetime) -> str:
-    """Serialize datetime for raw SQLite text() parameters."""
+    """Serialize datetime for PostgreSQL text() parameters (ISO format)."""
     if dt.tzinfo is not None:
         dt = dt.astimezone(UTC).replace(tzinfo=None)
     return dt.isoformat(sep=" ")
 
 
 class TestHeartbeatPreventsReclaim:
-    """DatabaseQueueService.reclaim_stuck_jobs uses COALESCE(heartbeat_at, updated_at).
+    """PostgresQueueService.reclaim_stuck_jobs uses COALESCE(heartbeat_at, updated_at).
     A job with a fresh heartbeat_at must never be reclaimed even when updated_at is stale."""
 
     def test_job_with_fresh_heartbeat_is_not_reclaimed(self, db):
@@ -93,7 +93,7 @@ class TestHeartbeatPreventsReclaim:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
 
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -136,7 +136,7 @@ class TestHeartbeatPreventsReclaim:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
 
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -185,7 +185,7 @@ class TestNoHeartbeatIsReclaimable:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
 
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -223,7 +223,7 @@ class TestNoHeartbeatIsReclaimable:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
 
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -261,7 +261,7 @@ class TestNoHeartbeatIsReclaimable:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
 
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -280,7 +280,7 @@ class TestNoHeartbeatIsReclaimable:
         db.expire_all()
         reloaded = db.query(Job).filter(Job.id == job.id).first()
         assert reloaded.heartbeat_at is not None, "heartbeat_at was not set"
-        # heartbeat_at should be between before and after (timezone-naive SQLite comparison)
+        # heartbeat_at should be between before and after
         hb = reloaded.heartbeat_at
         if hb.tzinfo is None:
             from datetime import timezone
@@ -794,7 +794,7 @@ class TestOrphanLockCleanup:
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
 
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -842,7 +842,7 @@ class TestOrphanLockCleanup:
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
 
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -877,6 +877,84 @@ class TestOrphanLockCleanup:
         remaining_lock = db.query(RunExecutionLock).filter(RunExecutionLock.run_id == run.id).first()
         assert remaining_lock is not None, "Active run lock was removed for a fresh-heartbeat job"
 
+    def test_lock_cleanup_failure_writes_job_event_and_reclaim_continues(self, db_engine_isolated):
+        """Best-effort stale lock cleanup failures are visible in job events."""
+        from app.jobs.queue import PostgresQueueService
+        from app.models import Job, JobEvent, RunExecutionLock
+        from sqlalchemy import text
+        from sqlalchemy.orm import sessionmaker
+
+        Session = sessionmaker(bind=db_engine_isolated)
+        db = Session()
+        space_id = "test-orphan-cleanup-warning"
+        try:
+            factories.create_test_space(db, space_id=space_id, commit=True)
+            user = factories.create_test_user(db, space_id=space_id, commit=True)
+            agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
+            run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
+
+            job = Job(
+                id=str(uuid.uuid4()),
+                space_id=space_id,
+                user_id=user.id,
+                job_type="agent_run",
+                status="running",
+                attempts=1,
+                max_attempts=3,
+                scheduled_at=datetime.now(UTC),
+                claimed_by="worker-stale",
+                payload={"run_id": run.id, "space_id": space_id, "user_id": user.id},
+            )
+            db.add(job)
+            db.flush()
+            stale_ts = _dt(datetime.now(UTC) - timedelta(hours=2))
+            db.execute(text("UPDATE jobs SET updated_at = :ts, heartbeat_at = :ts WHERE id = :id"),
+                       {"ts": stale_ts, "id": job.id})
+            db.add(
+                RunExecutionLock(
+                    run_id=run.id,
+                    locked_at=datetime.now(UTC) - timedelta(hours=2),
+                    worker_id="worker-stale",
+                    job_id=job.id,
+                )
+            )
+            db.commit()
+
+            class FailingLockCleanupSession:
+                def __init__(self):
+                    self.inner = Session()
+
+                def execute(self, statement, params=None, *args, **kwargs):
+                    if "DELETE FROM run_execution_locks" in str(statement):
+                        raise RuntimeError("forced lock cleanup failure")
+                    return self.inner.execute(statement, params, *args, **kwargs)
+
+                def __getattr__(self, name):
+                    return getattr(self.inner, name)
+
+            svc = PostgresQueueService(db_factory=FailingLockCleanupSession)
+            n = svc._reclaim_stuck_sync(600)
+
+            assert n >= 1
+            db.expire_all()
+            reloaded_job = db.query(Job).filter(Job.id == job.id).first()
+            assert reloaded_job.status == "pending"
+            assert db.query(RunExecutionLock).filter(RunExecutionLock.run_id == run.id).first() is not None
+
+            event = (
+                db.query(JobEvent)
+                .filter(JobEvent.job_id == job.id, JobEvent.event_type == "warning")
+                .one_or_none()
+            )
+            assert event is not None
+            assert event.message == "orphan run execution lock cleanup failed during stuck-job reclaim"
+            assert event.data == {
+                "operation": "reclaim_stuck_jobs",
+                "diagnostic": "orphan_run_execution_lock_cleanup_failed",
+            }
+        finally:
+            db.close()
+
     def test_stale_lock_cleanup_does_not_affect_unrelated_active_run(self, db):
         """Reclaiming job A's stale lock must not delete job B's active lock."""
         from app.models import Job, RunExecutionLock
@@ -892,7 +970,7 @@ class TestOrphanLockCleanup:
 
         # Stale job for run_a
         job_a = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -905,7 +983,7 @@ class TestOrphanLockCleanup:
         )
         # Fresh-heartbeat job for run_b
         job_b = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -962,7 +1040,7 @@ class TestHeartbeatLifecycle:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
 
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -995,7 +1073,7 @@ class TestHeartbeatLifecycle:
         factories.create_test_space(db, space_id=space_id, commit=True)
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -1026,7 +1104,7 @@ class TestHeartbeatLifecycle:
         factories.create_test_space(db, space_id=space_id, commit=True)
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -1055,7 +1133,7 @@ class TestHeartbeatLifecycle:
         factories.create_test_space(db, space_id=space_id, commit=True)
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type="agent_run",
@@ -1093,9 +1171,9 @@ class TestHeartbeatLifecycle:
         stale_hb = datetime.now(UTC) - timedelta(hours=1)
         # Unique job_type prevents _claim_next_sync from picking up leftover
         # pending rows that were reclaimed by earlier tests in this session.
-        unique_job_type = f"test-hb-claim-{str(ULID())}"
+        unique_job_type = f"test-hb-claim-{str(uuid.uuid4())}"
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user.id,
             job_type=unique_job_type,
@@ -1129,9 +1207,8 @@ class TestJobCancellationLinkage:
 
     def _make_job_with_run(self, db, *, space_id: str, user_id: str, run, job_status: str):
         from app.models import Job
-        from ulid import ULID
         job = Job(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user_id,
             job_type="agent_run",
@@ -1284,8 +1361,7 @@ class TestDuplicateExecutionQueueSemantics:
         lock_svc.try_acquire(run.id, worker_id="worker-holder")
         db.commit()
 
-        from ulid import ULID
-        job = SimpleNamespace(id=str(ULID()), space_id=space_id, user_id=user.id, payload=None)
+        job = SimpleNamespace(id=str(uuid.uuid4()), space_id=space_id, user_id=user.id, payload=None)
         payload = {"run_id": run.id, "space_id": space_id, "user_id": user.id}
 
         result = _execute_existing_run(job, payload, run.id)
@@ -1321,8 +1397,7 @@ class TestDuplicateExecutionQueueSemantics:
         lock_svc.try_acquire(run.id, worker_id="worker-holder-np")
         db.commit()
 
-        from ulid import ULID
-        job = SimpleNamespace(id=str(ULID()), space_id=space_id, user_id=user.id, payload=None)
+        job = SimpleNamespace(id=str(uuid.uuid4()), space_id=space_id, user_id=user.id, payload=None)
         payload = {"run_id": run.id, "space_id": space_id, "user_id": user.id}
         _execute_existing_run(job, payload, run.id)
 

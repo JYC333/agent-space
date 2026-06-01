@@ -1,9 +1,9 @@
 """Unit tests for project_id filter on durable object list APIs."""
 
 from __future__ import annotations
+import uuid
 
 import pytest
-from ulid import ULID
 
 from app.activity.service import ActivityService
 from app.artifacts.service import ArtifactReadService
@@ -15,11 +15,11 @@ from tests.support.ids import DEFAULT_USER_ID, PERSONAL_SPACE_ID
 
 
 def _space() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _user() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,9 @@
 """Contracts: activity consolidation HTTP + job handler registration."""
 
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime
-from ulid import ULID
 
 from app.jobs.handlers import get_handler, list_registered
 from app.models import ActivityRecord, Proposal
@@ -58,7 +58,7 @@ def test_consolidation_proposal_payload_has_dedupe_and_provenance(db, cross_spac
     a = cross_space_pair_db["space_a_id"]
     ua = cross_space_pair_db["user_a"]
     act = ActivityRecord(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         user_id=ua.id,
         activity_type="chat_message",

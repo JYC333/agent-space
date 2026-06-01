@@ -1,15 +1,15 @@
 """Canonical TaskRun-based linkage for run outputs."""
 
 from __future__ import annotations
+import uuid
 
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..models import Artifact, Proposal, Run, TaskArtifact, TaskProposal, TaskRun
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def link_run_outputs_to_tasks(

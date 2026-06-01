@@ -3,7 +3,7 @@
 ## 1. Repository Context
 
 agent-space is a space-based, multi-user, agent-first system for personal, family, and small-team
-use within a single deployment instance. It has a FastAPI backend (SQLite), a React/Vite frontend
+use within a single deployment instance. It has a FastAPI backend (PostgreSQL), a React/Vite frontend
 (PWA), and a server-authoritative agent execution model: agents run server-side inside isolated
 sandboxes, memory is written only through a proposal → approval workflow, and policy and
 credentials are enforced centrally. The system is **not** local-first; it supports offline capture
@@ -64,7 +64,7 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 
 | Doc | What it covers |
 |---|---|
-| [architecture/DATABASE_AND_TRANSACTIONS.md](architecture/DATABASE_AND_TRANSACTIONS.md) | UnitOfWork, transaction ownership, external call boundary, SQLite/Postgres rules |
+| [architecture/DATABASE_AND_TRANSACTIONS.md](architecture/DATABASE_AND_TRANSACTIONS.md) | UnitOfWork, transaction ownership, external call boundary, PostgreSQL rules |
 | [architecture/MEMORY_MODEL.md](architecture/MEMORY_MODEL.md) | Memory scopes, visibility, access control |
 | [architecture/PROPOSALS.md](architecture/PROPOSALS.md) | Proposal types, lifecycle, apply flow |
 | [architecture/TASK_BOARD_MODEL.md](architecture/TASK_BOARD_MODEL.md) | Task, Board, TaskRun, TaskArtifact, TaskProposal ORM |

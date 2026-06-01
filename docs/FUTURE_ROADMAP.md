@@ -89,9 +89,6 @@ begins.
 
 ## Infrastructure and Scale
 
-- **Postgres migration.** Current SQLite patterns will require rewrite. Existing data
-  migration is non-trivial and requires full audit of implicit SQLite behaviors first.
-
 - **Production-grade rate limits and advisory locks.** Current rate limits are service-layer
   only. The advisory lock for backups is single-host. Distributed locking is not designed.
 

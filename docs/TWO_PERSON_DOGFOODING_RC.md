@@ -73,8 +73,8 @@ The following surfaces are allowed after all release gates pass:
 
 **Backup and restore**
 - Automatic local backups through `BackupService` (primary — `BACKUP_ENABLED=true` required).
-- Manual backup via `POST /api/v1/system/backups/manual` or `scripts/backup.sh` (fallback only).
-- Manual restore through `scripts/restore.sh` or documented restore procedure.
+- Manual backup via `POST /api/v1/system/backups/manual` or, offline, `scripts/system/backup.sh`.
+- Full-system restore through `scripts/system/restore.sh`. DB-only tools under `scripts/db/`.
 - Restore is always manual and explicit.
 
 **Deployment**
@@ -185,7 +185,7 @@ Multi-user dogfooding requires each user to authenticate with their own credenti
 
 ```
 AGENT_SPACE_HOME/          (default: ~/aspace/dev/)
-  db/                      SQLite database (all spaces, memory, proposals, runs, etc.)
+  db/                      PostgreSQL data volume + pg_dump archives
   storage/                 Artifact storage files
   secrets/                 Encrypted provider key files
   config/                  Runtime configuration
@@ -250,7 +250,7 @@ Expected: clean build with no TypeScript or bundler errors.
 ### Script syntax check
 
 ```bash
-bash -n scripts/backup.sh scripts/restore.sh
+bash -n scripts/system/backup.sh scripts/system/restore.sh scripts/db/*.sh
 ```
 
 Expected: no output (no syntax errors).
@@ -258,7 +258,7 @@ Expected: no output (no syntax errors).
 ### Optional: shellcheck
 
 ```bash
-shellcheck scripts/backup.sh scripts/restore.sh
+shellcheck scripts/system/backup.sh scripts/system/restore.sh scripts/db/*.sh
 ```
 
 ### Focused test groups by boundary
@@ -571,7 +571,7 @@ grep "backup scheduler" ~/aspace/dev/logs/backend.log
 # Expected: "backup scheduler started"
 ```
 
-### Trigger a manual backup (primary: API; fallback: shell script)
+### Trigger a manual backup (API, or offline CLI)
 
 **API (backend running):**
 ```bash
@@ -580,11 +580,11 @@ curl -s -X POST http://localhost:8000/api/v1/system/backups/manual \
 # Expected: {"status": "ok", "backup": "manual-YYYYMMDD-HHMMSS.tar.gz"}
 ```
 
-**Shell script fallback (backend not running):**
+**Offline full-system CLI (backend not running, postgres up):**
 ```bash
-./scripts/backup.sh --mode dev
-# Archives to ~/aspace/dev/backups/fallback-<timestamp>.tar.gz (same dir as BackupService)
-# Note: shell script does NOT write backup_manifest.json
+scripts/system/backup.sh --mode dev
+# Archives to ~/aspace/dev/backups/system-<timestamp>.tar.gz
+# Same archive format as BackupService (PostgreSQL snapshot + files + backup_manifest.json)
 ```
 
 ### List backup archives
@@ -610,36 +610,39 @@ Expected fields in manifest:
 - `kind: "auto"` or `"manual"`
 - `created_at` — ISO timestamp
 - `source_root` — absolute path of data root at backup time
-- `included_paths` — list: `db/`, `storage/`, `secrets/`, `config/`, `workspaces/`
-- `excluded_paths` — `backups/`, `sandboxes/`, `cache/` with reason
-- `db_snapshot_method: "sqlite-backup-api"`
+- `included_paths` — list: `db/agent_space.dump`, `storage/`, `artifacts/`, `secrets/`, `config/`, `workspaces/`
+- `excluded_paths` — `backups/`, `sandboxes/`, `cache/`, `db/postgres/` with reason
+- `db_snapshot_method: "pg_dump_custom"`
 - `warnings` — empty list for clean backup
 
-### Restore into a clean target root
+### Restore rehearsal (full-system: database + files)
 
-**Stop the instance first:**
+Rehearse against the disposable `test` mode so the live `dev` data is untouched.
+
+**Stop the app, leave postgres running:**
 ```bash
-docker compose -f deployments/local/docker-compose.dev.yml stop
+docker compose -p agent-space-test -f deployments/local/docker-compose.test.yml stop backend frontend deployer
+docker compose -p agent-space-test -f deployments/local/docker-compose.test.yml up -d postgres
 ```
 
 **Restore:**
 ```bash
 ARCHIVE=~/aspace/dev/backups/auto-<timestamp>.tar.gz
 
-# Restore to clean location (preferred for rehearsal)
-./scripts/restore.sh "$ARCHIVE" --mode dev-restored
-
-# If overwriting existing root (requires --force):
-./scripts/restore.sh "$ARCHIVE" --mode dev --force
+# Full-system restore into the disposable test mode (database + files)
+scripts/system/restore.sh "$ARCHIVE" --mode test --force
 ```
 
-`--force` removes the existing data root before extracting. All current data is replaced.
+`--force` overwrites existing file data; the database is rebuilt with `pg_restore`. The live `db/postgres` directory is never touched.
 
 ### Verify restored app starts
 
 ```bash
-AGENT_SPACE_HOME=~/aspace/dev-restored ./scripts/start.sh
-curl -s http://localhost:8000/health
+# The restore above targeted --mode test, so start that mode to verify it.
+# (start.sh derives the mode root from ASPACE_ROOT, default ~/aspace; it does not
+#  read AGENT_SPACE_HOME — that is the in-container instance root.)
+./scripts/start.sh --test
+curl -s http://localhost:8100/health
 # Expected: {"status": "ok", ...}
 ```
 
@@ -686,10 +689,10 @@ Use this procedure when a stop condition triggers or a serious incident occurs.
 
 Prevent new writes from entering the database:
 ```bash
-docker compose -f deployments/local/docker-compose.dev.yml stop backend worker
+docker compose -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend deployer
 ```
 
-Do not stop the frontend yet — it will naturally lose backend connectivity.
+Keep postgres running so restore tooling can connect.
 
 ### Step 2 — Stop all services
 
@@ -724,8 +727,11 @@ git reset --hard <known-good-commit>
 ### Step 6 — Restore from last known-good backup (if data integrity suspect)
 
 ```bash
+# Bring postgres back up so pg_restore can connect (the app stays stopped)
+docker compose -p agent-space-dev -f deployments/local/docker-compose.dev.yml up -d postgres
+
 ARCHIVE=$(ls ~/aspace/dev/backups/auto-*.tar.gz | sort | tail -2 | head -1)
-./scripts/restore.sh "$ARCHIVE" --mode dev --force
+scripts/system/restore.sh "$ARCHIVE" --mode dev --force
 ```
 
 Use the backup immediately before the problem started, not the latest one (which may
@@ -792,8 +798,8 @@ Resume dogfooding only after the failed gate passes and the incident note is fil
 7. **Backup fails repeatedly** — `BackupService` cannot complete a backup or produce
    `backup_manifest.json` after two consecutive automatic intervals.
 
-8. **Restore rehearsal fails** — `scripts/restore.sh` fails, or the restored app fails
-   to start, or key data is missing after restore.
+8. **Restore rehearsal fails** — `scripts/system/restore.sh` fails, or the restored app
+   fails to start, or key data is missing after restore.
 
 9. **Workspace scan deletes metadata** — `POST /workspaces/scan` hard-deletes a
    workspace row instead of marking it `stale`.

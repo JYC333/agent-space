@@ -16,10 +16,14 @@ from .policy.exceptions import PolicyAuditPersistError, PolicyGateBlocked
 async def lifespan(app: FastAPI):
     paths.init_dirs()
     paths.validate()
+
+    # Backup safety policy: fail fast in prod when backups are disabled and not
+    # explicitly acknowledged (warn elsewhere). Runs before any data is written.
+    from .backups.guard import enforce_backup_policy
+    enforce_backup_policy(settings)
+
     # Alembic upgrade is synchronous and can take noticeable time on cold DBs.
     await asyncio.to_thread(init_db)
-    from .db import migrate_db
-    migrate_db()
 
     from .db import SessionLocal
     from .capabilities.registry import CapabilityRegistry
@@ -28,22 +32,26 @@ async def lifespan(app: FastAPI):
     from .models import Space, SpaceMembership
     from .jobs import handlers as _job_handlers  # noqa: F401 — registers job handlers
     from .daily_reports import handlers as _daily_report_handlers  # noqa: F401 — registers daily_capture_report handler
-    from .jobs.queue import DatabaseQueueService, init_queue
+    from .jobs.queue import PostgresQueueService, init_queue
     from .jobs.worker import start_worker
 
     db = SessionLocal()
     try:
         CapabilityRegistry(db).reload()
 
+        # Bring a fresh (empty) PostgreSQL database to a usable initial state:
+        # default personal space, default owner user + membership, and default
+        # execution planes. Idempotent — safe on every startup.
+        from .bootstrap import bootstrap_instance
+        bootstrap_instance(
+            db,
+            space_id=settings.default_space_id,
+            user_id=settings.default_user_id,
+        )
+
         # Register system-core workspace if configured
         from .workspaces.system_core import register_system_core_workspace
         register_system_core_workspace(db)
-
-        # Seed default execution planes only when the default space already exists
-        _default_space = db.query(Space).filter(Space.id == settings.default_space_id).first()
-        if _default_space:
-            from .execution_planes.seeder import seed_default_execution_planes
-            seed_default_execution_planes(db, settings.default_space_id)
 
         if settings.debug:
             dev_space = db.query(Space).filter(Space.id == settings.default_space_id).first()
@@ -69,7 +77,7 @@ async def lifespan(app: FastAPI):
         db.close()
 
     # Initialise the durable job queue and start the background worker
-    queue = DatabaseQueueService(SessionLocal)
+    queue = PostgresQueueService(SessionLocal)
     init_queue(queue)
     worker_task = await start_worker(queue)
 
@@ -119,6 +127,8 @@ async def lifespan(app: FastAPI):
             interval_hours=settings.backup_interval_hours,
             retention_count=settings.backup_retention_count,
             include_logs=settings.backup_include_logs,
+            database_url=settings.database_url,
+            app_version=settings.app_version,
         )
         _backup_scheduler = BackupScheduler(
             service=_backup_svc,

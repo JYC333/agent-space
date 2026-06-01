@@ -20,6 +20,7 @@ Covers:
 """
 
 from __future__ import annotations
+import uuid
 
 import subprocess
 from datetime import UTC, datetime
@@ -771,7 +772,6 @@ def test_task_linked_run_code_patch_produces_task_proposal_link(
     A run linked to a Task via TaskRun that produces a code_patch proposal must
     also create a TaskProposal row linking the proposal back to the task.
     """
-    from ulid import ULID
     from app.config import settings
 
     repo = tmp_path / "repo"
@@ -807,10 +807,10 @@ def test_task_linked_run_code_patch_produces_task_proposal_link(
     db.commit()
 
     # Create a Task and link the run to it via TaskRun
-    task = Task(id=str(ULID()), space_id=a, title="Implement feature X")
+    task = Task(id=str(uuid.uuid4()), space_id=a, title="Implement feature X")
     db.add(task)
     db.flush()
-    tr = TaskRun(id=str(ULID()), space_id=a, task_id=task.id, run_id=run_row.id)
+    tr = TaskRun(id=str(uuid.uuid4()), space_id=a, task_id=task.id, run_id=run_row.id)
     db.add(tr)
     db.commit()
 
@@ -864,7 +864,6 @@ def test_task_proposal_link_not_duplicated(
     Calling link_run_outputs_to_tasks a second time for the same proposal does not
     produce a duplicate TaskProposal row.
     """
-    from ulid import ULID
     from app.models import Proposal
     from app.runs.task_output_linkage import link_run_outputs_to_tasks
 
@@ -875,15 +874,15 @@ def test_task_proposal_link_not_duplicated(
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
     run_row = db.query(Run).filter(Run.id == run.id).one()
 
-    task = Task(id=str(ULID()), space_id=a, title="Idempotence check")
+    task = Task(id=str(uuid.uuid4()), space_id=a, title="Idempotence check")
     db.add(task)
     db.flush()
 
-    tr = TaskRun(id=str(ULID()), space_id=a, task_id=task.id, run_id=run_row.id)
+    tr = TaskRun(id=str(uuid.uuid4()), space_id=a, task_id=task.id, run_id=run_row.id)
     db.add(tr)
 
     proposal = Proposal(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         created_by_run_id=run_row.id,
         proposal_type="code_patch",

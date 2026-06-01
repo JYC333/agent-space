@@ -1,28 +1,21 @@
-from __future__ import annotations
-"""
-QueueService — replaceable durable job queue abstraction.
+"""Durable job queue.
 
-DatabaseQueueService is the default backend (SQLite/SQLAlchemy).
-Swap for a Redis or AMQP implementation without changing any caller.
+``PostgresQueueService`` is the queue implementation. It uses
+``SELECT … FOR UPDATE SKIP LOCKED`` for safe concurrent claim. ``QueueService``
+is the internal interface that queue consumers depend on.
 """
+from __future__ import annotations
+import uuid
 
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, UTC
 from typing import Callable
 
-from ulid import ULID
 
 log = logging.getLogger(__name__)
 
 _queue_service: "QueueService | None" = None
-
-
-def _dt(dt: datetime) -> str:
-    """Serialize datetime for raw SQLite text() parameters (matches SQLAlchemy storage format)."""
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(UTC).replace(tzinfo=None)
-    return dt.isoformat(sep=" ")
 
 
 def get_queue() -> "QueueService":
@@ -37,7 +30,7 @@ def init_queue(q: "QueueService") -> None:
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +38,10 @@ def _new_id() -> str:
 # ---------------------------------------------------------------------------
 
 class QueueService(ABC):
-    """All queue backends must implement this interface."""
+    """Internal queue interface that queue consumers depend on.
+
+    Implemented by ``PostgresQueueService``.
+    """
 
     @abstractmethod
     async def enqueue(
@@ -70,16 +66,18 @@ class QueueService(ABC):
     ) -> "Job | None": ...
 
     @abstractmethod
-    async def start_job(self, job_id: str) -> None: ...
+    async def start_job(self, job_id: str, worker_id: str | None = None) -> None: ...
 
     @abstractmethod
-    async def complete_job(self, job_id: str, result: dict | None = None) -> None: ...
+    async def complete_job(
+        self, job_id: str, result: dict | None = None, worker_id: str | None = None
+    ) -> None: ...
 
     @abstractmethod
-    async def fail_job(self, job_id: str, error: str) -> None: ...
+    async def fail_job(self, job_id: str, error: str, worker_id: str | None = None) -> None: ...
 
     @abstractmethod
-    async def cancel_job(self, job_id: str) -> None: ...
+    async def cancel_job(self, job_id: str, worker_id: str | None = None) -> None: ...
 
     @abstractmethod
     async def append_event(
@@ -116,13 +114,13 @@ class QueueService(ABC):
     async def get_events(self, job_id: str) -> "list[JobEvent]": ...
 
     @abstractmethod
-    async def touch_heartbeat(self, job_id: str) -> None:
+    async def touch_heartbeat(self, job_id: str, worker_id: str | None = None) -> None:
         """Update heartbeat_at to now so reclaim logic treats this job as alive."""
         ...
 
     @abstractmethod
     async def reclaim_stuck_jobs(self, stuck_after_seconds: int = 600) -> int:
-        """Reset claimed/running jobs that haven't progressed (e.g. after a crash).
+        """Recover claimed/running jobs that haven't progressed (e.g. after a crash).
 
         Uses COALESCE(heartbeat_at, updated_at) so a job that is actively
         sending heartbeats is never considered stuck, even if updated_at is old.
@@ -134,14 +132,13 @@ class QueueService(ABC):
 # Database-backed implementation
 # ---------------------------------------------------------------------------
 
-class DatabaseQueueService(QueueService):
+class PostgresQueueService(QueueService):
     """
-    SQLite/SQLAlchemy queue backend.
+    PostgreSQL-backed queue using row-level locking (SELECT ... FOR UPDATE SKIP LOCKED).
 
-    Claim atomicity relies on SQLite's single-writer guarantee in WAL mode plus
-    an UPDATE … WHERE id = (SELECT id … LIMIT 1) RETURNING id query that is
-    processed as a single statement. Safe for a multi-threaded single-process
-    deployment; add row-level locking when migrating to PostgreSQL.
+    Claim atomicity is guaranteed by PostgreSQL row-level locking: concurrent workers
+    each attempt to lock a pending job row; only one succeeds per row, and SKIP LOCKED
+    ensures others immediately move on to the next available row rather than blocking.
     """
 
     def __init__(self, db_factory: Callable):
@@ -206,7 +203,7 @@ class DatabaseQueueService(QueueService):
             db.close()
 
     # ------------------------------------------------------------------
-    # claim_next — atomic UPDATE via subquery + RETURNING
+    # claim_next — PostgreSQL SELECT ... FOR UPDATE SKIP LOCKED
     # ------------------------------------------------------------------
 
     async def claim_next(self, worker_id, job_types=None):
@@ -217,36 +214,43 @@ class DatabaseQueueService(QueueService):
         from ..models import Job
         db = self._db_factory()
         try:
-            now = _dt(datetime.now(UTC))
+            now = datetime.now(UTC)
             params: dict = {"worker_id": worker_id, "now": now}
 
-            type_clause = ""
+            type_filter = ""
             if job_types:
-                names = [f":jt{i}" for i in range(len(job_types))]
-                type_clause = f"AND job_type IN ({', '.join(names)})"
+                placeholders = ", ".join(f":jt{i}" for i in range(len(job_types)))
+                type_filter = f"AND job_type IN ({placeholders})"
                 for i, t in enumerate(job_types):
                     params[f"jt{i}"] = t
 
+            # SELECT ... FOR UPDATE SKIP LOCKED atomically claims one pending job.
+            # attempts is incremented here so a crash between claim and start still
+            # consumes an attempt; start_job only transitions claimed → running.
+            # heartbeat_at is reset to NULL: no heartbeat has been sent for this
+            # attempt yet, so any stale value from a prior attempt is cleared.
+            # Liveness until start_job uses COALESCE(heartbeat_at, updated_at).
             result = db.execute(text(f"""
                 UPDATE jobs
                 SET status       = 'claimed',
                     claimed_by   = :worker_id,
                     claimed_at   = :now,
                     heartbeat_at = NULL,
+                    attempts     = attempts + 1,
                     updated_at   = :now
                 WHERE id = (
                     SELECT id FROM jobs
                     WHERE  status       = 'pending'
                       AND  scheduled_at <= :now
                       AND  attempts     < max_attempts
-                      {type_clause}
+                      {type_filter}
                     ORDER BY priority DESC, scheduled_at ASC
+                    FOR UPDATE SKIP LOCKED
                     LIMIT 1
                 )
                 RETURNING id
             """), params)
 
-            # Fetch BEFORE commit — cursor is invalidated after commit
             row = result.fetchone()
             db.commit()
 
@@ -254,8 +258,9 @@ class DatabaseQueueService(QueueService):
                 return None
             return db.query(Job).filter(Job.id == row[0]).first()
         except Exception:
+            log.exception("claim_next: database error — rolling back and re-raising")
             db.rollback()
-            return None
+            raise
         finally:
             db.close()
 
@@ -263,18 +268,33 @@ class DatabaseQueueService(QueueService):
     # start_job
     # ------------------------------------------------------------------
 
-    async def start_job(self, job_id: str) -> None:
-        await self._run_in_thread(self._start_job_sync, job_id)
+    async def start_job(self, job_id: str, worker_id: str | None = None) -> None:
+        await self._run_in_thread(self._start_job_sync, job_id, worker_id)
 
-    def _start_job_sync(self, job_id: str) -> None:
+    @staticmethod
+    def _owns(job, worker_id: str | None) -> bool:
+        """Ownership gate for claimed/running transitions.
+
+        When a ``worker_id`` is supplied, only the worker that claimed the job
+        (``job.claimed_by``) may transition it. ``worker_id=None`` is reserved for
+        operator/system actions (e.g. an API cancel) that intentionally bypass the
+        worker-ownership check.
+        """
+        return worker_id is None or job.claimed_by == worker_id
+
+    def _start_job_sync(self, job_id: str, worker_id: str | None = None) -> None:
         from ..models import Job
         db = self._db_factory()
         try:
             job = db.query(Job).filter(Job.id == job_id).first()
-            if job:
+            # Only transition claimed → running. Non-claimed jobs (completed, failed,
+            # cancelled, or already running) are ignored so duplicate start_job calls
+            # are safe and terminal jobs are never reopened. attempts is not touched
+            # here — it is consumed at claim time. Only the claiming worker may start
+            # the job: a non-owner worker is a no-op.
+            if job and job.status == "claimed" and self._owns(job, worker_id):
                 now = datetime.now(UTC)
                 job.status = "running"
-                job.attempts = (job.attempts or 0) + 1
                 job.started_at = now
                 job.heartbeat_at = now
                 db.commit()
@@ -285,15 +305,22 @@ class DatabaseQueueService(QueueService):
     # complete_job
     # ------------------------------------------------------------------
 
-    async def complete_job(self, job_id: str, result: dict | None = None) -> None:
-        await self._run_in_thread(self._complete_job_sync, job_id, result)
+    async def complete_job(
+        self, job_id: str, result: dict | None = None, worker_id: str | None = None
+    ) -> None:
+        await self._run_in_thread(self._complete_job_sync, job_id, result, worker_id)
 
-    def _complete_job_sync(self, job_id: str, result: dict | None) -> None:
+    def _complete_job_sync(
+        self, job_id: str, result: dict | None, worker_id: str | None = None
+    ) -> None:
         from ..models import Job
         db = self._db_factory()
         try:
             job = db.query(Job).filter(Job.id == job_id).first()
-            if job:
+            # Only the claiming worker may complete a claimed/running job. Terminal
+            # jobs (completed, failed, cancelled) stay terminal; a non-owner worker
+            # is a no-op.
+            if job and job.status in ("claimed", "running") and self._owns(job, worker_id):
                 job.status = "completed"
                 job.result = result
                 job.completed_at = datetime.now(UTC)
@@ -306,19 +333,23 @@ class DatabaseQueueService(QueueService):
     # fail_job — auto-retry if attempts < max_attempts
     # ------------------------------------------------------------------
 
-    async def fail_job(self, job_id: str, error: str) -> None:
-        await self._run_in_thread(self._fail_job_sync, job_id, error)
+    async def fail_job(self, job_id: str, error: str, worker_id: str | None = None) -> None:
+        await self._run_in_thread(self._fail_job_sync, job_id, error, worker_id)
 
-    def _fail_job_sync(self, job_id: str, error: str) -> None:
+    def _fail_job_sync(self, job_id: str, error: str, worker_id: str | None = None) -> None:
         from ..models import Job
         db = self._db_factory()
         try:
             job = db.query(Job).filter(Job.id == job_id).first()
-            if not job:
+            # Only the claiming worker may fail/retry a claimed/running job. Terminal
+            # jobs (completed, failed, cancelled) stay terminal; a non-owner worker
+            # is a no-op.
+            if not job or job.status not in ("claimed", "running") or not self._owns(job, worker_id):
                 return
             job.error = error
             job.heartbeat_at = None
             job.completed_at = datetime.now(UTC)
+            # Retry decision uses attempts incremented at claim time.
             if job.attempts < job.max_attempts:
                 # Back to pending for retry
                 job.status = "pending"
@@ -336,15 +367,22 @@ class DatabaseQueueService(QueueService):
     # cancel_job
     # ------------------------------------------------------------------
 
-    async def cancel_job(self, job_id: str) -> None:
-        await self._run_in_thread(self._cancel_job_sync, job_id)
+    async def cancel_job(self, job_id: str, worker_id: str | None = None) -> None:
+        await self._run_in_thread(self._cancel_job_sync, job_id, worker_id)
 
-    def _cancel_job_sync(self, job_id: str) -> None:
+    def _cancel_job_sync(self, job_id: str, worker_id: str | None = None) -> None:
         from ..models import Job, Run
         db = self._db_factory()
         try:
             job = db.query(Job).filter(Job.id == job_id).first()
-            if not job or job.status not in ("pending", "claimed"):
+            # Allowed source states: pending, claimed, running. Terminal jobs
+            # (completed, failed, cancelled) stay terminal. A worker that later
+            # calls complete_job/fail_job on this now-cancelled job is a no-op.
+            # When a worker_id is supplied, only the claiming worker may cancel a
+            # claimed/running job; operator/system cancels pass worker_id=None.
+            if not job or job.status not in ("pending", "claimed", "running"):
+                return
+            if not self._owns(job, worker_id):
                 return
             job.status = "cancelled"
             job.heartbeat_at = None
@@ -462,17 +500,23 @@ class DatabaseQueueService(QueueService):
     # touch_heartbeat — called periodically by the worker while handler runs
     # ------------------------------------------------------------------
 
-    async def touch_heartbeat(self, job_id: str) -> None:
-        await self._run_in_thread(self._touch_heartbeat_sync, job_id)
+    async def touch_heartbeat(self, job_id: str, worker_id: str | None = None) -> None:
+        await self._run_in_thread(self._touch_heartbeat_sync, job_id, worker_id)
 
-    def _touch_heartbeat_sync(self, job_id: str) -> None:
+    def _touch_heartbeat_sync(self, job_id: str, worker_id: str | None = None) -> None:
         from sqlalchemy import text
         db = self._db_factory()
         try:
-            now = _dt(datetime.now(UTC))
+            # Only claimed/running jobs have a live heartbeat. Terminal jobs
+            # (completed, failed, cancelled) are never touched. When a worker_id is
+            # supplied, only the claiming worker (claimed_by) may heartbeat the job.
             db.execute(
-                text("UPDATE jobs SET heartbeat_at = :now WHERE id = :id"),
-                {"now": now, "id": job_id},
+                text(
+                    "UPDATE jobs SET heartbeat_at = :now "
+                    "WHERE id = :id AND status IN ('claimed', 'running') "
+                    "AND (CAST(:worker_id AS text) IS NULL OR claimed_by = :worker_id)"
+                ),
+                {"now": datetime.now(UTC), "id": job_id, "worker_id": worker_id},
             )
             db.commit()
         finally:
@@ -485,54 +529,111 @@ class DatabaseQueueService(QueueService):
     async def reclaim_stuck_jobs(self, stuck_after_seconds: int = 600) -> int:
         return await self._run_in_thread(self._reclaim_stuck_sync, stuck_after_seconds)
 
+    def _record_reclaim_warning_events(self, db, job_ids: list[str], now: datetime) -> None:
+        from ..models import JobEvent
+
+        message = "orphan run execution lock cleanup failed during stuck-job reclaim"
+        for job_id in sorted(set(job_ids)):
+            db.add(
+                JobEvent(
+                    id=_new_id(),
+                    job_id=job_id,
+                    event_type="warning",
+                    message=message,
+                    data={
+                        "operation": "reclaim_stuck_jobs",
+                        "diagnostic": "orphan_run_execution_lock_cleanup_failed",
+                    },
+                    created_at=now,
+                )
+            )
+        db.commit()
+
+    def _delete_orphan_run_execution_lock(self, db, job_id: str, run_id: str) -> None:
+        from sqlalchemy import text
+
+        db.execute(text("""
+            DELETE FROM run_execution_locks
+            WHERE run_id = :run_id
+              AND (job_id = :job_id OR job_id IS NULL)
+        """), {"run_id": run_id, "job_id": job_id})
+
     def _reclaim_stuck_sync(self, stuck_after_seconds: int) -> int:
         import json as _json
         from sqlalchemy import text
+        from datetime import timedelta
         db = self._db_factory()
         try:
-            from datetime import timedelta
-            cutoff = _dt(datetime.now(UTC) - timedelta(seconds=stuck_after_seconds))
+            now = datetime.now(UTC)
+            cutoff = now - timedelta(seconds=stuck_after_seconds)
 
             # Phase 1: clean up orphaned run_execution_locks for stuck agent_run jobs.
-            # A lock whose job_id matches a stuck job (or is NULL/old-style) is stale.
-            # A lock held by a fresh-heartbeating job is NOT in the stuck list and
-            # will never be deleted here.
-            try:
-                stuck_run_jobs = db.execute(text("""
-                    SELECT id, payload_json FROM jobs
-                    WHERE status IN ('claimed', 'running')
-                      AND job_type = 'agent_run'
-                      AND attempts < max_attempts
-                      AND COALESCE(heartbeat_at, updated_at) < :cutoff
-                """), {"cutoff": cutoff}).fetchall()
+            stuck_run_jobs = db.execute(text("""
+                SELECT id, payload_json FROM jobs
+                WHERE status IN ('claimed', 'running')
+                  AND job_type = 'agent_run'
+                  AND COALESCE(heartbeat_at, updated_at) < :cutoff
+            """), {"cutoff": cutoff}).fetchall()
 
-                for row in stuck_run_jobs:
-                    job_id, payload_raw = row[0], row[1]
-                    try:
-                        payload = (
-                            _json.loads(payload_raw)
-                            if isinstance(payload_raw, str)
-                            else (payload_raw or {})
-                        )
-                    except Exception:
-                        continue
-                    run_id = payload.get("run_id")
-                    if not run_id:
-                        continue
-                    db.execute(text("""
-                        DELETE FROM run_execution_locks
-                        WHERE run_id = :run_id
-                          AND (job_id = :job_id OR job_id IS NULL)
-                    """), {"run_id": run_id, "job_id": job_id})
+            cleanup_targets: list[tuple[str, str]] = []
+            for row in stuck_run_jobs:
+                job_id, payload_raw = row[0], row[1]
+                try:
+                    payload = (
+                        _json.loads(payload_raw)
+                        if isinstance(payload_raw, str)
+                        else (payload_raw or {})
+                    )
+                except Exception:
+                    continue
+                run_id = payload.get("run_id")
+                if run_id:
+                    cleanup_targets.append((job_id, run_id))
+
+            try:
+                for job_id, run_id in cleanup_targets:
+                    self._delete_orphan_run_execution_lock(db, job_id, run_id)
             except Exception:
+                db.rollback()
+                if cleanup_targets:
+                    self._record_reclaim_warning_events(
+                        db,
+                        [job_id for job_id, _run_id in cleanup_targets],
+                        now,
+                    )
                 log.warning(
                     "Orphan lock cleanup failed during reclaim_stuck_jobs — continuing",
                     exc_info=True,
                 )
 
-            # Phase 2: move stuck jobs back to pending and reset heartbeat_at.
+            # Phase 2: return retryable stuck jobs to pending and fail exhausted ones.
+            # Capture the run_ids of the *exhausted* agent_run jobs first (before the
+            # failing UPDATE changes their status) so their linked non-terminal Runs
+            # can be moved to a terminal state once the job itself becomes failed.
+            exhausted_run_rows = db.execute(text("""
+                SELECT payload_json FROM jobs
+                WHERE status IN ('claimed', 'running')
+                  AND job_type = 'agent_run'
+                  AND COALESCE(heartbeat_at, updated_at) < :cutoff
+                  AND attempts >= max_attempts
+            """), {"cutoff": cutoff}).fetchall()
+            exhausted_run_ids: list[str] = []
+            for row in exhausted_run_rows:
+                payload_raw = row[0]
+                try:
+                    payload = (
+                        _json.loads(payload_raw)
+                        if isinstance(payload_raw, str)
+                        else (payload_raw or {})
+                    )
+                except Exception:
+                    continue
+                run_id = payload.get("run_id")
+                if run_id:
+                    exhausted_run_ids.append(run_id)
+
             # COALESCE(heartbeat_at, updated_at): active heartbeat jobs are never reclaimed.
-            result = db.execute(text("""
+            pending_result = db.execute(text("""
                 UPDATE jobs
                 SET status       = 'pending',
                     claimed_by   = NULL,
@@ -543,11 +644,56 @@ class DatabaseQueueService(QueueService):
                 WHERE status IN ('claimed', 'running')
                   AND COALESCE(heartbeat_at, updated_at) < :cutoff
                   AND attempts < max_attempts
-            """), {"now": _dt(datetime.now(UTC)), "cutoff": cutoff})
+            """), {"now": now, "cutoff": cutoff})
+            failed_result = db.execute(text("""
+                UPDATE jobs
+                SET status       = 'failed',
+                    claimed_by   = NULL,
+                    claimed_at   = NULL,
+                    heartbeat_at = NULL,
+                    completed_at = :now,
+                    error        = :error,
+                    updated_at   = :now
+                WHERE status IN ('claimed', 'running')
+                  AND COALESCE(heartbeat_at, updated_at) < :cutoff
+                  AND attempts >= max_attempts
+            """), {
+                "now": now,
+                "cutoff": cutoff,
+                "error": "job stuck and retry attempts exhausted",
+            })
+
+            # Phase 3: move linked non-terminal Runs to a terminal state for the
+            # exhausted agent_run jobs just failed above. A Run left "running"/
+            # "queued" after its backing job is permanently dead would otherwise
+            # never reach a terminal state. Retryable jobs (returned to pending)
+            # intentionally leave their Run untouched so the retry can proceed.
+            if exhausted_run_ids:
+                from ..models import Run
+
+                _terminal_run_states = (
+                    "succeeded", "failed", "degraded", "cancelled", "waiting_for_review",
+                )
+                for run_id in dict.fromkeys(exhausted_run_ids):
+                    run = db.query(Run).filter(Run.id == run_id).first()
+                    if run and run.status not in _terminal_run_states:
+                        run.status = "failed"
+                        run.ended_at = now
+                        run.updated_at = now
+                        run.error_message = (
+                            "run abandoned: backing job stuck and retry attempts exhausted"
+                        )
+                        db.add(run)
+
             db.commit()
-            n = result.rowcount
+            n = (pending_result.rowcount or 0) + (failed_result.rowcount or 0)
             if n:
-                log.warning("Reclaimed %d stuck job(s) (stuck_after=%ds)", n, stuck_after_seconds)
+                log.warning("Recovered %d stuck job(s) (stuck_after=%ds)", n, stuck_after_seconds)
             return n
+        except Exception:
+            # Never hide DB errors as "nothing to reclaim" — roll back and re-raise.
+            log.exception("reclaim_stuck_jobs: database error — rolling back and re-raising")
+            db.rollback()
+            raise
         finally:
             db.close()

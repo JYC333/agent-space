@@ -1,6 +1,7 @@
 """Workflows: activity consolidation status, idempotency, episodic accept."""
 
 from __future__ import annotations
+import uuid
 
 import json
 
@@ -255,7 +256,6 @@ def test_consolidation_classifier_runs_without_open_transaction(db, test_user, t
 def test_consolidation_proposal_failure_rolls_back_partial_proposal(db, test_user, test_space, monkeypatch):
     from app.memory.consolidation import proposal_producer
     from app.models import MemoryEntry
-    from ulid import ULID
 
     a = test_space.id
     ua = test_user
@@ -275,7 +275,7 @@ def test_consolidation_proposal_failure_rolls_back_partial_proposal(db, test_use
     def add_then_fail(self, candidate, **kwargs):
         db.add(
             Proposal(
-                id=str(ULID()),
+                id=str(uuid.uuid4()),
                 space_id=a,
                 proposal_type="memory_create",
                 status="pending",

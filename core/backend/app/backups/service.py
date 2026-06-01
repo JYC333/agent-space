@@ -3,9 +3,9 @@
 Primary backup mechanism for two-person dogfooding. Called by BackupScheduler
 for automatic backups, and via API for manual backups.
 
-SQLite consistency: uses sqlite3.backup() API which produces a WAL-safe
-consistent snapshot even while the database is live. If the backup API fails,
-backup creation fails closed and no successful archive is produced.
+PostgreSQL: uses pg_dump custom format (-Fc --no-owner --no-acl) for a consistent
+database snapshot. If pg_dump fails, backup creation fails closed and no successful
+archive is produced.
 
 Never prints or logs raw secret values.
 """
@@ -15,7 +15,7 @@ import logging
 import fcntl
 import os
 import shutil
-import sqlite3
+import subprocess
 import tarfile
 import tempfile
 from contextlib import contextmanager
@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, UTC
 from pathlib import Path
 from typing import Iterator
+from urllib.parse import urlparse
 
 from .manifest import BackupManifest
 
@@ -37,6 +38,7 @@ _ALWAYS_EXCLUDED: dict[str, str] = {
     "backups":   "recursion prevention",
     "cache":     "ephemeral",
     "sandboxes": "ephemeral",
+    "db/postgres": "live PostgreSQL data",
 }
 
 
@@ -64,15 +66,16 @@ class BackupService:
         interval_hours: int = 24,
         retention_count: int = 7,
         include_logs: bool = False,
-        db_path: Path | None = None,
+        database_url: str | None = None,
+        app_version: str | None = None,
     ) -> None:
         self._data_root = data_root.resolve()
         self._backup_root = backup_root.resolve()
         self._interval_hours = interval_hours
         self._retention_count = retention_count
         self._include_logs = include_logs
-        # db_path defaults to the canonical AppPaths.db_file location.
-        self._db_path = db_path or (self._data_root / "db" / "agent_space.sqlite")
+        self._database_url = database_url
+        self._app_version = app_version
         self._lock_path = self._backup_root / ".backup.lock"
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -87,7 +90,6 @@ class BackupService:
         with self._file_lock(blocking=False):
             ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
             archive_path = self._backup_root / f"{kind}-{ts}.tar.gz"
-            # Handle same-second collisions (e.g. tests creating many backups rapidly)
             counter = 1
             while archive_path.exists():
                 archive_path = self._backup_root / f"{kind}-{ts}-{counter}.tar.gz"
@@ -102,10 +104,11 @@ class BackupService:
                     source_root=str(self._data_root),
                     included_paths=included,
                     excluded_paths=excluded,
-                    db_snapshot_method="sqlite-backup-api",
+                    db_snapshot_method="pg_dump_custom",
                     backup_interval_hours=self._interval_hours,
                     backup_retention_count=self._retention_count,
                     warnings=warnings,
+                    **self._version_metadata(),
                 )
                 (staging / "backup_manifest.json").write_text(manifest.to_json())
 
@@ -146,7 +149,6 @@ class BackupService:
         try:
             with self._file_lock(blocking=False):
                 auto_backups = [b for b in self.list_backups() if b.kind == "auto"]
-                # list_backups returns newest first; prune the tail
                 to_prune = auto_backups[self._retention_count:]
                 pruned: list[Path] = []
                 for entry in to_prune:
@@ -163,24 +165,48 @@ class BackupService:
 
     # ── Internal ───────────────────────────────────────────────────────────────
 
+    def _version_metadata(self) -> dict[str, str | None]:
+        """Best-effort version metadata recorded in the manifest for restore checks.
+
+        Every value is best-effort and may be None; gathering it must never abort
+        a backup. PostgreSQL is the server database.
+        """
+        from . import versions
+
+        def _safe(fn, *args):
+            try:
+                return fn(*args)
+            except Exception:
+                log.debug("version metadata gather failed for %s", getattr(fn, "__name__", fn), exc_info=True)
+                return None
+
+        return {
+            "app_version": self._app_version,
+            "git_commit": _safe(versions.git_commit),
+            "alembic_revision": _safe(versions.alembic_revision, self._database_url),
+            "postgres_server_version": _safe(versions.postgres_server_version, self._database_url),
+            "pg_dump_version": _safe(versions.pg_dump_version),
+        }
+
     def _stage(self, staging: Path) -> tuple[list[str], list[str], list[str]]:
         """Copy data into staging dir. Returns (included, excluded, warnings)."""
         included: list[str] = []
         excluded: list[str] = []
         warnings: list[str] = []
 
-        # DB — sqlite3 backup API for WAL-safe consistent snapshot
-        if self._db_path.exists():
+        # DB — pg_dump custom-format snapshot
+        if self._database_url:
             dest_db_dir = staging / "db"
             dest_db_dir.mkdir(parents=True, exist_ok=True)
-            dest_db = dest_db_dir / self._db_path.name
+            dest_dump = dest_db_dir / "agent_space.dump"
             try:
-                _sqlite_snapshot(self._db_path, dest_db)
+                _pg_dump(self._database_url, dest_dump)
+                included.append("db/agent_space.dump (pg_dump_custom)")
             except Exception as exc:
-                raise BackupError("sqlite backup API failed; backup aborted without raw file fallback") from exc
-            included.append(f"db/{self._db_path.name} (sqlite-backup-api)")
+                raise BackupError("pg_dump failed; backup aborted") from exc
         else:
-            excluded.append("db/ (sqlite file not found)")
+            excluded.append("db/ (DATABASE_URL not configured — skipped)")
+            warnings.append("Database not backed up: DATABASE_URL not set in BackupService")
 
         # Regular dirs
         for dirname in _INCLUDE_DIRS:
@@ -212,13 +238,7 @@ class BackupService:
 
     @contextmanager
     def _file_lock(self, *, blocking: bool) -> Iterator[None]:
-        """Cross-process local lock.
-
-        The lock file may remain after a crash, but the fcntl advisory lock is
-        released by the OS when the owning process exits. A leftover unlocked
-        file is therefore deterministic and safe to reuse.
-        """
-
+        """Cross-process local lock."""
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock_path.open("a+") as fh:
             flags = fcntl.LOCK_EX
@@ -238,12 +258,33 @@ class BackupService:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
-def _sqlite_snapshot(source: Path, dest: Path) -> None:
-    """Copy source SQLite DB to dest using the backup API (WAL-safe)."""
-    src_conn = sqlite3.connect(str(source))
-    dst_conn = sqlite3.connect(str(dest))
-    try:
-        src_conn.backup(dst_conn)
-    finally:
-        src_conn.close()
-        dst_conn.close()
+def _pg_dump(database_url: str, dest: Path) -> None:
+    """Dump PostgreSQL database to a custom-format archive using pg_dump.
+
+    Uses -Fc (custom format) with --no-owner and --no-acl so the dump can be
+    restored with pg_restore by any superuser without requiring original roles.
+    """
+    parsed = urlparse(database_url)
+    env = dict(os.environ)
+    if parsed.password:
+        env["PGPASSWORD"] = parsed.password
+
+    # -Fc          — custom format (portable, supports selective restore, smaller than plain SQL)
+    # --no-owner   — omit ownership commands (restore as any superuser)
+    # --no-acl     — omit GRANT/REVOKE (restore without needing original roles)
+    cmd = ["pg_dump", "--no-password", "-Fc", "--no-owner", "--no-acl"]
+    if parsed.hostname:
+        cmd += ["--host", parsed.hostname]
+    if parsed.port:
+        cmd += ["--port", str(parsed.port)]
+    if parsed.username:
+        cmd += ["--username", parsed.username]
+    db_name = parsed.path.lstrip("/")
+    cmd.append(db_name)
+
+    with dest.open("wb") as f:
+        result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, env=env, timeout=300)
+
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace")
+        raise RuntimeError(f"pg_dump exited with code {result.returncode}: {stderr[:500]}")

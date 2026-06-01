@@ -1,10 +1,10 @@
 """Invariant: canonical Intake/Evidence foundation."""
 from __future__ import annotations
+import uuid
 
 import pytest
 from pathlib import Path
 from sqlalchemy import func
-from ulid import ULID
 
 from app.config import settings
 from app.intake.service import IntakeDuplicateError, IntakeNotFound, IntakeService, IntakeValidationError
@@ -150,7 +150,7 @@ def test_source_connection_credential_reference_stays_in_space(db, cross_space_p
             owner_user_id=user_id,
             connector_key="manual_url",
             name="Missing credential",
-            credential_id=str(ULID()),
+            credential_id=str(uuid.uuid4()),
         )
 
     protected = svc.create_connection(
@@ -180,7 +180,7 @@ def test_source_connection_credential_reference_stays_in_space(db, cross_space_p
             space_id,
             protected.id,
             name="Still should not apply",
-            credential_id=str(ULID()),
+            credential_id=str(uuid.uuid4()),
         )
     assert protected.name == original_name
     assert protected.credential_id == original_credential_id
@@ -434,7 +434,7 @@ def test_evidence_link_target_validation_and_idempotence(db, cross_space_pair_db
     run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent)
     proposal = factories.create_test_proposal(db, space_id=space_id, run_id=run.id, created_by_user_id=user_id)
     task = Task(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=space_id,
         title="Evidence target task",
         created_by_user_id=user_id,
@@ -514,7 +514,7 @@ def test_evidence_link_rejects_cross_space_targets(db, cross_space_pair_db):
     other_memory = factories.create_test_memory_entry(db, space_id=other_space_id)
     other_knowledge = factories.create_test_knowledge_item(db, space_id=other_space_id)
     other_task = Task(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=other_space_id,
         title="Other evidence target task",
         created_by_user_id=other_user_id,
@@ -869,7 +869,7 @@ def test_run_event_normalization_creates_intake_and_evidence_only(db, cross_spac
     user_id = cross_space_pair_db["user_a"].id
     run = factories.create_test_run(db, space_id=space_id, user_id=user_id)
     event = RunEvent(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=space_id,
         run_id=run.id,
         event_index=0,
@@ -908,7 +908,7 @@ def test_run_event_normalization_is_idempotent(db, cross_space_pair_db):
     user_id = cross_space_pair_db["user_a"].id
     run = factories.create_test_run(db, space_id=space_id, user_id=user_id)
     event = RunEvent(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=space_id,
         run_id=run.id,
         event_index=0,
@@ -964,7 +964,7 @@ def test_internal_normalization_rejects_cross_space_objects(db, cross_space_pair
     other_run = factories.create_test_run(db, space_id=other_space_id, user_id=other_user_id)
     other_artifact = factories.create_test_artifact(db, space_id=other_space_id, run_id=other_run.id)
     other_event = RunEvent(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=other_space_id,
         run_id=other_run.id,
         event_index=0,

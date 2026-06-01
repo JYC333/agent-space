@@ -1,15 +1,15 @@
 from __future__ import annotations
+import uuid
 
 from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..models import MemoryRelation, ProvenanceLink
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 TARGET_MEMORY = "memory"

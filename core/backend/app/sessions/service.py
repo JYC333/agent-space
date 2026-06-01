@@ -1,10 +1,10 @@
 from __future__ import annotations
+import uuid
 """
 SessionService — manage chat sessions and messages.
 """
 
 from datetime import datetime, UTC
-from ulid import ULID
 from sqlalchemy.orm import Session as DBSession
 
 from ..models import Session, Message
@@ -13,7 +13,7 @@ from ..config import settings
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 class SessionService:

@@ -12,10 +12,10 @@ requires first-class granting-user approval.
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
 from datetime import UTC, datetime, timedelta
-from ulid import ULID
 
 from app.memory.retriever import MemoryRetriever
 from app.models import ContextSnapshot, MemoryEntry, PersonalMemoryGrant, Proposal, SpaceMembership
@@ -28,7 +28,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _personal_space(db):

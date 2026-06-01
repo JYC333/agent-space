@@ -1,8 +1,8 @@
 """HTTP contract: space type vocabulary, auth, and two-person membership boundaries."""
 
 from __future__ import annotations
+import uuid
 
-from ulid import ULID
 
 from app.auth.session import SESSION_COOKIE, UserSessionService
 from app.main import app as _app
@@ -21,7 +21,7 @@ def _params(space_id: str) -> dict[str, str]:
 
 
 def _membership(space_id: str, user_id: str, role: str = "member") -> SpaceMembership:
-    return SpaceMembership(id=str(ULID()), space_id=space_id, user_id=user_id, role=role, status="active")
+    return SpaceMembership(id=str(uuid.uuid4()), space_id=space_id, user_id=user_id, role=role, status="active")
 
 
 def test_create_space_uses_household_as_canonical_type(api_client, db, cross_space_pair_db):
@@ -65,8 +65,8 @@ def test_create_team_space_returns_team(api_client, db, cross_space_pair_db):
 
 
 def test_personal_space_is_private_to_member(api_client, db):
-    personal_id = str(ULID())
-    other_space_id = str(ULID())
+    personal_id = str(uuid.uuid4())
+    other_space_id = str(uuid.uuid4())
     factories.create_test_space(db, space_id=personal_id, name="A personal", space_type="personal")
     factories.create_test_space(db, space_id=other_space_id, name="B personal", space_type="personal")
     ua = factories.create_test_user(db, space_id=personal_id, display_name="Owner A")
@@ -88,9 +88,9 @@ def test_personal_space_is_private_to_member(api_client, db):
 
 
 def test_household_space_access_requires_membership(api_client, db):
-    household_id = str(ULID())
-    outside_space_id = str(ULID())
-    member_home_id = str(ULID())
+    household_id = str(uuid.uuid4())
+    outside_space_id = str(uuid.uuid4())
+    member_home_id = str(uuid.uuid4())
     factories.create_test_space(db, space_id=household_id, name="Shared home", space_type="household")
     factories.create_test_space(db, space_id=outside_space_id, name="Outside", space_type="team")
     factories.create_test_space(db, space_id=member_home_id, name="Member home", space_type="personal")

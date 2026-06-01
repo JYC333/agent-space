@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 """
 General proposal review: list, accept, reject — dispatches to ProposalApplyService.
 
@@ -16,7 +17,6 @@ from dataclasses import dataclass
 from datetime import datetime, UTC
 from typing import Any, Optional
 
-from ulid import ULID
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, case, func, not_, or_
 from sqlalchemy.orm.attributes import flag_modified
@@ -152,7 +152,7 @@ def _expired_filter_sql(now: datetime):
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _memory_provenance_entries(

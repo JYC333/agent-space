@@ -69,7 +69,7 @@ These fields are not yet in models.py but every new model should be designed so 
 
 1. **Self-hosted cloud relay** — agent-space server as sync hub between devices
 2. **Peer-to-peer** — direct device sync (no cloud dependency)
-3. **Third-party backend** — e.g., Turso/LibSQL for distributed SQLite
+3. **Third-party client-side sync store** — a client-side local store for offline capture (not the server-side backend)
 
 The sync layer must be pluggable — the choice of transport must not leak into model or business logic code.
 

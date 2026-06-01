@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 """
 AgentService — CRUD for Agent configurations and multi-agent run orchestration.
 
@@ -19,7 +20,6 @@ work happen in RunExecutionService — not in AgentService.
 """
 
 from datetime import datetime, UTC
-from ulid import ULID
 from sqlalchemy.orm import Session as DBSession
 from fastapi import HTTPException
 
@@ -38,7 +38,7 @@ _task_router = None
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _get_task_router():

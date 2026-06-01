@@ -19,6 +19,7 @@ Security invariants:
 """
 
 from __future__ import annotations
+import uuid
 
 import logging
 from dataclasses import dataclass
@@ -46,8 +47,7 @@ _MAX_MAX_ITEMS = 20
 
 
 def _new_id() -> str:
-    from ulid import ULID
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _write_event(

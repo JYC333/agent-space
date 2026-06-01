@@ -12,12 +12,12 @@ from sqlalchemy import (
     Float,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from .db import Base
@@ -64,8 +64,16 @@ class Space(Base):
     id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     type: Mapped[str] = mapped_column(String(32), nullable=False, default="personal")
-    # No DB FK: Space and User bootstrap each other in personal-mode setup.
-    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "users.id",
+            name="fk_spaces_created_by_user_id_users",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -152,7 +160,11 @@ class SpaceInvitation(Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="member")
     token_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
-    invited_by_user_id: Mapped[str] = mapped_column(UUID_COL, nullable=False)
+    invited_by_user_id: Mapped[str] = mapped_column(
+        UUID_COL,
+        ForeignKey("users.id", name="fk_space_invitations_invited_by_user_id_users", use_alter=True),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -187,7 +199,7 @@ class Workspace(Base):
     protected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     system_managed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     registered_from: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     # When True, root_path may resolve to a directory outside settings.workspace_root.
     # Defaults to False: all unqualified absolute paths that escape workspace_root are rejected.
     allow_external_root: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -226,7 +238,7 @@ class Project(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
     current_focus: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    settings_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    settings_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -291,7 +303,7 @@ class Credential(Base):
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     credential_type: Mapped[str] = mapped_column(String(64), nullable=False)
     secret_ref: Mapped[str] = mapped_column(Text, nullable=False)
-    scopes_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    scopes_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -308,8 +320,8 @@ class ModelProvider(Base):
     default_model: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     credential_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("credentials.id"), nullable=True, index=True)
-    capabilities_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    capabilities_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -337,7 +349,7 @@ class ExecutionPlane(Base):
     observability_level: Mapped[str] = mapped_column(String(64), nullable=False, default="black_box")
     data_exposure_level: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
     credential_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
-    config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
@@ -392,11 +404,11 @@ class RuntimeAdapter(Base):
     provider_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("model_providers.id"), nullable=True, index=True)
     credential_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("credentials.id"), nullable=True, index=True)
     credential_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
-    config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     health_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
     quota_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown", server_default=text("'unknown'"))
     execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
-    capability_support_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    capability_support_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -479,10 +491,18 @@ class Agent(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     role_instruction: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
-    # Nullable convenience pointer. DB FK is intentionally omitted to avoid an
-    # Agent <-> AgentVersion DDL cycle in the clean initial baseline; the
-    # canonical immutable execution FK is Run.agent_version_id.
-    current_version_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    # Nullable convenience pointer; Run.agent_version_id remains the canonical immutable execution FK.
+    current_version_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "agent_versions.id",
+            name="fk_agents_current_version_id_agent_versions",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -515,17 +535,36 @@ class AgentVersion(Base):
     model_name: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
     system_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    model_config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    runtime_config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    context_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    memory_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    capabilities_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    tool_permissions_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    runtime_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    model_config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    runtime_config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    context_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    memory_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    capabilities_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    tool_permissions_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    runtime_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     # Provenance for versions created by accepted agent_config_update proposals.
-    # Soft references avoid an AgentVersion <-> Proposal/Activity DDL ordering cycle.
-    source_proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
-    source_activity_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    source_proposal_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "proposals.id",
+            name="fk_agent_versions_source_proposal_id_proposals",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
+    source_activity_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "activity_records.id",
+            name="fk_agent_versions_source_activity_id_activity_records",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -554,7 +593,7 @@ class Session(Base):
     workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
     title: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -571,7 +610,7 @@ class Message(Base):
     user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
     session: Mapped[Session] = relationship("Session", back_populates="messages")
@@ -601,9 +640,17 @@ class SessionSummary(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
     summary_text: Mapped[str] = mapped_column(Text, nullable=False)
     source_message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    source_first_message_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
-    source_last_message_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
-    summary_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    source_first_message_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("messages.id", name="fk_session_summaries_source_first_message_id_messages", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_last_message_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("messages.id", name="fk_session_summaries_source_last_message_id_messages", ondelete="SET NULL"),
+        nullable=True,
+    )
+    summary_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     token_estimate_before: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     token_estimate_after: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     condenser_version: Mapped[str] = mapped_column(String(64), nullable=False, default="pattern.v1")
@@ -618,7 +665,7 @@ class SessionSummary(Base):
             "ix_session_summaries_one_active_per_session",
             "session_id",
             unique=True,
-            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
         ),
     )
 
@@ -650,7 +697,7 @@ class SourcePointer(Base):
     access_mode: Mapped[str] = mapped_column(String(32), nullable=False)
     granted_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
     __table_args__ = (
@@ -674,7 +721,7 @@ class Policy(Base):
     space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     domain: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
@@ -684,13 +731,29 @@ class Policy(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", server_default=text("'active'"), index=True)
     enforcement_mode: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
-    rule_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    applies_to_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    # Soft self-reference: no DB FK to avoid DDL cycle with policy versioning bootstrap.
-    supersedes_policy_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
-    # Soft reference to proposals: policies is created before proposals in migration order.
-    # Service layer enforces referential validity (no DB FK to avoid DDL ordering cycle).
-    created_from_proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    rule_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    applies_to_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    supersedes_policy_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "policies.id",
+            name="fk_policies_supersedes_policy_id_policies",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
+    created_from_proposal_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "proposals.id",
+            name="fk_policies_created_from_proposal_id_proposals",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -709,7 +772,7 @@ class ContextSnapshot(Base):
 
     id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
     space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
-    source_refs_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source_refs_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     compiled_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     token_estimate: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     relevant_period_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -725,24 +788,39 @@ class ContextSnapshot(Base):
     prefix_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     tail_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     compiler_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    retrieval_trace_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    token_budget_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    retrieval_trace_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    token_budget_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     policy_bundle_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     memory_digest_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     workspace_digest_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     # Runtime-facing context bundle fields. These represent the rendered context
     # sent to an external runtime (Codex, Claude Code, OpenCode, etc.).
-    # target_runtime_adapter_id and execution_plane_id are soft references (no FK
-    # constraint) because context_snapshots is seeded before runtime_adapters and
-    # execution_planes in the migration order.
-    target_runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
-    execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
-    included_memory_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    included_evidence_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    included_file_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    included_doc_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    redactions_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    target_runtime_adapter_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "runtime_adapters.id",
+            name="fk_context_snapshots_target_runtime_adapter_id_runtime_adapters",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    execution_plane_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "execution_planes.id",
+            name="fk_context_snapshots_execution_plane_id_execution_planes",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    included_memory_refs_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    included_evidence_refs_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    included_file_refs_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    included_doc_refs_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    redactions_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     data_exposure_level: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     rendered_context_uri: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     # Prefer rendered_context_uri for large rendered contexts. Use rendered_context_text
@@ -788,9 +866,9 @@ class ContextDigest(Base):
     content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Source traceability
-    source_memory_ids_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    source_policy_ids_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    source_relation_ids_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    source_memory_ids_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    source_policy_ids_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    source_relation_ids_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
     # Hashes for cache invalidation
     source_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
@@ -798,7 +876,7 @@ class ContextDigest(Base):
 
     # Dirty tracking
     dirty_since: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    dirty_reason_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    dirty_reason_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     dirty_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
 
     # Generation metadata
@@ -860,24 +938,29 @@ class Run(Base):
     model_provider_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("model_providers.id"), nullable=True, index=True)
     runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    error_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    output_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    usage_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    error_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    output_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    usage_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
-    # Optional primary-task hint (``Task.id``). Intentionally no DB FK: ``runs`` is
-    # created before ``tasks`` in the canonical migration, and SQLite cannot add this
-    # FK later without a batch table rebuild. **Canonical Task↔Run linkage is
-    # ``task_runs`` (TaskRun);** task board reads must use TaskRun, not this column alone.
-    task_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
-    # Soft reference to Project.id. No DB FK (SQLite ALTER TABLE cannot add FK to existing
-    # table without full rebuild). Project scoping is enforced at the service layer.
-    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    # Optional primary-task hint; canonical Task<->Run linkage is TaskRun.
+    task_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("tasks.id", name="fk_runs_task_id_tasks", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("projects.id", name="fk_runs_project_id_projects", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+        index=True,
+    )
     user_id = synonym("instructed_by_user_id")
     adapter_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     capability_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     model_selection_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="cli_default", server_default=text("'cli_default'"))
-    model_override_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    permission_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    model_override_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    permission_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     # Policy-derived minimum sandbox class for future real runtimes (no sandbox created here).
     required_sandbox_level: Mapped[str] = mapped_column(
         String(32), nullable=False, default="none", server_default=text("'none'")
@@ -898,7 +981,7 @@ class Run(Base):
     has_personal_grant_context: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
-    personal_grant_context_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    personal_grant_context_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     # Execution plane fields: where the run executed and at what trust/observability/exposure level.
     # observability_level, data_exposure_level, and trust_level are snapshots copied from the
@@ -985,18 +1068,34 @@ class ActivityRecord(Base):
     user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
     workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
     agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True, index=True)
-    # Soft reference only: ``tasks`` is created after ``activity_records`` and also
-    # references ``activity_records`` via ``tasks.source_activity_id``, so a FK from
-    # here to ``tasks.id`` would create a DDL bootstrap cycle. Task output linkage
-    # remains TaskRun / TaskArtifact / TaskProposal — never this column alone.
-    source_task_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
-    # Soft reference to Project.id — no DB FK; enforced at service layer.
-    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    # Optional provenance hint; task output linkage remains TaskRun / TaskArtifact / TaskProposal.
+    source_task_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "tasks.id",
+            name="fk_activity_records_source_task_id_tasks",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "projects.id",
+            name="fk_activity_records_project_id_projects",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
     source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     activity_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     title: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="raw", index=True)
@@ -1006,10 +1105,15 @@ class ActivityRecord(Base):
     # Default: internal_system — a conservative default that does not over-elevate trust.
     # Callers that know the activity came directly from a user should set user_confirmed.
     source_trust: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
-    source_integrity_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    entity_refs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    source_integrity_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    entity_refs_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     # subject_user_id: who the activity is *about* (distinct from user_id = who created it)
-    subject_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    subject_user_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("users.id", name="fk_activity_records_subject_user_id_users", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     lifecycle_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="raw", server_default=text("'raw'"), index=True
     )
@@ -1072,15 +1176,15 @@ class Artifact(Base):
     storage_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     storage_path: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     mime_type: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    exportable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("1"))
-    export_formats_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    exportable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    export_formats_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     canonical_format: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    preview: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("0"))
+    preview: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     relevant_period_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     relevant_period_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     visibility: Mapped[str] = mapped_column(
         String(32), nullable=False, default="space_shared", server_default=text("'space_shared'")
     )
@@ -1089,8 +1193,12 @@ class Artifact(Base):
     source_runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
     source_execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
     trust_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    # Soft reference to Project.id — no DB FK; enforced at service layer.
-    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("projects.id", name="fk_artifacts_project_id_projects", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
 
     run: Mapped[Optional[Run]] = relationship("Run", back_populates="artifacts")
@@ -1119,10 +1227,10 @@ class Proposal(Base):
     urgency: Mapped[str] = mapped_column(String(32), nullable=False, default="normal", index=True)
     # Dry-run preview marker. Preview proposals are distinguishable from
     # normal pending proposals; they must never be applied to active memory.
-    preview: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("0"))
+    preview: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     review_deadline: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
@@ -1139,8 +1247,12 @@ class Proposal(Base):
     visibility: Mapped[str] = mapped_column(
         String(32), nullable=False, default="space_shared", server_default=text("'space_shared'")
     )
-    # Soft reference to Project.id — no DB FK; enforced at service layer.
-    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("projects.id", name="fk_proposals_project_id_projects", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     type = synonym("proposal_type")
     decided_at = synonym("reviewed_at")
 
@@ -1263,7 +1375,7 @@ class ProposalApproval(Base):
     )
     target_space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -1282,7 +1394,7 @@ class ProposalApproval(Base):
             "approver_user_id",
             "grant_id",
             unique=True,
-            sqlite_where=text("status = 'approved'"),
+            postgresql_where=text("status = 'approved'"),
         ),
         Index("ix_proposal_approvals_created_at", "created_at"),
     )
@@ -1306,8 +1418,22 @@ class KnowledgeItem(Base):
     space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
     project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("projects.id"), nullable=True, index=True)
     workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
-    root_item_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
-    supersedes_item_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    root_item_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("knowledge_items.id", name="fk_knowledge_items_root_item_id_knowledge_items", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    supersedes_item_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "knowledge_items.id",
+            name="fk_knowledge_items_supersedes_item_id_knowledge_items",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
     item_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1316,10 +1442,10 @@ class KnowledgeItem(Base):
     visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="space_shared", index=True)
     verification_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unverified")
     reflection_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unreviewed")
-    tags_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    tags_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    source_refs_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source_refs_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     owner_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
     created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
     created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)
@@ -1378,6 +1504,7 @@ class KnowledgeRelation(Base):
     source_proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True)
     created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
     created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)
+    # Reserved for a future durable assessment table; no target table exists yet.
     created_from_assessment_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
@@ -1403,7 +1530,7 @@ class KnowledgeRelation(Base):
             "to_item_id",
             "relation_type",
             unique=True,
-            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
         ),
     )
 
@@ -1427,7 +1554,7 @@ class Board(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     default_view: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     sort_order: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
     created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
@@ -1456,7 +1583,7 @@ class BoardColumn(Base):
     wip_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_done_column: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_default_column: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -1498,9 +1625,9 @@ class Task(Base):
     source_proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True)
     source_artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("artifacts.id"), nullable=True)
 
-    acceptance_criteria_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    acceptance_criteria_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     definition_of_done: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    required_outputs_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    required_outputs_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     start_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -1515,9 +1642,9 @@ class Task(Base):
     max_cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     max_duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    policy_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    tags: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    policy_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    tags: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
@@ -1602,9 +1729,9 @@ class TaskEvaluation(Base):
     score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    checklist_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    known_issues_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    evidence_artifact_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    checklist_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    known_issues_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    evidence_artifact_ids: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     recommendation: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
@@ -1622,12 +1749,17 @@ class Job(Base):
     job_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    result_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    result_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
-    scheduled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Durable queue scheduling time. NOT NULL with a server default so a row can
+    # always be ordered by the claim query even if a writer omits it; enqueue()
+    # still sets it explicitly. Claim semantics require scheduled_at <= now().
+    scheduled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=text("now()")
+    )
     claimed_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -1645,6 +1777,32 @@ class Job(Base):
 
     events: Mapped[list["JobEvent"]] = relationship("JobEvent", back_populates="job", cascade="all, delete-orphan")
 
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('pending', 'claimed', 'running', 'completed', 'failed', 'cancelled')",
+            name="ck_jobs_status",
+        ),
+        CheckConstraint("attempts >= 0", name="ck_jobs_attempts_nonneg"),
+        CheckConstraint("max_attempts > 0", name="ck_jobs_max_attempts_positive"),
+        # Pending-claim index: matches the SELECT ... FOR UPDATE SKIP LOCKED claim
+        # query (WHERE status='pending' AND scheduled_at <= now ORDER BY priority
+        # DESC, scheduled_at ASC). Partial on pending so the index stays small.
+        Index(
+            "ix_jobs_claim_pending",
+            text("priority DESC"),
+            "scheduled_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        # Filtered-worker variant: workers that claim a subset of job_types.
+        Index(
+            "ix_jobs_type_claim_pending",
+            "job_type",
+            text("priority DESC"),
+            "scheduled_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
+
 
 class JobEvent(Base):
     """Infrastructure queue event log. Not a product-level Automation object."""
@@ -1655,7 +1813,7 @@ class JobEvent(Base):
     job_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("jobs.id"), nullable=False, index=True)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
-    data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
     job: Mapped[Job] = relationship("Job", back_populates="events")
@@ -1688,11 +1846,15 @@ class MemoryEntry(Base):
     sensitivity_level: Mapped[str] = mapped_column(
         String(32), nullable=False, default="normal", index=True
     )
-    selected_user_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    selected_user_ids: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     last_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
-    # Soft reference to Project.id — no DB FK; enforced at service layer.
-    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("projects.id", name="fk_memory_entries_project_id_projects", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True, index=True)
     capability_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     namespace: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
@@ -1710,21 +1872,32 @@ class MemoryEntry(Base):
     access_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_accessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     fitness_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    tags: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    tags: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
     memory_layer: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
     memory_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     event_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     event_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    summary_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    salience_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    summary_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    salience_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     last_retrieved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     reconsolidation_due: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    # Soft self-references: root_memory_id / supersedes_memory_id point to the
-    # lineage chain within a versioned semantic memory.  No DB FK to avoid DDL
-    # bootstrap ordering issues on first creation.
-    root_memory_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
-    supersedes_memory_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    root_memory_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("memory_entries.id", name="fk_memory_entries_root_memory_id_memory_entries", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    supersedes_memory_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "memory_entries.id",
+            name="fk_memory_entries_supersedes_memory_id_memory_entries",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
     source_trust: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     created_from_proposal_id: Mapped[Optional[str]] = mapped_column(
         UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True
@@ -1782,7 +1955,7 @@ class EntityRef(Base):
     entity_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, index=True)
     canonical_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, index=True)
     display_name: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    aliases_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    aliases_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     scope_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     scope_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
@@ -1801,7 +1974,7 @@ class MemoryRelation(Base):
     target_id: Mapped[str] = mapped_column(UUID_COL, nullable=False)
     relation_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    evidence_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    evidence_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_from_proposal_id: Mapped[Optional[str]] = mapped_column(
         UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True
     )
@@ -1827,8 +2000,7 @@ class Actor(Base):
     user_id/agent_id fields.  New records use actor_ref.  Do not migrate
     the old fields in bulk here.
 
-    Constraints enforced by ActorService (not all expressible as simple DB checks
-    with nullable columns in SQLite):
+    Constraints enforced by ActorService (service-layer rules, not DB-level constraints):
       - actor_type = user    → user_id required, agent_id must be null
       - actor_type = agent   → agent_id required, user_id must be null
       - actor_type in (system, service, job, automation, connector, integration)
@@ -1845,7 +2017,7 @@ class Actor(Base):
     service_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     display_name: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
-    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -1892,7 +2064,12 @@ class RunStep(Base):
     runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
     workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
     session_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("sessions.id"), nullable=True, index=True)
-    task_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    task_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("tasks.id", name="fk_run_steps_task_id_tasks", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("artifacts.id"), nullable=True, index=True)
     proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -1901,7 +2078,7 @@ class RunStep(Base):
     output_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error_type: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -1960,7 +2137,7 @@ class RunEvent(Base):
     proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True)
     data_exposure_level: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     trust_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, index=True)
 
     run: Mapped["Run"] = relationship("Run", back_populates="events")
@@ -2004,7 +2181,7 @@ class ProvenanceLink(Base):
     source_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     source_id: Mapped[str] = mapped_column(UUID_COL, nullable=False)
     source_trust: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    evidence_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    evidence_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
     __table_args__ = (
@@ -2090,7 +2267,7 @@ class PersonalMemoryGrant(Base):
     grant_scope: Mapped[str] = mapped_column(String(32), nullable=False)
     access_mode: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    memory_filter_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    memory_filter_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     read_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     egress_review_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     consume_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -2139,7 +2316,7 @@ class PersonalMemoryGrantEvent(Base):
     proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True)
     source_space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=True)
     target_space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=True)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
     grant: Mapped["PersonalMemoryGrant"] = relationship("PersonalMemoryGrant", back_populates="events")
@@ -2175,9 +2352,9 @@ class ValidationRecipe(Base):
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     task_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     risk_level: Mapped[str] = mapped_column(String(32), nullable=False, default="low")
-    commands_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    required_checks_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    artifact_expectations_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    commands_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    required_checks_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    artifact_expectations_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     timeout_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     requires_clean_git_state: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
@@ -2206,14 +2383,14 @@ class WorkspaceProfile(Base):
     space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
     workspace_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=False, index=True)
     repo_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    tech_stack_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    important_paths_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    forbidden_paths_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    test_commands_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    build_commands_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    architecture_boundaries_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    tech_stack_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    important_paths_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    forbidden_paths_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    test_commands_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    build_commands_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    architecture_boundaries_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     current_focus: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    known_failures_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    known_failures_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     validation_recipe_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("validation_recipes.id"), nullable=True)
     preferred_runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True)
     cloud_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -2264,7 +2441,7 @@ class ExternalRunRecord(Base):
     raw_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     raw_output_uri: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     imported_diff_uri: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    imported_artifacts_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    imported_artifacts_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     imported_logs_uri: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="imported")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
@@ -2307,14 +2484,14 @@ class RunReflection(Base):
     what_changed: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     what_worked: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     what_failed: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    reusable_rules_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    reusable_commands_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    workspace_facts_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    memory_candidates_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    capability_candidates_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    policy_candidates_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    validation_candidates_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    follow_up_tasks_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    reusable_rules_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    reusable_commands_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    workspace_facts_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    memory_candidates_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    capability_candidates_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    policy_candidates_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    validation_candidates_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    follow_up_tasks_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
@@ -2352,8 +2529,8 @@ class RunEvaluation(Base):
     failure_layer: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     failure_reason_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     trajectory_status: Mapped[str] = mapped_column(String(32), nullable=False)
-    evidence_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    rule_trace_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    evidence_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    rule_trace_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, index=True)
 
@@ -2401,9 +2578,9 @@ class RunFinalization(Base):
     failure_layer: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     failure_reason_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     trajectory_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    skipped_reasons_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    error_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    skipped_reasons_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    error_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     finalized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
@@ -2453,7 +2630,7 @@ class RuntimeToolBinding(Base):
     external_type: Mapped[str] = mapped_column(String(64), nullable=False)
     external_ref: Mapped[str] = mapped_column(String(512), nullable=False)
     display_name: Mapped[str] = mapped_column(String(256), nullable=False)
-    required_scopes_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    required_scopes_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     credential_ref: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     data_exposure_level: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
     observability_level: Mapped[str] = mapped_column(String(64), nullable=False, default="black_box")
@@ -2511,7 +2688,11 @@ class RunExecutionLock(Base):
         DateTime(timezone=True), nullable=False, default=_now,
     )
     worker_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    job_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+    job_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("jobs.id", name="fk_run_execution_locks_job_id_jobs", ondelete="SET NULL"),
+        nullable=True,
+    )
 
 
 class CliCredentialEvent(Base):
@@ -2528,7 +2709,11 @@ class CliCredentialEvent(Base):
     id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
     space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
     run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=True, index=True)
-    runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+    runtime_adapter_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("runtime_adapters.id", name="fk_cli_credential_events_runtime_adapter_id_runtime_adapters", ondelete="SET NULL"),
+        nullable=True,
+    )
     runtime_adapter_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     credential_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     # Source of the credential: "profile" | "container_default" | "none".
@@ -2567,7 +2752,7 @@ class PolicyDecisionRecord(Base):
     space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, nullable=True, index=True)
     actor_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     actor_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
-    actor_ref_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    actor_ref_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     action: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     resource_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     resource_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, index=True)
@@ -2581,7 +2766,7 @@ class PolicyDecisionRecord(Base):
     audit_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
     proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now, index=True
     )
@@ -2635,8 +2820,8 @@ class Automation(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     trigger_type: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
-    preflight_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    config_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    preflight_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    config_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -2660,18 +2845,16 @@ class AutomationRun(Base):
     """Link record connecting an Automation to the Run it triggered.
 
     Created by AutomationService.fire() alongside the Run row.
-    run_id is a soft reference (no DB FK) to match the pattern used in other
-    models where the runs table is created earlier in migration order.
     """
 
     __tablename__ = "automation_runs"
 
     id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
     automation_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("automations.id"), nullable=False, index=True)
-    run_id: Mapped[str] = mapped_column(UUID_COL, nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=False, index=True)
     triggered_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
     trigger_type: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
-    preflight_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    preflight_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
     automation: Mapped["Automation"] = relationship("Automation", back_populates="automation_runs")
@@ -2697,8 +2880,8 @@ class SourceConnector(Base):
     connector_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     ingestion_mode: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
-    capabilities_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    config_schema_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    capabilities_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    config_schema_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -2739,10 +2922,10 @@ class SourceConnection(Base):
     fetch_frequency: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
     capture_policy: Mapped[str] = mapped_column(String(64), nullable=False, default="metadata_only")
     trust_level: Mapped[str] = mapped_column(String(32), nullable=False, default="normal")
-    topic_hints_json: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    consent_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    topic_hints_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    consent_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     next_check_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
@@ -2772,7 +2955,7 @@ class SourceConnection(Base):
             "uq_source_connections_active_endpoint",
             "space_id", "connector_id", "endpoint_url",
             unique=True,
-            sqlite_where=text("endpoint_url IS NOT NULL AND deleted_at IS NULL AND status != 'archived'"),
+            postgresql_where=text("endpoint_url IS NOT NULL AND deleted_at IS NULL AND status != 'archived'"),
         ),
     )
 
@@ -2810,12 +2993,27 @@ class IntakeItem(Base):
     retention_policy: Mapped[str] = mapped_column(String(32), nullable=False, default="metadata_only")
     relevance_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     novelty_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    raw_artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
-    extracted_artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
-    summary_artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
+    raw_artifact_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("artifacts.id", name="fk_intake_items_raw_artifact_id_artifacts", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    extracted_artifact_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("artifacts.id", name="fk_intake_items_extracted_artifact_id_artifacts", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    summary_artifact_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("artifacts.id", name="fk_intake_items_summary_artifact_id_artifacts", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     search_index_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     embedding_index_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
@@ -2850,13 +3048,13 @@ class IntakeItem(Base):
             "uq_intake_items_active_canonical_uri",
             "space_id", "canonical_uri",
             unique=True,
-            sqlite_where=text("canonical_uri IS NOT NULL AND deleted_at IS NULL"),
+            postgresql_where=text("canonical_uri IS NOT NULL AND deleted_at IS NULL"),
         ),
         Index(
             "uq_intake_items_active_source_uri",
             "space_id", "source_uri",
             unique=True,
-            sqlite_where=text("source_uri IS NOT NULL AND deleted_at IS NULL"),
+            postgresql_where=text("source_uri IS NOT NULL AND deleted_at IS NULL"),
         ),
     )
 
@@ -2876,7 +3074,7 @@ class SourceSnapshot(Base):
     source_uri: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     capture_method: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
     trust_level: Mapped[str] = mapped_column(String(32), nullable=False, default="normal")
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
@@ -2919,7 +3117,7 @@ class ExtractionJob(Base):
     error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     # Sanitized short error description — never raw HTTP response body.
     error_message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
     __table_args__ = (
@@ -2962,7 +3160,7 @@ class ExtractedEvidence(Base):
     extraction_method: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate", index=True)
-    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
     created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True, index=True)
     created_by_run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=True, index=True)
@@ -3037,10 +3235,10 @@ class WorkspaceIntakeProfile(Base):
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
     observation_policy: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
-    routing_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    filters_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    extraction_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    context_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    routing_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    filters_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    extraction_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    context_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
@@ -3071,9 +3269,9 @@ class WorkspaceSourceBinding(Base):
     binding_key: Mapped[str] = mapped_column(String(128), nullable=False, default="default", server_default=text("'default'"))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    filters_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    routing_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    extraction_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    filters_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    routing_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    extraction_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
@@ -3118,7 +3316,7 @@ class DailyCaptureReportSetting(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     local_time: Mapped[str] = mapped_column(String(5), nullable=False, default="08:00")
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
-    include_source_types_json: Mapped[list] = mapped_column(JSON, nullable=False, default=lambda: ["user_capture"])
+    include_source_types_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=lambda: ["user_capture"])
     create_experience_proposals: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     create_memory_proposals: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     experience_confidence_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.75)

@@ -1,49 +1,41 @@
-# Agent Core — Agent Memory Foundation
+# core — Agent System Kernel
 
 An agent-first runtime focused on structured, user-controlled long-term memory.
 
 ## What this is
 
-Agent Core is not a chatbot or a CRUD app.
-It is a **harness around agents**: owning memory, context, proposals, permissions, and run logs while treating CLI tools (Claude, Codex, etc.) as pure execution engines.
+`core/` is not a chatbot or a CRUD app. It is a **harness around agents**: it owns memory,
+context, proposals, permissions, task board, and run logs while treating CLI tools (Claude,
+Codex, etc.) as pure execution engines.
+
+PostgreSQL is the only supported server database.
 
 ## Quick start
 
 ### Backend
+
 ```bash
 cd backend
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+# Instance data root for a direct local run (a concrete mode root, not the dev/test/prod parent):
+export AGENT_SPACE_HOME="$HOME/aspace/dev"
+uvicorn app.main:app --reload --port 8000   # → http://localhost:8000/docs
 ```
 
+The backend requires a reachable PostgreSQL database via `DATABASE_URL`
+(`postgresql+psycopg://…`). The usual path is `./scripts/start.sh` from the repo root, which
+brings up PostgreSQL, the backend, the frontend, and the deployer via Docker Compose.
+
 ### Frontend (React web app + PWA)
+
 ```bash
-cd frontend/web
+cd ../frontend
 npm install
 npm run dev        # → http://localhost:5173
 ```
 
-### Desktop (Tauri — requires Rust)
-```bash
-cd frontend/web
-npm install
-npm run tauri dev  # opens native desktop window
-```
-
-Prerequisites for desktop: [Rust](https://rustup.rs) + [Tauri CLI v2](https://tauri.app/start/prerequisites/)
-
-## Frontend stack
-
-| Platform | Technology | Status |
-|---|---|---|
-| Web | React + Vite | ✅ Active |
-| PWA | vite-plugin-pwa (installable on iPhone) | ✅ Active |
-| Desktop | Tauri + same React app | ✅ Scaffolded |
-| Mobile | React Native + Expo EAS Build | 🔜 Phase 6 |
-
-The web app and desktop app share the same React codebase.
-The PWA lets you install the web app on your iPhone from Safari with no App Store needed.
-React Native (future) will share API calls and business logic with the web app.
+The web app is React + Vite and is installable as a PWA. A `frontend/src-tauri/` directory
+exists, but desktop packaging is **deferred and not part of the current product**.
 
 ## First milestone flow
 
@@ -56,16 +48,20 @@ React Native (future) will share API calls and business logic with the web app.
 ## Running tests
 
 ```bash
-cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
+cd core/backend
+pip install -r requirements.txt -r requirements-test.txt
+python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
 ```
 
-``tests/conftest.py`` sets an isolated ``AGENT_SPACE_HOME`` before importing the app, so pytest does not open a real mode database.
+`tests/conftest.py` sets an isolated `AGENT_SPACE_HOME` before importing the app and runs the
+suite against a throwaway PostgreSQL container, so pytest never opens a real mode database.
 
 ## Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | `sqlite:///./data/agent_core.db` | Backend DB |
+| `DATABASE_URL` | dev/test local PostgreSQL URL | Backend DB (PostgreSQL only; authoritative connection string). Production must set an explicit non-development password. |
+| `AGENT_SPACE_HOME` | `~/aspace` | Instance data root for the running environment (`/aspace` in Docker; a mode root locally) |
 | `REFLECTOR_MODE` | `pattern` | `pattern` or `llm` |
 | `ANTHROPIC_API_KEY` | `` | Required for `llm` reflector mode |
 | `VITE_API_URL` | `/api/v1` | Frontend API base URL |
@@ -73,24 +69,24 @@ cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants
 ## Project structure
 
 ```
-agent-core/
+core/
 ├── backend/           FastAPI backend (Python)
 │   ├── app/
-│   │   ├── memory/    MemoryStore, ContextBuilder, Reflector, Proposals
-│   │   ├── sessions/  Session + Message service
-│   │   ├── agents/    Agent adapters + runner
+│   │   ├── memory/        MemoryStore, ContextBuilder, Reflector, Proposals
+│   │   ├── runs/          RunExecutionService (canonical run orchestration)
+│   │   ├── runtimes/      RuntimeAdapterSpec catalog + adapters
+│   │   ├── jobs/          Durable PostgreSQL job queue + worker
 │   │   ├── capabilities/  CapabilityRegistry
-│   │   ├── tasks/     Task service
-│   │   └── api/       FastAPI routers
+│   │   ├── backups/       BackupService (pg_dump full-system backup)
+│   │   └── modules/       Backend feature-module registry
+│   ├── migrations/    Alembic migrations (authoritative schema)
 │   └── tests/
-├── frontend/
-│   └── web/           React + Vite app (web + PWA + Tauri desktop)
-│       ├── src/       React components and pages
-│       └── src-tauri/ Tauri desktop wrapper config
 ├── capabilities/      Capability manifests
 ├── memory/            Memory scaffold files
 └── docs/              Architecture and design docs
 ```
+
+The frontend lives at the repo root in `../frontend` (React + Vite), not inside `core/`.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 See [docs/FUTURE_ROADMAP.md](docs/FUTURE_ROADMAP.md) for the platform strategy.

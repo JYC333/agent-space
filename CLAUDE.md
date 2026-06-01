@@ -7,7 +7,7 @@
 ## Project summary
 
 Space-based, multi-user, agent-first memory system. Supports personal, family, and team spaces
-within a single deployment instance. FastAPI backend with SQLite, React frontend.
+within a single deployment instance. FastAPI backend with PostgreSQL, React frontend.
 
 ## Directory layout
 
@@ -19,17 +19,24 @@ within a single deployment instance. FastAPI backend with SQLite, React frontend
   docs/                   Architecture documentation
   scripts/                Utility scripts (start.sh)
 
-~/aspace/               ← local data parent (optional: set AGENT_SPACE_HOME to override this parent)
+~/aspace/               ← ASPACE_ROOT: host-side parent holding the mode roots (override with ASPACE_ROOT)
   dev/                  ← default mode root (./scripts/start.sh); bind-mounted as /aspace in Docker
-    .env                  created from deployments/local/.env.example on first run
+    .env                  created from deployments/local/.env.dev.example on first run
     config/ db/ logs/ …   app-created dirs under this mode tree
   test/ prod/             other modes (--test / --prod)
 ```
 
 The source repo must **not** contain runtime data, user workspaces, sandboxes,
-secrets, db files, or logs. When using `scripts/start.sh`, app-managed runtime data for a profile
-lives under **`AGENT_SPACE_HOME/<mode>/`** on the host (defaults: `~/aspace/dev`, etc.). Inside
-containers, **`AGENT_SPACE_HOME=/aspace`** always refers to that mounted mode directory.
+secrets, db files, or logs. Two environment variables control data layout, and they mean
+different things:
+
+- **`ASPACE_ROOT`** (scripts only) — the host-side parent directory that holds the
+  `dev/`, `test/`, `prod/` mode roots. Default `~/aspace`. `scripts/start.sh` derives a
+  mode root as `$ASPACE_ROOT/<mode>` and never treats `AGENT_SPACE_HOME` as this parent.
+- **`AGENT_SPACE_HOME`** (the running app instance root) — the single data root for the
+  currently running environment. In Docker backend containers it is the bind mount
+  **`/aspace`**; for a direct local backend run it is a concrete mode root such as
+  `$HOME/aspace/dev`. It is **never** the parent that contains `dev/`/`test/`/`prod/`.
 
 ## Starting the system
 
@@ -40,9 +47,19 @@ containers, **`AGENT_SPACE_HOME=/aspace`** always refers to that mounted mode di
 ./scripts/start.sh --build   # Docker Compose with image rebuild
 ```
 
-On first run, `start.sh` creates `~/aspace/<mode>/` and copies `deployments/local/.env.example` to
-`~/aspace/<mode>/.env` when missing. Edit that file to set `ANTHROPIC_API_KEY`, then re-run.
-The `.env` file is never stored in the repo.
+On first run, `start.sh` creates `~/aspace/<mode>/` and copies the matching template
+(`deployments/local/.env.dev.example`, `.env.test.example`, or `.env.prod.example`) to
+`~/aspace/<mode>/.env` when missing. Edit that file to set credentials, then re-run.
+For `--prod`, replace the placeholder `POSTGRES_PASSWORD`; startup rejects empty,
+placeholder, and development passwords. The `.env` file is never stored in the repo.
+All local DB/system scripts use `scripts/lib/local-compose.sh` for the same mode/env
+resolution path as `start.sh`: `ASPACE_ROOT`, `MODE_ROOT`, `ENV_FILE`,
+`AGENT_SPACE_MODE_ROOT`, compose project/file, and `docker compose --env-file ...`.
+Test mode exposes the API on `localhost:8100`, but the backend container still listens
+on internal port `8000` and the frontend uses `http://backend:8000`.
+PostgreSQL containers have stable names (`agent-space-<mode>-postgres`). Docker-native
+migration, DB-only dump/restore/reset, and offline system backup/restore/verify
+stop postgres after completion only when that script started it.
 
 ## Running the backend only
 
@@ -64,7 +81,9 @@ Canonical backend tests live under ``tests/unit``, ``tests/contracts``,
 isolated ``AGENT_SPACE_HOME`` before importing the app.
 
 ```bash
-cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
+cd core/backend
+pip install -r requirements.txt -r requirements-test.txt
+python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
 ```
 
 ## Key concepts
@@ -91,7 +110,7 @@ cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants
 
 ## Key files
 
-- `core/backend/app/config.py` — `AppPaths` class + `Settings`; all runtime paths derive from `AGENT_SPACE_HOME`
+- `core/backend/app/config.py` — `AppPaths` class + `Settings`; all runtime paths derive from `AGENT_SPACE_HOME` (the instance root)
 - `core/backend/app/models.py` — SQLAlchemy ORM (Space, Memory, Session, **Task board** `Task`/`Board`/…, Run, Job, etc.)
 - `core/backend/app/modules/registry.py` — backend module loader (which features are active)
 - `core/backend/app/memory/store.py` — MemoryStore CRUD
@@ -107,18 +126,27 @@ cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants
 ## Environment variables
 
 ```
-AGENT_SPACE_HOME=~/aspace    # local data root; all sub-paths derive from this
+# Instance data root for the running environment (NOT the dev/test/prod parent).
+# Docker backend: /aspace. Direct local backend run: a concrete mode root, e.g. $HOME/aspace/dev.
+AGENT_SPACE_HOME=/aspace
 ANTHROPIC_API_KEY=
 DEFAULT_MODEL=claude-sonnet-4-6
 REFLECTOR_MODE=pattern   # or llm
 DEFAULT_SPACE_ID=personal
 DEFAULT_USER_ID=default_user
 
+# DATABASE_URL is the authoritative connection string. PostgreSQL is the only
+# supported server database.
+# DATABASE_URL=postgresql+psycopg://agent_space:password@localhost:5432/agent_space
+
 # Advanced overrides (rarely needed — defaults derive from AGENT_SPACE_HOME)
-# DATABASE_URL=sqlite:////home/you/aspace/db/agent_space.sqlite
-# WORKSPACE_ROOT=~/aspace/workspaces
-# SANDBOX_ROOT=~/aspace/sandboxes
+# WORKSPACE_ROOT=$AGENT_SPACE_HOME/workspaces
+# SANDBOX_ROOT=$AGENT_SPACE_HOME/sandboxes
 ```
+
+`scripts/` (host side) use `ASPACE_ROOT` (default `~/aspace`) as the parent that holds
+`dev/`, `test/`, `prod/`, derive `MODE_ROOT="$ASPACE_ROOT/<mode>"`, and never source a
+mode `.env` as shell code just to read values.
 
 ## Adding a new feature module
 

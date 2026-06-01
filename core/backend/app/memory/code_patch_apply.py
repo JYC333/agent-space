@@ -19,6 +19,7 @@ Schema contract:
 """
 
 from __future__ import annotations
+import uuid
 
 import hashlib
 import os
@@ -385,12 +386,11 @@ def _record_applied_activity(
     files: list[AppliedFile],
 ) -> None:
     from datetime import UTC, datetime
-    from ulid import ULID
 
     now = datetime.now(UTC)
     db.add(
         ActivityRecord(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             source_run_id=source_run_id,
             user_id=user_id,

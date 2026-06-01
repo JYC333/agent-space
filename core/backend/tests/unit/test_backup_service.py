@@ -5,7 +5,8 @@ Covers M7b automatic backup service invariants:
   - backup_manifest.json is present and well-formed.
   - Exclusions: backups/, cache/, sandboxes/ are never archived.
   - Logs excluded by default; included when configured.
-  - SQLite snapshot included via backup API; backup fails closed if snapshot fails.
+  - pg_dump snapshot included when DATABASE_URL is configured.
+  - Backup fails closed if pg_dump fails.
   - No raw secret patterns in manifest.
   - Retention prunes auto backups only.
   - Scheduler skips run when lock is held (overlap prevention).
@@ -17,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -43,13 +43,6 @@ def _make_data_root(base: Path) -> Path:
     (data / "cache").mkdir()
     (data / "sandboxes").mkdir()
     (data / "logs").mkdir()
-
-    # Minimal SQLite DB
-    conn = sqlite3.connect(str(data / "db" / "agent_space.sqlite"))
-    conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, val TEXT)")
-    conn.execute("INSERT INTO test VALUES (1, 'hello')")
-    conn.commit()
-    conn.close()
 
     (data / "storage" / "files" / "file.bin").write_bytes(b"\x01\x02")
     (data / "artifacts" / "run1.txt").write_text("output")
@@ -143,10 +136,10 @@ class TestManifest:
         m = _read_manifest(svc.create_backup("auto"))
         assert m["source_root"] == str(data_root)
 
-    def test_manifest_included_paths_contains_db(self, tmp_path):
+    def test_manifest_db_snapshot_method_is_pg_dump_custom(self, tmp_path):
         svc = _make_service(tmp_path)
         m = _read_manifest(svc.create_backup("auto"))
-        assert any("db/" in p for p in m["included_paths"])
+        assert m["db_snapshot_method"] == "pg_dump_custom"
 
     def test_manifest_excluded_paths_documents_backups(self, tmp_path):
         svc = _make_service(tmp_path)
@@ -163,6 +156,11 @@ class TestManifest:
         m = _read_manifest(svc.create_backup("auto"))
         assert any("sandboxes/" in p for p in m["excluded_paths"])
 
+    def test_manifest_excluded_paths_documents_db_postgres(self, tmp_path):
+        svc = _make_service(tmp_path)
+        m = _read_manifest(svc.create_backup("auto"))
+        assert any("db/postgres/" in p for p in m["excluded_paths"])
+
     def test_manifest_has_no_raw_api_key_pattern(self, tmp_path):
         """Manifest JSON must never contain raw API key patterns."""
         svc = _make_service(tmp_path)
@@ -171,11 +169,6 @@ class TestManifest:
         assert not re.search(r"sk-ant-[A-Za-z0-9\-_]{10,}", manifest_str)
         assert not re.search(r"ANTHROPIC_API_KEY\s*=\s*\S+", manifest_str)
 
-    def test_manifest_db_snapshot_method_present(self, tmp_path):
-        svc = _make_service(tmp_path)
-        m = _read_manifest(svc.create_backup("auto"))
-        assert m["db_snapshot_method"] == "sqlite-backup-api"
-
     def test_manifest_config_fields_match_service(self, tmp_path):
         svc = _make_service(tmp_path, interval_hours=12, retention_count=5)
         m = _read_manifest(svc.create_backup("auto"))
@@ -183,15 +176,64 @@ class TestManifest:
         assert m["backup_retention_count"] == 5
 
 
+# ── Version metadata ───────────────────────────────────────────────────────────
+
+class TestManifestVersionMetadata:
+    """Manifest carries version metadata so restore can validate compatibility."""
+
+    VERSION_KEYS = (
+        "app_version",
+        "git_commit",
+        "alembic_revision",
+        "postgres_server_version",
+        "pg_dump_version",
+    )
+
+    def test_manifest_has_all_version_fields(self, tmp_path):
+        """Every version key is present (value may be null when undeterminable)."""
+        svc = _make_service(tmp_path)
+        m = _read_manifest(svc.create_backup("auto"))
+        for key in self.VERSION_KEYS:
+            assert key in m, f"manifest missing version field: {key}"
+
+    def test_manifest_records_app_version(self, tmp_path):
+        svc = _make_service(tmp_path, app_version="9.9.9-test")
+        m = _read_manifest(svc.create_backup("auto"))
+        assert m["app_version"] == "9.9.9-test"
+
+    def test_manifest_has_backup_format_version(self, tmp_path):
+        svc = _make_service(tmp_path)
+        m = _read_manifest(svc.create_backup("auto"))
+        assert m["backup_format"] == "agent-space-backup.v1"
+
+    def test_version_helpers_never_raise_on_bad_input(self):
+        """The version helpers are best-effort and return None rather than raising."""
+        from app.backups import versions
+
+        assert versions.alembic_revision(None) is None
+        assert versions.postgres_server_version(None) is None
+        assert versions.alembic_revision("postgresql+psycopg://x:y@127.0.0.1:1/none") is None
+        assert versions.postgres_major(None) is None
+        assert versions.postgres_major("18.1") == 18
+        assert versions.pg_dump_version() is None or isinstance(versions.pg_dump_version(), str)
+
+    def test_version_gathering_failure_does_not_abort_backup(self, tmp_path, monkeypatch):
+        """A version helper that raises must not abort the backup (defensive gather)."""
+        from app.backups import versions
+
+        def _boom():
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(versions, "git_commit", _boom)
+        svc = _make_service(tmp_path)
+        m = _read_manifest(svc.create_backup("auto"))
+        assert m["git_commit"] is None  # gather failed -> recorded as null, not crash
+        assert "app_version" in m
+
+
 # ── Inclusions ────────────────────────────────────────────────────────────────
 
 class TestInclusions:
-    def test_db_snapshot_in_archive(self, tmp_path):
-        svc = _make_service(tmp_path)
-        archive = svc.create_backup("auto")
-        names = _archive_names(archive)
-        assert any(n.lstrip("./").startswith("db/") for n in names)
-
     def test_storage_in_archive(self, tmp_path):
         svc = _make_service(tmp_path)
         names = _archive_names(svc.create_backup("auto"))
@@ -244,10 +286,9 @@ class TestExclusions:
     def test_excludes_backups_dir_recursion_prevention(self, tmp_path):
         """backup_root inside data_root must not appear in the archive."""
         data_root = _make_data_root(tmp_path)
-        backup_root = data_root / "backups"  # intentionally inside data root
+        backup_root = data_root / "backups"
         backup_root.mkdir()
         svc = BackupService(data_root=data_root, backup_root=backup_root)
-        # Create a file inside backup_root to prove it is excluded
         (backup_root / "old-backup.tar.gz").write_bytes(b"fake")
         names = _archive_names(svc.create_backup("auto"))
         assert not any(n.lstrip("./").startswith("backups") for n in names)
@@ -256,67 +297,189 @@ class TestExclusions:
         """Backups dir is never in the include list regardless of location."""
         svc = _make_service(tmp_path)
         names = _archive_names(svc.create_backup("auto"))
-        # "backups" only appears in backup_manifest.json excluded_paths, not as a directory
         non_manifest = {n for n in names if "manifest" not in n}
         assert not any("backups" in n for n in non_manifest)
 
 
-# ── SQLite snapshot ────────────────────────────────────────────────────────────
+# ── PostgreSQL dump ────────────────────────────────────────────────────────────
 
-class TestSQLiteSnapshot:
-    def test_db_snapshot_is_valid_sqlite(self, tmp_path):
-        svc = _make_service(tmp_path)
-        archive = svc.create_backup("auto")
-        extract_dir = tmp_path / "extracted"
-        extract_dir.mkdir()
-        with tarfile.open(archive) as tar:
-            tar.extractall(extract_dir, filter="data")
-        db_file = extract_dir / "db" / "agent_space.sqlite"
-        assert db_file.exists()
-        conn = sqlite3.connect(str(db_file))
-        rows = conn.execute("SELECT val FROM test WHERE id=1").fetchall()
-        conn.close()
-        assert rows == [("hello",)]
-
-    def test_db_snapshot_method_in_manifest(self, tmp_path):
-        svc = _make_service(tmp_path)
-        m = _read_manifest(svc.create_backup("auto"))
-        assert m["db_snapshot_method"] == "sqlite-backup-api"
-
-    def test_sqlite_snapshot_opens_independent_connections(self, tmp_path, monkeypatch):
+class TestPgDump:
+    def test_db_dump_in_archive_when_database_url_set(self, tmp_path, monkeypatch):
+        """When database_url is configured, a dump file appears in db/ inside archive."""
         import app.backups.service as service_mod
+
+        def fake_pg_dump(database_url, dest):
+            dest.write_text("-- fake pg_dump output\n")
+
+        monkeypatch.setattr(service_mod, "_pg_dump", fake_pg_dump)
 
         data_root = _make_data_root(tmp_path)
-        backup_root = tmp_path / "backups"
-        db_path = data_root / "db" / "agent_space.sqlite"
-        opened: list[str] = []
-        real_connect = service_mod.sqlite3.connect
+        svc = BackupService(
+            data_root=data_root,
+            backup_root=tmp_path / "backups",
+            database_url="postgresql+psycopg://user:pass@localhost:5432/db",
+        )
+        archive = svc.create_backup("auto")
+        names = _archive_names(archive)
+        assert any(n.lstrip("./").startswith("db/") for n in names)
 
-        def tracking_connect(path, *args, **kwargs):
-            opened.append(str(path))
-            return real_connect(path, *args, **kwargs)
-
-        monkeypatch.setattr(service_mod.sqlite3, "connect", tracking_connect)
-
-        BackupService(data_root=data_root, backup_root=backup_root, db_path=db_path).create_backup("manual")
-
-        assert str(db_path) in opened
-        assert any(Path(p).name == "agent_space.sqlite" and Path(p) != db_path for p in opened)
-
-    def test_sqlite_snapshot_failure_fails_closed_without_archive(self, tmp_path, monkeypatch):
+    def test_manifest_included_db_when_database_url_set(self, tmp_path, monkeypatch):
         import app.backups.service as service_mod
 
-        svc = _make_service(tmp_path)
+        monkeypatch.setattr(service_mod, "_pg_dump", lambda url, dest: dest.write_text("-- dump\n"))
 
-        def fail_snapshot(source, dest):
-            raise sqlite3.Error("backup api unavailable")
+        data_root = _make_data_root(tmp_path)
+        svc = BackupService(
+            data_root=data_root,
+            backup_root=tmp_path / "backups",
+            database_url="postgresql+psycopg://user:pass@localhost:5432/db",
+        )
+        m = _read_manifest(svc.create_backup("auto"))
+        assert any("db/" in p for p in m["included_paths"])
 
-        monkeypatch.setattr(service_mod, "_sqlite_snapshot", fail_snapshot)
+    def test_db_excluded_from_manifest_when_no_database_url(self, tmp_path):
+        """Without a DATABASE_URL, db/ is excluded with a warning in manifest."""
+        svc = _make_service(tmp_path)  # no database_url
+        m = _read_manifest(svc.create_backup("auto"))
+        assert any("db/" in p for p in m["excluded_paths"])
 
+    def test_pg_dump_failure_fails_closed_without_archive(self, tmp_path, monkeypatch):
+        """If pg_dump fails, backup fails closed — no partial archive left behind."""
+        import app.backups.service as service_mod
+
+        def fail_dump(database_url, dest):
+            raise RuntimeError("pg_dump failed")
+
+        monkeypatch.setattr(service_mod, "_pg_dump", fail_dump)
+
+        data_root = _make_data_root(tmp_path)
+        svc = BackupService(
+            data_root=data_root,
+            backup_root=tmp_path / "backups",
+            database_url="postgresql+psycopg://user:pass@localhost:5432/db",
+        )
         with pytest.raises(BackupError, match="backup aborted"):
             svc.create_backup("auto")
 
         assert [p for p in (tmp_path / "backups").glob("*.tar.gz")] == []
+
+    def test_pg_dump_method_in_manifest(self, tmp_path):
+        """Manifest always reports pg_dump_custom as db_snapshot_method."""
+        svc = _make_service(tmp_path)
+        m = _read_manifest(svc.create_backup("auto"))
+        assert m["db_snapshot_method"] == "pg_dump_custom"
+
+    def test_pg_dump_command_uses_custom_format_flags(self, tmp_path, monkeypatch):
+        """pg_dump invocation must include -Fc, --no-owner, and --no-acl."""
+        import app.backups.service as service_mod
+
+        captured_cmd = []
+
+        def fake_pg_dump(database_url, dest):
+            # Peek at the command by monkeypatching subprocess.run inside service_mod
+            dest.write_bytes(b"\x00")  # minimal fake custom-format marker
+
+        original_run = service_mod.subprocess.run
+
+        def capturing_run(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            # Write empty bytes to stdout if a file handle is provided
+            f = kwargs.get("stdout")
+            if f is not None:
+                f.write(b"\x00")
+            class _R:
+                returncode = 0
+                stderr = b""
+            return _R()
+
+        monkeypatch.setattr(service_mod.subprocess, "run", capturing_run)
+
+        data_root = _make_data_root(tmp_path)
+        svc = BackupService(
+            data_root=data_root,
+            backup_root=tmp_path / "backups",
+            database_url="postgresql+psycopg://user:pass@localhost:5432/db",
+        )
+        svc.create_backup("auto")
+
+        assert "pg_dump" in captured_cmd
+        assert "-Fc" in captured_cmd
+        assert "--no-owner" in captured_cmd
+        assert "--no-acl" in captured_cmd
+
+    def test_pg_dump_dump_file_has_dump_extension(self, tmp_path, monkeypatch):
+        """BackupService must write agent_space.dump (custom format), not agent_space.sql."""
+        import app.backups.service as service_mod
+
+        written_paths: list[str] = []
+
+        def fake_pg_dump(database_url, dest):
+            written_paths.append(dest.name)
+            dest.write_bytes(b"\x00")
+
+        monkeypatch.setattr(service_mod, "_pg_dump", fake_pg_dump)
+
+        data_root = _make_data_root(tmp_path)
+        svc = BackupService(
+            data_root=data_root,
+            backup_root=tmp_path / "backups",
+            database_url="postgresql+psycopg://user:pass@localhost:5432/db",
+        )
+        svc.create_backup("auto")
+        assert written_paths == ["agent_space.dump"], (
+            f"Expected dump file 'agent_space.dump', got {written_paths}"
+        )
+
+    def test_archive_does_not_contain_db_postgres_directory(self, tmp_path, monkeypatch):
+        """Live db/postgres PGDATA directory must never appear in backup archives."""
+        import app.backups.service as service_mod
+
+        # Create a fake db/postgres directory as if it were a live PGDATA dir
+        data_root = _make_data_root(tmp_path)
+        (data_root / "db" / "postgres" / "base").mkdir(parents=True)
+        (data_root / "db" / "postgres" / "PG_VERSION").write_text("15\n")
+
+        monkeypatch.setattr(service_mod, "_pg_dump", lambda url, dest: dest.write_bytes(b"\x00"))
+
+        svc = BackupService(
+            data_root=data_root,
+            backup_root=tmp_path / "backups",
+            database_url="postgresql+psycopg://user:pass@localhost:5432/db",
+        )
+        archive = svc.create_backup("auto")
+        names = _archive_names(archive)
+        assert not any("db/postgres" in n for n in names), (
+            "Live db/postgres PGDATA must never be included in backup archives"
+        )
+
+    def test_archive_shape_matches_system_backup_contract(self, tmp_path, monkeypatch):
+        """BackupService and scripts/system/backup.sh share the same logical archive shape."""
+        import app.backups.service as service_mod
+
+        monkeypatch.setattr(service_mod, "_pg_dump", lambda url, dest: dest.write_bytes(b"\x00"))
+
+        data_root = _make_data_root(tmp_path)
+        svc = BackupService(
+            data_root=data_root,
+            backup_root=tmp_path / "backups",
+            include_logs=True,
+            database_url="postgresql+psycopg://user:pass@localhost:5432/db",
+        )
+        archive = svc.create_backup("auto")
+        normalized = {n.lstrip("./") for n in _archive_names(archive)}
+
+        for expected in {
+            "backup_manifest.json",
+            "db/agent_space.dump",
+            "storage",
+            "artifacts",
+            "config",
+            "secrets",
+            "workspaces",
+            "logs",
+        }:
+            assert expected in normalized
+        assert not any(n.startswith("db/postgres") for n in normalized)
 
 
 # ── Retention ─────────────────────────────────────────────────────────────────
@@ -456,7 +619,6 @@ class TestScheduler:
         scheduler = BackupScheduler(service=svc, interval_hours=1)
 
         async def _test():
-            # Simulate in-progress backup by holding the lock
             await scheduler._lock.acquire()
             await scheduler._run_once()
             scheduler._lock.release()
@@ -487,13 +649,11 @@ class TestScheduler:
 
     def test_scheduler_run_once_prunes_after_backup(self, tmp_path, monkeypatch):
         svc = _make_service(tmp_path, retention_count=2)
-        # Pre-populate more than retention_count backups
         for _ in range(4):
             svc.create_backup("auto")
         scheduler = BackupScheduler(service=svc, interval_hours=1)
 
         self._run_once_inline(scheduler, monkeypatch)
-        # _run_once creates one more then prunes → retention_count=2 remain
         auto = [b for b in svc.list_backups() if b.kind == "auto"]
         assert len(auto) == 2
 
@@ -516,7 +676,6 @@ class TestConfigAndIsolation:
         """No Automation/Trigger model needed — service is self-contained."""
         from app.backups.service import BackupService
         data_root = _make_data_root(tmp_path)
-        # Construct with only the required path args — no DB, no models
         svc = BackupService(data_root=data_root, backup_root=tmp_path / "bk")
         archive = svc.create_backup("manual")
         assert archive.exists()

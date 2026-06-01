@@ -1,6 +1,7 @@
 """Persist runtime outputs into canonical artifact storage."""
 
 from __future__ import annotations
+import uuid
 
 import hashlib
 import shutil
@@ -8,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..config import settings
 from ..models import Artifact, Run
@@ -23,7 +23,7 @@ from ..policy.gateway import PolicyGateway, PolicyCheckRequest
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _ensure_under_root(path: Path, root: Path) -> None:

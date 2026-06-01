@@ -14,7 +14,7 @@
 - Task board ORM (`Task`, `Board`, `TaskRun`, `TaskArtifact`, `TaskProposal`)
 - Persisted policy enforcement: `memory.private_placement` and `run.user_private_scope` in `policy/enforcement.py`; structural write boundary via `_INTERNAL_WRITE_AUTHORITY` sentinel
 - `UnitOfWork` transaction boundary; savepoint-isolated RunStep evidence
-- `BackupService` primary backup; `scripts/backup.sh` fallback; `scripts/restore.sh` restore
+- `BackupService` canonical full-system backup; `scripts/system/backup.sh` + `scripts/system/restore.sh` offline full-system tools; `scripts/db/` DB-only tools
 - Workspace lifecycle: stale-marking on missing paths (no hard-delete)
 - Deployer allowlist and Unix domain socket boundary
 - Home summary aggregation API

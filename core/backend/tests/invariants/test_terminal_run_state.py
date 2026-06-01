@@ -12,7 +12,7 @@ from tests.support import factories
 
 @pytest.fixture(autouse=True)
 def _stub_durable_policy_audit(monkeypatch):
-    """This SQLite module verifies terminal-state transitions, not policy audit commits."""
+    """Stub policy audit writes — this module verifies terminal-state transitions."""
     monkeypatch.setattr(
         "app.policy.audit.DurablePolicyAuditWriter.write",
         lambda _writer, _envelope: "stub-policy-audit",

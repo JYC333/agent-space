@@ -12,9 +12,9 @@ Tests verify:
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
-from ulid import ULID
 
 from app.memory.digest_service import ContextDigestService
 from app.models import ContextDigest, MemoryEntry, Policy, Proposal
@@ -27,7 +27,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _active_memory(db, *, space_id, scope_type="workspace", workspace_id=None, agent_id=None, content="test content") -> MemoryEntry:

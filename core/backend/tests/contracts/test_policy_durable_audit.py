@@ -16,11 +16,14 @@ E. Runtime gate tests (basic HTTP-level only):
   1. denied runtime.execute creates durable PolicyDecisionRecord.
 """
 from __future__ import annotations
+import uuid
 
 import pytest
 from app.models import Automation, AutomationRun, PolicyDecisionRecord, Run, Proposal, MemoryEntry
 from tests.support.ids import DEFAULT_USER_ID, PERSONAL_SPACE_ID
 from tests.support import factories
+
+pytestmark = pytest.mark.durable_audit
 
 
 def _fresh_records(action: str, decision_value: str | None = None) -> list[PolicyDecisionRecord]:
@@ -82,7 +85,7 @@ def _make_owner_client(db):
     """Return a TestClient authenticated as the default owner (DEFAULT_USER_ID).
 
     Commits db to release any pending write lock before creating the HTTP client,
-    so the HTTP worker thread can write to the same SQLite DB without lock contention.
+    so the HTTP worker thread can use its own connection cleanly.
     """
     from app.auth.session import SESSION_COOKIE, UserSessionService
     from app.main import app as _app
@@ -304,10 +307,9 @@ class TestInjectedFailureRollback:
 class TestProposalApplyDurability:
 
     def _build_pending_proposal(self, db) -> Proposal:
-        from ulid import ULID
         from app.memory.proposals import build_memory_create_proposal
 
-        pid = str(ULID())
+        pid = str(uuid.uuid4())
         p = build_memory_create_proposal(
             proposal_id=pid,
             space_id=PERSONAL_SPACE_ID,

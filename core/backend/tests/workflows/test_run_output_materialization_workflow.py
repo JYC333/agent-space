@@ -31,7 +31,7 @@ def _patch_execute(monkeypatch, tmp_path: Path):
 
 
 def _stub_durable_policy_audit(monkeypatch) -> None:
-    """Keep SQLite materialization coverage in the business transaction."""
+    """Stub policy audit writes — this module covers materialization, not audit I/O."""
     monkeypatch.setattr(
         "app.policy.audit.DurablePolicyAuditWriter.write",
         lambda _writer, _envelope: "stub-policy-audit",

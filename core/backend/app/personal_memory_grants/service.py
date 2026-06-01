@@ -6,6 +6,7 @@ Does NOT implement grant resolver for memory retrieval.
 Does NOT implement consuming/used transitions.
 """
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime, timedelta
 
@@ -86,8 +87,7 @@ class GrantAlreadyTerminalError(ValueError):
 
 
 def _new_id() -> str:
-    from ulid import ULID
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _find_personal_space(db: Session, user_id: str) -> Space:

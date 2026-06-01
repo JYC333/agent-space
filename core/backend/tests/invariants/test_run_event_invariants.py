@@ -11,6 +11,7 @@ Tests verify structural and cross-cutting invariants:
 - _gather_events_evidence correctly derives patch/artifact signals
 """
 from __future__ import annotations
+import uuid
 
 import pytest
 from sqlalchemy import CheckConstraint
@@ -90,9 +91,8 @@ class TestOrmConstraints:
         run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
         db.commit()
         from datetime import UTC, datetime
-        from ulid import ULID
         ev = RunEvent(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=SPACE,
             run_id=run.id,
             event_index=0,
@@ -109,10 +109,9 @@ class TestOrmConstraints:
         _setup(db)
         run = factories.create_test_run(db, space_id=SPACE, user_id=USER)
         from datetime import UTC, datetime
-        from ulid import ULID
 
         ev1 = RunEvent(
-            id=str(ULID()), space_id=SPACE, run_id=run.id, event_index=0,
+            id=str(uuid.uuid4()), space_id=SPACE, run_id=run.id, event_index=0,
             event_type="context_compiled", status="succeeded", created_at=datetime.now(UTC),
         )
         db.add(ev1)
@@ -120,11 +119,11 @@ class TestOrmConstraints:
 
         # Duplicate (space_id, run_id, event_index) must fail
         ev2 = RunEvent(
-            id=str(ULID()), space_id=SPACE, run_id=run.id, event_index=0,
+            id=str(uuid.uuid4()), space_id=SPACE, run_id=run.id, event_index=0,
             event_type="runtime_selected", status="succeeded", created_at=datetime.now(UTC),
         )
         db.add(ev2)
-        with pytest.raises(IntegrityError, match="UNIQUE constraint failed: run_events"):
+        with pytest.raises(IntegrityError, match=r"run_events|unique.*run_events|duplicate key"):
             db.flush()
         db.rollback()
 
@@ -1053,9 +1052,8 @@ class TestRuntimeOutputArtifactEvents:
         agent = factories.create_test_agent(db, space_id=_space, owner_user_id=_user)
         run = factories.create_test_run(db, space_id=_space, user_id=_user, agent=agent, commit=True)
 
-        # Policy audit durability is covered by dedicated policy tests. SQLite
-        # cannot run its independent audit write while this business transaction
-        # is intentionally kept open across artifact persistence and terminal state.
+        # Policy audit durability is covered by dedicated policy tests. Stub it here
+        # so this test stays focused on run event invariants.
         monkeypatch.setattr(
             "app.policy.audit.DurablePolicyAuditWriter.write",
             lambda _writer, _envelope: "stub-policy-audit",

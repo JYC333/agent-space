@@ -9,10 +9,10 @@ Endpoint contracts verified:
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
 from starlette.testclient import TestClient
-from ulid import ULID
 
 from app.auth.session import SESSION_COOKIE, UserSessionService
 from app.main import app as _app
@@ -27,7 +27,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _authed_client(db, user_id: str, space_id: str) -> TestClient:

@@ -14,10 +14,10 @@ Verifies:
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
 from datetime import UTC, datetime, timedelta
-from ulid import ULID
 
 from app.models import (
     AgentVersion,
@@ -42,7 +42,7 @@ from tests.support.assertions import (
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------
@@ -649,14 +649,14 @@ def test_error_message_includes_egress_review_proposal_id(db):
 
 
 # ---------------------------------------------------------------------------
-# G. Dedupe stability: no SQLite JSON path dependency
+# G. Dedupe stability
 # ---------------------------------------------------------------------------
 
 
 def test_repeated_blocked_artifact_materialization_reuses_existing_egress_review_proposal(db):
     """Calling materialize twice for the same blocked artifact must reuse the same egress_review proposal.
 
-    Dedupe is stable and does not depend on SQLite JSON path support.
+    Dedupe is stable and uses only ORM column filters + Python dict matching.
     """
     personal_id, user = _personal_space(db)
     team_id, _ = _team_space(db)
@@ -749,13 +749,12 @@ def test_repeated_blocked_memory_materialization_reuses_existing_egress_review_p
     assert all_egress[0].id == first_id
 
 
-def test_dedupe_does_not_require_sqlite_json_path(db):
-    """Dedupe must work without SQLite JSON path support.
+def test_dedupe_uses_orm_columns_and_python_matching(db):
+    """Dedupe uses only stable ORM columns for the DB query and Python dict matching.
 
-    Verifies that _find_existing_open_proposal uses only stable ORM columns
-    for the DB query and Python dict access for matching — no JSON path operators.
+    Verifies that _find_existing_open_proposal does not rely on JSON path operators.
     After creating one egress_review proposal, a second materialize call must
-    return the same proposal ID even when no JSON path operators are available.
+    return the same proposal ID.
     """
     from app.personal_memory_grants.egress_review import _find_existing_open_proposal, _compute_dedupe_key
 

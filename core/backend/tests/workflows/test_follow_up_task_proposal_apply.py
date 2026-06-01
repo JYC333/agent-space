@@ -13,9 +13,9 @@ Verifies:
 - API accept endpoint returns result_type="follow_up_task" with task_id and title.
 """
 from __future__ import annotations
+import uuid
 
 import pytest
-from ulid import ULID
 
 from app.memory.apply_service import ProposalApplyService, ProposalApplyError
 from app.memory.proposals import ProposalService
@@ -239,7 +239,7 @@ class TestMalformedPayloadRejection:
 class TestCrossSpaceWorkspaceRejection:
     def test_workspace_from_other_space_rejected(self, db):
         _setup(db)
-        other_space = str(__import__("ulid").ULID())
+        other_space = str(uuid.uuid4())
         factories.create_test_space(db, space_id=other_space)
         ws = factories.create_test_workspace(db, space_id=other_space)
         db.flush()
@@ -328,10 +328,9 @@ class TestSupportedTypes:
 
 def _make_reflection(db, space_id, run, **kwargs):
     from app.models import RunReflection
-    from ulid import ULID
 
     r = RunReflection(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=space_id,
         run_id=run.id,
         source="native",
@@ -496,8 +495,8 @@ class TestBuilderProposalOwnership:
     def test_builder_created_follow_up_task_can_be_accepted_by_source_run_user(self, db):
         from app.runs.proposal_builder import ReflectionProposalBuilder
 
-        space_id = str(ULID())
-        user_id = str(ULID())
+        space_id = str(uuid.uuid4())
+        user_id = str(uuid.uuid4())
         factories.create_test_space(db, space_id=space_id)
         factories.create_test_user(db, space_id=space_id, user_id=user_id)
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, commit=True)
@@ -538,20 +537,20 @@ class TestBuilderProposalOwnership:
         from app.models import SpaceMembership, User
         from app.runs.proposal_builder import ReflectionProposalBuilder
 
-        space_id = str(ULID())
+        space_id = str(uuid.uuid4())
         factories.create_test_space(db, space_id=space_id)
         owner_user = factories.create_test_user(db, space_id=space_id)
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=owner_user.id, commit=False)
 
         # Create a member-role user who should be denied
-        member_id = str(ULID())
+        member_id = str(uuid.uuid4())
         member_user = User(id=member_id, display_name="member", email=f"{member_id}@t.invalid")
         db.add(member_user)
-        db.add(SpaceMembership(id=str(ULID()), space_id=space_id, user_id=member_id, role="member", status="active"))
+        db.add(SpaceMembership(id=str(uuid.uuid4()), space_id=space_id, user_id=member_id, role="member", status="active"))
         db.flush()
 
         snapshot = ContextSnapshot(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             source_refs_json=[],
             compiled_summary=None,
@@ -561,7 +560,7 @@ class TestBuilderProposalOwnership:
         db.flush()
 
         run = Run(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             agent_id=agent.id,
             agent_version_id=agent.current_version_id,
@@ -603,8 +602,8 @@ class TestBuilderProposalOwnership:
     def test_builder_rejects_non_dict_follow_up_task_item(self, db):
         from app.runs.proposal_builder import ReflectionProposalBuilder
 
-        space_id = str(ULID())
-        user_id = str(ULID())
+        space_id = str(uuid.uuid4())
+        user_id = str(uuid.uuid4())
         factories.create_test_space(db, space_id=space_id)
         factories.create_test_user(db, space_id=space_id, user_id=user_id)
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, commit=True)

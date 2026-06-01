@@ -15,9 +15,9 @@ Responsibilities:
 """
 
 from __future__ import annotations
+import uuid
 
 from datetime import datetime, UTC
-from ulid import ULID
 from sqlalchemy.orm import Session as DBSession
 from fastapi import HTTPException
 
@@ -35,7 +35,7 @@ _STOPABLE_STATUSES = {"queued", "running", "waiting_for_review"}
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 class RunService:

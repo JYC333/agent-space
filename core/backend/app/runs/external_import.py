@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 """ExternalRunImportService — minimal import path for externally executed runs.
 
 Supports importing results from Codex CLI, Claude Code CLI, Cursor, OpenCode,
@@ -15,7 +16,6 @@ Import flow:
 
 import logging
 from dataclasses import dataclass, field
-from ulid import ULID
 from sqlalchemy.orm import Session
 
 from ..models import Run, ContextSnapshot, ExternalRunRecord, Artifact
@@ -27,7 +27,7 @@ _VALID_SOURCES = frozenset({"manual_import", "remote_import"})
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 @dataclass

@@ -1,8 +1,8 @@
 """Security invariants: SourcePointer is metadata only and does not grant memory reads."""
 
 from __future__ import annotations
+import uuid
 
-from ulid import ULID
 
 from app.memory.retriever import MemoryRetriever
 from app.models import MemoryEntry, SourcePointer, SpaceMembership
@@ -19,7 +19,7 @@ def _params(space_id: str, user_id: str) -> dict[str, str]:
 def _add_member(db, *, space_id: str, user_id: str, role: str = "member") -> None:
     db.add(
         SpaceMembership(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             user_id=user_id,
             role=role,
@@ -29,7 +29,7 @@ def _add_member(db, *, space_id: str, user_id: str, role: str = "member") -> Non
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _policy_row(db, *, space_id: str, domain: str, effect: str):

@@ -19,13 +19,13 @@ Design rules:
 """
 
 from __future__ import annotations
+import uuid
 
 import logging
 from datetime import UTC, datetime
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..models import Run, RunFinalization
 from .evaluation import RunEvaluationService
@@ -41,7 +41,7 @@ TERMINAL_STATUSES = frozenset({"succeeded", "failed", "degraded", "cancelled"})
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _now() -> datetime:

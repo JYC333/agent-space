@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tests.support import factories
 
 
@@ -300,6 +302,7 @@ def test_direct_agent_version_create_is_disabled(api_client, db, cross_space_pai
     assert db.query(AgentVersion).filter(AgentVersion.agent_id == agent.id).count() == before
 
 
+@pytest.mark.durable_audit
 def test_agent_config_proposal_accept_creates_immutable_new_version(api_client, db, cross_space_pair):
     from app.memory.digest_service import ContextDigestService
     from app.models import ActivityRecord, Agent, AgentVersion, ContextDigest, Proposal

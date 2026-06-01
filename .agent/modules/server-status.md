@@ -21,7 +21,7 @@ Surface the operational health of the agent-space runtime to the user. Users mus
 
 | Component | Check | Green | Yellow | Red |
 |---|---|---|---|---|
-| Database | SQLite reachable, schema current | OK | schema lag | unreachable |
+| Database | PostgreSQL reachable, schema current | OK | schema lag | unreachable |
 | LLM Provider | Anthropic API key valid, model reachable | OK | rate-limited | no key / unreachable |
 | Claude adapter | `claude --print` binary found | OK | degraded | not found |
 | Codex adapter | `codex` binary found | OK | degraded | not found |

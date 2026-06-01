@@ -18,6 +18,7 @@ Intake item content priority:
 """
 
 from __future__ import annotations
+import uuid
 
 import logging
 from dataclasses import dataclass, field
@@ -25,7 +26,6 @@ from datetime import UTC, datetime
 from typing import Sequence
 
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..config import settings
 from ..memory.provider_client import (
@@ -96,7 +96,7 @@ def _build_content_block(label: str, text: str) -> str:
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _source_trust_for_activity(row: ActivityRecord) -> str:
@@ -147,7 +147,6 @@ def _ensure_system_summarizer_agent(db: Session, space_id: str) -> tuple[str, st
         name=_NAME,
         description="System agent for input summarization runs.",
         status="active",
-        current_version_id=version_id,
     )
     version = AgentVersion(
         id=version_id,
@@ -161,7 +160,10 @@ def _ensure_system_summarizer_agent(db: Session, space_id: str) -> tuple[str, st
         runtime_policy_json=dict(DEFAULT_RUNTIME_POLICY),
     )
     db.add(agent)
+    db.flush()
     db.add(version)
+    db.flush()
+    agent.current_version_id = version_id
     db.flush()
     return agent_id, version_id
 

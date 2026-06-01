@@ -6,6 +6,7 @@ Create Date: 2026-05-11 20:48:51.184046
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 
@@ -30,7 +31,7 @@ def upgrade() -> None:
     op.create_table('context_snapshots',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
-    sa.Column('source_refs_json', sa.JSON(), nullable=False),
+    sa.Column('source_refs_json', postgresql.JSONB(), nullable=False),
     sa.Column('compiled_summary', sa.Text(), nullable=True),
     sa.Column('token_estimate', sa.Integer(), nullable=True),
     sa.Column('relevant_period_start', sa.DateTime(timezone=True), nullable=True),
@@ -43,21 +44,20 @@ def upgrade() -> None:
     sa.Column('prefix_hash', sa.String(length=128), nullable=True),
     sa.Column('tail_hash', sa.String(length=128), nullable=True),
     sa.Column('compiler_version', sa.String(length=64), nullable=True),
-    sa.Column('retrieval_trace_json', sa.JSON(), nullable=True),
-    sa.Column('token_budget_json', sa.JSON(), nullable=True),
+    sa.Column('retrieval_trace_json', postgresql.JSONB(), nullable=True),
+    sa.Column('token_budget_json', postgresql.JSONB(), nullable=True),
     sa.Column('policy_bundle_version', sa.String(length=64), nullable=True),
     sa.Column('memory_digest_version', sa.String(length=64), nullable=True),
     sa.Column('workspace_digest_version', sa.String(length=64), nullable=True),
-    # Runtime-facing context bundle. target_runtime_adapter_id and execution_plane_id are
-    # soft references (no FK constraints) to avoid a forward DDL reference since
-    # context_snapshots is created before runtime_adapters and execution_planes.
+    # Runtime-facing context bundle. FKs are added after runtime_adapters and
+    # execution_planes exist because this baseline creates context_snapshots first.
     sa.Column('target_runtime_adapter_id', sa.String(length=36), nullable=True),
     sa.Column('execution_plane_id', sa.String(length=36), nullable=True),
-    sa.Column('included_memory_refs_json', sa.JSON(), nullable=True),
-    sa.Column('included_evidence_refs_json', sa.JSON(), nullable=True),
-    sa.Column('included_file_refs_json', sa.JSON(), nullable=True),
-    sa.Column('included_doc_refs_json', sa.JSON(), nullable=True),
-    sa.Column('redactions_json', sa.JSON(), nullable=True),
+    sa.Column('included_memory_refs_json', postgresql.JSONB(), nullable=True),
+    sa.Column('included_evidence_refs_json', postgresql.JSONB(), nullable=True),
+    sa.Column('included_file_refs_json', postgresql.JSONB(), nullable=True),
+    sa.Column('included_doc_refs_json', postgresql.JSONB(), nullable=True),
+    sa.Column('redactions_json', postgresql.JSONB(), nullable=True),
     sa.Column('data_exposure_level', sa.String(length=64), nullable=True),
     sa.Column('rendered_context_uri', sa.String(length=1024), nullable=True),
     sa.Column('rendered_context_text', sa.Text(), nullable=True),
@@ -72,7 +72,7 @@ def upgrade() -> None:
     sa.Column('name', sa.String(length=256), nullable=False),
     sa.Column('credential_type', sa.String(length=64), nullable=False),
     sa.Column('secret_ref', sa.Text(), nullable=False),
-    sa.Column('scopes_json', sa.JSON(), nullable=False),
+    sa.Column('scopes_json', postgresql.JSONB(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
@@ -84,7 +84,7 @@ def upgrade() -> None:
     sa.Column('space_id', sa.String(length=36), nullable=False),
     sa.Column('name', sa.String(length=256), nullable=False),
     sa.Column('domain', sa.String(length=64), nullable=False),
-    sa.Column('policy_json', sa.JSON(), nullable=False),
+    sa.Column('policy_json', postgresql.JSONB(), nullable=False),
     sa.Column('enabled', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
@@ -93,11 +93,9 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=32), nullable=False, server_default='active'),
     sa.Column('enforcement_mode', sa.String(length=32), nullable=True),
     sa.Column('priority', sa.Integer(), nullable=False, server_default='0'),
-    sa.Column('rule_json', sa.JSON(), nullable=True),
-    sa.Column('applies_to_json', sa.JSON(), nullable=True),
-    # Soft self-reference: no DB FK to avoid DDL cycle with policy versioning bootstrap.
+    sa.Column('rule_json', postgresql.JSONB(), nullable=True),
+    sa.Column('applies_to_json', postgresql.JSONB(), nullable=True),
     sa.Column('supersedes_policy_id', sa.String(length=36), nullable=True),
-    # Soft reference to proposals: policies is created before proposals in migration order.
     sa.Column('created_from_proposal_id', sa.String(length=36), nullable=True),
     sa.CheckConstraint("status in ('draft', 'active', 'superseded', 'disabled')", name='ck_policies_status'),
     sa.CheckConstraint(
@@ -105,6 +103,11 @@ def upgrade() -> None:
         name='ck_policies_enforcement_mode',
     ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(
+        ['supersedes_policy_id'], ['policies.id'],
+        name='fk_policies_supersedes_policy_id_policies',
+        ondelete='SET NULL',
+    ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_policies_domain'), 'policies', ['domain'], unique=False)
@@ -147,6 +150,21 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
     op.create_index(op.f('ix_users_status'), 'users', ['status'], unique=False)
+    op.create_foreign_key(
+        'fk_spaces_created_by_user_id_users',
+        'spaces',
+        'users',
+        ['created_by_user_id'],
+        ['id'],
+        ondelete='SET NULL',
+    )
+    op.create_foreign_key(
+        'fk_space_invitations_invited_by_user_id_users',
+        'space_invitations',
+        'users',
+        ['invited_by_user_id'],
+        ['id'],
+    )
     op.create_table('agents',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -189,8 +207,8 @@ def upgrade() -> None:
     sa.Column('default_model', sa.String(length=256), nullable=True),
     sa.Column('enabled', sa.Boolean(), nullable=False),
     sa.Column('credential_id', sa.String(length=36), nullable=True),
-    sa.Column('capabilities_json', sa.JSON(), nullable=False),
-    sa.Column('config_json', sa.JSON(), nullable=False),
+    sa.Column('capabilities_json', postgresql.JSONB(), nullable=False),
+    sa.Column('config_json', postgresql.JSONB(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['credential_id'], ['credentials.id'], ),
@@ -249,8 +267,8 @@ def upgrade() -> None:
     sa.Column('protected', sa.Boolean(), nullable=False),
     sa.Column('system_managed', sa.Boolean(), nullable=False),
     sa.Column('registered_from', sa.String(length=32), nullable=True),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('allow_external_root', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
+    sa.Column('allow_external_root', sa.Boolean(), nullable=False, server_default=sa.text('false')),
     sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -271,8 +289,8 @@ def upgrade() -> None:
     sa.Column('observability_level', sa.String(length=64), nullable=False, server_default='black_box'),
     sa.Column('data_exposure_level', sa.String(length=64), nullable=False, server_default='unknown'),
     sa.Column('credential_mode', sa.String(length=32), nullable=False, server_default='unknown'),
-    sa.Column('config_json', sa.JSON(), nullable=False),
-    sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.text('1')),
+    sa.Column('config_json', postgresql.JSONB(), nullable=False),
+    sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.text('true')),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint("type in ('native', 'local', 'remote_vendor', 'hybrid', 'manual')", name='ck_execution_planes_type'),
@@ -297,12 +315,12 @@ def upgrade() -> None:
     sa.Column('name', sa.String(length=256), nullable=False),
     sa.Column('task_type', sa.String(length=64), nullable=True),
     sa.Column('risk_level', sa.String(length=32), nullable=False, server_default='low'),
-    sa.Column('commands_json', sa.JSON(), nullable=False),
-    sa.Column('required_checks_json', sa.JSON(), nullable=False),
-    sa.Column('artifact_expectations_json', sa.JSON(), nullable=True),
+    sa.Column('commands_json', postgresql.JSONB(), nullable=False),
+    sa.Column('required_checks_json', postgresql.JSONB(), nullable=False),
+    sa.Column('artifact_expectations_json', postgresql.JSONB(), nullable=True),
     sa.Column('timeout_seconds', sa.Integer(), nullable=True),
-    sa.Column('requires_clean_git_state', sa.Boolean(), nullable=False, server_default=sa.text('0')),
-    sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.text('1')),
+    sa.Column('requires_clean_git_state', sa.Boolean(), nullable=False, server_default=sa.text('false')),
+    sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.text('true')),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint("risk_level in ('low', 'medium', 'high')", name='ck_validation_recipes_risk_level'),
@@ -320,12 +338,12 @@ def upgrade() -> None:
     sa.Column('job_type', sa.String(length=128), nullable=False),
     sa.Column('status', sa.String(length=32), nullable=False),
     sa.Column('priority', sa.Integer(), nullable=False),
-    sa.Column('payload_json', sa.JSON(), nullable=False),
-    sa.Column('result_json', sa.JSON(), nullable=True),
+    sa.Column('payload_json', postgresql.JSONB(), nullable=False),
+    sa.Column('result_json', postgresql.JSONB(), nullable=True),
     sa.Column('error', sa.Text(), nullable=True),
     sa.Column('attempts', sa.Integer(), nullable=False),
     sa.Column('max_attempts', sa.Integer(), nullable=False),
-    sa.Column('scheduled_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('scheduled_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
     sa.Column('claimed_by', sa.String(length=64), nullable=True),
     sa.Column('claimed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('started_at', sa.DateTime(timezone=True), nullable=True),
@@ -340,6 +358,12 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
+    sa.CheckConstraint(
+        "status in ('pending', 'claimed', 'running', 'completed', 'failed', 'cancelled')",
+        name='ck_jobs_status',
+    ),
+    sa.CheckConstraint('attempts >= 0', name='ck_jobs_attempts_nonneg'),
+    sa.CheckConstraint('max_attempts > 0', name='ck_jobs_max_attempts_positive'),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_jobs_agent_id'), 'jobs', ['agent_id'], unique=False)
@@ -348,6 +372,18 @@ def upgrade() -> None:
     op.create_index(op.f('ix_jobs_status'), 'jobs', ['status'], unique=False)
     op.create_index(op.f('ix_jobs_user_id'), 'jobs', ['user_id'], unique=False)
     op.create_index(op.f('ix_jobs_workspace_id'), 'jobs', ['workspace_id'], unique=False)
+    # Pending-claim index: SELECT ... FOR UPDATE SKIP LOCKED orders by
+    # priority DESC, scheduled_at ASC over pending rows only.
+    op.create_index(
+        'ix_jobs_claim_pending', 'jobs',
+        [sa.text('priority DESC'), 'scheduled_at'],
+        unique=False, postgresql_where=sa.text("status = 'pending'"),
+    )
+    op.create_index(
+        'ix_jobs_type_claim_pending', 'jobs',
+        ['job_type', sa.text('priority DESC'), 'scheduled_at'],
+        unique=False, postgresql_where=sa.text("status = 'pending'"),
+    )
     op.create_table('runtime_adapters',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -357,11 +393,11 @@ def upgrade() -> None:
     sa.Column('provider_id', sa.String(length=36), nullable=True),
     sa.Column('credential_id', sa.String(length=36), nullable=True),
     sa.Column('credential_profile_id', sa.String(length=128), nullable=True),
-    sa.Column('config_json', sa.JSON(), nullable=False),
+    sa.Column('config_json', postgresql.JSONB(), nullable=False),
     sa.Column('health_status', sa.String(length=32), nullable=False),
     sa.Column('quota_status', sa.String(length=32), nullable=False, server_default='unknown'),
     sa.Column('execution_plane_id', sa.String(length=36), nullable=True),
-    sa.Column('capability_support_json', sa.JSON(), nullable=True),
+    sa.Column('capability_support_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['credential_id'], ['credentials.id'], ),
@@ -389,17 +425,17 @@ def upgrade() -> None:
     sa.Column('space_id', sa.String(length=36), nullable=False),
     sa.Column('workspace_id', sa.String(length=36), nullable=False),
     sa.Column('repo_type', sa.String(length=64), nullable=True),
-    sa.Column('tech_stack_json', sa.JSON(), nullable=True),
-    sa.Column('important_paths_json', sa.JSON(), nullable=True),
-    sa.Column('forbidden_paths_json', sa.JSON(), nullable=True),
-    sa.Column('test_commands_json', sa.JSON(), nullable=True),
-    sa.Column('build_commands_json', sa.JSON(), nullable=True),
-    sa.Column('architecture_boundaries_json', sa.JSON(), nullable=True),
+    sa.Column('tech_stack_json', postgresql.JSONB(), nullable=True),
+    sa.Column('important_paths_json', postgresql.JSONB(), nullable=True),
+    sa.Column('forbidden_paths_json', postgresql.JSONB(), nullable=True),
+    sa.Column('test_commands_json', postgresql.JSONB(), nullable=True),
+    sa.Column('build_commands_json', postgresql.JSONB(), nullable=True),
+    sa.Column('architecture_boundaries_json', postgresql.JSONB(), nullable=True),
     sa.Column('current_focus', sa.Text(), nullable=True),
-    sa.Column('known_failures_json', sa.JSON(), nullable=True),
+    sa.Column('known_failures_json', postgresql.JSONB(), nullable=True),
     sa.Column('validation_recipe_id', sa.String(length=36), nullable=True),
     sa.Column('preferred_runtime_adapter_id', sa.String(length=36), nullable=True),
-    sa.Column('cloud_allowed', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+    sa.Column('cloud_allowed', sa.Boolean(), nullable=False, server_default=sa.text('false')),
     sa.Column('max_data_exposure_level', sa.String(length=64), nullable=True),
     sa.Column('min_observability_level', sa.String(length=64), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
@@ -423,7 +459,7 @@ def upgrade() -> None:
     sa.Column('workspace_id', sa.String(length=36), nullable=True),
     sa.Column('title', sa.String(length=512), nullable=True),
     sa.Column('status', sa.String(length=32), nullable=False),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], ),
@@ -446,13 +482,13 @@ def upgrade() -> None:
     sa.Column('model_name', sa.String(length=256), nullable=True),
     sa.Column('runtime_adapter_id', sa.String(length=36), nullable=True),
     sa.Column('system_prompt', sa.Text(), nullable=True),
-    sa.Column('model_config_json', sa.JSON(), nullable=False),
-    sa.Column('runtime_config_json', sa.JSON(), nullable=False),
-    sa.Column('context_policy_json', sa.JSON(), nullable=False),
-    sa.Column('memory_policy_json', sa.JSON(), nullable=False),
-    sa.Column('capabilities_json', sa.JSON(), nullable=False),
-    sa.Column('tool_permissions_json', sa.JSON(), nullable=False),
-    sa.Column('runtime_policy_json', sa.JSON(), nullable=False),
+    sa.Column('model_config_json', postgresql.JSONB(), nullable=False),
+    sa.Column('runtime_config_json', postgresql.JSONB(), nullable=False),
+    sa.Column('context_policy_json', postgresql.JSONB(), nullable=False),
+    sa.Column('memory_policy_json', postgresql.JSONB(), nullable=False),
+    sa.Column('capabilities_json', postgresql.JSONB(), nullable=False),
+    sa.Column('tool_permissions_json', postgresql.JSONB(), nullable=False),
+    sa.Column('runtime_policy_json', postgresql.JSONB(), nullable=False),
     sa.Column('source_proposal_id', sa.String(length=36), nullable=True),
     sa.Column('source_activity_id', sa.String(length=36), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
@@ -476,7 +512,7 @@ def upgrade() -> None:
     sa.Column('job_id', sa.String(length=36), nullable=False),
     sa.Column('event_type', sa.String(length=32), nullable=False),
     sa.Column('message', sa.Text(), nullable=False),
-    sa.Column('data', sa.JSON(), nullable=True),
+    sa.Column('data', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['job_id'], ['jobs.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -489,7 +525,7 @@ def upgrade() -> None:
     sa.Column('user_id', sa.String(length=36), nullable=True),
     sa.Column('role', sa.String(length=32), nullable=False),
     sa.Column('content', sa.Text(), nullable=False),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint("role in ('user', 'assistant', 'system', 'tool')", name='ck_messages_role'),
     sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], ),
@@ -511,7 +547,7 @@ def upgrade() -> None:
     sa.Column('source_message_count', sa.Integer(), nullable=False),
     sa.Column('source_first_message_id', sa.String(length=36), nullable=True),
     sa.Column('source_last_message_id', sa.String(length=36), nullable=True),
-    sa.Column('summary_json', sa.JSON(), nullable=True),
+    sa.Column('summary_json', postgresql.JSONB(), nullable=True),
     sa.Column('token_estimate_before', sa.Integer(), nullable=True),
     sa.Column('token_estimate_after', sa.Integer(), nullable=True),
     sa.Column('condenser_version', sa.String(length=64), nullable=False),
@@ -520,6 +556,16 @@ def upgrade() -> None:
     sa.UniqueConstraint('session_id', 'version', name='uq_session_summaries_session_version'),
     sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(
+        ['source_first_message_id'], ['messages.id'],
+        name='fk_session_summaries_source_first_message_id_messages',
+        ondelete='SET NULL',
+    ),
+    sa.ForeignKeyConstraint(
+        ['source_last_message_id'], ['messages.id'],
+        name='fk_session_summaries_source_last_message_id_messages',
+        ondelete='SET NULL',
+    ),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -529,7 +575,7 @@ def upgrade() -> None:
     op.create_index('ix_session_summaries_status', 'session_summaries', ['status'], unique=False)
     op.create_index('ix_session_summaries_session_status', 'session_summaries', ['session_id', 'status'], unique=False)
     op.create_index('ix_session_summaries_space_session_status', 'session_summaries', ['space_id', 'session_id', 'status'], unique=False)
-    op.create_index('ix_session_summaries_one_active_per_session', 'session_summaries', ['session_id'], unique=True, sqlite_where=sa.text("status = 'active'"))
+    op.create_index('ix_session_summaries_one_active_per_session', 'session_summaries', ['session_id'], unique=True, postgresql_where=sa.text("status = 'active'"))
     op.create_table('runs',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -555,15 +601,15 @@ def upgrade() -> None:
     sa.Column('model_provider_id', sa.String(length=36), nullable=True),
     sa.Column('runtime_adapter_id', sa.String(length=36), nullable=True),
     sa.Column('error_message', sa.Text(), nullable=True),
-    sa.Column('error_json', sa.JSON(), nullable=True),
-    sa.Column('output_json', sa.JSON(), nullable=True),
-    sa.Column('usage_json', sa.JSON(), nullable=True),
+    sa.Column('error_json', postgresql.JSONB(), nullable=True),
+    sa.Column('output_json', postgresql.JSONB(), nullable=True),
+    sa.Column('usage_json', postgresql.JSONB(), nullable=True),
     sa.Column('task_id', sa.String(length=36), nullable=True),
     sa.Column('adapter_type', sa.String(length=64), nullable=True),
     sa.Column('capability_id', sa.String(length=128), nullable=True),
     sa.Column('model_selection_mode', sa.String(length=32), nullable=False, server_default='cli_default'),
-    sa.Column('model_override_json', sa.JSON(), nullable=True),
-    sa.Column('permission_snapshot_json', sa.JSON(), nullable=True),
+    sa.Column('model_override_json', postgresql.JSONB(), nullable=True),
+    sa.Column('permission_snapshot_json', postgresql.JSONB(), nullable=True),
     sa.Column('required_sandbox_level', sa.String(length=32), nullable=False, server_default='none'),
     sa.Column('sandbox_path', sa.Text(), nullable=True),
     sa.Column('runtime_seconds', sa.Float(), nullable=True),
@@ -575,13 +621,14 @@ def upgrade() -> None:
     sa.Column('visibility', sa.String(length=32), nullable=False, server_default='space_shared'),
     # Safe marker for runs that consumed a PersonalMemoryGrant during context build.
     sa.Column('has_personal_grant_context', sa.Boolean(), nullable=False, server_default='false'),
-    sa.Column('personal_grant_context_json', sa.JSON(), nullable=True),
+    sa.Column('personal_grant_context_json', postgresql.JSONB(), nullable=True),
     sa.Column('execution_plane_id', sa.String(length=36), nullable=True),
     sa.Column('source', sa.String(length=32), nullable=True),
     sa.Column('observability_level', sa.String(length=64), nullable=True),
     sa.Column('data_exposure_level', sa.String(length=64), nullable=True),
     sa.Column('trust_level', sa.String(length=32), nullable=True),
     sa.Column('externality_level', sa.String(length=32), nullable=True),
+    sa.Column('project_id', sa.String(length=36), nullable=True),
     sa.CheckConstraint("mode in ('live', 'dry_run')", name='ck_runs_mode'),
     sa.CheckConstraint("run_type in ('agent', 'system', 'workflow', 'validation', 'reflection', 'export')", name='ck_runs_run_type'),
     sa.CheckConstraint("status in ('queued', 'running', 'succeeded', 'degraded', 'failed', 'cancelled', 'waiting_for_review')", name='ck_runs_status'),
@@ -621,11 +668,13 @@ def upgrade() -> None:
     op.create_index(op.f('ix_runs_task_id'), 'runs', ['task_id'], unique=False)
     op.create_index(op.f('ix_runs_trigger_origin'), 'runs', ['trigger_origin'], unique=False)
     op.create_index(op.f('ix_runs_workspace_id'), 'runs', ['workspace_id'], unique=False)
+    op.create_index('ix_runs_project_id', 'runs', ['project_id'])
     op.create_table('run_execution_locks',
     sa.Column('run_id', sa.String(length=36), sa.ForeignKey('runs.id'), nullable=False),
     sa.Column('locked_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('worker_id', sa.String(length=64), nullable=False),
     sa.Column('job_id', sa.String(length=36), nullable=True),
+    sa.ForeignKeyConstraint(['job_id'], ['jobs.id'], name='fk_run_execution_locks_job_id_jobs', ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('run_id')
     )
     op.create_table('activity_records',
@@ -641,15 +690,15 @@ def upgrade() -> None:
     sa.Column('activity_type', sa.String(length=64), nullable=False),
     sa.Column('title', sa.String(length=512), nullable=True),
     sa.Column('content', sa.Text(), nullable=True),
-    sa.Column('payload_json', sa.JSON(), nullable=False),
+    sa.Column('payload_json', postgresql.JSONB(), nullable=False),
     sa.Column('occurred_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('status', sa.String(length=32), nullable=False, server_default='raw'),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('source_kind', sa.String(length=64), nullable=True),
     sa.Column('source_trust', sa.String(length=32), nullable=True),
-    sa.Column('source_integrity_json', sa.JSON(), nullable=True),
-    sa.Column('entity_refs_json', sa.JSON(), nullable=True),
+    sa.Column('source_integrity_json', postgresql.JSONB(), nullable=True),
+    sa.Column('entity_refs_json', postgresql.JSONB(), nullable=True),
     sa.Column('subject_user_id', sa.String(length=36), nullable=True),
     sa.Column('lifecycle_status', sa.String(length=32), nullable=False, server_default='raw'),
     sa.Column('consolidation_status', sa.String(length=32), nullable=False, server_default='pending'),
@@ -657,6 +706,7 @@ def upgrade() -> None:
     sa.Column('discarded_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('visibility', sa.String(length=32), nullable=False, server_default='space_shared'),
     sa.Column('owner_user_id', sa.String(length=36), nullable=True),
+    sa.Column('project_id', sa.String(length=36), nullable=True),
     sa.CheckConstraint(
         "status in ('raw', 'processed', 'proposals_generated', 'archived')",
         name='ck_activity_records_status',
@@ -687,6 +737,7 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], ),
     sa.ForeignKeyConstraint(['source_run_id'], ['runs.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['subject_user_id'], ['users.id'], name='fk_activity_records_subject_user_id_users', ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -706,6 +757,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_activity_records_lifecycle_status'), 'activity_records', ['lifecycle_status'], unique=False)
     op.create_index(op.f('ix_activity_records_consolidation_status'), 'activity_records', ['consolidation_status'], unique=False)
     op.create_index(op.f('ix_activity_records_owner_user_id'), 'activity_records', ['owner_user_id'], unique=False)
+    op.create_index('ix_activity_records_project_id', 'activity_records', ['project_id'])
     op.create_table('projects',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -714,7 +766,7 @@ def upgrade() -> None:
     sa.Column('description', sa.Text(), nullable=True),
     sa.Column('status', sa.String(length=32), nullable=False),
     sa.Column('current_focus', sa.Text(), nullable=True),
-    sa.Column('settings_json', sa.JSON(), nullable=True),
+    sa.Column('settings_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('archived_at', sa.DateTime(timezone=True), nullable=True),
@@ -755,10 +807,10 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=32), nullable=False),
     sa.Column('risk_level', sa.String(length=32), nullable=False),
     sa.Column('urgency', sa.String(length=32), nullable=False),
-    sa.Column('preview', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+    sa.Column('preview', sa.Boolean(), nullable=False, server_default=sa.text('false')),
     sa.Column('title', sa.String(length=512), nullable=False),
     sa.Column('summary', sa.Text(), nullable=True),
-    sa.Column('payload_json', sa.JSON(), nullable=False),
+    sa.Column('payload_json', postgresql.JSONB(), nullable=False),
     sa.Column('review_deadline', sa.DateTime(timezone=True), nullable=True),
     sa.Column('expires_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
@@ -771,11 +823,13 @@ def upgrade() -> None:
     sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
     sa.Column('required_approver_role', sa.String(length=64), nullable=True),
     sa.Column('visibility', sa.String(length=32), nullable=False, server_default='space_shared'),
+    sa.Column('project_id', sa.String(length=36), nullable=True),
     sa.CheckConstraint("risk_level in ('low', 'medium', 'high', 'critical')", name='ck_proposals_risk_level'),
     sa.CheckConstraint("urgency in ('low', 'normal', 'high', 'critical')", name='ck_proposals_urgency'),
     sa.ForeignKeyConstraint(['created_by_agent_id'], ['agents.id'], ),
     sa.ForeignKeyConstraint(['created_by_run_id'], ['runs.id'], ),
     sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['project_id'], ['projects.id'], name='fk_proposals_project_id_projects', ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['reviewed_by'], ['users.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
@@ -788,6 +842,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_proposals_status'), 'proposals', ['status'], unique=False)
     op.create_index(op.f('ix_proposals_urgency'), 'proposals', ['urgency'], unique=False)
     op.create_index(op.f('ix_proposals_workspace_id'), 'proposals', ['workspace_id'], unique=False)
+    op.create_index('ix_proposals_project_id', 'proposals', ['project_id'])
     op.create_table('artifacts',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -799,23 +854,25 @@ def upgrade() -> None:
     sa.Column('storage_ref', sa.String(length=1024), nullable=True),
     sa.Column('storage_path', sa.String(length=1024), nullable=True),
     sa.Column('mime_type', sa.String(length=256), nullable=True),
-    sa.Column('exportable', sa.Boolean(), nullable=False, server_default=sa.text('1')),
-    sa.Column('export_formats_json', sa.JSON(), nullable=False),
+    sa.Column('exportable', sa.Boolean(), nullable=False, server_default=sa.text('true')),
+    sa.Column('export_formats_json', postgresql.JSONB(), nullable=False),
     sa.Column('canonical_format', sa.String(length=64), nullable=True),
-    sa.Column('preview', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+    sa.Column('preview', sa.Boolean(), nullable=False, server_default=sa.text('false')),
     sa.Column('relevant_period_start', sa.DateTime(timezone=True), nullable=True),
     sa.Column('relevant_period_end', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
     sa.Column('visibility', sa.String(length=32), nullable=False, server_default='space_shared'),
     sa.Column('owner_user_id', sa.String(length=36), nullable=True),
     sa.Column('source_runtime_adapter_id', sa.String(length=36), nullable=True),
     sa.Column('source_execution_plane_id', sa.String(length=36), nullable=True),
     sa.Column('trust_level', sa.String(length=32), nullable=True),
+    sa.Column('project_id', sa.String(length=36), nullable=True),
     sa.CheckConstraint("storage_path is null or storage_path not like '/%'", name='ck_artifacts_storage_path_relative'),
     sa.CheckConstraint("trust_level is null or trust_level in ('high', 'medium', 'low', 'unknown')", name='ck_artifacts_trust_level'),
     sa.ForeignKeyConstraint(['owner_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['project_id'], ['projects.id'], name='fk_artifacts_project_id_projects', ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['proposal_id'], ['proposals.id'], ),
     sa.ForeignKeyConstraint(['run_id'], ['runs.id'], ),
     sa.ForeignKeyConstraint(['source_execution_plane_id'], ['execution_planes.id'], ),
@@ -830,6 +887,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_artifacts_source_runtime_adapter_id'), 'artifacts', ['source_runtime_adapter_id'], unique=False)
     op.create_index(op.f('ix_artifacts_source_execution_plane_id'), 'artifacts', ['source_execution_plane_id'], unique=False)
     op.create_index(op.f('ix_artifacts_space_id'), 'artifacts', ['space_id'], unique=False)
+    op.create_index('ix_artifacts_project_id', 'artifacts', ['project_id'])
     op.create_table('knowledge_items',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -845,10 +903,10 @@ def upgrade() -> None:
     sa.Column('visibility', sa.String(length=32), nullable=False),
     sa.Column('verification_status', sa.String(length=32), nullable=False),
     sa.Column('reflection_status', sa.String(length=32), nullable=False),
-    sa.Column('tags_json', sa.JSON(), nullable=False),
+    sa.Column('tags_json', postgresql.JSONB(), nullable=False),
     sa.Column('confidence', sa.Float(), nullable=True),
     sa.Column('source_url', sa.Text(), nullable=True),
-    sa.Column('source_refs_json', sa.JSON(), nullable=False),
+    sa.Column('source_refs_json', postgresql.JSONB(), nullable=False),
     sa.Column('owner_user_id', sa.String(length=36), nullable=True),
     sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
     sa.Column('created_by_agent_id', sa.String(length=36), nullable=True),
@@ -875,9 +933,19 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['created_from_proposal_id'], ['proposals.id'], ),
     sa.ForeignKeyConstraint(['owner_user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['project_id'], ['projects.id'], ),
+    sa.ForeignKeyConstraint(
+        ['root_item_id'], ['knowledge_items.id'],
+        name='fk_knowledge_items_root_item_id_knowledge_items',
+        ondelete='SET NULL',
+    ),
     sa.ForeignKeyConstraint(['source_activity_id'], ['activity_records.id'], ),
     sa.ForeignKeyConstraint(['source_artifact_id'], ['artifacts.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(
+        ['supersedes_item_id'], ['knowledge_items.id'],
+        name='fk_knowledge_items_supersedes_item_id_knowledge_items',
+        ondelete='SET NULL',
+    ),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -922,7 +990,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_knowledge_relations_space_id'), 'knowledge_relations', ['space_id'], unique=False)
     op.create_index(op.f('ix_knowledge_relations_status'), 'knowledge_relations', ['status'], unique=False)
     op.create_index(op.f('ix_knowledge_relations_to_item_id'), 'knowledge_relations', ['to_item_id'], unique=False)
-    op.create_index('ix_knowledge_relations_unique_active', 'knowledge_relations', ['space_id', 'from_item_id', 'to_item_id', 'relation_type'], unique=True, sqlite_where=sa.text("status = 'active'"))
+    op.create_index('ix_knowledge_relations_unique_active', 'knowledge_relations', ['space_id', 'from_item_id', 'to_item_id', 'relation_type'], unique=True, postgresql_where=sa.text("status = 'active'"))
     op.create_table('boards',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -933,7 +1001,7 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=32), nullable=False, server_default='active'),
     sa.Column('default_view', sa.String(length=64), nullable=True),
     sa.Column('sort_order', sa.Integer(), nullable=True),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
     sa.Column('created_by_agent_id', sa.String(length=36), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
@@ -956,9 +1024,9 @@ def upgrade() -> None:
     sa.Column('status_key', sa.String(length=64), nullable=False),
     sa.Column('position', sa.Integer(), nullable=False, server_default='0'),
     sa.Column('wip_limit', sa.Integer(), nullable=True),
-    sa.Column('is_done_column', sa.Boolean(), nullable=False, server_default=sa.text('0')),
-    sa.Column('is_default_column', sa.Boolean(), nullable=False, server_default=sa.text('0')),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('is_done_column', sa.Boolean(), nullable=False, server_default=sa.text('false')),
+    sa.Column('is_default_column', sa.Boolean(), nullable=False, server_default=sa.text('false')),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
@@ -991,9 +1059,9 @@ def upgrade() -> None:
     sa.Column('source_run_id', sa.String(length=36), nullable=True),
     sa.Column('source_proposal_id', sa.String(length=36), nullable=True),
     sa.Column('source_artifact_id', sa.String(length=36), nullable=True),
-    sa.Column('acceptance_criteria_json', sa.JSON(), nullable=True),
+    sa.Column('acceptance_criteria_json', postgresql.JSONB(), nullable=True),
     sa.Column('definition_of_done', sa.Text(), nullable=True),
-    sa.Column('required_outputs_json', sa.JSON(), nullable=True),
+    sa.Column('required_outputs_json', postgresql.JSONB(), nullable=True),
     sa.Column('due_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('start_after', sa.DateTime(timezone=True), nullable=True),
     sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
@@ -1004,9 +1072,9 @@ def upgrade() -> None:
     sa.Column('max_runs', sa.Integer(), nullable=True),
     sa.Column('max_cost', sa.Float(), nullable=True),
     sa.Column('max_duration_seconds', sa.Integer(), nullable=True),
-    sa.Column('policy_json', sa.JSON(), nullable=True),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('tags', sa.JSON(), nullable=True),
+    sa.Column('policy_json', postgresql.JSONB(), nullable=True),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
+    sa.Column('tags', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
@@ -1033,9 +1101,6 @@ def upgrade() -> None:
     op.create_index(op.f('ix_tasks_parent_task_id'), 'tasks', ['parent_task_id'], unique=False)
     op.create_index(op.f('ix_tasks_space_id'), 'tasks', ['space_id'], unique=False)
     op.create_index(op.f('ix_tasks_workspace_id'), 'tasks', ['workspace_id'], unique=False)
-    # runs.task_id: optional primary-task hint only (no DB FK). ``runs`` is created
-    # before ``tasks``; adding a deferred FK would require batch ALTER on SQLite.
-    # Canonical Task↔Run linkage is ``task_runs``.
     op.create_table('task_runs',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -1112,8 +1177,8 @@ def upgrade() -> None:
     sa.Column('failure_layer', sa.String(length=32), nullable=True),
     sa.Column('failure_reason_code', sa.String(length=128), nullable=True),
     sa.Column('trajectory_status', sa.String(length=32), nullable=False),
-    sa.Column('evidence_json', sa.JSON(), nullable=True),
-    sa.Column('rule_trace_json', sa.JSON(), nullable=True),
+    sa.Column('evidence_json', postgresql.JSONB(), nullable=True),
+    sa.Column('rule_trace_json', postgresql.JSONB(), nullable=True),
     sa.Column('notes', sa.Text(), nullable=True),
     sa.Column('evaluated_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint("outcome_status in ('passed', 'failed', 'partial', 'unknown')", name='ck_run_evaluations_outcome_status'),
@@ -1140,9 +1205,9 @@ def upgrade() -> None:
     sa.Column('score', sa.Float(), nullable=True),
     sa.Column('confidence', sa.Float(), nullable=True),
     sa.Column('summary', sa.Text(), nullable=True),
-    sa.Column('checklist_json', sa.JSON(), nullable=True),
-    sa.Column('known_issues_json', sa.JSON(), nullable=True),
-    sa.Column('evidence_artifact_ids', sa.JSON(), nullable=True),
+    sa.Column('checklist_json', postgresql.JSONB(), nullable=True),
+    sa.Column('known_issues_json', postgresql.JSONB(), nullable=True),
+    sa.Column('evidence_artifact_ids', postgresql.JSONB(), nullable=True),
     sa.Column('recommendation', sa.String(length=64), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['evaluator_agent_id'], ['agents.id'], ),
@@ -1173,7 +1238,7 @@ def upgrade() -> None:
     sa.Column('subject_user_id', sa.String(length=36), nullable=True),
     sa.Column('owner_user_id', sa.String(length=36), nullable=True),
     sa.Column('sensitivity_level', sa.String(length=32), nullable=False, server_default='normal'),
-    sa.Column('selected_user_ids', sa.JSON(), nullable=True),
+    sa.Column('selected_user_ids', postgresql.JSONB(), nullable=True),
     sa.Column('last_confirmed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('workspace_id', sa.String(length=36), nullable=True),
     sa.Column('agent_id', sa.String(length=36), nullable=True),
@@ -1193,19 +1258,20 @@ def upgrade() -> None:
     sa.Column('access_count', sa.Integer(), nullable=False),
     sa.Column('last_accessed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('fitness_score', sa.Float(), nullable=True),
-    sa.Column('tags', sa.JSON(), nullable=True),
+    sa.Column('tags', postgresql.JSONB(), nullable=True),
     sa.Column('memory_layer', sa.String(length=32), nullable=True),
     sa.Column('memory_kind', sa.String(length=64), nullable=True),
     sa.Column('event_time', sa.DateTime(timezone=True), nullable=True),
     sa.Column('event_type', sa.String(length=64), nullable=True),
-    sa.Column('summary_json', sa.JSON(), nullable=True),
-    sa.Column('salience_json', sa.JSON(), nullable=True),
+    sa.Column('summary_json', postgresql.JSONB(), nullable=True),
+    sa.Column('salience_json', postgresql.JSONB(), nullable=True),
     sa.Column('last_retrieved_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('reconsolidation_due', sa.DateTime(timezone=True), nullable=True),
     sa.Column('root_memory_id', sa.String(length=36), nullable=True),
     sa.Column('supersedes_memory_id', sa.String(length=36), nullable=True),
     sa.Column('source_trust', sa.String(length=32), nullable=True),
     sa.Column('created_from_proposal_id', sa.String(length=36), nullable=True),
+    sa.Column('project_id', sa.String(length=36), nullable=True),
     sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], ),
     sa.ForeignKeyConstraint(['subject_user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['owner_user_id'], ['users.id'], ),
@@ -1224,10 +1290,21 @@ def upgrade() -> None:
         name='ck_memory_entries_source_trust',
     ),
     sa.ForeignKeyConstraint(['created_from_proposal_id'], ['proposals.id'], ),
+    sa.ForeignKeyConstraint(['project_id'], ['projects.id'], name='fk_memory_entries_project_id_projects', ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(
+        ['root_memory_id'], ['memory_entries.id'],
+        name='fk_memory_entries_root_memory_id_memory_entries',
+        ondelete='SET NULL',
+    ),
     sa.ForeignKeyConstraint(['source_activity_id'], ['activity_records.id'], ),
     sa.ForeignKeyConstraint(['source_artifact_id'], ['artifacts.id'], ),
     sa.ForeignKeyConstraint(['source_proposal_id'], ['proposals.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(
+        ['supersedes_memory_id'], ['memory_entries.id'],
+        name='fk_memory_entries_supersedes_memory_id_memory_entries',
+        ondelete='SET NULL',
+    ),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -1250,6 +1327,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_memory_entries_memory_kind'), 'memory_entries', ['memory_kind'], unique=False)
     op.create_index(op.f('ix_memory_entries_root_memory_id'), 'memory_entries', ['root_memory_id'], unique=False)
     op.create_index(op.f('ix_memory_entries_supersedes_memory_id'), 'memory_entries', ['supersedes_memory_id'], unique=False)
+    op.create_index('ix_memory_entries_project_id', 'memory_entries', ['project_id'])
     op.create_index(op.f('ix_memory_entries_created_from_proposal_id'), 'memory_entries', ['created_from_proposal_id'], unique=False)
     op.create_table('memory_access_logs',
     sa.Column('id', sa.String(length=36), nullable=False),
@@ -1282,7 +1360,7 @@ def upgrade() -> None:
     sa.Column('entity_id', sa.String(length=256), nullable=True),
     sa.Column('canonical_key', sa.String(length=512), nullable=True),
     sa.Column('display_name', sa.String(length=256), nullable=True),
-    sa.Column('aliases_json', sa.JSON(), nullable=True),
+    sa.Column('aliases_json', postgresql.JSONB(), nullable=True),
     sa.Column('scope_type', sa.String(length=32), nullable=True),
     sa.Column('scope_id', sa.String(length=36), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
@@ -1303,7 +1381,7 @@ def upgrade() -> None:
     sa.Column('target_id', sa.String(length=36), nullable=False),
     sa.Column('relation_type', sa.String(length=64), nullable=False),
     sa.Column('confidence', sa.Float(), nullable=True),
-    sa.Column('evidence_json', sa.JSON(), nullable=True),
+    sa.Column('evidence_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_from_proposal_id', sa.String(length=36), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint(
@@ -1328,7 +1406,7 @@ def upgrade() -> None:
     sa.Column('source_type', sa.String(length=64), nullable=False),
     sa.Column('source_id', sa.String(length=36), nullable=False),
     sa.Column('source_trust', sa.String(length=32), nullable=True),
-    sa.Column('evidence_json', sa.JSON(), nullable=True),
+    sa.Column('evidence_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint(
         "source_type in ('activity', 'proposal', 'memory', 'artifact', "
@@ -1358,13 +1436,13 @@ def upgrade() -> None:
     sa.Column('version', sa.Integer(), nullable=False, server_default=sa.text('1')),
     sa.Column('status', sa.String(length=32), nullable=False, server_default=sa.text("'active'")),
     sa.Column('content', sa.Text(), nullable=True),
-    sa.Column('source_memory_ids_json', sa.JSON(), nullable=True),
-    sa.Column('source_policy_ids_json', sa.JSON(), nullable=True),
-    sa.Column('source_relation_ids_json', sa.JSON(), nullable=True),
+    sa.Column('source_memory_ids_json', postgresql.JSONB(), nullable=True),
+    sa.Column('source_policy_ids_json', postgresql.JSONB(), nullable=True),
+    sa.Column('source_relation_ids_json', postgresql.JSONB(), nullable=True),
     sa.Column('source_hash', sa.String(length=128), nullable=True),
     sa.Column('content_hash', sa.String(length=128), nullable=True),
     sa.Column('dirty_since', sa.DateTime(timezone=True), nullable=True),
-    sa.Column('dirty_reason_json', sa.JSON(), nullable=True),
+    sa.Column('dirty_reason_json', postgresql.JSONB(), nullable=True),
     sa.Column('dirty_count', sa.Integer(), nullable=False, server_default=sa.text('0')),
     sa.Column('generated_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_from_run_id', sa.String(length=36), nullable=True),
@@ -1384,8 +1462,7 @@ def upgrade() -> None:
     # actors — actor identity foundation.
     # actors depends on spaces, users, and agents — all created above.
     # space_id is nullable so deployment-level (system) actors can have no space.
-    # user_id / agent_id constraints enforced by ActorService (not at DB level:
-    # SQLite cannot express conditional NOT NULL checks across columns).
+    # user_id / agent_id constraints enforced by ActorService (not at DB level).
     op.create_table('actors',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=True),
@@ -1395,7 +1472,7 @@ def upgrade() -> None:
     sa.Column('service_name', sa.String(length=128), nullable=True),
     sa.Column('display_name', sa.String(length=256), nullable=True),
     sa.Column('status', sa.String(length=32), nullable=False, server_default='active'),
-    sa.Column('metadata_json', sa.JSON(), nullable=False),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint(
@@ -1422,8 +1499,6 @@ def upgrade() -> None:
     # run_steps depends on spaces, runs, actors, runtime_adapters, workspaces,
     # sessions, artifacts, and proposals — all created above.
     # actor_id is NOT NULL: every RunStep must carry actor identity (M2 rule).
-    # task_id is a soft reference only (no DB FK: avoids DDL bootstrap cycle
-    # with tasks created before run_steps in migration order).
     # Secret values must never appear in error_message or metadata_json.
     op.create_table('run_steps',
     sa.Column('id', sa.String(length=36), nullable=False),
@@ -1447,7 +1522,7 @@ def upgrade() -> None:
     sa.Column('output_summary', sa.Text(), nullable=True),
     sa.Column('error_type', sa.String(length=128), nullable=True),
     sa.Column('error_message', sa.Text(), nullable=True),
-    sa.Column('metadata_json', sa.JSON(), nullable=False),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint(
@@ -1470,6 +1545,7 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['runtime_adapter_id'], ['runtime_adapters.id'], ),
     sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], ),
     sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.ForeignKeyConstraint(['task_id'], ['tasks.id'], name='fk_run_steps_task_id_tasks', ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('run_id', 'step_index', name='uq_run_steps_run_step_index')
@@ -1487,6 +1563,86 @@ def upgrade() -> None:
     op.create_index(op.f('ix_run_steps_artifact_id'), 'run_steps', ['artifact_id'], unique=False)
     op.create_index(op.f('ix_run_steps_proposal_id'), 'run_steps', ['proposal_id'], unique=False)
     op.create_index('ix_run_steps_space_run_index', 'run_steps', ['space_id', 'run_id', 'step_index'], unique=False)
+    op.create_foreign_key(
+        'fk_context_snapshots_target_runtime_adapter_id_runtime_adapters',
+        'context_snapshots',
+        'runtime_adapters',
+        ['target_runtime_adapter_id'],
+        ['id'],
+        ondelete='SET NULL',
+    )
+    op.create_foreign_key(
+        'fk_context_snapshots_execution_plane_id_execution_planes',
+        'context_snapshots',
+        'execution_planes',
+        ['execution_plane_id'],
+        ['id'],
+        ondelete='SET NULL',
+    )
+    op.create_foreign_key(
+        'fk_policies_created_from_proposal_id_proposals',
+        'policies',
+        'proposals',
+        ['created_from_proposal_id'],
+        ['id'],
+        ondelete='SET NULL',
+    )
+    op.create_foreign_key(
+        'fk_agents_current_version_id_agent_versions',
+        'agents',
+        'agent_versions',
+        ['current_version_id'],
+        ['id'],
+        ondelete='SET NULL',
+    )
+    op.create_foreign_key(
+        'fk_agent_versions_source_proposal_id_proposals',
+        'agent_versions',
+        'proposals',
+        ['source_proposal_id'],
+        ['id'],
+        ondelete='SET NULL',
+    )
+    op.create_foreign_key(
+        'fk_agent_versions_source_activity_id_activity_records',
+        'agent_versions',
+        'activity_records',
+        ['source_activity_id'],
+        ['id'],
+        ondelete='SET NULL',
+    )
+    op.create_foreign_key(
+        'fk_runs_task_id_tasks',
+        'runs',
+        'tasks',
+        ['task_id'],
+        ['id'],
+        ondelete='SET NULL',
+    )
+    op.create_foreign_key(
+        'fk_runs_project_id_projects',
+        'runs',
+        'projects',
+        ['project_id'],
+        ['id'],
+        ondelete='SET NULL',
+    )
+    op.create_foreign_key(
+        'fk_activity_records_source_task_id_tasks',
+        'activity_records',
+        'tasks',
+        ['source_task_id'],
+        ['id'],
+        ondelete='SET NULL',
+    )
+    op.create_foreign_key(
+        'fk_activity_records_project_id_projects',
+        'activity_records',
+        'projects',
+        ['project_id'],
+        ['id'],
+        ondelete='SET NULL',
+    )
     # run_events — structured append-only harness evidence spine.
     # run_events depends on spaces, runs, run_steps, actors, runtime_adapters, workspaces,
     # artifacts, and proposals — all created above.
@@ -1511,7 +1667,7 @@ def upgrade() -> None:
     sa.Column('proposal_id', sa.String(length=36), nullable=True),
     sa.Column('data_exposure_level', sa.String(length=64), nullable=True),
     sa.Column('trust_level', sa.String(length=32), nullable=True),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint(
         "event_type in ("
@@ -1568,7 +1724,7 @@ def upgrade() -> None:
     sa.Column('access_mode', sa.String(length=32), nullable=False),
     sa.Column('granted_by_user_id', sa.String(length=36), nullable=True),
     sa.Column('expires_at', sa.DateTime(timezone=True), nullable=True),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint("access_mode in ('read', 'subscribe', 'federated')", name='ck_source_pointers_access_mode'),
     sa.ForeignKeyConstraint(['granted_by_user_id'], ['users.id'], ),
@@ -1612,7 +1768,7 @@ def upgrade() -> None:
     sa.Column('grant_scope', sa.String(length=32), nullable=False),
     sa.Column('access_mode', sa.String(length=32), nullable=False),
     sa.Column('status', sa.String(length=32), nullable=False),
-    sa.Column('memory_filter_json', sa.JSON(), nullable=True),
+    sa.Column('memory_filter_json', postgresql.JSONB(), nullable=True),
     sa.Column('read_expires_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('egress_review_expires_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('consume_started_at', sa.DateTime(timezone=True), nullable=True),
@@ -1643,8 +1799,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_personal_memory_grants_status'), 'personal_memory_grants', ['status'], unique=False)
     op.create_index(op.f('ix_personal_memory_grants_read_expires_at'), 'personal_memory_grants', ['read_expires_at'], unique=False)
     # Partial unique index: at most one active/consuming grant per (granting_user_id, target_run_id).
-    # SQLite supports partial indexes with WHERE clause. Service layer must enforce atomicity
-    # for concurrent grant transitions not caught at the SQL level.
+    # Service layer must enforce atomicity for concurrent grant transitions.
     op.execute(
         "CREATE UNIQUE INDEX ix_personal_memory_grants_unique_active_consuming "
         "ON personal_memory_grants (granting_user_id, target_run_id) "
@@ -1659,7 +1814,7 @@ def upgrade() -> None:
     sa.Column('grant_id', sa.String(length=36), nullable=True),
     sa.Column('target_space_id', sa.String(length=36), nullable=True),
     sa.Column('status', sa.String(length=32), nullable=False),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('revoked_at', sa.DateTime(timezone=True), nullable=True),
     sa.CheckConstraint("approval_type in ('egress_granting_user')", name='ck_proposal_approvals_approval_type'),
@@ -1691,7 +1846,7 @@ def upgrade() -> None:
     sa.Column('proposal_id', sa.String(length=36), nullable=True),
     sa.Column('source_space_id', sa.String(length=36), nullable=True),
     sa.Column('target_space_id', sa.String(length=36), nullable=True),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint(
         "event_type in ('created', 'previewed', 'consuming', 'used', 'revoked', 'expired', 'failed', 'denied', 'egress_proposal_created', 'egress_approved')",
@@ -1721,11 +1876,11 @@ def upgrade() -> None:
     sa.Column('external_url', sa.Text(), nullable=True),
     sa.Column('observability_level', sa.String(length=64), nullable=False, server_default='black_box'),
     sa.Column('data_exposure_level', sa.String(length=64), nullable=False, server_default='unknown'),
-    sa.Column('trace_available', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+    sa.Column('trace_available', sa.Boolean(), nullable=False, server_default=sa.text('false')),
     sa.Column('raw_summary', sa.Text(), nullable=True),
     sa.Column('raw_output_uri', sa.String(length=1024), nullable=True),
     sa.Column('imported_diff_uri', sa.String(length=1024), nullable=True),
-    sa.Column('imported_artifacts_json', sa.JSON(), nullable=True),
+    sa.Column('imported_artifacts_json', postgresql.JSONB(), nullable=True),
     sa.Column('imported_logs_uri', sa.String(length=1024), nullable=True),
     sa.Column('status', sa.String(length=32), nullable=False, server_default='imported'),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
@@ -1751,14 +1906,14 @@ def upgrade() -> None:
     sa.Column('what_changed', sa.Text(), nullable=True),
     sa.Column('what_worked', sa.Text(), nullable=True),
     sa.Column('what_failed', sa.Text(), nullable=True),
-    sa.Column('reusable_rules_json', sa.JSON(), nullable=True),
-    sa.Column('reusable_commands_json', sa.JSON(), nullable=True),
-    sa.Column('workspace_facts_json', sa.JSON(), nullable=True),
-    sa.Column('memory_candidates_json', sa.JSON(), nullable=True),
-    sa.Column('capability_candidates_json', sa.JSON(), nullable=True),
-    sa.Column('policy_candidates_json', sa.JSON(), nullable=True),
-    sa.Column('validation_candidates_json', sa.JSON(), nullable=True),
-    sa.Column('follow_up_tasks_json', sa.JSON(), nullable=True),
+    sa.Column('reusable_rules_json', postgresql.JSONB(), nullable=True),
+    sa.Column('reusable_commands_json', postgresql.JSONB(), nullable=True),
+    sa.Column('workspace_facts_json', postgresql.JSONB(), nullable=True),
+    sa.Column('memory_candidates_json', postgresql.JSONB(), nullable=True),
+    sa.Column('capability_candidates_json', postgresql.JSONB(), nullable=True),
+    sa.Column('policy_candidates_json', postgresql.JSONB(), nullable=True),
+    sa.Column('validation_candidates_json', postgresql.JSONB(), nullable=True),
+    sa.Column('follow_up_tasks_json', postgresql.JSONB(), nullable=True),
     sa.Column('confidence', sa.Float(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint("source in ('native', 'external_import', 'manual', 'evaluator')", name='ck_run_reflections_source'),
@@ -1781,9 +1936,9 @@ def upgrade() -> None:
     sa.Column('failure_layer', sa.String(length=32), nullable=True),
     sa.Column('failure_reason_code', sa.String(length=128), nullable=True),
     sa.Column('trajectory_status', sa.String(length=32), nullable=True),
-    sa.Column('skipped_reasons_json', sa.JSON(), nullable=True),
-    sa.Column('error_json', sa.JSON(), nullable=True),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('skipped_reasons_json', postgresql.JSONB(), nullable=True),
+    sa.Column('error_json', postgresql.JSONB(), nullable=True),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
     sa.Column('finalized_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint("status in ('completed', 'failed')", name='ck_run_finalizations_status'),
@@ -1814,13 +1969,13 @@ def upgrade() -> None:
     sa.Column('external_type', sa.String(length=64), nullable=False),
     sa.Column('external_ref', sa.String(length=512), nullable=False),
     sa.Column('display_name', sa.String(length=256), nullable=False),
-    sa.Column('required_scopes_json', sa.JSON(), nullable=True),
+    sa.Column('required_scopes_json', postgresql.JSONB(), nullable=True),
     sa.Column('credential_ref', sa.String(length=256), nullable=True),
     sa.Column('data_exposure_level', sa.String(length=64), nullable=False, server_default='unknown'),
     sa.Column('observability_level', sa.String(length=64), nullable=False, server_default='black_box'),
     sa.Column('side_effect_level', sa.String(length=32), nullable=False, server_default='none'),
-    sa.Column('approval_required', sa.Boolean(), nullable=False, server_default=sa.text('1')),
-    sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+    sa.Column('approval_required', sa.Boolean(), nullable=False, server_default=sa.text('true')),
+    sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.text('false')),
     sa.Column('notes', sa.Text(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
@@ -1843,16 +1998,6 @@ def upgrade() -> None:
     op.create_index(op.f('ix_runtime_tool_bindings_execution_plane_id'), 'runtime_tool_bindings', ['execution_plane_id'], unique=False)
     op.create_index(op.f('ix_runtime_tool_bindings_enabled'), 'runtime_tool_bindings', ['enabled'], unique=False)
 
-    op.add_column('runs', sa.Column('project_id', sa.String(length=36), nullable=True))
-    op.create_index('ix_runs_project_id', 'runs', ['project_id'])
-    op.add_column('activity_records', sa.Column('project_id', sa.String(length=36), nullable=True))
-    op.create_index('ix_activity_records_project_id', 'activity_records', ['project_id'])
-    op.add_column('artifacts', sa.Column('project_id', sa.String(length=36), nullable=True))
-    op.create_index('ix_artifacts_project_id', 'artifacts', ['project_id'])
-    op.add_column('proposals', sa.Column('project_id', sa.String(length=36), nullable=True))
-    op.create_index('ix_proposals_project_id', 'proposals', ['project_id'])
-    op.add_column('memory_entries', sa.Column('project_id', sa.String(length=36), nullable=True))
-    op.create_index('ix_memory_entries_project_id', 'memory_entries', ['project_id'])
     op.create_table(
         'cli_credential_events',
         sa.Column('id', sa.String(length=36), nullable=False),
@@ -1874,6 +2019,11 @@ def upgrade() -> None:
             name='ck_cli_credential_events_credential_source',
         ),
         sa.ForeignKeyConstraint(['run_id'], ['runs.id']),
+        sa.ForeignKeyConstraint(
+            ['runtime_adapter_id'], ['runtime_adapters.id'],
+            name='fk_cli_credential_events_runtime_adapter_id_runtime_adapters',
+            ondelete='SET NULL',
+        ),
         sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
         sa.PrimaryKeyConstraint('id'),
     )
@@ -1890,7 +2040,7 @@ def upgrade() -> None:
     sa.Column('space_id', sa.String(length=36), nullable=True),
     sa.Column('actor_type', sa.String(length=64), nullable=True),
     sa.Column('actor_id', sa.String(length=36), nullable=True),
-    sa.Column('actor_ref_json', sa.JSON(), nullable=True),
+    sa.Column('actor_ref_json', postgresql.JSONB(), nullable=True),
     sa.Column('action', sa.String(length=128), nullable=False),
     sa.Column('resource_type', sa.String(length=64), nullable=True),
     sa.Column('resource_id', sa.String(length=256), nullable=True),
@@ -1904,7 +2054,7 @@ def upgrade() -> None:
     sa.Column('audit_code', sa.String(length=128), nullable=True),
     sa.Column('run_id', sa.String(length=36), nullable=True),
     sa.Column('proposal_id', sa.String(length=36), nullable=True),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint(
         "decision in ('allow', 'deny', 'require_approval')",
@@ -1943,8 +2093,8 @@ def upgrade() -> None:
         sa.Column('description', sa.Text(), nullable=True),
         sa.Column('trigger_type', sa.String(length=64), nullable=False, server_default='manual'),
         sa.Column('status', sa.String(length=32), nullable=False, server_default='active'),
-        sa.Column('preflight_snapshot_json', sa.JSON(), nullable=True),
-        sa.Column('config_json', sa.JSON(), nullable=True),
+        sa.Column('preflight_snapshot_json', postgresql.JSONB(), nullable=True),
+        sa.Column('config_json', postgresql.JSONB(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("trigger_type in ('manual')", name='ck_automations_trigger_type'),
@@ -1967,9 +2117,10 @@ def upgrade() -> None:
         sa.Column('run_id', sa.String(length=36), nullable=False),
         sa.Column('triggered_by_user_id', sa.String(length=36), nullable=True),
         sa.Column('trigger_type', sa.String(length=64), nullable=False, server_default='manual'),
-        sa.Column('preflight_snapshot_json', sa.JSON(), nullable=True),
+        sa.Column('preflight_snapshot_json', postgresql.JSONB(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(['automation_id'], ['automations.id']),
+        sa.ForeignKeyConstraint(['run_id'], ['runs.id']),
         sa.ForeignKeyConstraint(['triggered_by_user_id'], ['users.id']),
         sa.PrimaryKeyConstraint('id'),
     )
@@ -1986,8 +2137,8 @@ def upgrade() -> None:
         sa.Column('connector_type', sa.String(length=64), nullable=False),
         sa.Column('ingestion_mode', sa.String(length=32), nullable=False),
         sa.Column('status', sa.String(length=32), nullable=False),
-        sa.Column('capabilities_json', sa.JSON(), nullable=False),
-        sa.Column('config_schema_json', sa.JSON(), nullable=True),
+        sa.Column('capabilities_json', postgresql.JSONB(), nullable=False),
+        sa.Column('config_schema_json', postgresql.JSONB(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("connector_type in ('external_feed', 'external_url', 'internal_activity', 'internal_artifact', 'internal_run', 'file', 'document')", name='ck_source_connectors_connector_type'),
@@ -2012,10 +2163,10 @@ def upgrade() -> None:
         sa.Column('fetch_frequency', sa.String(length=32), nullable=False),
         sa.Column('capture_policy', sa.String(length=64), nullable=False),
         sa.Column('trust_level', sa.String(length=32), nullable=False),
-        sa.Column('topic_hints_json', sa.JSON(), nullable=True),
-        sa.Column('consent_json', sa.JSON(), nullable=False),
-        sa.Column('policy_json', sa.JSON(), nullable=False),
-        sa.Column('config_json', sa.JSON(), nullable=False),
+        sa.Column('topic_hints_json', postgresql.JSONB(), nullable=True),
+        sa.Column('consent_json', postgresql.JSONB(), nullable=False),
+        sa.Column('policy_json', postgresql.JSONB(), nullable=False),
+        sa.Column('config_json', postgresql.JSONB(), nullable=False),
         sa.Column('last_checked_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('next_check_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
@@ -2042,7 +2193,7 @@ def upgrade() -> None:
     op.create_index('ix_source_connections_due', 'source_connections', ['status', 'next_check_at'])
     op.create_index(
         'uq_source_connections_active_endpoint', 'source_connections', ['space_id', 'connector_id', 'endpoint_url'],
-        unique=True, sqlite_where=sa.text("endpoint_url IS NOT NULL AND deleted_at IS NULL AND status != 'archived'"),
+        unique=True, postgresql_where=sa.text("endpoint_url IS NOT NULL AND deleted_at IS NULL AND status != 'archived'"),
     )
 
     op.create_table('intake_items',
@@ -2074,7 +2225,7 @@ def upgrade() -> None:
         sa.Column('summary_artifact_id', sa.String(length=36), nullable=True),
         sa.Column('search_index_ref', sa.String(length=1024), nullable=True),
         sa.Column('embedding_index_ref', sa.String(length=1024), nullable=True),
-        sa.Column('metadata_json', sa.JSON(), nullable=True),
+        sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
@@ -2084,7 +2235,10 @@ def upgrade() -> None:
         sa.CheckConstraint("content_state in ('metadata_only', 'excerpt_saved', 'content_queued', 'content_saved', 'snapshot_queued', 'snapshot_saved', 'extraction_failed', 'content_unavailable')", name='ck_intake_items_content_state'),
         sa.CheckConstraint("retention_policy in ('metadata_only', 'summary_only', 'full_text', 'full_snapshot', 'archived')", name='ck_intake_items_retention_policy'),
         sa.ForeignKeyConstraint(['connection_id'], ['source_connections.id']),
+        sa.ForeignKeyConstraint(['extracted_artifact_id'], ['artifacts.id'], name='fk_intake_items_extracted_artifact_id_artifacts', ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(['raw_artifact_id'], ['artifacts.id'], name='fk_intake_items_raw_artifact_id_artifacts', ondelete='SET NULL'),
         sa.ForeignKeyConstraint(['space_id'], ['spaces.id']),
+        sa.ForeignKeyConstraint(['summary_artifact_id'], ['artifacts.id'], name='fk_intake_items_summary_artifact_id_artifacts', ondelete='SET NULL'),
         sa.PrimaryKeyConstraint('id'),
     )
     op.create_index('ix_intake_items_space_id', 'intake_items', ['space_id'])
@@ -2108,11 +2262,11 @@ def upgrade() -> None:
     op.create_index('ix_intake_items_source_object', 'intake_items', ['space_id', 'source_object_type', 'source_object_id'])
     op.create_index(
         'uq_intake_items_active_canonical_uri', 'intake_items', ['space_id', 'canonical_uri'],
-        unique=True, sqlite_where=sa.text("canonical_uri IS NOT NULL AND deleted_at IS NULL"),
+        unique=True, postgresql_where=sa.text("canonical_uri IS NOT NULL AND deleted_at IS NULL"),
     )
     op.create_index(
         'uq_intake_items_active_source_uri', 'intake_items', ['space_id', 'source_uri'],
-        unique=True, sqlite_where=sa.text("source_uri IS NOT NULL AND deleted_at IS NULL"),
+        unique=True, postgresql_where=sa.text("source_uri IS NOT NULL AND deleted_at IS NULL"),
     )
 
     op.create_table('source_snapshots',
@@ -2126,7 +2280,7 @@ def upgrade() -> None:
         sa.Column('source_uri', sa.Text(), nullable=True),
         sa.Column('capture_method', sa.String(length=64), nullable=False),
         sa.Column('trust_level', sa.String(length=32), nullable=False),
-        sa.Column('metadata_json', sa.JSON(), nullable=True),
+        sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
         sa.Column('captured_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("snapshot_type in ('metadata', 'raw', 'extracted', 'summary')", name='ck_source_snapshots_snapshot_type'),
@@ -2163,7 +2317,7 @@ def upgrade() -> None:
         sa.Column('items_updated', sa.Integer(), nullable=True),
         sa.Column('error_code', sa.String(length=64), nullable=True),
         sa.Column('error_message', sa.String(length=512), nullable=True),
-        sa.Column('metadata_json', sa.JSON(), nullable=True),
+        sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("job_type in ('connection_scan', 'manual_url', 'extract_text', 'snapshot', 'normalize_activity', 'normalize_artifact', 'normalize_run_event')", name='ck_extraction_jobs_job_type'),
         sa.CheckConstraint("status in ('pending', 'running', 'succeeded', 'failed', 'skipped')", name='ck_extraction_jobs_status'),
@@ -2205,7 +2359,7 @@ def upgrade() -> None:
         sa.Column('extraction_method', sa.String(length=64), nullable=False),
         sa.Column('confidence', sa.Float(), nullable=True),
         sa.Column('status', sa.String(length=32), nullable=False),
-        sa.Column('metadata_json', sa.JSON(), nullable=True),
+        sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
         sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
         sa.Column('created_by_agent_id', sa.String(length=36), nullable=True),
         sa.Column('created_by_run_id', sa.String(length=36), nullable=True),
@@ -2288,10 +2442,10 @@ def upgrade() -> None:
         sa.Column('name', sa.String(length=256), nullable=False),
         sa.Column('status', sa.String(length=32), nullable=False),
         sa.Column('observation_policy', sa.String(length=32), nullable=False),
-        sa.Column('routing_policy_json', sa.JSON(), nullable=False),
-        sa.Column('filters_json', sa.JSON(), nullable=False),
-        sa.Column('extraction_policy_json', sa.JSON(), nullable=False),
-        sa.Column('context_policy_json', sa.JSON(), nullable=False),
+        sa.Column('routing_policy_json', postgresql.JSONB(), nullable=False),
+        sa.Column('filters_json', postgresql.JSONB(), nullable=False),
+        sa.Column('extraction_policy_json', postgresql.JSONB(), nullable=False),
+        sa.Column('context_policy_json', postgresql.JSONB(), nullable=False),
         sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
@@ -2317,9 +2471,9 @@ def upgrade() -> None:
         sa.Column('binding_key', sa.String(length=128), server_default=sa.text("'default'"), nullable=False),
         sa.Column('status', sa.String(length=32), nullable=False),
         sa.Column('priority', sa.Integer(), nullable=False),
-        sa.Column('filters_json', sa.JSON(), nullable=False),
-        sa.Column('routing_policy_json', sa.JSON(), nullable=False),
-        sa.Column('extraction_policy_json', sa.JSON(), nullable=False),
+        sa.Column('filters_json', postgresql.JSONB(), nullable=False),
+        sa.Column('routing_policy_json', postgresql.JSONB(), nullable=False),
+        sa.Column('extraction_policy_json', postgresql.JSONB(), nullable=False),
         sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
@@ -2349,7 +2503,7 @@ def upgrade() -> None:
         sa.Column('enabled', sa.Boolean(), nullable=False, default=False),
         sa.Column('local_time', sa.String(5), nullable=False, default='08:00'),
         sa.Column('timezone', sa.String(64), nullable=False, default='UTC'),
-        sa.Column('include_source_types_json', sa.JSON(), nullable=False, default=list),
+        sa.Column('include_source_types_json', postgresql.JSONB(), nullable=False, default=list),
         sa.Column('create_experience_proposals', sa.Boolean(), nullable=False, default=True),
         sa.Column('create_memory_proposals', sa.Boolean(), nullable=False, default=False),
         sa.Column('experience_confidence_threshold', sa.Float(), nullable=False, default=0.75),
@@ -2386,6 +2540,19 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_constraint('fk_activity_records_project_id_projects', 'activity_records', type_='foreignkey')
+    op.drop_constraint('fk_activity_records_source_task_id_tasks', 'activity_records', type_='foreignkey')
+    op.drop_constraint('fk_runs_project_id_projects', 'runs', type_='foreignkey')
+    op.drop_constraint('fk_runs_task_id_tasks', 'runs', type_='foreignkey')
+    op.drop_constraint('fk_agent_versions_source_activity_id_activity_records', 'agent_versions', type_='foreignkey')
+    op.drop_constraint('fk_agent_versions_source_proposal_id_proposals', 'agent_versions', type_='foreignkey')
+    op.drop_constraint('fk_agents_current_version_id_agent_versions', 'agents', type_='foreignkey')
+    op.drop_constraint('fk_policies_created_from_proposal_id_proposals', 'policies', type_='foreignkey')
+    op.drop_constraint('fk_context_snapshots_execution_plane_id_execution_planes', 'context_snapshots', type_='foreignkey')
+    op.drop_constraint('fk_context_snapshots_target_runtime_adapter_id_runtime_adapters', 'context_snapshots', type_='foreignkey')
+    op.drop_constraint('fk_space_invitations_invited_by_user_id_users', 'space_invitations', type_='foreignkey')
+    op.drop_constraint('fk_spaces_created_by_user_id_users', 'spaces', type_='foreignkey')
+
     op.drop_index('ix_daily_capture_report_settings_next_run_at', table_name='daily_capture_report_settings')
     op.drop_index('ix_daily_capture_report_settings_user_id', table_name='daily_capture_report_settings')
     op.drop_index('ix_daily_capture_report_settings_space_id', table_name='daily_capture_report_settings')
@@ -2523,16 +2690,6 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_cli_credential_events_run_id'), table_name='cli_credential_events')
     op.drop_index(op.f('ix_cli_credential_events_space_id'), table_name='cli_credential_events')
     op.drop_table('cli_credential_events')
-    op.drop_index('ix_memory_entries_project_id', table_name='memory_entries')
-    op.drop_column('memory_entries', 'project_id')
-    op.drop_index('ix_proposals_project_id', table_name='proposals')
-    op.drop_column('proposals', 'project_id')
-    op.drop_index('ix_artifacts_project_id', table_name='artifacts')
-    op.drop_column('artifacts', 'project_id')
-    op.drop_index('ix_activity_records_project_id', table_name='activity_records')
-    op.drop_column('activity_records', 'project_id')
-    op.drop_index('ix_runs_project_id', table_name='runs')
-    op.drop_column('runs', 'project_id')
     # Control plane: drop leaf tables first (no other table references these).
     op.drop_index(op.f('ix_runtime_tool_bindings_enabled'), table_name='runtime_tool_bindings')
     op.drop_index(op.f('ix_runtime_tool_bindings_execution_plane_id'), table_name='runtime_tool_bindings')
@@ -2605,8 +2762,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_source_pointers_owner_space_id'), table_name='source_pointers')
     op.drop_table('source_pointers')
     # visibility/owner_user_id columns on existing tables are NOT dropped here.
-    # SQLite <3.35 does not support DROP COLUMN. Since this is a baseline migration with
-    # no historical data, the downgrade path is to recreate from scratch.
+    # This is a baseline migration — downgrade recreates from scratch.
     # Drop run_events before run_steps (run_events has a FK to run_steps).
     op.drop_index(op.f('ix_run_events_created_at'), table_name='run_events')
     op.drop_index(op.f('ix_run_events_proposal_id'), table_name='run_events')

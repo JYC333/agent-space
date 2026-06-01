@@ -15,12 +15,12 @@ See ``# TODO: Capability`` at the bottom for registry-only capability objects.
 """
 
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
 
 from sqlalchemy.orm import Session as DBSession
-from ulid import ULID
 
 from app.models import (
     Actor,
@@ -57,7 +57,7 @@ T = TypeVar("T")
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _utcnow() -> datetime:
@@ -147,8 +147,11 @@ def create_test_agent(
         owner_user_id=owner_user_id,
         name=name,
         status="active",
-        current_version_id=version_id,
+        current_version_id=None,
     )
+    db.add(agent)
+    db.flush()
+
     version = AgentVersion(
         id=version_id,
         agent_id=agent_id,
@@ -160,8 +163,10 @@ def create_test_agent(
         tool_permissions_json={},
         runtime_policy_json=dict(DEFAULT_RUNTIME_POLICY),
     )
-    db.add(agent)
     db.add(version)
+    db.flush()
+
+    agent.current_version_id = version_id
     return _finish(db, agent, commit=commit)
 
 

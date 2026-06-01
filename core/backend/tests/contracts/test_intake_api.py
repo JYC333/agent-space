@@ -1,8 +1,8 @@
 """HTTP contract: Intake API maps service-layer validation to 4xx responses."""
 
 from __future__ import annotations
+import uuid
 
-from ulid import ULID
 
 from app.intake.service import IntakeService
 from tests.support import factories
@@ -22,7 +22,7 @@ def test_create_evidence_missing_reference_returns_404(db, cross_space_pair):
         params=_params(space_id),
         json={
             "title": "Missing intake reference",
-            "intake_item_id": str(ULID()),
+            "intake_item_id": str(uuid.uuid4()),
             "evidence_type": "claim",
         },
     )
@@ -41,7 +41,7 @@ def test_create_connection_missing_credential_returns_404(db, cross_space_pair):
         json={
             "connector_key": "manual_url",
             "name": "Missing credential",
-            "credential_id": str(ULID()),
+            "credential_id": str(uuid.uuid4()),
         },
     )
 

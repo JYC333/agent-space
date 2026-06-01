@@ -50,8 +50,8 @@ No automation, connector marketplace, crawler, or self-evolution controls appear
 - Task boards and task-linked runs/artifacts/proposals.
 - Home summary as read-only command center.
 - Automatic local backups through `BackupService` (requires `BACKUP_ENABLED=true`).
-- Manual backup via API or `scripts/backup.sh`.
-- Manual restore via `scripts/restore.sh`.
+- Manual backup via API or `scripts/system/backup.sh` (offline full-system).
+- Full-system restore via `scripts/system/restore.sh`; DB-only tools under `scripts/db/`.
 - Manual deployment or allowlisted deployer-only flow.
 
 ## Non-Goals for Development

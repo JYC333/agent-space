@@ -14,6 +14,7 @@ Do not pass Settings.default_user_id as actor identity.
 """
 
 from __future__ import annotations
+import uuid
 
 import logging
 from datetime import UTC, datetime
@@ -47,9 +48,8 @@ def _now() -> datetime:
 
 
 def _new_id() -> str:
-    from ulid import ULID
 
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _next_step_index(db: Session, run_id: str) -> int:

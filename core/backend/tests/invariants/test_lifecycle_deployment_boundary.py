@@ -33,6 +33,7 @@ Covered by this file:
 """
 
 from __future__ import annotations
+import uuid
 
 import subprocess
 import sys
@@ -66,7 +67,7 @@ def test_scan_marks_missing_path_workspace_as_stale(api_client, db, cross_space_
     missing_dir.mkdir(parents=True, exist_ok=True)
 
     ws = Workspace(
-        id=str(__import__("ulid", fromlist=["ULID"]).ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         name="MissingProject",
         root_path=str(missing_dir),
@@ -116,7 +117,7 @@ def test_scan_stale_workspace_excluded_from_active_queries(api_client, db, cross
     missing_dir.mkdir(parents=True, exist_ok=True)
 
     ws = Workspace(
-        id=str(__import__("ulid", fromlist=["ULID"]).ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         name="StaleProject",
         root_path=str(missing_dir),
@@ -155,7 +156,7 @@ def test_scan_preserves_workspace_metadata_after_stale(db, cross_space_pair, tmp
     missing_dir = ws_root / a / "meta-project"
     missing_dir.mkdir(parents=True, exist_ok=True)
 
-    ws_id = str(__import__("ulid", fromlist=["ULID"]).ULID())
+    ws_id = str(uuid.uuid4())
     ws = Workspace(
         id=ws_id,
         space_id=a,
@@ -323,7 +324,7 @@ def test_artifact_export_returns_inline_content(api_client, db, cross_space_pair
     ua = cross_space_pair["user_a"]
 
     art = Artifact(
-        id=str(__import__("ulid", fromlist=["ULID"]).ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         artifact_type="text",
         title="test-inline-artifact",
@@ -357,7 +358,7 @@ def test_artifact_export_path_traversal_rejected(db, cross_space_pair, tmp_path,
     # Create an artifact with a relative path that tries to escape the root.
     from app.models import Artifact as ArtifactModel
     art = ArtifactModel(
-        id=str(__import__("ulid", fromlist=["ULID"]).ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         artifact_type="text",
         title="traversal-artifact",
@@ -382,7 +383,7 @@ def test_artifact_missing_file_returns_404_not_path_leak(api_client, db, cross_s
     monkeypatch.setattr(settings, "artifact_storage_root", str(art_root))
 
     art = Artifact(
-        id=str(__import__("ulid", fromlist=["ULID"]).ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         artifact_type="text",
         title="missing-file-artifact",
@@ -413,7 +414,7 @@ def test_artifact_storage_path_is_relative(db, cross_space_pair, tmp_path, monke
     monkeypatch.setattr(settings, "artifact_storage_root", str(art_root))
 
     art = Artifact(
-        id=str(__import__("ulid", fromlist=["ULID"]).ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         artifact_type="text",
         title="absolute-path-artifact",
@@ -437,7 +438,7 @@ def test_artifact_export_cross_space_rejected(api_client, db, cross_space_pair, 
 
     # Create artifact in space A.
     art = Artifact(
-        id=str(__import__("ulid", fromlist=["ULID"]).ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         artifact_type="text",
         title="space-a-artifact",
@@ -532,73 +533,86 @@ def test_deployer_client_requires_socket(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Backup script — dry-run smoke test
+# Backup / restore scripts — shape and safety
 # ---------------------------------------------------------------------------
 
+# Canonical operating model:
+#   scripts/system/backup.sh  — full-system backup (offline equivalent of BackupService)
+#   scripts/system/restore.sh — full-system restore (database + file data)
+#   scripts/db/*.sh           — DB-only expert tools
+# Top-level ambiguous backup entrypoints are not part of the supported surface.
 
-def test_backup_script_dry_run_exits_zero(tmp_path):
-    """backup.sh --dry-run must exit 0 without creating any files."""
+_CANONICAL_SCRIPTS = [
+    "scripts/system/backup.sh",
+    "scripts/system/restore.sh",
+    "scripts/db/dump.sh",
+    "scripts/db/restore.sh",
+    "scripts/db/reset-postgres.sh",
+    "scripts/db/migrate.sh",
+    "scripts/db/shell.sh",
+]
+
+
+def test_no_generic_file_only_backup_entrypoints():
+    """Ambiguous top-level backup entrypoints must not exist."""
     repo_root = Path(__file__).resolve().parents[4]
-    backup_script = repo_root / "scripts" / "backup.sh"
+    for name in ("backup", "restore"):
+        assert not (repo_root / "scripts" / f"{name}.sh").exists(), (
+            f"ambiguous top-level {name} entrypoint must not exist"
+        )
 
-    if not backup_script.exists():
-        pytest.skip("scripts/backup.sh not found")
 
+def test_canonical_scripts_exist_and_are_valid():
+    """Every canonical backup/db script exists, is executable, and parses cleanly."""
+    repo_root = Path(__file__).resolve().parents[4]
+    for rel in _CANONICAL_SCRIPTS:
+        path = repo_root / rel
+        assert path.exists(), f"missing canonical script: {rel}"
+        assert __import__("os").access(path, __import__("os").X_OK), f"not executable: {rel}"
+        result = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, f"syntax error in {rel}:\n{result.stderr}"
+
+
+def test_backup_help_prints_no_secrets():
+    """scripts/system/backup.sh --help must exit 0 and leak no secret-looking values."""
+    repo_root = Path(__file__).resolve().parents[4]
     result = subprocess.run(
-        [str(backup_script), "--mode", "dev", "--dry-run", "--output", str(tmp_path)],
+        ["bash", str(repo_root / "scripts" / "system" / "backup.sh"), "--help"],
         capture_output=True,
         text=True,
-        env={
-            **__import__("os").environ,
-            "AGENT_SPACE_HOME": str(tmp_path / "aspace"),
-        },
         timeout=30,
     )
-    # dry-run with missing data root exits 1 (data root doesn't exist)
-    # That is correct behavior — the script refuses to proceed.
-    # What we care about is no secrets printed, script doesn't crash with unexpected errors.
-    assert "Traceback" not in result.stdout
-    assert "Traceback" not in result.stderr
-    # Must not leak any secret-looking values.
+    assert result.returncode == 0
+    assert "Traceback" not in result.stdout and "Traceback" not in result.stderr
     assert "sk-" not in result.stdout
     assert "ANTHROPIC_API_KEY" not in result.stdout
 
 
-def test_backup_script_dry_run_with_existing_root(tmp_path):
-    """backup.sh --dry-run must output dry-run message and exit 0 when data root exists."""
+def test_system_backup_manifest_generation_uses_json_module():
+    """System backup manifest generation must be JSON-safe and validated."""
     repo_root = Path(__file__).resolve().parents[4]
-    backup_script = repo_root / "scripts" / "backup.sh"
+    script = (repo_root / "scripts" / "system" / "backup.sh").read_text()
+    assert "json.dump(manifest" in script
+    assert "python3 -m json.tool" in script
+    assert "cat > \"$STAGING/backup_manifest.json\"" not in script
 
-    if not backup_script.exists():
-        pytest.skip("scripts/backup.sh not found")
 
-    aspace_home = tmp_path / "aspace"
-    mode_root = aspace_home / "dev"
-    mode_root.mkdir(parents=True, exist_ok=True)
-    (mode_root / "db").mkdir()
-    (mode_root / "config").mkdir()
+def test_system_backup_manifest_schema_matches_backup_service():
+    """scripts/system/backup.sh must emit the same manifest fields as BackupService.
 
-    result = subprocess.run(
-        [
-            str(backup_script),
-            "--mode", "dev",
-            "--dry-run",
-            "--output", str(tmp_path / "backups"),
-        ],
-        capture_output=True,
-        text=True,
-        env={
-            **__import__("os").environ,
-            "AGENT_SPACE_HOME": str(aspace_home),
-        },
-        timeout=30,
-    )
-    assert result.returncode == 0, f"Expected exit 0 for dry-run, got {result.returncode}:\n{result.stderr}"
-    assert "DRY RUN" in result.stdout or "dry" in result.stdout.lower()
-    # No archive should be created.
-    backups_dir = tmp_path / "backups"
-    created_files = list(backups_dir.glob("*.tar.gz")) if backups_dir.exists() else []
-    assert created_files == [], "Dry-run must not create any archive files"
+    A single canonical manifest schema is required: the offline script and the
+    in-process BackupService write identical keys, including
+    backup_interval_hours and backup_retention_count.
+    """
+    from app.backups.manifest import BackupManifest
+
+    repo_root = Path(__file__).resolve().parents[4]
+    script = (repo_root / "scripts" / "system" / "backup.sh").read_text()
+    for field in BackupManifest.__dataclass_fields__:
+        assert f'"{field}":' in script, (
+            f"scripts/system/backup.sh manifest is missing field '{field}' "
+            "present in BackupService manifest"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -2,12 +2,41 @@ import os
 import stat
 from pathlib import Path
 from typing import Optional
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
-# Agent Space local data root.
-# Defaults to ~/aspace; override with AGENT_SPACE_HOME env var.
-# In Docker, set AGENT_SPACE_HOME=/app/aspace via docker-compose environment.
+# Convenience default for dev/test only. Production must set DATABASE_URL
+# explicitly — the after-validator below rejects this default when
+# AGENT_SPACE_ENV=prod so prod never silently runs on a development database.
+_DEV_DEFAULT_DATABASE_URL = (
+    "postgresql+psycopg://agent_space:agent_space_dev_password@localhost:5432/agent_space"
+)
+
+
+def normalize_database_url(v: str) -> str:
+    stripped = v.strip()
+    if not stripped:
+        raise ValueError(
+            "DATABASE_URL must be a PostgreSQL connection string. "
+            "Use postgresql+psycopg:// as the canonical form. "
+            "Example: postgresql+psycopg://agent_space:<password>@localhost:5432/agent_space"
+        )
+    if stripped.startswith("postgresql+psycopg://"):
+        return stripped
+    if stripped.startswith("postgresql://"):
+        return "postgresql+psycopg://" + stripped.removeprefix("postgresql://")
+    raise ValueError(
+        "DATABASE_URL must be a PostgreSQL connection string. "
+        "Use postgresql+psycopg:// as the canonical form. "
+        "Example: postgresql+psycopg://agent_space:<password>@localhost:5432/agent_space"
+    )
+
+# Agent Space instance data root for the currently running environment.
+# AGENT_SPACE_HOME is the single instance root — NOT the parent that contains
+# dev/, test/, prod/ mode dirs (that host-side parent is ASPACE_ROOT, used only
+# by scripts/). In the Docker backend container it is the bind mount /aspace;
+# for a direct local backend run it is a concrete mode root such as
+# $HOME/aspace/dev. Defaults to ~/aspace when unset.
 _ASPACE_HOME = Path(
     os.getenv("AGENT_SPACE_HOME", str(Path.home() / "aspace"))
 ).expanduser().resolve()
@@ -39,8 +68,9 @@ class AppPaths:
         return (self.storage_dir / "artifacts").resolve()
 
     @property
-    def db_file(self) -> Path:
-        return self.db_dir / "agent_space.sqlite"
+    def db_dumps_dir(self) -> Path:
+        """Directory for pg_dump backups and database dumps (not the live DB data)."""
+        return self.db_dir / "dumps"
 
     @property
     def cli_credentials_dir(self) -> Path:
@@ -83,11 +113,22 @@ class AppPaths:
             return False
 
         def safe_mkdir(p: Path, mode: int) -> None:
-            """Create directory, skip if mount point or no permission."""
+            """Create directory and apply its mode, skipping mounts/unowned paths.
+
+            ``mkdir`` is subject to the process umask, so the restrictive mode is
+            applied explicitly afterwards. We only chmod directories we own and
+            that are not bind-mount points — host bind mounts are the operator's
+            responsibility and must not be chmod'ed implicitly.
+            """
             try:
                 if _skip_path(p):
                     return
                 p.mkdir(parents=True, exist_ok=True)
+                try:
+                    if not os.path.ismount(p) and p.stat().st_uid == os.getuid():
+                        os.chmod(p, mode)
+                except (OSError, PermissionError):
+                    pass
             except (OSError, PermissionError):
                 pass
 
@@ -109,39 +150,48 @@ class AppPaths:
         for path, mode in entries:
             safe_mkdir(path, mode)
 
-    def validate(self) -> None:
-        """Fail fast if sensitive dirs are world-accessible or not writable.
+    # Sensitive directories that must never be world-accessible and must be
+    # writable by the running process — checked in both host (direct local run)
+    # and container (/aspace bind mount) modes.
+    SENSITIVE_DIR_ATTRS = ("home", "config_dir", "secrets_dir", "db_dir", "runtime_dir")
 
-        In Docker containers (non-root, uid != 0), skip this check because:
-        - Docker bind mounts inherit host permissions which may be 755 for group access
-        - The container user (uid 1000) can't chmod host directories from inside the container
-        - group_add is the correct mechanism for Docker permission handling
+    def validate(self) -> None:
+        """Fail fast on insecure or unusable sensitive directories.
+
+        Runs identically for host runs and inside the Docker backend container
+        (where ``AGENT_SPACE_HOME=/aspace`` is a bind mount). For ``home``,
+        ``config``, ``secrets``, ``db`` and ``runtime`` this enforces:
+
+        - the directory is not world-accessible (no ``other`` rwx bits), and
+        - the current process can write to it.
+
+        This never chmods anything: host bind-mount permissions are the
+        operator's responsibility (``scripts/start.sh`` creates mode-700 trees).
+        We refuse to start rather than silently relax checks for non-root
+        users, so an insecure or unwritable data root is caught immediately.
         """
         import os
-        # In a non-root container, skip all permission checks — we can't chmod host volumes
-        if os.getuid() != 0:
-            return
-        sensitive = [self.home, self.secrets_dir, self.db_dir, self.runtime_dir, self.config_dir]
+
+        sensitive = [getattr(self, attr) for attr in self.SENSITIVE_DIR_ATTRS]
         for path in sensitive:
             if not path.exists():
                 continue
-            # Skip mount points (e.g. /instance when running in Docker)
-            try:
-                if os.path.ismount(path):
-                    continue
-            except (OSError, PermissionError):
-                pass
             try:
                 mode = path.stat().st_mode
-            except (OSError, PermissionError):
-                continue
+            except (OSError, PermissionError) as exc:
+                raise RuntimeError(
+                    f"Cannot stat sensitive directory {path}: {exc}"
+                ) from exc
             if mode & stat.S_IRWXO:
                 raise RuntimeError(
-                    f"Security: {path} is world-accessible (mode {oct(mode)}). "
-                    f"Fix with: chmod 700 {path}"
+                    f"Security: {path} is world-accessible (mode "
+                    f"{oct(stat.S_IMODE(mode))}). Fix with: chmod 700 {path}"
                 )
             if not os.access(path, os.W_OK):
-                raise RuntimeError(f"Cannot write to {path}. Check permissions.")
+                raise RuntimeError(
+                    f"Cannot write to required directory {path}. "
+                    f"Check ownership and permissions of the data root."
+                )
 
 
 paths = AppPaths()
@@ -152,8 +202,34 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     debug: bool = False
 
-    # Database — defaults to $AGENT_SPACE_HOME/db/agent_space.sqlite
-    database_url: str = f"sqlite:///{paths.db_file}"
+    # Database — PostgreSQL is the server database.
+    # Set DATABASE_URL to a postgresql+psycopg:// connection string.
+    # postgresql:// inputs are accepted and normalized to postgresql+psycopg://.
+    # Example: postgresql+psycopg://agent_space:password@localhost:5432/agent_space
+    # The default is a dev/test convenience; prod must set DATABASE_URL explicitly.
+    database_url: str = _DEV_DEFAULT_DATABASE_URL
+
+    @field_validator("database_url")
+    @classmethod
+    def validate_database_url(cls, v: str) -> str:
+        return normalize_database_url(v)
+
+    @model_validator(mode="after")
+    def require_explicit_prod_database_url(self):
+        """Prod must configure DATABASE_URL explicitly, never the dev/test default.
+
+        dev and test may rely on the convenience default. In prod the development
+        default database is rejected so the instance never silently connects to a
+        development PostgreSQL database.
+        """
+        if (self.agent_space_env or "").strip().lower() == "prod":
+            if self.database_url == _DEV_DEFAULT_DATABASE_URL:
+                raise ValueError(
+                    "AGENT_SPACE_ENV=prod requires an explicit DATABASE_URL. "
+                    "Set DATABASE_URL to the production PostgreSQL connection string, "
+                    "e.g. postgresql+psycopg://agent_space:<password>@<host>:5432/agent_space"
+                )
+        return self
 
     # Defaults for single-user / personal-space mode
     default_space_id: str = "personal"
@@ -165,6 +241,17 @@ class Settings(BaseSettings):
 
     # AGENT_SPACE_HOME — single local data root (all runtime data lives here)
     agent_space_home: str = str(_ASPACE_HOME)
+
+    # PostgreSQL connection components — informational/operator tooling only.
+    # DATABASE_URL is always the authoritative connection string; these fields
+    # are not used to construct it automatically. Docker Compose sets DATABASE_URL
+    # explicitly. Scripts such as scripts/db/migrate.sh may read these as fallback
+    # when DATABASE_URL is not in the environment.
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_db: str = "agent_space"
+    postgres_user: str = "agent_space"
+    postgres_password: str = "agent_space_dev_password"
 
     # Runtime paths — all overridable via env vars; derive from AGENT_SPACE_HOME by default.
     # instance_root mirrors agent_space_home for kernel helpers that still read this field.
@@ -255,8 +342,10 @@ class Settings(BaseSettings):
         return v
 
     # ── Backup ────────────────────────────────────────────────────────────────
-    # Primary backup is BackupService (automatic, scheduled).
-    # backup.sh / restore.sh are fallback operator tools only.
+    # BackupService is the canonical full-system backup (automatic, scheduled,
+    # and via API). scripts/system/backup.sh and scripts/system/restore.sh are
+    # the offline full-system equivalents (same archive format) for when the
+    # backend is not running. scripts/db/ holds DB-only expert tools.
     #
     # Two-person dogfooding MUST set BACKUP_ENABLED=true.
     # Default is False (safe for tests and unattended CI).
@@ -266,6 +355,11 @@ class Settings(BaseSettings):
     backup_include_logs: bool = False
     backup_on_startup: bool = True
     backup_root: str = str(_ASPACE_HOME / "backups")
+    # Safety guard for prod-like environments: when AGENT_SPACE_ENV=prod and
+    # BACKUP_ENABLED is false, startup fails fast unless this is explicitly set
+    # true to acknowledge running without automatic backups. Non-prod envs only
+    # emit a warning. See app.backups.guard.enforce_backup_policy.
+    backup_accept_no_backup: bool = False
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

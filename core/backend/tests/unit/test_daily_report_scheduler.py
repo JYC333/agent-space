@@ -15,6 +15,7 @@ Covers:
  10. DST spring-forward: next_run_at computed correctly across DST boundary.
 """
 from __future__ import annotations
+import uuid
 
 import asyncio
 import re
@@ -22,7 +23,6 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from ulid import ULID
 from zoneinfo import ZoneInfo
 
 from app.daily_reports.scheduler import (
@@ -39,14 +39,16 @@ from app.models import (
 
 
 def _uid() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _make_space_and_user(db) -> tuple[str, str]:
     user_id = _uid()
     space_id = _uid()
     db.add(User(id=user_id, display_name="Sched Test", status="active"))
+    db.flush()
     db.add(Space(id=space_id, name="Sched Space", type="personal", created_by_user_id=user_id))
+    db.flush()
     db.add(SpaceMembership(id=_uid(), space_id=space_id, user_id=user_id, role="owner", status="active"))
     db.commit()
     return space_id, user_id

@@ -1,11 +1,11 @@
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime
 from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from app.models import Board, BoardColumn, Task, Workspace
 
@@ -13,7 +13,7 @@ from .visibility import can_read_task
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 _DEFAULT_COLUMN_DEFS: list[tuple[str, str, int, bool, bool]] = [

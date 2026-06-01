@@ -13,7 +13,7 @@ from tests.support import factories
 
 @pytest.fixture(autouse=True)
 def _stub_durable_policy_audit(monkeypatch):
-    """This SQLite module verifies run-step behavior, not independent policy audit writes."""
+    """Stub policy audit writes — this module covers run-step behavior."""
     monkeypatch.setattr(
         "app.policy.audit.DurablePolicyAuditWriter.write",
         lambda _writer, _envelope: "stub-policy-audit",

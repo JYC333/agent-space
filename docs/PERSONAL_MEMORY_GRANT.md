@@ -163,7 +163,7 @@ semantic review status, a stable `egress_review_dedupe_key` (IDs + operation onl
 
 Dedupe prevents duplicate proposals for the same run + target + type + operation + grant.
 The `egress_review_dedupe_key` is matched in Python after a bounded ORM-column query
-(no SQLite JSON path operators).
+(uses only ORM column filters + Python dict matching, no JSON path operators).
 
 **SourcePointer** remains hard-blocked without an egress_review proposal when grant-derived
 indicator keys are present in metadata for non-personal owner spaces.

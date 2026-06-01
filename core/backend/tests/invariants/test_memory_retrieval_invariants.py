@@ -21,10 +21,10 @@ Policy:
 """
 
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime
 
-from ulid import ULID
 
 from app.models import MemoryEntry, MemoryRelation, Policy
 from app.memory.retriever import MemoryRetriever
@@ -32,7 +32,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _make_memory(

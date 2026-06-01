@@ -6,11 +6,11 @@ large, consider reducing log frequency at the call sites.
 """
 
 from __future__ import annotations
+import uuid
 
 from datetime import datetime, UTC
 from typing import TYPE_CHECKING
 
-from ulid import ULID
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def record_memory_access(

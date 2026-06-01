@@ -15,7 +15,7 @@ from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRunti
 
 @pytest.fixture(autouse=True)
 def _stub_durable_policy_audit(monkeypatch):
-    """Keep SQLite path-ingestion coverage focused on artifact writes."""
+    """Stub policy audit writes — this module covers artifact path ingestion."""
     monkeypatch.setattr(
         "app.policy.audit.DurablePolicyAuditWriter.write",
         lambda self, decision: None,

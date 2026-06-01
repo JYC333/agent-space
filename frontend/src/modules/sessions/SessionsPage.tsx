@@ -136,7 +136,7 @@ export default function SessionsPage() {
           </div>
           <div>
             <Label>Workspace ID (optional)</Label>
-            <Input value={workspace} onChange={e => setWorkspace(e.target.value)} placeholder="e.g. agent-core" />
+            <Input value={workspace} onChange={e => setWorkspace(e.target.value)} placeholder="e.g. agent-space" />
           </div>
         </div>
         <Button onClick={createSession} disabled={!activeOperationalSpaceId}>Create Session</Button>

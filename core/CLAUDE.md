@@ -25,7 +25,9 @@ Canonical backend tests live under ``tests/unit``, ``tests/contracts``,
 isolated ``AGENT_SPACE_HOME`` before importing the app.
 
 ```bash
-cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
+cd core/backend
+pip install -r requirements.txt -r requirements-test.txt
+python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
 ```
 
 ## Key files

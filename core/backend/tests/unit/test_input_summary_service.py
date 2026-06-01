@@ -16,6 +16,7 @@ Covers:
  13. SummaryRunResult includes run_id.
 """
 from __future__ import annotations
+import uuid
 
 from unittest.mock import patch
 
@@ -382,13 +383,12 @@ def test_empty_content_raises_no_content_error(db):
 def test_intake_item_with_evidence_uses_evidence_content(db):
     from app.intake.service import IntakeService
     from app.models import IntakeItem, ExtractedEvidence
-    from ulid import ULID
 
     svc_intake = IntakeService(db)
 
     # Create IntakeItem
     item = IntakeItem(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=PERSONAL_SPACE_ID,
         item_type="external_url",
         title="Test Article",
@@ -429,10 +429,9 @@ def test_intake_item_with_evidence_uses_evidence_content(db):
 
 def test_intake_item_title_only_produces_metadata_only_block(db):
     from app.models import IntakeItem
-    from ulid import ULID
 
     item = IntakeItem(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=PERSONAL_SPACE_ID,
         item_type="external_url",
         title="Just a title",

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 """
 Background worker loop for the durable job queue.
 
@@ -22,7 +23,6 @@ import asyncio
 import logging
 from datetime import datetime, UTC
 
-from ulid import ULID
 
 from .queue import QueueService
 from .handlers import get_handler
@@ -36,7 +36,7 @@ MAX_CONCURRENCY: int = 4          # max parallel jobs per worker
 HEARTBEAT_INTERVAL: float = 60.0  # seconds between heartbeat updates while handler runs
 
 # Stable ID for this worker instance (set at module import time)
-WORKER_ID: str = str(ULID())
+WORKER_ID: str = str(uuid.uuid4())
 
 
 async def start_worker(queue: QueueService) -> asyncio.Task:
@@ -114,7 +114,7 @@ async def _heartbeat_loop(job_id: str, queue: QueueService, interval: float) -> 
     while True:
         await asyncio.sleep(interval)
         try:
-            await queue.touch_heartbeat(job_id)
+            await queue.touch_heartbeat(job_id, WORKER_ID)
             log.debug("Heartbeat sent for job %s", job_id)
         except asyncio.CancelledError:
             raise
@@ -140,17 +140,19 @@ async def _run_job(job, queue: QueueService, sem: asyncio.Semaphore) -> None:
         handler = get_handler(job.job_type)
         if handler is None:
             log.error("No handler registered for job type %r (job=%s)", job.job_type, job.id)
-            await queue.fail_job(job.id, f"No handler for job type: {job.job_type!r}")
+            await queue.fail_job(job.id, f"No handler for job type: {job.job_type!r}", WORKER_ID)
             await _append_event_aux("error", f"No handler registered for {job.job_type!r}")
             return
 
-        await queue.start_job(job.id)
+        await queue.start_job(job.id, WORKER_ID)
+        # attempts is incremented at claim time, so job.attempts already reflects
+        # the current (1-based) attempt number — do not add 1 here.
         await _append_event_aux(
             "status_change",
-            f"Job started by worker {WORKER_ID} (attempt {job.attempts + 1}/{job.max_attempts})",
+            f"Job started by worker {WORKER_ID} (attempt {job.attempts}/{job.max_attempts})",
         )
 
-        log.info("Executing job %s type=%s attempt=%d", job.id, job.job_type, job.attempts + 1)
+        log.info("Executing job %s type=%s attempt=%d", job.id, job.job_type, job.attempts)
 
         # Start a background heartbeat so reclaim_stuck_jobs does not evict
         # this job while the handler is legitimately running (e.g. long CLI runs).
@@ -161,7 +163,7 @@ async def _run_job(job, queue: QueueService, sem: asyncio.Semaphore) -> None:
 
         result = await asyncio.get_running_loop().run_in_executor(None, handler, job)
 
-        await queue.complete_job(job.id, result if isinstance(result, dict) else None)
+        await queue.complete_job(job.id, result if isinstance(result, dict) else None, WORKER_ID)
         await _append_event_aux("status_change", "Job completed successfully")
         log.info("Job %s completed", job.id)
 
@@ -170,7 +172,7 @@ async def _run_job(job, queue: QueueService, sem: asyncio.Semaphore) -> None:
         raise
     except Exception as exc:
         log.exception("Job %s (%s) raised an exception", job.id, job.job_type)
-        await queue.fail_job(job.id, str(exc))
+        await queue.fail_job(job.id, str(exc), WORKER_ID)
         await _append_event_aux("error", f"Job failed: {exc}")
     finally:
         # Always cancel the heartbeat task regardless of outcome.

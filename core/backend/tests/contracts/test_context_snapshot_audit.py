@@ -12,6 +12,7 @@ Checks:
 """
 
 from __future__ import annotations
+import uuid
 
 import json
 
@@ -175,7 +176,7 @@ def test_policy_in_source_refs_when_policy_exists(
 
     # Create an active policy in the space.
     policy = Policy(
-        id=str(__import__("ulid").ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         name="test-audit-policy",
         domain="runtime",
@@ -216,7 +217,7 @@ def test_memory_injected_into_context_creates_access_log(
 
     # Create a space_shared memory so it passes the hard filter for this user.
     mem = MemoryEntry(
-        id=str(__import__("ulid").ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         scope_type="user",
         memory_type="semantic",

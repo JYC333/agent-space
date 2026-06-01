@@ -1,6 +1,7 @@
 """Invariants: produced artifact path validation and storage boundaries."""
 
 from __future__ import annotations
+import uuid
 
 from pathlib import Path
 
@@ -11,11 +12,10 @@ from app.config import settings
 from app.models import Artifact
 from app.runs.produced_artifact_path_ingestion import ingest_produced_artifact_paths
 from tests.support import factories
-from ulid import ULID
 
 
 def _space_user(db: Session):
-    sid = str(ULID())
+    sid = str(uuid.uuid4())
     factories.create_test_space(db, space_id=sid, name="inv", commit=False)
     u = factories.create_test_user(db, space_id=sid, commit=False)
     return sid, u.id

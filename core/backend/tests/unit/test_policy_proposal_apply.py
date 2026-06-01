@@ -3,9 +3,9 @@
 Covers Scopes C, D (effective risk), and J test requirements.
 """
 from __future__ import annotations
+import uuid
 
 import pytest
-from ulid import ULID
 
 from app.memory.apply_service import ProposalApplyService
 from app.policy.decisions import Decision, RiskLevel
@@ -20,7 +20,7 @@ from tests.support import factories
 
 
 def _uid() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _make_space_user(db, space_id: str, role: str):

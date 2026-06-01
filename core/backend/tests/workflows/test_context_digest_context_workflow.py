@@ -15,9 +15,9 @@ Tests verify:
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
-from ulid import ULID
 
 from app.models import ContextDigest, ContextSnapshot, MemoryEntry, Policy, Proposal, Run
 from app.runs.context_snapshot_populator import ContextSnapshotPopulator
@@ -33,7 +33,7 @@ from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRunti
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _setup_execution(monkeypatch, db, tmp_path, *, space_id: str, user_id: str):

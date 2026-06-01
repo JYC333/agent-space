@@ -9,7 +9,7 @@ from tests.support import factories
 
 
 def _stub_durable_policy_audit(monkeypatch) -> None:
-    """Keep SQLite execution tests focused on run artifacts, not independent audit I/O."""
+    """Stub policy audit writes — this module covers run artifacts, not audit I/O."""
     monkeypatch.setattr(
         "app.policy.audit.DurablePolicyAuditWriter.write",
         lambda _writer, _envelope: "stub-policy-audit",

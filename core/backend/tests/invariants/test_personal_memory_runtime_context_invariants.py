@@ -8,11 +8,11 @@ These tests verify:
 """
 
 from __future__ import annotations
+import uuid
 
 import threading
 from datetime import UTC, datetime, timedelta
 
-from ulid import ULID
 
 from app.models import ContextSnapshot, MemoryEntry, PersonalMemoryGrant, SpaceMembership
 from app.personal_memory_grants.resolver import (
@@ -26,7 +26,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _personal_space(db):
@@ -111,7 +111,7 @@ def _active_grant(
 def test_concurrent_resolver_calls_at_most_one_consumes_grant(db):
     """Two sequential begin_consuming_grant calls on the same active grant: only one succeeds.
 
-    Uses service-level (not HTTP) calls.  SQLite serializes writes, so we test the
+    Uses service-level (not HTTP) calls.  Tests the
     begin_consuming_grant conditional-UPDATE logic directly.  The first call must
     claim the grant (rowcount=1); the second must be rejected (rowcount=0).
     """

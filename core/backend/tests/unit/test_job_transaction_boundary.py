@@ -17,14 +17,16 @@ class _FakeQueue:
         self.result = None
         self.error = None
 
-    async def start_job(self, job_id: str) -> None:
+    async def start_job(self, job_id: str, worker_id: str | None = None) -> None:
         self.status = "running"
 
-    async def complete_job(self, job_id: str, result: dict | None = None) -> None:
+    async def complete_job(
+        self, job_id: str, result: dict | None = None, worker_id: str | None = None
+    ) -> None:
         self.status = "completed"
         self.result = result
 
-    async def fail_job(self, job_id: str, error: str) -> None:
+    async def fail_job(self, job_id: str, error: str, worker_id: str | None = None) -> None:
         self.status = "failed"
         self.error = error
 

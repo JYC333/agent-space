@@ -15,6 +15,7 @@ Covers:
 """
 
 from __future__ import annotations
+import uuid
 
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -1305,7 +1306,6 @@ def _make_code_patch_proposal(db, *, space_id: str, workspace_root: "Path", inco
     import hashlib
     from tests.support import factories
     from app.models import Proposal
-    from ulid import ULID
     import datetime as _dt
 
     factories.create_test_space(db, space_id=space_id, commit=True)
@@ -1319,7 +1319,7 @@ def _make_code_patch_proposal(db, *, space_id: str, workspace_root: "Path", inco
     preimage_sha256 = hashlib.sha256(existing_content).hexdigest()
 
     proposal = Proposal(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=space_id,
         workspace_id=ws.id,
         proposal_type="code_patch",

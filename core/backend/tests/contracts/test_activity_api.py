@@ -1,11 +1,11 @@
 """HTTP contract: activity inbox uses get_identity; space-scoped; visibility enforced for mutations."""
 
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime
 
 from sqlalchemy import func
-from ulid import ULID
 
 from app.models import ActivityRecord, MemoryEntry
 from tests.support import factories
@@ -292,7 +292,7 @@ def test_post_activity_accepts_occurred_at_and_stores_it(api_client, db, cross_s
     out = r.json()
     assert "occurred_at" in out
     assert out["occurred_at"] is not None
-    # Strip TZ info for comparison — SQLite may return naive datetimes.
+    # Normalise ISO timestamp for comparison.
     from datetime import datetime
     stored_str = out["occurred_at"].replace("Z", "").replace("+00:00", "")
     stored = datetime.fromisoformat(stored_str)
@@ -328,7 +328,7 @@ def test_post_activity_without_occurred_at_uses_server_time(api_client, db, cros
 # ---------------------------------------------------------------------------
 
 def _nid() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _make_private_activity(db, *, space_id: str, owner_user_id: str) -> ActivityRecord:

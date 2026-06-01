@@ -1,8 +1,8 @@
 """Workflow tests for PostRunFinalizationService."""
 from __future__ import annotations
+import uuid
 
 import pytest
-from ulid import ULID
 
 from app.models import (
     RunEvaluation,
@@ -16,7 +16,7 @@ from tests.support import factories
 
 
 def _id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _setup(db, *, space_id: str | None = None, user_id: str | None = None) -> tuple[str, str]:

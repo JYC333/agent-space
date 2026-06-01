@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 """
 API key authentication.
 
@@ -23,7 +24,6 @@ from typing import Any, Optional
 
 from fastapi import Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..db import get_db
 from ..feature_gates import API_KEYS_DB_PERSISTED, feature_not_implemented
@@ -36,7 +36,7 @@ from ..param_binding import wire_header
 # ---------------------------------------------------------------------------
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def generate_key() -> str:

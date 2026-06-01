@@ -6,12 +6,12 @@ Payload flags such as ``approved_by_granting_user`` are intentionally ignored.
 """
 
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..models import PersonalMemoryGrant, Proposal, ProposalApproval, Run
 from ..personal_memory_grants.validation import validate_grant_event_metadata
@@ -30,7 +30,7 @@ class GrantingUserApprovalRequired(PersonalMemoryEgressApprovalError):
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _utcnow() -> datetime:

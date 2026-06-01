@@ -4,7 +4,7 @@ This module provides get-or-create helpers for all actor kinds and ActorRef
 factory functions.  It is intentionally small: no full identity provider,
 no RBAC, no enterprise auth.
 
-Rules enforced here (not at DB level due to SQLite nullable-FK limitations):
+Rules enforced here at the service layer (not as DB-level CHECK constraints):
   - actor_type = user    → user_id required, agent_id null, space_id required
   - actor_type = agent   → agent_id required, user_id null, space_id required
   - actor_type in (system, service, job, automation, connector, integration)

@@ -312,7 +312,7 @@ class TestAutomationFire:
         )
         # Commit to release the write lock acquired by svc.create()'s db.flush().
         # DurablePolicyAuditWriter in the subsequent svc.fire() call needs to commit
-        # independently and SQLite only allows one writer at a time.
+        # independently in its own session.
         db.commit()
         return auto
 
@@ -930,7 +930,7 @@ class TestAutomationPolicyPreflight:
     def test_cli_policy_preflight_ignores_cross_space_agent_version_provider(self, db, test_agent):
         from tests.support import factories
 
-        other_space = "policy-preflight-other-provider-space"
+        other_space = "preflight-other-provider-space"
         factories.create_test_space(db, space_id=other_space, space_type="team")
         provider = factories.create_test_model_provider(
             db,
@@ -981,7 +981,7 @@ class TestAutomationPolicyPreflight:
     def test_cli_policy_preflight_ignores_cross_space_provider_credential(self, db, test_agent):
         from tests.support import factories
 
-        other_space = "policy-preflight-other-credential-space"
+        other_space = "preflight-other-credential-space"
         factories.create_test_space(db, space_id=other_space, space_type="team")
         credential = factories.create_test_credential_stub(
             db,

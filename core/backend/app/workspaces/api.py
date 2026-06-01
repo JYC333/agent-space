@@ -1,3 +1,4 @@
+import uuid
 import logging
 import re
 from datetime import datetime, UTC
@@ -6,7 +7,6 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..config import settings
 from ..db import get_db
@@ -46,7 +46,7 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 @router.get("", response_model=Page[WorkspaceOut])

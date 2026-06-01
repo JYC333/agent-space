@@ -10,6 +10,7 @@ Covers:
 """
 
 from __future__ import annotations
+import uuid
 
 import subprocess
 from pathlib import Path
@@ -1168,14 +1169,13 @@ class TestGetWorkspaceValidationCommands:
     def test_returns_test_commands_from_profile(self, db):
         from app.models import WorkspaceProfile
         from app.runs.worktree_validation import get_workspace_validation_commands
-        from ulid import ULID
 
         space_id = "test-val-cmds-profile"
         factories.create_test_space(db, space_id=space_id, commit=True)
         ws = factories.create_test_workspace(db, space_id=space_id, commit=True)
 
         profile = WorkspaceProfile(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             workspace_id=ws.id,
             test_commands_json=["pytest tests/", "echo done"],

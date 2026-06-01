@@ -1,31 +1,67 @@
 # Backup and Restore — agent-space Local Instance
 
-**Scope:** Local two-person dogfooding instance.
+**Scope:** Local two-person dogfooding instance. PostgreSQL is the server database.
 
 ---
 
-## Architecture
+## Model
 
-Backup is **service-primary**. The backend `BackupService` is the authoritative backup
-mechanism. It runs automatically on schedule and writes a structured manifest into every archive.
+There is one full-system backup concept and one full-system restore concept.
 
-| Component | Role |
+| Tool | Role |
 |---|---|
-| `BackupService` (`app/backups/service.py`) | Creates archives, prunes old backups, sqlite snapshot |
-| `BackupScheduler` (`app/backups/scheduler.py`) | Periodic auto-backup, tied to app lifespan |
-| `scripts/backup.sh` | **Fallback only** — use when backend is not running |
-| `scripts/restore.sh` | Manual restore — always explicit, always manual |
+| `BackupService` (`core/backend/app/backups/service.py`) | **Canonical full-system backup** — scheduled, on-startup, and via API. Produces a manifested archive. |
+| `BackupScheduler` (`core/backend/app/backups/scheduler.py`) | Drives periodic auto-backup, tied to the app lifespan. |
+| `scripts/system/backup.sh` | App-services-stopped full-system backup — same archive format as `BackupService`, for when `backend`, `frontend`, and `deployer` are stopped while postgres remains running. |
+| `scripts/system/restore.sh` | Full-system restore — restores **both** the database and file data from one archive. |
+| `scripts/db/dump.sh` | DB-only expert tool — `pg_dump` custom-format dump to `db/dumps/`. |
+| `scripts/db/restore.sh` | DB-only expert tool — `pg_restore` from a `.dump` file. |
 
-**Two-person dogfooding must set `BACKUP_ENABLED=true`** (or `backup_enabled: true` in `.env`).
-The service defaults to `False` for test safety.
+A full-system backup archive contains a logical PostgreSQL snapshot **and** the file data, together with a manifest. Restore is a single command that rebuilds the database and the files.
+
+**Two-person dogfooding must set `BACKUP_ENABLED=true`** (or `backup_enabled: true` in `.env`). The service defaults to `False` for test safety.
+
+The local compose stack uses the bundled `postgres` service by default. Setting
+`DATABASE_URL` in the mode `.env` points the backend at another PostgreSQL
+connection, but the bundled `postgres` service remains defined in the local
+compose files until a separate external-db compose profile is added.
+Across dev, test, and prod the backend container listens on internal port `8000`.
+Test mode maps host `localhost:8100` to container `8000`, and the test frontend uses
+`http://backend:8000`.
+The bundled PostgreSQL containers have stable names per mode:
+`agent-space-dev-postgres`, `agent-space-test-postgres`, and `agent-space-prod-postgres`.
 
 ---
 
-## Automatic Backup (Primary)
+## Data locations
+
+> **Path semantics.** `ASPACE_ROOT` is the host-side parent directory that holds the
+> `dev/`, `test/`, `prod/` mode roots (default `~/aspace`); the scripts locate a mode
+> root as `$ASPACE_ROOT/<mode>`. Inside containers the running backend sees that mode
+> root as `AGENT_SPACE_HOME=/aspace`. `AGENT_SPACE_HOME` is never the parent of the mode dirs.
+> The DB/system scripts share `scripts/lib/local-compose.sh` with `scripts/start.sh`,
+> so mode validation, `$MODE_ROOT/.env`, `AGENT_SPACE_MODE_ROOT`, compose project/file,
+> and `docker compose --env-file "$ENV_FILE"` stay consistent.
+> Docker-native `scripts/db/migrate.sh`, DB-only `scripts/db/{dump,restore,reset-postgres}.sh`,
+> and offline `scripts/system/{backup,restore,verify-restore}.sh` stop the compose
+> `postgres` service after completion only if that script started it; they do not
+> stop a database that was already running.
+
+| Path | Meaning | In normal backups? |
+|---|---|---|
+| `$ASPACE_ROOT/<mode>/db/postgres` | Live PostgreSQL data directory (bind-mounted into the postgres container) | **No** — never archived. The database is captured logically via `pg_dump`. |
+| `$ASPACE_ROOT/<mode>/db/dumps` | `pg_dump` custom-format dump files written by `scripts/db/dump.sh` | Operator-managed; not part of the system archive |
+| `storage/`, `artifacts/`, `config/`, `secrets/`, `workspaces/` | File data | Yes |
+| `logs/` | Application logs | Optional (`BACKUP_INCLUDE_LOGS=true`) |
+| `backups/`, `cache/`, `sandboxes/` | Archives / ephemeral | No |
+
+---
+
+## Automatic backup (canonical)
 
 ### Enable
 
-In `~/aspace/<mode>/.env`:
+In `$ASPACE_ROOT/<mode>/.env`:
 
 ```
 BACKUP_ENABLED=true
@@ -35,225 +71,238 @@ BACKUP_INCLUDE_LOGS=false
 BACKUP_ON_STARTUP=true
 ```
 
-The backend reads these on startup and starts `BackupScheduler`. No manual action required.
-`BACKUP_ON_STARTUP=true` (the default) triggers an immediate backup on first startup, making it
-easy to verify that the service is configured and writing archives before any writes occur.
+The backend reads these on startup and starts `BackupScheduler`. `BACKUP_ON_STARTUP=true` triggers an immediate backup on first startup so you can verify the service is writing archives before any real writes occur.
 
-### What is backed up
+### Archive contents
 
-| Directory | Contents | Included |
-|---|---|---|
-| `db/` | SQLite database — all memory, proposals, runs, activity, artifacts, policies, run steps | Always |
-| `storage/` | Artifact storage files | Always |
-| `artifacts/` | Artifact storage root (may overlap `storage/` by config) | Always |
-| `config/` | Runtime configuration (no secret values) | Always |
-| `secrets/` | Encrypted key files (AES key for provider API keys, CLI credentials) | Always |
-| `workspaces/` | Workspace metadata directories | Always |
-| `backups/` | Previous backup archives | **Never** (recursion prevention) |
-| `sandboxes/` | Ephemeral sandbox state | **Never** (ephemeral) |
-| `cache/` | Ephemeral cache | **Never** (ephemeral) |
-| `logs/` | Application logs | Optional (`BACKUP_INCLUDE_LOGS=true`) |
+| Path in archive | Contents |
+|---|---|
+| `db/agent_space.dump` | PostgreSQL snapshot (`pg_dump -Fc --no-owner --no-acl`) — all memory, proposals, runs, activity, artifacts, policies, run steps |
+| `storage/` | Artifact storage files |
+| `artifacts/` | Artifact storage root |
+| `config/` | Runtime configuration (no secret values) |
+| `secrets/` | Encrypted key files (AES key for provider keys, CLI credentials) |
+| `workspaces/` | Workspace metadata directories |
+| `logs/` | Only when `BACKUP_INCLUDE_LOGS=true` |
+| `backup_manifest.json` | Archive metadata (see below) |
 
-**Secrets note:** `secrets/` contains encrypted key files. Raw secret values are never
-written to stdout, logs, or the manifest. Archive permissions are set to `600`.
+`backups/`, `cache/`, `sandboxes/`, and the live `db/postgres` directory are never included.
+
+**Secrets:** `secrets/` holds encrypted key files. Raw secret values are never written to stdout, logs, or the manifest. Archive permissions are `600`; the output directory is `700`.
 
 ### Archive naming
 
 ```
-AGENT_SPACE_HOME/backups/auto-YYYYMMDD-HHMMSS.tar.gz    ← automatic
-AGENT_SPACE_HOME/backups/manual-YYYYMMDD-HHMMSS.tar.gz  ← manual trigger
+$ASPACE_ROOT/<mode>/backups/auto-YYYYMMDD-HHMMSS.tar.gz     ← scheduled
+$ASPACE_ROOT/<mode>/backups/manual-YYYYMMDD-HHMMSS.tar.gz   ← API trigger
+$ASPACE_ROOT/<mode>/backups/system-YYYYMMDD-HHMMSS.tar.gz   ← scripts/system/backup.sh
 ```
 
 ### backup_manifest.json
 
-Every archive contains `backup_manifest.json` at the root with:
+Every full-system backup archive — whether written by `BackupService` or by
+`scripts/system/backup.sh` — contains a `backup_manifest.json` at its root with
+the same schema:
 
-- `backup_format: "agent-space-backup.v1"`
-- `kind: "auto" | "manual"`
+- `backup_format: "agent-space-backup.v1"` — backup format version
+- `kind` — `"auto"` | `"manual"`
 - `created_at` — ISO timestamp
-- `source_root` — absolute path of data root at time of backup
-- `included_paths` — list of dirs/files copied
-- `excluded_paths` — list of dirs excluded and why
-- `db_snapshot_method` — `"sqlite-backup-api"`
+- `source_root` — absolute path of the data root at backup time
+- `included_paths` / `excluded_paths` — what was copied and what was skipped (with reasons)
+- `db_snapshot_method` — `"pg_dump_custom"`
 - `backup_interval_hours`, `backup_retention_count`
-- `warnings` — any non-fatal issues during backup
+- `warnings` — non-fatal issues
+- **Version metadata** (best-effort; `null` when undeterminable):
+  - `app_version` — application version at backup time
+  - `git_commit` — source commit if the instance is a git checkout
+  - `alembic_revision` — current Alembic schema revision in the dumped DB
+  - `postgres_server_version` — PostgreSQL server version that produced the dump
+  - `pg_dump_version` — `pg_dump` client version that wrote the dump
 
-No raw secret values appear in the manifest.
+No raw secret values appear in the manifest. PostgreSQL is the server database.
 
-### SQLite consistency
+### PostgreSQL consistency
 
-`BackupService` uses `sqlite3.Connection.backup()` (Python's built-in sqlite3 backup API).
-This produces a WAL-safe consistent snapshot of the database even while the backend is live.
-It is not necessary to stop the backend before an automatic backup.
+`BackupService` runs `pg_dump -Fc --no-owner --no-acl` for a consistent custom-format database snapshot using PostgreSQL MVCC — the backend does not need to be stopped. The dump is restored with `pg_restore`. **If `pg_dump` fails, the backup fails closed**: no partial archive is produced.
 
-If the backup API fails for any reason, the backup fails closed. The service does **not**
-fall back to raw SQLite file copy, because raw copy can miss WAL state and produce a
-misleading successful archive.
+Full-system backup also copies file data (`storage/`, `artifacts/`, `config/`, `secrets/`, `workspaces/`). The database dump and file copies are not one cross-resource transaction, so restore verification should check restored `artifacts.storage_path` rows against files under `storage/artifacts/`. Use `scripts/system/verify-restore.sh` after restore.
 
-### Local overlap protection
+### pg_dump client version (must match the server)
 
-`BackupService` uses an in-process scheduler lock and a local lock file:
+`pg_dump` refuses to dump a server **newer** than the client. The online `BackupService`
+runs `pg_dump` inside the backend container, so the backend image installs the PostgreSQL
+client whose major version **matches** the `postgres` server image in
+`deployments/local/docker-compose.*.yml`. `POSTGRES_MAJOR` in
+the mode-specific templates in `deployments/local/.env.*.example` drive the compose
+`postgres` image and the backend `PG_MAJOR` build arg. The backend `Dockerfile` installs
+`postgresql-client-${PG_MAJOR}` from the official PostgreSQL APT repository (PGDG) —
+never the generic, older Debian `postgresql-client`. When the `postgres` server major
+is upgraded, bump `POSTGRES_MAJOR` in lockstep. This match is enforced by
+`tests/unit/test_backup_pg_dump_version.py`. The backend never reaches into the
+postgres container (it does not mount the Docker socket); the matching client keeps
+`BackupService` self-contained.
 
-```
-AGENT_SPACE_HOME/backups/.backup.lock
-```
+### Backup safety guard (prod)
 
-The lock prevents overlapping backups across multiple backend processes on the same host.
-If a process crashes, the lock file may remain, but the OS releases the advisory lock when
-the process exits. A leftover unlocked file is reused by the next backup.
+When `AGENT_SPACE_ENV=prod` and `BACKUP_ENABLED=false`, the backend **fails fast at startup**
+rather than silently running without backups. To run prod without automatic backups you must
+explicitly acknowledge the risk with `BACKUP_ACCEPT_NO_BACKUP=true`; non-prod environments only
+log a strong warning. See `app/backups/guard.py`.
 
-### Retention
+### Overlap protection and retention
 
-- Auto backups: the latest `BACKUP_RETENTION_COUNT` (default: 7) are kept. Older ones are pruned after each backup run.
-- Manual backups: never pruned automatically. Operator must remove manually if desired.
-- The backup currently being written is never pruned; pruning takes the same local lock and skips if another backup is active.
+- Local advisory lock file `backups/.backup.lock` (fcntl-based) prevents overlapping backups across backend processes on the same host.
+- Auto backups: the latest `BACKUP_RETENTION_COUNT` (default 7) are kept; older ones are pruned after each run. Manual backups are never pruned automatically.
 
-### Manual trigger via API
+### API
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/system/backups/manual \
-  -H "X-API-Key: <your-api-key>"
-# Response: {"status": "ok", "backup": "manual-20260101-120000.tar.gz"}
-```
+# Trigger a manual full-system backup
+curl -X POST http://localhost:8000/api/v1/system/backups/manual -H "X-API-Key: <key>"
 
-### View backup list
-
-```bash
-curl http://localhost:8000/api/v1/system/backups \
-  -H "X-API-Key: <your-api-key>"
+# List backups
+curl http://localhost:8000/api/v1/system/backups -H "X-API-Key: <key>"
 ```
 
 ---
 
-## Fallback Shell Script (Offline / Emergency Only)
+## Offline full-system backup
 
-Use `scripts/backup.sh` only when the backend is not running:
+When app services are stopped, produce an identical-format archive with:
 
 ```bash
-./scripts/backup.sh                          # dev mode (default)
-./scripts/backup.sh --mode prod              # prod mode
-./scripts/backup.sh --dry-run               # preview without writing
-./scripts/backup.sh --include-logs          # include logs/
-./scripts/backup.sh --output /mnt/backups   # custom output directory
+# Stop writers first; backup starts postgres automatically if needed.
+docker compose --env-file "${ASPACE_ROOT:-$HOME/aspace}/dev/.env" -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend deployer
+
+scripts/system/backup.sh --mode dev
+scripts/system/backup.sh --mode prod --include-logs
+scripts/system/backup.sh --mode dev --output /mnt/backups
 ```
 
-Archives are written to `AGENT_SPACE_HOME/<mode>/backups/` by default — the same directory
-used by `BackupService`. This means fallback archives appear alongside service archives and
-can be found in the same place. Archive name: `fallback-<YYYYMMDDTHHMMSSZ>.tar.gz`.
-
-The shell script does **not** write `backup_manifest.json`. For manifested backups, use the backend service.
+This runs `pg_dump` inside the postgres container, copies the file data, writes a `backup_manifest.json` with the same schema as `BackupService` (including `backup_interval_hours` and `backup_retention_count`, read from `BACKUP_INTERVAL_HOURS` / `BACKUP_RETENTION_COUNT` in the mode `.env`, defaulting to `24` / `7`), and produces `system-<timestamp>.tar.gz`. It starts PostgreSQL automatically if needed and stops it afterward only if backup started it. By default, `scripts/system/backup.sh` refuses to run while `backend`, `frontend`, or `deployer` are active because file data can change during the backup. Use `BackupService` or `POST /api/v1/system/backups/manual` for online backup while the backend is running.
 
 ---
 
-## Restore
+## Restore (full-system, single command)
 
-Restore is always **manual and explicit**. There is no automatic restore.
+Restore rebuilds the database and the file data from one archive. Stop `backend`, `frontend`, and `deployer`; restore starts `postgres` automatically if needed and stops it afterward only if restore started it.
 
-### Restore procedure
-
-```bash
-# 1. Stop any running instance
-docker compose -f deployments/local/docker-compose.yml stop
-
-# 2. Restore (refuses to overwrite existing data root without --force)
-./scripts/restore.sh ~/aspace/backups/auto-20260101-120000.tar.gz --mode dev
-
-# 3. Restart
-./scripts/start.sh
-```
-
-If a data root already exists, `--force` is required:
+> **Do not use `scripts/start.sh` as a restore preflight** — it starts the app services (`backend`, `frontend`, `deployer`), which `restore.sh` then refuses. Run `scripts/start.sh --<mode>` only *after* the restore succeeds.
 
 ```bash
-./scripts/restore.sh <archive> --mode dev --force
+# 1. Stop the app (leave postgres running)
+docker compose --env-file "${ASPACE_ROOT:-$HOME/aspace}/dev/.env" -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend deployer
+
+# 2. Keep or start postgres only
+docker compose --env-file "${ASPACE_ROOT:-$HOME/aspace}/dev/.env" -p agent-space-dev -f deployments/local/docker-compose.dev.yml up -d postgres
+
+# 3. Restore database + files from one archive
+scripts/system/restore.sh ~/aspace/dev/backups/auto-20260101-120000.tar.gz --mode dev --force
+
+# 4. Start the app after restore succeeds, then verify
+scripts/start.sh --dev
+scripts/system/verify-restore.sh --mode dev
 ```
 
-`--force` removes the existing data root before extracting — all current data is replaced.
+`restore.sh` extracts the archive to a temporary staging directory before any destructive database operation. It validates `backup_manifest.json`, verifies `db/agent_space.dump`, checks file-directory overwrite preconditions, refuses to continue while `backend`, `frontend`, or `deployer` are running, then runs `pg_restore` (terminate connections → drop → create → restore) against the maintenance database and restores the file directories into `$ASPACE_ROOT/<mode>/`. `--force` is required to overwrite existing file directories. The live `db/postgres` directory is never touched — the database is rebuilt logically.
+
+During preflight, `restore.sh` reads the manifest **version metadata** (`backup_format`,
+`app_version`, `git_commit`, `alembic_revision`, `postgres_server_version`, `pg_dump_version`),
+prints the recorded values, and **fails closed before any destructive operation** on a missing
+or unexpected `backup_format`, or a PostgreSQL **major-version** mismatch between the backup
+source and the live restore target. For controlled recovery you can override this check with
+`--force-incompatible-backup`; `--force` (file overwrite) and `--force-running` (active
+services) do **not** imply it. The metadata is never silently ignored.
+
+For `test` or `prod`, use the matching compose project and file, for example `agent-space-test` with `deployments/local/docker-compose.test.yml` or `agent-space-prod` with `deployments/local/docker-compose.prod.yml`.
+
+`--force-running` bypasses the running-service refusal and should only be used for controlled recovery when you have independently stopped all writers. `--force-incompatible-backup` bypasses the backup-compatibility preflight (unexpected `backup_format` or PostgreSQL major-version mismatch) and should only be used when you have verified the archive is restorable on the target server.
+
+### DB-only expert path
+
+To dump or restore only the database (no file data):
+
+```bash
+scripts/db/dump.sh --mode dev                       # → db/dumps/dump-<ts>.dump
+scripts/db/restore.sh ~/aspace/dev/db/dumps/dump-<ts>.dump --mode dev
+```
+
+DB-only dump/restore/reset start `postgres` automatically and stop it afterward only if that script started it. Restore and reset refuse to run while app services are active; stop `backend`, `frontend`, and `deployer` first. `scripts/db/restore.sh` validates the dump with `pg_restore --list` before any destructive drop, so an unreadable archive is rejected before the database is touched.
 
 ---
 
-## Restore Verification Checklist
+## Restore verification checklist
 
-After restore, verify before resuming writes:
+Use the restore verification script first. It checks the compose `postgres` service,
+the Alembic revision, core table counts, and artifact file consistency:
 
-**1. App starts**
 ```bash
-curl -s http://localhost:8000/health
-# Expected: {"status": "ok", ...}
+scripts/system/verify-restore.sh --mode dev
+scripts/system/verify-restore.sh --mode test
+scripts/system/verify-restore.sh --mode prod
 ```
 
-**2. Spaces and users visible**
+For targeted API checks after the verifier passes:
+
 ```bash
 curl -s "http://localhost:8000/api/v1/spaces?space_id=personal"
-```
-
-**3. Memory entries readable**
-```bash
 curl -s "http://localhost:8000/api/v1/memory?space_id=personal&status=active"
-```
-
-**4. Artifacts readable**
-```bash
 curl -s "http://localhost:8000/api/v1/artifacts?space_id=personal"
-```
-
-**5. Proposals and runs inspectable**
-```bash
 curl -s "http://localhost:8000/api/v1/proposals?space_id=personal"
 curl -s "http://localhost:8000/api/v1/runs?space_id=personal"
-```
-
-**6. Activity inbox survives**
-```bash
 curl -s "http://localhost:8000/api/v1/activity?space_id=personal"
-```
-
-**7. RunStep replay survives**
-```bash
-curl -s "http://localhost:8000/api/v1/runs/<run_id>/steps?space_id=personal"
+curl -s "http://localhost:8000/api/v1/runs/<run_id>/steps?space_id=personal"   # RunStep replay survives
 ```
 
 ---
 
-## Rollback Strategy
+## Rollback strategy
 
-1. Stop writes: `docker compose stop backend`.
-2. Snapshot current state before overwriting: `cp -a ~/aspace/dev ~/aspace/dev-pre-rollback`.
-3. Restore from last known-good archive: `./scripts/restore.sh <archive> --mode dev --force`.
-4. Verify with checklist above.
-5. Restart: `./scripts/start.sh`.
-
----
-
-## Security Considerations
-
-- Archives contain `secrets/provider_keys.key` — treat archives as sensitive material.
-- Archive permissions: `600` (owner only). Output directory: `700`.
-- No archive passphrase by default. For offsite storage: `gpg --symmetric <archive.tar.gz>`.
-- Raw secret values are never printed to stdout or written to the manifest.
+1. Stop writes: `docker compose --env-file "${ASPACE_ROOT:-$HOME/aspace}/dev/.env" -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend deployer`.
+2. Snapshot current state: `cp -a ~/aspace/dev ~/aspace/dev-pre-rollback-$(date +%Y%m%d-%H%M%S)`.
+3. Restore from the last known-good archive: `scripts/system/restore.sh <archive> --mode dev --force`.
+4. Restart: `scripts/start.sh --dev`.
+5. Verify with `scripts/system/verify-restore.sh --mode dev`.
 
 ---
 
-## Residual Risks
+## Security considerations
+
+- **Full-system archives intentionally include `secrets/`** (e.g. `provider_keys.key`,
+  CLI credentials) and `config/`. This is by design — a restore must rebuild a working
+  instance — so every backup archive is a **high-sensitivity file** and must be handled
+  like the secrets it contains.
+- Archive permissions are set to `600` (owner only) and the output directory to `700`.
+  **`chmod 600` is necessary but is not encryption** — it only restricts other local
+  users; it does nothing once the file leaves the machine.
+- **Store backups securely, and encrypt them before moving them off-machine.** There is
+  no archive passphrase by default; for any offsite/cloud/transfer copy, encrypt first,
+  e.g. `gpg --symmetric <archive.tar.gz>`, and protect the passphrase separately.
+- Raw secret values are never printed to stdout or written to the manifest. Scripts never
+  print database passwords.
+
+---
+
+## Residual risks
 
 | Risk | Mitigation |
 |---|---|
-| Automatic backup requires `BACKUP_ENABLED=true` — not set, no backups | Dogfood operators must set this in `.env` before first write |
-| `BackupService` fails closed when `sqlite3.backup()` raises — **no** raw DB file-copy fallback in the tarball | Fix the underlying SQLite/locking error before retrying; archives are only produced on full success |
+| Automatic backup requires `BACKUP_ENABLED=true` | Prod fails fast at startup when backups are off unless `BACKUP_ACCEPT_NO_BACKUP=true`; dogfood operators set `BACKUP_ENABLED=true` in `.env` before first write |
+| `pg_dump` client older than the server would fail | Backend image pins `postgresql-client-${PG_MAJOR}` to the `postgres:<major>` server; match enforced by tests |
+| `BackupService` fails closed when `pg_dump` raises — no partial archive | Fix the underlying database/connection error before retrying |
+| Database dump and file copy are not one cross-resource transaction | Keep normal writers quiescent for offline backup, and run `scripts/system/verify-restore.sh` after restore |
 | `workspaces/` captures directory structure, not external mount contents | Document external dependencies separately |
 | No cloud backup or offsite replication | Manual GPG + offsite upload if required |
-| No `backup_manifest.json` from shell script fallback | Shell script is for offline emergencies only; use the backend service for manifested backups |
 
 ---
 
-## Implementation Notes
+## Implementation notes
 
-- `BackupService`: `core/backend/app/backups/service.py` — creates archives, sqlite backup API, prunes
-- `BackupScheduler`: `core/backend/app/backups/scheduler.py` — periodic auto-backup, lifespan-tied
-- `BackupManifest`: `core/backend/app/backups/manifest.py` — structured `backup_manifest.json`
-- Backup API: `GET /api/v1/system/backups`, `POST /api/v1/system/backups/manual`
-- `scripts/backup.sh`: fallback emergency tool only
-- `scripts/restore.sh`: manual restore tool
-- Workspace scan: missing paths marked `stale`, not hard-deleted
-- Deployment job persistence: `501 Not Implemented` (deferred, documented)
-- Self-evolution: disabled by default (`ENABLE_SYSTEM_EVOLUTION=false`)
+- `BackupService`: `core/backend/app/backups/service.py` — creates archives via `pg_dump`, prunes.
+- `BackupScheduler`: `core/backend/app/backups/scheduler.py` — periodic auto-backup, lifespan-tied.
+- `BackupManifest`: `core/backend/app/backups/manifest.py` — `backup_manifest.json` structure.
+- Backup API: `GET /api/v1/system/backups`, `POST /api/v1/system/backups/manual`.
+- `scripts/system/backup.sh` / `scripts/system/restore.sh` — offline full-system tools.
+- `scripts/system/verify-restore.sh` — restored DB/schema/artifact consistency check.
+- `scripts/db/dump.sh` / `scripts/db/restore.sh` — DB-only expert tools.
+- `scripts/lib/local-compose.sh` — shared mode/env/compose resolution for start, DB, and system scripts.

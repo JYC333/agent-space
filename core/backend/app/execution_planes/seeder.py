@@ -105,8 +105,13 @@ _DEFAULT_PLANES: list[dict] = [
 ]
 
 
-def seed_default_execution_planes(db: Session, space_id: str) -> None:
-    """Idempotently ensure all default execution planes exist for the given space."""
+def seed_default_execution_planes(db: Session, space_id: str) -> int:
+    """Idempotently ensure all default execution planes exist for the given space.
+
+    Returns the number of plane rows actually inserted on this call (0 when every
+    default plane already existed). Existing rows are never modified.
+    """
+    inserted = 0
     for spec in _DEFAULT_PLANES:
         existing = (
             db.query(ExecutionPlane)
@@ -116,4 +121,6 @@ def seed_default_execution_planes(db: Session, space_id: str) -> None:
         if not existing:
             plane = ExecutionPlane(space_id=space_id, **spec)
             db.add(plane)
+            inserted += 1
     db.commit()
+    return inserted

@@ -1,11 +1,11 @@
 """HTTP contract: SourcePointer API is membership-gated metadata only."""
 
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from ulid import ULID
 
 from app.models import MemoryEntry, SourcePointer, SpaceMembership
 from app.source_pointers.service import create_source_pointer
@@ -31,7 +31,7 @@ _FORBIDDEN_FIELDS = frozenset({
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _params(space_id: str) -> dict[str, str]:

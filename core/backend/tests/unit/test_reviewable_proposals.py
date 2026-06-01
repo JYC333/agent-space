@@ -4,16 +4,16 @@ Covers Scope D: owner/admin/reviewer/member/no-membership reviewability rules an
 cross-space exclusion.
 """
 from __future__ import annotations
+import uuid
 
 import pytest
-from ulid import ULID
 
 from app.memory.proposals import ProposalService
 from tests.support import factories
 
 
 def _uid() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _make_space_user(db, space_id: str, role: str) -> str:

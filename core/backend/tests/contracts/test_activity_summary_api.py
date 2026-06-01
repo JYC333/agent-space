@@ -1,5 +1,6 @@
 """HTTP contract tests for activity/summary-runs, intake/summary-runs, and home/summary intake_summary."""
 from __future__ import annotations
+import uuid
 
 from unittest.mock import patch
 
@@ -196,7 +197,6 @@ def test_home_summary_includes_due_connections(db, cross_space_pair):
     """due_connections counts active SourceConnection rows with next_check_at <= now."""
     from datetime import datetime, UTC, timedelta
     from app.models import SourceConnection, User
-    from ulid import ULID
 
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
@@ -214,7 +214,7 @@ def test_home_summary_includes_due_connections(db, cross_space_pair):
 
     past = datetime.now(UTC) - timedelta(hours=2)
     conn = SourceConnection(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         connector_id=connector.id,
         owner_user_id=ua.id,

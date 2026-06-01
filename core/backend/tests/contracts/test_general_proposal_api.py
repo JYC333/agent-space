@@ -1,6 +1,7 @@
 """HTTP contract: general proposal API — list, detail, accept, reject."""
 
 from __future__ import annotations
+import uuid
 
 import hashlib
 from sqlalchemy import func
@@ -87,19 +88,18 @@ def test_reject_proposal_cross_space_returns_404(api_client, db, cross_space_pai
 def test_member_cannot_accept_in_same_space_returns_403(api_client, db, cross_space_pair_db):
     """Member-role users cannot apply proposals — policy gate returns 403."""
     from app.models import SpaceMembership, User
-    from ulid import ULID
 
     a = cross_space_pair_db["space_a_id"]
     ua = cross_space_pair_db["user_a"]
 
     # Create a member-role user (not owner/admin)
-    member_id = str(ULID())
+    member_id = str(uuid.uuid4())
     member_user = User(
         id=member_id,
         display_name="member-user", email=f"{member_id}@test.invalid",
     )
     db.add(member_user)
-    db.add(SpaceMembership(id=str(ULID()), space_id=a, user_id=member_id, role="member", status="active"))
+    db.add(SpaceMembership(id=str(uuid.uuid4()), space_id=a, user_id=member_id, role="member", status="active"))
     db.commit()
 
     prop = factories.create_test_proposal(db, space_id=a, created_by_user_id=ua.id, commit=True)

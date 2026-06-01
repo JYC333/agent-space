@@ -1178,8 +1178,7 @@ class RunExecutionService:
                 )
                 # Artifact persistence performs fail-closed policy audit writes in
                 # an independent session. Commit adapter completion evidence first
-                # so SQLite does not hold a writer lock while the audit record is
-                # inserted.
+                # so the audit write uses a clean, uncommitted connection.
                 self.db.commit()
                 self.db.refresh(run)
                 if (
@@ -1504,7 +1503,7 @@ class RunExecutionService:
                 # Persist the runtime-output artifact before marking the run
                 # terminal. Its policy gate writes an independent audit record,
                 # so the execution session must not yet hold terminal-state
-                # writes on SQLite.
+                # writes.
                 safe_output_text = redact_artifact_content(safe_output_text_for_run) or ""
                 try:
                     art = ArtifactPersistenceService(self.db).persist_text_file(

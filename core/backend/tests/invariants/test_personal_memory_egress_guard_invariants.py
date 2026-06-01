@@ -5,11 +5,11 @@ artifacts, team memory, SourcePointer content, or public targets.
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from ulid import ULID
 
 from app.models import (
     AgentVersion,
@@ -33,7 +33,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------

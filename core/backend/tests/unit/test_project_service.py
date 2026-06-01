@@ -1,9 +1,9 @@
 """Unit tests for ProjectService and assert_project_in_space."""
 
 from __future__ import annotations
+import uuid
 
 import pytest
-from ulid import ULID
 
 from app.models import Project, ProjectWorkspace
 from app.projects.service import ProjectService, assert_project_in_space
@@ -13,11 +13,11 @@ from tests.support.ids import DEFAULT_USER_ID, PERSONAL_SPACE_ID
 
 
 def _space() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _user_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------

@@ -14,10 +14,10 @@ Rules under test:
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
 from fastapi import HTTPException
-from ulid import ULID
 
 from app.activity.service import ActivityService
 from app.artifacts.service import ArtifactReadService
@@ -30,7 +30,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------

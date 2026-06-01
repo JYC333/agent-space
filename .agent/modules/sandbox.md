@@ -124,7 +124,7 @@ Adapters check `self.sandbox_dir is not None`:
 - `core/backend/app/runtimes/adapters/cli_runtime.py` — generic local CLI runtime path
 - `core/backend/Dockerfile` — installs claude + codex for high-risk worktree runs
 - `deployments/sandbox/Dockerfile` — sandbox image for critical-risk one_shot_docker runs
-- `deployments/local/docker-compose.yml` — mounts Docker socket for critical-risk container spawning
+- `deployments/local/docker-compose.<mode>.yml` — mounts Docker socket for critical-risk container spawning
 
 ## Related Decisions
 - [0005-desktop-runtime.md](../decisions/0005-desktop-runtime.md)

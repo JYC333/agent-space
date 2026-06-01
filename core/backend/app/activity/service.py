@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 """
 ActivityService — manages ActivityRecord lifecycle and proposal generation.
 
@@ -17,7 +18,6 @@ Consolidation runs via ``ActivityConsolidationService`` from
 from datetime import datetime, UTC
 from typing import Optional
 
-from ulid import ULID
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
@@ -28,7 +28,7 @@ from ..projects.service import assert_project_in_space
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 SOURCE_TYPE_ALIASES: dict[str, str] = {

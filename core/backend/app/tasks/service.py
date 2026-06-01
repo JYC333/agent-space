@@ -1,11 +1,11 @@
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime
 from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
-from ulid import ULID
 
 from app.models import (
     Agent,
@@ -27,7 +27,7 @@ from .visibility import can_read_task
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 class TaskService:

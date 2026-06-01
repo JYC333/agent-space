@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from app.config import settings
 from app.policy.decisions import Decision, PolicyDecision, RiskLevel
 from app.policy.exceptions import PolicyGateBlocked
@@ -252,6 +254,7 @@ def test_git_diff_output_is_bounded(api_client, db, cross_space_pair, tmp_path, 
     assert len(body["diff"].encode("utf-8")) <= workspace_api._MAX_DIFF_BYTES
 
 
+@pytest.mark.durable_audit
 def test_full_diff_workspace_read_is_force_audited(api_client, db, cross_space_pair, tmp_path, monkeypatch):
     import app.workspace_console.api as workspace_api
 

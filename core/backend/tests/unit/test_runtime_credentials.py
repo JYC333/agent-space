@@ -1,5 +1,6 @@
 """Unit tests for the M4 runtime credential resolver."""
 from __future__ import annotations
+import uuid
 
 import pytest
 
@@ -252,10 +253,9 @@ class TestResolveCredentialsProviderPath:
         assert result.get("api_key") == key_run
 
     def test_missing_provider_raises_credential_resolution_error(self, db):
-        from ulid import ULID
         # Test via resolve_provider_api_key — no FK constraint on the function call
         with pytest.raises(CredentialResolutionError) as exc_info:
-            resolve_provider_api_key(db, str(ULID()))
+            resolve_provider_api_key(db, str(uuid.uuid4()))
         assert "not found" in str(exc_info.value).lower()
         # The error message must not contain a raw API key
         assert "sk-" not in str(exc_info.value)
@@ -311,9 +311,8 @@ class TestResolveProviderApiKey:
         assert result == plaintext
 
     def test_raises_for_missing_provider(self, db):
-        from ulid import ULID
         with pytest.raises(CredentialResolutionError):
-            resolve_provider_api_key(db, str(ULID()))
+            resolve_provider_api_key(db, str(uuid.uuid4()))
 
 
 class TestProviderCredentialSecretRef:

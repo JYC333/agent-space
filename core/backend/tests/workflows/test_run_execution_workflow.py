@@ -15,7 +15,7 @@ def _params(space_id: str, user_id: str) -> dict[str, str]:
 
 
 def _stub_durable_policy_audit(monkeypatch) -> None:
-    """Avoid SQLite nested-writer contention in artifact workflow coverage."""
+    """Stub policy audit writes — this module covers artifact workflow, not audit I/O."""
     monkeypatch.setattr(
         "app.policy.audit.DurablePolicyAuditWriter.write",
         lambda _writer, _envelope: "stub-policy-audit",

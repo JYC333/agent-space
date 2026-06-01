@@ -13,15 +13,15 @@ Covers:
 """
 
 from __future__ import annotations
+import uuid
 
 from app.models import Message, Session as SessionModel
 from tests.support.ids import DEFAULT_USER_ID, PERSONAL_SPACE_ID
 
 
 def _make_session(db, *, space_id: str, user_id: str, title: str = "test") -> SessionModel:
-    from ulid import ULID
     session = SessionModel(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=space_id,
         user_id=user_id,
         title=title,
@@ -33,9 +33,8 @@ def _make_session(db, *, space_id: str, user_id: str, title: str = "test") -> Se
 
 
 def _make_message(db, *, session_id: str, space_id: str, user_id: str, content: str = "hello") -> Message:
-    from ulid import ULID
     msg = Message(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         session_id=session_id,
         space_id=space_id,
         user_id=user_id,

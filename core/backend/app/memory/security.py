@@ -124,7 +124,7 @@ _BINARY_EXTENSIONS: frozenset[str] = frozenset({
     ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
     ".exe", ".dll", ".so", ".dylib", ".bin",
     ".pdf", ".docx", ".xlsx", ".pptx",
-    ".db", ".sqlite", ".sqlite3",
+    ".db",
     ".pyc", ".pyo", ".class",
     ".wasm",
 })

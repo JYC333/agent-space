@@ -1,6 +1,7 @@
 """Project service — CRUD, workspace linking, and summary counts."""
 
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime
 
@@ -30,8 +31,7 @@ def _now() -> datetime:
 
 
 def _new_id() -> str:
-    from ulid import ULID
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def assert_project_in_space(

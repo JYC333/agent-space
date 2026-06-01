@@ -47,7 +47,7 @@ GET  /api/v1/workspace-console/workspaces/{id}/git/diff?path=...
 - Workspace console tree/file/status/diff reads enforce `workspace.read` before data is returned
 - Workspace list remains membership-scoped and does not create one policy record per row
 - PathPolicy validates all requested paths and blocks traversal plus secret-like paths such
-  as `.env*` except `.env.example`/`.env.sample`/`.env.template`, private keys,
+  as `.env*` except committed env templates (`.env.*.example`, `.env.sample`, `.env.template`), private keys,
   `.ssh`, `.aws`, and secrets directories
 - Git operations must be scoped to the workspace root; no `..` traversal allowed
 - Full git diff output is bounded. Full diff, system-managed, external-root,

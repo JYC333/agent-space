@@ -130,7 +130,15 @@ _IGNORE_DIRS = {
     ".git", "__pycache__", "node_modules", ".venv", "venv",
     ".tox", "dist", "build", ".next", ".nuxt", "coverage",
 }
-_SHOW_HIDDEN = {".gitignore", ".env.example", ".claude", ".editorconfig"}
+_SHOW_HIDDEN = {
+    ".gitignore",
+    ".env.example",
+    ".env.dev.example",
+    ".env.test.example",
+    ".env.prod.example",
+    ".claude",
+    ".editorconfig",
+}
 
 
 def _looks_secret_like_path(path: str | None) -> bool:

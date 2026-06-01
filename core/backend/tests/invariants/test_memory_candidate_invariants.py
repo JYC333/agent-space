@@ -1,12 +1,12 @@
 """Invariants: classifier / validator / producer boundaries for activity consolidation."""
 
 from __future__ import annotations
+import uuid
 
 import json
 from datetime import UTC, datetime
 
 from sqlalchemy import func
-from ulid import ULID
 
 from app.memory.consolidation.classifier import DefaultRuleBasedMemoryCandidateClassifier
 from app.memory.consolidation.service import ActivityConsolidationService
@@ -76,7 +76,7 @@ def test_agent_inferred_semantic_rejected_by_validator(db, cross_space_pair_db):
     a = cross_space_pair_db["space_a_id"]
     ua = cross_space_pair_db["user_a"]
     act = ActivityRecord(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         user_id=ua.id,
         activity_type="note",

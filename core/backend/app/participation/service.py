@@ -15,12 +15,12 @@ Rules:
 """
 
 from __future__ import annotations
+import uuid
 
 import logging
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..models import ParticipationRecord, Space, SpaceMembership
 
@@ -69,7 +69,7 @@ def try_record_participation(
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _find_personal_space_id(db: Session, user_id: str) -> str | None:

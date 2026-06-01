@@ -1,8 +1,8 @@
 """HTTP contract: home summary is space-scoped with a stable aggregate shape."""
 
 from __future__ import annotations
+import uuid
 
-from ulid import ULID
 
 from app.auth.session import SESSION_COOKIE, UserSessionService
 from app.main import app as _app
@@ -16,7 +16,7 @@ def _params(space_id: str, user_id: str) -> dict[str, str]:
 
 
 def test_home_summary_empty_stable_shape(api_client, db):
-    sid = str(ULID())
+    sid = str(uuid.uuid4())
     factories.create_test_space(db, space_id=sid, name="Empty Home", space_type="team", commit=True)
     u = factories.create_test_user(db, space_id=sid, commit=True)
     _, raw = UserSessionService(db).create(u.id)

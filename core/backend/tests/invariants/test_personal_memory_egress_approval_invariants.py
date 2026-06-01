@@ -1,10 +1,10 @@
 """PersonalMemoryGrant egress approval invariants."""
 
 from __future__ import annotations
+import uuid
 
 import pytest
 from datetime import UTC, datetime, timedelta
-from ulid import ULID
 
 from app.memory.apply_service import ProposalApplyError, ProposalApplyService
 from app.models import AgentVersion, MemoryEntry, PersonalMemoryGrant, PersonalMemoryGrantEvent, Proposal, ProposalApproval, SpaceMembership
@@ -18,7 +18,7 @@ from tests.support.assertions import assert_no_personal_content_fields
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _space(db, *, space_type: str, name: str):

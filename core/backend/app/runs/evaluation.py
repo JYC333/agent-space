@@ -23,6 +23,7 @@ Hard rules:
 """
 
 from __future__ import annotations
+import uuid
 
 import logging
 from datetime import UTC, datetime
@@ -121,8 +122,7 @@ _EXACT_ERROR_CODE_MAP: dict[str, tuple[str, str]] = {
 
 
 def _new_id() -> str:
-    from ulid import ULID
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _utcnow() -> datetime:

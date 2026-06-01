@@ -1,12 +1,12 @@
 """Workflow tests for PersonalMemoryGrant runtime-only prompt injection."""
 
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from ulid import ULID
 
 from app.models import (
     AgentVersion,
@@ -25,7 +25,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 class _CapturingRuntimeAdapter:
@@ -144,7 +144,7 @@ def _prepare_roots(monkeypatch, tmp_path) -> None:
 
 
 def _stub_durable_policy_audit(monkeypatch) -> None:
-    """Keep SQLite output persistence atomic while exercising policy and egress logic."""
+    """Stub policy audit writes — this module covers policy and egress logic."""
     monkeypatch.setattr(
         "app.policy.audit.DurablePolicyAuditWriter.write",
         lambda _writer, _envelope: "stub-policy-audit",

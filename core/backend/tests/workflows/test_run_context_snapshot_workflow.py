@@ -10,11 +10,11 @@ Verifies:
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
 from datetime import UTC, datetime
 
-from ulid import ULID
 
 from app.models import (
     ContextSnapshot,
@@ -30,7 +30,7 @@ from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRunti
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _patch_echo(monkeypatch, tmp_path):

@@ -16,6 +16,35 @@ from app.db import Base
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
+# ── PostgreSQL schema inspection helpers ───────────────────────────────────────
+
+def _pg_constraints_info(conn, table_name: str) -> str:
+    """Return concatenated constraint names and definitions for a table.
+
+    PostgreSQL DDL inspection via information_schema and pg_get_constraintdef().
+    Returns a single string containing all constraint names and pg_get_constraintdef()
+    output, suitable for substring checks.
+    """
+    from sqlalchemy import text as sa_text
+    rows = conn.execute(sa_text("""
+        SELECT conname || ' ' || pg_get_constraintdef(oid)
+        FROM pg_constraint
+        WHERE conrelid = CAST(:t AS regclass)
+        ORDER BY conname
+    """), {"t": table_name}).fetchall()
+    return " ".join(row[0] for row in rows)
+
+
+def _pg_index_def(conn, index_name: str) -> str | None:
+    """Return the CREATE INDEX definition for a named index, or None if not found."""
+    from sqlalchemy import text as sa_text
+    rows = conn.execute(sa_text("""
+        SELECT indexdef FROM pg_indexes
+        WHERE schemaname = 'public' AND indexname = :n
+    """), {"n": index_name}).fetchall()
+    return rows[0][0] if rows else None
+
+
 @pytest.fixture(scope="module")
 def canonical_engine(db_engine):
     """Reuse the session-scoped migrated engine — no second Alembic upgrade needed."""
@@ -173,11 +202,13 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
         "subject_user_id",
         "lifecycle_status",
         "consolidation_status",
+        "project_id",
     }.issubset(activity_columns)
     ar_indexes = {tuple(i["column_names"]) for i in inspector.get_indexes("activity_records")}
     assert ("source_task_id",) in ar_indexes
     assert ("lifecycle_status",) in ar_indexes
     assert ("consolidation_status",) in ar_indexes
+    assert ("project_id",) in ar_indexes, "ix_activity_records_project_id missing"
 
     artifact_columns = {column["name"] for column in inspector.get_columns("artifacts")}
     assert {
@@ -190,7 +221,10 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
         "relevant_period_start",
         "preview",
         "metadata_json",
+        "project_id",
     }.issubset(artifact_columns)
+    artifact_indexes = {tuple(i["column_names"]) for i in inspector.get_indexes("artifacts")}
+    assert ("project_id",) in artifact_indexes, "ix_artifacts_project_id missing"
     policy_columns = {column["name"] for column in inspector.get_columns("policies")}
     assert {
         "id", "space_id", "name", "domain", "policy_json", "enabled", "created_at", "updated_at",
@@ -292,7 +326,6 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
             runtime_adapter_id=adapter.id,
             system_prompt="You are useful.",
         )
-        agent.current_version_id = version.id
         workspace = models.Workspace(id="workspace-1", space_id=space.id, name="Workspace")
         session = models.Session(id="session-1", space_id=space.id, user_id=user.id, agent_id=agent.id, workspace_id=workspace.id)
         snapshot = models.ContextSnapshot(id="snapshot-1", space_id=space.id, source_refs_json=[])
@@ -396,6 +429,7 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
         db.commit()
 
         agent.current_version_id = version.id
+        db.flush()
         db.add_all([session, snapshot])
         db.commit()
 
@@ -506,18 +540,15 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
 def test_key_canonical_foreign_keys_exist(canonical_engine):
     inspector = inspect(canonical_engine)
 
-    # Intentionally omitted to avoid an Agent <-> AgentVersion DDL cycle in the
-    # clean baseline. Run.agent_version_id is the immutable execution FK.
-    assert ("current_version_id", "agent_versions", "id") not in _foreign_keys(inspector, "agents")
-    # Intentionally service-enforced to avoid Space/User bootstrap ordering cycles.
-    assert ("created_by_user_id", "users", "id") not in _foreign_keys(inspector, "spaces")
-    assert ("invited_by_user_id", "users", "id") not in _foreign_keys(inspector, "space_invitations")
+    assert ("current_version_id", "agent_versions", "id") in _foreign_keys(inspector, "agents")
+    assert ("created_by_user_id", "users", "id") in _foreign_keys(inspector, "spaces")
+    assert ("invited_by_user_id", "users", "id") in _foreign_keys(inspector, "space_invitations")
 
     assert ("agent_id", "agents", "id") in _foreign_keys(inspector, "agent_versions")
-    assert ("source_proposal_id", "proposals", "id") not in _foreign_keys(inspector, "agent_versions")
-    assert ("source_activity_id", "activity_records", "id") not in _foreign_keys(inspector, "agent_versions")
-    assert ("task_id", "tasks", "id") not in _foreign_keys(inspector, "runs")
-    assert ("source_task_id", "tasks", "id") not in _foreign_keys(inspector, "activity_records")
+    assert ("source_proposal_id", "proposals", "id") in _foreign_keys(inspector, "agent_versions")
+    assert ("source_activity_id", "activity_records", "id") in _foreign_keys(inspector, "agent_versions")
+    assert ("task_id", "tasks", "id") in _foreign_keys(inspector, "runs")
+    assert ("source_task_id", "tasks", "id") in _foreign_keys(inspector, "activity_records")
     assert ("agent_version_id", "agent_versions", "id") in _foreign_keys(inspector, "runs")
     assert ("context_snapshot_id", "context_snapshots", "id") in _foreign_keys(inspector, "runs")
     assert ("run_id", "runs", "id") in _foreign_keys(inspector, "artifacts")
@@ -558,8 +589,7 @@ def test_key_canonical_foreign_keys_exist(canonical_engine):
     assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "memory_relations")
     assert ("created_from_proposal_id", "proposals", "id") in _foreign_keys(inspector, "memory_relations")
     assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "provenance_links")
-    # policies.created_from_proposal_id is intentionally a soft reference (policies precedes proposals in migration order)
-    assert ("created_from_proposal_id", "proposals", "id") not in _foreign_keys(inspector, "policies")
+    assert ("created_from_proposal_id", "proposals", "id") in _foreign_keys(inspector, "policies")
     # These three fields are real FKs (not soft references) — enforced in ORM and migration.
     assert ("run_evaluation_id", "run_evaluations", "id") in _foreign_keys(inspector, "task_evaluations")
     assert ("run_evaluation_id", "run_evaluations", "id") in _foreign_keys(inspector, "run_finalizations")
@@ -578,6 +608,14 @@ def test_key_canonical_foreign_keys_exist(canonical_engine):
     assert ("evidence_id", "extracted_evidence", "id") in _foreign_keys(inspector, "evidence_links")
     assert ("workspace_id", "workspaces", "id") in _foreign_keys(inspector, "workspace_intake_profiles")
     assert ("source_connection_id", "source_connections", "id") in _foreign_keys(inspector, "workspace_source_bindings")
+
+
+def test_automation_runs_referential_integrity(canonical_engine):
+    """automation_runs links are real FKs to automations and runs (not soft refs)."""
+    inspector = inspect(canonical_engine)
+    fks = _foreign_keys(inspector, "automation_runs")
+    assert ("automation_id", "automations", "id") in fks
+    assert ("run_id", "runs", "id") in fks
 
 
 def test_initial_migration_has_no_forward_table_references():
@@ -649,8 +687,7 @@ def test_visibility_columns_exist_with_correct_default(canonical_engine):
         assert "visibility" in col_defs, f"{table}.visibility column missing"
         col = col_defs["visibility"]
         assert col["nullable"] is False, f"{table}.visibility must be NOT NULL"
-        # server_default may be wrapped in quotes by SQLite; strip them
-        raw = str(col.get("default") or "").strip("'\" ")
+        raw = str(col.get("default") or "").split("::")[0].strip("'\" ")
         assert raw == _VISIBILITY_DEFAULT, (
             f"{table}.visibility server_default must be '{_VISIBILITY_DEFAULT}', got {col.get('default')!r}"
         )
@@ -920,10 +957,7 @@ def test_personal_memory_grant_check_constraints_exist(canonical_engine):
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='personal_memory_grants'")
-        ).fetchall()
-    ddl = rows[0][0] if rows else ""
+        ddl = _pg_constraints_info(conn, "personal_memory_grants")
     assert "ck_personal_memory_grants_grant_scope" in ddl, "grant_scope CHECK constraint missing"
     assert "ck_personal_memory_grants_access_mode" in ddl, "access_mode CHECK constraint missing"
     assert "ck_personal_memory_grants_status" in ddl, "status CHECK constraint missing"
@@ -935,10 +969,7 @@ def test_personal_memory_grant_events_check_constraint_exists(canonical_engine):
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='personal_memory_grant_events'")
-        ).fetchall()
-    ddl = rows[0][0] if rows else ""
+        ddl = _pg_constraints_info(conn, "personal_memory_grant_events")
     assert "ck_personal_memory_grant_events_event_type" in ddl, "event_type CHECK constraint missing"
 
 
@@ -947,10 +978,7 @@ def test_grant_events_event_type_constraint_includes_new_types(canonical_engine)
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='personal_memory_grant_events'")
-        ).fetchall()
-    ddl = rows[0][0] if rows else ""
+        ddl = _pg_constraints_info(conn, "personal_memory_grant_events")
     assert "egress_proposal_created" in ddl, "egress_proposal_created must be in event_type CHECK constraint"
     assert "egress_approved" in ddl, "egress_approved must be in event_type CHECK constraint"
 
@@ -1035,10 +1063,7 @@ def test_proposal_approvals_check_constraints_exist(canonical_engine):
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='proposal_approvals'")
-        ).fetchall()
-    ddl = rows[0][0] if rows else ""
+        ddl = _pg_constraints_info(conn, "proposal_approvals")
     assert "ck_proposal_approvals_approval_type" in ddl
     assert "ck_proposal_approvals_status" in ddl
     assert "egress_granting_user" in ddl
@@ -1051,14 +1076,8 @@ def test_proposal_approvals_partial_unique_index_exists(canonical_engine):
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text(
-                "SELECT name, sql FROM sqlite_master "
-                "WHERE type='index' AND name='ix_proposal_approvals_unique_active'"
-            )
-        ).fetchall()
-    assert rows, "ix_proposal_approvals_unique_active partial unique index not found"
-    idx_sql = rows[0][1]
+        idx_sql = _pg_index_def(conn, "ix_proposal_approvals_unique_active")
+    assert idx_sql is not None, "ix_proposal_approvals_unique_active partial unique index not found"
     assert "UNIQUE" in idx_sql.upper()
     assert "proposal_id" in idx_sql
     assert "approval_type" in idx_sql
@@ -1072,14 +1091,8 @@ def test_personal_memory_grant_partial_unique_index_exists(canonical_engine):
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text(
-                "SELECT name, sql FROM sqlite_master "
-                "WHERE type='index' AND name='ix_personal_memory_grants_unique_active_consuming'"
-            )
-        ).fetchall()
-    assert rows, "ix_personal_memory_grants_unique_active_consuming partial unique index not found"
-    idx_sql = rows[0][1]
+        idx_sql = _pg_index_def(conn, "ix_personal_memory_grants_unique_active_consuming")
+    assert idx_sql is not None, "ix_personal_memory_grants_unique_active_consuming partial unique index not found"
     assert "UNIQUE" in idx_sql.upper()
     assert "granting_user_id" in idx_sql
     assert "target_run_id" in idx_sql
@@ -1087,9 +1100,8 @@ def test_personal_memory_grant_partial_unique_index_exists(canonical_engine):
 
 def test_personal_memory_grant_constraints_reject_invalid_scope(canonical_engine):
     """PersonalMemoryGrant grant_scope != 'run' is rejected by DB constraint."""
-    import sqlite3
     from sqlalchemy import text as sa_text
-    from datetime import UTC, datetime, timedelta
+    from sqlalchemy.exc import IntegrityError
 
     with canonical_engine.connect() as conn:
         with conn.begin():
@@ -1104,14 +1116,13 @@ def test_personal_memory_grant_constraints_reject_invalid_scope(canonical_engine
                      'r1', 'agent', 'summary_only', 'active',
                      '2099-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
                 """))
-                # If we reach here without an exception, the test must detect the violation via the
-                # constraint name. Force a failure so the test reflects the expected DB behavior.
                 conn.rollback()
                 raise AssertionError("Expected IntegrityError for invalid grant_scope='agent'")
+            except AssertionError:
+                raise
             except Exception as exc:
                 conn.rollback()
-                # Accept any integrity / constraint error — the specific type varies by driver
-                assert "SQLITE_CONSTRAINT" in type(exc).__name__ or "IntegrityError" in type(exc).__name__ or isinstance(exc, AssertionError) is False or "CHECK" in str(exc).upper() or "constraint" in str(exc).lower(), f"Unexpected exception type: {type(exc)} {exc}"
+                assert isinstance(exc, IntegrityError) or "IntegrityError" in type(exc).__name__ or "constraint" in str(exc).lower(), f"Unexpected exception type: {type(exc)} {exc}"
 
 
 def test_personal_memory_grant_constraints_reject_null_run_id(canonical_engine):
@@ -1175,10 +1186,7 @@ def test_execution_planes_unique_space_name_constraint_exists(canonical_engine):
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='execution_planes'")
-        ).fetchall()
-    ddl = rows[0][0] if rows else ""
+        ddl = _pg_constraints_info(conn, "execution_planes")
     assert "uq_execution_planes_space_name" in ddl
 
 
@@ -1187,10 +1195,7 @@ def test_execution_planes_check_constraints_exist(canonical_engine):
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='execution_planes'")
-        ).fetchall()
-    ddl = rows[0][0] if rows else ""
+        ddl = _pg_constraints_info(conn, "execution_planes")
     assert "ck_execution_planes_type" in ddl
     assert "ck_execution_planes_trust_level" in ddl
     assert "ck_execution_planes_observability_level" in ddl
@@ -1215,10 +1220,7 @@ def test_runtime_adapter_health_and_quota_constraints(canonical_engine):
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='runtime_adapters'")
-        ).fetchall()
-    ddl = rows[0][0] if rows else ""
+        ddl = _pg_constraints_info(conn, "runtime_adapters")
     assert "ck_runtime_adapters_health_status" in ddl
     assert "ck_runtime_adapters_quota_status" in ddl
 
@@ -1245,10 +1247,7 @@ def test_runs_source_and_externality_check_constraints_exist(canonical_engine):
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='runs'")
-        ).fetchall()
-    ddl = rows[0][0] if rows else ""
+        ddl = _pg_constraints_info(conn, "runs")
     assert "ck_runs_source" in ddl, "ck_runs_source CHECK constraint missing"
     assert "ck_runs_externality_level" in ddl, "ck_runs_externality_level CHECK constraint missing"
     assert "manual_import" in ddl, "source CHECK must include 'manual_import'"
@@ -1256,7 +1255,7 @@ def test_runs_source_and_externality_check_constraints_exist(canonical_engine):
 
 
 def test_context_snapshots_has_runtime_facing_fields(canonical_engine):
-    """context_snapshots has runtime-facing rendered context columns (soft references, no FKs)."""
+    """context_snapshots has runtime-facing rendered context columns with real FKs."""
     inspector = inspect(canonical_engine)
     col_names = {c["name"] for c in inspector.get_columns("context_snapshots")}
     required = {
@@ -1272,15 +1271,9 @@ def test_context_snapshots_has_runtime_facing_fields(canonical_engine):
         "rendered_context_text",
     }
     assert required.issubset(col_names), f"Missing context_snapshot columns: {required - col_names}"
-    # These are deliberately soft references (no FK constraints) — enforce that here
     fks = _foreign_keys(inspector, "context_snapshots")
-    assert ("target_runtime_adapter_id", "runtime_adapters", "id") not in fks, (
-        "context_snapshots.target_runtime_adapter_id must be a soft reference (no FK) "
-        "because context_snapshots is created before runtime_adapters in migration DDL order"
-    )
-    assert ("execution_plane_id", "execution_planes", "id") not in fks, (
-        "context_snapshots.execution_plane_id must be a soft reference (no FK)"
-    )
+    assert ("target_runtime_adapter_id", "runtime_adapters", "id") in fks
+    assert ("execution_plane_id", "execution_planes", "id") in fks
 
 
 def test_artifacts_extended_with_source_plane_fields(canonical_engine):
@@ -1343,10 +1336,7 @@ def test_workspace_profiles_unique_workspace_constraint_exists(canonical_engine)
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='workspace_profiles'")
-        ).fetchall()
-    ddl = rows[0][0] if rows else ""
+        ddl = _pg_constraints_info(conn, "workspace_profiles")
     assert "uq_workspace_profiles_workspace" in ddl
 
 
@@ -1387,10 +1377,7 @@ def test_run_reflections_source_check_constraint_exists(canonical_engine):
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_reflections'")
-        ).fetchall()
-    ddl = rows[0][0] if rows else ""
+        ddl = _pg_constraints_info(conn, "run_reflections")
     assert "ck_run_reflections_source" in ddl
 
 
@@ -1427,10 +1414,7 @@ def test_runtime_tool_bindings_check_constraints_exist(canonical_engine):
     from sqlalchemy import text as sa_text
 
     with canonical_engine.connect() as conn:
-        rows = conn.execute(
-            sa_text("SELECT sql FROM sqlite_master WHERE type='table' AND name='runtime_tool_bindings'")
-        ).fetchall()
-    ddl = rows[0][0] if rows else ""
+        ddl = _pg_constraints_info(conn, "runtime_tool_bindings")
     assert "ck_runtime_tool_bindings_external_type" in ddl
     assert "ck_runtime_tool_bindings_side_effect_level" in ddl
     assert "mcp_server" in ddl, "external_type CHECK must include 'mcp_server'"
@@ -1442,9 +1426,8 @@ def test_runtime_tool_bindings_approval_required_defaults_true(canonical_engine)
     inspector = inspect(canonical_engine)
     col_defs = {c["name"]: c for c in inspector.get_columns("runtime_tool_bindings")}
     assert col_defs["approval_required"]["nullable"] is False
-    # Default is 1 (true) in SQLite
-    raw = str(col_defs["approval_required"].get("default") or "").strip("'\" ")
-    assert raw in ("1", "True", "true", ""), f"approval_required default must be true, got {raw!r}"
+    raw = str(col_defs["approval_required"].get("default") or "").strip("'\" ").lower()
+    assert raw in ("1", "true"), f"approval_required default must be true, got {raw!r}"
 
 
 def test_default_execution_planes_are_seeded(canonical_conn):
@@ -1557,10 +1540,13 @@ def test_control_plane_orm_relationships_navigate_correctly(canonical_conn):
             model_provider_id=provider.id, runtime_adapter_id=adapter.id,
             system_prompt="test",
         )
-        agent.current_version_id = version.id
         workspace = models.Workspace(id="cp-ws-1", space_id=space.id, name="WS", created_by_user_id=user.id)
         snapshot = models.ContextSnapshot(id="cp-snap-1", space_id=space.id, source_refs_json=[])
-        db.add_all([agent, version, workspace, snapshot])
+        db.add_all([agent, workspace, snapshot])
+        db.commit()
+        db.add(version)
+        db.commit()
+        agent.current_version_id = version.id
         db.commit()
 
         run = models.Run(
@@ -1655,10 +1641,7 @@ def test_copied_enum_check_constraints_exist(canonical_engine):
     from sqlalchemy import text as sa_text
 
     def get_ddl(conn, table):
-        rows = conn.execute(
-            sa_text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table}'")
-        ).fetchall()
-        return rows[0][0] if rows else ""
+            return _pg_constraints_info(conn, table)
 
     with canonical_engine.connect() as conn:
         runs_ddl = get_ddl(conn, "runs")

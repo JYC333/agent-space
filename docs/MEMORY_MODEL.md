@@ -8,7 +8,7 @@
 | `semantic` | Stable factual knowledge | "I am a software engineer", "My company is Acme" |
 | `episodic` | Record of what happened | "User completed onboarding on 2025-05-01" |
 | `procedural` | How to do something | "My deploy process: push to main → CI auto-deploys" |
-| `project` | Project-specific facts | "agent-core uses FastAPI + SQLite" |
+| `project` | Project-specific facts | "agent-space uses FastAPI + PostgreSQL" |
 
 ## Memory Scopes
 
@@ -31,7 +31,7 @@ Namespaces are dot-separated hierarchical identifiers:
 user.default.preferences
 user.default.goals
 user.default.profile
-workspace.agent-core.project
+workspace.agent-space.project
 capability.memory.reflect
 agent.coding-agent.behaviour
 system.memory_policy

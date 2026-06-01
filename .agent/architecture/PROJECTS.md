@@ -69,20 +69,16 @@ Uniqueness constraint: `(project_id, workspace_id, role)` — a workspace can fi
 
 ### project_id on durable objects
 
-The following tables carry a nullable soft-reference `project_id` column.
-Existing rows with `project_id = NULL` are unaffected; no existing behaviour changes.
+The following tables carry nullable `project_id` columns with database foreign keys to
+`projects.id`. Existing rows with `project_id = NULL` are unaffected.
 
 | Table | Column added |
 |---|---|
-| `runs` | `project_id` (no FK, consistent with `task_id` pattern) |
-| `activity_records` | `project_id` (soft reference) |
-| `artifacts` | `project_id` (soft reference) |
-| `proposals` | `project_id` (soft reference) |
-| `memory_entries` | `project_id` (soft reference) |
-
-> **Why no FK on existing tables?**  
-> SQLite cannot add FK constraints to existing tables via `ALTER TABLE ADD COLUMN` without a full table rebuild.  
-> Integrity is enforced at the service layer.
+| `runs` | `project_id` |
+| `activity_records` | `project_id` |
+| `artifacts` | `project_id` |
+| `proposals` | `project_id` |
+| `memory_entries` | `project_id` |
 
 ## API routes
 

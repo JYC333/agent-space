@@ -82,7 +82,7 @@ clear error with instructions.
 - `core/backend/app/deployment/api.py` — HTTP routes
 - `core/backend/app/models.py` — DeploymentJob model
 - `core/backend/app/config.py` — `deployer_socket_path`
-- `deployments/local/docker-compose.yml` — mounts /var/run/agent-space into backend
+- `deployments/local/docker-compose.<mode>.yml` — mounts /var/run/agent-space into backend
 
 ## Related Boundaries
 - B41, B42, B43 in BOUNDARIES.md

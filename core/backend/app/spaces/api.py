@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 import hashlib
 import secrets
 from datetime import datetime, UTC, timedelta
@@ -7,7 +8,6 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..db import get_db
 from ..models import Space, SpaceMembership, SpaceInvitation, User
@@ -23,7 +23,7 @@ extra_routers = [invitations_router]
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _hash_token(raw: str) -> str:

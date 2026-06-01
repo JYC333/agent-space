@@ -1,8 +1,8 @@
 from __future__ import annotations
+import uuid
 
 import hashlib
 import json
-from ulid import ULID
 from sqlalchemy.orm import Session
 
 from ...models import Proposal
@@ -13,7 +13,7 @@ from .constants import CONSOLIDATION_COMPILER_VERSION
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _memory_candidate_hash(candidate: MemoryCandidate) -> str:

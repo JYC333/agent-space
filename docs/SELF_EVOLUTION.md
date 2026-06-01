@@ -7,44 +7,26 @@ agent-space supports a protected self-evolution deployment structure where syste
 ## Directory Structure
 
 ```
-~/aspace/                    # AGENT_SPACE_HOME (default: ~/aspace)
-├── config/                  # app config (.env, cli-credentials.yaml)
-├── db/                      # SQLite database (shared across modes)
-├── storage/                 # file uploads, exports
-├── logs/                    # app + agent run logs
-├── cache/                   # quota cache, runtime-homes
-├── runtime/                 # transient runtime state
-├── workspaces/             # managed workspace repos (<workspace_id>/repo)
-├── sandboxes/               # per-run agent sandboxes
-│   └── system-evolution/
-│       └── <run_id>/        # git worktree created by deployer
-├── artifacts/               # run artifacts, diffs, patches, reports
-├── secrets/                 # encrypted API keys, credentials
-│
-├── dev/                     # dev instance root (MODE_ROOT)
+~/aspace/                    # ASPACE_ROOT: host-side parent (default ~/aspace), holds mode roots
+├── dev/                     # one mode root; bind-mounted as AGENT_SPACE_HOME=/aspace in containers
 │   ├── .env
-│   ├── storage/
-│   ├── logs/
-│   ├── db/
-│   ├── run/                 # Unix socket for deployer
-│   └── sandboxes/
+│   ├── config/              # app config (.env, cli-credentials.yaml)
+│   ├── db/postgres/         # PostgreSQL data directory (bind-mounted into postgres container)
+│   ├── db/dumps/            # pg_dump backup files
+│   ├── storage/             # file uploads, exports
+│   ├── logs/                # app + agent run logs
+│   ├── cache/               # quota cache, runtime-homes
+│   ├── runtime/             # transient runtime state
+│   ├── workspaces/          # managed workspace repos (<workspace_id>/repo)
+│   ├── sandboxes/           # per-run agent sandboxes
+│   │   └── system-evolution/
+│   │       └── <run_id>/    # git worktree created by deployer
+│   ├── artifacts/           # run artifacts, diffs, patches, reports
+│   ├── secrets/             # encrypted API keys, credentials
+│   └── run/                 # Unix socket for deployer
 │
-├── test/                    # test instance root
-│   ├── .env
-│   ├── storage/
-│   ├── logs/
-│   ├── db/
-│   ├── run/
-│   └── sandboxes/
-│
-└── prod/                    # prod instance root
-    ├── .env
-    ├── storage/
-    ├── logs/
-    ├── db/
-    ├── secrets/
-    ├── run/
-    └── sandboxes/
+├── test/                    # test mode root (same layout)
+└── prod/                    # prod mode root (same layout)
 ```
 
 ## Instances
@@ -58,7 +40,7 @@ agent-space supports a protected self-evolution deployment structure where syste
 ## Repository Rules
 
 - The repo must NOT contain real instance data.
-- Keep only code, docs, migrations, compose templates, scripts, `.env.example`.
+- Keep only code, docs, migrations, compose templates, scripts, and example env templates.
 - Do NOT store real `.env`, db files, uploaded files, memory data, logs, or secrets in git.
 
 ## Container Responsibilities
@@ -74,9 +56,9 @@ Owns:
 - File editing inside approved sandbox worktrees only
 
 Backend mounts:
-- `${AGENT_SPACE_HOME}/<env>:/aspace` (mode root for that environment)
-- `${AGENT_SPACE_HOME}/sandboxes:/aspace/sandboxes`
-- `${AGENT_SPACE_HOME}/<env>/run/deployer.sock:/aspace/run/deployer.sock`
+- `${ASPACE_ROOT}/<env>:/aspace` (mode root for that environment)
+- `${ASPACE_ROOT}/<env>/sandboxes:/aspace/sandboxes`
+- `${ASPACE_ROOT}/<env>/run/deployer.sock:/aspace/run/deployer.sock`
 
 Backend must NOT mount:
 - `/var/run/docker.sock`
@@ -97,9 +79,9 @@ Owns:
 
 Deployer mounts:
 - `${REPO_ROOT}:/repo:ro` (the agent-space source repo)
-- `${AGENT_SPACE_HOME}/sandboxes:/aspace/sandboxes`
-- `${AGENT_SPACE_HOME}/<env>:/aspace` (mode root)
-- `${AGENT_SPACE_HOME}/<env>/run:/aspace/run`
+- `${ASPACE_ROOT}/<env>/sandboxes:/aspace/sandboxes`
+- `${ASPACE_ROOT}/<env>:/aspace` (mode root)
+- `${ASPACE_ROOT}/<env>/run:/aspace/run`
 - `/var/run/docker.sock:/var/run/docker.sock`
 
 Deployer must NOT:
@@ -132,7 +114,7 @@ Communicate through Unix socket only. Accepts structured allowlisted jobs only.
    ```
    deployer: create_system_worktree(RUN_ID=<run_id>)
    ```
-3. **Backend Agent edits only** the worktree at `~/aspace/sandboxes/system-evolution/<run_id>`
+3. **Backend Agent edits only** the worktree at `~/aspace/dev/sandboxes/system-evolution/<run_id>`
 4. **Backend asks deployer to collect diff**
    ```
    deployer: collect_system_diff(WORKTREE_DIR=<path>)
@@ -171,7 +153,7 @@ Communicate through Unix socket only. Accepts structured allowlisted jobs only.
 - `SYSTEM_CORE_REPO_PATH=/path/to/agent-space-repo` (must be an existing git repo)
 - `SYSTEM_CORE_BASE_BRANCH=master`
 - `SYSTEM_CORE_OWNER_EMAIL=<developer email>`
-- `SYSTEM_EVOLUTION_SANDBOX_ROOT=~/aspace/sandboxes/system-evolution`
+- `SYSTEM_EVOLUTION_SANDBOX_ROOT=~/aspace/dev/sandboxes/system-evolution`
 
 ## System-Core Workspace Policy
 

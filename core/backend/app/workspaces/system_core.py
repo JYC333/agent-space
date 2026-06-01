@@ -14,13 +14,13 @@ The worktree path is derived from AGENT_SPACE_HOME: AGENT_SPACE_HOME/workspaces/
 This module is ONLY invoked at startup — not through any API endpoint.
 """
 from __future__ import annotations
+import uuid
 
 import logging
 import subprocess
 from pathlib import Path
 
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..config import settings, paths
 from ..models import Space, SpaceMembership, User, Workspace
@@ -32,7 +32,7 @@ SYSTEM_CORE_WORKSPACE_ID = "system-core-workspace"
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _validate_git_repo(path: Path) -> bool:

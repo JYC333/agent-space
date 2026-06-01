@@ -9,14 +9,14 @@ Covers:
 """
 
 from __future__ import annotations
+import uuid
 
-from ulid import ULID
 
 from app.models import Board, Task
 
 
 def _nid() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _params(space_id: str) -> dict[str, str]:

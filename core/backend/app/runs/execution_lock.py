@@ -21,13 +21,6 @@ progress without committing business work in the caller's session. A PK
 collision raises ``IntegrityError`` and indicates that another worker owns
 the lock. Release deletes the lock in its own short transaction and does not
 commit caller business work.
-
-SQLite note: the implementation uses a plain ORM INSERT in its own short
-transaction. A PK collision raises ``IntegrityError`` which is caught and
-rolled back — equivalent in effect to
-``INSERT OR IGNORE`` / ``ON CONFLICT DO NOTHING`` but using portable SQLAlchemy
-primitives rather than dialect-specific SQL.  When migrating to PostgreSQL,
-``INSERT … ON CONFLICT DO NOTHING`` may be more efficient.
 """
 
 from __future__ import annotations
@@ -42,34 +35,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 log = logging.getLogger(__name__)
 
-# Sentinel set by the job worker; callers outside the worker pass their own id.
 _UNKNOWN_WORKER = "unknown"
 
 
 class RunExecutionLockService:
     def __init__(self, db: Session) -> None:
         self._db = db
-
-    def _is_sqlite(self) -> bool:
-        bind = self._db.get_bind()
-        try:
-            return (bind.dialect.name or "").lower() == "sqlite"
-        except Exception:
-            return False
-
-    def _sqlite_use_caller_nested_lock(self) -> bool:
-        """Use savepoint-based lock when caller already has an open SQLite transaction.
-
-        ``flush()`` can leave ``dirty/new/deleted`` empty while the write
-        transaction remains open — an independent lock session would then block
-        until ``busy_timeout``.
-        """
-        if not self._is_sqlite():
-            return False
-        try:
-            return bool(self._db.in_transaction())
-        except Exception:
-            return False
 
     def try_acquire(self, run_id: str, *, worker_id: str, job_id: str | None = None) -> bool:
         """Attempt to acquire the execution lock for *run_id*.
@@ -81,36 +52,6 @@ class RunExecutionLockService:
         to other workers without committing the caller's business transaction.
         """
         from ..models import RunExecutionLock
-
-        # SQLite cannot reliably support an "independent short commit" lock when the
-        # caller already holds a write transaction (common in tests). In that case,
-        # a second connection will block until busy_timeout and appear "slow".
-        #
-        # When the caller session has no pending business writes, use the same
-        # independent-session path as PostgreSQL so the lock is durable and release()
-        # can delete it without committing caller mutations.
-        #
-        # When the caller already has pending ORM writes, fall back to a nested
-        # transaction on the caller session to avoid writer lock contention.
-        if self._sqlite_use_caller_nested_lock():
-            lock = RunExecutionLock(
-                run_id=run_id,
-                locked_at=datetime.now(UTC),
-                worker_id=worker_id,
-                job_id=job_id,
-            )
-            try:
-                with self._db.begin_nested():
-                    self._db.add(lock)
-                    self._db.flush()
-                log.debug("Execution lock acquired (sqlite) run=%s worker=%s", run_id, worker_id)
-                return True
-            except IntegrityError:
-                log.warning(
-                    "Execution lock already held for run=%s — duplicate execution prevented",
-                    run_id,
-                )
-                return False
 
         LockSession = sessionmaker(bind=self._db.get_bind(), autocommit=False, autoflush=False)
         lock_db = LockSession()
@@ -138,24 +79,6 @@ class RunExecutionLockService:
         finally:
             lock_db.close()
 
-    def _sqlite_release_read_transaction_if_idle(self) -> None:
-        """End a read-only caller transaction so an independent DELETE can proceed."""
-        if not self._is_sqlite():
-            return
-        try:
-            if not self._db.in_transaction():
-                return
-            if self._db.new or self._db.dirty or self._db.deleted:
-                return
-            trans = self._db.get_transaction()
-            if trans is not None:
-                trans.commit()
-        except Exception:
-            log.debug(
-                "Could not release idle SQLite read transaction before lock delete",
-                exc_info=True,
-            )
-
     def release(self, run_id: str) -> None:
         """Release the execution lock for *run_id*.
 
@@ -164,8 +87,6 @@ class RunExecutionLockService:
         pending business changes in the caller's session are untouched.
         """
         from ..models import RunExecutionLock
-
-        self._sqlite_release_read_transaction_if_idle()
 
         LockSession = sessionmaker(bind=self._db.get_bind(), autocommit=False, autoflush=False)
         lock_db = LockSession()

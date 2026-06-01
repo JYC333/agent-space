@@ -8,9 +8,9 @@ Each test group protects a real product invariant, not just an import path.
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
-from ulid import ULID
 
 from app.models import (
     ExecutionPlane,
@@ -28,7 +28,7 @@ pytest_plugins = ["tests.support.fixtures"]
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------

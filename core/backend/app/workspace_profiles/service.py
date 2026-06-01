@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 """WorkspaceProfile service — structured operational knowledge for workspaces.
 
 WorkspaceProfile stores durable agent-facing config (test commands, forbidden
@@ -7,7 +8,6 @@ remains for ad-hoc annotations and is not replaced by this service.
 """
 
 import logging
-from ulid import ULID
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 _JSON_LIST_FIELDS = frozenset({
     "tech_stack_json",

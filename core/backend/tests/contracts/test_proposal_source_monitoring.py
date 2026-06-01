@@ -1,12 +1,12 @@
 """Contracts: deterministic source monitoring gates proposal application."""
 
 from __future__ import annotations
+import uuid
 
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
-from ulid import ULID
 
 from app.memory.apply_service import ProposalApplyError, ProposalApplyService
 from app.memory.proposals import ProposalService
@@ -19,7 +19,7 @@ def test_semantic_memory_create_without_provenance_rejects(db, cross_space_pair_
     ua = cross_space_pair_db["user_a"]
     now = datetime.now(UTC)
     prop = Proposal(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         proposal_type="memory_create",
         status="pending",
@@ -173,7 +173,7 @@ def test_internal_seed_bypasses_monitoring(db, cross_space_pair_db):
     ua = cross_space_pair_db["user_a"]
     now = datetime.now(UTC)
     prop = Proposal(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         proposal_type="policy_change",
         status="pending",

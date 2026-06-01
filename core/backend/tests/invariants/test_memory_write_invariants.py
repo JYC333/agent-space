@@ -15,6 +15,7 @@ These invariants must hold regardless of proposal type:
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
 from sqlalchemy import func
@@ -34,10 +35,9 @@ from tests.support import factories
 
 def _make_member(db, space_id):
     from app.models import SpaceMembership, User
-    from ulid import ULID
-    uid = str(ULID())
+    uid = str(uuid.uuid4())
     db.add(User(id=uid, display_name="member", email=f"{uid}@test.invalid"))
-    db.add(SpaceMembership(id=str(ULID()), space_id=space_id, user_id=uid, role="member", status="active"))
+    db.add(SpaceMembership(id=str(uuid.uuid4()), space_id=space_id, user_id=uid, role="member", status="active"))
     db.flush()
     return uid
 
@@ -335,9 +335,8 @@ def test_proposal_approved_archive_sets_status_archived(db, cross_space_pair_db)
     ua = cross_space_pair_db["user_a"]
     # Use ORM insertion for test fixture setup (no direct write path needed)
     from app.models import MemoryEntry as ME
-    from ulid import ULID
     mem = ME(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=a,
         scope_type="agent",
         memory_type="semantic",

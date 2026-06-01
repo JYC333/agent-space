@@ -4,11 +4,18 @@ See also: [docs/BACKUP_AND_RESTORE.md](../../docs/BACKUP_AND_RESTORE.md) and [do
 
 ## Data Root
 
-All runtime data lives under `AGENT_SPACE_HOME` (default: `~/aspace/dev` for dev mode). Never store runtime data in the source repository.
+All runtime data for the running environment lives under `AGENT_SPACE_HOME` — the single
+instance root (in Docker it is the `/aspace` bind mount; for a direct local backend run it is a
+concrete mode root such as `~/aspace/dev`). Never store runtime data in the source repository.
+
+`AGENT_SPACE_HOME` is **not** the parent of the `dev/`/`test/`/`prod/` mode dirs. That host-side
+parent is `ASPACE_ROOT` (default `~/aspace`), used only by `scripts/`, which derive
+`MODE_ROOT="$ASPACE_ROOT/<mode>"`.
 
 ```
 AGENT_SPACE_HOME/
-  db/          SQLite database (all spaces, memory, proposals, runs, activity, etc.)
+  db/postgres/ Live PostgreSQL data directory (bind-mounted into the postgres container; never archived)
+  db/dumps/    pg_dump custom-format dump files (written by scripts/db/dump.sh)
   storage/     Artifact storage files
   secrets/     Encrypted provider key files (AES key, CLI credentials)
   config/      Runtime configuration
@@ -16,14 +23,14 @@ AGENT_SPACE_HOME/
   backups/     Backup archives (auto-pruned to BACKUP_RETENTION_COUNT)
   logs/        Application logs (optional; excluded from backup by default)
   sandboxes/   Ephemeral sandbox state (never backed up)
-  cache/        Ephemeral cache (never backed up)
+  cache/       Ephemeral cache (never backed up)
 ```
 
-## Backup — Primary: BackupService
+## Backup — Canonical: BackupService
 
-`BackupService` (`core/backend/app/backups/service.py`) is the authoritative backup mechanism. It runs automatically on schedule and writes a structured manifest into every archive.
+`BackupService` (`core/backend/app/backups/service.py`) is the canonical full-system backup mechanism. It runs automatically on schedule and writes a structured manifest into every archive. The full procedure lives in [docs/BACKUP_AND_RESTORE.md](../../docs/BACKUP_AND_RESTORE.md).
 
-**Enable in `AGENT_SPACE_HOME/<mode>/.env`:**
+**Enable in `$ASPACE_ROOT/<mode>/.env`:**
 
 ```
 BACKUP_ENABLED=true
@@ -39,7 +46,7 @@ Without `BACKUP_ENABLED=true`, no automatic backups are created. For dogfooding,
 
 | Directory | Included |
 |---|---|
-| `db/` — SQLite database | Always |
+| `db/agent_space.dump` — PostgreSQL snapshot (`pg_dump` custom format) | Always |
 | `storage/` — artifact files | Always |
 | `secrets/` — encrypted key files | Always |
 | `config/` — runtime config | Always |
@@ -49,14 +56,18 @@ Without `BACKUP_ENABLED=true`, no automatic backups are created. For dogfooding,
 | `cache/` — ephemeral cache | **Never** |
 | `logs/` — application logs | Only if `BACKUP_INCLUDE_LOGS=true` |
 
-**SQLite consistency:** `BackupService` uses `sqlite3.Connection.backup()` (WAL-safe, live). No raw file-copy fallback — raw copy may miss WAL tail.
+**PostgreSQL backup:** `BackupService` uses `pg_dump -Fc --no-owner --no-acl` (custom format) for a consistent snapshot. Fails closed if `pg_dump` fails — no partial archive is produced. `db_snapshot_method` in the manifest is `"pg_dump_custom"`. The dump is restored with `pg_restore`. The live `db/postgres` data directory is **never** copied into an archive — the database is only captured logically.
+
+**Manifest version metadata:** every manifest records `backup_format`, `app_version`, `git_commit`, `alembic_revision`, `postgres_server_version`, and `pg_dump_version` (best-effort, `null` when undeterminable). `scripts/system/restore.sh` reads these during preflight and **fails** on an incompatible `backup_format` or a PostgreSQL major-version mismatch unless `--force-incompatible-backup` is supplied — the metadata is never silently ignored.
+
+**Pre-migration backup:** `scripts/db/migrate.sh --mode prod` takes a `pg_dump` custom-format dump to `$ASPACE_ROOT/<mode>/db/dumps/pre-migrate-<ts>.dump` before Alembic runs and aborts if it fails; non-prod opts in via `PRE_MIGRATION_BACKUP=1` / `--pre-migration-backup`.
 
 **Archive naming:**
-- Auto: `AGENT_SPACE_HOME/backups/auto-YYYYMMDD-HHMMSS.tar.gz`
-- Manual: `AGENT_SPACE_HOME/backups/manual-YYYYMMDD-HHMMSS.tar.gz`
-- Fallback script: `AGENT_SPACE_HOME/backups/fallback-<timestamp>.tar.gz`
+- Auto: `$ASPACE_ROOT/<mode>/backups/auto-YYYYMMDD-HHMMSS.tar.gz`
+- Manual (API): `$ASPACE_ROOT/<mode>/backups/manual-YYYYMMDD-HHMMSS.tar.gz`
+- Offline CLI: `$ASPACE_ROOT/<mode>/backups/system-YYYYMMDD-HHMMSS.tar.gz`
 
-**Local overlap protection:** `backups/.backup.lock` (advisory, fcntl-based). Fails closed if sqlite backup API fails.
+**Local overlap protection:** `backups/.backup.lock` (advisory, fcntl-based). Fails closed if `pg_dump` fails.
 
 **Retention:** Latest `BACKUP_RETENTION_COUNT` auto archives kept; older pruned. Manual archives never pruned automatically.
 
@@ -67,35 +78,33 @@ Without `BACKUP_ENABLED=true`, no automatic backups are created. For dogfooding,
 curl -X POST http://localhost:8000/api/v1/system/backups/manual -H "X-API-Key: <key>"
 ```
 
-## Backup — Fallback: backup.sh
+## Backup — Offline: scripts/system/backup.sh
 
-Use `scripts/backup.sh` **only** when the backend is not running (offline emergency):
+Use `scripts/system/backup.sh` when the backend is not running. It produces the same archive format as `BackupService` (PostgreSQL snapshot + file data + `backup_manifest.json`). PostgreSQL must be running.
 
 ```bash
-./scripts/backup.sh --mode dev
-./scripts/backup.sh --mode prod
-./scripts/backup.sh --dry-run
-./scripts/backup.sh --include-logs
+scripts/system/backup.sh --mode dev
+scripts/system/backup.sh --mode prod --include-logs
 ```
 
-Fallback archives appear in the same `backups/` directory as service archives. The shell script does **not** write `backup_manifest.json`.
+DB-only expert tools live under `scripts/db/` (`dump.sh`, `restore.sh`).
 
 ## Restore
 
-Restore is always **manual and explicit**. There is no automatic restore.
+Restore is always **manual and explicit**. There is no automatic restore. One command restores both the database and the file data:
 
 ```bash
-# 1. Stop any running instance
-docker compose -f deployments/local/docker-compose.dev.yml stop
+# 1. Stop the app, leaving postgres running
+docker compose -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend
 
-# 2. Restore (requires --force to overwrite existing data root)
-./scripts/restore.sh ~/aspace/dev/backups/auto-<timestamp>.tar.gz --mode dev
+# 2. Ensure PostgreSQL is up
+scripts/start.sh --dev
 
-# 3. Restart
-./scripts/start.sh
+# 3. Restore database + files from one archive
+scripts/system/restore.sh ~/aspace/dev/backups/auto-<timestamp>.tar.gz --mode dev --force
 ```
 
-`--force` removes the existing data root before extracting. All current data is replaced.
+`scripts/system/restore.sh` runs `pg_restore` against the database and restores the file directories; `--force` overwrites existing file data. The live `db/postgres` directory is never touched.
 
 **After restore, verify before resuming writes:**
 1. `curl -s http://localhost:8000/health` — expected: `{"status": "ok"}`

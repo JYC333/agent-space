@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 """
 MemoryStore — read and low-level insertion operations for long-term memories.
 
@@ -21,7 +22,6 @@ Authorised write paths:
      → bootstrap/seed only; sets source_trust="internal_system"
 """
 
-from ulid import ULID
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
@@ -34,7 +34,7 @@ from .access_log import record_memory_access
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 # Unforgeable sentinel — only MemoryInternalWriter._persist() holds a reference.

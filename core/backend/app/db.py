@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from fastapi import Request
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from .config import settings
 
@@ -16,18 +16,9 @@ def _json_serializer(obj):
 
 engine = create_engine(
     settings.database_url,
-    connect_args={"check_same_thread": False},
+    pool_pre_ping=True,
     json_serializer=lambda obj: json.dumps(obj, default=_json_serializer),
 )
-
-
-@event.listens_for(engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
-
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -74,6 +65,3 @@ def init_db():
     command.upgrade(cfg, "head")
 
 
-def migrate_db():
-    """Compatibility hook kept for callers; schema changes live in Alembic."""
-    return None

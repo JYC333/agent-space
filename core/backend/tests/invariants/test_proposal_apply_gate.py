@@ -7,10 +7,10 @@ Owner and admin actors get through the gate; member/guest and users
 with no space membership are denied.
 """
 from __future__ import annotations
+import uuid
 
 import pytest
 from sqlalchemy import func
-from ulid import ULID
 
 from app.memory.proposals import ProposalService
 from app.models import MemoryEntry, Policy, PolicyDecisionRecord, Proposal, Task
@@ -20,7 +20,7 @@ from tests.support import factories
 
 
 def _uid() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _make_space_user(db, space_id: str, role: str):

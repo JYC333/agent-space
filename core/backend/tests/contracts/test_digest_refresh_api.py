@@ -13,6 +13,7 @@ Checks:
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
 from pydantic import ValidationError
@@ -125,7 +126,7 @@ def test_refresh_all_dirty_never_writes_memory_entry_or_proposal(db, cross_space
     # Seed a workspace memory and generate a digest
     from app.models import MemoryEntry as ME
     mem = ME(
-        id=__import__("ulid", fromlist=["ULID"]).ULID().__str__(),
+        id=str(uuid.uuid4()),
         space_id=space_id,
         scope_type="workspace",
         memory_type="semantic",

@@ -1,5 +1,6 @@
 """Invariant tests for RunStep execution replay spine (M3)."""
 from __future__ import annotations
+import uuid
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -184,10 +185,9 @@ def test_steps_space_scoped_query(db):
     from app.actors.service import get_or_create_user_actor
     from app.runs.steps import create_step, list_run_steps
     from tests.support.factories import create_test_run
-    from ulid import ULID
 
-    space_a = factories.create_test_space(db, space_id=str(ULID()), name="RunStep A", space_type="team")
-    space_b = factories.create_test_space(db, space_id=str(ULID()), name="RunStep B", space_type="team")
+    space_a = factories.create_test_space(db, space_id=str(uuid.uuid4()), name="RunStep A", space_type="team")
+    space_b = factories.create_test_space(db, space_id=str(uuid.uuid4()), name="RunStep B", space_type="team")
     ua = factories.create_test_user(db, space_id=space_a.id, display_name="RunStep User A")
     ub = factories.create_test_user(db, space_id=space_b.id, display_name="RunStep User B")
     a = space_a.id

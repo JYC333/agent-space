@@ -19,6 +19,7 @@ Security invariants:
 """
 
 from __future__ import annotations
+import uuid
 
 import logging
 from dataclasses import dataclass, field
@@ -115,7 +116,6 @@ def _write_denied_event(
     """
     from ..personal_memory_grants.validation import validate_grant_event_metadata
     from ..models import PersonalMemoryGrantEvent
-    from ulid import ULID
 
     metadata = {
         "reason": reason[:256],
@@ -132,7 +132,7 @@ def _write_denied_event(
         return
 
     event = PersonalMemoryGrantEvent(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         grant_id=grant_id,
         event_type="denied",
         run_id=run_id,

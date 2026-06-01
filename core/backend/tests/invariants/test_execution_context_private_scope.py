@@ -19,8 +19,8 @@ See: .agent/reports/space-ownership-visibility-gap-analysis.md § Gap 6a
 """
 
 from __future__ import annotations
+import uuid
 
-from ulid import ULID
 
 from app.memory.read_auth import can_read_memory
 from app.memory.retriever import MemoryRetriever
@@ -30,7 +30,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,8 @@
 """Unit tests for the policy approval resolver (app/policy/approval.py)."""
 from __future__ import annotations
+import uuid
 
 import pytest
-from ulid import ULID
 
 from app.policy.actions import UnknownPolicyActionError
 from app.policy.approval import can_approve_policy_action, get_space_role
@@ -11,7 +11,7 @@ from tests.support import factories
 
 
 def _uid() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------

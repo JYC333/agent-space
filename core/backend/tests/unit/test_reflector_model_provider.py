@@ -9,6 +9,7 @@ Covers:
 """
 
 from __future__ import annotations
+import uuid
 
 import importlib
 import inspect
@@ -388,9 +389,8 @@ class TestResolveReflectorProvider:
 def _make_session_and_messages(db, space_id: str, user_id: str, contents: list[str]):
     """Create a Session row + Message rows and return (session_id, messages)."""
     from app.models import Session, Message
-    from ulid import ULID
 
-    session_id = str(ULID())
+    session_id = str(uuid.uuid4())
     session = Session(
         id=session_id,
         space_id=space_id,
@@ -403,7 +403,7 @@ def _make_session_and_messages(db, space_id: str, user_id: str, contents: list[s
     msgs = []
     for content in contents:
         msg = Message(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             session_id=session_id,
             user_id=user_id,

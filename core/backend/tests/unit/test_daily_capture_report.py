@@ -21,13 +21,13 @@ Covers:
  15. Memory proposal provenance is user_confirmed; artifact not trust-bearing.
 """
 from __future__ import annotations
+import uuid
 
 import json
 from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
-from ulid import ULID
 
 from app.activity.service import ActivityService
 from app.daily_reports.service import (
@@ -51,7 +51,7 @@ _FAKE_PROVIDER_TUPLE = ("openai", None, "gpt-4o-mini", "test-key")
 
 
 def _uid() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _make_space_and_user(db) -> tuple[str, str]:
@@ -62,7 +62,9 @@ def _make_space_and_user(db) -> tuple[str, str]:
     space = Space(id=space_id, name="Test Space", type="personal", created_by_user_id=user_id)
     ms = SpaceMembership(id=_uid(), space_id=space_id, user_id=user_id, role="owner", status="active")
     db.add(user)
+    db.flush()
     db.add(space)
+    db.flush()
     db.add(ms)
     db.commit()
     return space_id, user_id

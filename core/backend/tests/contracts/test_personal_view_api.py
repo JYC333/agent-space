@@ -12,8 +12,8 @@ Tests verify:
 """
 
 from __future__ import annotations
+import uuid
 
-from ulid import ULID
 
 import pytest
 from app.auth.session import SESSION_COOKIE, UserSessionService
@@ -24,7 +24,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _authed_client(db, user_id: str) -> TestClient:

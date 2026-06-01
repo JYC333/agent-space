@@ -16,13 +16,13 @@ persistence remains blocked. The error message includes the proposal ID.
 """
 
 from __future__ import annotations
+import uuid
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from ..memory.proposals import build_memory_create_proposal
 from ..models import ActivityRecord, Artifact, Proposal, Run, Workspace
@@ -51,7 +51,7 @@ class MaterializationResult:
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _utcnow() -> datetime:

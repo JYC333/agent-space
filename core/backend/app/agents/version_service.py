@@ -1,5 +1,5 @@
+import uuid
 from datetime import datetime, UTC
-from ulid import ULID
 from sqlalchemy.orm import Session as DBSession
 from fastapi import HTTPException
 
@@ -9,7 +9,7 @@ from ..config import settings
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _next_version_label(existing_labels: list[str]) -> str:

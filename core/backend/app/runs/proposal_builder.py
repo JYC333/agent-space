@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 """ReflectionProposalBuilder — create proposal candidates from a RunReflection.
 
 Rules:
@@ -24,7 +25,6 @@ ProposalApplyService.
 """
 
 import logging
-from ulid import ULID
 from sqlalchemy.orm import Session
 
 from ..models import Proposal, Run, RunReflection
@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _build_proposal(

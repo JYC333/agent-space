@@ -20,31 +20,27 @@ This document describes current capability lines and known future risks. It is o
 
 ---
 
-### 2. Database / Postgres Readiness
+### 2. Database / PostgreSQL
 
-**Current state:** SQLite with `UnitOfWork`, savepoint isolation, and Postgres-compatible patterns in new code. `RunStep.step_index` uses `MAX()+1` for local SQLite — a documented distributed-writer risk. No SQLite-only SQL in new infrastructure.
+**Current state:** PostgreSQL is the server database. `UnitOfWork`, savepoint isolation, and explicit transaction boundaries are all in place. `RunStep.step_index` uses `MAX()+1` — a documented distributed-writer risk under concurrent writers.
 
-**Why it matters:** Moving to Postgres is a significant migration. Patterns introduced now directly determine migration cost.
+**Why it matters:** All new schema and query work must stay PostgreSQL-idiomatic.
 
-**Likely next steps:** Audit all implicit SQLite behaviors in existing code; ensure all new timestamps are UTC; review FK constraints.
+**Likely next steps:** Stronger `RunStep` ordering under distributed writers (DB sequence or distributed counter). Distributed multi-host locking (advisory lock is currently single-host).
 
-**What must be true first:** Full audit of existing implicit SQLite behaviors before writing migration scripts.
-
-**Risks if built too early:** Distributed locking and conflict resolution are not yet designed; multi-writer race conditions would require additional schema changes.
-
-**Not now:** Postgres migration itself, distributed multi-host locking, distributed sequence for RunStep ordering.
+**Not now:** Distributed multi-host locking, distributed sequence for RunStep ordering.
 
 ---
 
 ### 3. Backup / Restore / Offsite Safety
 
-**Current state:** `BackupService` is primary (WAL-safe, manifest, local lock). `scripts/backup.sh` is fallback (no manifest). `scripts/restore.sh` is manual restore. Single-host advisory lock. 7-archive retention.
+**Current state:** `BackupService` is the canonical full-system backup (pg_dump custom-format snapshot + files + manifest, local lock; live `db/postgres` never archived). `scripts/system/backup.sh` and `scripts/system/restore.sh` are the offline full-system equivalents (same archive format; restore rebuilds database and files in one command). `scripts/db/dump.sh` / `scripts/db/restore.sh` are DB-only pg_dump/pg_restore operator tools. Single-host advisory lock. 7-archive retention.
 
 **Why it matters:** Dogfood data has no recovery path without reliable backups and a tested restore procedure.
 
 **Likely next steps:** Offsite backup strategy (manual GPG + external storage as a start). Scheduled restore rehearsal.
 
-**Risks:** No cloud/offsite replication. Single-host advisory lock does not extend to multi-process. Shell script fallback lacks `backup_manifest.json`.
+**Risks:** No cloud/offsite replication. Single-host advisory lock does not extend to multi-process.
 
 **Not now:** Automatic cloud sync, multi-device conflict resolution, automatic restore.
 
@@ -422,7 +418,7 @@ external trigger is implemented.
 
 | Risk | Why it matters | Current status |
 |---|---|---|
-| Postgres migration | Current SQLite-only patterns will require rewrite; migration of existing data is non-trivial | Postgres-compatible patterns enforced in new code; migration not yet planned |
+| Distributed multi-host DB locking | Current advisory lock is single-host; multi-host requires a real distributed lock service | Documented risk; single-process only for now |
 | Distributed multi-process locking | Current advisory lock is single-host only | Documented risk; single-process for now |
 | Cloud/offsite backup | No automated offsite replication | Manual GPG + offsite transfer documented; not automated |
 | TestClient lifespan fixture | Some policy/proposal tests that request `cross_space_pair` can block while constructing the test client in this environment | Test environment limitation only; not a product architecture boundary |

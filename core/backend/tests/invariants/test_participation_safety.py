@@ -6,12 +6,12 @@ is silently logged without raising.
 """
 
 from __future__ import annotations
+import uuid
 
 import logging
 from unittest.mock import patch
 
 import pytest
-from ulid import ULID
 
 from app.models import Task
 from app.participation.service import record_participation, try_record_participation
@@ -19,7 +19,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def test_participation_failure_does_not_rollback_committed_primary_op(db):

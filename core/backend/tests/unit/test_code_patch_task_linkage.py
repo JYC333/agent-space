@@ -10,6 +10,7 @@ Tests in this file verify:
 """
 
 from __future__ import annotations
+import uuid
 
 from unittest.mock import MagicMock, patch
 
@@ -95,7 +96,6 @@ class TestWorktreeCollectionResultProposal:
 class TestLinkRunOutputsToTasks:
     def test_proposal_linked_to_task_when_taskrun_exists(self, db, cross_space_pair_db):
         """A run linked to a task via TaskRun gets a TaskProposal row for the code_patch proposal."""
-        from ulid import ULID
         from app.models import Proposal, Task, TaskProposal, TaskRun, Run
         from app.runs.task_output_linkage import link_run_outputs_to_tasks
         from tests.support import factories
@@ -109,7 +109,7 @@ class TestLinkRunOutputsToTasks:
 
         # Create a Task in the same space
         task = Task(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=a,
             title="Test task for linkage",
         )
@@ -118,7 +118,7 @@ class TestLinkRunOutputsToTasks:
 
         # Link the run to the task via TaskRun
         tr = TaskRun(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=a,
             task_id=task.id,
             run_id=run_row.id,
@@ -128,7 +128,7 @@ class TestLinkRunOutputsToTasks:
 
         # Create a code_patch proposal
         proposal = Proposal(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=a,
             created_by_run_id=run_row.id,
             proposal_type="code_patch",
@@ -155,7 +155,6 @@ class TestLinkRunOutputsToTasks:
 
     def test_no_duplicate_task_proposal_on_repeated_call(self, db, cross_space_pair_db):
         """Calling link_run_outputs_to_tasks twice for the same proposal does not create duplicate rows."""
-        from ulid import ULID
         from app.models import Proposal, Task, TaskProposal, TaskRun, Run
         from app.runs.task_output_linkage import link_run_outputs_to_tasks
         from tests.support import factories
@@ -167,16 +166,16 @@ class TestLinkRunOutputsToTasks:
         run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
         run_row = db.query(Run).filter(Run.id == run.id).one()
 
-        task = Task(id=str(ULID()), space_id=a, title="Idempotence task")
+        task = Task(id=str(uuid.uuid4()), space_id=a, title="Idempotence task")
         db.add(task)
         db.flush()
 
-        tr = TaskRun(id=str(ULID()), space_id=a, task_id=task.id, run_id=run_row.id)
+        tr = TaskRun(id=str(uuid.uuid4()), space_id=a, task_id=task.id, run_id=run_row.id)
         db.add(tr)
         db.flush()
 
         proposal = Proposal(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=a,
             created_by_run_id=run_row.id,
             proposal_type="code_patch",
@@ -202,7 +201,6 @@ class TestLinkRunOutputsToTasks:
 
     def test_run_without_taskrun_creates_no_task_proposal(self, db, cross_space_pair_db):
         """A run with no TaskRun linkage produces no TaskProposal rows."""
-        from ulid import ULID
         from app.models import Proposal, TaskProposal, Run
         from app.runs.task_output_linkage import link_run_outputs_to_tasks
         from tests.support import factories
@@ -216,7 +214,7 @@ class TestLinkRunOutputsToTasks:
         # No TaskRun created
 
         proposal = Proposal(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=a,
             created_by_run_id=run_row.id,
             proposal_type="code_patch",
@@ -239,7 +237,6 @@ class TestLinkRunOutputsToTasks:
 
     def test_cross_space_taskrun_not_linked(self, db, cross_space_pair_db):
         """TaskRun rows from another space are not matched — cross-space linkage is impossible."""
-        from ulid import ULID
         from app.models import Proposal, Task, TaskProposal, TaskRun, Run
         from app.runs.task_output_linkage import link_run_outputs_to_tasks
         from tests.support import factories
@@ -254,18 +251,18 @@ class TestLinkRunOutputsToTasks:
         run_row = db.query(Run).filter(Run.id == run.id).one()
 
         # Task is in space B
-        task_b = Task(id=str(ULID()), space_id=b, title="Space B task")
+        task_b = Task(id=str(uuid.uuid4()), space_id=b, title="Space B task")
         db.add(task_b)
         db.flush()
 
         # Attempt a cross-space TaskRun (space_id=b, run_id from space A)
         # link_run_outputs_to_tasks queries with space_id=run.space_id (a), so space B rows are invisible
-        tr_cross = TaskRun(id=str(ULID()), space_id=b, task_id=task_b.id, run_id=run_row.id)
+        tr_cross = TaskRun(id=str(uuid.uuid4()), space_id=b, task_id=task_b.id, run_id=run_row.id)
         db.add(tr_cross)
         db.flush()
 
         proposal = Proposal(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=a,
             created_by_run_id=run_row.id,
             proposal_type="code_patch",

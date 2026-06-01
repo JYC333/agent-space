@@ -1,11 +1,11 @@
 """Behavior tests: memory-access policy domains are registered and enforced."""
 
 from __future__ import annotations
+import uuid
 
 from unittest.mock import patch
 
 import pytest
-from ulid import ULID
 
 from app.memory.internal_writer import MemoryInternalWriter
 from app.memory.retriever import MemoryRetriever
@@ -27,7 +27,7 @@ from tests.support import factories
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _policy_row(

@@ -1,6 +1,7 @@
 """Unit tests: produced artifact path parsing and safety checks."""
 
 from __future__ import annotations
+import uuid
 
 import pytest
 
@@ -11,11 +12,10 @@ from app.runs.produced_artifact_path_ingestion import (
     parse_produced_artifact_entry,
 )
 from tests.support import factories
-from ulid import ULID
 
 
 def _sid_uid(db):
-    sid = str(ULID())
+    sid = str(uuid.uuid4())
     factories.create_test_space(db, space_id=sid, name="u", commit=False)
     u = factories.create_test_user(db, space_id=sid, commit=False)
     return sid, u.id

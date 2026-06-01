@@ -13,6 +13,7 @@ ModelService never calls litellm directly — always goes through a registered a
 """
 
 from __future__ import annotations
+import uuid
 
 import logging
 from typing import AsyncIterator
@@ -20,7 +21,6 @@ from typing import AsyncIterator
 import httpx
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
-from ulid import ULID
 
 from ..crypto import encrypt_to_base64
 from ..models import Credential, ModelProvider
@@ -96,7 +96,7 @@ def _attach_api_key_credential(
             return
 
     cred = Credential(
-        id=str(ULID()),
+        id=str(uuid.uuid4()),
         space_id=space_id,
         name=f"{row.name} API key",
         credential_type="api_key",
@@ -172,7 +172,7 @@ class ModelService:
             models.insert(0, data.default_model)
 
         config = ModelProvider(
-            id=str(ULID()),
+            id=str(uuid.uuid4()),
             space_id=space_id,
             name=data.name.strip(),
             provider_type=data.provider_type,

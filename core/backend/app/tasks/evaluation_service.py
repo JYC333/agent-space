@@ -1,11 +1,11 @@
 """TaskEvaluationService — append-only task-level evaluations."""
 
 from __future__ import annotations
+import uuid
 
 from typing import Optional
 
 from sqlalchemy.orm import Session
-from ulid import ULID
 
 from app.models import (
     Artifact,
@@ -46,7 +46,7 @@ _OUTCOME_TO_CONFIDENCE: dict[str, float] = {
 
 
 def _new_id() -> str:
-    return str(ULID())
+    return str(uuid.uuid4())
 
 
 def _build_summary(re: RunEvaluation) -> str:

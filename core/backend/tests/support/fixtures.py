@@ -5,9 +5,9 @@ from here (collection order / circular imports).
 """
 
 from __future__ import annotations
+import uuid
 
 import pytest
-from ulid import ULID
 
 from tests.support.fake_provider import DeterministicFakeProvider, FakeProviderConfig
 from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRuntimeConfig
@@ -80,11 +80,10 @@ def cross_space_pair_db(db):
     """Lightweight cross-space fixture: two spaces + users, no HTTP client.
 
     Use for pure-service tests that don't make HTTP requests. Avoids starting
-    the FastAPI lifespan (and its background worker), which eliminates SQLite
-    lock contention on teardown.
+    the FastAPI lifespan (and its background worker) on teardown.
     """
-    a = str(ULID())
-    b = str(ULID())
+    a = str(uuid.uuid4())
+    b = str(uuid.uuid4())
     factories.create_test_space(db, space_id=a, name="Iso A", space_type="team")
     factories.create_test_space(db, space_id=b, name="Iso B", space_type="team")
     ua = factories.create_test_user(db, space_id=a, display_name="User A")
@@ -110,8 +109,8 @@ def cross_space_pair(db, app_db_override):
     from app.main import app as _app
     from starlette.testclient import TestClient
 
-    a = str(ULID())
-    b = str(ULID())
+    a = str(uuid.uuid4())
+    b = str(uuid.uuid4())
     factories.create_test_space(db, space_id=a, name="Iso A", space_type="team")
     factories.create_test_space(db, space_id=b, name="Iso B", space_type="team")
     # create_test_user already inserts an active owner SpaceMembership for (space_id, user).
@@ -121,7 +120,6 @@ def cross_space_pair(db, app_db_override):
     _, raw_a = session_svc.create(ua.id)
     _, raw_b = session_svc.create(ub.id)
     # Must commit: TestClient runs in another thread with its own DB connection.
-    # An open write transaction here would block inserts (sqlite "database is locked").
     db.commit()
 
     # Create per-identity clients with cookies set at construction time. Tests
@@ -161,7 +159,7 @@ def same_space_pair(db, app_db_override):
     from app.main import app as _app
     from starlette.testclient import TestClient
 
-    space = str(ULID())
+    space = str(uuid.uuid4())
     factories.create_test_space(db, space_id=space, name="Shared Space", space_type="team")
     ua = factories.create_test_user(db, space_id=space, display_name="Owner A")
     ub = factories.create_test_user(db, space_id=space, display_name="Member B")

@@ -93,8 +93,8 @@ class KnowledgeService:
             like = f"%{q}%"
             query = query.filter(or_(KnowledgeItem.title.ilike(like), KnowledgeItem.content.ilike(like)))
         if tag:
-            # Portable enough for SQLite JSON text storage in this codebase; exact
-            # JSON membership can be tightened when a DB-specific dialect is chosen.
+            # LIKE on JSON text for tag matching; upgrade to @> JSON containment
+            # if this becomes a performance concern.
             query = query.filter(KnowledgeItem.tags_json.cast(String).like(f'%"{tag}"%'))
         total = query.count()
         items = (
