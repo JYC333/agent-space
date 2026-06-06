@@ -37,11 +37,14 @@ DEFAULT_RUNTIME_POLICY: dict = {
     "risk_level": "medium",  # low | medium | high | critical — controls sandbox level
     "max_run_time_seconds": 300,
     # adapter_ids this agent may use; matches RuntimeAdapter.adapter_id or adapter_type
-    # Note: anthropic_messages is intentionally absent — Anthropic/Claude usage
-    # must go through CLI integrations (claude_code).
+    # model_api (ADR 0010) is the in-process, provider-agnostic, no-tools LLM adapter:
+    # it selects any configured ModelProvider + model (Anthropic included) and passes the
+    # key via litellm parameter, never env. claude_code stays the CLI path for tool-using /
+    # filesystem Claude work.
     "allowed_adapter_types": [
         "echo",
         "capability",
+        "model_api",
         "claude_code",
         "codex_cli",
         "opencode",
@@ -81,7 +84,7 @@ class WorkspaceUpdate(BaseModel):
 
 class WorkspaceOut(BaseModel):
     id: str
-    owner_space_id: str
+    owner_space_id: str = Field(validation_alias="space_id")
     created_by_user_id: str
     name: str
     slug: Optional[str]
@@ -123,6 +126,10 @@ class AgentVersionOut(BaseModel):
     capabilities_json: list
     tool_permissions_json: dict
     runtime_policy_json: dict
+    tool_policy_json: dict = Field(default_factory=dict)
+    output_policy_json: dict = Field(default_factory=dict)
+    schedule_config_json: dict = Field(default_factory=dict)
+    output_schema_json: dict = Field(default_factory=dict)
     source_proposal_id: Optional[str] = None
     source_activity_id: Optional[str] = None
     created_at: datetime
@@ -152,6 +159,10 @@ class AgentVersionCreate(BaseModel):
     capabilities_json: list[str] = Field(default_factory=list)
     tool_permissions_json: dict = Field(default_factory=dict)
     runtime_policy_json: dict = Field(default_factory=lambda: dict(DEFAULT_RUNTIME_POLICY))
+    tool_policy_json: dict = Field(default_factory=dict)
+    output_policy_json: dict = Field(default_factory=dict)
+    schedule_config_json: dict = Field(default_factory=dict)
+    output_schema_json: dict = Field(default_factory=dict)
 
 
 class AgentConfigProposalCreate(BaseModel):
@@ -180,6 +191,13 @@ class AgentCreate(BaseModel):
     space_id: Optional[str] = None
     default_model_provider_id: Optional[str] = None
     default_model: Optional[str] = None
+    # The agent's persistent system prompt (its role/identity), stored on the v1
+    # AgentVersion and sent as the system message at run time.
+    system_prompt: Optional[str] = None
+    # Runtime adapter the agent runs on (e.g. "model_api", "claude_code"). Merged into
+    # the v1 runtime_policy_json (default_adapter_type + allowed_adapter_types) without
+    # dropping the other policy fields. When omitted, the default policy is used.
+    adapter_type: Optional[str] = None
     # Optional v1 execution snapshot (stored on initial AgentVersion).
     model_config_json: Optional[dict] = None
     memory_policy_json: Optional[dict] = None
@@ -213,21 +231,200 @@ class AgentUpdate(BaseModel):
     runtime_policy_json: Optional[dict] = None
 
 
+class AgentConfigUpdate(BaseModel):
+    """Owner edit of an Agent's behavior from the config UI.
+
+    Applying this appends a NEW immutable AgentVersion built from the current one,
+    then repoints Agent.current_version_id. The previous AgentVersion is never
+    mutated. Only the fields below are editable; hard-safety snapshots
+    (tool_policy_json, tool_permissions_json, capabilities_json, runtime_policy_json,
+    runtime_config_json, runtime_adapter_id) are copied verbatim and can never be
+    loosened here. Within memory/output policy the write-access and proposal-only
+    guarantees are re-stamped from the source version so a frontend override cannot
+    grant direct memory write or disable proposal-only outputs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Identity (applied directly to the Agent row).
+    name: Optional[str] = None
+    description: Optional[str] = None
+    # Versioned, safety-bounded execution config.
+    system_prompt: Optional[str] = None
+    model_provider_id: Optional[str] = None
+    model_name: Optional[str] = None
+    model_config_json: Optional[dict] = None
+    context_policy_json: Optional[dict] = None
+    memory_policy_json: Optional[dict] = None
+    output_policy_json: Optional[dict] = None
+    schedule_config_json: Optional[dict] = None
+    output_schema_json: Optional[dict] = None
+
+
 class AgentOut(BaseModel):
     id: str
     space_id: str
-    created_by_user_id: str
+    # None for system-owned agents (e.g. the default Assistant); no default-user masking.
+    created_by_user_id: Optional[str] = None
     name: str
     description: Optional[str]
     visibility: str
     role_instruction: Optional[str]
     status: str
+    # "standard" | "system_assistant" — the latter is the space's system-managed
+    # default Assistant (Chat identity), not an ordinary user agent.
+    agent_kind: str = "standard"
     current_version_id: Optional[str]
+    # Provenance only — never used to assemble runtime config.
+    source_template_id: Optional[str] = None
+    source_template_version_id: Optional[str] = None
     model: Optional[AgentModelSummary] = None
+    system_prompt: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Agent templates — reusable factories (NOT runtime objects)
+# ---------------------------------------------------------------------------
+
+AgentTemplateScope = Literal["system", "space", "user"]
+AgentTemplateVisibility = Literal["private", "space_shared", "system_public", "system_internal"]
+AgentTemplateStatus = Literal["draft", "published", "archived"]
+
+
+class AgentTemplateVersionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Optional[str] = None
+    system_prompt: Optional[str] = None
+    model_config_json: dict = Field(default_factory=dict)
+    context_policy_json: dict = Field(default_factory=dict)
+    memory_policy_json: dict = Field(default_factory=dict)
+    tool_policy_json: dict = Field(default_factory=dict)
+    runtime_policy_json: dict = Field(default_factory=dict)
+    output_policy_json: dict = Field(default_factory=dict)
+    schedule_defaults_json: dict = Field(default_factory=dict)
+    output_schema_json: dict = Field(default_factory=dict)
+
+
+class AgentTemplateVersionOut(BaseModel):
+    id: str
+    template_id: str
+    version: str
+    system_prompt: Optional[str]
+    model_config_json: dict
+    context_policy_json: dict
+    memory_policy_json: dict
+    tool_policy_json: dict
+    runtime_policy_json: dict
+    output_policy_json: dict
+    schedule_defaults_json: dict
+    output_schema_json: dict
+    created_by_user_id: Optional[str]
+    created_at: datetime
+    published_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
+class AgentTemplateCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    name: str
+    description: Optional[str] = None
+    category: Optional[str] = None
+    # Only space/user templates may be created via the API; system templates are seeded.
+    scope: Literal["space", "user"] = "user"
+    space_id: Optional[str] = None
+    visibility: AgentTemplateVisibility = "private"
+    # Optional initial draft version created alongside the template.
+    initial_version: Optional[AgentTemplateVersionCreate] = None
+
+
+class AgentTemplateOut(BaseModel):
+    id: str
+    key: str
+    name: str
+    description: Optional[str]
+    category: Optional[str]
+    scope: AgentTemplateScope
+    space_id: Optional[str]
+    owner_user_id: Optional[str]
+    visibility: AgentTemplateVisibility
+    status: AgentTemplateStatus
+    current_version_id: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CreateAgentFromTemplate(BaseModel):
+    """Allowed user overrides when instantiating an Agent from a template.
+
+    Overrides apply ONLY to the copied AgentVersion (never to the template), and
+    cannot bypass hard policy defaults (tool/memory/context/runtime/output policy).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Optional: select a specific template version; defaults to template.current_version_id.
+    template_version_id: Optional[str] = None
+    space_id: Optional[str] = None
+    # Allowed initial overrides (applied to the copied AgentVersion only). Memory/output
+    # policy overrides are safety re-stamped server-side; tool/runtime policy is never
+    # overridable here.
+    name: Optional[str] = None
+    description: Optional[str] = None
+    model_config_json: Optional[dict] = None
+    schedule_config_json: Optional[dict] = None
+    system_prompt: Optional[str] = None
+    context_policy_json: Optional[dict] = None
+    memory_policy_json: Optional[dict] = None
+    output_policy_json: Optional[dict] = None
+    output_schema_json: Optional[dict] = None
+
+
+# ---------------------------------------------------------------------------
+# Space Assistant preferences — a soft UI/context layer, never hard policy.
+# ---------------------------------------------------------------------------
+
+ResponseStyle = Literal["neutral", "friendly", "direct", "formal"]
+Verbosity = Literal["concise", "balanced", "detailed"]
+ProposalStyle = Literal["proactive", "balanced", "conservative"]
+
+
+class SpaceAssistantSettingsOut(BaseModel):
+    id: str
+    space_id: str
+    assistant_agent_id: Optional[str]
+    response_style: Optional[ResponseStyle]
+    verbosity: Optional[Verbosity]
+    default_context_toggles_json: dict
+    default_project_id: Optional[str]
+    proposal_style: Optional[ProposalStyle]
+    model_preferences_json: dict
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class SpaceAssistantSettingsUpdate(BaseModel):
+    """Soft preferences only — cannot edit the core prompt or any hard policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    response_style: Optional[ResponseStyle] = None
+    verbosity: Optional[Verbosity] = None
+    default_context_toggles_json: Optional[dict] = None
+    default_project_id: Optional[str] = None
+    proposal_style: Optional[ProposalStyle] = None
+    model_preferences_json: Optional[dict] = None
 
 
 class RunRequest(BaseModel):
@@ -280,10 +477,19 @@ class MemoryCreate(BaseModel):
     last_confirmed_at: Optional[datetime] = None
     source_proposal_id: Optional[str] = None
     workspace_id: Optional[str] = None
+    # episodic | semantic — drives episodic-context filtering and symbol-match retrieval.
+    memory_layer: Optional[str] = None
+    memory_kind: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_memory_fields(self) -> "MemoryCreate":
         from app.memory.read_auth import SENSITIVITY_LEVELS, VISIBILITY_VALUES
+
+        if self.memory_layer is not None:
+            ml = self.memory_layer.lower()
+            if ml not in ("episodic", "semantic"):
+                raise ValueError(f"invalid memory_layer: {self.memory_layer!r}")
+            object.__setattr__(self, "memory_layer", ml)
 
         sl = (self.sensitivity_level or "normal").lower()
         if sl not in SENSITIVITY_LEVELS:
@@ -493,7 +699,6 @@ class ActivityRecordOut(BaseModel):
     source_kind: Optional[str] = None
     source_trust: Optional[str] = None
     subject_user_id: Optional[str] = None
-    lifecycle_status: Optional[str] = None
     consolidation_status: Optional[str] = None
     visibility: str = "space_shared"
     project_id: Optional[str] = None
@@ -620,6 +825,56 @@ class ContextPackage(BaseModel):
     # source_refs_json, or any shared artifact.  Present only in the in-memory
     # ContextPackage returned to the caller; never written to the DB snapshot.
     personal_context_block: str = ""
+
+
+class ContextRequest(BaseModel):
+    """Input to ChatContextBuilder for the Personal Assistant / chat path.
+
+    agent_version_id is used to load AgentVersion.context_policy_json, which defines
+    the allowed context boundary for this request.  AgentVersion is never mutated for
+    per-run context selection — all selection decisions live in this request and the
+    resulting ContextBundle.
+    """
+
+    space_id: str
+    user_id: str
+    agent_version_id: Optional[str] = None
+    session_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+    project_id: Optional[str] = None
+    run_id: Optional[str] = None
+    user_message: Optional[str] = None
+    manual_context: list[dict] = []
+    max_tokens: int = 4000
+    max_items: int = 20
+
+
+class ContextBundleItem(BaseModel):
+    """A single context item selected for a model call."""
+
+    item_type: str
+    item_id: Optional[str] = None
+    title: Optional[str] = None
+    excerpt: Optional[str] = None
+    score: Optional[float] = None
+    reason: Optional[str] = None
+    token_count: Optional[int] = None
+    metadata: dict = {}
+
+
+class ContextBundle(BaseModel):
+    """Assembled context package for the Personal Assistant / chat model call.
+
+    Built by ChatContextBuilder.build() from a ContextRequest.  snapshot_id is
+    populated after ChatContextBuilder.persist_snapshot() runs; it references the
+    ContextSnapshot row that makes this model call auditable.
+    """
+
+    items: list[ContextBundleItem] = []
+    token_count: int = 0
+    truncated: bool = False
+    snapshot_id: Optional[str] = None
+    retrieval_trace: dict = {}
 
 
 # ---------------------------------------------------------------------------

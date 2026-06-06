@@ -62,8 +62,12 @@ Proposal. Read access is allowed. The forbidden write suffixes are declared in
 | `claude_code` | Async (BG) | Saves status="running", dispatches `BackgroundTask`, returns immediately |
 | `codex_cli`   | Async (BG) | Same as claude_code |
 
-Policy: Anthropic/Claude execution must go through the `claude_code`
-RuntimeAdapterSpec and `GenericCliRuntimeAdapter`.
+Policy: Console sessions are local CLI runtimes (claude_code, codex_cli). Per ADR 0010 the
+invariant is **credential channel isolation** — an Anthropic API key must never enter a Claude
+Code CLI subprocess env (enforced by `local_executor.build_subprocess_env`'s allowlist). The
+in-process encrypted API channel (the reflector, `/providers/chat`) passes the key as a litellm
+parameter, never via env, and may serve any provider including Anthropic. A generic
+vendor-neutral API *runtime* adapter (`model_api`) is sanctioned but not yet built.
 
 Frontend polls `GET /workspace-console/sessions/{id}` every 2 s while
 `session.status === "running"`, then replays events with animation once done.

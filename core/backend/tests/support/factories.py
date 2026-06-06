@@ -31,7 +31,9 @@ from app.models import (
     ContextSnapshot,
     Credential,
     KnowledgeItem,
-    KnowledgeRelation,
+    KnowledgeItemRelation,
+    KnowledgeItemSource,
+    Source,
     MemoryEntry,
     ModelProvider,
     Policy,
@@ -580,7 +582,6 @@ def create_test_knowledge_item(
         verification_status="unverified",
         reflection_status="unreviewed",
         tags_json=[],
-        source_refs_json=[],
         owner_user_id=owner_user_id,
         created_by_user_id=created_by_user_id,
         created_from_proposal_id=created_from_proposal_id,
@@ -594,18 +595,18 @@ def create_test_knowledge_item(
     return _finish(db, row, commit=commit)
 
 
-def create_test_knowledge_relation(
+def create_test_knowledge_item_relation(
     db: DBSession,
     *,
     space_id: str,
     from_item_id: str,
     to_item_id: str,
-    relation_type: str = "related",
+    relation_type: str = "related_to",
     status: str = "active",
     source_proposal_id: str | None = None,
     commit: bool = False,
-) -> KnowledgeRelation:
-    row = KnowledgeRelation(
+) -> KnowledgeItemRelation:
+    row = KnowledgeItemRelation(
         id=_new_id(),
         space_id=space_id,
         from_item_id=from_item_id,
@@ -613,6 +614,62 @@ def create_test_knowledge_relation(
         relation_type=relation_type,
         status=status,
         source_proposal_id=source_proposal_id,
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_source(
+    db: DBSession,
+    *,
+    space_id: str,
+    source_type: str = "webpage",
+    title: str = "Test source",
+    uri: str | None = None,
+    status: str = "raw",
+    source_activity_id: str | None = None,
+    created_by_user_id: str | None = None,
+    metadata: dict | None = None,
+    commit: bool = False,
+) -> Source:
+    row = Source(
+        id=_new_id(),
+        space_id=space_id,
+        source_type=source_type,
+        title=title,
+        uri=uri,
+        status=status,
+        source_activity_id=source_activity_id,
+        created_by_user_id=created_by_user_id,
+        metadata_json=dict(metadata or {}),
+    )
+    db.add(row)
+    return _finish(db, row, commit=commit)
+
+
+def create_test_knowledge_item_source(
+    db: DBSession,
+    *,
+    space_id: str,
+    knowledge_item_id: str,
+    source_id: str,
+    relation_type: str = "derived_from",
+    locator: str | None = None,
+    quote: str | None = None,
+    note: str | None = None,
+    confidence: float | None = None,
+    commit: bool = False,
+) -> KnowledgeItemSource:
+    row = KnowledgeItemSource(
+        id=_new_id(),
+        space_id=space_id,
+        knowledge_item_id=knowledge_item_id,
+        source_id=source_id,
+        relation_type=relation_type,
+        locator=locator,
+        quote=quote,
+        note=note,
+        confidence=confidence,
     )
     db.add(row)
     return _finish(db, row, commit=commit)

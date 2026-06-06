@@ -52,7 +52,8 @@ Proposals activate into memory / knowledge / cards
 
 ## Related Files
 - `core/backend/app/models.py` — ActivityRecord (TODO)
-- `core/backend/app/agents/seeder.py` — memory-curator-agent (existing related agent)
+- `core/backend/app/agents/template_seeder.py` — `memory_reflector` system template (factory)
+- `core/backend/app/memory/reflector.py` — `MemoryReflector` internal reflection service
 - `frontend/src/pages/` — TODO: capture UI
 
 ## TODO

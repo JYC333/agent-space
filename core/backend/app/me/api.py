@@ -16,11 +16,11 @@ Rules:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..auth import get_identity
@@ -81,6 +81,90 @@ def _proposal_owner_user_id(proposal: Proposal) -> str | None:
     return proposal.created_by_user_id
 
 
+def _space_rollups(
+    db: Session, *, user_id: str, space_ids: list[str], now: datetime
+) -> list["MeSpaceRollup"]:
+    """Per-space attention counts via grouped aggregates (one query each).
+
+    Visibility for proposals matches ``can_read_scoped_object`` for a member:
+    private proposals are only counted for their creator.
+    """
+    if not space_ids:
+        return []
+
+    pending_rows = (
+        db.query(Proposal.space_id, func.count(Proposal.id))
+        .filter(
+            Proposal.space_id.in_(space_ids),
+            Proposal.status == "pending",
+            or_(
+                Proposal.visibility != "private",
+                Proposal.created_by_user_id == user_id,
+            ),
+        )
+        .group_by(Proposal.space_id)
+        .all()
+    )
+    pending_by_space = {sid: int(c) for sid, c in pending_rows}
+
+    task_rows = (
+        db.query(Task.space_id, func.count(Task.id))
+        .filter(
+            Task.space_id.in_(space_ids),
+            Task.deleted_at.is_(None),
+            or_(
+                Task.assigned_user_id == user_id,
+                Task.created_by_user_id == user_id,
+                Task.claimed_by_user_id == user_id,
+            ),
+        )
+        .group_by(Task.space_id)
+        .all()
+    )
+    tasks_by_space = {sid: int(c) for sid, c in task_rows}
+
+    week_ago = now - timedelta(days=7)
+    failed_rows = (
+        db.query(Run.space_id, func.count(Run.id))
+        .filter(
+            Run.space_id.in_(space_ids),
+            Run.instructed_by_user_id == user_id,
+            Run.status == "failed",
+            Run.created_at >= week_ago,
+        )
+        .group_by(Run.space_id)
+        .all()
+    )
+    failed_by_space = {sid: int(c) for sid, c in failed_rows}
+
+    space_rows = (
+        db.query(Space.id, Space.name, Space.type)
+        .filter(Space.id.in_(space_ids))
+        .all()
+    )
+
+    rollups = [
+        MeSpaceRollup(
+            space_id=sid,
+            name=name,
+            type=stype,
+            pending_proposals_count=pending_by_space.get(sid, 0),
+            assigned_tasks_count=tasks_by_space.get(sid, 0),
+            recent_failed_runs_count=failed_by_space.get(sid, 0),
+        )
+        for sid, name, stype in space_rows
+    ]
+    # Most attention first (pending + failed), then name for stable ordering.
+    rollups.sort(
+        key=lambda r: (
+            -(r.pending_proposals_count + r.recent_failed_runs_count),
+            -r.assigned_tasks_count,
+            r.name.lower(),
+        )
+    )
+    return rollups
+
+
 # ---------------------------------------------------------------------------
 # Response schemas (minimal — no raw content fields)
 # ---------------------------------------------------------------------------
@@ -111,12 +195,29 @@ class RecentParticipationMinimal(BaseModel):
     created_at: datetime
 
 
+class MeSpaceRollup(BaseModel):
+    """Per-space attention rollup for the cross-space Home dashboard.
+
+    Counts are visibility-correct for a space member: pending proposals exclude
+    other users' private proposals; tasks are those the user is assigned/created/claimed;
+    failed runs are the user's own runs from the last 7 days.
+    """
+
+    space_id: str
+    name: str
+    type: str
+    pending_proposals_count: int
+    assigned_tasks_count: int
+    recent_failed_runs_count: int
+
+
 class MeSummaryOut(BaseModel):
     pending_proposals_count: int
     assigned_tasks_count: int
     recent_runs: list[RecentRunMinimal]
     recent_participation: list[RecentParticipationMinimal]
     accessible_spaces_count: int
+    spaces: list[MeSpaceRollup] = []
 
 
 class TimelineEntryOut(BaseModel):
@@ -170,6 +271,7 @@ def get_me_summary(
 ) -> MeSummaryOut:
     """Lightweight cross-space summary for the authenticated user."""
     _space_id, user_id = ids
+    now = datetime.now(UTC)
     space_ids = _member_space_ids(db, user_id)
 
     if not space_ids:
@@ -179,6 +281,7 @@ def get_me_summary(
             recent_runs=[],
             recent_participation=[],
             accessible_spaces_count=0,
+            spaces=[],
         )
 
     pending_proposals_count = (
@@ -223,6 +326,8 @@ def get_me_summary(
         .all()
     )
 
+    spaces = _space_rollups(db, user_id=user_id, space_ids=space_ids, now=now)
+
     return MeSummaryOut(
         pending_proposals_count=pending_proposals_count,
         assigned_tasks_count=assigned_tasks_count,
@@ -254,6 +359,7 @@ def get_me_summary(
             for p in recent_participation
         ],
         accessible_spaces_count=len(space_ids),
+        spaces=spaces,
     )
 
 

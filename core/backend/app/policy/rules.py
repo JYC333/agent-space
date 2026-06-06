@@ -99,9 +99,19 @@ def rule_use_credential(ctx: PolicyContext) -> Optional[PolicyDecision]:
             audit_code="credential_cross_space",
         )
 
-    # automation-origin: require approval (fall through to default keeps REQUIRE_APPROVAL,
-    # but explicit rule makes audit clearer).
+    # automation-origin: allow only when a standing pre-authorization grant exists
+    # (Option A — the owner approved this automation's unattended credential use at
+    # creation). Otherwise require explicit approval. Cross-space was already denied above.
     if trigger_origin == "automation":
+        if ctx.get("automation_pre_authorized") is True:
+            return PolicyDecision(
+                decision=Decision.ALLOW,
+                message="Automation-origin credential use allowed by standing pre-authorization.",
+                risk_level=RiskLevel.HIGH,
+                reason_code="credential_automation_preauthorized",
+                policy_rule_id="credential_automation_preauthorized_allow",
+                audit_code="credential_automation_preauthorized",
+            )
         return PolicyDecision(
             decision=Decision.REQUIRE_APPROVAL,
             message="Automation-origin credential use requires explicit approval.",

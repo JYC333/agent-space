@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useSpaceNavigate as useNavigate } from '../../core/spaceNav'
 import { ListTodo, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { boardsApi, tasksApi } from '../../api/client'
@@ -42,7 +42,7 @@ function acPreview(task: Task): string | null {
 
 export default function TasksPage() {
   const navigate = useNavigate()
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const { writeTargetSpaceId, hasWriteTarget } = useWriteTarget()
   const [boards, setBoards] = useState<Board[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
@@ -57,7 +57,7 @@ export default function TasksPage() {
   const [creating, setCreating] = useState(false)
 
   const loadBoards = useCallback(async () => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setBoards([])
       return
     }
@@ -67,10 +67,10 @@ export default function TasksPage() {
     } catch {
       setBoards([])
     }
-  }, [activeOperationalSpaceId])
+  }, [activeSpaceId])
 
   const loadTasks = useCallback(async () => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setTasks([])
       setLoading(false)
       return
@@ -87,7 +87,7 @@ export default function TasksPage() {
     } finally {
       setLoading(false)
     }
-  }, [boardId, activeOperationalSpaceId])
+  }, [boardId, activeSpaceId])
 
   useEffect(() => { loadBoards() }, [loadBoards])
   useEffect(() => { loadTasks() }, [loadTasks])
@@ -183,7 +183,7 @@ export default function TasksPage() {
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Tasks</h1>
             <p className="text-sm text-muted-foreground">Board work items, runs, and downstream artifacts.</p>
-            <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+            <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
           </div>
         </div>
         <Button onClick={() => setCreateOpen(true)} className="gap-1.5">
@@ -210,7 +210,7 @@ export default function TasksPage() {
         </Card>
       ) : filtered.length === 0 ? (
         <Card className="p-10 text-center text-sm text-muted-foreground">
-          {activeOperationalSpaceId ? 'No tasks match these filters. Create a task or adjust filters.' : 'Select an operational space to browse tasks.'}
+          {activeSpaceId ? 'No tasks match these filters. Create a task or adjust filters.' : 'Select an operational space to browse tasks.'}
         </Card>
       ) : (
         <div className="grid gap-3 md:grid-cols-2">

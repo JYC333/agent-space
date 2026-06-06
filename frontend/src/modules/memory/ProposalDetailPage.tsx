@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { proposalsApi } from '../../api/client'
@@ -19,14 +20,14 @@ function fmt(dt: string | null | undefined) {
 
 export default function ProposalDetailPage() {
   const { proposalId = '' } = useParams()
-  const { activeOperationalSpaceId, activeOperationalSpaceName, userId } = useSpace()
+  const { activeSpaceId, activeSpaceName, userId } = useSpace()
   const [p, setP] = useState<Proposal | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     if (!proposalId) return
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setP(null)
       setLoading(false)
       return
@@ -47,7 +48,7 @@ export default function ProposalDetailPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [proposalId, activeOperationalSpaceId])
+  }, [proposalId, activeSpaceId])
 
   const canDecide =
     p &&
@@ -117,7 +118,7 @@ export default function ProposalDetailPage() {
 
       {!loading && !p && (
         <Card className="p-8 text-center text-sm text-muted-foreground">
-          {activeOperationalSpaceId ? 'Proposal not found.' : 'Select an operational space to view this proposal.'}
+          {activeSpaceId ? 'Proposal not found.' : 'Select an operational space to view this proposal.'}
         </Card>
       )}
 
@@ -127,7 +128,7 @@ export default function ProposalDetailPage() {
             <div>
               <h1 className="text-lg font-semibold tracking-tight">{p.proposed_title}</h1>
               <p className="text-xs text-muted-foreground">
-                Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
+                Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}
               </p>
             </div>
             {canDecide && (
@@ -156,7 +157,7 @@ export default function ProposalDetailPage() {
           <EgressReviewNotice
             proposal={p}
             currentUserId={userId}
-            targetSpaceName={activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'this space'}
+            targetSpaceName={activeSpaceName ?? activeSpaceId ?? 'this space'}
             approving={busy}
             onApprove={approveEgress}
           />

@@ -13,13 +13,16 @@ def on_space_created(db: Session, space_id: str, *, seeded_by_user_id: str) -> N
     """
     Run after a new ``Space`` exists.
 
-    ``seeded_by_user_id`` is the acting owner's ``users.id`` (used for built-in
-    agents and audit); system policy memories are space-owned with ``subject_user_id`` NULL.
+    ``seeded_by_user_id`` is the acting owner's ``users.id`` (used for audit);
+    system policy memories are space-owned with ``subject_user_id`` NULL.
+
+    No concrete agents are seeded per space. Built-in product behavior comes from
+    system AgentTemplates (factories, seeded once globally in ``bootstrap``); a
+    concrete Agent is created only on demand via
+    ``AgentTemplateService.create_agent_from_template`` (copy-on-create).
     """
     from ..memory.seeder import seed_system_memories_for_space
-    from ..agents.seeder import seed_builtin_agents
     from ..execution_planes.seeder import seed_default_execution_planes
 
     seed_system_memories_for_space(db, space_id)
-    seed_builtin_agents(db, space_id=space_id, owner_user_id=seeded_by_user_id)
     seed_default_execution_planes(db, space_id)

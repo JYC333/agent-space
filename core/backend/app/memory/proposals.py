@@ -22,7 +22,7 @@ from sqlalchemy import and_, case, func, not_, or_
 from sqlalchemy.orm.attributes import flag_modified
 
 from ..db_uow import UnitOfWork
-from ..models import AgentVersion, KnowledgeItem, KnowledgeRelation, MemoryEntry, Policy, Proposal, Run, Task, Workspace
+from ..models import AgentVersion, KnowledgeItem, KnowledgeItemRelation, MemoryEntry, Policy, Proposal, Run, Task, Workspace
 from ..param_binding import duplicate_mapper
 from ..policy.gateway import PolicyCheckRequest, PolicyGateway
 from ..projects.service import assert_project_in_space
@@ -48,7 +48,7 @@ class ProposalAcceptResult:
     task: Optional[Task] = None
     agent_version: Optional[AgentVersion] = None
     knowledge_item: Optional[KnowledgeItem] = None
-    knowledge_relation: Optional[KnowledgeRelation] = None
+    knowledge_relation: Optional[KnowledgeItemRelation] = None
 
 
 # ---------------------------------------------------------------------------
@@ -980,7 +980,7 @@ class ProposalService:
                 accept_context="explicit_user_accept",
             )
             proposal.status = "accepted"
-            proposal.decided_at = datetime.now(UTC)
+            proposal.reviewed_at = datetime.now(UTC)
             proposal.reviewed_by = user_id
 
             if result.memory is not None:
@@ -1065,7 +1065,7 @@ class ProposalService:
             return None
 
         proposal.status = "rejected"
-        proposal.decided_at = datetime.now(UTC)
+        proposal.reviewed_at = datetime.now(UTC)
         self.db.commit()
         self.db.refresh(proposal)
         return proposal

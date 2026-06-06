@@ -287,7 +287,6 @@ class RunOutputMaterializer:
             content=content,
             payload_json=payload or {},
             status="raw",
-            lifecycle_status="raw",
             consolidation_status="pending",
             owner_user_id=run.instructed_by_user_id,
         )

@@ -47,7 +47,8 @@
 │     core/backend/app/cards/                         │
 ├─────────────────────────────────────────────────────┤
 │   5. Knowledge Layer  [PLANNED]                      │
-│     KnowledgeItem, KnowledgeRelation                │
+│     KnowledgeItem, KnowledgeItemRelation,           │
+│     Source, KnowledgeItemSource                     │
 │     Structured, agent-generated, proposal-gated     │
 │     core/backend/app/knowledge/                     │
 ├─────────────────────────────────────────────────────┤
@@ -78,7 +79,7 @@
 - **space_id** — every record carries it; the primary isolation boundary
 - **Run is the central execution object** — every agent invocation creates a Run; Run produces Activities, Artifacts, and Proposals; Session is conversation-level, Run is execution-level
 - **Proposal gate** — memory and code changes require explicit proposal approval before durable mutation
-- **Runtime-agnostic core** — Agent is a product-level actor; Runtime Adapter (echo, claude_code, codex_cli, opencode, …) is a replaceable execution backend; Model Provider (Anthropic, OpenAI, litellm) is the underlying LLM. These three are distinct. Anthropic/Claude execution goes through the `claude_code` RuntimeAdapterSpec.
+- **Runtime-agnostic core** — Agent is a product-level actor; Runtime Adapter (echo, claude_code, codex_cli, opencode, …) is a replaceable execution backend; Model Provider (Anthropic, OpenAI, litellm) is the underlying LLM. These three are distinct. Tool-using / filesystem Claude work goes through the `claude_code` CLI RuntimeAdapterSpec. Per ADR 0010 the governing invariant is **credential channel isolation** — an Anthropic API key must never enter a Claude Code CLI subprocess env; the in-process encrypted API channel (reflector, `/providers/chat`) passes the key as a litellm parameter (never via env) and may serve any provider including Anthropic. A generic vendor-neutral API *runtime* adapter (`model_api`, any ModelProvider + model) is sanctioned but not yet built.
 - **Sandbox enforcement** — file-access local CLI runtimes (`claude_code`, `codex_cli`) require `risk_level=high` in `runtime_policy_json`; the execution service validates this before the adapter starts and fails the run with a clear config error if it is not set. `risk_level=high` maps to `required_sandbox_level=worktree`; the agent works in a detached git worktree, never directly in the real workspace. See `modules/sandbox.md`.
 - **ContextCompiler** — vendor files (CLAUDE.md, AGENTS.md, SOUL.md) are compiled artefacts written to the sandbox, never source of truth; security scanning, token budgets, and `.agent/` progressive loading enforced at compile time
 - **ContextSnapshot** — frozen ContextPackage saved at run-start; immutable; stored in `context_snapshots` for audit

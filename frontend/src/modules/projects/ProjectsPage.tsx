@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useSpaceNavigate as useNavigate } from '../../core/spaceNav'
 import { FolderKanban, Plus, Target } from 'lucide-react'
 import { toast } from 'sonner'
 import { projectsApi } from '../../api/client'
@@ -34,7 +34,7 @@ const FILTER_OPTIONS = [
 
 export default function ProjectsPage() {
   const navigate = useNavigate()
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('active')
@@ -45,7 +45,7 @@ export default function ProjectsPage() {
   const [newFocus, setNewFocus] = useState('')
 
   const loadProjects = useCallback(async () => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setProjects([])
       setLoading(false)
       return
@@ -60,7 +60,7 @@ export default function ProjectsPage() {
     } finally {
       setLoading(false)
     }
-  }, [statusFilter, activeOperationalSpaceId])
+  }, [statusFilter, activeSpaceId])
 
   useEffect(() => { loadProjects() }, [loadProjects])
 
@@ -113,7 +113,7 @@ export default function ProjectsPage() {
             <h1 className="text-xl font-semibold tracking-tight">Projects</h1>
             <p className="text-sm text-muted-foreground">Goal and knowledge context for long-lived objectives.</p>
             <p className="text-xs text-muted-foreground">
-              Space: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No space selected'}
+              Space: {activeSpaceName ?? activeSpaceId ?? 'No space selected'}
             </p>
           </div>
         </div>
@@ -141,7 +141,7 @@ export default function ProjectsPage() {
           <Skeleton className="h-24 w-full" />
           <Skeleton className="h-24 w-full" />
         </Card>
-      ) : !activeOperationalSpaceId ? (
+      ) : !activeSpaceId ? (
         <EmptyState
           title="No space selected."
           description="Select an operational space to browse projects."

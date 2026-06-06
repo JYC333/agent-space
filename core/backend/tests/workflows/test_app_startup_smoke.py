@@ -77,17 +77,20 @@ def test_real_lifespan_cold_start_on_empty_postgres(pg_container, monkeypatch):
                 )).scalar() == 1
 
             # Fresh-instance bootstrap reached a usable initial state on the
-            # empty database: default personal space, owner user + membership,
-            # and default execution planes.
+            # empty database: the owner's personal space (a generated UUID),
+            # owner user + membership, and default execution planes.
             with fresh_engine.connect() as conn:
-                space_id = app_config.settings.default_space_id
                 user_id = app_config.settings.default_user_id
-                assert conn.execute(
-                    text("SELECT count(*) FROM spaces WHERE id = :s"), {"s": space_id}
-                ).scalar() == 1, "default personal space not bootstrapped"
-                assert conn.execute(
-                    text("SELECT type FROM spaces WHERE id = :s"), {"s": space_id}
-                ).scalar() == "personal"
+                space_id = conn.execute(
+                    text(
+                        "SELECT s.id FROM spaces s "
+                        "JOIN space_memberships m ON m.space_id = s.id "
+                        "WHERE m.user_id = :u AND m.role = 'owner' "
+                        "AND m.status = 'active' AND s.type = 'personal'"
+                    ),
+                    {"u": user_id},
+                ).scalar()
+                assert space_id, "default personal space not bootstrapped"
                 assert conn.execute(
                     text("SELECT count(*) FROM users WHERE id = :u"), {"u": user_id}
                 ).scalar() == 1, "default owner user not bootstrapped"

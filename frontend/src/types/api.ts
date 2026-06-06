@@ -657,6 +657,16 @@ export interface Message {
   created_at: string
 }
 
+/** One synchronous Personal Assistant chat turn result (`ChatTurnOut`). */
+export interface ChatTurnOut {
+  session_id: string
+  run_id: string
+  ok: boolean
+  reply?: string | null
+  error?: string | null
+  error_code?: string | null
+}
+
 /** Product task board item (`TaskOut`). */
 export interface Task {
   id: string
@@ -1060,10 +1070,133 @@ export interface AgentOut {
   visibility: string
   role_instruction: string | null
   status: string
+  // 'standard' | 'system_assistant' (the space's system-managed default Assistant)
+  agent_kind: string
   current_version_id: string | null
+  // Provenance only — never used to assemble runtime config.
+  source_template_id: string | null
+  source_template_version_id: string | null
   model: AgentModelSummary | null
+  system_prompt: string | null
   created_at: string
   updated_at: string
+}
+
+export interface AgentVersionOut {
+  id: string
+  agent_id: string
+  space_id: string
+  version_label: string
+  model_provider_id: string | null
+  model_name: string | null
+  runtime_adapter_id: string | null
+  system_prompt: string | null
+  model_config_json: Record<string, unknown>
+  runtime_config_json: Record<string, unknown>
+  context_policy_json: Record<string, unknown>
+  memory_policy_json: Record<string, unknown>
+  capabilities_json: unknown[]
+  tool_permissions_json: Record<string, unknown>
+  runtime_policy_json: Record<string, unknown>
+  tool_policy_json: Record<string, unknown>
+  output_policy_json: Record<string, unknown>
+  schedule_config_json: Record<string, unknown>
+  output_schema_json: Record<string, unknown>
+  source_proposal_id: string | null
+  source_activity_id: string | null
+  created_at: string
+  published_at: string | null
+  archived_at: string | null
+}
+
+export interface AgentTemplateOut {
+  id: string
+  key: string
+  name: string
+  description: string | null
+  category: string | null
+  scope: 'system' | 'space' | 'user'
+  space_id: string | null
+  owner_user_id: string | null
+  visibility: 'private' | 'space_shared' | 'system_public' | 'system_internal'
+  status: 'draft' | 'published' | 'archived'
+  current_version_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type AssistantResponseStyle = 'neutral' | 'friendly' | 'direct' | 'formal'
+export type AssistantVerbosity = 'concise' | 'balanced' | 'detailed'
+export type AssistantProposalStyle = 'proactive' | 'balanced' | 'conservative'
+
+export interface SpaceAssistantSettingsOut {
+  id: string
+  space_id: string
+  assistant_agent_id: string | null
+  response_style: AssistantResponseStyle | null
+  verbosity: AssistantVerbosity | null
+  default_context_toggles_json: Record<string, boolean>
+  default_project_id: string | null
+  proposal_style: AssistantProposalStyle | null
+  model_preferences_json: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface SpaceAssistantSettingsUpdate {
+  response_style?: AssistantResponseStyle | null
+  verbosity?: AssistantVerbosity | null
+  default_context_toggles_json?: Record<string, boolean>
+  default_project_id?: string | null
+  proposal_style?: AssistantProposalStyle | null
+  model_preferences_json?: Record<string, unknown>
+}
+
+export interface AgentTemplateVersionOut {
+  id: string
+  template_id: string
+  version: string
+  system_prompt: string | null
+  model_config_json: Record<string, unknown>
+  context_policy_json: Record<string, unknown>
+  memory_policy_json: Record<string, unknown>
+  tool_policy_json: Record<string, unknown>
+  runtime_policy_json: Record<string, unknown>
+  output_policy_json: Record<string, unknown>
+  schedule_defaults_json: Record<string, unknown>
+  output_schema_json: Record<string, unknown>
+  created_by_user_id: string | null
+  created_at: string
+  published_at: string | null
+}
+
+/** Editable areas for the agent config UI (`POST /agents/{id}/config`). */
+export interface AgentConfigUpdateBody {
+  name?: string | null
+  description?: string | null
+  system_prompt?: string | null
+  model_provider_id?: string | null
+  model_name?: string | null
+  model_config_json?: Record<string, unknown> | null
+  context_policy_json?: Record<string, unknown> | null
+  memory_policy_json?: Record<string, unknown> | null
+  output_policy_json?: Record<string, unknown> | null
+  schedule_config_json?: Record<string, unknown> | null
+  output_schema_json?: Record<string, unknown> | null
+}
+
+export interface CreateAgentFromTemplateBody {
+  template_version_id?: string | null
+  space_id?: string | null
+  name?: string | null
+  description?: string | null
+  model_config_json?: Record<string, unknown> | null
+  schedule_config_json?: Record<string, unknown> | null
+  system_prompt?: string | null
+  context_policy_json?: Record<string, unknown> | null
+  memory_policy_json?: Record<string, unknown> | null
+  output_policy_json?: Record<string, unknown> | null
+  output_schema_json?: Record<string, unknown> | null
 }
 
 export interface AgentCreateBody {
@@ -1071,8 +1204,10 @@ export interface AgentCreateBody {
   description?: string | null
   visibility?: string
   role_instruction?: string | null
+  system_prompt?: string | null
   default_model_provider_id?: string | null
   default_model?: string | null
+  adapter_type?: string | null
 }
 
 export interface AgentUpdateBody {
@@ -1081,6 +1216,7 @@ export interface AgentUpdateBody {
   visibility?: string
   role_instruction?: string | null
   status?: string
+  system_prompt?: string | null
   default_model_provider_id?: string | null
   default_model?: string | null
 }
@@ -1513,12 +1649,22 @@ export interface MeRecentParticipationItem {
   created_at: string
 }
 
+export interface MeSpaceRollup {
+  space_id: string
+  name: string
+  type: string
+  pending_proposals_count: number
+  assigned_tasks_count: number
+  recent_failed_runs_count: number
+}
+
 export interface MeSummaryOut {
   pending_proposals_count: number
   assigned_tasks_count: number
   recent_runs: MeRecentRunItem[]
   recent_participation: MeRecentParticipationItem[]
   accessible_spaces_count: number
+  spaces: MeSpaceRollup[]
 }
 
 export interface MeTimelineEntry {
@@ -1613,4 +1759,48 @@ export interface ProjectSummary {
   workspace_count: number
   active_run_count: number
   memory_entry_count: number
+}
+
+// ── Automations ─────────────────────────────────────────────────────────────
+export type AutomationTriggerType = 'manual' | 'schedule'
+
+export interface AutomationOut {
+  id: string
+  space_id: string
+  owner_user_id: string
+  agent_id: string
+  workspace_id: string | null
+  name: string
+  description: string | null
+  trigger_type: string
+  status: string
+  preflight_snapshot_json: Record<string, unknown> | null
+  config_json: Record<string, unknown> | null
+  next_run_at: string | null
+  last_fired_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AutomationCreateBody {
+  name: string
+  agent_id: string
+  workspace_id?: string | null
+  description?: string | null
+  trigger_type?: AutomationTriggerType
+  config_json?: Record<string, unknown> | null
+}
+
+export interface AutomationUpdateBody {
+  name?: string | null
+  description?: string | null
+  status?: string | null
+  config_json?: Record<string, unknown> | null
+}
+
+export interface AutomationFireResult {
+  run_id: string
+  automation_run_id: string
+  trigger_origin: string
+  preflight_executable: boolean
 }

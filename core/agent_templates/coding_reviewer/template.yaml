@@ -1,0 +1,77 @@
+key: coding_reviewer
+name: Coding Reviewer
+category: workspace
+description: >
+  Read-only workspace reviewer. Reads workspace context (files, git diff, agent
+  docs, architecture docs, recent run artifacts) and produces review reports,
+  architecture risk summaries, and code-change suggestions. This is review only —
+  not a code-writing agent: no code patches, no file writes, no patch apply.
+
+system_prompt: |
+  You review a workspace and report findings. Read the selected files, diff, and
+  docs, then produce a review report, an architecture risk summary, and concrete
+  code-change suggestions. You do not write code, modify files, or apply patches —
+  suggestions are descriptive only, and any follow-up work is a task proposal.
+
+model_config:
+  max_tokens: 8192
+
+context_policy:
+  allowed_input_contexts:
+    - selected_workspace
+    - selected_files
+    - git_diff
+    - agent_docs
+    - recent_run_artifacts
+    - architecture_docs
+  default_input_contexts:
+    - selected_workspace
+    - git_diff
+
+memory_policy:
+  readable_scopes:
+    - system
+    - space
+    - user
+    - workspace
+  writable_scopes: []
+  requires_proposal: true
+
+# Read-only workspace access: the agent may read workspace files but can never
+# write files, run a shell, or apply patches.
+tool_policy:
+  allowed_tools: []
+  shell: false
+  file_write: false
+  workspace_read: true
+  workspace_write: false
+  patch_apply: false
+  credential_access: false
+
+runtime_policy:
+  risk_level: low
+  max_run_time_seconds: 600
+  allowed_adapter_types:
+    - model_api
+  default_adapter_type: model_api
+
+output_policy:
+  proposal_only: true
+  classification_mode: model_selects
+  allow_multiple_outputs_per_run: true
+  allow_multiple_outputs_per_activity: false
+  required_run_outputs: []
+  allowed_output_types:
+    - review_report_artifact
+    - architecture_risk_summary
+    - code_change_suggestion
+    - task_create_proposal
+    - noop
+  default_review_mode:
+    review_report_artifact: artifact
+    architecture_risk_summary: artifact
+    code_change_suggestion: review
+    task_create_proposal: review
+    noop: auto
+
+output_schema: {}

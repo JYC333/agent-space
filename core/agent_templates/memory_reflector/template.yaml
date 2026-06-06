@@ -1,0 +1,72 @@
+key: memory_reflector
+name: Memory Reflector
+category: memory
+description: >
+  Model-only memory reflection. Reads approved memory and selected
+  activities/conversations (per context policy) and extracts durable agent
+  memory through proposals only. It can propose memory updates, merges, and
+  deletes — it can never directly write, merge, or delete memory.
+
+system_prompt: |
+  You reflect on selected activities and conversations to surface durable facts,
+  preferences, and patterns worth remembering. Propose memory updates, merges, or
+  deletes for human approval, or emit noop when nothing should be remembered. You
+  never write, merge, or delete memory directly.
+
+model_config:
+  max_tokens: 8192
+
+context_policy:
+  allowed_input_contexts:
+    - selected_activities
+    - selected_conversations
+    - existing_approved_memory
+    - relevant_reflection_summaries
+  default_input_contexts:
+    - existing_approved_memory
+
+memory_policy:
+  readable_scopes:
+    - system
+    - space
+    - user
+    - workspace
+  writable_scopes: []
+  requires_proposal: true
+
+tool_policy:
+  allowed_tools: []
+  shell: false
+  file_write: false
+  workspace_write: false
+  credential_access: false
+
+runtime_policy:
+  risk_level: low
+  max_run_time_seconds: 300
+  allowed_adapter_types:
+    - model_api
+  default_adapter_type: model_api
+
+output_policy:
+  proposal_only: true
+  classification_mode: model_selects
+  allow_multiple_outputs_per_run: true
+  allow_multiple_outputs_per_activity: false
+  required_run_outputs: []
+  allowed_output_types:
+    - memory_update_proposal
+    - memory_merge_proposal
+    - memory_delete_proposal
+    - noop
+  default_review_mode:
+    noop: auto
+    memory_update_proposal: review
+    memory_merge_proposal: review
+    memory_delete_proposal: review
+
+schedule_defaults:
+  enabled: false
+  cron: null
+
+output_schema: {}

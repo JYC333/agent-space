@@ -16,7 +16,6 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from ..config import settings
 from ..models import MemoryEntry
 from .consolidation.candidate import MemoryCandidate
 from .consolidation.constants import MEMORY_EVOLVER_COMPILER_VERSION
@@ -91,7 +90,12 @@ class MemoryEvolver:
         dry_run=True — report archive candidates only.
         dry_run=False — create ``memory_archive`` proposals (no direct status writes).
         """
-        actor = acting_user_id or settings.default_user_id
+        if not dry_run and acting_user_id is None:
+            raise ValueError(
+                "decay_and_archive(dry_run=False) requires acting_user_id "
+                "(there is no default-user fallback)."
+            )
+        actor = acting_user_id
         scores = self.compute_fitness_scores(space_id)
         candidates = [mid for mid, score in scores.items() if score < _ARCHIVE_THRESHOLD]
 

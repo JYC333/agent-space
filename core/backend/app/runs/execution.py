@@ -64,6 +64,7 @@ from .task_output_linkage import link_run_outputs_to_tasks
 from .events import safe_append_run_event
 from .policy_inputs import (
     CredentialPolicyMetadataError,
+    automation_credential_preauthorized,
     build_runtime_execute_policy_request,
     build_runtime_use_credential_policy_request,
     resolve_runtime_credential_policy_metadata,
@@ -454,6 +455,7 @@ class RunExecutionService:
                 _credential_subject,
                 decision,
                 resolved.adapter_type,
+                automation_pre_authorized=automation_credential_preauthorized(self.db, run),
             )
             try:
                 _cred_policy_decision = PolicyGateway(self.db).enforce(_cred_req)
@@ -1011,7 +1013,10 @@ class RunExecutionService:
                     resolved_model_name = run.model_override_json["model"]
                 adapter_model_name = (
                     resolved_model_name
-                    if run.model_selection_mode == "cli_model_override"
+                    if (
+                        run.model_selection_mode == "cli_model_override"
+                        or runtime_requirements.model_provider_mode in ("required", "optional")
+                    )
                     else None
                 )
                 ctx = RuntimeExecutionContext(
@@ -1023,6 +1028,7 @@ class RunExecutionService:
                     model_name=adapter_model_name,
                     system_prompt=version.system_prompt,
                     adapter_config=safe_config,
+                    model_provider_id=run.model_provider_id,
                     instruction=run.instruction,
                     project_id=run.project_id,
                     workspace_id=run.workspace_id,

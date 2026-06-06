@@ -168,11 +168,12 @@ All authenticated calls require a real session cookie or API key. No dev-identit
 ### Runtime
 
 ```env
-DEFAULT_SPACE_ID=personal
 DEFAULT_USER_ID=default_user
 ```
 
-These bootstrap defaults are used only for single-user personal mode initialization.
+This bootstrap default is used only for single-user personal mode initialization;
+the default space is this owner's personal space (a generated UUID, resolved from
+the DB — there is no fixed/magic space id).
 Multi-user dogfooding requires each user to authenticate with their own credentials.
 
 ### Where config lives

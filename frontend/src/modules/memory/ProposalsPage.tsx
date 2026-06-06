@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { FileCheck, FolderKanban, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { proposalsApi } from '../../api/client'
@@ -25,7 +26,7 @@ const RISK_VARIANT: Record<string, 'default' | 'secondary' | 'muted' | 'destruct
 }
 
 export default function ProposalsPage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName, userId } = useSpace()
+  const { activeSpaceId, activeSpaceName, userId } = useSpace()
   const [searchParams, setSearchParams] = useSearchParams()
   const projectFilter = searchParams.get('project_id') ?? ''
 
@@ -36,8 +37,14 @@ export default function ProposalsPage() {
   const [filterExpired, setFilterExpired]     = useState<string>('')
   const [approvingId, setApprovingId] = useState<string | null>(null)
 
+  // The Review scene sidebar drives the proposal-type filter through the URL (?type=…).
+  const urlType = searchParams.get('type') ?? ''
+  useEffect(() => {
+    setFilterType(prev => (prev === urlType ? prev : urlType))
+  }, [urlType])
+
   const load = useCallback(async () => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setProposals([])
       return
     }
@@ -52,7 +59,7 @@ export default function ProposalsPage() {
       })
       setProposals(r.items)
     } catch (e) { toast.error(errMsg(e)) }
-  }, [filterStatus, filterType, filterUrgency, filterExpired, projectFilter, activeOperationalSpaceId])
+  }, [filterStatus, filterType, filterUrgency, filterExpired, projectFilter, activeSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -130,7 +137,7 @@ export default function ProposalsPage() {
               Canonical list from <code className="text-xs bg-muted px-1 rounded">GET /api/v1/proposals</code>
               {' '}— accept/reject use <code className="text-xs bg-muted px-1 rounded">POST /api/v1/proposals/…</code>.
             </p>
-            <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+            <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
             {projectFilter && (
               <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-accent/40 text-xs text-accent-foreground">
                 <FolderKanban className="size-3" />
@@ -196,7 +203,7 @@ export default function ProposalsPage() {
 
       {proposals.length === 0
         ? <Card><p className="text-muted-foreground text-center py-10 text-sm">
-            {activeOperationalSpaceId ? 'No proposals for these filters.' : 'Select an operational space to browse proposals.'}
+            {activeSpaceId ? 'No proposals for these filters.' : 'Select an operational space to browse proposals.'}
           </p></Card>
         : proposals.map(p => (
           <Card key={p.id}>
@@ -236,7 +243,7 @@ export default function ProposalsPage() {
             <EgressReviewNotice
               proposal={p}
               currentUserId={userId}
-              targetSpaceName={activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'this space'}
+              targetSpaceName={activeSpaceName ?? activeSpaceId ?? 'this space'}
               approving={approvingId === p.id}
               compact
               onApprove={() => approveEgress(p)}

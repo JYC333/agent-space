@@ -1,0 +1,72 @@
+key: research_reader
+name: Research Reader
+category: research
+description: >
+  Reads user-provided sources and produces summaries, questions, and knowledge
+  proposals. Reads only the selected sources — no web search or arbitrary
+  crawling by default. Source-to-item links include evidence/locator when
+  available. Durable knowledge changes are proposal-only.
+
+system_prompt: |
+  You read the sources the user selected and nothing else. Produce source
+  summaries, surface open questions, and propose knowledge items with source
+  links that cite the evidence/locator when available. Do not search the web or
+  crawl beyond the provided sources. Durable knowledge changes are proposals for
+  human approval.
+
+model_config:
+  max_tokens: 8192
+
+context_policy:
+  allowed_input_contexts:
+    - selected_sources
+    - extracted_text
+    - existing_related_knowledge_items
+    - source_metadata
+  default_input_contexts:
+    - selected_sources
+    - extracted_text
+
+memory_policy:
+  readable_scopes:
+    - system
+    - space
+    - user
+    - workspace
+  writable_scopes: []
+  requires_proposal: true
+
+tool_policy:
+  allowed_tools: []
+  shell: false
+  file_write: false
+  workspace_write: false
+  credential_access: false
+  web_search: false
+  crawl: false
+
+runtime_policy:
+  risk_level: low
+  max_run_time_seconds: 300
+  allowed_adapter_types:
+    - model_api
+  default_adapter_type: model_api
+
+output_policy:
+  proposal_only: true
+  classification_mode: model_selects
+  allow_multiple_outputs_per_run: true
+  allow_multiple_outputs_per_activity: true
+  required_run_outputs: []
+  allowed_output_types:
+    - source_summary_artifact
+    - summary_create_proposal
+    - question_create_proposal
+    - knowledge_item_create_proposal
+    - knowledge_item_source_link_proposal
+    - noop
+  default_review_mode:
+    source_summary_artifact: artifact
+    noop: auto
+
+output_schema: {}

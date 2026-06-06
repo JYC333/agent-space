@@ -51,7 +51,7 @@ _PATCHABLE_FIELDS = frozenset({
 def _check_workspace_in_space(db: Session, workspace_id: str, space_id: str) -> None:
     ws = db.query(Workspace).filter(
         Workspace.id == workspace_id,
-        Workspace.owner_space_id == space_id,
+        Workspace.space_id == space_id,
     ).first()
     if not ws:
         raise ValueError(

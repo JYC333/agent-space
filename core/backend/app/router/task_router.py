@@ -14,9 +14,13 @@ Principle:
   appropriate non-CLI adapter (e.g. capability) for tasks that don't need CLI.
 
 Policy:
-  anthropic_api is NOT a supported adapter type. Anthropic/Claude usage must
-  go through CLI integrations (claude_code) only.
-  Do NOT add anthropic_api or anthropic_messages as downgrade targets.
+  Per ADR 0010, the governing invariant is credential channel isolation: an
+  Anthropic API key must never enter a Claude Code CLI subprocess environment.
+  In-process API calls (litellm with the key passed as a parameter, never via
+  os.environ) may serve any provider including Anthropic. A generic vendor-neutral
+  API runtime adapter (`model_api`) is sanctioned but not yet built.
+  This router performs no automatic downgrade to any API adapter; the caller is
+  responsible for choosing a non-CLI adapter when one is appropriate.
 
 Decision logic:
   If any of requires_filesystem | requires_terminal | requires_git is True,
@@ -96,9 +100,9 @@ class TaskRouter:
         If the requested adapter is already non-CLI, return it unchanged.
         If the requested adapter is a CLI type and the task needs CLI, keep it.
         If the requested adapter is a CLI type but the task does NOT need CLI,
-        return the requested adapter unchanged — no automatic downgrade to a
-        direct API adapter (anthropic_api is not a supported adapter type).
-        The caller should request an appropriate non-CLI adapter directly.
+        return the requested adapter unchanged — this router performs no
+        automatic downgrade to an in-process API adapter. The caller should
+        request an appropriate non-CLI adapter directly.
         """
         if requested_adapter not in _CLI_ADAPTERS:
             return requested_adapter

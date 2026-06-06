@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import type { KnowledgeItemSummary } from '../../types/api'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'

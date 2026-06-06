@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { Package, FolderKanban, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { artifactsApi } from '../../api/client'
@@ -20,7 +21,7 @@ function fmt(dt: string | null | undefined) {
 }
 
 export default function ArtifactsPage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [searchParams, setSearchParams] = useSearchParams()
   const projectFilter = searchParams.get('project_id') ?? ''
 
@@ -29,7 +30,7 @@ export default function ArtifactsPage() {
   const [fType, setFType] = useState('')
 
   const load = useCallback(async () => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setItems([])
       setLoading(false)
       return
@@ -48,7 +49,7 @@ export default function ArtifactsPage() {
     } finally {
       setLoading(false)
     }
-  }, [fType, projectFilter, activeOperationalSpaceId])
+  }, [fType, projectFilter, activeSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -78,7 +79,7 @@ export default function ArtifactsPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Artifacts</h1>
           <p className="text-sm text-muted-foreground">Browse and export space-scoped artifacts.</p>
-          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+          <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
           {projectFilter && (
             <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-accent/40 text-xs text-accent-foreground">
               <FolderKanban className="size-3" />
@@ -110,7 +111,7 @@ export default function ArtifactsPage() {
         <Card className="p-6"><Skeleton className="h-24 w-full" /></Card>
       ) : items.length === 0 ? (
         <Card className="p-10 text-center text-sm text-muted-foreground">
-          {activeOperationalSpaceId ? 'No artifacts.' : 'Select an operational space to browse artifacts.'}
+          {activeSpaceId ? 'No artifacts.' : 'Select an operational space to browse artifacts.'}
         </Card>
       ) : (
         <div className="space-y-3">

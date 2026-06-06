@@ -8,14 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 KnowledgeItemType = Literal[
     "knowledge",
+    "idea",
     "experience",
+    "reflection",
     "lesson",
     "procedure",
     "decision",
-    "reflection",
-    "source",
     "question",
-    "answer",
     "summary",
 ]
 KnowledgeContentFormat = Literal["markdown", "plain"]
@@ -23,18 +22,38 @@ KnowledgeItemStatus = Literal["draft", "active", "superseded", "archived"]
 KnowledgeVisibility = Literal["private", "space_shared", "workspace_shared", "restricted"]
 KnowledgeVerificationStatus = Literal["unverified", "needs_review", "verified"]
 KnowledgeReflectionStatus = Literal["unreviewed", "reviewed", "distilled"]
-KnowledgeRelationType = Literal[
-    "related",
+KnowledgeItemRelationType = Literal[
+    "related_to",
     "derived_from",
-    "example_of",
     "supports",
     "contradicts",
-    "part_of",
-    "prerequisite_of",
-    "applies_to",
     "answers",
+    "summarizes",
+    "depends_on",
+    "updates",
 ]
-KnowledgeRelationStatus = Literal["candidate", "active", "rejected", "archived"]
+KnowledgeItemRelationStatus = Literal["candidate", "active", "rejected", "archived"]
+
+SourceType = Literal[
+    "activity_record",
+    "chat_capture",
+    "webpage",
+    "article",
+    "paper",
+    "pdf",
+    "file",
+    "email",
+    "manual_reference",
+    "external_note",
+]
+SourceStatus = Literal["raw", "processing", "processed", "archived", "error"]
+KnowledgeItemSourceRelationType = Literal[
+    "derived_from",
+    "supported_by",
+    "cites",
+    "summarizes",
+    "mentions",
+]
 
 
 class KnowledgeItemOut(BaseModel):
@@ -55,7 +74,6 @@ class KnowledgeItemOut(BaseModel):
     tags: list[str] = Field(default_factory=list)
     confidence: float | None
     source_url: str | None
-    source_refs: list[dict] = Field(default_factory=list)
     owner_user_id: str | None
     created_by_user_id: str | None
     created_by_agent_id: str | None
@@ -88,21 +106,64 @@ class KnowledgeItemSummaryOut(BaseModel):
     updated_at: datetime
 
 
-class KnowledgeRelationOut(BaseModel):
+class KnowledgeItemRelationOut(BaseModel):
     id: str
     space_id: str
     from_item_id: str
     to_item_id: str
-    relation_type: KnowledgeRelationType
-    status: KnowledgeRelationStatus
+    relation_type: KnowledgeItemRelationType
+    status: KnowledgeItemRelationStatus
     confidence: float | None
-    evidence_summary: str | None
+    note: str | None
     source_proposal_id: str | None
     created_by_user_id: str | None
     created_by_agent_id: str | None
     created_from_assessment_id: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class SourceOut(BaseModel):
+    id: str
+    space_id: str
+    source_type: SourceType
+    title: str
+    uri: str | None
+    content_ref: str | None
+    raw_text: str | None
+    summary: str | None
+    metadata: dict = Field(default_factory=dict)
+    status: SourceStatus
+    source_activity_id: str | None
+    created_by_user_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SourceSummaryOut(BaseModel):
+    id: str
+    space_id: str
+    source_type: SourceType
+    title: str
+    uri: str | None
+    status: SourceStatus
+    source_activity_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeItemSourceOut(BaseModel):
+    id: str
+    space_id: str
+    knowledge_item_id: str
+    source_id: str
+    relation_type: KnowledgeItemSourceRelationType
+    locator: str | None
+    quote: str | None
+    note: str | None
+    confidence: float | None
+    created_by_user_id: str | None
+    created_at: datetime
 
 
 class KnowledgeCreateProposalIn(BaseModel):
@@ -141,13 +202,50 @@ class KnowledgeUpdateProposalIn(BaseModel):
     rationale: str | None = None
 
 
-class KnowledgeRelationCreateProposalIn(BaseModel):
+class KnowledgeItemRelationCreateProposalIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     from_item_id: str
     to_item_id: str
-    relation_type: KnowledgeRelationType
+    relation_type: KnowledgeItemRelationType
     confidence: float | None = Field(default=None, ge=0, le=1)
-    evidence_summary: str | None = None
+    note: str | None = None
     status: Literal["candidate", "active"] = "active"
     rationale: str | None = None
+
+
+class SourceCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: SourceType
+    title: str = Field(min_length=1, max_length=512)
+    uri: str | None = None
+    content_ref: str | None = None
+    raw_text: str | None = None
+    summary: str | None = None
+    metadata: dict = Field(default_factory=dict)
+    status: SourceStatus = "raw"
+    source_activity_id: str | None = None
+
+
+class SourceUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=512)
+    uri: str | None = None
+    content_ref: str | None = None
+    raw_text: str | None = None
+    summary: str | None = None
+    metadata: dict | None = None
+    status: SourceStatus | None = None
+
+
+class KnowledgeItemSourceLinkIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str
+    relation_type: KnowledgeItemSourceRelationType = "derived_from"
+    locator: str | None = None
+    quote: str | None = None
+    note: str | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)

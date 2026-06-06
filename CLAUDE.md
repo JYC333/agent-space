@@ -129,11 +129,12 @@ python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v
 # Instance data root for the running environment (NOT the dev/test/prod parent).
 # Docker backend: /aspace. Direct local backend run: a concrete mode root, e.g. $HOME/aspace/dev.
 AGENT_SPACE_HOME=/aspace
-ANTHROPIC_API_KEY=
+# LLM provider API keys are NOT env/config — users add them in the app (Providers page),
+# stored as encrypted ModelProvider Credentials (ADR 0010). The CLI runtime likewise gets
+# its key from the credential broker, never from ambient env.
 DEFAULT_MODEL=claude-sonnet-4-6
-REFLECTOR_MODE=pattern   # or llm
-DEFAULT_SPACE_ID=personal
-DEFAULT_USER_ID=default_user
+REFLECTOR_MODE=pattern   # or llm (llm mode uses REFLECTOR_MODEL_PROVIDER_ID, not an API key)
+DEFAULT_USER_ID=default_user   # bootstrap owner; the default space is this owner's personal space (a generated UUID, not a fixed id)
 
 # DATABASE_URL is the authoritative connection string. PostgreSQL is the only
 # supported server database.

@@ -15,12 +15,16 @@ log = logging.getLogger(__name__)
 # Maps adapter_type short names to canonical execution plane names.
 # Planes must be seeded by ExecutionPlaneSeeder before these lookups are useful.
 #
-# Policy note: ``anthropic_api`` and ``anthropic_messages`` are intentionally
-# absent. Anthropic/Claude usage must go through CLI integrations
-# (``claude_code``), not in-process Anthropic runtime types.
+# Policy note: there is no in-process LLM runtime adapter mapped here yet. Per
+# ADR 0010, a generic vendor-neutral API runtime adapter (``model_api``, backed by
+# the providers/LiteLLM layer, selecting any configured ModelProvider + model incl
+# Anthropic) is sanctioned but not yet built; it would get its own plane mapping when
+# added. Do not add vendor-specific runtime types like ``anthropic_api`` — the adapter
+# stays vendor-neutral and selects the provider at runtime.
 _ADAPTER_TO_PLANE: dict[str, str] = {
     "echo":        "agent_space_native_local",
     "capability":  "agent_space_native_local",
+    "model_api":   "managed_model_api",
     "claude_code": "local_claude_code_cli",
     "codex_cli":   "local_codex_cli",
     "opencode":    "local_opencode",

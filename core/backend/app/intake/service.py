@@ -2347,7 +2347,6 @@ class IntakeService:
             title=title[:512],
             payload_json={**payload, "kind": "intake_provenance"},
             status="processed",
-            lifecycle_status="active",
             consolidation_status="skipped",
             visibility="space_shared",
         )

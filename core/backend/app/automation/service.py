@@ -14,23 +14,25 @@ This service must NOT:
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any, Optional
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from ..models import Automation, AutomationRun
+from ..models import Automation, AutomationCredentialGrant, AutomationRun
 from ..policy.gateway import PolicyGateway, PolicyCheckRequest
 from ..policy.roles import get_space_role_normalized
 from ..runs.preflight import PreflightRequest, PreflightService
 from ..runs.run_service import RunService
 from ..schemas import RunCreate
 from .policy_preflight import AutomationPolicyPreflightService
+from .schedule import InvalidScheduleError, compute_next_run_at
 from .schemas import AutomationCreate, AutomationFireResult, AutomationUpdate
 
 log = logging.getLogger(__name__)
 
-_VALID_TRIGGER_TYPES = frozenset({"manual"})
+_VALID_TRIGGER_TYPES = frozenset({"manual", "schedule"})
 _VALID_STATUSES = frozenset({"active", "paused", "archived"})
 
 
@@ -66,6 +68,15 @@ class AutomationService:
                 status_code=422,
                 detail=f"Unsupported trigger_type {data.trigger_type!r}. Must be one of: {sorted(_VALID_TRIGGER_TYPES)}",
             )
+
+        # Schedule automations must carry a valid cron + timezone; compute the first
+        # due instant up front so an invalid schedule fails closed at creation.
+        initial_next_run_at: Optional[datetime] = None
+        if data.trigger_type == "schedule":
+            try:
+                initial_next_run_at = compute_next_run_at(data.config_json, after=datetime.now(UTC))
+            except InvalidScheduleError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         membership_role = get_space_role_normalized(self.db, owner_user_id, space_id) or "guest"
         PolicyGateway(self.db).enforce(PolicyCheckRequest(
@@ -106,6 +117,9 @@ class AutomationService:
             agent_id=data.agent_id,
             workspace_id=data.workspace_id,
             trigger_origin="automation",
+            # Schedule automations receive a standing credential grant at creation
+            # (Option A), so their unattended credential use is pre-authorized.
+            pre_authorized=(data.trigger_type == "schedule"),
         )
         if not policy_preflight.executable:
             raise HTTPException(
@@ -135,11 +149,23 @@ class AutomationService:
                 policy_preflight=policy_preflight.model_dump(),
             ),
             config_json=data.config_json,
+            next_run_at=initial_next_run_at,
         )
         if automation_id:
             auto.id = automation_id
         self.db.add(auto)
         self.db.flush()
+
+        # Option A pre-authorization: creating a scheduled automation (an admin/owner
+        # act, already gated above) grants its unattended same-space credential use.
+        if data.trigger_type == "schedule":
+            self.db.add(AutomationCredentialGrant(
+                space_id=space_id,
+                automation_id=auto.id,
+                granted_by_user_id=owner_user_id,
+                status="active",
+            ))
+            self.db.flush()
         return auto
 
     # ------------------------------------------------------------------
@@ -189,8 +215,69 @@ class AutomationService:
             auto.status = data.status
         if data.config_json is not None:
             auto.config_json = data.config_json
+
+        # Recompute the next due instant when a schedule's cron/timezone changes.
+        if auto.trigger_type == "schedule" and data.config_json is not None:
+            try:
+                auto.next_run_at = compute_next_run_at(auto.config_json, after=datetime.now(UTC))
+            except InvalidScheduleError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        # Archiving an automation revokes its standing credential pre-authorization.
+        if data.status == "archived":
+            self._revoke_active_grants(auto.id, space_id, actor_user_id)
+            auto.next_run_at = None
+
         self.db.flush()
         return auto
+
+    # ------------------------------------------------------------------
+    # Schedule advance + grant helpers
+    # ------------------------------------------------------------------
+
+    def advance_schedule(self, auto: Automation) -> None:
+        """Advance a fired schedule automation to its next due instant.
+
+        Sets last_fired_at=now and next_run_at to the next cron occurrence. Caller
+        commits. An invalid schedule clears next_run_at (the automation stops firing
+        until reconfigured) rather than raising.
+        """
+        now = datetime.now(UTC)
+        auto.last_fired_at = now
+        try:
+            auto.next_run_at = compute_next_run_at(auto.config_json, after=now)
+        except InvalidScheduleError:
+            log.warning(
+                "automation %s has an invalid schedule; clearing next_run_at", auto.id
+            )
+            auto.next_run_at = None
+
+    def _has_active_grant(self, automation_id: str, space_id: str) -> bool:
+        return (
+            self.db.query(AutomationCredentialGrant)
+            .filter(
+                AutomationCredentialGrant.automation_id == automation_id,
+                AutomationCredentialGrant.space_id == space_id,
+                AutomationCredentialGrant.status == "active",
+            )
+            .first()
+        ) is not None
+
+    def _revoke_active_grants(self, automation_id: str, space_id: str, actor_user_id: str) -> None:
+        now = datetime.now(UTC)
+        grants = (
+            self.db.query(AutomationCredentialGrant)
+            .filter(
+                AutomationCredentialGrant.automation_id == automation_id,
+                AutomationCredentialGrant.space_id == space_id,
+                AutomationCredentialGrant.status == "active",
+            )
+            .all()
+        )
+        for grant in grants:
+            grant.status = "revoked"
+            grant.revoked_at = now
+            grant.revoked_by_user_id = actor_user_id
 
     # ------------------------------------------------------------------
     # Fire (manual trigger)
@@ -203,6 +290,7 @@ class AutomationService:
         actor_user_id: str,
         prompt: Optional[str] = None,
         instruction: Optional[str] = None,
+        trigger_type: str = "manual",
     ) -> AutomationFireResult:
         """Manually trigger an Automation — creates a queued Run only.
 
@@ -236,7 +324,7 @@ class AutomationService:
             resource_id=automation_id,
             context={
                 "agent_id": auto.agent_id,
-                "trigger_type": "manual",
+                "trigger_type": trigger_type,
                 "trigger_origin": "automation",
                 "membership_role": membership_role,
             },
@@ -267,6 +355,7 @@ class AutomationService:
             agent_id=auto.agent_id,
             workspace_id=auto.workspace_id,
             trigger_origin="automation",
+            pre_authorized=self._has_active_grant(automation_id, space_id),
         )
         if not policy_preflight.executable:
             raise HTTPException(
@@ -297,7 +386,7 @@ class AutomationService:
             automation_id=auto.id,
             run_id=run.id,
             triggered_by_user_id=actor_user_id,
-            trigger_type="manual",
+            trigger_type=trigger_type,
             preflight_snapshot_json=self._preflight_snapshot(
                 runtime_preflight=preflight_result.model_dump(),
                 policy_preflight=policy_preflight.model_dump(),

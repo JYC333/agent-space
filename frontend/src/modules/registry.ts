@@ -124,10 +124,10 @@ export const MODULE_REGISTRY: Module[] = [
   {
     id: 'today', label: 'Today', path: '/today',
     section: 'capture', group: 'daily', icon: 'sun', accent: true,
-    description: 'Daily overview, active items, and suggested actions.',
+    description: "This space's daily overview, active items, and suggested actions.",
     source: 'built_in', capabilityId: undefined,
-    enabled: true, visible: true, planned: true,
-    perspectiveType: 'neutral',
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
     component: lazy(() => import('./today/TodayPage')),
   },
   {
@@ -140,9 +140,9 @@ export const MODULE_REGISTRY: Module[] = [
     component: lazy(() => import('./capture/CapturePage')),
   },
   {
-    id: 'activity', label: 'Activity', path: '/activity',
+    id: 'activity', label: 'Inbox', path: '/activity',
     section: 'capture', group: 'daily', icon: 'inbox',
-    description: 'Review raw captured records before they become proposals.',
+    description: 'Capture intake — review raw records before they become proposals.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
@@ -221,7 +221,7 @@ export const MODULE_REGISTRY: Module[] = [
     component: lazy(() => import('./runs/RunsModule')),
   },
   {
-    id: 'proposals', label: 'Proposals', path: '/proposals',
+    id: 'proposals', label: 'Review', path: '/proposals',
     section: 'knowledge', group: 'work', icon: 'check-circle',
     description: 'Review memory, knowledge, card, code, and system proposals.',
     source: 'built_in', capabilityId: undefined,
@@ -245,7 +245,7 @@ export const MODULE_REGISTRY: Module[] = [
 
   // ── Knowledge ─────────────────────────────────────────────────────────────
   {
-    id: 'knowledge', label: 'Knowledge', path: '/knowledge',
+    id: 'knowledge', label: 'Wiki', path: '/knowledge',
     section: 'knowledge', group: 'knowledge', icon: 'book-open', accent: true,
     description: 'Structured knowledge — concepts, claims, sources, questions.',
     source: 'built_in', capabilityId: undefined,
@@ -352,6 +352,15 @@ export const MODULE_REGISTRY: Module[] = [
     component: lazy(() => import('./providers/ModelProvidersPage')),
   },
   {
+    id: 'automations', label: 'Automations', path: '/automations',
+    section: 'agents', group: 'agents', icon: 'clock',
+    description: 'Schedule agents to run on a cron, or trigger them manually.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    component: lazy(() => import('./automations/AutomationsPage')),
+  },
+  {
     id: 'context', label: 'Context Preview', path: '/context',
     section: 'dev', group: 'system', icon: 'code',
     description: 'Preview the assembled context package for a space.',
@@ -362,20 +371,14 @@ export const MODULE_REGISTRY: Module[] = [
   },
 ]
 
-export function perspectiveTypeForPath(pathname: string): PerspectiveType {
-  if (pathname === '/personal' || pathname.startsWith('/personal/')) return 'personal'
-  const match = MODULE_REGISTRY.find(module => {
+/**
+ * Find the registered module that owns a path (used for route metadata lookups).
+ * Navigation tiers live in `src/core/navigation.tsx`; the home/space scope split lives in
+ * `routeScopeForPath`. The legacy "perspective" path classifier has been removed.
+ */
+export function moduleForPath(pathname: string): Module | undefined {
+  return MODULE_REGISTRY.find(module => {
     if (pathname === module.path) return true
     return module.hasSubRoutes && pathname.startsWith(`${module.path}/`)
   })
-  return match?.perspectiveType ?? 'neutral'
 }
-
-export const APP_GROUPS: { label: string; key: AppGroup }[] = [
-  { label: 'Daily',     key: 'daily'     },
-  { label: 'Work',      key: 'work'      },
-  { label: 'Knowledge', key: 'knowledge' },
-  { label: 'Agents',    key: 'agents'    },
-  { label: 'Workspace', key: 'workspace' },
-  { label: 'System',    key: 'system'    },
-]

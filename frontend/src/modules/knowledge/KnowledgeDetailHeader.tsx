@@ -8,8 +8,8 @@ import { fmt } from './utils'
 
 interface KnowledgeDetailHeaderProps {
   item: KnowledgeItem
-  activeOperationalSpaceName: string | null
-  activeOperationalSpaceId: string | null
+  activeSpaceName: string | null
+  activeSpaceId: string | null
   archiving: boolean
   onArchive: () => void
 }
@@ -32,8 +32,8 @@ export function knowledgeProvenance(item: KnowledgeItem): { label: string; value
 
 export default function KnowledgeDetailHeader({
   item,
-  activeOperationalSpaceName,
-  activeOperationalSpaceId,
+  activeSpaceName,
+  activeSpaceId,
   archiving,
   onArchive,
 }: KnowledgeDetailHeaderProps) {
@@ -42,7 +42,7 @@ export default function KnowledgeDetailHeader({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold tracking-tight">{item.title}</h1>
-          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+          <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
           <p className="text-xs text-muted-foreground mt-1">
             ID <span className="font-mono select-all text-foreground">{item.id}</span>
           </p>

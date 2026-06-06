@@ -1,5 +1,5 @@
 import { Copy } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { toast } from 'sonner'
 import type { Proposal } from '../../types/api'
 import { Badge } from '../../components/ui/badge'

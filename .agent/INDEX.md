@@ -58,6 +58,7 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 | Doc | What it covers |
 |---|---|
 | [architecture/SECURITY_AND_ACCESS_BOUNDARIES.md](architecture/SECURITY_AND_ACCESS_BOUNDARIES.md) | Auth boundary, space isolation, object visibility, session/task/activity policy, cross-space exceptions, credential secrecy, dogfooding readiness |
+| [architecture/CREDENTIAL_STORAGE.md](architecture/CREDENTIAL_STORAGE.md) | How secrets are stored at rest: ModelProvider API keys (AES-256-GCM + disk master key + `secret_ref`) vs CLI login state; runtime resolution; ADR 0010 channel isolation |
 | [architecture/POLICY_ENFORCEMENT_INVENTORY.md](architecture/POLICY_ENFORCEMENT_INVENTORY.md) | All current policy enforcement points; enforcement status per class |
 
 ### Backend Domains

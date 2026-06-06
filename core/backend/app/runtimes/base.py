@@ -40,6 +40,10 @@ class RuntimeExecutionContext:
     model_name: str | None
     system_prompt: str | None
     adapter_config: dict[str, Any]
+    # Effective resolved ModelProvider id for this run (set by the execution service
+    # for model_provider adapters). managed_api adapters use it to select the provider;
+    # the decrypted key still arrives via ``resolved_credentials``.
+    model_provider_id: str | None = None
     instruction: str | None = None
     project_id: str | None = None
     workspace_id: str | None = None

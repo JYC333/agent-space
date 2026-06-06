@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { Inbox, FolderKanban, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { activityApi } from '../../api/client'
@@ -14,7 +15,8 @@ import { ScopeBadge } from '../../components/ScopeBadge'
 
 function fmt(dt: string) { return new Date(dt).toLocaleString() }
 
-const STATUS_FILTERS: ActivityStatus[] = ['raw', 'processed', 'proposals_generated', 'archived']
+type StatusFilter = ActivityStatus | 'all'
+const STATUS_FILTERS: StatusFilter[] = ['all', 'raw', 'proposals_generated', 'processed', 'archived']
 
 const SOURCE_COLORS: Record<ActivitySourceType, string> = {
   user_capture:    'default',
@@ -30,17 +32,19 @@ const SOURCE_COLORS: Record<ActivitySourceType, string> = {
 }
 
 export default function ActivityInboxPage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [searchParams, setSearchParams] = useSearchParams()
   const projectFilter = searchParams.get('project_id') ?? ''
 
   const [records, setRecords]   = useState<ActivityInboxRecord[]>([])
-  const [filter, setFilter]     = useState<ActivityStatus>('raw')
+  // Status filter is URL-driven so the Inbox scene sidebar and the header toggles stay in sync.
+  const filter = (searchParams.get('status') as StatusFilter | null) ?? 'raw'
+  const setFilter = (next: StatusFilter) => setSearchParams(p => { p.set('status', next); return p }, { replace: true })
   const [loading, setLoading]   = useState(false)
   const [busy, setBusy]         = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setRecords([])
       setLoading(false)
       return
@@ -48,7 +52,7 @@ export default function ActivityInboxPage() {
     setLoading(true)
     try {
       const items = await activityApi.list({
-        status: filter,
+        status: filter === 'all' ? undefined : filter,
         project_id: projectFilter || undefined,
       })
       setRecords(items)
@@ -57,7 +61,7 @@ export default function ActivityInboxPage() {
     } finally {
       setLoading(false)
     }
-  }, [filter, projectFilter, activeOperationalSpaceId])
+  }, [filter, projectFilter, activeSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -101,7 +105,7 @@ export default function ActivityInboxPage() {
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Activity Inbox</h1>
             <p className="text-sm text-muted-foreground">Saved as activity first. Nothing becomes memory or changes files without review.</p>
-            <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+            <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
             {projectFilter && (
               <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-accent/40 text-xs text-accent-foreground">
                 <FolderKanban className="size-3" />
@@ -127,7 +131,7 @@ export default function ActivityInboxPage() {
       )}
 
       {!loading && records.length === 0 && (
-        !activeOperationalSpaceId ? (
+        !activeSpaceId ? (
           <EmptyState
             title="No space selected"
             description="Select an operational space to browse activity."
@@ -144,7 +148,7 @@ export default function ActivityInboxPage() {
           />
         ) : (
           <EmptyState
-            title={`No ${filter.replace(/_/g, ' ')} activity`}
+            title={filter === 'all' ? 'No activity yet' : `No ${filter.replace(/_/g, ' ')} activity`}
             description={filter === 'archived'
               ? 'Archived records appear here after you dismiss them.'
               : 'Records with proposals generated appear here.'}

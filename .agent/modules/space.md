@@ -25,7 +25,7 @@ WorkspaceMembership: id, workspace_id, user_id, role
 ```
 
 ## Main Flows
-- On first run, a `personal` space with `DEFAULT_SPACE_ID` is seeded
+- On first run, bootstrap seeds the default owner's personal space (a generated UUID, located by owner membership — no fixed/magic space id)
 - All API calls include `space_id` (from session / header / default)
 - ContextBuilder requires `space_id` and raises if missing
 
@@ -37,7 +37,8 @@ WorkspaceMembership: id, workspace_id, user_id, role
 ## Related Files
 - `core/backend/app/models.py` — Space, SpaceMembership, Workspace, WorkspaceMembership
 - `core/backend/app/schemas.py` — WorkspaceCreate, WorkspaceOut
-- `core/backend/app/config.py` — DEFAULT_SPACE_ID, DEFAULT_USER_ID
+- `core/backend/app/config.py` — DEFAULT_USER_ID (bootstrap owner)
+- `core/backend/app/spaces/defaults.py` — resolves the default space (owner's personal space) from the DB
 - `core/backend/app/memory/context_builder.py` — enforces space boundary
 
 ## Related Decisions

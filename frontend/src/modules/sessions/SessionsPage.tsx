@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { MessageSquare } from 'lucide-react'
 import { toast } from 'sonner'
-import { useLocation } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { sessionsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg, isNotFoundError } from '../../lib/utils'
@@ -18,8 +18,8 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '.
 function fmt(dt: string | null | undefined) { return dt ? new Date(dt).toLocaleString() : '—' }
 
 export default function SessionsPage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
-  const location = useLocation()
+  const { activeSpaceId, activeSpaceName } = useSpace()
+  const [searchParams] = useSearchParams()
   const [sessions, setSessions]             = useState<Session[]>([])
   const [activeSession, setActiveSession]   = useState<Session | null>(null)
   const [sessionNotFound, setSessionNotFound] = useState(false)
@@ -31,28 +31,28 @@ export default function SessionsPage() {
   const autoOpenRef = useRef(false)
 
   const loadSessions = useCallback(async () => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setSessions([])
       return
     }
     try { setSessions((await sessionsApi.list()).items) }
     catch (e) { toast.error(errMsg(e)) }
-  }, [activeOperationalSpaceId])
+  }, [activeSpaceId])
 
   useEffect(() => { loadSessions() }, [loadSessions])
 
-  // Auto-open a specific session when navigated here with state (e.g. from RecentCard)
+  // Auto-open a specific session when deep-linked via ?open=<sessionId> (e.g. from Space Today).
   useEffect(() => {
     if (autoOpenRef.current) return
-    const openId = (location.state as { openSessionId?: string } | null)?.openSessionId
+    const openId = searchParams.get('open')
     if (!openId) return
     autoOpenRef.current = true
     openSession(openId)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [searchParams])
 
   async function createSession() {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       toast.error('Select an operational space before creating a session')
       return
     }
@@ -122,7 +122,7 @@ export default function SessionsPage() {
       <Card>
         <CardTitle>New Session</CardTitle>
         <p className="text-xs text-muted-foreground mb-3">
-          Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
+          Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}
         </p>
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
@@ -139,14 +139,14 @@ export default function SessionsPage() {
             <Input value={workspace} onChange={e => setWorkspace(e.target.value)} placeholder="e.g. agent-space" />
           </div>
         </div>
-        <Button onClick={createSession} disabled={!activeOperationalSpaceId}>Create Session</Button>
+        <Button onClick={createSession} disabled={!activeSpaceId}>Create Session</Button>
       </Card>
 
       <Card>
         <CardTitle>Sessions</CardTitle>
         {sessions.length === 0
           ? <p className="text-muted-foreground text-center py-10 text-sm">
-              {activeOperationalSpaceId ? 'No sessions yet.' : 'Select an operational space to browse sessions.'}
+              {activeSpaceId ? 'No sessions yet.' : 'Select an operational space to browse sessions.'}
             </p>
           : (
             <Table>

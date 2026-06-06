@@ -1,34 +1,30 @@
 import { useState, useEffect, useRef } from 'react'
-import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Settings, Sun, Moon, LogOut } from 'lucide-react'
+import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Sun, Moon, LogOut, Menu, Globe } from 'lucide-react'
 import { Toaster } from 'sonner'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
+import { useSpace } from '../contexts/SpaceContext'
 import { SpaceSwitcher } from '../components/SpaceSwitcher'
-import { PerspectiveGuardBanner } from '../components/PerspectiveGuardBanner'
 import { UserAvatar } from '../components/UserAvatar'
-import { cn } from '../lib/utils'
-import { perspectiveTypeForPath } from '../modules/registry'
+import { GlobalRail } from '../components/shell/GlobalRail'
+import { SceneSidebar, SceneTabs } from '../components/shell/SceneSidebar'
+import { MobileTabBar } from '../components/shell/MobileTabBar'
+import { FloatingQuickCapture } from '../components/FloatingQuickCapture'
+import { routeScopeForPath, sceneForPath, stripSpacePrefix } from './navigation'
+import { moduleForPath } from '../modules/registry'
 
-/* ── Aperture A brand mark ─────────────────────────────────────────────────── */
-function ApertureMark({ size = 22 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 512 512" style={{ flexShrink: 0 }}>
-      <rect width="512" height="512" rx="96" fill="var(--card)" />
-      <rect x="80" y="80" width="352" height="352" rx="48" fill="var(--background)" stroke="var(--border)" strokeWidth="8" />
-      <path
-        d="M 176 360 L 232 184 Q 256 132 280 184 L 336 360"
-        fill="none" stroke="var(--primary)" strokeWidth="44"
-        strokeLinecap="round" strokeLinejoin="round"
-      />
-      <line x1="212" y1="288" x2="300" y2="288"
-        stroke="var(--primary)" strokeWidth="44" strokeLinecap="round" />
-      <circle cx="256" cy="288" r="18" fill="var(--accent-foreground)" />
-    </svg>
-  )
+const RAIL_KEY = 'agent-space:rail-expanded'
+const SCENE_COLLAPSE_KEY = 'agent-space:scene-collapsed'
+
+function readBool(key: string, fallback: boolean): boolean {
+  try { const v = localStorage.getItem(key); return v === null ? fallback : v === 'true' } catch { return fallback }
+}
+function readMap(key: string): Record<string, boolean> {
+  try { const v = JSON.parse(localStorage.getItem(key) ?? '{}'); return typeof v === 'object' && v ? v : {} } catch { return {} }
 }
 
-/* ── Theme toggle button ───────────────────────────────────────────────────── */
+/* ── Theme toggle ──────────────────────────────────────────────────────────── */
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme()
   return (
@@ -76,11 +72,7 @@ function UserMenu() {
         className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border hover:opacity-90 transition-opacity"
         title={currentUser.display_name}
       >
-        <UserAvatar
-          avatarUrl={currentUser.avatar_url}
-          displayName={currentUser.display_name}
-          email={currentUser.email}
-        />
+        <UserAvatar avatarUrl={currentUser.avatar_url} displayName={currentUser.display_name} email={currentUser.email} />
       </button>
 
       {open && (
@@ -102,62 +94,44 @@ function UserMenu() {
   )
 }
 
-/* ── Top bar ───────────────────────────────────────────────────────────────── */
-function TopBar() {
+/* ── Scene header (title + collapsed-sidebar expand handle + space context) ─── */
+function SceneHeader({
+  title, isHome, sidebarCollapsed, hasSidebar, onExpandSidebar,
+}: {
+  title: string
+  isHome: boolean
+  sidebarCollapsed: boolean
+  hasSidebar: boolean
+  onExpandSidebar: () => void
+}) {
   return (
     <header className="shrink-0 flex items-center gap-2.5 h-14 px-4 border-b border-border bg-card">
-      {/* Brand — always links home */}
-      <Link
-        to="/"
-        className="flex items-center gap-2.5 pr-3 h-full border-r border-border shrink-0"
-        style={{ textDecoration: 'none' }}
-      >
-        <ApertureMark size={22} />
-        <span className="font-bold text-[13px] tracking-tight text-accent-foreground">
-          agent-space
+      {hasSidebar && sidebarCollapsed ? (
+        <button
+          type="button"
+          onClick={onExpandSidebar}
+          className="hidden md:flex items-center gap-2 h-8 px-2.5 rounded-md border border-border text-[13px] font-semibold text-foreground hover:bg-accent transition-colors"
+          title="Show sidebar"
+          aria-label="Show sidebar"
+        >
+          <Menu className="size-4" /> {title}
+        </button>
+      ) : (
+        <h1 className="text-[15px] font-semibold tracking-tight text-foreground truncate">{title}</h1>
+      )}
+
+      {isHome && (
+        <span className="hidden sm:inline-flex items-center gap-1 h-7 px-2 rounded-md border border-border text-[11px] text-muted-foreground">
+          <Globe className="size-3" /> Showing: All spaces
         </span>
-      </Link>
+      )}
 
-      {/* Space switcher */}
-      <SpaceSwitcher />
-
-      {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Right controls */}
       <div className="flex items-center gap-1.5">
-        <NavLink
-          to="/proposals"
-          className={({ isActive }) =>
-            cn(
-              'flex items-center gap-1.5 h-8 px-2.5 rounded-md border text-[12px] font-medium transition-colors',
-              isActive
-                ? 'border-primary/40 text-accent-foreground bg-primary/10'
-                : 'border-border text-muted-foreground hover:text-foreground hover:bg-accent',
-            )
-          }
-        >
-          Proposals
-        </NavLink>
-
+        <SpaceSwitcher />
         <ThemeToggle />
-
         <UserMenu />
-
-        <NavLink
-          to="/settings"
-          className={({ isActive }) =>
-            cn(
-              'flex items-center justify-center w-8 h-8 rounded-md border border-border transition-colors',
-              isActive
-                ? 'text-accent-foreground bg-primary/10 border-primary/40'
-                : 'text-muted-foreground hover:text-foreground hover:bg-accent',
-            )
-          }
-          title="Settings"
-        >
-          <Settings className="size-3.5" />
-        </NavLink>
       </div>
     </header>
   )
@@ -166,16 +140,56 @@ function TopBar() {
 /* ── Shell ─────────────────────────────────────────────────────────────────── */
 export default function Shell() {
   const { theme } = useTheme()
+  const { preferredSpaceId } = useSpace()
   const location = useLocation()
-  const isSpaceScopedPage = perspectiveTypeForPath(location.pathname) === 'space-scoped'
-  return (
-    <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground">
-      <TopBar />
 
-      <main className="flex-1 overflow-y-auto">
-        <PerspectiveGuardBanner isSpaceScopedPage={isSpaceScopedPage} />
-        <Outlet />
-      </main>
+  const scope = routeScopeForPath(location.pathname)
+  const scene = scope === 'home' ? null : sceneForPath(location.pathname)
+  const logicalPath = stripSpacePrefix(location.pathname)
+  const isHome = logicalPath === '/home' || logicalPath.startsWith('/home/') || logicalPath === '/'
+
+  const [railExpanded, setRailExpanded] = useState(() => readBool(RAIL_KEY, false))
+  const [collapsedScenes, setCollapsedScenes] = useState<Record<string, boolean>>(() => readMap(SCENE_COLLAPSE_KEY))
+
+  useEffect(() => { try { localStorage.setItem(RAIL_KEY, String(railExpanded)) } catch { /* ignore */ } }, [railExpanded])
+  useEffect(() => { try { localStorage.setItem(SCENE_COLLAPSE_KEY, JSON.stringify(collapsedScenes)) } catch { /* ignore */ } }, [collapsedScenes])
+
+  const sceneCollapsed = scene ? (collapsedScenes[scene.id] ?? false) : false
+  const showSidebar = Boolean(scene) && !sceneCollapsed
+  const title = scene?.title ?? (isHome ? 'Home' : moduleForPath(logicalPath)?.label ?? 'agent-space')
+
+  function setSceneCollapsed(collapsed: boolean) {
+    if (!scene) return
+    setCollapsedScenes(prev => ({ ...prev, [scene.id]: collapsed }))
+  }
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+      <GlobalRail expanded={railExpanded} onToggle={() => setRailExpanded(v => !v)} spaceId={preferredSpaceId} />
+
+      {showSidebar && scene && (
+        <SceneSidebar scene={scene} onCollapse={() => setSceneCollapsed(true)} spaceId={preferredSpaceId} />
+      )}
+
+      <div className="flex-1 flex flex-col min-w-0">
+        <SceneHeader
+          title={title}
+          isHome={isHome}
+          hasSidebar={Boolean(scene)}
+          sidebarCollapsed={sceneCollapsed}
+          onExpandSidebar={() => setSceneCollapsed(false)}
+        />
+
+        {scene && <SceneTabs scene={scene} spaceId={preferredSpaceId} />}
+
+        <main className="flex-1 overflow-y-auto">
+          <Outlet />
+        </main>
+
+        <MobileTabBar spaceId={preferredSpaceId} />
+      </div>
+
+      <FloatingQuickCapture scope={scope} />
 
       <Toaster
         theme={theme}

@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { ArrowLeft, ExternalLink, FlaskConical } from 'lucide-react'
 import { toast } from 'sonner'
 import { artifactsApi, runsApi } from '../../api/client'
@@ -24,10 +25,10 @@ function fmt(dt: string | null | undefined) {
 
 export default function RunDetailPage() {
   const { runId = '' } = useParams()
-  const { spaces, activeOperationalSpaceId, activeOperationalSpaceName, personalSpaceId, userId } = useSpace()
+  const { spaces, activeSpaceId, activeSpaceName, personalSpaceId, userId } = useSpace()
   const [reloadKey, setReloadKey] = useState(0)
   const [executingRun, setExecutingRun] = useState(false)
-  const { run: polled, loading, error } = useRun(runId && activeOperationalSpaceId ? runId : null, reloadKey)
+  const { run: polled, loading, error } = useRun(runId && activeSpaceId ? runId : null, reloadKey)
   const [activities, setActivities] = useState<ActivityRecord[]>([])
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
@@ -35,7 +36,7 @@ export default function RunDetailPage() {
 
   const loadSubs = useCallback(async () => {
     if (!runId) return
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setActivities([])
       setArtifacts([])
       setProposals([])
@@ -57,7 +58,7 @@ export default function RunDetailPage() {
     } finally {
       setTabLoading(false)
     }
-  }, [runId, activeOperationalSpaceId])
+  }, [runId, activeSpaceId])
 
   useEffect(() => {
     void loadSubs()
@@ -65,7 +66,7 @@ export default function RunDetailPage() {
 
   useEffect(() => {
     setReloadKey(k => k + 1)
-  }, [activeOperationalSpaceId])
+  }, [activeSpaceId])
 
   // Sub-resources are created when the run finishes; refetch when polling reaches a terminal status
   // (mount-only loadSubs() would leave tabs empty after queued → succeeded without leaving the page).
@@ -109,7 +110,7 @@ export default function RunDetailPage() {
   }
 
   if (error || !polled) {
-    const isNotFound = !activeOperationalSpaceId
+    const isNotFound = !activeSpaceId
       || (error?.includes('404') ?? false)
       || (error?.toLowerCase().includes('not found') ?? false)
     return (
@@ -117,7 +118,7 @@ export default function RunDetailPage() {
         <Button variant="ghost" asChild>
           <Link to="/runs"><ArrowLeft className="size-4 mr-1" />Runs</Link>
         </Button>
-        {!activeOperationalSpaceId ? (
+        {!activeSpaceId ? (
           <EmptyState
             className="mt-6"
             title="No space selected"
@@ -157,7 +158,7 @@ export default function RunDetailPage() {
 
       <div className="space-y-3 border-b border-border pb-4">
         <h1 className="text-xl font-semibold tracking-tight font-mono">{r.id}</h1>
-        <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+        <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
         <div className="flex flex-wrap gap-1.5 items-center">
           <StatusBadge status={r.status} />
           <Badge variant="secondary">{r.mode}</Badge>

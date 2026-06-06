@@ -8,6 +8,9 @@ import type {
   Job, JobEvent, ActivityInboxRecord,
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
   TaskArtifact, TaskProposal, Artifact, Proposal, ProposalAcceptOut, AgentOut, AgentCreateBody, AgentUpdateBody, RunCreateBody,
+  AgentTemplateOut, AgentTemplateVersionOut, CreateAgentFromTemplateBody,
+  AgentVersionOut, AgentConfigUpdateBody, ChatTurnOut,
+  SpaceAssistantSettingsOut, SpaceAssistantSettingsUpdate,
   ActivityRecord, ActivitySourceType,
   KnowledgeCreateProposalBody, KnowledgeItem, KnowledgeItemSummary, KnowledgeRelation, KnowledgeRelationProposalBody, KnowledgeUpdateProposalBody,
   FileNode, FileContent, GitStatus, RuntimeInfo, ConsoleSession, WorkspaceInfo,
@@ -22,6 +25,7 @@ import type {
   SummaryRunRequest, SummaryRunOut,
   DailyCaptureReportSettingOut, DailyCaptureReportSettingUpdate,
   DailyReportRunRequest, DailyReportRunResponse, DailyReportArtifactItem,
+  AutomationOut, AutomationCreateBody, AutomationUpdateBody, AutomationFireResult,
 } from '../types/api'
 
 const BASE = '/api/v1'
@@ -61,7 +65,10 @@ interface RequestOptions {
 }
 
 async function request<T = unknown>(method: string, path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  // FormData (file/voice upload) must keep the browser-set multipart boundary, so
+  // we do not force a Content-Type for it and pass the body through unserialized.
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData
+  const headers: Record<string, string> = isForm ? {} : { 'Content-Type': 'application/json' }
   if (_apiKey) headers['Authorization'] = `Bearer ${_apiKey}`
 
   const includeSpaceParams = options.includeSpaceParams ?? true
@@ -70,7 +77,7 @@ async function request<T = unknown>(method: string, path: string, body?: unknown
     : BASE + path
 
   const opts: RequestInit = { method, headers }
-  if (body !== undefined) opts.body = JSON.stringify(body)
+  if (body !== undefined) opts.body = isForm ? (body as FormData) : JSON.stringify(body)
 
   const r = await fetch(url, opts)
 
@@ -371,11 +378,57 @@ export const agentsApi = {
   get: (agentId: string) => get<AgentOut>(`/agents/${agentId}`),
   create: (data: AgentCreateBody) => post<AgentOut>('/agents', data),
   update: (agentId: string, data: AgentUpdateBody) => patch<AgentOut>(`/agents/${agentId}`, data),
+  // Config edit: appends a new immutable AgentVersion and repoints current_version_id.
+  updateConfig: (agentId: string, data: AgentConfigUpdateBody) =>
+    post<AgentOut>(`/agents/${agentId}/config`, data),
+  currentVersion: (agentId: string) => get<AgentVersionOut>(`/agents/${agentId}/current-version`),
+  // Per-space system-managed default Assistant (the Chat identity). ensure is idempotent.
+  getDefaultAssistant: () => get<AgentOut>('/agents/default-assistant'),
+  ensureDefaultAssistant: () => post<AgentOut>('/agents/default-assistant'),
+  // Assistant preferences (soft UI/context layer — never edits prompt or hard policy).
+  getAssistantSettings: () => get<SpaceAssistantSettingsOut>('/agents/default-assistant/settings'),
+  updateAssistantSettings: (data: SpaceAssistantSettingsUpdate) =>
+    patch<SpaceAssistantSettingsOut>('/agents/default-assistant/settings', data),
+  listVersions: (agentId: string) => get<AgentVersionOut[]>(`/agents/${agentId}/versions`),
+  getVersion: (agentId: string, versionId: string) =>
+    get<AgentVersionOut>(`/agents/${agentId}/versions/${versionId}`),
+  restoreVersion: (agentId: string, versionId: string) =>
+    post<AgentOut>(`/agents/${agentId}/versions/${versionId}/restore`),
+  listProposals: (agentId: string, status = 'pending') =>
+    get<Proposal[]>(`/agents/${agentId}/proposals?status=${encodeURIComponent(status)}`),
   createRun: (agentId: string, body: RunCreateBody = {}) =>
     post<Run>(`/agents/${agentId}/runs`, body),
+  // Synchronous Personal Assistant chat turn. spaceId pins the request to the
+  // agent's space (the assistant may live in a space other than the active one).
+  chat: (agentId: string, body: { message: string; session_id?: string }, options: { spaceId?: string } = {}) =>
+    post<ChatTurnOut>(`/agents/${agentId}/chat`, body, { spaceId: options.spaceId }),
   listRuns:       (limit = 50)        => get<Run[]>(`/agents/runs?limit=${limit}`),
   getRun:         (runId: string)     => get<Run>(`/agents/runs/${runId}`),
   listRunsForAgent:  (agentId: string)   => get<Run[]>(`/agents/${agentId}/runs`),
+}
+
+// ── Agent Templates (reusable factories) ────────────────────────────────────
+export const agentTemplatesApi = {
+  list: (params: Record<string, string> = {}) =>
+    get<AgentTemplateOut[]>('/agent-templates?' + new URLSearchParams(params)),
+  get: (templateId: string) => get<AgentTemplateOut>(`/agent-templates/${templateId}`),
+  listVersions: (templateId: string) =>
+    get<AgentTemplateVersionOut[]>(`/agent-templates/${templateId}/versions`),
+  getVersion: (templateId: string, versionId: string) =>
+    get<AgentTemplateVersionOut>(`/agent-templates/${templateId}/versions/${versionId}`),
+  createAgent: (templateId: string, body: CreateAgentFromTemplateBody = {}) =>
+    post<AgentOut>(`/agent-templates/${templateId}/agents`, body),
+}
+
+// ── Automations ───────────────────────────────────────────────────────────
+// Space-scoped paths (/spaces/{space_id}/automations); identity via session/bearer.
+export const automationsApi = {
+  list:   ()                                  => get<AutomationOut[]>(`/spaces/${_spaceId}/automations`),
+  get:    (id: string)                        => get<AutomationOut>(`/spaces/${_spaceId}/automations/${id}`),
+  create: (data: AutomationCreateBody)        => post<AutomationOut>(`/spaces/${_spaceId}/automations`, data),
+  update: (id: string, data: AutomationUpdateBody) => patch<AutomationOut>(`/spaces/${_spaceId}/automations/${id}`, data),
+  fire:   (id: string, body: { prompt?: string; instruction?: string } = {}) =>
+    post<AutomationFireResult>(`/spaces/${_spaceId}/automations/${id}/fire`, body),
 }
 
 // ── Workspaces ────────────────────────────────────────────────────────────
@@ -492,6 +545,19 @@ export const activityApi = {
     options: { spaceId?: string } = {},
   ) =>
     post<ActivityInboxRecord>('/activity', data, { spaceId: options.spaceId }),
+  // File / voice capture (store-only). Sends multipart; lands in the Activity Inbox.
+  upload: (
+    file: File,
+    options: { kind?: 'file' | 'voice'; title?: string; note?: string; workspace_id?: string; spaceId?: string } = {},
+  ) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('kind', options.kind ?? 'file')
+    if (options.title) fd.append('title', options.title)
+    if (options.note) fd.append('note', options.note)
+    if (options.workspace_id) fd.append('workspace_id', options.workspace_id)
+    return post<ActivityInboxRecord>('/activity/upload', fd, { spaceId: options.spaceId })
+  },
   get:    (id: string) => get<ActivityInboxRecord>(`/activity/${id}`),
   review: (id: string) => patch<ActivityInboxRecord>(`/activity/${id}/review`),
   archive:(id: string) => patch<ActivityInboxRecord>(`/activity/${id}/archive`),

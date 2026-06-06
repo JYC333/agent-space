@@ -803,7 +803,7 @@ class TestOrphanLockCleanup:
             max_attempts=3,
             scheduled_at=datetime.now(UTC),
             claimed_by="worker-stale",
-            payload={"run_id": run.id, "space_id": space_id, "user_id": user.id},
+            payload_json={"run_id": run.id, "space_id": space_id, "user_id": user.id},
         )
         db.add(job)
         db.flush()
@@ -851,7 +851,7 @@ class TestOrphanLockCleanup:
             max_attempts=3,
             scheduled_at=datetime.now(UTC),
             claimed_by="worker-fresh",
-            payload={"run_id": run.id, "space_id": space_id, "user_id": user.id},
+            payload_json={"run_id": run.id, "space_id": space_id, "user_id": user.id},
         )
         db.add(job)
         db.flush()
@@ -903,7 +903,7 @@ class TestOrphanLockCleanup:
                 max_attempts=3,
                 scheduled_at=datetime.now(UTC),
                 claimed_by="worker-stale",
-                payload={"run_id": run.id, "space_id": space_id, "user_id": user.id},
+                payload_json={"run_id": run.id, "space_id": space_id, "user_id": user.id},
             )
             db.add(job)
             db.flush()
@@ -979,7 +979,7 @@ class TestOrphanLockCleanup:
             max_attempts=3,
             scheduled_at=datetime.now(UTC),
             claimed_by="worker-stale-a",
-            payload={"run_id": run_a.id, "space_id": space_id, "user_id": user.id},
+            payload_json={"run_id": run_a.id, "space_id": space_id, "user_id": user.id},
         )
         # Fresh-heartbeat job for run_b
         job_b = Job(
@@ -992,7 +992,7 @@ class TestOrphanLockCleanup:
             max_attempts=3,
             scheduled_at=datetime.now(UTC),
             claimed_by="worker-fresh-b",
-            payload={"run_id": run_b.id, "space_id": space_id, "user_id": user.id},
+            payload_json={"run_id": run_b.id, "space_id": space_id, "user_id": user.id},
         )
         db.add(job_a)
         db.add(job_b)
@@ -1141,7 +1141,7 @@ class TestHeartbeatLifecycle:
             attempts=0,
             max_attempts=3,
             scheduled_at=datetime.now(UTC),
-            payload={},
+            payload_json={},
         )
         db.add(job)
         db.commit()
@@ -1216,7 +1216,7 @@ class TestJobCancellationLinkage:
             attempts=0 if job_status == "pending" else 1,
             max_attempts=3,
             scheduled_at=datetime.now(UTC),
-            payload={"run_id": run.id, "space_id": space_id, "user_id": user_id},
+            payload_json={"run_id": run.id, "space_id": space_id, "user_id": user_id},
         )
         db.add(job)
         db.commit()

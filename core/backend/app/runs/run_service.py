@@ -79,7 +79,7 @@ class RunService:
         ws = self.db.query(Workspace).filter(Workspace.id == workspace_id).first()
         if not ws:
             raise HTTPException(status_code=400, detail=f"Workspace '{workspace_id}' not found")
-        if ws.owner_space_id != space_id:
+        if ws.space_id != space_id:
             raise HTTPException(
                 status_code=400,
                 detail=f"Workspace '{workspace_id}' does not belong to this space",

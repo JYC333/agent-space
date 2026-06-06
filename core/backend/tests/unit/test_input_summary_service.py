@@ -37,7 +37,14 @@ from app.memory.proposals import ProposalService
 from app.models import Artifact, KnowledgeItem, MemoryEntry, Proposal, Run
 
 
-_FAKE_PROVIDER_TUPLE = ("openai", None, "gpt-4o-mini", "test-key")
+from app.providers.invocation import CompletionResult as _CompletionResult
+
+
+def _CR(text):
+    return _CompletionResult(text=text, model="gpt-4o-mini")
+
+
+_FAKE_PROVIDER_TUPLE = ("prov-test", None)
 _FAKE_SUMMARY = "This is a deterministic test summary."
 
 
@@ -60,8 +67,8 @@ def test_creates_run_and_artifact_from_activity(db):
     act = _make_activity(db)
     svc = InputSummaryService(db)
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         result = svc.run(
             space_id=PERSONAL_SPACE_ID,
             user_id=DEFAULT_USER_ID,
@@ -90,8 +97,8 @@ def test_run_status_succeeded_on_success(db):
     act = _make_activity(db)
     svc = InputSummaryService(db)
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         result = svc.run(space_id=PERSONAL_SPACE_ID, user_id=DEFAULT_USER_ID, activity_ids=[act.id])
 
     run = db.query(Run).filter(Run.id == result.run_id).first()
@@ -108,8 +115,8 @@ def test_run_status_failed_on_provider_error_no_artifact(db):
         Artifact.space_id == PERSONAL_SPACE_ID, Artifact.artifact_type == "summary"
     ).count()
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", side_effect=RuntimeError("network error")):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", side_effect=RuntimeError("network error")):
         with pytest.raises(InputSummaryProviderCallError):
             svc.run(space_id=PERSONAL_SPACE_ID, user_id=DEFAULT_USER_ID, activity_ids=[act.id])
 
@@ -145,8 +152,8 @@ def test_creates_memory_proposal_when_requested(db):
     act = _make_activity(db)
     svc = InputSummaryService(db)
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         result = svc.run(
             space_id=PERSONAL_SPACE_ID,
             user_id=DEFAULT_USER_ID,
@@ -169,8 +176,8 @@ def test_memory_proposal_can_be_accepted(db):
     act = _make_activity(db)
     svc = InputSummaryService(db)
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         result = svc.run(
             space_id=PERSONAL_SPACE_ID,
             user_id=DEFAULT_USER_ID,
@@ -196,8 +203,8 @@ def test_creates_knowledge_proposal_when_requested(db):
     act = _make_activity(db)
     svc = InputSummaryService(db)
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         result = svc.run(
             space_id=PERSONAL_SPACE_ID,
             user_id=DEFAULT_USER_ID,
@@ -222,8 +229,8 @@ def test_knowledge_proposal_can_be_accepted(db):
     act = _make_activity(db)
     svc = InputSummaryService(db)
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         result = svc.run(
             space_id=PERSONAL_SPACE_ID,
             user_id=DEFAULT_USER_ID,
@@ -249,8 +256,8 @@ def test_creates_both_proposals_when_both_requested(db):
     act = _make_activity(db)
     svc = InputSummaryService(db)
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         result = svc.run(
             space_id=PERSONAL_SPACE_ID,
             user_id=DEFAULT_USER_ID,
@@ -272,8 +279,8 @@ def test_no_proposals_created_by_default(db):
     act = _make_activity(db)
     svc = InputSummaryService(db)
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         result = svc.run(
             space_id=PERSONAL_SPACE_ID,
             user_id=DEFAULT_USER_ID,
@@ -290,8 +297,8 @@ def test_never_writes_memory_or_knowledge_directly(db):
     memory_before = db.query(MemoryEntry).filter(MemoryEntry.space_id == PERSONAL_SPACE_ID).count()
     knowledge_before = db.query(KnowledgeItem).filter(KnowledgeItem.space_id == PERSONAL_SPACE_ID).count()
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         result = svc.run(
             space_id=PERSONAL_SPACE_ID,
             user_id=DEFAULT_USER_ID,
@@ -319,8 +326,8 @@ def test_provider_call_failure_raises_call_error_not_missing(db):
     act = _make_activity(db)
     svc = InputSummaryService(db)
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", side_effect=RuntimeError("timeout")):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", side_effect=RuntimeError("timeout")):
         with pytest.raises(InputSummaryProviderCallError):
             svc.run(space_id=PERSONAL_SPACE_ID, user_id=DEFAULT_USER_ID, activity_ids=[act.id])
 
@@ -332,7 +339,7 @@ def test_missing_provider_raises_typed_error(db):
     from app.memory.provider_client import ReflectorModelProviderMissingError
 
     with patch(
-        "app.activity.input_summary_service.resolve_reflector_provider",
+        "app.activity.input_summary_service.resolve_reflector_provider_id",
         side_effect=ReflectorModelProviderMissingError("no provider"),
     ):
         with pytest.raises(InputSummaryProviderMissingError):
@@ -348,8 +355,8 @@ def test_cross_space_activity_raises_error(db):
     act = _make_activity(db, space_id=PERSONAL_SPACE_ID)
     svc = InputSummaryService(db)
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         with pytest.raises(InputSummaryCrossSpaceError):
             svc.run(
                 space_id=other_space,
@@ -367,7 +374,7 @@ def test_empty_content_raises_no_content_error(db):
         user_id=DEFAULT_USER_ID,
     )
     summary_svc = InputSummaryService(db)
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE):
         with pytest.raises(InputSummaryNoContentError):
             summary_svc.run(
                 space_id=PERSONAL_SPACE_ID,
@@ -412,8 +419,8 @@ def test_intake_item_with_evidence_uses_evidence_content(db):
     db.commit()
 
     summary_svc = InputSummaryService(db)
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY) as mock_llm:
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)) as mock_llm:
         result = summary_svc.run(
             space_id=PERSONAL_SPACE_ID,
             user_id=DEFAULT_USER_ID,
@@ -422,7 +429,7 @@ def test_intake_item_with_evidence_uses_evidence_content(db):
 
     # Check that the evidence content reached the LLM call
     call_args = mock_llm.call_args
-    user_prompt = call_args[0][5]  # 6th positional arg to call_reflector_llm
+    user_prompt = call_args.kwargs["user"]  # 6th positional arg to complete_text
     assert "evidence content from the article" in user_prompt
     assert result.artifact_id
 
@@ -442,8 +449,8 @@ def test_intake_item_title_only_produces_metadata_only_block(db):
     db.commit()
 
     summary_svc = InputSummaryService(db)
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY) as mock_llm:
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)) as mock_llm:
         result = summary_svc.run(
             space_id=PERSONAL_SPACE_ID,
             user_id=DEFAULT_USER_ID,
@@ -458,7 +465,7 @@ def test_intake_item_title_only_produces_metadata_only_block(db):
     assert item_ref.get("metadata_only") is True
 
     # "[metadata only]" was sent to LLM
-    user_prompt = mock_llm.call_args[0][5]
+    user_prompt = mock_llm.call_args.kwargs["user"]
     assert "metadata only" in user_prompt
 
 
@@ -471,8 +478,8 @@ def test_memory_proposal_provenance_does_not_include_artifact_as_trusted(db):
     act = _make_activity(db)
     svc = InputSummaryService(db)
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         result = svc.run(
             space_id=PERSONAL_SPACE_ID,
             user_id=DEFAULT_USER_ID,
@@ -502,8 +509,8 @@ def test_summary_preview_truncated(db):
     long_summary = "B" * 400
     svc = InputSummaryService(db)
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=long_summary):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(long_summary)):
         result = svc.run(
             space_id=PERSONAL_SPACE_ID,
             user_id=DEFAULT_USER_ID,

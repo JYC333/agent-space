@@ -13,13 +13,13 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '.
 function fmt(dt: string | null | undefined) { return dt ? new Date(dt).toLocaleString() : '—' }
 
 export default function CapabilitiesPage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [caps, setCaps]           = useState<Capability[]>([])
   const [reloading, setReloading] = useState(false)
   const [selected, setSelected]   = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setCaps([])
       setSelected(null)
       return
@@ -29,12 +29,12 @@ export default function CapabilitiesPage() {
       setCaps(data)
       if (data.length && !selected) setSelected(data[0].id)
     } catch (e) { toast.error(errMsg(e)) }
-  }, [selected, activeOperationalSpaceId])
+  }, [selected, activeSpaceId])
 
   useEffect(() => { load() }, [load])
 
   async function reload() {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       toast.error('Select an operational space before reloading capabilities')
       return
     }
@@ -66,7 +66,7 @@ export default function CapabilitiesPage() {
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Capabilities</h1>
             <p className="text-sm text-muted-foreground">Registered capability manifests available to agents.</p>
-            <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+            <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
           </div>
         </div>
         <Button variant="ghost" size="sm" onClick={reload} disabled={reloading}>

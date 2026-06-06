@@ -153,7 +153,7 @@ class TestActivitySourceTypes:
             content="Intake pipeline content",
             user_id=DEFAULT_USER_ID,
         )
-        assert act.source_type == "intake"
+        assert act.activity_type == "intake"
         assert act.source_kind == "intake"
 
     def test_canonical_source_types_include_intake(self, db):

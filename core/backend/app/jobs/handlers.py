@@ -11,7 +11,7 @@ Register a handler:
         return {"key": "value"}
 
 Handlers are synchronous callables; the worker runs them in a thread-pool executor.
-Return a dict (or None) that becomes job.result on success.
+Return a dict (or None) that becomes job.result_json on success.
 Raise any exception to signal failure (the worker calls fail_job and retries).
 """
 
@@ -306,7 +306,7 @@ def handle_agent_run(job) -> dict | None:
     ``job.result_json``. Re-raises on internal errors so the queue marks
     the Job as failed (with retry per ``max_attempts``).
     """
-    payload = job.payload or {}
+    payload = job.payload_json or {}
     _reject_removed_job_runtime(payload)
     run_id = payload.get("run_id")
     task_id = payload.get("task_id")
@@ -330,7 +330,7 @@ def handle_memory_consolidation(job) -> dict | None:
     from ..db import SessionLocal
     from ..memory.consolidation.service import run_memory_consolidation_job_payload
 
-    payload = job.payload or {}
+    payload = job.payload_json or {}
     db = SessionLocal()
     try:
         return run_memory_consolidation_job_payload(db=db, payload=payload)

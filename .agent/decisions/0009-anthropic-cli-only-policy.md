@@ -2,7 +2,17 @@
 
 ## Status
 
+**Superseded by [ADR 0010 - Credential Channel Isolation](0010-credential-channel-isolation.md) (2026-06-02).**
+
 Accepted - 2026-05-20
+
+> **Why superseded:** The "Anthropic is CLI-only" framing was too broad. The real
+> requirement was credential *channel isolation* — keeping an Anthropic API key out of
+> the Claude Code CLI subprocess environment — not forbidding the Anthropic API. ADR 0010
+> restates the invariant correctly and permits the in-process encrypted API channel
+> (reflector, `/providers/chat`, the future `model_api` adapter) to serve any provider,
+> Anthropic included. The retained invariants below (CLI subprocess env hygiene, no
+> ambient key fallback, vendor-neutral runtime standard) remain in force under 0010.
 
 ## Context
 
@@ -49,3 +59,13 @@ path unless genuinely new native behavior is required.
 
 Vendor CLI execution remains a RuntimeAdapter concern, not an Agent or provider
 foundation.
+
+## Superseded — see ADR 0010
+
+The original framing here ("Anthropic is CLI-only") is superseded by
+[ADR 0010 - Credential Channel Isolation](0010-credential-channel-isolation.md).
+The correct invariant is: an Anthropic API key must never enter a Claude Code CLI
+subprocess environment. The in-process encrypted API channel may serve any provider,
+Anthropic included. Read 0010 for the authoritative position; the retained invariants
+in the section above (CLI env hygiene, no ambient key fallback, vendor-neutral runtime
+standard) continue to apply.

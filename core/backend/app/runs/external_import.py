@@ -88,7 +88,7 @@ class ExternalRunImportService:
             from ..models import Workspace
             ws = self.db.query(Workspace).filter(
                 Workspace.id == imp.workspace_id,
-                Workspace.owner_space_id == imp.space_id,
+                Workspace.space_id == imp.space_id,
             ).first()
             if not ws:
                 raise ValueError(

@@ -8,7 +8,7 @@ Proves that:
    (Canonical coverage lives in tests/contracts/test_knowledge_api.py; this file
    adds a service-level assertion as a cross-layer guard.)
 5. Rejecting a knowledge_create proposal creates no KnowledgeItem.
-6. Rejecting a knowledge_relation_create proposal creates no KnowledgeRelation.
+6. Rejecting a knowledge_relation_create proposal creates no KnowledgeItemRelation.
 
 These tests are distinct from tests/contracts/test_knowledge_api.py: they guard
 the data-layer boundary (no object created before accept) rather than the API
@@ -21,7 +21,7 @@ from __future__ import annotations
 from sqlalchemy import func
 
 from app.memory.apply_service import ProposalApplyService
-from app.models import ActivityRecord, KnowledgeItem, KnowledgeRelation, MemoryEntry, Proposal
+from app.models import ActivityRecord, KnowledgeItem, KnowledgeItemRelation, MemoryEntry, Proposal
 from tests.support import factories
 
 
@@ -253,12 +253,12 @@ def test_reject_knowledge_create_proposal_creates_no_knowledge_item(api_client, 
 
 
 # ---------------------------------------------------------------------------
-# 6. Rejecting a knowledge_relation_create proposal creates no KnowledgeRelation
+# 6. Rejecting a knowledge_relation_create proposal creates no KnowledgeItemRelation
 # ---------------------------------------------------------------------------
 
 
 def test_reject_knowledge_relation_proposal_creates_no_relation(api_client, db, same_space_pair):
-    """Rejecting a knowledge_relation_create proposal must leave no KnowledgeRelation in the DB."""
+    """Rejecting a knowledge_relation_create proposal must leave no KnowledgeItemRelation in the DB."""
     space = same_space_pair["space_id"]
     ua = same_space_pair["user_a"]
     from_item = factories.create_test_knowledge_item(db, space_id=space, title="Source", commit=False)
@@ -270,7 +270,7 @@ def test_reject_knowledge_relation_proposal_creates_no_relation(api_client, db, 
         json={
             "from_item_id": from_item.id,
             "to_item_id": to_item.id,
-            "relation_type": "related",
+            "relation_type": "related_to",
         },
     )
     assert r.status_code == 202, r.text
@@ -278,8 +278,8 @@ def test_reject_knowledge_relation_proposal_creates_no_relation(api_client, db, 
 
     db.expire_all()
     assert (
-        db.query(func.count(KnowledgeRelation.id)).filter(KnowledgeRelation.space_id == space).scalar() == 0
-    ), "relation proposal creation must not create KnowledgeRelation"
+        db.query(func.count(KnowledgeItemRelation.id)).filter(KnowledgeItemRelation.space_id == space).scalar() == 0
+    ), "relation proposal creation must not create KnowledgeItemRelation"
 
     rejected = same_space_pair["client_a"].post(
         f"/api/v1/proposals/{proposal_id}/reject",
@@ -289,8 +289,8 @@ def test_reject_knowledge_relation_proposal_creates_no_relation(api_client, db, 
     assert rejected.json()["status"] == "rejected"
 
     db.expire_all()
-    after = db.query(func.count(KnowledgeRelation.id)).filter(KnowledgeRelation.space_id == space).scalar()
-    assert after == 0, "rejecting a knowledge_relation_create proposal must create no KnowledgeRelation"
+    after = db.query(func.count(KnowledgeItemRelation.id)).filter(KnowledgeItemRelation.space_id == space).scalar()
+    assert after == 0, "rejecting a knowledge_relation_create proposal must create no KnowledgeItemRelation"
 
 
 # ---------------------------------------------------------------------------
@@ -351,12 +351,12 @@ def test_accepted_knowledge_item_does_not_create_memory_entry(db, cross_space_pa
 
 
 # ---------------------------------------------------------------------------
-# 8. KnowledgeRelation creation requires proposal accept (service-layer guard)
+# 8. KnowledgeItemRelation creation requires proposal accept (service-layer guard)
 # ---------------------------------------------------------------------------
 
 
 def test_knowledge_relation_create_requires_proposal_accept(db, cross_space_pair_db):
-    """Service-layer guard: a pending knowledge_relation_create proposal creates no KnowledgeRelation
+    """Service-layer guard: a pending knowledge_relation_create proposal creates no KnowledgeItemRelation
     until ProposalApplyService.apply() is called (i.e., until the proposal is accepted).
     """
     a = cross_space_pair_db["space_a_id"]
@@ -381,8 +381,8 @@ def test_knowledge_relation_create_requires_proposal_accept(db, cross_space_pair
     )
 
     db.expire_all()
-    before = db.query(func.count(KnowledgeRelation.id)).filter(KnowledgeRelation.space_id == a).scalar()
-    assert before == 0, "pending proposal must not create any KnowledgeRelation"
+    before = db.query(func.count(KnowledgeItemRelation.id)).filter(KnowledgeItemRelation.space_id == a).scalar()
+    assert before == 0, "pending proposal must not create any KnowledgeItemRelation"
 
     result = ProposalApplyService(db).apply(
         proposal,
@@ -393,8 +393,8 @@ def test_knowledge_relation_create_requires_proposal_accept(db, cross_space_pair
     db.commit()
 
     db.expire_all()
-    after = db.query(func.count(KnowledgeRelation.id)).filter(KnowledgeRelation.space_id == a).scalar()
-    assert after == 1, "accepting a knowledge_relation_create proposal must create exactly one KnowledgeRelation"
+    after = db.query(func.count(KnowledgeItemRelation.id)).filter(KnowledgeItemRelation.space_id == a).scalar()
+    assert after == 1, "accepting a knowledge_relation_create proposal must create exactly one KnowledgeItemRelation"
     assert result.knowledge_relation is not None
     assert result.knowledge_relation.status == "active"
     assert result.knowledge_relation.relation_type == "derived_from"

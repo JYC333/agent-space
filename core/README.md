@@ -63,7 +63,7 @@ suite against a throwaway PostgreSQL container, so pytest never opens a real mod
 | `DATABASE_URL` | dev/test local PostgreSQL URL | Backend DB (PostgreSQL only; authoritative connection string). Production must set an explicit non-development password. |
 | `AGENT_SPACE_HOME` | `~/aspace` | Instance data root for the running environment (`/aspace` in Docker; a mode root locally) |
 | `REFLECTOR_MODE` | `pattern` | `pattern` or `llm` |
-| `ANTHROPIC_API_KEY` | `` | Required for `llm` reflector mode |
+| `REFLECTOR_MODEL_PROVIDER_ID` | `` | For `llm` reflector mode: the configured ModelProvider row to use. Its API key comes from the provider's encrypted Credential — never an env var (ADR 0010). |
 | `VITE_API_URL` | `/api/v1` | Frontend API base URL |
 
 ## Project structure

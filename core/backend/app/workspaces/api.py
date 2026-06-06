@@ -58,13 +58,13 @@ def list_workspaces(
     db: Session = Depends(get_db),
 ):
     space_id, _ = ids
-    q = db.query(Workspace).filter(Workspace.owner_space_id == space_id)
+    q = db.query(Workspace).filter(Workspace.space_id == space_id)
     if status:
         q = q.filter(Workspace.status == status)
 
     from sqlalchemy import func
     total = db.query(func.count(Workspace.id)).filter(
-        Workspace.owner_space_id == space_id,
+        Workspace.space_id == space_id,
         Workspace.status == status,
     ).scalar() or 0
 
@@ -90,7 +90,7 @@ def create_workspace(
 
     # Reject duplicate names within the same space
     duplicate = db.query(Workspace).filter(
-        Workspace.owner_space_id == space_id,
+        Workspace.space_id == space_id,
         Workspace.name == data.name.strip(),
         Workspace.status == "active",
     ).first()
@@ -115,7 +115,7 @@ def create_workspace(
 
     ws = Workspace(
         id=ws_id,
-        owner_space_id=space_id,
+        space_id=space_id,
         created_by_user_id=user_id,
         name=data.name,
         description=data.description,
@@ -151,7 +151,7 @@ def scan_workspaces(
     space_workspace_root = workspace_root / space_id
 
     existing = db.query(Workspace).filter(
-        Workspace.owner_space_id == space_id,
+        Workspace.space_id == space_id,
         Workspace.status == "active",
     ).all()
 
@@ -194,14 +194,14 @@ def scan_workspaces(
         # between when we built known_paths and now (e.g. React StrictMode
         # double-invoking the effect fires two requests nearly simultaneously).
         if db.query(Workspace).filter(
-            Workspace.owner_space_id == space_id,
+            Workspace.space_id == space_id,
             Workspace.root_path == str(entry),
             Workspace.status == "active",
         ).first():
             continue
         ws = Workspace(
             id=_new_id(),
-            owner_space_id=space_id,
+            space_id=space_id,
             created_by_user_id=user_id,
             name=entry.name,
             kind="project",
@@ -227,7 +227,7 @@ def get_workspace(
     db: Session = Depends(get_db),
 ):
     space_id, _ = ids
-    ws = db.query(Workspace).filter(Workspace.id == workspace_id, Workspace.owner_space_id == space_id).first()
+    ws = db.query(Workspace).filter(Workspace.id == workspace_id, Workspace.space_id == space_id).first()
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
     return ws
@@ -241,7 +241,7 @@ def update_workspace(
     db: Session = Depends(get_db),
 ):
     space_id, _ = ids
-    ws = db.query(Workspace).filter(Workspace.id == workspace_id, Workspace.owner_space_id == space_id).first()
+    ws = db.query(Workspace).filter(Workspace.id == workspace_id, Workspace.space_id == space_id).first()
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
     for field, value in data.model_dump(exclude_none=True).items():
@@ -259,7 +259,7 @@ def archive_workspace(
     db: Session = Depends(get_db),
 ):
     space_id, _ = ids
-    ws = db.query(Workspace).filter(Workspace.id == workspace_id, Workspace.owner_space_id == space_id).first()
+    ws = db.query(Workspace).filter(Workspace.id == workspace_id, Workspace.space_id == space_id).first()
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
     ws.status = "archived"

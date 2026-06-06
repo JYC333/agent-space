@@ -38,6 +38,7 @@ from .models import (
     ChatMessage,
 )
 from .registry import registry
+from .invocation import build_litellm_model_name
 from .validation import ModelProviderValidationError, validate_create_fields, validate_update_base_url
 from ..runtimes.credentials import resolve_provider_api_key
 
@@ -324,11 +325,15 @@ class ModelService:
         model = request.model or config.default_model
         if not model and config.available_models:
             model = config.available_models[0]
+        if model:
+            # Single source of litellm model-name qualification (shared with the
+            # in-process invocation primitive). Already-qualified names pass through.
+            request.model = build_litellm_model_name(config.provider_type, model)
 
         log.info(
             "chat: provider=%s model=%s space=%s",
             config.provider_type,
-            model or "unknown",
+            request.model or "unknown",
             space_id,
         )
 
@@ -351,6 +356,8 @@ class ModelService:
             config = self.resolve_default_config(db, space_id)
 
         adapter = registry.get(config.provider_type) or registry.get("litellm")
+        if request.model:
+            request.model = build_litellm_model_name(config.provider_type, request.model)
         log.info("stream: provider=%s model=%s space=%s", config.provider_type, request.model, space_id)
 
         async for chunk in adapter.stream(config.api_key, config.base_url, request):
@@ -367,8 +374,7 @@ class ModelService:
             if not model_name:
                 return ConnectionTestResult(success=False, message="No models configured")
 
-            if "/" not in model_name:
-                model_name = f"{config.provider_type}/{model_name}"
+            model_name = build_litellm_model_name(config.provider_type, model_name)
 
             test_request = ChatRequest(
                 model=model_name,

@@ -40,6 +40,8 @@ def _out(auto) -> AutomationOut:
         status=auto.status,
         preflight_snapshot_json=auto.preflight_snapshot_json,
         config_json=auto.config_json,
+        next_run_at=auto.next_run_at,
+        last_fired_at=auto.last_fired_at,
         created_at=auto.created_at,
         updated_at=auto.updated_at,
     )

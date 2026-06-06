@@ -47,7 +47,14 @@ from app.models import (
     User,
 )
 
-_FAKE_PROVIDER_TUPLE = ("openai", None, "gpt-4o-mini", "test-key")
+from app.providers.invocation import CompletionResult as _CompletionResult
+
+
+def _CR(text):
+    return _CompletionResult(text=text, model="gpt-4o-mini")
+
+
+_FAKE_PROVIDER_TUPLE = ("prov-test", None)
 
 
 def _uid() -> str:
@@ -239,7 +246,7 @@ def test_run_with_no_captures_returns_skipped(db):
     setting = _get_setting(db, space_id, user_id)
     svc = DailyCaptureReportService(db)
 
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -263,8 +270,8 @@ def test_successful_run_creates_run_and_artifact(db):
     setting = _get_setting(db, space_id, user_id)
     svc = DailyCaptureReportService(db)
 
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=_structured_json()):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(_structured_json())):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -295,8 +302,8 @@ def test_artifact_metadata_contains_required_fields(db):
     setting = _get_setting(db, space_id, user_id)
     svc = DailyCaptureReportService(db)
 
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=_structured_json()):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(_structured_json())):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -327,8 +334,8 @@ def test_experience_proposals_created_when_enabled_and_above_threshold(db):
     db.commit()
 
     svc = DailyCaptureReportService(db)
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=_structured_with_experience(cap.id, 0.80)):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(_structured_with_experience(cap.id, 0.80))):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -354,8 +361,8 @@ def test_experience_proposals_skipped_below_threshold(db):
     db.commit()
 
     svc = DailyCaptureReportService(db)
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=_structured_with_experience(cap.id, 0.75)):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(_structured_with_experience(cap.id, 0.75))):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -375,8 +382,8 @@ def test_accepting_experience_proposal_creates_knowledge_item(db):
     db.commit()
 
     svc = DailyCaptureReportService(db)
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=_structured_with_experience(cap.id, 0.80)):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(_structured_with_experience(cap.id, 0.80))):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -403,8 +410,8 @@ def test_memory_proposals_not_created_when_disabled(db):
     db.commit()
 
     svc = DailyCaptureReportService(db)
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=_structured_with_memory(cap.id, 0.90)):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(_structured_with_memory(cap.id, 0.90))):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -424,8 +431,8 @@ def test_memory_proposals_created_when_enabled_and_above_threshold(db):
     db.commit()
 
     svc = DailyCaptureReportService(db)
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=_structured_with_memory(cap.id, 0.90)):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(_structured_with_memory(cap.id, 0.90))):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -467,8 +474,8 @@ def test_no_direct_memory_or_knowledge_before_acceptance(db):
     knowledge_before = db.query(KnowledgeItem).filter(KnowledgeItem.space_id == space_id).count()
 
     svc = DailyCaptureReportService(db)
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=json.dumps(llm_json)):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(json.dumps(llm_json))):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -489,8 +496,8 @@ def test_accepting_memory_proposal_creates_memory_entry(db):
     db.commit()
 
     svc = DailyCaptureReportService(db)
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=_structured_with_memory(cap.id, 0.90)):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(_structured_with_memory(cap.id, 0.90))):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -514,8 +521,8 @@ def test_rerun_same_date_without_force_returns_existing(db):
     setting = _get_setting(db, space_id, user_id)
     svc = DailyCaptureReportService(db)
 
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=_structured_json()):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(_structured_json())):
         result1 = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -528,8 +535,8 @@ def test_rerun_same_date_without_force_returns_existing(db):
         Artifact.artifact_type == "daily_capture_report",
     ).count()
 
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=_structured_json()):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(_structured_json())):
         result2 = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -559,7 +566,7 @@ def test_provider_missing_marks_result_failed_no_artifact(db):
     from app.memory.provider_client import ReflectorModelProviderMissingError
 
     with patch(
-        "app.daily_reports.service.resolve_reflector_provider",
+        "app.daily_reports.service.resolve_reflector_provider_id",
         side_effect=ReflectorModelProviderMissingError("no provider"),
     ):
         result = svc.generate_for_date(
@@ -590,7 +597,7 @@ def test_provider_missing_no_captures_returns_skipped_without_provider(db):
     from app.memory.provider_client import ReflectorModelProviderMissingError
 
     with patch(
-        "app.daily_reports.service.resolve_reflector_provider",
+        "app.daily_reports.service.resolve_reflector_provider_id",
         side_effect=ReflectorModelProviderMissingError("should not be called"),
     ) as mock_provider:
         result = svc.generate_for_date(
@@ -611,8 +618,8 @@ def test_invalid_llm_json_marks_run_failed_no_artifact(db):
     setting = _get_setting(db, space_id, user_id)
     svc = DailyCaptureReportService(db)
 
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value="not valid json at all"):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR("not valid json at all")):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -715,8 +722,8 @@ def test_empty_source_activity_ids_drops_experience_candidate(db):
     db.commit()
 
     svc = DailyCaptureReportService(db)
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=_structured_with_empty_source_ids()):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(_structured_with_empty_source_ids())):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,
@@ -737,8 +744,8 @@ def test_empty_source_activity_ids_drops_memory_candidate(db):
     db.commit()
 
     svc = DailyCaptureReportService(db)
-    with patch("app.daily_reports.service.resolve_reflector_provider", return_value=_FAKE_PROVIDER_TUPLE), \
-         patch("app.daily_reports.service.call_reflector_llm", return_value=_structured_with_empty_source_ids()):
+    with patch("app.daily_reports.service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER_TUPLE), \
+         patch("app.daily_reports.service.complete_text", return_value=_CR(_structured_with_empty_source_ids())):
         result = svc.generate_for_date(
             space_id=space_id,
             user_id=user_id,

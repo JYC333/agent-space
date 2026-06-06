@@ -219,6 +219,28 @@ def _build_builtin_specs() -> list[RuntimeAdapterSpec]:
             metadata=MetadataSpec(notes="Executes enabled local capability manifests."),
         ),
         RuntimeAdapterSpec(
+            adapter_type="model_api",
+            display_name="Model API",
+            runtime_kind="managed_api",
+            implementation_status="implemented",
+            credentials=CredentialsSpec(credential_mode="model_provider_api_key"),
+            sandbox=no_files,
+            model=ModelSpec(
+                model_provider_mode="required",
+                supports_model_override=False,
+                model_config_behavior="uses_model",
+            ),
+            usage=UsageSpec(usage_accuracy="estimated", supports_usage_probe=False),
+            output=OutputSpec(output_parser_type="plain_text", patch_strategy="none"),
+            metadata=MetadataSpec(
+                notes=(
+                    "In-process, provider-agnostic LLM call (no tools, no filesystem). Selects a "
+                    "configured ModelProvider + model and calls the shared invocation primitive. "
+                    "Serves any provider including Anthropic (ADR 0010)."
+                ),
+            ),
+        ),
+        RuntimeAdapterSpec(
             adapter_type="claude_code",
             display_name="Claude Code",
             runtime_kind="local_cli",

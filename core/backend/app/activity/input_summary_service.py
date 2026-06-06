@@ -30,10 +30,9 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..memory.provider_client import (
     ReflectorModelProviderMissingError,
-    UnsupportedProviderForReflectorError,
-    call_reflector_llm,
-    resolve_reflector_provider,
+    resolve_reflector_provider_id,
 )
+from ..providers.invocation import complete_text
 from ..memory.proposal_payload import SOURCE_TRUST_VALUES
 from ..models import (
     ActivityRecord,
@@ -100,10 +99,10 @@ def _new_id() -> str:
 
 
 def _source_trust_for_activity(row: ActivityRecord) -> str:
-    """Map activity source_type to source_trust for provenance."""
-    if row.source_type in ("user_capture", "chat_message"):
+    """Map activity type to source_trust for provenance."""
+    if row.activity_type in ("user_capture", "chat_message"):
         return "user_confirmed"
-    if row.source_type in ("run_event", "workspace_event", "system_event"):
+    if row.activity_type in ("run_event", "workspace_event", "system_event"):
         return "internal_system"
     return "untrusted_external"
 
@@ -323,12 +322,8 @@ class InputSummaryService:
         # Resolve provider before creating the Run
         # ------------------------------------------------------------------
         try:
-            provider_type, base_url, model, api_key = resolve_reflector_provider(
-                self._db, settings
-            )
+            provider_id, model = resolve_reflector_provider_id(settings)
         except ReflectorModelProviderMissingError as exc:
-            raise InputSummaryProviderMissingError(str(exc)) from exc
-        except UnsupportedProviderForReflectorError as exc:
             raise InputSummaryProviderMissingError(str(exc)) from exc
 
         # ------------------------------------------------------------------
@@ -375,14 +370,18 @@ class InputSummaryService:
         )
 
         log.info(
-            "input_summary: calling LLM provider=%s model=%s source_count=%d space=%s run=%s",
-            provider_type, model, len(source_refs), space_id, run.id,
+            "input_summary: calling LLM provider_id=%s model=%s source_count=%d space=%s run=%s",
+            provider_id, model, len(source_refs), space_id, run.id,
         )
 
         try:
-            summary_text = call_reflector_llm(
-                provider_type, base_url, model, api_key, system_prompt, user_prompt
-            )
+            summary_text = complete_text(
+                self._db,
+                provider_id=provider_id,
+                model=model,
+                system=system_prompt,
+                user=user_prompt,
+            ).text
         except Exception as exc:
             log.warning("input_summary: provider call failed run=%s: %s", run.id, exc)
             run.status = "failed"
@@ -414,7 +413,7 @@ class InputSummaryService:
             metadata_json={
                 "source_refs": source_refs,
                 "summary_goal": summary_goal,
-                "provider_type": provider_type,
+                "provider_id": provider_id,
                 "model": model,
                 "generated_by": "input_summary_service",
                 "input_summary_service_version": _SERVICE_VERSION,

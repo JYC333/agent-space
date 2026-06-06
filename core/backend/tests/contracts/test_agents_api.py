@@ -264,11 +264,16 @@ def test_get_agent_version_same_space_succeeds(api_client, db, cross_space_pair)
     assert r.json()["id"] == version_id
 
 
-def test_patch_agent_execution_fields_points_to_config_proposals(api_client, db, cross_space_pair):
+def test_patch_agent_system_prompt_appends_version_and_records_activity(api_client, db, cross_space_pair):
+    """Owner direct edit of execution config: versioned (new immutable version) + Activity,
+    no proposal required."""
+    from app.models import AgentVersion, ActivityRecord
+
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
-    original_name = agent.name
+    v1_id = agent.current_version_id
+    versions_before = db.query(AgentVersion).filter(AgentVersion.agent_id == agent.id).count()
 
     r = cross_space_pair["client_a"].patch(
         f"/api/v1/agents/{agent.id}",
@@ -276,11 +281,24 @@ def test_patch_agent_execution_fields_points_to_config_proposals(api_client, db,
         json={"name": "new name", "system_prompt": "use stricter instructions"},
     )
 
-    assert r.status_code == 409
-    assert "config-proposals" in str(r.json().get("message"))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "new name"
+    assert body["system_prompt"] == "use stricter instructions"
+
     db.expire_all()
+    # New immutable version appended; old version preserved unchanged.
+    assert db.query(AgentVersion).filter(AgentVersion.agent_id == agent.id).count() == versions_before + 1
     refreshed = db.query(type(agent)).filter(type(agent).id == agent.id).one()
-    assert refreshed.name == original_name
+    assert refreshed.current_version_id != v1_id
+    new_v = db.query(AgentVersion).filter(AgentVersion.id == refreshed.current_version_id).one()
+    assert new_v.system_prompt == "use stricter instructions"
+    old_v = db.query(AgentVersion).filter(AgentVersion.id == v1_id).one()
+    assert old_v.system_prompt != "use stricter instructions"
+
+    # Lightweight audit Activity recorded (not a proposal).
+    acts = db.query(ActivityRecord).filter(ActivityRecord.agent_id == agent.id).all()
+    assert any((x.payload_json or {}).get("kind") == "agent_config_updated" for x in acts)
 
 
 def test_direct_agent_version_create_is_disabled(api_client, db, cross_space_pair):

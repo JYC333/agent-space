@@ -8,14 +8,34 @@ The Knowledge Base is the human-browsable, reviewable, relational long-term cont
 
 Knowledge is distinct from Memory. Memory is agent context. Knowledge is durable content for people to inspect, revise, relate, and later use as a source for other review flows.
 
-No legacy route or compatibility alias exists for the replaced planned module. The API path is `/api/v1/knowledge`; canonical table names are `knowledge_items` and `knowledge_relations`; proposal types use `knowledge_*`.
+No legacy route or compatibility alias exists for the replaced planned module. The API path is `/api/v1/knowledge`; canonical table names are `knowledge_items`, `knowledge_item_relations`, `sources`, and `knowledge_item_sources`; proposal types use `knowledge_*`.
+
+## Three-Layer Model
+
+The wiki is split into three explicit layers:
+
+1. **KnowledgeItem** — the semantic wiki content layer. Only the 9 semantic item
+   types below. `source` and `answer` are **not** item types.
+2. **Source** — an independent provenance / evidence object (table `sources`). Raw
+   material/evidence (webpage, paper, chat capture, processed ActivityRecord, …).
+   A Source is **not** a wiki item and must never appear in the main KnowledgeItem
+   list. `source` is now a table, not a KnowledgeItem type.
+3. Two explicit link tables:
+   - **KnowledgeItemRelation** (`knowledge_item_relations`) — item↔item semantic
+     graph relations. `answer` is now a **relation type** (`answers`), not an item
+     type: an answer is any appropriate KnowledgeItem (e.g. `knowledge`) linked to a
+     `question` item via `relation_type=answers`.
+   - **KnowledgeItemSource** (`knowledge_item_sources`) — item↔source evidence /
+     provenance links. This is strictly for evidence, never for item↔item relations.
 
 ## Owns
 - `KnowledgeItem` model
-- `KnowledgeRelation` model
-- `/api/v1/knowledge` read and proposal API
+- `KnowledgeItemRelation` model (item↔item semantic relations)
+- `Source` model (independent provenance/evidence layer)
+- `KnowledgeItemSource` model (item↔source evidence links)
+- `/api/v1/knowledge` read and proposal API, plus `/api/v1/knowledge/sources` direct CRUD
 - Knowledge proposal apply handlers
-- Relation records backed by database rows, not only Markdown links
+- Relation and evidence-link records backed by database rows, not only Markdown links
 
 ## Does Not Own
 - Raw capture (activity module)
@@ -45,7 +65,7 @@ Raw user input, session content, file imports, web captures, and run outputs ent
 Activity / Run / Artifact
 -> knowledge proposal
 -> proposal acceptance
--> active KnowledgeItem / KnowledgeRelation
+-> active KnowledgeItem / KnowledgeItemRelation
 ```
 
 Agent-generated knowledge never becomes active without proposal approval.
@@ -57,15 +77,19 @@ Agent-generated knowledge never becomes active without proposal approval.
 | Type | Purpose |
 |---|---|
 | `knowledge` | General durable knowledge item |
+| `idea` | Nascent idea or hypothesis |
 | `experience` | First-person or observed experience |
+| `reflection` | Reflective synthesis |
 | `lesson` | Learned principle or takeaway |
 | `procedure` | Repeatable steps or operating procedure |
 | `decision` | Decision record or rationale |
-| `reflection` | Reflective synthesis |
-| `source` | Source record or citation summary |
 | `question` | Open question |
-| `answer` | Answer to a question |
-| `summary` | Digest of an Activity, Run, Artifact, or source |
+| `summary` | Digest of an Activity, Run, Artifact, or Source |
+
+`source` and `answer` are **removed** as item types. Provenance/evidence now lives
+in the `Source` table; "answering a question" is expressed with
+`KnowledgeItemRelation.relation_type = answers` between two KnowledgeItems
+(e.g. `KnowledgeItem(type=knowledge) --answers--> KnowledgeItem(type=question)`).
 
 Knowledge-type items may later use a Feynman Gate. Experience-type items may later use a Reflection Gate. These are future assessment flows and must not block the MVP persistence/API slice.
 
@@ -144,18 +168,48 @@ KnowledgeItem:
   approved_by_user_id
   version, created_at, updated_at, archived_at
 
-KnowledgeRelation:
+KnowledgeItemRelation:                # item <-> item semantic graph
   id, space_id
   from_item_id, to_item_id
-  relation_type
+  relation_type                   # related_to|derived_from|supports|contradicts|
+                                  #   answers|summarizes|depends_on|updates
   status                          # candidate|active|rejected|archived
-  confidence, evidence_summary
+  confidence, note
   source_proposal_id
   created_by_user_id, created_by_agent_id
   created_at, updated_at
+
+Source:                               # independent provenance / evidence layer
+  id, space_id
+  source_type                     # activity_record|chat_capture|webpage|article|
+                                  #   paper|pdf|file|email|manual_reference|external_note
+  title, uri, content_ref, raw_text, summary, metadata_json
+  status                          # raw|processing|processed|archived|error
+  source_activity_id              # optional FK back to the raw ActivityRecord
+  created_by_user_id
+  created_at, updated_at
+
+KnowledgeItemSource:                  # item <-> source evidence link
+  id, space_id
+  knowledge_item_id, source_id
+  relation_type                   # derived_from|supported_by|cites|summarizes|mentions
+  locator, quote, note, confidence
+  created_by_user_id
+  created_at
 ```
 
-Relation creation must enforce same-space endpoints.
+Relation creation must enforce same-space endpoints. `KnowledgeItemRelation` is the
+item↔item semantic layer; `KnowledgeItemSource` is the item↔source evidence layer —
+the two must not be conflated. Sources are evidence/raw material, so Source and
+KnowledgeItemSource use direct CRUD (`/api/v1/knowledge/sources`,
+`/api/v1/knowledge/items/{id}/sources`) rather than the proposal workflow that gates
+semantic KnowledgeItem and KnowledgeItemRelation writes. A Source may point back to an
+existing ActivityRecord via `source_activity_id` (or any other origin via
+`content_ref` / `metadata_json`); ActivityRecord remains the raw capture layer and is
+not replaced by Source.
+
+> Frontend follow-up: Sources should surface as a Wiki sub-tab / evidence panel, not
+> as ordinary wiki items.
 
 ## Invariants
 
@@ -173,13 +227,13 @@ Relation creation must enforce same-space endpoints.
 - No historical data migration compatibility is required.
 
 **Enforced by tests:**
-- `test_knowledge_ingestion_boundary.py` — raw/article/file captures create no KnowledgeItem; agent-generated proposals stay pending; rejecting a proposal creates no KnowledgeItem or KnowledgeRelation; accepted KnowledgeItem creates no MemoryEntry; KnowledgeRelation creation requires proposal accept.
-- `test_knowledge_api.py` — accepting a proposal creates active KnowledgeItem; KnowledgeItem does not auto-inject as Memory; KnowledgeRelation requires proposal accept; cross-space relation rejected; ownership and visibility enforcement.
+- `test_knowledge_ingestion_boundary.py` — raw/article/file captures create no KnowledgeItem; agent-generated proposals stay pending; rejecting a proposal creates no KnowledgeItem or KnowledgeItemRelation; accepted KnowledgeItem creates no MemoryEntry; KnowledgeItemRelation creation requires proposal accept.
+- `test_knowledge_api.py` — accepting a proposal creates active KnowledgeItem; KnowledgeItem does not auto-inject as Memory; KnowledgeItemRelation requires proposal accept; cross-space relation rejected; ownership and visibility enforcement.
 - Payload validation is enforced at apply time in `KnowledgeProposalApplier`: `item_type`, `content_format`, `visibility`, `verification_status`, `reflection_status`, and `confidence` for items; `relation_type`, `status`, and `confidence` for relations.
 
 ## Related Files
 - `core/backend/app/knowledge/` - API, service, schemas, read models
-- `core/backend/app/models.py` - `KnowledgeItem`, `KnowledgeRelation`
+- `core/backend/app/models.py` - `KnowledgeItem`, `KnowledgeItemRelation`, `Source`, `KnowledgeItemSource`
 - `core/backend/migrations/versions/0001_canonical_initial_schema.py` - canonical schema tables
 - `core/backend/app/policy/actions.py` - Knowledge policy actions wired via proposal
 - `core/backend/app/policy/proposal_apply.py` - supported Knowledge proposal type names
@@ -189,6 +243,7 @@ Relation creation must enforce same-space endpoints.
 - `core/backend/tests/contracts/test_knowledge_api.py` - API contract tests (accept, versioning, visibility, relations)
 
 ## Related Modules
+- [../architecture/INTAKE_EVIDENCE_FOUNDATION.md](../architecture/INTAKE_EVIDENCE_FOUNDATION.md) - the two evidence stacks (intake candidate vs curated wiki `Source`/`KnowledgeItemSource`), their hard separation, and the intake→wiki promotion rule spec
 - [memory.md](memory.md) - Memory is agent context, not the Knowledge browser
 - [activity.md](activity.md) - raw input and source events
 - [spaced-repetition.md](spaced-repetition.md) - future card generation from approved Knowledge

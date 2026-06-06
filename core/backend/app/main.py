@@ -40,35 +40,33 @@ async def lifespan(app: FastAPI):
         CapabilityRegistry(db).reload()
 
         # Bring a fresh (empty) PostgreSQL database to a usable initial state:
-        # default personal space, default owner user + membership, and default
+        # default owner user + their personal space + membership, and default
         # execution planes. Idempotent — safe on every startup.
         from .bootstrap import bootstrap_instance
-        bootstrap_instance(
-            db,
-            space_id=settings.default_space_id,
-            user_id=settings.default_user_id,
-        )
+        bootstrap_instance(db, user_id=settings.default_user_id)
 
         # Register system-core workspace if configured
         from .workspaces.system_core import register_system_core_workspace
         register_system_core_workspace(db)
 
         if settings.debug:
-            dev_space = db.query(Space).filter(Space.id == settings.default_space_id).first()
+            from .spaces.defaults import resolve_default_space_id
+            space_id = resolve_default_space_id(db)
+            dev_space = db.query(Space).filter(Space.id == space_id).first()
             owner_ms = (
                 db.query(SpaceMembership)
                 .filter(
-                    SpaceMembership.space_id == settings.default_space_id,
+                    SpaceMembership.space_id == space_id,
                     SpaceMembership.role == "owner",
                     SpaceMembership.status == "active",
                 )
                 .first()
             )
             if dev_space and owner_ms and API_KEYS_DB_PERSISTED:
-                existing = ApiKeyService(db).list(space_id=settings.default_space_id)
+                existing = ApiKeyService(db).list(space_id=space_id)
                 if not existing:
                     _, raw = ApiKeyService(db).create(
-                        space_id=settings.default_space_id,
+                        space_id=space_id,
                         owner_user_id=owner_ms.user_id,
                         name="dev-key",
                     )
@@ -116,6 +114,35 @@ async def lifespan(app: FastAPI):
 
         _dr_scheduler_task = asyncio.create_task(_daily_report_scheduler_loop())
 
+    # ── Automation scheduler ─────────────────────────────────────────────────
+    _automation_scheduler_task: asyncio.Task | None = None
+    if settings.automation_scheduler_enabled:
+        from .automation.scheduler import AutomationScheduler
+
+        async def _automation_scheduler_loop() -> None:
+            while True:
+                try:
+                    db_scan = SessionLocal()
+                    try:
+                        fired = await asyncio.to_thread(
+                            AutomationScheduler(db_scan).scan_and_fire
+                        )
+                        if fired:
+                            _dr_log.info("automation_scheduler: scan fired %d automation(s)", fired)
+                    finally:
+                        db_scan.close()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _dr_log.exception("automation_scheduler: scan loop error")
+
+                try:
+                    await asyncio.sleep(settings.automation_scheduler_interval_seconds)
+                except asyncio.CancelledError:
+                    raise
+
+        _automation_scheduler_task = asyncio.create_task(_automation_scheduler_loop())
+
     # ── Backup scheduler ──────────────────────────────────────────────────────
     _backup_scheduler = None
     if settings.backup_enabled:
@@ -151,6 +178,13 @@ async def lifespan(app: FastAPI):
         _dr_scheduler_task.cancel()
         try:
             await _dr_scheduler_task
+        except asyncio.CancelledError:
+            pass
+
+    if _automation_scheduler_task is not None:
+        _automation_scheduler_task.cancel()
+        try:
+            await _automation_scheduler_task
         except asyncio.CancelledError:
             pass
 

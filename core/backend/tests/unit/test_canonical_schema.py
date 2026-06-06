@@ -91,8 +91,9 @@ REQUIRED_TABLES = {
     "workspaces",
     "memory_entries",
     "knowledge_items",
-    "knowledge_relations",
-    "entity_refs",
+    "knowledge_item_relations",
+    "sources",
+    "knowledge_item_sources",
     "memory_relations",
     "provenance_links",
     "participation_records",
@@ -180,8 +181,10 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
     assert run_column_defs["agent_id"]["nullable"] is False
     assert run_column_defs["agent_version_id"]["nullable"] is False
     context_snapshot_columns = {column["name"] for column in inspector.get_columns("context_snapshots")}
-    assert "run_id" not in context_snapshot_columns
+    # Chat-path columns added in the canonical 0001 migration.
+    assert {"agent_id", "session_id", "run_id", "request_json"}.issubset(context_snapshot_columns)
     assert "included_evidence_refs_json" in context_snapshot_columns
+    assert "context_snapshot_items" in inspector.get_table_names()
 
     proposal_columns = {column["name"] for column in inspector.get_columns("proposals")}
     assert {"urgency", "review_deadline", "expires_at", "preview"}.issubset(proposal_columns)
@@ -200,13 +203,11 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
         "source_kind",
         "source_trust",
         "subject_user_id",
-        "lifecycle_status",
         "consolidation_status",
         "project_id",
     }.issubset(activity_columns)
     ar_indexes = {tuple(i["column_names"]) for i in inspector.get_indexes("activity_records")}
     assert ("source_task_id",) in ar_indexes
-    assert ("lifecycle_status",) in ar_indexes
     assert ("consolidation_status",) in ar_indexes
     assert ("project_id",) in ar_indexes, "ix_activity_records_project_id missing"
 
@@ -242,10 +243,7 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
         "supersedes_memory_id",
         "event_time",
         "event_type",
-        "summary_json",
-        "salience_json",
         "last_retrieved_at",
-        "reconsolidation_due",
     }.issubset(memory_columns)
 
     knowledge_columns = {column["name"] for column in inspector.get_columns("knowledge_items")}
@@ -253,25 +251,40 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
         "id", "space_id", "project_id", "workspace_id", "root_item_id",
         "supersedes_item_id", "item_type", "title", "content", "content_format",
         "status", "visibility", "verification_status", "reflection_status",
-        "tags_json", "confidence", "source_url", "source_refs_json",
+        "tags_json", "confidence", "source_url",
         "owner_user_id", "created_by_user_id", "created_by_agent_id", "created_by_run_id",
         "source_activity_id", "source_artifact_id", "created_from_proposal_id",
         "approved_by_user_id", "version", "created_at", "updated_at", "archived_at",
     }.issubset(knowledge_columns)
-    knowledge_relation_columns = {column["name"] for column in inspector.get_columns("knowledge_relations")}
+    knowledge_relation_columns = {column["name"] for column in inspector.get_columns("knowledge_item_relations")}
     assert {
         "id", "space_id", "from_item_id", "to_item_id", "relation_type", "status",
-        "confidence", "evidence_summary", "source_proposal_id", "created_by_user_id",
+        "confidence", "note", "source_proposal_id", "created_by_user_id",
         "created_by_agent_id", "created_from_assessment_id", "created_at", "updated_at",
     }.issubset(knowledge_relation_columns)
     knowledge_indexes = {tuple(i["column_names"]) for i in inspector.get_indexes("knowledge_items")}
     assert ("space_id",) in knowledge_indexes
     assert ("owner_user_id",) in knowledge_indexes
     assert ("root_item_id",) in knowledge_indexes
-    relation_indexes = {tuple(i["column_names"]) for i in inspector.get_indexes("knowledge_relations")}
+    relation_indexes = {tuple(i["column_names"]) for i in inspector.get_indexes("knowledge_item_relations")}
     assert ("space_id",) in relation_indexes
     assert ("from_item_id",) in relation_indexes
     assert ("to_item_id",) in relation_indexes
+
+    source_columns = {column["name"] for column in inspector.get_columns("sources")}
+    assert {
+        "id", "space_id", "source_type", "title", "uri", "content_ref", "raw_text",
+        "summary", "metadata_json", "status", "source_activity_id", "created_by_user_id",
+        "created_at", "updated_at",
+    }.issubset(source_columns)
+    item_source_columns = {column["name"] for column in inspector.get_columns("knowledge_item_sources")}
+    assert {
+        "id", "space_id", "knowledge_item_id", "source_id", "relation_type",
+        "locator", "quote", "note", "confidence", "created_by_user_id", "created_at",
+    }.issubset(item_source_columns)
+    item_source_indexes = {tuple(i["column_names"]) for i in inspector.get_indexes("knowledge_item_sources")}
+    assert ("knowledge_item_id",) in item_source_indexes
+    assert ("source_id",) in item_source_indexes
 
     snapshot_columns = {column["name"] for column in inspector.get_columns("context_snapshots")}
     assert {
@@ -462,7 +475,6 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
             verification_status="unverified",
             reflection_status="unreviewed",
             tags_json=[],
-            source_refs_json=[],
             owner_user_id=user.id,
             created_by_user_id=user.id,
             created_by_run_id=run.id,
@@ -474,12 +486,12 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
         db.add(knowledge_item)
         db.commit()
 
-        knowledge_relation = models.KnowledgeRelation(
+        knowledge_relation = models.KnowledgeItemRelation(
             id="knowledge-relation-1",
             space_id=space.id,
             from_item_id=knowledge_item.id,
             to_item_id=knowledge_item.id,
-            relation_type="related",
+            relation_type="related_to",
             status="active",
             source_proposal_id=proposal.id,
             created_by_user_id=user.id,
@@ -492,14 +504,6 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
         db.add_all([job, memory, message])
         db.commit()
 
-        entity_ref = models.EntityRef(
-            id="entity-1",
-            space_id=space.id,
-            entity_type="person",
-            entity_id="ext-person-42",
-            canonical_key="person:ext-person-42",
-            display_name="Alice",
-        )
         memory_relation = models.MemoryRelation(
             id="relation-1",
             space_id=space.id,
@@ -519,7 +523,7 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
             source_id=activity.id,
             source_trust="internal_system",
         )
-        db.add_all([entity_ref, memory_relation, provenance_link])
+        db.add_all([memory_relation, provenance_link])
         db.commit()
 
         assert db.get(models.Agent, "agent-1").current_version_id == "version-1"
@@ -529,8 +533,7 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
         assert db.get(models.Proposal, "proposal-1").created_by_run_id == "run-1"
         assert db.get(models.ActivityRecord, "activity-1").source_run_id == "run-1"
         assert db.get(models.KnowledgeItem, "knowledge-1").created_from_proposal_id == "proposal-1"
-        assert db.get(models.KnowledgeRelation, "knowledge-relation-1").relation_type == "related"
-        assert db.get(models.EntityRef, "entity-1").entity_type == "person"
+        assert db.get(models.KnowledgeItemRelation, "knowledge-relation-1").relation_type == "related_to"
         assert db.get(models.MemoryRelation, "relation-1").relation_type == "related_to"
         assert db.get(models.ProvenanceLink, "provenance-1").source_trust == "internal_system"
     finally:
@@ -579,13 +582,12 @@ def test_key_canonical_foreign_keys_exist(canonical_engine):
     assert ("source_artifact_id", "artifacts", "id") in _foreign_keys(inspector, "knowledge_items")
     assert ("created_from_proposal_id", "proposals", "id") in _foreign_keys(inspector, "knowledge_items")
     assert ("approved_by_user_id", "users", "id") in _foreign_keys(inspector, "knowledge_items")
-    assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "knowledge_relations")
-    assert ("from_item_id", "knowledge_items", "id") in _foreign_keys(inspector, "knowledge_relations")
-    assert ("to_item_id", "knowledge_items", "id") in _foreign_keys(inspector, "knowledge_relations")
-    assert ("source_proposal_id", "proposals", "id") in _foreign_keys(inspector, "knowledge_relations")
+    assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "knowledge_item_relations")
+    assert ("from_item_id", "knowledge_items", "id") in _foreign_keys(inspector, "knowledge_item_relations")
+    assert ("to_item_id", "knowledge_items", "id") in _foreign_keys(inspector, "knowledge_item_relations")
+    assert ("source_proposal_id", "proposals", "id") in _foreign_keys(inspector, "knowledge_item_relations")
     assert "memory_access_logs" in inspector.get_table_names()
     assert ("memory_id", "memory_entries", "id") in _foreign_keys(inspector, "memory_access_logs")
-    assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "entity_refs")
     assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "memory_relations")
     assert ("created_from_proposal_id", "proposals", "id") in _foreign_keys(inspector, "memory_relations")
     assert ("space_id", "spaces", "id") in _foreign_keys(inspector, "provenance_links")
@@ -1431,7 +1433,7 @@ def test_runtime_tool_bindings_approval_required_defaults_true(canonical_engine)
 
 
 def test_default_execution_planes_are_seeded(canonical_conn):
-    """seed_default_execution_planes creates all 7 canonical planes idempotently."""
+    """seed_default_execution_planes creates all 8 canonical planes idempotently."""
     from app.execution_planes.seeder import seed_default_execution_planes
 
     Session = sessionmaker(bind=canonical_conn, join_transaction_mode="create_savepoint")
@@ -1447,6 +1449,7 @@ def test_default_execution_planes_are_seeded(canonical_conn):
         names = {p.name for p in planes}
         expected = {
             "agent_space_native_local",
+            "managed_model_api",
             "local_codex_cli",
             "local_claude_code_cli",
             "local_opencode",
@@ -1455,6 +1458,15 @@ def test_default_execution_planes_are_seeded(canonical_conn):
             "manual_import",
         }
         assert expected == names, f"Missing planes: {expected - names}"
+
+        # Managed model API plane: in-process native orchestration, full trace, but
+        # prompt data is exposed to the configured model provider (ADR 0010 channel).
+        managed = next(p for p in planes if p.name == "managed_model_api")
+        assert managed.type == "hybrid"
+        assert managed.trust_level == "high"
+        assert managed.observability_level == "full_trace"
+        assert managed.data_exposure_level == "model_provider"
+        assert managed.enabled is True
 
         # Remote vendor planes must be disabled by default (data exposure risk)
         for plane in planes:
@@ -1476,7 +1488,7 @@ def test_default_execution_planes_are_seeded(canonical_conn):
         # Re-seeding must be idempotent
         seed_default_execution_planes(db, "seed-space-1")
         count_after = db.query(models.ExecutionPlane).filter_by(space_id="seed-space-1").count()
-        assert count_after == 7, "Re-seeding must not create duplicate planes"
+        assert count_after == 8, "Re-seeding must not create duplicate planes"
     finally:
         db.close()
 
@@ -1599,7 +1611,7 @@ def test_control_plane_orm_relationships_navigate_correctly(canonical_conn):
 
 
 def test_on_space_created_seeds_execution_planes(canonical_conn):
-    """on_space_created seeds all 7 default execution planes for every new space, idempotently."""
+    """on_space_created seeds all 8 default execution planes for every new space, idempotently."""
     from app.spaces.hooks import on_space_created
 
     Session = sessionmaker(bind=canonical_conn, join_transaction_mode="create_savepoint")
@@ -1613,12 +1625,12 @@ def test_on_space_created_seeds_execution_planes(canonical_conn):
         on_space_created(db, space.id, seeded_by_user_id=user.id)
 
         count = db.query(models.ExecutionPlane).filter_by(space_id=space.id).count()
-        assert count == 7, f"on_space_created must seed 7 execution planes, got {count}"
+        assert count == 8, f"on_space_created must seed 8 execution planes, got {count}"
 
         # Second call must not create duplicates
         on_space_created(db, space.id, seeded_by_user_id=user.id)
         count_after = db.query(models.ExecutionPlane).filter_by(space_id=space.id).count()
-        assert count_after == 7, "on_space_created seeding must be idempotent"
+        assert count_after == 8, "on_space_created seeding must be idempotent"
     finally:
         db.close()
 

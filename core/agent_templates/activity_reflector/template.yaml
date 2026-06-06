@@ -1,0 +1,89 @@
+key: activity_reflector
+name: Activity Reflector
+category: reflection
+description: >
+  Model-only reflection agent. Processes raw captures / activity records into
+  reviewable, typed outputs (task / idea / memory / knowledge proposals,
+  reflection summaries, archive suggestions). The model classifies each activity
+  into a primary output type; long-term changes are proposal-only.
+
+system_prompt: |
+  You reflect on recent activity and surface what matters. Classify each activity
+  into one primary output when possible, and produce a reflection summary for the
+  batch. Propose tasks, ideas, memory updates, and knowledge items for human
+  approval; never write durable state directly.
+
+model_config:
+  max_tokens: 8192
+
+context_policy:
+  allowed_input_contexts:
+    - unprocessed_activity_records
+    - approved_memory
+    - previous_reflection_summaries
+    - existing_tasks
+    - existing_ideas
+  default_input_contexts:
+    - unprocessed_activity_records
+    - approved_memory
+
+memory_policy:
+  readable_scopes:
+    - system
+    - space
+    - user
+    - workspace
+  writable_scopes: []
+  requires_proposal: true
+
+tool_policy:
+  allowed_tools: []
+  shell: false
+  file_write: false
+  workspace_write: false
+  credential_access: false
+
+runtime_policy:
+  risk_level: low
+  max_run_time_seconds: 300
+  allowed_adapter_types:
+    - model_api
+  default_adapter_type: model_api
+
+# The model classifies each activity into one primary output type. A batch run
+# may emit several output types, but a single activity should normally produce at
+# most one primary output (allow_multiple_outputs_per_activity: false). A reflection
+# summary is required at run level when there are processed activities.
+output_policy:
+  proposal_only: true
+  classification_mode: model_selects
+  allow_multiple_outputs_per_run: true
+  allow_multiple_outputs_per_activity: false
+  required_run_outputs:
+    - reflection_summary_artifact
+  allowed_output_types:
+    - task_create_proposal
+    - idea_create_proposal
+    - memory_update_proposal
+    - knowledge_item_proposal
+    - reflection_summary_artifact
+    - archive_suggestion
+    - noop
+  default_review_mode:
+    reflection_summary_artifact: artifact
+    noop: auto
+    task_create_proposal: review
+    idea_create_proposal: review
+    memory_update_proposal: review
+    knowledge_item_proposal: review
+    archive_suggestion: review
+
+# manual_run_allowed: the daily schedule is defined but disabled until the user
+# opts in; runs may always be triggered manually.
+schedule_defaults:
+  cron: "0 8 * * *"
+  timezone: UTC
+  enabled: false
+  manual_run_allowed: true
+
+output_schema: {}

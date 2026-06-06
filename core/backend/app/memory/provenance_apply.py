@@ -14,6 +14,55 @@ def _new_id() -> str:
 
 TARGET_MEMORY = "memory"
 TARGET_POLICY = "policy"
+TARGET_KNOWLEDGE = "knowledge"
+
+# Values accepted by the ProvenanceLink.source_type CHECK constraint.
+_VALID_PROVENANCE_SOURCE_TYPES = frozenset(
+    {
+        "activity",
+        "proposal",
+        "memory",
+        "artifact",
+        "run_step",
+        "external_source",
+        "user_confirmation",
+        "intake_item",
+        "source_snapshot",
+        "extracted_evidence",
+        "run_event",
+    }
+)
+
+
+def source_refs_to_provenance_entries(source_refs: Any) -> list[dict[str, Any]]:
+    """Normalise free-form ``source_refs`` pointers into ProvenanceLink entries.
+
+    ``source_refs`` carry internal provenance pointers (e.g.
+    ``{"type": "activity", "id": <id>, "source_trust": ...}``). Entries whose
+    type is not a valid ProvenanceLink ``source_type`` are skipped rather than
+    forced into an invalid row.
+    """
+    entries: list[dict[str, Any]] = []
+    for ref in source_refs or []:
+        if not isinstance(ref, dict):
+            continue
+        st = ref.get("source_type") or ref.get("type")
+        sid = ref.get("source_id") or ref.get("id")
+        if not isinstance(st, str) or not isinstance(sid, str):
+            continue
+        if st not in _VALID_PROVENANCE_SOURCE_TYPES:
+            continue
+        trust = ref.get("source_trust")
+        evidence = ref.get("evidence_json")
+        entries.append(
+            {
+                "source_type": st,
+                "source_id": sid,
+                "source_trust": trust if isinstance(trust, str) else None,
+                "evidence_json": evidence if isinstance(evidence, dict) else None,
+            }
+        )
+    return entries
 
 
 def write_provenance_links(

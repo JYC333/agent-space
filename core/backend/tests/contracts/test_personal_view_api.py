@@ -93,6 +93,70 @@ def test_me_summary_aggregates_across_member_spaces(api_client, db):
     assert data["accessible_spaces_count"] >= 2
 
 
+def test_me_summary_spaces_rollup_reports_per_space_counts(api_client, db):
+    """The ``spaces`` rollup carries per-space pending / task / failed-run counts."""
+    space_a = _new_id()
+    space_b = _new_id()
+    factories.create_test_space(db, space_id=space_a, name="Alpha", space_type="team", commit=False)
+    factories.create_test_space(db, space_id=space_b, name="Beta", space_type="personal", commit=False)
+    user = factories.create_test_user(db, space_id=space_a, commit=False)
+
+    from app.models import SpaceMembership
+    db.add(SpaceMembership(id=_new_id(), space_id=space_b, user_id=user.id, role="member", status="active"))
+    db.flush()
+
+    # space_a: 2 pending proposals + 1 assigned task, no failed runs.
+    factories.create_test_proposal(db, space_id=space_a, created_by_user_id=user.id, status="pending", commit=False)
+    factories.create_test_proposal(db, space_id=space_a, created_by_user_id=user.id, status="pending", commit=False)
+    db.add(Task(
+        id=_new_id(), space_id=space_a, title="task", status="inbox",
+        priority="normal", assigned_user_id=user.id, created_by_user_id=user.id,
+    ))
+    # space_b: 1 pending proposal + 1 recent failed run.
+    factories.create_test_proposal(db, space_id=space_b, created_by_user_id=user.id, status="pending", commit=False)
+    run = factories.create_test_run(db, space_id=space_b, user_id=user.id, commit=False)
+    run.status = "failed"
+    db.commit()
+
+    c = _authed_client(db, user.id)
+    r = c.get("/api/v1/me/summary", params={"space_id": space_a})
+    assert r.status_code == 200
+    by_id = {s["space_id"]: s for s in r.json()["spaces"]}
+
+    assert by_id[space_a]["name"] == "Alpha"
+    assert by_id[space_a]["type"] == "team"
+    assert by_id[space_a]["pending_proposals_count"] == 2
+    assert by_id[space_a]["assigned_tasks_count"] == 1
+    assert by_id[space_a]["recent_failed_runs_count"] == 0
+
+    assert by_id[space_b]["pending_proposals_count"] == 1
+    assert by_id[space_b]["recent_failed_runs_count"] == 1
+
+
+def test_me_summary_spaces_rollup_excludes_other_user_private_proposals(api_client, db):
+    """Per-space pending count excludes another user's private proposals."""
+    space_id = _new_id()
+    factories.create_test_space(db, space_id=space_id, name="Team", space_type="team", commit=False)
+    me = factories.create_test_user(db, space_id=space_id, commit=False)
+    other = factories.create_test_user(db, space_id=space_id, commit=False)
+
+    foreign = factories.create_test_proposal(
+        db, space_id=space_id, created_by_user_id=other.id, status="pending", commit=False
+    )
+    foreign.visibility = "private"
+    mine = factories.create_test_proposal(
+        db, space_id=space_id, created_by_user_id=me.id, status="pending", commit=False
+    )
+    mine.visibility = "space_shared"
+    db.commit()
+
+    c = _authed_client(db, me.id)
+    r = c.get("/api/v1/me/summary", params={"space_id": space_id})
+    assert r.status_code == 200
+    by_id = {s["space_id"]: s for s in r.json()["spaces"]}
+    assert by_id[space_id]["pending_proposals_count"] == 1
+
+
 def test_me_summary_excludes_non_member_space_data(api_client, db):
     """Summary never includes data from spaces where user is not a member."""
     space_a = _new_id()

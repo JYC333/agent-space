@@ -16,12 +16,8 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import Message
 from .proposals import ProposalService
-from .provider_client import (
-    ReflectorModelProviderMissingError,
-    UnsupportedProviderForReflectorError,
-    call_reflector_llm,
-    resolve_reflector_provider,
-)
+from ..providers.invocation import complete_text
+from .provider_client import resolve_reflector_provider_id
 
 
 # Signal phrases that suggest a memory-worthy statement
@@ -144,11 +140,10 @@ class MemoryReflector:
 
         Raises:
             ReflectorModelProviderMissingError: no provider configured
-            UnsupportedProviderForReflectorError: provider_type=anthropic or unknown
+            ProviderUnavailableError: configured provider missing/disabled
+            UnsupportedProviderError: provider_type unknown/unsupported
         """
-        provider_type, base_url, model, api_key = resolve_reflector_provider(
-            self.db, settings
-        )
+        provider_id, model = resolve_reflector_provider_id(settings)
 
         conversation = "\n".join(
             f"[{m.role.upper()}]: {m.content}" for m in messages
@@ -168,14 +163,13 @@ Return ONLY valid JSON. Example:
 
 If nothing is memory-worthy, return an empty array: []"""
 
-        raw = call_reflector_llm(
-            provider_type,
-            base_url,
-            model,
-            api_key,
-            system_prompt,
-            f"Conversation:\n\n{conversation}",
-        )
+        raw = complete_text(
+            self.db,
+            provider_id=provider_id,
+            model=model,
+            system=system_prompt,
+            user=f"Conversation:\n\n{conversation}",
+        ).text
 
         try:
             items = json.loads(raw.strip())

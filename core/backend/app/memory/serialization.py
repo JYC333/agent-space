@@ -29,7 +29,15 @@ def memory_entry_to_out(
         include_public_templates=include_public_templates,
     ):
         return None
-    out = MemoryOut.model_validate(memory)
+    data = {}
+    for name in MemoryOut.model_fields:
+        if name == "scope":
+            data[name] = memory.scope_type
+        elif name == "type":
+            data[name] = memory.memory_type
+        else:
+            data[name] = getattr(memory, name)
+    out = MemoryOut.model_validate(data)
     if summary_only_redact_content(memory, viewer_user_id=viewer_user_id):
         return out.model_copy(update={"content": None})
     return out

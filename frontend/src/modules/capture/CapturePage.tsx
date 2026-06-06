@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { Plus, Send } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { useSpaceNavigate as useNavigate } from '../../core/spaceNav'
+import { Plus, Send, Paperclip, Mic, Square, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { activityApi } from '../../api/client'
 import { errMsg } from '../../lib/utils'
@@ -13,6 +13,11 @@ export default function CapturePage() {
   const { writeTargetSpaceId, hasWriteTarget, label } = useWriteTarget()
   const [text, setText] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const chunksRef = useRef<Blob[]>([])
 
   async function handleCapture(e: React.FormEvent) {
     e.preventDefault()
@@ -33,6 +38,60 @@ export default function CapturePage() {
     }
   }
 
+  async function doUpload(file: File, kind: 'file' | 'voice') {
+    setUploading(true)
+    try {
+      await activityApi.upload(file, { kind, spaceId: writeTargetSpaceId ?? undefined })
+      toast.success('Saved to Activity Inbox')
+      navigate('/activity')
+    } catch (err) {
+      toast.error(errMsg(err))
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (f) void doUpload(f, 'file')
+  }
+
+  async function startRecording() {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      toast.error('Voice recording is not supported in this browser')
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mr = new MediaRecorder(stream)
+      chunksRef.current = []
+      mr.ondataavailable = (ev) => { if (ev.data.size) chunksRef.current.push(ev.data) }
+      mr.onstop = () => {
+        stream.getTracks().forEach(t => t.stop())
+        const type = mr.mimeType || 'audio/webm'
+        const ext = type.includes('ogg') ? 'ogg' : type.includes('mp4') ? 'mp4' : 'webm'
+        const blob = new Blob(chunksRef.current, { type })
+        setRecording(false)
+        if (blob.size > 0) {
+          void doUpload(new File([blob], `voice-${Date.now()}.${ext}`, { type }), 'voice')
+        }
+      }
+      recorderRef.current = mr
+      mr.start()
+      setRecording(true)
+    } catch (err) {
+      toast.error(errMsg(err))
+    }
+  }
+
+  function stopRecording() {
+    recorderRef.current?.stop()
+    recorderRef.current = null
+  }
+
+  const busy = submitting || uploading
+
   return (
     <div className="p-6 space-y-6 max-w-2xl">
       <div className="flex items-center gap-4 pb-4 border-b border-border">
@@ -47,7 +106,7 @@ export default function CapturePage() {
         </div>
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Capture</h1>
-          <p className="text-sm text-muted-foreground">Quickly save thoughts, ideas, notes, and external content.</p>
+          <p className="text-sm text-muted-foreground">Quickly save thoughts, notes, files, and voice memos.</p>
         </div>
       </div>
 
@@ -65,12 +124,53 @@ export default function CapturePage() {
           <span className="text-[11px] text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
             {text.length} chars · write target: {label ?? 'none'}
           </span>
-          <Button type="submit" size="sm" disabled={!text.trim() || submitting || !hasWriteTarget}>
+          <Button type="submit" size="sm" disabled={!text.trim() || busy || recording || !hasWriteTarget}>
             <Send className="size-3.5 mr-1.5" />
             {submitting ? 'Capturing…' : 'Capture'}
           </Button>
         </div>
       </form>
+
+      {/* File & voice capture (store-only — lands in the Activity Inbox for review) */}
+      <div className="pt-4 border-t border-border space-y-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Or capture a file / voice memo</p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input ref={fileInputRef} type="file" hidden onChange={onPickFile} />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!hasWriteTarget || busy || recording}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {uploading ? <Loader2 className="size-3.5 mr-1.5 animate-spin" /> : <Paperclip className="size-3.5 mr-1.5" />}
+            Attach file
+          </Button>
+          {recording ? (
+            <Button type="button" variant="destructive" size="sm" onClick={stopRecording}>
+              <Square className="size-3.5 mr-1.5" /> Stop &amp; save
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!hasWriteTarget || busy}
+              onClick={() => void startRecording()}
+            >
+              <Mic className="size-3.5 mr-1.5" /> Record voice
+            </Button>
+          )}
+          {recording && (
+            <span className="flex items-center gap-1.5 text-[12px] text-destructive">
+              <span className="size-2 rounded-full bg-destructive animate-pulse" /> Recording…
+            </span>
+          )}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Files and voice memos up to 25&nbsp;MB are stored and queued in the Activity Inbox. Audio is not transcribed yet.
+        </p>
+      </div>
     </div>
   )
 }

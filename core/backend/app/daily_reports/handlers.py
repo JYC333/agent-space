@@ -36,7 +36,7 @@ def handle_daily_capture_report(job) -> dict | None:
     from ..models import DailyCaptureReportSetting
     from .service import DailyCaptureReportService
 
-    payload = job.payload or {}
+    payload = job.payload_json or {}
     space_id = payload.get("space_id") or job.space_id
     user_id = payload.get("user_id") or job.user_id
     setting_id = payload.get("setting_id")

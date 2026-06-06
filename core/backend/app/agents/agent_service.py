@@ -32,7 +32,11 @@ from ..schemas import (
     AgentOut, AgentModelSummary,
     DEFAULT_MODEL_CONFIG, DEFAULT_MEMORY_POLICY, DEFAULT_RUNTIME_POLICY,
 )
-from ..config import settings
+from ..spaces.defaults import resolve_default_space_id
+
+import logging
+
+log = logging.getLogger(__name__)
 
 _task_router = None
 
@@ -82,18 +86,30 @@ class AgentService:
             model=version.model_name,
         )
 
+    def _system_prompt_for_agent(self, agent: Agent) -> str | None:
+        if not agent.current_version_id:
+            return None
+        version = self.db.query(AgentVersion).filter(
+            AgentVersion.id == agent.current_version_id
+        ).first()
+        return version.system_prompt if version else None
+
     def to_agent_out(self, agent: Agent) -> AgentOut:
         return AgentOut(
             id=agent.id,
             space_id=agent.space_id,
-            created_by_user_id=agent.owner_user_id or settings.default_user_id,
+            created_by_user_id=agent.owner_user_id,
             name=agent.name,
             description=agent.description,
             visibility=agent.visibility,
             role_instruction=agent.role_instruction,
             status=agent.status,
+            agent_kind=agent.agent_kind,
             current_version_id=agent.current_version_id,
+            source_template_id=agent.source_template_id,
+            source_template_version_id=agent.source_template_version_id,
             model=self._model_summary_for_agent(agent),
+            system_prompt=self._system_prompt_for_agent(agent),
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )
@@ -129,8 +145,13 @@ class AgentService:
 
     def create(self, data: AgentCreate, requesting_user_id: str | None = None) -> Agent:
         from .version_service import AgentVersionService
-        space_id = data.space_id or settings.default_space_id
-        owner_user_id = data.created_by_user_id or requesting_user_id or settings.default_user_id
+        space_id = data.space_id or resolve_default_space_id(self.db)
+        owner_user_id = data.created_by_user_id or requesting_user_id
+        if owner_user_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="agent creation requires an owner (created_by_user_id or an authenticated user)",
+            )
 
         version_svc = AgentVersionService(self.db)
 
@@ -140,6 +161,25 @@ class AgentService:
                 status_code=400,
                 detail="default_model_provider_id is required when default_model is set",
             )
+
+        # Resolve the runtime adapter into the v1 policy (merge, don't replace).
+        runtime_policy = dict(data.runtime_policy_json or DEFAULT_RUNTIME_POLICY)
+        if data.adapter_type:
+            from ..runtimes.requirements import get_runtime_requirements
+            try:
+                requirements = get_runtime_requirements(data.adapter_type)
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"Unknown adapter_type {data.adapter_type!r}")
+            runtime_policy["default_adapter_type"] = data.adapter_type
+            allowed = list(runtime_policy.get("allowed_adapter_types") or [])
+            if data.adapter_type not in allowed:
+                allowed.append(data.adapter_type)
+            runtime_policy["allowed_adapter_types"] = allowed
+            if requirements.model_provider_mode == "required" and not data.default_model_provider_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"adapter_type {data.adapter_type!r} requires a model provider; set default_model_provider_id.",
+                )
 
         agent = Agent(
             id=_new_id(),
@@ -157,11 +197,12 @@ class AgentService:
         version_data = AgentVersionCreate(
             model_provider_id=data.default_model_provider_id,
             model_name=data.default_model,
+            system_prompt=data.system_prompt,
             model_config_json=dict(data.model_config_json or DEFAULT_MODEL_CONFIG),
             memory_policy_json=dict(data.memory_policy_json or DEFAULT_MEMORY_POLICY),
             capabilities_json=list(data.capabilities_json or []),
             tool_permissions_json=dict(data.tool_permissions_json or {}),
-            runtime_policy_json=dict(data.runtime_policy_json or DEFAULT_RUNTIME_POLICY),
+            runtime_policy_json=runtime_policy,
         )
         version = version_svc.create(
             agent_id=agent.id,
@@ -195,52 +236,284 @@ class AgentService:
     ) -> list[Agent]:
         q = self.db.query(Agent).filter(Agent.space_id == space_id)
         if created_by_user_id:
-            q = q.filter(Agent.created_by_user_id == created_by_user_id)
+            q = q.filter(Agent.owner_user_id == created_by_user_id)
         if visibility:
             q = q.filter(Agent.visibility == visibility)
         if status:
             q = q.filter(Agent.status == status)
         return q.order_by(Agent.created_at.desc()).offset(offset).limit(limit).all()
 
-    def update(self, agent_id: str, data: AgentUpdate) -> Agent | None:
+    # Agent-level metadata fields edited directly on the Agent row.
+    _AGENT_LEVEL_FIELDS = ("name", "description", "visibility", "role_instruction", "status")
+
+    # AgentUpdate field → versioned AgentVersion field. An owner's direct edit of these
+    # appends a new immutable AgentVersion + records an Activity (no proposal needed).
+    _EXEC_FIELD_MAP = {
+        "system_prompt": "system_prompt",
+        "default_model_provider_id": "model_provider_id",
+        "model_provider_id": "model_provider_id",
+        "default_model": "model_name",
+        "model_name": "model_name",
+        "runtime_adapter_id": "runtime_adapter_id",
+        "model_config_json": "model_config_json",
+        "runtime_config_json": "runtime_config_json",
+        "context_policy_json": "context_policy_json",
+        "memory_policy_json": "memory_policy_json",
+        "capabilities_json": "capabilities_json",
+        "tool_permissions_json": "tool_permissions_json",
+        "runtime_policy_json": "runtime_policy_json",
+    }
+
+    def update(self, agent_id: str, data: AgentUpdate, *, user_id: str | None = None) -> Agent | None:
         agent = self.get(agent_id)
         if not agent:
             return None
 
-        exec_field_names = {
-            "default_model_provider_id",
-            "default_model",
-            "model_provider_id",
-            "model_name",
-            "runtime_adapter_id",
-            "system_prompt",
-            "model_config_json",
-            "runtime_config_json",
-            "context_policy_json",
-            "memory_policy_json",
-            "capabilities_json",
-            "tool_permissions_json",
-            "tool_policy_json",
-            "runtime_policy_json",
-        }
-
         update_dict = data.model_dump(exclude_none=True)
-        if any(fn in update_dict for fn in exec_field_names):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Agent execution configuration changes require an "
-                    "agent_config_update proposal. Use POST /api/v1/agents/{agent_id}/config-proposals."
-                ),
-            )
 
-        for field, value in update_dict.items():
-            setattr(agent, field, value)
+        for field in self._AGENT_LEVEL_FIELDS:
+            if field in update_dict:
+                setattr(agent, field, update_dict[field])
+
+        # Execution config is versioned: the owner edits it directly (no proposal —
+        # the owner is the authority and there is no second party to review). The
+        # immutable-version mechanism preserves history; an Activity records the edit.
+        # The agent_config_update proposal flow remains for *proposed* changes (e.g. an
+        # agent learning loop or automation suggesting config), which need human review.
+        changes = {tgt: update_dict[src] for src, tgt in self._EXEC_FIELD_MAP.items() if src in update_dict}
+        if changes:
+            self._apply_config_update_direct(agent, changes, user_id=user_id)
 
         agent.updated_at = datetime.now(UTC)
         self.db.commit()
         self.db.refresh(agent)
         return agent
+
+    def _apply_config_update_direct(self, agent: Agent, changes: dict, *, user_id: str | None) -> AgentVersion:
+        """Append a new AgentVersion with `changes` over the current one + record an Activity."""
+        from .version_service import AgentVersionService
+        from ..activity.service import ActivityService
+        from ..models import RuntimeAdapter
+
+        base = AgentVersionService(self.db).get_or_404(agent.current_version_id)
+        version_dict = {
+            "model_provider_id": base.model_provider_id,
+            "model_name": base.model_name,
+            "runtime_adapter_id": base.runtime_adapter_id,
+            "system_prompt": base.system_prompt,
+            "model_config_json": base.model_config_json or dict(DEFAULT_MODEL_CONFIG),
+            "runtime_config_json": base.runtime_config_json or dict(DEFAULT_RUNTIME_POLICY),
+            "context_policy_json": base.context_policy_json or {},
+            "memory_policy_json": base.memory_policy_json or dict(DEFAULT_MEMORY_POLICY),
+            "capabilities_json": base.capabilities_json or [],
+            "tool_permissions_json": base.tool_permissions_json or {},
+            "runtime_policy_json": base.runtime_policy_json or dict(DEFAULT_RUNTIME_POLICY),
+        }
+        version_dict.update(changes)
+
+        provider_id = version_dict.get("model_provider_id")
+        if version_dict.get("model_name") and not provider_id:
+            raise HTTPException(status_code=400, detail="model_provider_id is required when model_name is set")
+        if provider_id:
+            self._validate_model_provider(provider_id, agent.space_id)
+        runtime_adapter_id = version_dict.get("runtime_adapter_id")
+        if runtime_adapter_id and not self.db.query(RuntimeAdapter).filter(
+            RuntimeAdapter.id == runtime_adapter_id, RuntimeAdapter.space_id == agent.space_id
+        ).first():
+            raise HTTPException(status_code=400, detail="runtime_adapter_id does not belong to this space")
+
+        new_version = AgentVersionService(self.db).create(
+            agent_id=agent.id, space_id=agent.space_id, data=AgentVersionCreate(**version_dict),
+        )
+        agent.current_version_id = new_version.id
+
+        # Lightweight audit record (not a proposal).
+        try:
+            ActivityService(self.db).create(
+                space_id=agent.space_id,
+                source_type="system_event",
+                content=f"Agent '{agent.name}' configuration updated: {', '.join(sorted(changes))}.",
+                user_id=user_id,
+                agent_id=agent.id,
+                title="Agent configuration updated",
+                metadata_json={
+                    "kind": "agent_config_updated",
+                    "agent_id": agent.id,
+                    "changed_fields": sorted(changes.keys()),
+                    "base_version_id": base.id,
+                    "new_version_id": new_version.id,
+                },
+            )
+        except Exception:
+            log.warning("agent config update activity record failed for agent=%s", agent.id, exc_info=True)
+        return new_version
+
+    # ------------------------------------------------------------------
+    # Owner-driven config edit from the agent config UI.
+    # Copy-on-write: build a NEW AgentVersion from the current one, apply
+    # only the allowed fields, re-stamp hard-safety guarantees, then repoint
+    # current_version_id. The old AgentVersion is never mutated.
+    # ------------------------------------------------------------------
+
+    # Snapshots that the config UI may never edit; copied verbatim from the
+    # source version so a frontend override cannot bypass hard safety defaults.
+    _LOCKED_SAFETY_FIELDS = (
+        "tool_policy_json",
+        "tool_permissions_json",
+        "capabilities_json",
+        "runtime_policy_json",
+        "runtime_config_json",
+        "runtime_adapter_id",
+    )
+
+    def update_config(self, agent_id: str, data, *, user_id: str | None = None) -> Agent:
+        from .version_service import AgentVersionService
+
+        agent = self.get_or_404(agent_id)
+        if not agent.current_version_id:
+            raise HTTPException(status_code=400, detail="Agent has no current version to edit")
+        base = AgentVersionService(self.db).get_or_404(agent.current_version_id)
+
+        payload = data.model_dump(exclude_unset=True)
+
+        # Identity fields applied directly to the Agent row.
+        if payload.get("name"):
+            agent.name = payload["name"]
+        if "description" in payload:
+            agent.description = payload["description"]
+
+        # Full copy of the current version as the new version baseline.
+        new = {
+            "model_provider_id": base.model_provider_id,
+            "model_name": base.model_name,
+            "runtime_adapter_id": base.runtime_adapter_id,
+            "system_prompt": base.system_prompt,
+            "model_config_json": dict(base.model_config_json or DEFAULT_MODEL_CONFIG),
+            "runtime_config_json": dict(base.runtime_config_json or DEFAULT_RUNTIME_POLICY),
+            "context_policy_json": dict(base.context_policy_json or {}),
+            "memory_policy_json": dict(base.memory_policy_json or DEFAULT_MEMORY_POLICY),
+            "capabilities_json": list(base.capabilities_json or []),
+            "tool_permissions_json": dict(base.tool_permissions_json or {}),
+            "runtime_policy_json": dict(base.runtime_policy_json or DEFAULT_RUNTIME_POLICY),
+            "tool_policy_json": dict(base.tool_policy_json or {}),
+            "output_policy_json": dict(base.output_policy_json or {}),
+            "schedule_config_json": dict(base.schedule_config_json or {}),
+            "output_schema_json": dict(base.output_schema_json or {}),
+        }
+
+        changed: list[str] = []
+        if "system_prompt" in payload:
+            new["system_prompt"] = payload["system_prompt"]
+            changed.append("system_prompt")
+        if "model_provider_id" in payload:
+            new["model_provider_id"] = payload["model_provider_id"]
+            changed.append("model_provider_id")
+        if "model_name" in payload:
+            new["model_name"] = payload["model_name"]
+            changed.append("model_name")
+        if payload.get("model_config_json") is not None:
+            new["model_config_json"] = {**new["model_config_json"], **payload["model_config_json"]}
+            changed.append("model_config_json")
+        if payload.get("context_policy_json") is not None:
+            from .policy_safety import merge_context_policy_safe
+            new["context_policy_json"] = merge_context_policy_safe(base.context_policy_json, payload["context_policy_json"])
+            changed.append("context_policy_json")
+        if payload.get("memory_policy_json") is not None:
+            from .policy_safety import merge_memory_policy_safe
+            new["memory_policy_json"] = merge_memory_policy_safe(base.memory_policy_json, payload["memory_policy_json"])
+            changed.append("memory_policy_json")
+        if payload.get("output_policy_json") is not None:
+            from .policy_safety import merge_output_policy_safe
+            new["output_policy_json"] = merge_output_policy_safe(base.output_policy_json, payload["output_policy_json"])
+            changed.append("output_policy_json")
+        if payload.get("schedule_config_json") is not None:
+            new["schedule_config_json"] = {**new["schedule_config_json"], **payload["schedule_config_json"]}
+            changed.append("schedule_config_json")
+        if payload.get("output_schema_json") is not None:
+            new["output_schema_json"] = dict(payload["output_schema_json"])
+            changed.append("output_schema_json")
+
+        if new.get("model_name") and not new.get("model_provider_id"):
+            raise HTTPException(status_code=400, detail="model_provider_id is required when model_name is set")
+        if new.get("model_provider_id"):
+            self._validate_model_provider(new["model_provider_id"], agent.space_id)
+
+        if changed:
+            version = AgentVersionService(self.db).create(
+                agent_id=agent.id, space_id=agent.space_id, data=AgentVersionCreate(**new),
+            )
+            agent.current_version_id = version.id
+            self._record_config_activity(agent, changed, base.id, version.id, user_id=user_id)
+
+        agent.updated_at = datetime.now(UTC)
+        self.db.commit()
+        self.db.refresh(agent)
+        return agent
+
+    def restore_version(self, agent_id: str, version_id: str, *, user_id: str | None = None) -> Agent:
+        """Create a NEW AgentVersion that copies a prior version's config, then set it current.
+
+        The selected old version is never mutated or reactivated; a fresh immutable
+        version is appended (preserving full history), satisfying the append-only model.
+        """
+        from .version_service import AgentVersionService
+
+        agent = self.get_or_404(agent_id)
+        version_svc = AgentVersionService(self.db)
+        source = version_svc.get_version_for_agent(version_id, agent.id, agent.space_id)
+
+        new = {
+            "model_provider_id": source.model_provider_id,
+            "model_name": source.model_name,
+            "runtime_adapter_id": source.runtime_adapter_id,
+            "system_prompt": source.system_prompt,
+            "model_config_json": dict(source.model_config_json or DEFAULT_MODEL_CONFIG),
+            "runtime_config_json": dict(source.runtime_config_json or DEFAULT_RUNTIME_POLICY),
+            "context_policy_json": dict(source.context_policy_json or {}),
+            "memory_policy_json": dict(source.memory_policy_json or DEFAULT_MEMORY_POLICY),
+            "capabilities_json": list(source.capabilities_json or []),
+            "tool_permissions_json": dict(source.tool_permissions_json or {}),
+            "runtime_policy_json": dict(source.runtime_policy_json or DEFAULT_RUNTIME_POLICY),
+            "tool_policy_json": dict(source.tool_policy_json or {}),
+            "output_policy_json": dict(source.output_policy_json or {}),
+            "schedule_config_json": dict(source.schedule_config_json or {}),
+            "output_schema_json": dict(source.output_schema_json or {}),
+        }
+        version = version_svc.create(
+            agent_id=agent.id, space_id=agent.space_id, data=AgentVersionCreate(**new),
+        )
+        agent.current_version_id = version.id
+        self._record_config_activity(
+            agent, [f"restore_from:{source.version_label}"], source.id, version.id, user_id=user_id
+        )
+        agent.updated_at = datetime.now(UTC)
+        self.db.commit()
+        self.db.refresh(agent)
+        return agent
+
+    def _record_config_activity(
+        self, agent: Agent, changed: list[str], base_version_id: str, new_version_id: str, *, user_id: str | None
+    ) -> None:
+        from ..activity.service import ActivityService
+
+        try:
+            ActivityService(self.db).create(
+                space_id=agent.space_id,
+                source_type="system_event",
+                content=f"Agent '{agent.name}' configuration updated: {', '.join(sorted(changed))}.",
+                user_id=user_id,
+                agent_id=agent.id,
+                title="Agent configuration updated",
+                metadata_json={
+                    "kind": "agent_config_updated",
+                    "agent_id": agent.id,
+                    "changed_fields": sorted(changed),
+                    "base_version_id": base_version_id,
+                    "new_version_id": new_version_id,
+                },
+            )
+        except Exception:
+            log.warning("agent config update activity record failed for agent=%s", agent.id, exc_info=True)
 
     def create_config_update_proposal(
         self,
@@ -441,7 +714,12 @@ class AgentService:
         agent = self.get_or_404(agent_id)
         self._check_run(agent, adapter_type, space_id)
 
-        user_id = instructed_by_user_id or settings.default_user_id
+        if instructed_by_user_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="run dispatch requires instructed_by_user_id (the authenticated user)",
+            )
+        user_id = instructed_by_user_id
 
         run_svc = RunService(self.db)
         run = run_svc.create_run(
@@ -484,7 +762,12 @@ class AgentService:
         agent = self.get_or_404(agent_id)
         self._check_run(agent, adapter_type, space_id)
 
-        user_id = instructed_by_user_id or settings.default_user_id
+        if instructed_by_user_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="run dispatch requires instructed_by_user_id (the authenticated user)",
+            )
+        user_id = instructed_by_user_id
 
         run_svc = RunService(self.db)
         run = run_svc.create_run(

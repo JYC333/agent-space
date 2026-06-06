@@ -164,7 +164,7 @@ function JobRow({
 // Page
 // ---------------------------------------------------------------------------
 export default function JobQueuePage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [jobs, setJobs]               = useState<Job[]>([])
   const [total, setTotal]             = useState(0)
   const [loading, setLoading]         = useState(true)
@@ -174,7 +174,7 @@ export default function JobQueuePage() {
   const hasActive = jobs.some(j => ACTIVE.has(j.status))
 
   const load = useCallback(async (quiet = false) => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setJobs([])
       setTotal(0)
       setLoading(false)
@@ -195,7 +195,7 @@ export default function JobQueuePage() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [statusFilter, activeOperationalSpaceId])
+  }, [statusFilter, activeSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -240,14 +240,14 @@ export default function JobQueuePage() {
             )}
           </p>
           <p className="text-xs text-muted-foreground">
-            Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
+            Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}
           </p>
         </div>
         <Button
           variant="ghost"
           size="icon"
           onClick={() => load(true)}
-          disabled={refreshing || !activeOperationalSpaceId}
+          disabled={refreshing || !activeSpaceId}
           title="Refresh"
         >
           <RefreshCw className={`size-4 ${refreshing ? 'animate-spin' : ''}`} />
@@ -285,7 +285,7 @@ export default function JobQueuePage() {
           </div>
         ) : jobs.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-10">
-            {!activeOperationalSpaceId
+            {!activeSpaceId
               ? 'Select an operational space to browse jobs.'
               : statusFilter ? `No ${statusFilter} jobs.` : 'No jobs yet. Submit an agent run to see it here.'}
           </p>

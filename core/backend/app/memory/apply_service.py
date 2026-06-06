@@ -18,8 +18,8 @@ Supported proposal types
   knowledge_create — create an active KnowledgeItem
   knowledge_update — append-only KnowledgeItem version update
   knowledge_archive — archive a KnowledgeItem
-  knowledge_relation_create — create a same-space KnowledgeRelation
-  knowledge_relation_delete — archive a KnowledgeRelation
+  knowledge_relation_create — create a same-space KnowledgeItemRelation
+  knowledge_relation_delete — archive a KnowledgeItemRelation
 
 Callers
 -------
@@ -38,7 +38,7 @@ from ..models import (
     ActivityRecord,
     AgentVersion,
     KnowledgeItem,
-    KnowledgeRelation,
+    KnowledgeItemRelation,
     MemoryEntry,
     Policy,
     Proposal,
@@ -87,7 +87,7 @@ class ApplyResult:
     task: Optional[Task] = None
     agent_version: Optional[AgentVersion] = None
     knowledge_item: Optional[KnowledgeItem] = None
-    knowledge_relation: Optional[KnowledgeRelation] = None
+    knowledge_relation: Optional[KnowledgeItemRelation] = None
 
 
 def _validate_grant_egress_approval_or_raise(db: Session, proposal: Proposal) -> None:
@@ -201,6 +201,8 @@ class MemoryProposalApplier:
             selected_user_ids=payload.get("selected_user_ids"),
             workspace_id=proposal.workspace_id,
             source_proposal_id=proposal.id,
+            memory_layer=payload.get("target_layer") or payload.get("memory_layer"),
+            memory_kind=payload.get("memory_kind"),
         )
 
         writer = MemoryInternalWriter(self._db)
@@ -319,6 +321,8 @@ class MemoryProposalApplier:
             selected_user_ids=payload.get("selected_user_ids") or old_mem.selected_user_ids,
             workspace_id=proposal.workspace_id or old_mem.workspace_id,
             source_proposal_id=proposal.id,
+            memory_layer=payload.get("target_layer") or payload.get("memory_layer") or old_mem.memory_layer,
+            memory_kind=payload.get("memory_kind") or old_mem.memory_kind,
         )
 
         root_id = old_mem.root_memory_id or old_mem.id
@@ -871,7 +875,6 @@ class ProposalApplyService:
             status="processed",
             source_kind="system_event",
             source_trust="internal_system",
-            lifecycle_status="active",
             consolidation_status="processed",
         )
         self._db.add(activity)

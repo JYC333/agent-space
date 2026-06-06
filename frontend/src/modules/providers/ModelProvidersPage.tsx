@@ -35,7 +35,12 @@ function ProviderTypeSelect({ value, onChange }: { value: ProviderType; onChange
   )
 }
 
-function AddProviderForm({ onAdded, canCreate }: { onAdded: () => void; canCreate: boolean }) {
+function AddProviderForm({ onAdded, canCreate, expanded, setExpanded }: {
+  onAdded: () => void
+  canCreate: boolean
+  expanded: boolean
+  setExpanded: (v: boolean) => void
+}) {
   const [name, setName] = useState('')
   const [providerType, setProviderType] = useState<ProviderType>('openai')
   const [apiKey, setApiKey] = useState('')
@@ -44,7 +49,6 @@ function AddProviderForm({ onAdded, canCreate }: { onAdded: () => void; canCreat
   const [baseUrl, setBaseUrl] = useState('')
   const [isDefault, setIsDefault] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [expanded, setExpanded] = useState(false)
 
   function reset() {
     setName('')
@@ -267,17 +271,20 @@ function ProviderCard({
 }
 
 export default function ModelProvidersPage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [configs, setConfigs] = useState<ModelProviderOut[]>([])
   const [loading, setLoading] = useState(true)
+  // While the add form is open it takes over the view; the list/empty-state below
+  // is hidden so we never show "no providers" (or the existing list) mid-add.
+  const [adding, setAdding] = useState(false)
   const headingId = useId()
 
-  useEffect(() => { loadAll() }, [activeOperationalSpaceId])
+  useEffect(() => { loadAll() }, [activeSpaceId])
 
   async function loadAll() {
     setLoading(true)
     try {
-      if (!activeOperationalSpaceId) {
+      if (!activeSpaceId) {
         setConfigs([])
         return
       }
@@ -298,7 +305,7 @@ export default function ModelProvidersPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Model Providers</h1>
           <p className="text-sm text-muted-foreground">Configure OpenAI, Anthropic, OpenRouter, Ollama, or custom endpoints.</p>
-          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+          <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
         </div>
       </div>
 
@@ -308,11 +315,11 @@ export default function ModelProvidersPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          <AddProviderForm onAdded={loadAll} canCreate={Boolean(activeOperationalSpaceId)} />
-          {configs.length === 0 ? (
+          <AddProviderForm onAdded={loadAll} canCreate={Boolean(activeSpaceId)} expanded={adding} setExpanded={setAdding} />
+          {!adding && (configs.length === 0 ? (
             <Card>
               <p className="text-sm text-muted-foreground p-4">
-                {activeOperationalSpaceId
+                {activeSpaceId
                   ? 'No model providers configured. Add OpenAI, Anthropic, OpenRouter, Ollama, or a custom OpenAI-compatible endpoint before running agents.'
                   : 'Select an operational space to configure providers.'}
               </p>
@@ -327,7 +334,7 @@ export default function ModelProvidersPage() {
                 onPatched={updated => setConfigs(prev => prev.map(c => c.id === updated.id ? updated : c))}
               />
             ))
-          )}
+          ))}
         </div>
       )}
     </div>

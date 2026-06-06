@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { artifactsApi } from '../../api/client'
@@ -19,13 +20,13 @@ function fmt(dt: string | null | undefined) {
 
 export default function ArtifactDetailPage() {
   const { artifactId = '' } = useParams()
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [a, setA] = useState<Artifact | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!artifactId) return
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setA(null)
       setLoading(false)
       return
@@ -46,7 +47,7 @@ export default function ArtifactDetailPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [artifactId, activeOperationalSpaceId])
+  }, [artifactId, activeSpaceId])
 
   async function exportArt() {
     if (!a) return
@@ -68,7 +69,7 @@ export default function ArtifactDetailPage() {
 
       {!loading && !a && (
         <Card className="p-8 text-center text-sm text-muted-foreground">
-          {activeOperationalSpaceId ? 'Artifact not found.' : 'Select an operational space to inspect this artifact.'}
+          {activeSpaceId ? 'Artifact not found.' : 'Select an operational space to inspect this artifact.'}
         </Card>
       )}
 
@@ -78,7 +79,7 @@ export default function ArtifactDetailPage() {
             <h1 className="text-lg font-semibold tracking-tight">{a.title}</h1>
             <Button size="sm" variant="outline" onClick={exportArt}>Export</Button>
           </div>
-          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+          <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
           <div className="flex flex-wrap gap-1.5 items-center text-xs text-muted-foreground">
             <Badge variant="secondary">{a.artifact_type}</Badge>
             <ScopeBadge visibility={a.visibility} />

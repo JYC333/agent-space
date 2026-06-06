@@ -98,7 +98,7 @@ def seed_system_memories_for_space(db: Session, space_id: str) -> int:
             .filter(
                 MemoryEntry.space_id == space_id,
                 MemoryEntry.namespace == seed.namespace,
-                MemoryEntry.scope == "system",
+                MemoryEntry.scope_type == "system",
                 MemoryEntry.deleted_at.is_(None),
             )
             .first()

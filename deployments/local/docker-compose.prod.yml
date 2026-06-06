@@ -18,8 +18,8 @@ services:
 
   backend:
     build:
-      context: ../../core/backend
-      dockerfile: Dockerfile
+      context: ../../core
+      dockerfile: backend/Dockerfile
       network: host
       args:
         PG_MAJOR: ${POSTGRES_MAJOR:-18}
@@ -52,10 +52,11 @@ services:
       context: ../../frontend
       dockerfile: Dockerfile
       network: host
+      target: prod
+    # nginx serves the built static bundle and proxies /api to the backend
+    # service (see frontend/nginx.conf), so no API_URL env is needed here.
     ports:
-      - "80:5173"
-    environment:
-      - API_URL=http://backend:8000
+      - "80:80"
     depends_on:
       - backend
 

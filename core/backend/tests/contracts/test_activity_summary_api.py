@@ -10,7 +10,14 @@ from app.activity.service import ActivityService
 from app.models import Artifact
 
 
-_FAKE_PROVIDER = ("openai", None, "gpt-4o-mini", "test-key")
+from app.providers.invocation import CompletionResult as _CompletionResult
+
+
+def _CR(text):
+    return _CompletionResult(text=text, model="gpt-4o-mini")
+
+
+_FAKE_PROVIDER = ("prov-test", None)
 _FAKE_SUMMARY = "This is a test summary."
 
 
@@ -29,8 +36,8 @@ def test_activity_summary_run_creates_artifact(db, cross_space_pair):
     )
     db.commit()
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         r = client_a.post(
             "/api/v1/activity/summary-runs",
             params={"space_id": a},
@@ -62,8 +69,8 @@ def test_activity_summary_run_creates_memory_proposal_when_requested(db, cross_s
     )
     db.commit()
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         r = client_a.post(
             "/api/v1/activity/summary-runs",
             params={"space_id": a},
@@ -92,7 +99,7 @@ def test_activity_summary_run_missing_provider_returns_422(db, cross_space_pair)
     from app.memory.provider_client import ReflectorModelProviderMissingError
 
     with patch(
-        "app.activity.input_summary_service.resolve_reflector_provider",
+        "app.activity.input_summary_service.resolve_reflector_provider_id",
         side_effect=ReflectorModelProviderMissingError("no provider"),
     ):
         r = client_a.post(
@@ -131,8 +138,8 @@ def test_activity_summary_run_cross_space_rejects(db, cross_space_pair):
     )
     db.commit()
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         r = client_b.post(
             "/api/v1/activity/summary-runs",
             params={"space_id": b},
@@ -161,8 +168,8 @@ def test_intake_summary_run_creates_artifact(db, cross_space_pair):
     )
     db.commit()
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         r = client_a.post(
             "/api/v1/intake/summary-runs",
             params={"space_id": a},
@@ -248,8 +255,8 @@ def test_activity_summary_run_returns_run_id(db, cross_space_pair):
     )
     db.commit()
 
-    with patch("app.activity.input_summary_service.resolve_reflector_provider", return_value=_FAKE_PROVIDER), \
-         patch("app.activity.input_summary_service.call_reflector_llm", return_value=_FAKE_SUMMARY):
+    with patch("app.activity.input_summary_service.resolve_reflector_provider_id", return_value=_FAKE_PROVIDER), \
+         patch("app.activity.input_summary_service.complete_text", return_value=_CR(_FAKE_SUMMARY)):
         r = client_a.post(
             "/api/v1/activity/summary-runs",
             params={"space_id": a},

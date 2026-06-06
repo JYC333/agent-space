@@ -18,8 +18,8 @@ services:
 
   backend:
     build:
-      context: ../../core/backend
-      dockerfile: Dockerfile
+      context: ../../core
+      dockerfile: backend/Dockerfile
       network: host
       args:
         PG_MAJOR: ${POSTGRES_MAJOR:-18}
@@ -54,6 +54,7 @@ services:
       context: ../../frontend
       dockerfile: Dockerfile
       network: host
+      target: dev
     ports:
       - "3100:5173"
     volumes:

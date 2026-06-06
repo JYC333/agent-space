@@ -374,7 +374,7 @@ _reg(
         default_required_approver_role="owner",
         current_enforcement_point="app.memory.proposals.ProposalService.accept via proposal.apply",
         description=(
-            "Create a same-space KnowledgeRelation after an accepted "
+            "Create a same-space KnowledgeItemRelation after an accepted "
             "knowledge_relation_create proposal. Protected via proposal.apply gate "
             "and ProposalApplyService."
         ),
@@ -390,7 +390,7 @@ _reg(
         default_required_approver_role="owner",
         current_enforcement_point="app.memory.proposals.ProposalService.accept via proposal.apply",
         description=(
-            "Remove or archive a KnowledgeRelation after an accepted "
+            "Remove or archive a KnowledgeItemRelation after an accepted "
             "knowledge_relation_delete proposal. Protected via proposal.apply gate "
             "and ProposalApplyService."
         ),

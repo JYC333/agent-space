@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
+import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/spaceNav'
 import {
   FolderKanban, Target, Edit2, Archive, Plus, Trash2, ChevronLeft,
   Activity, Package, CheckCircle, Folder, Cpu, Database,
@@ -228,7 +229,7 @@ function LinkWorkspaceDialog({ projectId, existingIds, open, onOpenChange, onLin
 export default function ProjectDetailPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
-  const { activeOperationalSpaceId } = useSpace()
+  const { activeSpaceId } = useSpace()
 
   const [project, setProject] = useState<Project | null>(null)
   const [summary, setSummary] = useState<ProjectSummary | null>(null)
@@ -246,7 +247,7 @@ export default function ProjectDetailPage() {
   const [archiving, setArchiving] = useState(false)
 
   const loadAll = useCallback(async () => {
-    if (!projectId || !activeOperationalSpaceId) {
+    if (!projectId || !activeSpaceId) {
       setLoading(false)
       return
     }
@@ -287,7 +288,7 @@ export default function ProjectDetailPage() {
     } finally {
       setLoading(false)
     }
-  }, [projectId, activeOperationalSpaceId])
+  }, [projectId, activeSpaceId])
 
   useEffect(() => { loadAll() }, [loadAll])
 

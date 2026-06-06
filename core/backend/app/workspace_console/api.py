@@ -23,8 +23,11 @@ Runtime execution
   complete via BackgroundTask. Callers poll GET /sessions/{id} until the status
   changes to "completed" or "failed".
 
-Policy: anthropic_api / anthropic_messages in-process Anthropic runtime types are not supported.
-  Anthropic/Claude execution must go through the claude_code CLI integration.
+Policy: Console sessions run local CLI runtimes only (claude_code, codex_cli). Per ADR 0010
+  the invariant is credential channel isolation — an Anthropic API key must never enter a
+  Claude Code CLI subprocess env (enforced by local_executor.build_subprocess_env's allowlist).
+  In-process API calls (reflector, /providers/chat) pass the key as a litellm parameter, never
+  via env, and may serve any provider incl Anthropic; that channel is separate from these sessions.
 """
 from __future__ import annotations
 
@@ -61,7 +64,7 @@ def _ws_path(ws: Workspace) -> Path:
 def _get_ws(db: Session, workspace_id: str, space_id: str) -> Workspace:
     ws = db.query(Workspace).filter(
         Workspace.id == workspace_id,
-        Workspace.owner_space_id == space_id,
+        Workspace.space_id == space_id,
         Workspace.status == "active",
     ).first()
     if not ws:
@@ -321,7 +324,7 @@ def list_workspaces(
     space_id, _ = ids
     items = (
         db.query(Workspace)
-        .filter(Workspace.owner_space_id == space_id, Workspace.status == "active")
+        .filter(Workspace.space_id == space_id, Workspace.status == "active")
         .order_by(Workspace.updated_at.desc())
         .all()
     )

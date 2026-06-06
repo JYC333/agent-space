@@ -1,6 +1,7 @@
 # agent-space API — FastAPI backend
 #
-# Build context: core/backend/
+# Build context: core/  (so the sibling core/agent_templates seed dir is bundled
+#                        into the image alongside the backend app)
 # Run via docker-compose in deployments/local/
 #
 # Sandbox routing:
@@ -47,12 +48,15 @@ RUN npm install -g @anthropic-ai/claude-code \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app/ ./app/
-COPY alembic.ini ./alembic.ini
-COPY migrations/ ./migrations/
+COPY backend/app/ ./app/
+COPY backend/alembic.ini ./alembic.ini
+COPY backend/migrations/ ./migrations/
+# System AgentTemplate seed catalog (factories). Bundled next to the app package
+# so seed_system_templates finds it at /app/agent_templates inside the container.
+COPY agent_templates/ ./agent_templates/
 
 # Non-root user
 RUN useradd -m -u 1000 agentspace && chown -R agentspace /app

@@ -46,6 +46,7 @@ _REGISTRY: list[Module] = [
     Module("sessions",     "Sessions",       "app.sessions",     always_on=True),
     Module("tasks",        "Tasks",          "app.tasks",        always_on=True),
     Module("agents",        "Agents",          "app.agents",        always_on=True),
+    Module("agent_templates", "Agent Templates", "app.agent_templates", always_on=True),
     Module("runs",          "Runs",            "app.runs",          always_on=True),
     Module("proposals",     "Proposals",       "app.proposals",     always_on=True),
     Module("artifacts",     "Artifacts",       "app.artifacts",     always_on=True),

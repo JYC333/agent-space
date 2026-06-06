@@ -280,7 +280,7 @@ function AddConfigForm({ onAdded, canCreate, catalog }: { onAdded: () => void; c
 // ── Main page ─────────────────────────────────────────────────────────────
 
 export default function RuntimeAdaptersPage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [detection, setDetection] = useState<RuntimeAdapterStatus[]>([])
   const [configs, setConfigs]     = useState<RuntimeAdapter[]>([])
   const [catalog, setCatalog] = useState<RuntimeAdapterSpec[]>([])
@@ -298,7 +298,7 @@ export default function RuntimeAdaptersPage() {
   }
 
   async function loadConfigs() {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setConfigs([])
       setLoadingConfigs(false)
       return
@@ -342,11 +342,11 @@ export default function RuntimeAdaptersPage() {
     }
   }
 
-  useEffect(() => { loadConfigs() }, [activeOperationalSpaceId])
+  useEffect(() => { loadConfigs() }, [activeSpaceId])
   useEffect(() => { loadCatalog() }, [])
 
   async function handleQuotaChange(id: string, status: string) {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       toast.error('Select an operational space before updating usage status')
       return
     }
@@ -378,7 +378,7 @@ export default function RuntimeAdaptersPage() {
   }
 
   async function handleToggle(id: string, enabled: boolean) {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       toast.error('Select an operational space before updating runtime adapters')
       return
     }
@@ -391,7 +391,7 @@ export default function RuntimeAdaptersPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       toast.error('Select an operational space before removing runtime adapters')
       return
     }
@@ -421,14 +421,14 @@ export default function RuntimeAdaptersPage() {
           <h1 className="text-xl font-semibold tracking-tight">Runtime Adapters</h1>
           <p className="text-sm text-muted-foreground">Detect installed runtimes, credential profiles, and usage status.</p>
           <p className="text-xs text-muted-foreground">
-            Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
+            Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}
           </p>
         </div>
       </div>
 
       {/* Credential login panel */}
-      {activeOperationalSpaceId ? (
-        <CLILoginSection key={activeOperationalSpaceId} />
+      {activeSpaceId ? (
+        <CLILoginSection key={activeSpaceId} />
       ) : (
         <Card>
           <CardTitle>Runtime Credentials</CardTitle>
@@ -467,7 +467,7 @@ export default function RuntimeAdaptersPage() {
           </div>
         ) : configs.length === 0 ? (
           <p className="text-sm text-muted-foreground mb-4">
-            {activeOperationalSpaceId
+            {activeSpaceId
               ? 'No runtime adapters configured yet. Add one below.'
               : 'Select an operational space to manage configured runtime adapters.'}
           </p>
@@ -490,7 +490,7 @@ export default function RuntimeAdaptersPage() {
           </div>
         )}
 
-        <AddConfigForm onAdded={loadConfigs} canCreate={Boolean(activeOperationalSpaceId)} catalog={catalog} />
+        <AddConfigForm onAdded={loadConfigs} canCreate={Boolean(activeSpaceId)} catalog={catalog} />
       </Card>
 
       <Card>

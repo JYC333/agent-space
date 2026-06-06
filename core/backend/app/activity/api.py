@@ -16,14 +16,18 @@ Optional query ``for_user_id`` limits the list to that user and must equal the
 current user (cannot enumerate another user's inbox via query).
 """
 
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..auth import get_identity
+from ..config import paths
 from ..db import get_db
 from ..memory.consolidation.service import ActivityConsolidationService
 from ..participation.service import try_record_participation
@@ -98,15 +102,15 @@ class ActivityOut(BaseModel):
             user_id=m.user_id,                # type: ignore[attr-defined]
             workspace_id=m.workspace_id,      # type: ignore[attr-defined]
             agent_id=m.agent_id,              # type: ignore[attr-defined]
-            source_type=m.source_type,        # type: ignore[attr-defined]
+            source_type=m.activity_type,      # type: ignore[attr-defined]
             title=m.title,                    # type: ignore[attr-defined]
             content=m.content or "",          # type: ignore[attr-defined]
             source_run_id=m.source_run_id,    # type: ignore[attr-defined]
             source_task_id=m.source_task_id,  # type: ignore[attr-defined]
-            source_session_id=m.source_session_id,  # type: ignore[attr-defined]
+            source_session_id=m.session_id,   # type: ignore[attr-defined]
             source_url=m.source_url,          # type: ignore[attr-defined]
             status=m.status,                  # type: ignore[attr-defined]
-            metadata_json=m.metadata_json,    # type: ignore[attr-defined]
+            metadata_json=m.payload_json,     # type: ignore[attr-defined]
             visibility=m.visibility,          # type: ignore[attr-defined]
             occurred_at=occ.isoformat() if occ is not None else None,
             created_at=m.created_at.isoformat(),   # type: ignore[attr-defined]
@@ -153,6 +157,135 @@ def create_activity(
     try_record_participation(
         db,
         user_id=auth_user_id,
+        source_space_id=space_id,
+        source_object_type="activity",
+        source_object_id=record.id,
+        role="created",
+    )
+    return ActivityOut.from_orm_model(record)
+
+
+# --- File / voice capture upload -------------------------------------------------
+
+# Store-only capture: the file (incl. audio) is saved under the data root and an
+# Activity Inbox record is created so it flows into consolidate -> proposal. No
+# transcription is performed yet.
+_MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+_ALLOWED_MIME_PREFIXES = ("image/", "audio/", "video/", "text/")
+_ALLOWED_MIME_EXACT = frozenset({
+    "application/pdf",
+    "application/json",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+    "application/zip",
+    "application/octet-stream",
+})
+
+
+def _mime_allowed(content_type: str) -> bool:
+    return content_type in _ALLOWED_MIME_EXACT or content_type.startswith(_ALLOWED_MIME_PREFIXES)
+
+
+@router.post("/upload", response_model=ActivityOut)
+async def upload_capture(
+    file: UploadFile = File(...),
+    kind: str = Form("file"),
+    title: Optional[str] = Form(None),
+    note: Optional[str] = Form(None),
+    workspace_id: Optional[str] = Form(None),
+    ids: tuple[str, str] = Depends(get_identity),
+    db: Session = Depends(get_db),
+) -> ActivityOut:
+    """Capture a file or voice clip into the Activity Inbox (store-only).
+
+    ``kind`` is ``file`` or ``voice``. The upload is streamed to
+    ``<AGENT_SPACE_HOME>/storage/uploads/<space_id>/`` with a generated name, then
+    recorded as a canonical ``file_import`` activity (the capture kind and file
+    metadata live in ``metadata_json``).
+    """
+    space_id, user_id = ids
+
+    capture_kind = (kind or "file").lower().strip()
+    if capture_kind not in {"file", "voice"}:
+        raise HTTPException(status_code=422, detail="kind must be 'file' or 'voice'")
+
+    content_type = (file.content_type or "application/octet-stream").lower()
+    if capture_kind == "voice" and not (
+        content_type.startswith("audio/") or content_type == "application/octet-stream"
+    ):
+        raise HTTPException(status_code=422, detail="voice capture requires an audio file")
+    if not _mime_allowed(content_type):
+        raise HTTPException(status_code=415, detail=f"unsupported file type: {content_type}")
+
+    original_name = os.path.basename(file.filename or "").strip()
+    ext = os.path.splitext(original_name)[1][:16]  # keep only a short extension
+    stored_name = f"{uuid4().hex}{ext}"
+    space_dir = Path(paths.uploads_dir) / space_id
+    space_dir.mkdir(parents=True, exist_ok=True)
+    dest = space_dir / stored_name
+
+    size = 0
+    try:
+        with dest.open("wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > _MAX_UPLOAD_BYTES:
+                    out.close()
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"file exceeds {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+                    )
+                out.write(chunk)
+    except HTTPException:
+        raise
+    except OSError as exc:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"failed to store upload: {exc}") from exc
+    finally:
+        await file.close()
+
+    if size == 0:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail="uploaded file is empty")
+
+    rel_path = f"{space_id}/{stored_name}"
+    display_name = title or original_name or ("Voice capture" if capture_kind == "voice" else "Uploaded file")
+    content = note or (
+        f"Voice capture ({content_type}, {size} bytes)"
+        if capture_kind == "voice"
+        else f"File capture: {original_name or stored_name} ({content_type}, {size} bytes)"
+    )
+
+    svc = ActivityService(db)
+    try:
+        record = svc.create(
+            space_id=space_id,
+            source_type="voice_capture" if capture_kind == "voice" else "file_capture",
+            content=content,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            title=display_name,
+            metadata_json={
+                "capture_kind": capture_kind,
+                "filename": original_name or None,
+                "mime_type": content_type,
+                "size_bytes": size,
+                "stored_path": rel_path,
+            },
+        )
+    except ValueError as exc:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try_record_participation(
+        db,
+        user_id=user_id,
         source_space_id=space_id,
         source_object_type="activity",
         source_object_id=record.id,

@@ -28,7 +28,7 @@ from sqlalchemy import or_
 from ..models import MemoryEntry
 from ..projects.service import assert_project_in_space
 from ..schemas import MemoryCreate
-from ..config import settings
+from ..spaces.defaults import resolve_default_space_id
 from .read_auth import can_read_memory
 from .access_log import record_memory_access
 
@@ -68,32 +68,36 @@ class MemoryStore:
         if data.visibility == "private" and owner_user_id is None:
             raise ValueError("owner_user_id is required for private visibility (or provide acting_user_id)")
 
+        effective_space_id = data.space_id or resolve_default_space_id(self.db)
+
         from ..policy.enforcement import check_private_memory_placement
 
         check_private_memory_placement(
             self.db,
-            space_id=data.space_id or settings.default_space_id,
+            space_id=effective_space_id,
             visibility=data.visibility,
             acting_user_id=acting_user_id,
         )
 
-        if created_by is not None:
-            audit = created_by
-        else:
-            audit = acting_user_id or settings.default_user_id
+        audit = created_by or acting_user_id
+        if audit is None:
+            raise ValueError(
+                "MemoryStore.create requires an actor: pass created_by or "
+                "acting_user_id (there is no default-user fallback)."
+            )
 
         mem = MemoryEntry(
             id=_new_id(),
-            space_id=data.space_id or settings.default_space_id,
+            space_id=effective_space_id,
             subject_user_id=data.subject_user_id,
             owner_user_id=owner_user_id,
             sensitivity_level=data.sensitivity_level,
             selected_user_ids=data.selected_user_ids,
             last_confirmed_at=data.last_confirmed_at,
             workspace_id=data.workspace_id,
-            scope=data.scope,
+            scope_type=data.scope,
             namespace=data.namespace,
-            type=data.type,
+            memory_type=data.type,
             title=data.title,
             content=data.content,
             status="active",
@@ -105,6 +109,8 @@ class MemoryStore:
             created_by=audit,
             approved_by=approved_by,
             tags=data.tags,
+            memory_layer=data.memory_layer,
+            memory_kind=data.memory_kind,
             version=1,
         )
         self.db.add(mem)
@@ -181,11 +187,11 @@ class MemoryStore:
         if status:
             q = q.filter(MemoryEntry.status == status)
         if scope:
-            q = q.filter(MemoryEntry.scope == scope)
+            q = q.filter(MemoryEntry.scope_type == scope)
         if namespace:
             q = q.filter(MemoryEntry.namespace == namespace)
         if memory_type:
-            q = q.filter(MemoryEntry.type == memory_type)
+            q = q.filter(MemoryEntry.memory_type == memory_type)
         return q
 
     def count(
@@ -270,11 +276,11 @@ class MemoryStore:
             ),
         )
         if scope:
-            q = q.filter(MemoryEntry.scope == scope)
+            q = q.filter(MemoryEntry.scope_type == scope)
         if namespace:
             q = q.filter(MemoryEntry.namespace == namespace)
         if memory_type:
-            q = q.filter(MemoryEntry.type == memory_type)
+            q = q.filter(MemoryEntry.memory_type == memory_type)
 
         rows = q.order_by(MemoryEntry.importance.desc(), MemoryEntry.confidence.desc()).all()
         filtered = self._filter_readable(

@@ -34,7 +34,7 @@ const EMPTY_FORM: MemoryForm = {
 }
 
 export default function MemoriesPage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [searchParams, setSearchParams] = useSearchParams()
   const projectFilter = searchParams.get('project_id') ?? ''
 
@@ -42,7 +42,7 @@ export default function MemoriesPage() {
   const [form, setForm]         = useState<MemoryForm>(EMPTY_FORM)
 
   const load = useCallback(async () => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setMemories([])
       return
     }
@@ -53,7 +53,7 @@ export default function MemoriesPage() {
       })).items)
     }
     catch (e) { toast.error(errMsg(e)) }
-  }, [projectFilter, activeOperationalSpaceId])
+  }, [projectFilter, activeSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -62,7 +62,7 @@ export default function MemoriesPage() {
   }
 
   async function addMemory() {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       toast.error('Select an operational space before proposing memory')
       return
     }
@@ -101,7 +101,7 @@ export default function MemoriesPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Memories</h1>
           <p className="text-sm text-muted-foreground">Review-gated long-term memories across scopes and namespaces.</p>
-          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+          <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
           {projectFilter && (
             <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-accent/40 text-xs text-accent-foreground">
               <FolderKanban className="size-3" />
@@ -146,14 +146,14 @@ export default function MemoriesPage() {
           <Label>Content</Label>
           <Textarea value={form.content} onChange={e => setField('content', e.target.value)} placeholder="Memory content…" />
         </div>
-        <Button onClick={addMemory} disabled={!activeOperationalSpaceId}>Submit proposal</Button>
+        <Button onClick={addMemory} disabled={!activeSpaceId}>Submit proposal</Button>
       </Card>
 
       <Card>
         <CardTitle>Active Memories ({memories.length})</CardTitle>
         {memories.length === 0
           ? <p className="text-muted-foreground text-center py-10 text-sm">
-              {activeOperationalSpaceId ? 'No active memories.' : 'Select an operational space to browse memories.'}
+              {activeSpaceId ? 'No active memories.' : 'Select an operational space to browse memories.'}
             </p>
           : (
             <Table>

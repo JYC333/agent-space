@@ -27,10 +27,9 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..memory.provider_client import (
     ReflectorModelProviderMissingError,
-    UnsupportedProviderForReflectorError,
-    call_reflector_llm,
-    resolve_reflector_provider,
+    resolve_reflector_provider_id,
 )
+from ..providers.invocation import complete_text
 from ..memory.proposal_payload import SOURCE_TRUST_VALUES, ProvenanceEntry
 from ..memory.proposals import build_memory_create_proposal
 from ..models import (
@@ -362,10 +361,8 @@ class DailyCaptureReportService:
 
         # Resolve provider — provider failure creates a failed Run for observability
         try:
-            provider_type, base_url, model, api_key = resolve_reflector_provider(
-                self._db, settings
-            )
-        except (ReflectorModelProviderMissingError, UnsupportedProviderForReflectorError) as exc:
+            provider_id, model = resolve_reflector_provider_id(settings)
+        except ReflectorModelProviderMissingError as exc:
             log.warning("daily_report: no provider space=%s date=%s: %s", space_id, local_date, exc)
             run.status = "failed"
             run.error_message = f"Provider unavailable: {exc}"[:1000]
@@ -415,9 +412,13 @@ class DailyCaptureReportService:
         )
 
         try:
-            raw_json = call_reflector_llm(
-                provider_type, base_url, model, api_key, system_prompt, user_prompt
-            )
+            raw_json = complete_text(
+                self._db,
+                provider_id=provider_id,
+                model=model,
+                system=system_prompt,
+                user=user_prompt,
+            ).text
         except Exception as exc:
             log.warning("daily_report: LLM call failed run=%s: %s", run.id, exc)
             run.status = "failed"
@@ -491,7 +492,7 @@ class DailyCaptureReportService:
                 "source_activity_ids": capture_ids,
                 "capture_count": capture_count,
                 "structured_report": report.model_dump(mode="json"),
-                "provider_type": provider_type,
+                "provider_id": provider_id,
                 "model": model,
                 "service_version": _SERVICE_VERSION,
                 "setting_id": setting.id,
@@ -576,7 +577,7 @@ class DailyCaptureReportService:
             self._db.query(ActivityRecord)
             .filter(
                 ActivityRecord.space_id == space_id,
-                ActivityRecord.source_type.in_(allowed_types),
+                ActivityRecord.activity_type.in_(allowed_types),
                 ActivityRecord.status != "archived",
                 ActivityRecord.occurred_at >= start_utc,
                 ActivityRecord.occurred_at < end_utc,

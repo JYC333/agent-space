@@ -63,6 +63,10 @@ class AgentVersionService:
             capabilities_json=data.capabilities_json,
             tool_permissions_json=data.tool_permissions_json,
             runtime_policy_json=data.runtime_policy_json,
+            tool_policy_json=data.tool_policy_json,
+            output_policy_json=data.output_policy_json,
+            schedule_config_json=data.schedule_config_json,
+            output_schema_json=data.output_schema_json,
         )
         self.db.add(version)
         self.db.commit()

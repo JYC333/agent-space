@@ -78,6 +78,7 @@ class AutomationPolicyPreflightService:
         agent_id: str,
         workspace_id: str | None = None,
         trigger_origin: str = "automation",
+        pre_authorized: bool = False,
     ) -> AutomationPolicyPreflightResult:
         errors: list[str] = []
         warnings: list[str] = []
@@ -180,6 +181,7 @@ class AutomationPolicyPreflightService:
                         credential_subject,
                         runtime_policy_decision,
                         adapter_type,
+                        automation_pre_authorized=pre_authorized,
                     )
                 )
             )

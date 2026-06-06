@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import {
   Archive,
   Bookmark,
@@ -70,7 +70,7 @@ function preview(text: string | null | undefined, fallback = 'No excerpt') {
 }
 
 export default function IntakePage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
 
   const [connectors, setConnectors] = useState<SourceConnector[]>([])
   const [connections, setConnections] = useState<SourceConnection[]>([])
@@ -128,7 +128,7 @@ export default function IntakePage() {
   )
 
   const load = useCallback(async () => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setConnectors([])
       setConnections([])
       setItems([])
@@ -185,7 +185,7 @@ export default function IntakePage() {
     } finally {
       setLoading(false)
     }
-  }, [activeOperationalSpaceId, itemFilter, evidenceFilter, connectorKey])
+  }, [activeSpaceId, itemFilter, evidenceFilter, connectorKey])
 
   useEffect(() => { load() }, [load])
 
@@ -377,7 +377,7 @@ export default function IntakePage() {
     return links.some(l => l.evidence_id === row.id && l.status === 'active' && l.target_type === 'space')
   }
 
-  if (!activeOperationalSpaceId) {
+  if (!activeSpaceId) {
     return (
       <div className="p-6">
         <EmptyState title="No space selected" description="Select an operational space to use Intake." />
@@ -401,7 +401,7 @@ export default function IntakePage() {
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Intake</h1>
             <p className="text-sm text-muted-foreground">Source connections, candidate items, and citable evidence.</p>
-            <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId}</p>
+            <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId}</p>
           </div>
         </div>
         <Button variant="outline" onClick={load} disabled={loading} type="button">

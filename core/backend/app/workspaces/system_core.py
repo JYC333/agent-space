@@ -174,7 +174,7 @@ def register_system_core_workspace(db: Session) -> Workspace | None:
 
     # Check if already registered
     existing = db.query(Workspace).filter(
-        Workspace.owner_space_id == space.id,
+        Workspace.space_id == space.id,
         Workspace.id == SYSTEM_CORE_WORKSPACE_ID,
     ).first()
     if existing:
@@ -189,7 +189,7 @@ def register_system_core_workspace(db: Session) -> Workspace | None:
     # Register the workspace
     ws = Workspace(
         id=SYSTEM_CORE_WORKSPACE_ID,
-        owner_space_id=space.id,
+        space_id=space.id,
         created_by_user_id=user.id,
         name="Agent Space",
         description="Agent-space self-evolution workspace — managed by agent-space",

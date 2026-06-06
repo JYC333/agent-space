@@ -190,7 +190,7 @@ class PostgresQueueService(QueueService):
                 job_type=job_type,
                 status="pending",
                 priority=priority,
-                payload=payload,
+                payload_json=payload,
                 attempts=0,
                 max_attempts=max_attempts,
                 scheduled_at=scheduled_at or datetime.now(UTC),
@@ -322,7 +322,7 @@ class PostgresQueueService(QueueService):
             # is a no-op.
             if job and job.status in ("claimed", "running") and self._owns(job, worker_id):
                 job.status = "completed"
-                job.result = result
+                job.result_json = result
                 job.completed_at = datetime.now(UTC)
                 job.heartbeat_at = None
                 db.commit()
@@ -389,7 +389,7 @@ class PostgresQueueService(QueueService):
             # Cancel the linked Run when this is an agent_run job with a run_id payload.
             # Only cancel non-terminal runs; leave succeeded/failed/cancelled/etc. untouched.
             if job.job_type == "agent_run":
-                payload = job.payload or {}
+                payload = job.payload_json or {}
                 run_id = payload.get("run_id")
                 if run_id:
                     run = db.query(Run).filter(Run.id == run_id).first()

@@ -7,7 +7,18 @@ from sqlalchemy import String, and_, or_
 from sqlalchemy.orm import Session
 
 from ..memory.proposals import ProposalService
-from ..models import ActivityRecord, Artifact, KnowledgeItem, KnowledgeRelation, Project, Proposal, Run, Workspace
+from ..models import (
+    ActivityRecord,
+    Artifact,
+    KnowledgeItem,
+    KnowledgeItemRelation,
+    KnowledgeItemSource,
+    Project,
+    Proposal,
+    Run,
+    Source,
+    Workspace,
+)
 
 
 class KnowledgeError(Exception):
@@ -115,23 +126,23 @@ class KnowledgeService:
             .first()
         )
 
-    def get_relation(self, *, space_id: str, relation_id: str) -> KnowledgeRelation | None:
+    def get_relation(self, *, space_id: str, relation_id: str) -> KnowledgeItemRelation | None:
         return (
-            self._db.query(KnowledgeRelation)
-            .filter(KnowledgeRelation.id == relation_id, KnowledgeRelation.space_id == space_id)
+            self._db.query(KnowledgeItemRelation)
+            .filter(KnowledgeItemRelation.id == relation_id, KnowledgeItemRelation.space_id == space_id)
             .first()
         )
 
-    def list_item_relations(self, *, space_id: str, viewer_user_id: str, item_id: str) -> list[KnowledgeRelation]:
+    def list_item_relations(self, *, space_id: str, viewer_user_id: str, item_id: str) -> list[KnowledgeItemRelation]:
         if self.get_readable_item(space_id=space_id, viewer_user_id=viewer_user_id, item_id=item_id) is None:
             raise KnowledgeNotFound("Knowledge item not found")
         relations = (
-            self._db.query(KnowledgeRelation)
+            self._db.query(KnowledgeItemRelation)
             .filter(
-                KnowledgeRelation.space_id == space_id,
-                or_(KnowledgeRelation.from_item_id == item_id, KnowledgeRelation.to_item_id == item_id),
+                KnowledgeItemRelation.space_id == space_id,
+                or_(KnowledgeItemRelation.from_item_id == item_id, KnowledgeItemRelation.to_item_id == item_id),
             )
-            .order_by(KnowledgeRelation.created_at.desc())
+            .order_by(KnowledgeItemRelation.created_at.desc())
             .all()
         )
         endpoint_ids = {r.from_item_id for r in relations} | {r.to_item_id for r in relations}
@@ -252,7 +263,7 @@ class KnowledgeService:
             "to_item_id": data["to_item_id"],
             "relation_type": data["relation_type"],
             "confidence": data.get("confidence"),
-            "evidence_summary": data.get("evidence_summary"),
+            "note": data.get("note"),
             "status": data.get("status") or "active",
         }
         return ProposalService(self._db).create_user_proposal(
@@ -343,8 +354,8 @@ class KnowledgeService:
 
 
 _VALID_ITEM_TYPES: frozenset[str] = frozenset({
-    "knowledge", "experience", "lesson", "procedure", "decision",
-    "reflection", "source", "question", "answer", "summary",
+    "knowledge", "idea", "experience", "reflection", "lesson",
+    "procedure", "decision", "question", "summary",
 })
 _VALID_CONTENT_FORMATS: frozenset[str] = frozenset({"markdown", "plain"})
 _VALID_VISIBILITY: frozenset[str] = frozenset({
@@ -353,8 +364,8 @@ _VALID_VISIBILITY: frozenset[str] = frozenset({
 _VALID_VERIFICATION_STATUS: frozenset[str] = frozenset({"unverified", "needs_review", "verified"})
 _VALID_REFLECTION_STATUS: frozenset[str] = frozenset({"unreviewed", "reviewed", "distilled"})
 _VALID_RELATION_TYPES: frozenset[str] = frozenset({
-    "related", "derived_from", "example_of", "supports",
-    "contradicts", "part_of", "prerequisite_of", "applies_to", "answers",
+    "related_to", "derived_from", "supports", "contradicts",
+    "answers", "summarizes", "depends_on", "updates",
 })
 _VALID_RELATION_CREATE_STATUS: frozenset[str] = frozenset({"candidate", "active"})
 
@@ -402,7 +413,6 @@ class KnowledgeProposalApplier:
             tags_json=list(payload.get("tags") or []),
             confidence=payload.get("confidence"),
             source_url=payload.get("source_url"),
-            source_refs_json=list(payload.get("source_refs") or []),
             owner_user_id=proposal.created_by_user_id,
             created_by_user_id=proposal.created_by_user_id,
             created_by_agent_id=proposal.created_by_agent_id,
@@ -417,6 +427,7 @@ class KnowledgeProposalApplier:
         self._db.flush()
         item.root_item_id = item.id
         self._db.flush()
+        self._write_source_provenance(item, payload)
         return item
 
     def apply_update(self, proposal: Proposal, *, user_id: str) -> KnowledgeItem:
@@ -456,7 +467,6 @@ class KnowledgeProposalApplier:
             tags_json=list(payload.get("tags") or []),
             confidence=payload.get("confidence"),
             source_url=target.source_url,
-            source_refs_json=list(payload.get("source_refs") or []),
             owner_user_id=target.owner_user_id or target.created_by_user_id,
             created_by_user_id=proposal.created_by_user_id,
             created_by_agent_id=proposal.created_by_agent_id,
@@ -469,7 +479,32 @@ class KnowledgeProposalApplier:
         )
         self._db.add(item)
         self._db.flush()
+        self._write_source_provenance(item, payload)
         return item
+
+    def _write_source_provenance(self, item: KnowledgeItem, payload: dict[str, Any]) -> None:
+        """Persist free-form payload ``source_refs`` as ProvenanceLink rows for this item.
+
+        Internal provenance pointers (activity/run/artifact/...) now live on the
+        first-class ProvenanceLink table (target_type="knowledge"); the wiki
+        Source/KnowledgeItemSource layer handles curated external evidence.
+        """
+        from ..memory.provenance_apply import (
+            TARGET_KNOWLEDGE,
+            source_refs_to_provenance_entries,
+            write_provenance_links,
+        )
+
+        entries = source_refs_to_provenance_entries(payload.get("source_refs"))
+        if entries:
+            write_provenance_links(
+                self._db,
+                space_id=item.space_id,
+                target_type=TARGET_KNOWLEDGE,
+                target_id=item.id,
+                entries=entries,
+            )
+            self._db.flush()
 
     def apply_archive(self, proposal: Proposal, *, user_id: str) -> KnowledgeItem:
         del user_id
@@ -486,7 +521,7 @@ class KnowledgeProposalApplier:
         self._db.flush()
         return item
 
-    def apply_relation_create(self, proposal: Proposal, *, user_id: str) -> KnowledgeRelation:
+    def apply_relation_create(self, proposal: Proposal, *, user_id: str) -> KnowledgeItemRelation:
         payload = proposal.payload_json or {}
         self._expect_operation(payload, "relation_create")
         relation_type = self._required_str(payload, "relation_type")
@@ -506,26 +541,26 @@ class KnowledgeProposalApplier:
             raise KnowledgeValidationError("Knowledge item not found")
         if status == "active":
             existing = (
-                self._db.query(KnowledgeRelation)
+                self._db.query(KnowledgeItemRelation)
                 .filter(
-                    KnowledgeRelation.space_id == proposal.space_id,
-                    KnowledgeRelation.from_item_id == from_item.id,
-                    KnowledgeRelation.to_item_id == to_item.id,
-                    KnowledgeRelation.relation_type == relation_type,
-                    KnowledgeRelation.status == "active",
+                    KnowledgeItemRelation.space_id == proposal.space_id,
+                    KnowledgeItemRelation.from_item_id == from_item.id,
+                    KnowledgeItemRelation.to_item_id == to_item.id,
+                    KnowledgeItemRelation.relation_type == relation_type,
+                    KnowledgeItemRelation.status == "active",
                 )
                 .first()
             )
             if existing is not None:
                 raise KnowledgeValidationError("active Knowledge relation already exists")
-        relation = KnowledgeRelation(
+        relation = KnowledgeItemRelation(
             space_id=proposal.space_id,
             from_item_id=from_item.id,
             to_item_id=to_item.id,
             relation_type=relation_type,
             status=status,
             confidence=payload.get("confidence"),
-            evidence_summary=payload.get("evidence_summary"),
+            note=payload.get("note"),
             source_proposal_id=proposal.id,
             created_by_user_id=proposal.created_by_user_id or user_id,
             created_by_agent_id=proposal.created_by_agent_id,
@@ -534,15 +569,15 @@ class KnowledgeProposalApplier:
         self._db.flush()
         return relation
 
-    def apply_relation_delete(self, proposal: Proposal, *, user_id: str) -> KnowledgeRelation:
+    def apply_relation_delete(self, proposal: Proposal, *, user_id: str) -> KnowledgeItemRelation:
         del user_id
         payload = proposal.payload_json or {}
         self._expect_operation(payload, "relation_delete")
         relation = (
-            self._db.query(KnowledgeRelation)
+            self._db.query(KnowledgeItemRelation)
             .filter(
-                KnowledgeRelation.id == self._required_str(payload, "relation_id"),
-                KnowledgeRelation.space_id == proposal.space_id,
+                KnowledgeItemRelation.id == self._required_str(payload, "relation_id"),
+                KnowledgeItemRelation.space_id == proposal.space_id,
             )
             .first()
         )
@@ -590,3 +625,210 @@ class KnowledgeProposalApplier:
             raise KnowledgeValidationError(
                 f"confidence must be a number between 0 and 1, got {confidence!r}"
             )
+
+
+_VALID_SOURCE_TYPES: frozenset[str] = frozenset({
+    "activity_record", "chat_capture", "webpage", "article", "paper",
+    "pdf", "file", "email", "manual_reference", "external_note",
+})
+_VALID_SOURCE_STATUS: frozenset[str] = frozenset({"raw", "processing", "processed", "archived", "error"})
+_VALID_ITEM_SOURCE_RELATION_TYPES: frozenset[str] = frozenset({
+    "derived_from", "supported_by", "cites", "summarizes", "mentions",
+})
+
+
+class SourceService:
+    """Direct (non-proposal) CRUD for provenance/evidence Sources and the
+    KnowledgeItemSource evidence links between wiki items and Sources.
+
+    Sources are raw material/evidence, not semantic wiki content, so they do not
+    flow through the proposal → approval workflow that governs KnowledgeItem.
+    """
+
+    def __init__(self, db: Session) -> None:
+        self._db = db
+
+    # ----- Source CRUD ----------------------------------------------------
+    def create_source(self, *, space_id: str, user_id: str | None, data: dict[str, Any]) -> Source:
+        source_type = data.get("source_type")
+        if source_type not in _VALID_SOURCE_TYPES:
+            raise KnowledgeValidationError(f"invalid source_type: {source_type!r}")
+        status = data.get("status") or "raw"
+        if status not in _VALID_SOURCE_STATUS:
+            raise KnowledgeValidationError(f"invalid source status: {status!r}")
+        activity_id = data.get("source_activity_id")
+        if activity_id is not None:
+            exists = (
+                self._db.query(ActivityRecord.id)
+                .filter(ActivityRecord.id == activity_id, ActivityRecord.space_id == space_id)
+                .first()
+            )
+            if not exists:
+                raise KnowledgeValidationError("source_activity_id does not belong to this space")
+        source = Source(
+            space_id=space_id,
+            source_type=source_type,
+            title=data["title"],
+            uri=data.get("uri"),
+            content_ref=data.get("content_ref"),
+            raw_text=data.get("raw_text"),
+            summary=data.get("summary"),
+            metadata_json=dict(data.get("metadata") or {}),
+            status=status,
+            source_activity_id=activity_id,
+            created_by_user_id=user_id,
+        )
+        self._db.add(source)
+        self._db.flush()
+        return source
+
+    def list_sources(
+        self,
+        *,
+        space_id: str,
+        source_type: str | None = None,
+        status: str | None = None,
+        q: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[int, list[Source]]:
+        query = self._db.query(Source).filter(Source.space_id == space_id)
+        if source_type:
+            query = query.filter(Source.source_type == source_type)
+        if status:
+            query = query.filter(Source.status == status)
+        if q:
+            like = f"%{q}%"
+            query = query.filter(or_(Source.title.ilike(like), Source.summary.ilike(like)))
+        total = query.count()
+        rows = (
+            query.order_by(Source.updated_at.desc(), Source.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return total, rows
+
+    def get_source(self, *, space_id: str, source_id: str) -> Source | None:
+        return (
+            self._db.query(Source)
+            .filter(Source.id == source_id, Source.space_id == space_id)
+            .first()
+        )
+
+    def update_source(self, *, space_id: str, source_id: str, data: dict[str, Any]) -> Source:
+        source = self.get_source(space_id=space_id, source_id=source_id)
+        if source is None:
+            raise KnowledgeNotFound("Source not found")
+        if "status" in data and data["status"] is not None:
+            if data["status"] not in _VALID_SOURCE_STATUS:
+                raise KnowledgeValidationError(f"invalid source status: {data['status']!r}")
+            source.status = data["status"]
+        for field in ("title", "uri", "content_ref", "raw_text", "summary"):
+            if field in data and data[field] is not None:
+                setattr(source, field, data[field])
+        if "metadata" in data and data["metadata"] is not None:
+            source.metadata_json = dict(data["metadata"])
+        source.updated_at = datetime.now(UTC)
+        self._db.flush()
+        return source
+
+    def archive_source(self, *, space_id: str, source_id: str) -> Source:
+        source = self.get_source(space_id=space_id, source_id=source_id)
+        if source is None:
+            raise KnowledgeNotFound("Source not found")
+        source.status = "archived"
+        source.updated_at = datetime.now(UTC)
+        self._db.flush()
+        return source
+
+    # ----- Item <-> Source evidence links --------------------------------
+    def link_source(
+        self, *, space_id: str, user_id: str | None, item_id: str, data: dict[str, Any]
+    ) -> KnowledgeItemSource:
+        item = self._get_item(space_id=space_id, item_id=item_id)
+        if item is None:
+            raise KnowledgeNotFound("Knowledge item not found")
+        source_id = data.get("source_id")
+        source = self.get_source(space_id=space_id, source_id=source_id) if source_id else None
+        if source is None:
+            raise KnowledgeNotFound("Source not found")
+        relation_type = data.get("relation_type") or "derived_from"
+        if relation_type not in _VALID_ITEM_SOURCE_RELATION_TYPES:
+            raise KnowledgeValidationError(f"invalid relation_type: {relation_type!r}")
+        confidence = data.get("confidence")
+        if confidence is not None and not (0.0 <= float(confidence) <= 1.0):
+            raise KnowledgeValidationError("confidence must be between 0 and 1")
+        existing = (
+            self._db.query(KnowledgeItemSource)
+            .filter(
+                KnowledgeItemSource.knowledge_item_id == item_id,
+                KnowledgeItemSource.source_id == source_id,
+                KnowledgeItemSource.relation_type == relation_type,
+            )
+            .first()
+        )
+        if existing is not None:
+            raise KnowledgeValidationError("evidence link already exists")
+        link = KnowledgeItemSource(
+            space_id=space_id,
+            knowledge_item_id=item_id,
+            source_id=source_id,
+            relation_type=relation_type,
+            locator=data.get("locator"),
+            quote=data.get("quote"),
+            note=data.get("note"),
+            confidence=confidence,
+            created_by_user_id=user_id,
+        )
+        self._db.add(link)
+        self._db.flush()
+        return link
+
+    def unlink_source(self, *, space_id: str, item_id: str, link_id: str) -> None:
+        link = (
+            self._db.query(KnowledgeItemSource)
+            .filter(
+                KnowledgeItemSource.id == link_id,
+                KnowledgeItemSource.space_id == space_id,
+                KnowledgeItemSource.knowledge_item_id == item_id,
+            )
+            .first()
+        )
+        if link is None:
+            raise KnowledgeNotFound("Evidence link not found")
+        self._db.delete(link)
+        self._db.flush()
+
+    def list_item_sources(self, *, space_id: str, item_id: str) -> list[KnowledgeItemSource]:
+        if self._get_item(space_id=space_id, item_id=item_id) is None:
+            raise KnowledgeNotFound("Knowledge item not found")
+        return (
+            self._db.query(KnowledgeItemSource)
+            .filter(
+                KnowledgeItemSource.space_id == space_id,
+                KnowledgeItemSource.knowledge_item_id == item_id,
+            )
+            .order_by(KnowledgeItemSource.created_at.desc())
+            .all()
+        )
+
+    def list_items_for_source(self, *, space_id: str, source_id: str) -> list[KnowledgeItemSource]:
+        if self.get_source(space_id=space_id, source_id=source_id) is None:
+            raise KnowledgeNotFound("Source not found")
+        return (
+            self._db.query(KnowledgeItemSource)
+            .filter(
+                KnowledgeItemSource.space_id == space_id,
+                KnowledgeItemSource.source_id == source_id,
+            )
+            .order_by(KnowledgeItemSource.created_at.desc())
+            .all()
+        )
+
+    def _get_item(self, *, space_id: str, item_id: str) -> KnowledgeItem | None:
+        return (
+            self._db.query(KnowledgeItem)
+            .filter(KnowledgeItem.id == item_id, KnowledgeItem.space_id == space_id)
+            .first()
+        )

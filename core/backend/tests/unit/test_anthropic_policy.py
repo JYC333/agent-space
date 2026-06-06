@@ -1,10 +1,13 @@
-"""Guard tests: Anthropic local CLI runtime policy enforcement.
+"""Guard tests: credential channel isolation for runtime adapters (ADR 0010).
 
-Product policy: Anthropic/Claude execution must go through the ``claude_code``
-RuntimeAdapterSpec and GenericCliRuntimeAdapter path.
+Invariant: an Anthropic API key must never enter a Claude Code CLI subprocess
+environment. Canonical runtime adapters must not read ambient ANTHROPIC_API_KEY
+from env/settings, and Claude Code is modeled as a local CLI spec using cli_profile
+credentials granted explicitly by the CredentialBroker.
 
-These tests keep current runtime adapters from reading ambient Anthropic
-credentials and verify that Claude Code is modeled as a local CLI spec.
+(In-process API calls — reflector, /providers/chat, the future model_api adapter —
+pass the key as a litellm parameter and never touch os.environ, so they may serve
+any provider including Anthropic; that channel is out of scope for these CLI tests.)
 """
 
 from __future__ import annotations

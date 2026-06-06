@@ -5,7 +5,7 @@ IntentRouter — routes user input to the appropriate agent, capability, and wor
 Current status: STUB — explicit slash-command routing only.
 
 Today: slash-command routing
-    /memory reflect       → system.memory-curator-agent + memory.reflect
+    /memory reflect       → memory.reflect internal service (MemoryReflector); no concrete agent
     /agent run <name>     → AgentService.run(agent_name)
     /capabilities list    → CapabilityRegistry.list_capabilities()
 
@@ -58,12 +58,14 @@ class IntentRouter:
 
         match parts:
             case ["memory", "reflect", *_]:
+                # Memory reflection is an internal service (MemoryReflector via the
+                # memory.reflect capability), not a concrete built-in agent. No
+                # agent_id is resolved here — there is no legacy memory-curator-agent.
                 return RoutingDecision(
-                    agent_id="system.memory-curator-agent",
                     capability_id="memory.reflect",
                     space_id=space_id,
                     workspace_id=workspace_id,
-                    action="runtime.execute",
+                    action="memory.reflect",
                 )
             case ["agent", "run", agent_name, *rest]:
                 return RoutingDecision(

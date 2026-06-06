@@ -18,7 +18,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
 
@@ -203,8 +203,6 @@ class Workspace(Base):
     # When True, root_path may resolve to a directory outside settings.workspace_root.
     # Defaults to False: all unqualified absolute paths that escape workspace_root are rejected.
     allow_external_root: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-
-    owner_space_id = synonym("space_id")
 
     space: Mapped[Space] = relationship("Space", back_populates="workspaces")
     profile: Mapped[Optional["WorkspaceProfile"]] = relationship(
@@ -477,6 +475,133 @@ class RuntimeAdapter(Base):
 
 
 # ---------------------------------------------------------------------------
+# Agent templates — reusable factories (NOT runtime objects)
+# ---------------------------------------------------------------------------
+
+
+class AgentTemplate(Base):
+    """A reusable factory for creating Agents.
+
+    A template is NOT a runtime object: no Run, AgentVersion, or model-call path
+    ever reads an AgentTemplate or AgentTemplateVersion to determine behavior.
+    Creating an Agent from a template copies the selected AgentTemplateVersion into
+    a fresh AgentVersion (copy-on-create). Template updates never mutate existing
+    Agents. There is no inheritance, no runtime merging, no dynamic parent lookup.
+    """
+
+    __tablename__ = "agent_templates"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    key: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False, default="user", index=True)
+    space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=True, index=True)
+    owner_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="private")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", index=True)
+    current_version_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "agent_template_versions.id",
+            name="fk_agent_templates_current_version_id_agent_template_versions",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    versions: Mapped[list["AgentTemplateVersion"]] = relationship(
+        "AgentTemplateVersion",
+        back_populates="template",
+        foreign_keys="AgentTemplateVersion.template_id",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope in ('system', 'space', 'user')", name="ck_agent_templates_scope"),
+        CheckConstraint(
+            "visibility in ('private', 'space_shared', 'system_public', 'system_internal')",
+            name="ck_agent_templates_visibility",
+        ),
+        CheckConstraint(
+            "status in ('draft', 'published', 'archived')",
+            name="ck_agent_templates_status",
+        ),
+        # Scope ⇒ required ownership anchor. System templates need neither a
+        # space nor an owner; space templates need a space; user templates need an owner.
+        CheckConstraint(
+            "(scope = 'system' AND space_id IS NULL AND owner_user_id IS NULL) "
+            "OR (scope = 'space' AND space_id IS NOT NULL) "
+            "OR (scope = 'user' AND owner_user_id IS NOT NULL)",
+            name="ck_agent_templates_scope_ownership",
+        ),
+        # key is unique within its scope (partial unique indexes, one per scope).
+        Index(
+            "uq_agent_templates_system_key",
+            "key",
+            unique=True,
+            postgresql_where=text("scope = 'system'"),
+        ),
+        Index(
+            "uq_agent_templates_space_key",
+            "space_id",
+            "key",
+            unique=True,
+            postgresql_where=text("scope = 'space'"),
+        ),
+        Index(
+            "uq_agent_templates_user_key",
+            "owner_user_id",
+            "key",
+            unique=True,
+            postgresql_where=text("scope = 'user'"),
+        ),
+    )
+
+
+class AgentTemplateVersion(Base):
+    """Immutable snapshot of template configuration.
+
+    Published versions are treated as immutable by the service layer. A template's
+    ``current_version_id`` points to one of its versions. These fields are copied
+    verbatim into a new AgentVersion when an Agent is created from this template.
+    """
+
+    __tablename__ = "agent_template_versions"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    template_id: Mapped[str] = mapped_column(
+        UUID_COL, ForeignKey("agent_templates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    system_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    model_config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    context_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    memory_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    tool_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    runtime_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    output_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    schedule_defaults_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    output_schema_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    template: Mapped[AgentTemplate] = relationship(
+        "AgentTemplate", back_populates="versions", foreign_keys=[template_id]
+    )
+
+    __table_args__ = (
+        UniqueConstraint("template_id", "version", name="uq_agent_template_versions_template_version"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Agents and immutable versions
 # ---------------------------------------------------------------------------
 
@@ -491,6 +616,37 @@ class Agent(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     role_instruction: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    # Agent kind distinguishes the system-managed default Assistant (the Chat
+    # identity, one active per space) from ordinary template-instantiated agents.
+    # Runtime never reads this — it only gates seeding/resolution and UI labelling.
+    agent_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="standard",
+        server_default=text("'standard'"), index=True,
+    )
+    # Provenance only — records which template/version this Agent was created from.
+    # NEVER read to assemble runtime config; runtime always loads from AgentVersion.
+    source_template_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "agent_templates.id",
+            name="fk_agents_source_template_id_agent_templates",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
+    source_template_version_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "agent_template_versions.id",
+            name="fk_agents_source_template_version_id_agent_template_versions",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
     # Nullable convenience pointer; Run.agent_version_id remains the canonical immutable execution FK.
     current_version_id: Mapped[Optional[str]] = mapped_column(
         UUID_COL,
@@ -508,8 +664,6 @@ class Agent(Base):
 
     # Denormalized fields slated to move fully onto AgentVersion over time.
     visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="private")
-    created_by_user_id = synonym("owner_user_id")
-
     space: Mapped[Space] = relationship("Space", back_populates="agents")
     versions: Mapped[list["AgentVersion"]] = relationship(
         "AgentVersion",
@@ -521,6 +675,14 @@ class Agent(Base):
 
     __table_args__ = (
         CheckConstraint("status in ('active', 'inactive', 'archived', 'disabled')", name="ck_agents_status"),
+        CheckConstraint("agent_kind in ('standard', 'system_assistant')", name="ck_agents_agent_kind"),
+        # At most one active system-managed default Assistant per space.
+        Index(
+            "uq_agents_system_assistant_per_space",
+            "space_id",
+            unique=True,
+            postgresql_where=text("agent_kind = 'system_assistant' AND status = 'active'"),
+        ),
     )
 
 
@@ -542,6 +704,11 @@ class AgentVersion(Base):
     capabilities_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     tool_permissions_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     runtime_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Clean-model runtime snapshot fields (copied from AgentTemplateVersion on create-from-template).
+    tool_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    output_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    schedule_config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    output_schema_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     # Provenance for versions created by accepted agent_config_update proposals.
     source_proposal_id: Mapped[Optional[str]] = mapped_column(
         UUID_COL,
@@ -573,9 +740,60 @@ class AgentVersion(Base):
     model_provider: Mapped[Optional[ModelProvider]] = relationship("ModelProvider")
     runtime_adapter: Mapped[Optional[RuntimeAdapter]] = relationship("RuntimeAdapter")
 
-    version = synonym("version_label")
-
     __table_args__ = (UniqueConstraint("agent_id", "version_label", name="uq_agent_versions_agent_label"),)
+
+
+class SpaceAssistantSettings(Base):
+    """User/space-configurable preferences for a space's default Assistant.
+
+    This is a *preferences* layer kept deliberately separate from AgentVersion:
+    it influences default UI/context behavior only and can NEVER loosen the
+    assistant's hard policy (tool/runtime/output/safety) — those live on the
+    immutable AgentVersion snapshot and are never merged with these fields.
+    """
+
+    __tablename__ = "space_assistant_settings"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(
+        SPACE_COL, ForeignKey("spaces.id"), nullable=False, unique=True, index=True
+    )
+    assistant_agent_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "agents.id",
+            name="fk_space_assistant_settings_assistant_agent_id_agents",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
+    response_style: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    verbosity: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    default_context_toggles_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Soft reference to projects.id (no hard FK — a deleted project simply leaves a
+    # dangling default that the UI resolves leniently). See SOFT_REFERENCE_ALLOWLIST.
+    default_project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+    proposal_style: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    model_preferences_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "response_style is null or response_style in ('neutral', 'friendly', 'direct', 'formal')",
+            name="ck_space_assistant_settings_response_style",
+        ),
+        CheckConstraint(
+            "verbosity is null or verbosity in ('concise', 'balanced', 'detailed')",
+            name="ck_space_assistant_settings_verbosity",
+        ),
+        CheckConstraint(
+            "proposal_style is null or proposal_style in ('proactive', 'balanced', 'conservative')",
+            name="ck_space_assistant_settings_proposal_style",
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -827,10 +1045,101 @@ class ContextSnapshot(Base):
     # only for small inline contexts or fallback/debug — large payloads bloat the row.
     rendered_context_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Chat-path context fields — link this snapshot to the agent, session, and run that
+    # requested it.  All three carry deferred FKs (ALTER TABLE) to avoid circular table
+    # creation ordering: context_snapshots is created before agents/sessions/runs.
+    # run_id specifically avoids a circular FK loop: runs.context_snapshot_id already
+    # points here; we add the reverse direction via use_alter=True.
+    agent_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "agents.id",
+            name="fk_context_snapshots_agent_id_agents",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
+    session_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "sessions.id",
+            name="fk_context_snapshots_session_id_sessions",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
+    run_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "runs.id",
+            name="fk_context_snapshots_run_id_runs",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
+    )
+    # Serialised ContextRequest that produced this snapshot (for audit/debug).
+    request_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
     __table_args__ = (
         CheckConstraint(
             "data_exposure_level is null or data_exposure_level in ('local_only', 'model_provider', 'vendor_platform', 'third_party_tools', 'unknown')",
             name="ck_context_snapshots_data_exposure_level",
+        ),
+    )
+
+    items: Mapped[list["ContextSnapshotItem"]] = relationship(
+        "ContextSnapshotItem",
+        back_populates="context_snapshot",
+        cascade="all, delete-orphan",
+        order_by="ContextSnapshotItem.created_at",
+    )
+
+
+# ---------------------------------------------------------------------------
+# ContextSnapshotItem — per-item audit record for a ContextSnapshot
+# ---------------------------------------------------------------------------
+
+
+class ContextSnapshotItem(Base):
+    """Audit record of a single item included in a ContextSnapshot.
+
+    Created by ChatContextBuilder.persist_snapshot() to record what was actually
+    selected for a model call.  item_id is a nullable reference to the originating
+    row (memory_id, knowledge_item_id, etc.) with no FK constraint since item_type
+    varies across many source tables (polymorphic association).
+    """
+
+    __tablename__ = "context_snapshot_items"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    context_snapshot_id: Mapped[str] = mapped_column(
+        UUID_COL, ForeignKey("context_snapshots.id"), nullable=False, index=True
+    )
+    item_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    item_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True)
+    title: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    excerpt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    token_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    context_snapshot: Mapped["ContextSnapshot"] = relationship(
+        "ContextSnapshot", back_populates="items"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "item_type in ('memory', 'knowledge_item', 'source', 'activity_record', 'task', "
+            "'idea', 'project', 'workspace', 'run', 'proposal', 'artifact', 'manual_context')",
+            name="ck_context_snapshot_items_item_type",
         ),
     )
 
@@ -955,7 +1264,6 @@ class Run(Base):
         nullable=True,
         index=True,
     )
-    user_id = synonym("instructed_by_user_id")
     adapter_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     capability_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     model_selection_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="cli_default", server_default=text("'cli_default'"))
@@ -992,10 +1300,6 @@ class Run(Base):
     data_exposure_level: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     trust_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     externality_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-
-    completed_at = synonym("ended_at")
-    output = synonym("output_json")
-    error = synonym("error_message")
 
     agent: Mapped[Agent] = relationship("Agent", back_populates="runs", foreign_keys=[agent_id])
     agent_version: Mapped[AgentVersion] = relationship("AgentVersion")
@@ -1114,9 +1418,6 @@ class ActivityRecord(Base):
         nullable=True,
         index=True,
     )
-    lifecycle_status: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="raw", server_default=text("'raw'"), index=True
-    )
     consolidation_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="pending", server_default=text("'pending'"), index=True
     )
@@ -1127,21 +1428,12 @@ class ActivityRecord(Base):
     )
     owner_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
 
-    # Field name aliases for activity API (source_type, source_session_id, metadata_json).
-    source_type = synonym("activity_type")
-    source_session_id = synonym("session_id")
-    metadata_json = synonym("payload_json")
-
     source_run: Mapped[Optional[Run]] = relationship("Run", back_populates="activities")
 
     __table_args__ = (
         CheckConstraint(
             "status in ('raw', 'processed', 'proposals_generated', 'archived')",
             name="ck_activity_records_status",
-        ),
-        CheckConstraint(
-            "lifecycle_status in ('raw', 'active', 'archived', 'discarded')",
-            name="ck_activity_records_lifecycle_status",
         ),
         CheckConstraint(
             "consolidation_status in ('pending', 'skipped', 'proposals_generated', 'processed', 'failed')",
@@ -1253,13 +1545,8 @@ class Proposal(Base):
         nullable=True,
         index=True,
     )
-    type = synonym("proposal_type")
-    decided_at = synonym("reviewed_at")
-
     created_by_run: Mapped[Optional[Run]] = relationship("Run", back_populates="proposals")
     approvals: Mapped[list["ProposalApproval"]] = relationship("ProposalApproval", back_populates="proposal")
-
-    user_id = synonym("created_by_user_id")
 
     # Memory follow-up: if Proposal grows, move memory_update payload accessors
     # (owner_user_id, subject_user_id, sensitivity_level, selected_user_ids, …)
@@ -1445,7 +1732,6 @@ class KnowledgeItem(Base):
     tags_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    source_refs_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     owner_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
     created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
     created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)
@@ -1463,8 +1749,8 @@ class KnowledgeItem(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "item_type in ('knowledge', 'experience', 'lesson', 'procedure', 'decision', "
-            "'reflection', 'source', 'question', 'answer', 'summary')",
+            "item_type in ('knowledge', 'idea', 'experience', 'reflection', 'lesson', "
+            "'procedure', 'decision', 'question', 'summary')",
             name="ck_knowledge_items_item_type",
         ),
         CheckConstraint("content_format in ('markdown', 'plain')", name="ck_knowledge_items_content_format"),
@@ -1488,10 +1774,16 @@ class KnowledgeItem(Base):
     )
 
 
-class KnowledgeRelation(Base):
-    """Database-backed relation between two same-space KnowledgeItem rows."""
+class KnowledgeItemRelation(Base):
+    """Semantic wiki graph relation between two same-space KnowledgeItem rows.
 
-    __tablename__ = "knowledge_relations"
+    This is the item-to-item layer. Evidence/provenance links from an item to a
+    Source live on KnowledgeItemSource, not here. ``answers`` is a relation type
+    here (a knowledge/summary/... item answering a question item); there is no
+    KnowledgeItem type ``answer``.
+    """
+
+    __tablename__ = "knowledge_item_relations"
 
     id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
     space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
@@ -1500,7 +1792,7 @@ class KnowledgeRelation(Base):
     relation_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    evidence_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source_proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True)
     created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
     created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)
@@ -1511,26 +1803,111 @@ class KnowledgeRelation(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "relation_type in ('related', 'derived_from', 'example_of', 'supports', "
-            "'contradicts', 'part_of', 'prerequisite_of', 'applies_to', 'answers')",
-            name="ck_knowledge_relations_relation_type",
+            "relation_type in ('related_to', 'derived_from', 'supports', 'contradicts', "
+            "'answers', 'summarizes', 'depends_on', 'updates')",
+            name="ck_knowledge_item_relations_relation_type",
         ),
         CheckConstraint(
             "status in ('candidate', 'active', 'rejected', 'archived')",
-            name="ck_knowledge_relations_status",
+            name="ck_knowledge_item_relations_status",
         ),
         CheckConstraint(
             "confidence is null or (confidence >= 0 and confidence <= 1)",
-            name="ck_knowledge_relations_confidence",
+            name="ck_knowledge_item_relations_confidence",
         ),
         Index(
-            "ix_knowledge_relations_unique_active",
+            "ix_knowledge_item_relations_unique_active",
             "space_id",
             "from_item_id",
             "to_item_id",
             "relation_type",
             unique=True,
             postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+
+class Source(Base):
+    """First-class provenance / evidence object backing wiki KnowledgeItems.
+
+    Source is NOT a semantic wiki item and must never appear in the main
+    KnowledgeItem list. It represents raw material / evidence (a webpage, paper,
+    chat capture, processed ActivityRecord, ...). A Source may point back to an
+    existing ActivityRecord via ``source_activity_id`` (the raw capture layer) or
+    to any other origin through ``content_ref`` / ``metadata_json``.
+    """
+
+    __tablename__ = "sources"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    uri: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    content_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    raw_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="raw", index=True)
+    source_activity_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL, ForeignKey("activity_records.id"), nullable=True, index=True
+    )
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "source_type in ('activity_record', 'chat_capture', 'webpage', 'article', "
+            "'paper', 'pdf', 'file', 'email', 'manual_reference', 'external_note')",
+            name="ck_sources_source_type",
+        ),
+        CheckConstraint(
+            "status in ('raw', 'processing', 'processed', 'archived', 'error')",
+            name="ck_sources_status",
+        ),
+    )
+
+
+class KnowledgeItemSource(Base):
+    """Evidence/provenance link between a KnowledgeItem and a Source.
+
+    This join table records *why* a Source backs an item (derived_from,
+    supported_by, cites, summarizes, mentions). It is strictly for item->source
+    evidence; semantic item->item relations live on KnowledgeItemRelation.
+    """
+
+    __tablename__ = "knowledge_item_sources"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    knowledge_item_id: Mapped[str] = mapped_column(
+        UUID_COL, ForeignKey("knowledge_items.id"), nullable=False, index=True
+    )
+    source_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("sources.id"), nullable=False, index=True)
+    relation_type: Mapped[str] = mapped_column(String(32), nullable=False, default="derived_from", index=True)
+    locator: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    quote: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "relation_type in ('derived_from', 'supported_by', 'cites', 'summarizes', 'mentions')",
+            name="ck_knowledge_item_sources_relation_type",
+        ),
+        CheckConstraint(
+            "confidence is null or (confidence >= 0 and confidence <= 1)",
+            name="ck_knowledge_item_sources_confidence",
+        ),
+        Index(
+            "ix_knowledge_item_sources_unique",
+            "knowledge_item_id",
+            "source_id",
+            "relation_type",
+            unique=True,
         ),
     )
 
@@ -1772,9 +2149,6 @@ class Job(Base):
     user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
     workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
     agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True, index=True)
-    payload = synonym("payload_json")
-    result = synonym("result_json")
-
     events: Mapped[list["JobEvent"]] = relationship("JobEvent", back_populates="job", cascade="all, delete-orphan")
 
     __table_args__ = (
@@ -1871,17 +2245,13 @@ class MemoryEntry(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     access_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_accessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    fitness_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     tags: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
     memory_layer: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
     memory_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     event_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     event_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    summary_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
-    salience_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     last_retrieved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    reconsolidation_due: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     root_memory_id: Mapped[Optional[str]] = mapped_column(
         UUID_COL,
         ForeignKey("memory_entries.id", name="fk_memory_entries_root_memory_id_memory_entries", ondelete="SET NULL"),
@@ -1902,9 +2272,6 @@ class MemoryEntry(Base):
     created_from_proposal_id: Mapped[Optional[str]] = mapped_column(
         UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True
     )
-
-    scope = synonym("scope_type")
-    type = synonym("memory_type")
 
     __table_args__ = (
         CheckConstraint(
@@ -1939,26 +2306,8 @@ class MemoryReadTrace(Base):
 
 
 # ---------------------------------------------------------------------------
-# Ontology / provenance tables
+# Provenance / relation tables
 # ---------------------------------------------------------------------------
-
-
-class EntityRef(Base):
-    """Named domain entity referenced by memories, activities, or proposals."""
-
-    __tablename__ = "entity_refs"
-
-    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
-    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
-    entity_origin: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    entity_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    entity_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, index=True)
-    canonical_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, index=True)
-    display_name: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    aliases_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    scope_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    scope_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
 
 class MemoryRelation(Base):
@@ -2822,6 +3171,13 @@ class Automation(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
     preflight_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     config_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Schedule trigger bookkeeping. cron expression + timezone live in config_json
+    # ({"cron": "...", "timezone": "..."}). next_run_at is the next due UTC instant
+    # (indexed for the scheduler scan); last_fired_at records the last fire.
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    last_fired_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -2831,7 +3187,7 @@ class Automation(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "trigger_type in ('manual')",
+            "trigger_type in ('manual', 'schedule')",
             name="ck_automations_trigger_type",
         ),
         CheckConstraint(
@@ -2861,6 +3217,46 @@ class AutomationRun(Base):
 
     __table_args__ = (
         Index("ix_automation_runs_automation_created", "automation_id", "created_at"),
+    )
+
+
+class AutomationCredentialGrant(Base):
+    """One-time pre-authorization for an automation's unattended credential use.
+
+    Created when a scheduled Automation is created (the owner/admin act of creating
+    the automation is the explicit approval). While an active grant exists, the
+    ``runtime.use_credential`` policy gate ALLOWs same-space credential use for runs
+    fired by this automation (trigger_origin="automation") instead of the default
+    REQUIRE_APPROVAL. Cross-space credential use remains hard-denied regardless.
+
+    Revoked when the automation is archived. The grant authorizes the automation's
+    same-space credential use only; it never widens space boundaries.
+    """
+
+    __tablename__ = "automation_credential_grants"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    automation_id: Mapped[str] = mapped_column(
+        UUID_COL, ForeignKey("automations.id"), nullable=False, index=True
+    )
+    granted_by_user_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by_user_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL, ForeignKey("users.id"), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('active', 'revoked')",
+            name="ck_automation_credential_grants_status",
+        ),
+        Index(
+            "ix_automation_credential_grants_lookup",
+            "space_id", "automation_id", "status",
+        ),
     )
 
 

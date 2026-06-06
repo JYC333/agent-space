@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from ..models import Session, Message
 from ..schemas import SessionCreate, MessageCreate
-from ..config import settings
+from ..spaces.defaults import resolve_default_space_id
 
 
 def _new_id() -> str:
@@ -21,10 +21,15 @@ class SessionService:
         self.db = db
 
     def create_session(self, data: SessionCreate) -> Session:
+        if not data.user_id:
+            raise ValueError(
+                "create_session requires data.user_id (set from the authenticated "
+                "identity; there is no default-user fallback)."
+            )
         session = Session(
             id=_new_id(),
-            space_id=data.space_id or settings.default_space_id,
-            user_id=data.user_id or settings.default_user_id,
+            space_id=data.space_id or resolve_default_space_id(self.db),
+            user_id=data.user_id,
             workspace_id=data.workspace_id,
             title=data.title,
             status="active",

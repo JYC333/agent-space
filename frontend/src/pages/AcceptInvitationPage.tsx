@@ -13,7 +13,7 @@ export default function AcceptInvitationPage() {
   const { token } = useParams<{ token: string }>()
   const navigate = useNavigate()
   const { currentUser, isLoading: authLoading } = useAuth()
-  const { setSpace, reloadSpaces } = useSpace()
+  const { reloadSpaces } = useSpace()
   const [searchParams] = useSearchParams()
   const autoAccept = searchParams.get('auto') === '1'
 
@@ -51,8 +51,7 @@ export default function AcceptInvitationPage() {
 
   function goToSpace() {
     if (result) {
-      setSpace(result.space_id)
-      navigate('/', { replace: true })
+      navigate(`/spaces/${result.space_id}/today`, { replace: true })
     }
   }
 

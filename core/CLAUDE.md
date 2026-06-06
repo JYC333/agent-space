@@ -47,11 +47,11 @@ python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v
 
 ```
 AGENT_SPACE_HOME=~/aspace    # data root; DB, workspaces, sandboxes, secrets all live here
-ANTHROPIC_API_KEY=
+# LLM provider API keys are entered in the app (Providers page) and stored as encrypted
+# ModelProvider Credentials — never set them in env/config (ADR 0010).
 DEFAULT_MODEL=claude-sonnet-4-6
 REFLECTOR_MODE=pattern   # or llm
-DEFAULT_SPACE_ID=personal
-DEFAULT_USER_ID=default_user
+DEFAULT_USER_ID=default_user   # bootstrap owner; the default space is this owner's personal space (a generated UUID)
 ```
 
 ## Key concepts
@@ -75,6 +75,6 @@ DEFAULT_USER_ID=default_user
 ## Run execution
 
 - `RunExecutionService` (`backend/app/runs/execution.py`) drives queued Runs through **real** runtime adapters resolved from `AgentVersion` / `RuntimeAdapter` rows / `runtime_policy_json` (`default_adapter_type`, `allowed_adapter_types`, `allowed_model_providers`).
-- Built-in runtime adapter implementations live under `backend/app/runtimes/` (`echo` for zero-dependency tests, `capability` for capability-based execution). Anthropic/Claude execution uses the `claude_code` RuntimeAdapterSpec through the generic local CLI runtime path.
+- Built-in runtime adapter implementations live under `backend/app/runtimes/` (`echo` for zero-dependency tests, `capability` for capability-based execution). Tool-using / filesystem Claude work uses the `claude_code` RuntimeAdapterSpec via the local CLI runtime path. Per ADR 0010 the invariant is **credential channel isolation** (no Anthropic API key in a Claude Code CLI subprocess env); the in-process encrypted API channel may serve any provider incl Anthropic. There is no in-process LLM *runtime adapter* yet — a generic vendor-neutral one (`model_api`, backed by the providers/LiteLLM layer, any ModelProvider + model) is sanctioned but not yet built.
 - Unsupported runtime query / job payload overrides are rejected. `POST .../runs/{id}/execute` may return **410 Gone** when such an override is supplied; the job handler rejects unsupported overrides with `ValueError` (prefix `runtime_removed:`); `RunExecutionService` returns `error_code=runtime_removed` **without** mutating the Run row. There is **no** synthetic adapter fallback when a real adapter fails.
 - Text outputs are persisted with `ArtifactPersistenceService` under `artifact_storage_root`; ephemeral work uses `sandbox_root` (worktree isolation for high-risk policy) and is removed after the run while persisted artifact files remain.

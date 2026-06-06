@@ -134,6 +134,104 @@ When a `SessionSummary` is loaded, `ContextBuilder` records:
 
 ---
 
+## 4a. ChatContextBuilder — Personal Assistant / chat context path (`memory/chat_context.py`)
+
+The existing `ContextBuilder` (§4 above) handles the CLI agent path: it produces a `ContextPackage`
+rendered by `ContextCompiler` into an instruction file.  The chat context path is different:
+
+- Input is a `ContextRequest` (not `ContextBuildRequest`)
+- Output is a `ContextBundle` (not `ContextPackage`) — a flat list of `ContextBundleItem` records
+- Each item carries `item_type`, `item_id`, `title`, `excerpt`, `score`, `reason`, `token_count`
+- The bundle is intended to be injected directly into a model call (no instruction-file rendering)
+- Result is persisted as `ContextSnapshot` + `ContextSnapshotItem` rows for full auditability
+
+### Context boundary: AgentVersion.context_policy_json
+
+`ChatContextBuilder` reads `AgentVersion.context_policy_json` to determine which source types
+are allowed for a given request. **AgentVersion is never mutated** — all per-run selection
+decisions are local to `build()` and stored only in `ContextBundle` / `ContextSnapshot`.
+
+`context_policy_json` structure:
+
+```json
+{
+  "sources": ["memory", "knowledge_item", "workspace", "activity_record"],
+  "max_tokens": 4000,
+  "max_items": 20
+}
+```
+
+- `sources` — allowed source types; absent / empty → all types allowed (permissive default)
+- `max_tokens` — overrides the per-request budget when set
+- `max_items` — overrides the per-request item cap when set
+
+Supported `item_type` values in a `ContextBundle` / `ContextSnapshotItem`:
+
+| item_type | Source table |
+|-----------|-------------|
+| `memory` | `memory_entries` (via `MemoryRetriever`) |
+| `knowledge_item` | `knowledge_items` (item_type ≠ idea) |
+| `idea` | `knowledge_items` (item_type = idea) |
+| `source` | `sources` (status = processed) |
+| `activity_record` | `activity_records` (recent-first) |
+| `workspace` | `workspaces` (current workspace metadata) |
+| `project` | `projects` (current project metadata) |
+| `manual_context` | Caller-supplied explicit context (highest priority) |
+| `task`, `run`, `proposal`, `artifact` | Reserved; not yet selected automatically |
+
+### Selection priority
+
+```
+1. manual_context       (score=1.0, always first)
+2. workspace metadata   (score=0.9, current workspace only)
+3. project metadata     (score=0.9, current project only)
+4. approved memory      (score=0.8, via MemoryRetriever)
+5. knowledge_item/idea  (score=0.7, recent-first + keyword filter)
+6. source               (score=0.6, processed, recent-first)
+7. activity_record      (score=0.5, recent-first)
+```
+
+Deduplication by `(item_type, item_id)` is applied across all sources. Token budget and
+max_items caps stop collection once either limit is reached (`truncated=True`).
+
+### API
+
+```python
+builder = ChatContextBuilder(db)
+
+# Build a context bundle (does not persist anything).
+bundle: ContextBundle = builder.build(request: ContextRequest)
+
+# Persist ContextSnapshot + ContextSnapshotItem rows for audit.
+snap: ContextSnapshot = builder.persist_snapshot(bundle, request, context_snapshot_id?)
+
+# List audit items for a snapshot (for debug / run detail).
+items: list[ContextSnapshotItem] = builder.list_snapshot_items(context_snapshot_id)
+```
+
+`persist_snapshot()` flushes but does not commit — the caller owns the transaction boundary.
+
+### ContextSnapshot additions
+
+`context_snapshots` now carries three new nullable columns:
+- `agent_id` — FK to `agents.id` (derived from `AgentVersion.agent_id` by the builder)
+- `session_id` — FK to `sessions.id` (from `ContextRequest.session_id`)
+- `run_id` — FK to `runs.id` (from `ContextRequest.run_id`; avoids circular FK via ALTER TABLE)
+- `request_json` — serialised `ContextRequest` for full audit reproducibility
+
+All three FKs use `use_alter=True` because `context_snapshots` is created before the
+referenced tables in the baseline migration.
+
+### Not implemented (future scope)
+
+- Embeddings / vector search (no numpy, faiss, pgvector)
+- Graph traversal beyond what MemoryRetriever already provides
+- Source chunking pipeline
+- Full workspace file search
+- Frontend context picker UI
+
+---
+
 ## 5. SessionSummary and SessionCondenser (`sessions/condenser.py`)
 
 ### Design invariants

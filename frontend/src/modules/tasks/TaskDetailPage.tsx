@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
 import { agentsApi, artifactsApi, tasksApi } from '../../api/client'
@@ -32,7 +33,7 @@ function JsonBlock({ value }: { value: unknown }) {
 
 export default function TaskDetailPage() {
   const { taskId = '' } = useParams()
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [task, setTask] = useState<Task | null>(null)
   const [runs, setRuns] = useState<TaskRunListItem[]>([])
   const [arts, setArts] = useState<TaskArtifact[]>([])
@@ -45,7 +46,7 @@ export default function TaskDetailPage() {
 
   const load = useCallback(async () => {
     if (!taskId) return
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setTask(null)
       setRuns([])
       setArts([])
@@ -74,7 +75,7 @@ export default function TaskDetailPage() {
     } finally {
       setLoading(false)
     }
-  }, [taskId, activeOperationalSpaceId])
+  }, [taskId, activeSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -121,8 +122,8 @@ export default function TaskDetailPage() {
         </Button>
         <EmptyState
           className="mt-6"
-          title={activeOperationalSpaceId ? 'Task not found or not accessible' : 'No space selected'}
-          description={activeOperationalSpaceId
+          title={activeSpaceId ? 'Task not found or not accessible' : 'No space selected'}
+          description={activeSpaceId
             ? 'This task may not exist, or it may not be visible in your current space.'
             : 'Select an operational space to inspect this task.'}
           action={
@@ -148,7 +149,7 @@ export default function TaskDetailPage() {
 
       <div className="border-b border-border pb-4 space-y-3">
         <h1 className="text-xl font-semibold tracking-tight">{task.title}</h1>
-        <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+        <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
         <div className="flex flex-wrap gap-1.5 items-center">
           <StatusBadge status={task.status} />
           <Badge variant="outline">{task.priority}</Badge>

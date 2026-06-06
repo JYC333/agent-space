@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { Play, FolderKanban, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { runsApi } from '../../api/client'
@@ -81,7 +82,7 @@ function StopRunButton({ runId, onDone }: { runId: string; onDone: () => void })
 }
 
 export default function RunsPage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [searchParams, setSearchParams] = useSearchParams()
   const projectFilter = searchParams.get('project_id') ?? ''
 
@@ -93,7 +94,7 @@ export default function RunsPage() {
   const [fWs, setFWs] = useState('')
 
   const load = useCallback(async () => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setRuns([])
       setLoading(false)
       return
@@ -115,7 +116,7 @@ export default function RunsPage() {
     } finally {
       setLoading(false)
     }
-  }, [fStatus, fMode, fAgent, fWs, projectFilter, activeOperationalSpaceId])
+  }, [fStatus, fMode, fAgent, fWs, projectFilter, activeSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -140,7 +141,7 @@ export default function RunsPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Runs</h1>
           <p className="text-sm text-muted-foreground">Canonical runs: queue, status, and links to activity and artifacts.</p>
-          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+          <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
           {projectFilter && (
             <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-accent/40 text-xs text-accent-foreground">
               <FolderKanban className="size-3" />
@@ -210,7 +211,7 @@ export default function RunsPage() {
         </Card>
       ) : runs.length === 0 ? (
         <Card className="p-10 text-center text-sm text-muted-foreground">
-          {activeOperationalSpaceId ? 'No runs in this operational space.' : 'Select an operational space to browse runs.'}
+          {activeSpaceId ? 'No runs in this operational space.' : 'Select an operational space to browse runs.'}
         </Card>
       ) : (
         <div className="space-y-3">

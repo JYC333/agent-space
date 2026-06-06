@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import func
 
-from app.models import KnowledgeItem, KnowledgeRelation, MemoryEntry, Proposal
+from app.models import KnowledgeItem, KnowledgeItemRelation, MemoryEntry, Proposal, ProvenanceLink
 from tests.support import factories
 
 
@@ -112,6 +112,45 @@ def test_accept_knowledge_create_creates_active_item(api_client, db, cross_space
     assert item.owner_user_id == ua.id
     assert item.created_from_proposal_id == proposal_id
     assert item.root_item_id == item.id
+
+
+def test_knowledge_create_source_refs_become_provenance_links(api_client, db, cross_space_pair):
+    """source_refs (internal provenance pointers) are persisted as ProvenanceLink
+    rows (target_type="knowledge"), not on a source_refs_json column."""
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    activity_ref = "11111111-1111-1111-1111-111111111111"
+    r = cross_space_pair["client_a"].post(
+        "/api/v1/knowledge/items/proposals",
+        params=_params(a, ua.id),
+        json=_create_payload(
+            title="With provenance",
+            content="v1",
+            source_refs=[
+                {"type": "activity", "id": activity_ref, "source_trust": "user_confirmed"},
+                {"type": "bogus", "id": "should-be-skipped"},
+            ],
+        ),
+    )
+    proposal_id = r.json()["id"]
+    accepted = cross_space_pair["client_a"].post(
+        f"/api/v1/proposals/{proposal_id}/accept", params=_params(a, ua.id)
+    )
+    assert accepted.status_code == 200
+    item_id = accepted.json()["result"]["knowledge_item"]["id"]
+
+    links = (
+        db.query(ProvenanceLink)
+        .filter(ProvenanceLink.target_type == "knowledge", ProvenanceLink.target_id == item_id)
+        .all()
+    )
+    assert len(links) == 1, "only the valid activity ref becomes a provenance link"
+    assert links[0].source_type == "activity"
+    assert links[0].source_id == activity_ref
+    assert links[0].source_trust == "user_confirmed"
+
+    # The free-form column is gone; provenance lives on ProvenanceLink.
+    assert not hasattr(KnowledgeItem, "source_refs_json")
 
 
 def test_private_knowledge_is_owner_visible_and_hidden_from_same_space_user(db, same_space_pair):
@@ -547,7 +586,7 @@ def test_relation_create_and_delete_are_proposal_applied(api_client, db, cross_s
     relation_id = accepted.json()["result"]["knowledge_relation"]["id"]
 
     db.expire_all()
-    relation = db.get(KnowledgeRelation, relation_id)
+    relation = db.get(KnowledgeItemRelation, relation_id)
     assert relation is not None and relation.status == "active"
 
     delete_prop = cross_space_pair["client_a"].delete(
@@ -561,7 +600,7 @@ def test_relation_create_and_delete_are_proposal_applied(api_client, db, cross_s
     )
     assert deleted.status_code == 200
     db.expire_all()
-    relation = db.get(KnowledgeRelation, relation_id)
+    relation = db.get(KnowledgeItemRelation, relation_id)
     assert relation is not None and relation.status == "archived"
 
 
@@ -586,7 +625,7 @@ def test_relation_reads_do_not_leak_unreadable_private_endpoint(db, same_space_p
         created_by_user_id=ua.id,
         commit=False,
     )
-    relation = factories.create_test_knowledge_relation(
+    relation = factories.create_test_knowledge_item_relation(
         db,
         space_id=space,
         from_item_id=shared.id,
@@ -635,14 +674,14 @@ def test_relation_proposal_requires_readable_endpoints(db, same_space_pair):
     blocked = same_space_pair["client_b"].post(
         "/api/v1/knowledge/relations/proposals",
         params=_params(space, ub.id),
-        json={"from_item_id": shared_a.id, "to_item_id": private.id, "relation_type": "related"},
+        json={"from_item_id": shared_a.id, "to_item_id": private.id, "relation_type": "related_to"},
     )
     assert blocked.status_code == 404
 
     allowed = same_space_pair["client_b"].post(
         "/api/v1/knowledge/relations/proposals",
         params=_params(space, ub.id),
-        json={"from_item_id": shared_a.id, "to_item_id": shared_b.id, "relation_type": "related"},
+        json={"from_item_id": shared_a.id, "to_item_id": shared_b.id, "relation_type": "related_to"},
     )
     assert allowed.status_code == 202
 
@@ -670,7 +709,7 @@ def test_apply_relation_create_rejects_malformed_private_endpoint_proposal_from_
             "operation": "relation_create",
             "from_item_id": shared.id,
             "to_item_id": private.id,
-            "relation_type": "related",
+            "relation_type": "related_to",
             "status": "active",
         },
         commit=True,
@@ -679,7 +718,7 @@ def test_apply_relation_create_rejects_malformed_private_endpoint_proposal_from_
     accepted = same_space_pair["client_b"].post(f"/api/v1/proposals/{prop.id}/accept", params=_params(space, ub.id))
     assert accepted.status_code == 422
     db.expire_all()
-    assert db.query(func.count(KnowledgeRelation.id)).filter(KnowledgeRelation.space_id == space).scalar() == 0
+    assert db.query(func.count(KnowledgeItemRelation.id)).filter(KnowledgeItemRelation.space_id == space).scalar() == 0
 
 
 def test_apply_relation_create_allows_owner_private_endpoint_and_shared_pair_for_same_space_user(db, same_space_pair):
@@ -720,7 +759,7 @@ def test_apply_relation_create_allows_owner_private_endpoint_and_shared_pair_for
             "operation": "relation_create",
             "from_item_id": shared_a.id,
             "to_item_id": shared_b.id,
-            "relation_type": "related",
+            "relation_type": "related_to",
             "status": "active",
         },
         commit=True,
@@ -738,7 +777,7 @@ def test_apply_relation_create_allows_owner_private_endpoint_and_shared_pair_for
     assert shared_accept.status_code == 200
 
     db.expire_all()
-    assert db.query(func.count(KnowledgeRelation.id)).filter(KnowledgeRelation.space_id == space).scalar() == 2
+    assert db.query(func.count(KnowledgeItemRelation.id)).filter(KnowledgeItemRelation.space_id == space).scalar() == 2
 
 
 def test_apply_relation_delete_rejects_malformed_private_endpoint_proposal_from_non_owner(db, same_space_pair):
@@ -755,7 +794,7 @@ def test_apply_relation_delete_rejects_malformed_private_endpoint_proposal_from_
         created_by_user_id=ua.id,
         commit=False,
     )
-    relation = factories.create_test_knowledge_relation(
+    relation = factories.create_test_knowledge_item_relation(
         db,
         space_id=space,
         from_item_id=shared.id,
@@ -774,7 +813,7 @@ def test_apply_relation_delete_rejects_malformed_private_endpoint_proposal_from_
     accepted = same_space_pair["client_b"].post(f"/api/v1/proposals/{prop.id}/accept", params=_params(space, ub.id))
     assert accepted.status_code == 422
     db.expire_all()
-    unchanged = db.get(KnowledgeRelation, relation.id)
+    unchanged = db.get(KnowledgeItemRelation, relation.id)
     assert unchanged is not None
     assert unchanged.status == "active"
 
@@ -794,7 +833,7 @@ def test_apply_relation_delete_allows_owner_private_relation_and_shared_relation
     )
     shared_a = factories.create_test_knowledge_item(db, space_id=space, title="Shared A", commit=False)
     shared_b = factories.create_test_knowledge_item(db, space_id=space, title="Shared B", commit=False)
-    private_relation = factories.create_test_knowledge_relation(
+    private_relation = factories.create_test_knowledge_item_relation(
         db,
         space_id=space,
         from_item_id=private.id,
@@ -802,12 +841,12 @@ def test_apply_relation_delete_allows_owner_private_relation_and_shared_relation
         relation_type="supports",
         commit=False,
     )
-    shared_relation = factories.create_test_knowledge_relation(
+    shared_relation = factories.create_test_knowledge_item_relation(
         db,
         space_id=space,
         from_item_id=shared_a.id,
         to_item_id=shared_b.id,
-        relation_type="related",
+        relation_type="related_to",
         commit=False,
     )
     owner_prop = factories.create_test_proposal(
@@ -839,8 +878,8 @@ def test_apply_relation_delete_allows_owner_private_relation_and_shared_relation
     assert shared_accept.status_code == 200
 
     db.expire_all()
-    assert db.get(KnowledgeRelation, private_relation.id).status == "archived"  # type: ignore[union-attr]
-    assert db.get(KnowledgeRelation, shared_relation.id).status == "archived"  # type: ignore[union-attr]
+    assert db.get(KnowledgeItemRelation, private_relation.id).status == "archived"  # type: ignore[union-attr]
+    assert db.get(KnowledgeItemRelation, shared_relation.id).status == "archived"  # type: ignore[union-attr]
 
 
 def test_relation_create_cross_space_fails_on_accept(api_client, db, cross_space_pair):
@@ -858,7 +897,7 @@ def test_relation_create_cross_space_fails_on_accept(api_client, db, cross_space
             "operation": "relation_create",
             "from_item_id": left.id,
             "to_item_id": right.id,
-            "relation_type": "related",
+            "relation_type": "related_to",
             "status": "active",
         },
         commit=True,
@@ -867,7 +906,7 @@ def test_relation_create_cross_space_fails_on_accept(api_client, db, cross_space
     accepted = cross_space_pair["client_a"].post(f"/api/v1/proposals/{prop.id}/accept", params=_params(a, ua.id))
     assert accepted.status_code == 422
     db.expire_all()
-    relation_count = db.query(func.count(KnowledgeRelation.id)).filter(KnowledgeRelation.space_id == a).scalar()
+    relation_count = db.query(func.count(KnowledgeItemRelation.id)).filter(KnowledgeItemRelation.space_id == a).scalar()
     assert relation_count == 0
 
 

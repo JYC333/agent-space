@@ -1,5 +1,5 @@
 import { useState, useEffect, useId } from 'react'
-import { Link } from 'react-router-dom'
+import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/spaceNav'
 import { Settings, Sun, Moon, Users, Plus, Mail, Send, KeyRound } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../contexts/AuthContext'
@@ -27,7 +27,8 @@ const SPACE_TYPES: { value: Exclude<SpaceType, 'personal'>; label: string; descr
 
 export default function SettingsPage() {
   const { currentUser } = useAuth()
-  const { spaces, setSpace, reloadSpaces, activeOperationalSpaceId } = useSpace()
+  const { spaces, preferredSpaceId, reloadSpaces } = useSpace()
+  const navigate = useNavigate()
   const { theme, setTheme } = useTheme()
 
   // Create space
@@ -45,7 +46,8 @@ export default function SettingsPage() {
   const [loadingMembers, setLoadingMembers] = useState(false)
 
   const headingId = useId()
-  const effectiveSpaceId = activeOperationalSpaceId
+  // Settings is a top-level surface (no Space in the URL); it operates on the preferred Space.
+  const effectiveSpaceId = preferredSpaceId
 
   useEffect(() => {
     if (!currentUser || !effectiveSpaceId) {
@@ -68,7 +70,8 @@ export default function SettingsPage() {
       toast.success(`Space "${space.name}" created`)
       setNewSpaceName('')
       await reloadSpaces()
-      setSpace(space.id)
+      // Enter the new Space by navigating to its URL (the active Space is now URL-derived).
+      navigate(`/spaces/${space.id}/today`)
     } catch (err) {
       toast.error(errMsg(err))
     } finally {

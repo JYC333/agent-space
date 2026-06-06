@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { dailyReportApi } from '../../api/client'
 import type {
   DailyCaptureReportSettingOut,

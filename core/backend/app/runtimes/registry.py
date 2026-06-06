@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from .adapters import CapabilityRuntimeAdapter, EchoRuntimeAdapter, GenericCliRuntimeAdapter
+from .adapters import (
+    CapabilityRuntimeAdapter,
+    EchoRuntimeAdapter,
+    GenericCliRuntimeAdapter,
+    ModelApiRuntimeAdapter,
+)
 from .base import BaseRuntimeAdapter
 from .specs import get_runtime_adapter_spec
 
 _NATIVE_RUNTIME_ADAPTER_CLASSES: dict[str, type[BaseRuntimeAdapter]] = {
     EchoRuntimeAdapter.adapter_type: EchoRuntimeAdapter,
     CapabilityRuntimeAdapter.adapter_type: CapabilityRuntimeAdapter,
+    ModelApiRuntimeAdapter.adapter_type: ModelApiRuntimeAdapter,
 }
 
 

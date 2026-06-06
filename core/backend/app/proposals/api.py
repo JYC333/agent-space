@@ -22,7 +22,7 @@ from ..memory.serialization import memory_entry_to_out
 from ..param_binding import wire_query
 from ..schemas import Page, ProposalAcceptOut, ProposalOut
 from .read_model import proposal_to_out
-from ..knowledge.read_model import knowledge_item_to_out, knowledge_relation_to_out
+from ..knowledge.read_model import knowledge_item_to_out, knowledge_item_relation_to_out
 
 router = APIRouter(prefix="/proposals", tags=["proposals"])
 
@@ -90,7 +90,7 @@ def _build_proposal_accept_out(
         return ProposalAcceptOut(
             proposal=prop_out,
             result_type="knowledge_relation",
-            result={"knowledge_relation": knowledge_relation_to_out(result.knowledge_relation).model_dump(mode="json")},
+            result={"knowledge_relation": knowledge_item_relation_to_out(result.knowledge_relation).model_dump(mode="json")},
         )
 
     # memory_create, memory_update, memory_archive all surface the MemoryEntry.

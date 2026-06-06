@@ -51,8 +51,9 @@ The local PostgreSQL containers use stable names: `agent-space-dev-postgres`,
 # 1. Start everything (creates ~/aspace/dev/ and .env from template on first run)
 ./scripts/start.sh
 
-# 2. Edit secrets
-#    ~/aspace/dev/.env — set ANTHROPIC_API_KEY at minimum, then re-run ./scripts/start.sh
+# 2. Add a model provider in the app
+#    Open the web app → Providers and paste your API key (stored encrypted; never in .env).
+#    ~/aspace/dev/.env holds infra-only settings (e.g. POSTGRES_PASSWORD for --prod).
 ```
 
 `start.sh` builds the sandbox image on first run, then starts backend + frontend + deployer via Docker Compose. Data lives under **`~/aspace/<mode>/`** (default mode `dev`).
@@ -129,12 +130,28 @@ cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants
 | Sandbox | Per-run isolation; git worktree by default, one-shot Docker for high-risk runs |
 | Adapter | Execution backend: `echo`, `claude_cli`, `codex_cli` |
 
-## Built-in Agents
+## Built-in Templates
 
-| Agent | Adapter | Sandbox | Purpose |
-|-------|---------|---------|---------|
-| `system.echo-agent` | echo | No | Deterministic test/echo agent |
-| `system.memory-curator-agent` | claude_cli | Yes | Reflects on sessions, proposes memory updates |
+No concrete agents are seeded. Built-in behavior comes from system **AgentTemplates**
+(reusable factories, seeded once globally); a concrete Agent is created on demand via
+copy-on-create, and runtime always loads config from its `AgentVersion` — never a template.
+
+There is no `general_chat` template and no DirectChat — chat is the per-space **system-managed
+default Assistant** (`agent_kind=system_assistant`), minted from the internal `personal_assistant`
+seed spec. That seed spec is `visibility=system_internal`: hidden from the public Template Library
+and not user-instantiable (at most one active Assistant per space). The reusable specialized
+templates below are the public library:
+
+| Template | Category | Purpose |
+|----------|----------|---------|
+| `activity_reflector` | reflection | Processes captures/activity into typed proposals + reflection summary; model selects output type |
+| `memory_reflector` | memory | Memory update/merge/delete proposals only (no direct write) |
+| `knowledge_curator` | knowledge | Proposes semantic KnowledgeItem types, relations, source links (proposal-only) |
+| `research_reader` | research | Reads selected sources only (no web search/crawl); summaries, questions, knowledge proposals |
+| `coding_reviewer` | workspace | Read-only review/report outputs; no file write, shell, or patch apply |
+
+Memory reflection is also exposed as an internal service (`MemoryReflector` via the
+`memory.reflect` capability, `POST /sessions/{id}/reflect`).
 
 ## Documentation
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { BookOpen } from 'lucide-react'
 import { toast } from 'sonner'
 import { knowledgeApi } from '../../api/client'
@@ -17,10 +18,10 @@ const DEFAULT_FILTERS: KnowledgeFilters = {
 }
 
 export default function KnowledgePage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName, spaces } = useSpace()
+  const { activeSpaceId, activeSpaceName, spaces } = useSpace()
   const activeSpace = useMemo(
-    () => spaces.find(s => s.id === activeOperationalSpaceId) ?? null,
-    [spaces, activeOperationalSpaceId],
+    () => spaces.find(s => s.id === activeSpaceId) ?? null,
+    [spaces, activeSpaceId],
   )
   const displayName = getKnowledgeDisplayName(activeSpace)
   const [items, setItems] = useState<KnowledgeItemSummary[]>([])
@@ -29,8 +30,15 @@ export default function KnowledgePage() {
   const [filters, setFilters] = useState<KnowledgeFilters>(DEFAULT_FILTERS)
   const [appliedQ, setAppliedQ] = useState('')
 
+  // The Wiki scene sidebar drives the item-type filter through the URL (?item_type=…).
+  const [searchParams] = useSearchParams()
+  const urlItemType = searchParams.get('item_type') ?? ''
+  useEffect(() => {
+    setFilters(f => (f.itemType === urlItemType ? f : { ...f, itemType: urlItemType }))
+  }, [urlItemType])
+
   const load = useCallback(async () => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setItems([])
       setTotal(0)
       setLoading(false)
@@ -54,7 +62,7 @@ export default function KnowledgePage() {
     } finally {
       setLoading(false)
     }
-  }, [activeOperationalSpaceId, filters.itemType, filters.status, filters.visibility, appliedQ])
+  }, [activeSpaceId, filters.itemType, filters.status, filters.visibility, appliedQ])
 
   useEffect(() => { load() }, [load])
 
@@ -78,16 +86,16 @@ export default function KnowledgePage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">{displayName}</h1>
           <p className="text-sm text-muted-foreground">Browse approved knowledge and submit review-gated changes.</p>
-          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+          <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
         </div>
       </div>
 
-      <KnowledgeCreateProposalForm hasOperationalSpace={Boolean(activeOperationalSpaceId)} />
+      <KnowledgeCreateProposalForm hasOperationalSpace={Boolean(activeSpaceId)} />
       <KnowledgeList
         items={items}
         total={total}
         loading={loading}
-        hasOperationalSpace={Boolean(activeOperationalSpaceId)}
+        hasOperationalSpace={Boolean(activeSpaceId)}
         filters={filters}
         onFiltersChange={setFilters}
         onSearch={() => setAppliedQ(filters.q.trim())}

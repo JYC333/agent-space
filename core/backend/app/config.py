@@ -58,6 +58,9 @@ class AppPaths:
         self.sandboxes_dir  = self.home / "sandboxes"
         self.artifacts_dir  = self.home / "artifacts"
         self.backups_dir    = self.home / "backups"
+        # Captured file/voice uploads (Activity Inbox attachments). Lives under storage/
+        # alongside artifacts; never inside the source repo.
+        self.uploads_dir    = self.storage_dir / "uploads"
 
     @property
     def artifact_storage_root(self) -> Path:
@@ -145,6 +148,7 @@ class AppPaths:
             (self.sandboxes_dir,  0o700),
             (self.artifacts_dir,  0o700),
             (self.artifact_storage_root, 0o700),
+            (self.uploads_dir,    0o700),
             (self.backups_dir,    0o700),
         ]
         for path, mode in entries:
@@ -231,13 +235,18 @@ class Settings(BaseSettings):
                 )
         return self
 
-    # Defaults for single-user / personal-space mode
-    default_space_id: str = "personal"
+    # Bootstrap owner for single-user mode. There is no default *space* id: the
+    # default space is this owner's personal space (a generated UUID created by
+    # bootstrap_instance and resolved via app.spaces.defaults), never a magic
+    # "personal" string.
     default_user_id: str = "default_user"
 
-    # LLM configuration
-    anthropic_api_key: str = ""
-    default_model: str = "claude-sonnet-4-6"
+    # LLM configuration. Provider API keys are NOT stored here: users enter them in the
+    # app (Providers page) and they are persisted as encrypted ModelProvider Credentials
+    # (secret_ref), resolved at runtime via resolve_provider_api_key. Never put an LLM API
+    # key in settings or env — ADR 0010 (credential channel isolation). default_model is a
+    # non-secret default model name only.
+    default_model: str = ""
 
     # AGENT_SPACE_HOME — single local data root (all runtime data lives here)
     agent_space_home: str = str(_ASPACE_HOME)
@@ -271,7 +280,8 @@ class Settings(BaseSettings):
     # LLM reflector model provider — must reference a configured ModelProvider row.
     # Set REFLECTOR_MODEL_PROVIDER_ID to the provider's UUID/ULID.
     # Set REFLECTOR_MODEL to override the provider's default_model (optional).
-    # Do NOT set REFLECTOR_ANTHROPIC_API_KEY — Anthropic is CLI-only.
+    # The provider's API key comes from its encrypted ModelProvider Credential, never
+    # from an ambient env var. The reflector may use any provider incl Anthropic (ADR 0010).
     reflector_model_provider_id: Optional[str] = None
     reflector_model: Optional[str] = None
 
@@ -338,6 +348,21 @@ class Settings(BaseSettings):
         if v < 30:
             raise ValueError(
                 f"daily_report_scheduler_interval_seconds must be at least 30, got {v}"
+            )
+        return v
+
+    # ── Automation scheduler ─────────────────────────────────────────────────
+    # Fires schedule-trigger automations whose next_run_at is due. Disable to run
+    # without in-app scheduling. Minimum scan interval is 30 seconds.
+    automation_scheduler_enabled: bool = True
+    automation_scheduler_interval_seconds: int = 60
+
+    @field_validator("automation_scheduler_interval_seconds")
+    @classmethod
+    def validate_automation_scheduler_interval(cls, v: int) -> int:
+        if v < 30:
+            raise ValueError(
+                f"automation_scheduler_interval_seconds must be at least 30, got {v}"
             )
         return v
 

@@ -35,26 +35,89 @@ Artifacts are the outputs.
 
 ---
 
-## 3. Home Page Direction
+## 3. Home and Space Scope Model
 
-Home acts as the command center, not a module gallery.
+There are exactly two route scopes (`routeScopeForPath` in `src/core/navigation.tsx`):
 
-Home prioritizes:
-- **Needs attention** — pending proposals, unprocessed activity, failed runs, blocked tasks
-- **Quick input** — QuickCapture composer with mode tabs
-- **Continue working** — recent sessions and recent runs with status
-- **Pending review** — proposal inbox summary in the right sidebar
-- **Runtime status** — adapter health in the right sidebar
-- **Recent sessions / runs / captures** — recent items panel
+| Scope | Routes | Data source | Write target |
+|---|---|---|---|
+| `home` | `/`, `/home`, and neutral system surfaces (`/settings`) | `meApi` cross-space `/me/*` aggregate (no `space_id` param) | explicit `writeTargetSpaceId` (defaults to the user's **Personal Space**) |
+| `space` | `/spaces/:spaceId/*` (`…/today`, `…/activity`, `…/knowledge`, …) | space-scoped APIs bound to the URL's `:spaceId` | the active Space (the URL's `:spaceId`) |
 
-The module gallery (all enabled modules grouped by category) is secondary. It should not
-occupy the primary viewport on first load.
+**The active Space lives in the URL.** Space-scoped routes are `/spaces/:spaceId/<module>`;
+`activeSpaceId` is **derived from the route params** (`useMatch('/spaces/:spaceId/*')` in
+`SpaceContext`), never from local/`localStorage` state. This makes Space a first-class,
+deep-linkable, per-tab dimension and removes cross-tab interference. There is no imperative
+"set active space" — to switch Space you navigate to its URL. `preferredSpaceId`
+(active → last visited → default → personal) is the Space targeted when following a space link
+from a user-scoped surface. `localStorage` only remembers the last visited Space and the Home
+write target. Logical in-space paths are composed with `spacePath()` / `useSpaceNavigate` /
+`SpaceLink` (`src/core/spaceNav.tsx`); the API client's space header is synced from the URL
+before page effects run.
+
+Rules enforced by the frontend:
+
+- **Home is user-scoped, not a Space.** `/home` shows the cross-space command center and is
+  **never** filtered by the active Space. `activeSpaceId` is null on Home and only governs
+  `/spaces/:spaceId/*` routes.
+- **Home is not a Space Switcher option.** The switcher lists only real Spaces
+  (Personal / Family / Team). Selecting one navigates to `/spaces/:spaceId/today`; it never
+  mutates Home.
+- **Personal Space is a real data container, not the cross-space overview.** It uses the same
+  Space UI as any other Space and does not aggregate other spaces.
+- **Home writes show their target.** The floating Quick Capture always shows `Save to: <Space>`
+  (default Personal Space) — Home never writes silently.
+
+### Home (`/home`) — user-level Today Command Center
+
+Prioritizes, all cross-space with source-Space badges:
+- **Personal Assistant entry** — a space-aware entry point (memory, projects, wiki, captures,
+  runs, proposals). Opening expands into the Assistant surface; chat execution is not wired yet,
+  so it never fabricates a reply. It is labelled **Personal Assistant**, never "DirectChat".
+- **Needs attention** — pending proposals, assigned tasks, failed runs.
+- **Review packets** — pending proposals grouped/labelled by source Space; opening enters the
+  owning Space.
+- **Continue working** — recent runs and participation across spaces.
+- **Suggested actions** — derived from the real aggregate (never fabricated).
+- **Recent timeline** — cross-space pointers.
+- **Right panel** — pending review, active runs, your tasks (useful empty states).
+
+There is **no module gallery** on Home.
+
+### Space Today (`/spaces/:spaceId/today`) — space-scoped dashboard
+
+Mirrors Home's structure but limited to the active Space (`homeApi.summary`): today stats, the
+product-loop strip (recent runs / open tasks / pending proposals), pending review with quick
+accept/reject, intake, projects, providers, runtime, recent. Writes default to the active Space.
+
+---
+
+## 3a. Navigation Model
+
+Two stable tiers plus per-scene context (`src/core/navigation.tsx`, `src/components/shell/`):
+
+- **Global Rail** (`RAIL_ITEMS`) — narrow, icon-only desktop rail of major destinations, Home
+  first and stable: Home · Inbox · Review · Wiki · Tasks · Agents · Workspaces · Settings.
+  Collapsible/expandable. On mobile this becomes the bottom tab bar (`MOBILE_TAB_ITEMS`).
+- **Scene Sidebar** (`SCENES`) — second-level navigation for the current scene, changes by
+  scene (Inbox / Wiki / Review / Agents / Workspaces). Collapsible; when collapsed the expand
+  handle is shown in the main header next to the scene title (e.g. "☰ Wiki"). Home needs no
+  scene sidebar. On mobile it becomes a horizontal tab strip. Filter scenes (Inbox/Wiki/Review)
+  drive a single real, API-backed query param the page reads — no fabricated views.
+- **Right Inspector** — scene/object-specific and owned by individual pages, never an
+  app-level feature menu.
+
+The legacy single mixed sidebar, the "perspective" (personal-as-Space) model, the
+PersonalView-as-Space switcher entry, the module-gallery Home, the imperative
+`setActiveSpace`/`activeOperationalSpace*` context API, and `location.state` navigation handoffs
+(now `?open=` / `?draft=` URL params) have been removed. All navigation is URL-based.
 
 ---
 
 ## 4. Module Visibility Policy
 
-Implemented modules with backend support appear in the primary navigation and gallery.
+Implemented modules with backend support appear in the navigation (Global Rail and, where
+applicable, the scene sidebar). There is no module gallery.
 
 Unimplemented modules must not appear as clickable primary modules. Modules are hidden using
 `enabled: false, visible: false` in the frontend module registry
@@ -81,9 +144,11 @@ not be navigable.
 | Capabilities | Enabled | Developer tool |
 | Providers | Enabled | Functional |
 | Runtime (CLI Adapters) | Enabled | Functional |
-| Personal View | Enabled | Cross-space aggregation |
-| **Today** | `planned: true` | Home serves the command-center role; Today shows "soon" badge |
-| **Knowledge** | `enabled: false, visible: false` | Hidden until the frontend browser exists; backend API/model exists |
+| **Home** (user-scoped) | Enabled | Cross-space command center at `/home`; **not** a Space, not in the switcher |
+| **Today** (Space) | Enabled | Space-scoped dashboard at `/spaces/:spaceId/today` for the active Space |
+| **Inbox** (Activity) | Enabled | Capture intake (rail label "Inbox"; route `/activity`) |
+| **Review** (Proposals) | Enabled | Proposal review (rail label "Review"; route `/proposals`) |
+| **Wiki** (Knowledge) | Enabled | Structured knowledge browser (rail label "Wiki"; route `/knowledge`) |
 | **Cards** | `enabled: false, visible: false` | Hidden until backend spaced-repetition model exists |
 | Time | `planned: true` | Shows "soon" badge |
 
@@ -137,11 +202,19 @@ The frontend is ready for personal dogfooding. The core product loop is usable:
 
 **Non-blocking follow-ups (discovered during use):**
 
-- Home gallery can be collapsed or demoted further so the command-center content is primary.
-- Home can add stronger Needs Attention and Continue Working sections.
+- ✅ **Done:** Space-scoped routes are now URL-scoped (`/spaces/:spaceId/*`) and deep-linkable;
+  the active Space is read from the route, and all in-app navigation is URL-based (no
+  `location.state` handoffs). Accessing a Space the user can't see falls back to the preferred
+  Space. (Backend access control is the source of truth — a shared-Space URL is only viewable by
+  its members; non-members get the standard authz error, not silent space-switching.)
+- Cross-space Home aggregates are limited to what `/me/*` exposes (proposals, tasks, runs,
+  participation, timeline). "Captures waiting" / "review packets ready" / "cards due" per Space
+  need cross-space aggregate endpoints before they can appear on Home.
+- Quick Capture supports text and links; file/image drag-drop and voice are shown as
+  coming-soon (no upload endpoint yet).
+- Assistant chat execution is not wired; the Home Assistant is an entry point only.
 - Activity / Run / Artifact cross-linking can be improved (e.g., post-consolidate navigation
   to generated proposals; post-accept link to created memory record).
-- Sessions UI is functional but not a polished chat interface.
 - Board visibility notice can be added before heavier shared-space use.
 
 These are improvements to collect from real use, not pre-conditions for dogfooding.
@@ -167,7 +240,7 @@ These are improvements to collect from real use, not pre-conditions for dogfoodi
 
 | Module | Backend prerequisite |
 |---|---|
-| Knowledge | KnowledgeItem / KnowledgeRelation model + CRUD API |
+| Knowledge | KnowledgeItem / KnowledgeItemRelation + Source / KnowledgeItemSource model + CRUD API |
 | Cards | Spaced-repetition card model + review API |
 | Time | Time entry model + activity linkage |
 | Editor | File editor backend + save API |

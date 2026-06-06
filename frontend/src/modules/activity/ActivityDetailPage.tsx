@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { activityApi } from '../../api/client'
@@ -18,7 +19,7 @@ function fmt(dt: string) {
 
 export default function ActivityDetailPage() {
   const { activityId = '' } = useParams()
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [row, setRow] = useState<ActivityInboxRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [consolidating, setConsolidating] = useState(false)
@@ -26,7 +27,7 @@ export default function ActivityDetailPage() {
 
   useEffect(() => {
     if (!activityId) return
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setRow(null)
       setLoading(false)
       return
@@ -47,7 +48,7 @@ export default function ActivityDetailPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [activityId, activeOperationalSpaceId])
+  }, [activityId, activeSpaceId])
 
   async function doConsolidate() {
     if (!activityId) return
@@ -81,8 +82,8 @@ export default function ActivityDetailPage() {
 
       {!loading && !row && (
         <EmptyState
-          title={activeOperationalSpaceId ? 'Activity not found or not accessible' : 'No space selected'}
-          description={activeOperationalSpaceId
+          title={activeSpaceId ? 'Activity not found or not accessible' : 'No space selected'}
+          description={activeSpaceId
             ? 'This activity may not exist, or it may not be visible in your current space.'
             : 'Select an operational space to inspect this activity.'}
           action={
@@ -100,7 +101,7 @@ export default function ActivityDetailPage() {
             <h1 className="text-lg font-semibold tracking-tight">{row.title ?? row.source_type}</h1>
             <span className="text-xs text-muted-foreground">{fmt(row.created_at)}</span>
           </div>
-          <p className="text-xs text-muted-foreground">Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}</p>
+          <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
           <div className="flex flex-wrap gap-1.5 items-center">
             <Badge variant="secondary">{row.source_type.replace('_', ' ')}</Badge>
             <Badge variant="outline">{row.status.replace('_', ' ')}</Badge>

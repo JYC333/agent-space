@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { knowledgeApi } from '../../api/client'
@@ -18,10 +19,10 @@ import { getKnowledgeDisplayName } from './display'
 
 export default function KnowledgeDetailPage() {
   const { itemId = '' } = useParams()
-  const { activeOperationalSpaceId, activeOperationalSpaceName, spaces } = useSpace()
+  const { activeSpaceId, activeSpaceName, spaces } = useSpace()
   const activeSpace = useMemo(
-    () => spaces.find(s => s.id === activeOperationalSpaceId) ?? null,
-    [spaces, activeOperationalSpaceId],
+    () => spaces.find(s => s.id === activeSpaceId) ?? null,
+    [spaces, activeSpaceId],
   )
   const displayName = getKnowledgeDisplayName(activeSpace)
   const [item, setItem] = useState<KnowledgeItem | null>(null)
@@ -47,7 +48,7 @@ export default function KnowledgeDetailPage() {
   }, [])
 
   const loadItem = useCallback(async () => {
-    if (!itemId || !activeOperationalSpaceId) {
+    if (!itemId || !activeSpaceId) {
       setItem(null)
       setRelations([])
       setLoadingItem(false)
@@ -69,7 +70,7 @@ export default function KnowledgeDetailPage() {
     } finally {
       setLoadingItem(false)
     }
-  }, [activeOperationalSpaceId, itemId, loadRelations])
+  }, [activeSpaceId, itemId, loadRelations])
 
   useEffect(() => { loadItem() }, [loadItem])
 
@@ -96,9 +97,9 @@ export default function KnowledgeDetailPage() {
 
       {loadingItem && <Skeleton className="h-48 w-full" />}
 
-      {!loadingItem && (!activeOperationalSpaceId || notFound || !item) && (
+      {!loadingItem && (!activeSpaceId || notFound || !item) && (
         <Card className="p-8 text-center text-sm text-muted-foreground">
-          {activeOperationalSpaceId
+          {activeSpaceId
             ? 'Knowledge item not found or not authorized.'
             : 'Select an operational space to inspect this knowledge item.'}
         </Card>
@@ -108,8 +109,8 @@ export default function KnowledgeDetailPage() {
         <>
           <KnowledgeDetailHeader
             item={item}
-            activeOperationalSpaceName={activeOperationalSpaceName}
-            activeOperationalSpaceId={activeOperationalSpaceId}
+            activeSpaceName={activeSpaceName}
+            activeSpaceId={activeSpaceId}
             archiving={archiving}
             onArchive={submitArchiveProposal}
           />

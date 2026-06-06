@@ -7,7 +7,14 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..models import AgentVersion, Credential, ModelProvider, Run
+from ..models import (
+    AgentVersion,
+    AutomationCredentialGrant,
+    AutomationRun,
+    Credential,
+    ModelProvider,
+    Run,
+)
 from ..policy.gateway import PolicyCheckRequest
 from ..runtimes.requirements import RuntimeRequirements
 from .adapter_resolution import ResolvedRuntimeAdapter
@@ -209,11 +216,36 @@ def resolve_runtime_credential_policy_metadata(
     return None
 
 
+def automation_credential_preauthorized(db: Session, run: Run) -> bool:
+    """True if an active AutomationCredentialGrant pre-authorizes this run's credential use.
+
+    Only meaningful for automation-origin runs (Option A, ADR 0010 + automation policy).
+    Resolves the firing automation via the AutomationRun link and checks for an active,
+    same-space grant. Cross-space credential use is denied elsewhere regardless.
+    """
+    if getattr(run, "trigger_origin", None) != "automation":
+        return False
+    link = db.query(AutomationRun).filter(AutomationRun.run_id == run.id).first()
+    if link is None:
+        return False
+    grant = (
+        db.query(AutomationCredentialGrant)
+        .filter(
+            AutomationCredentialGrant.space_id == run.space_id,
+            AutomationCredentialGrant.automation_id == link.automation_id,
+            AutomationCredentialGrant.status == "active",
+        )
+        .first()
+    )
+    return grant is not None
+
+
 def build_runtime_use_credential_policy_request(
     run: Run,
     credential_policy_subject: CredentialPolicySubject,
     runtime_policy_decision: RuntimePolicyDecision,
     adapter_type: str | None,
+    automation_pre_authorized: bool = False,
 ) -> PolicyCheckRequest:
     trigger_origin = getattr(run, "trigger_origin", "manual") or "manual"
     return PolicyCheckRequest(
@@ -227,6 +259,7 @@ def build_runtime_use_credential_policy_request(
         run_id=str(run.id),
         context={
             "trigger_origin": trigger_origin,
+            "automation_pre_authorized": automation_pre_authorized,
             "instructed_by_user_id": (
                 str(run.instructed_by_user_id)
                 if getattr(run, "instructed_by_user_id", None) else None
@@ -237,6 +270,7 @@ def build_runtime_use_credential_policy_request(
             "adapter_type": adapter_type,
             "has_model_provider": credential_policy_subject.has_model_provider,
             "trigger_origin": trigger_origin,
+            "automation_pre_authorized": automation_pre_authorized,
             "credential_space_id": credential_policy_subject.credential_space_id,
             "risk_level": runtime_policy_decision.risk_level,
             "data_exposure_level": getattr(run, "data_exposure_level", None),

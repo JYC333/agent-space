@@ -37,6 +37,11 @@ SOURCE_TYPE_ALIASES: dict[str, str] = {
     "imported_chat": "external_chat",
     "agent_run": "run_event",
     "task_log": "workspace_event",
+    # File and voice captures are stored as canonical ``file_import`` records; the
+    # specific capture kind is preserved in metadata (``capture_kind``). This avoids
+    # a new source-type vocabulary / DB check-constraint change.
+    "file_capture": "file_import",
+    "voice_capture": "file_import",
 }
 
 CANONICAL_SOURCE_TYPES = frozenset({
@@ -94,16 +99,16 @@ class ActivityService:
             user_id=user_id,
             workspace_id=workspace_id,
             agent_id=agent_id,
-            source_type=normalize_source_type(source_type),
+            activity_type=normalize_source_type(source_type),
             source_kind=normalize_source_type(source_type),
             title=title,
             content=content,
             source_run_id=source_run_id,
             source_task_id=source_task_id,
-            source_session_id=source_session_id,
+            session_id=source_session_id,
             source_url=source_url,
             status="raw",
-            metadata_json=metadata_json,
+            payload_json=metadata_json,
             occurred_at=occurred_at if occurred_at is not None else now,
             updated_at=now,
             owner_user_id=owner_user_id if owner_user_id is not None else user_id,
@@ -179,7 +184,7 @@ class ActivityService:
         if workspace_id:
             q = q.filter(ActivityRecord.workspace_id == workspace_id)
         if source_type:
-            q = q.filter(ActivityRecord.source_type == normalize_source_type(source_type))
+            q = q.filter(ActivityRecord.activity_type == normalize_source_type(source_type))
         if status:
             q = q.filter(ActivityRecord.status == status)
         rows = q.order_by(ActivityRecord.created_at.desc()).all()

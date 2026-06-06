@@ -27,7 +27,7 @@ const SUMMARY_ROWS: [string, keyof ContextPackage][] = [
 ]
 
 export default function ContextPreviewPage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [form, setForm] = useState<ContextForm>({ session_id: '', capability_id: '', query: '' })
   const [pkg, setPkg]   = useState<ContextPackage | null>(null)
   const [loading, setLoading] = useState(false)
@@ -35,7 +35,7 @@ export default function ContextPreviewPage() {
   function setField(k: keyof ContextForm, v: string) { setForm(f => ({ ...f, [k]: v })) }
 
   async function build() {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       toast.error('Select an operational space before building context')
       return
     }
@@ -67,7 +67,7 @@ export default function ContextPreviewPage() {
           <h1 className="text-xl font-semibold tracking-tight">Context Preview</h1>
           <p className="text-sm text-muted-foreground">Build and inspect context packages assembled for agent runs.</p>
           <p className="text-xs text-muted-foreground">
-            Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
+            Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}
           </p>
         </div>
       </div>
@@ -88,8 +88,8 @@ export default function ContextPreviewPage() {
           <Label>Query (optional — relevance search)</Label>
           <Input value={form.query} onChange={e => setField('query', e.target.value)} placeholder="What are you building?" />
         </div>
-        <Button onClick={build} disabled={loading || !activeOperationalSpaceId}>{loading ? 'Building…' : 'Build Context'}</Button>
-        {!activeOperationalSpaceId && (
+        <Button onClick={build} disabled={loading || !activeSpaceId}>{loading ? 'Building…' : 'Build Context'}</Button>
+        {!activeSpaceId && (
           <p className="text-xs text-muted-foreground mt-2">Select an operational space to build a context package.</p>
         )}
       </Card>

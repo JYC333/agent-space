@@ -27,6 +27,26 @@ export, and any raw context/prompt inspection remain separate gated reads.
 Cross-space trace reads return not found and must not reveal whether the run
 exists.
 
+## RunStep vs RunEvent — grain rule
+
+`RunStep` and `RunEvent` are intentionally kept as two tables with a strict
+division of responsibility. They must not duplicate the same payload:
+
+- **`RunEvent` is the append-only audit source of truth.** It carries the
+  detailed phase payload — `summary`, `metadata_json`, exposure/trust levels,
+  error codes — and is written only through `RunEventService` /
+  `safe_append_run_event`. Rows are never updated or deleted.
+- **`RunStep` is the coarse lifecycle/status projection.** A step carries only
+  `step_type`, `status`, `title`, structured FKs (runtime_adapter_id,
+  artifact_id, proposal_id, …), timing, and `error_type`/`error_message`.
+  Step writers (`create_step`, `record_artifact_step`, `record_proposal_step`,
+  `fail_step`, `complete_step`, `start_step`) must **not** receive
+  `metadata_json` or `*_summary` detail that already lives on a `RunEvent`.
+
+Rule of thumb: rich, queryable phase detail goes on `RunEvent`; a `RunStep` is a
+human-/UI-facing lifecycle marker. New orchestration code must not write the same
+detail to both.
+
 ## Durable Outputs
 
 - A run may produce an `Artifact`.

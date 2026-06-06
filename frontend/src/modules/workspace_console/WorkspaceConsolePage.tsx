@@ -290,7 +290,7 @@ type CenterView =
   | { mode: 'session'; session: ConsoleSession }
 
 export default function WorkspaceConsolePage() {
-  const { activeOperationalSpaceId, activeOperationalSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName } = useSpace()
 
   // ── Workspace state ──────────────────────────────────────────────────────
   const [workspaces, setWorkspaces]               = useState<WorkspaceInfo[]>([])
@@ -320,7 +320,7 @@ export default function WorkspaceConsolePage() {
 
   // ── Load workspaces + runtimes on mount ──────────────────────────────────
   useEffect(() => {
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       setWorkspaces([])
       setSelectedWs(null)
       setFileTree(null)
@@ -339,7 +339,7 @@ export default function WorkspaceConsolePage() {
       .then(r => setRuntimes(r.runtimes))
       .catch(() => {/* non-fatal */})
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeOperationalSpaceId])
+  }, [activeSpaceId])
 
   // ── Load file tree + git status when workspace changes ───────────────────
   const loadTree = useCallback(async (ws: WorkspaceInfo) => {
@@ -421,7 +421,7 @@ export default function WorkspaceConsolePage() {
   // ── Run / continue session ────────────────────────────────────────────────
   async function handleRun() {
     if (!prompt.trim()) return
-    if (!activeOperationalSpaceId) {
+    if (!activeSpaceId) {
       toast.error('Select an operational space before running a console session')
       return
     }
@@ -505,7 +505,7 @@ export default function WorkspaceConsolePage() {
         </div>
         <h1 className="text-sm font-semibold">Workspace Console</h1>
         <span className="text-[10px] text-muted-foreground hidden md:inline">
-          Viewing: {activeOperationalSpaceName ?? activeOperationalSpaceId ?? 'No operational space selected'}
+          Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}
         </span>
 
         {/* Workspace selector */}
@@ -736,7 +736,7 @@ export default function WorkspaceConsolePage() {
               onChange={e => setPrompt(e.target.value)}
               placeholder={selectedWs ? "Describe what you want the agent to do…" : "Select or create a workspace first…"}
               rows={4}
-              disabled={!selectedWs || !activeOperationalSpaceId}
+              disabled={!selectedWs || !activeSpaceId}
               className="w-full text-xs bg-background border border-border rounded px-2.5 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 disabled:opacity-50 disabled:cursor-not-allowed"
               onKeyDown={e => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !running && selectedWs) {
@@ -749,7 +749,7 @@ export default function WorkspaceConsolePage() {
               <Button
                 size="sm"
                 className="flex-1 h-7 text-xs"
-                disabled={!selectedWs || !activeOperationalSpaceId || !prompt.trim() || running}
+                disabled={!selectedWs || !activeSpaceId || !prompt.trim() || running}
                 onClick={handleRun}
               >
                 {running ? (

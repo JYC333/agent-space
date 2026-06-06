@@ -17,11 +17,14 @@ baseline rows the running app needs; it never creates or mutates schema.
 from __future__ import annotations
 
 import logging
+import uuid
 
 from sqlalchemy.orm import Session
 
+from .agents.template_seeder import seed_system_templates
 from .execution_planes.seeder import seed_default_execution_planes
 from .models import Space, SpaceMembership, User
+from .spaces.defaults import personal_space_id_for_owner
 
 log = logging.getLogger(__name__)
 
@@ -29,12 +32,13 @@ log = logging.getLogger(__name__)
 def bootstrap_instance(
     db: Session,
     *,
-    space_id: str,
     user_id: str,
     seed_execution_planes: bool = True,
 ) -> dict[str, bool]:
-    """Idempotently ensure the default space/user/membership (+ execution planes).
+    """Idempotently ensure the default user + their personal space (+ planes).
 
+    The default space is the owner's personal space, created with a generated
+    UUID and located by owner membership — there is no fixed/magic space id.
     Returns a summary dict marking which rows were created on this call. Existing
     rows are left untouched, so calling this on every startup is safe.
     """
@@ -43,7 +47,12 @@ def bootstrap_instance(
         "user": False,
         "membership": False,
         "execution_planes": False,
+        "system_templates": False,
     }
+
+    # System agent templates are global factories (no space/owner) — seed them
+    # once, idempotently, independent of any space.
+    created["system_templates"] = seed_system_templates(db) > 0
 
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
@@ -53,8 +62,10 @@ def bootstrap_instance(
     # Ensure the referenced owner user exists before inserting the space.
     db.flush()
 
-    space = db.query(Space).filter(Space.id == space_id).first()
-    if space is None:
+    # Find the owner's existing personal space, or mint a new one with a UUID.
+    space_id = personal_space_id_for_owner(db, user_id)
+    if space_id is None:
+        space_id = str(uuid.uuid4())
         db.add(
             Space(
                 id=space_id,

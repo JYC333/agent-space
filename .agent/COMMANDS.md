@@ -162,7 +162,6 @@ development `POSTGRES_PASSWORD` values. Key vars:
 | `ANTHROPIC_API_KEY` | — | Optional credential-broker API-key file env for `claude_code` |
 | `OPENAI_API_KEY` | — | Optional credential-broker API-key file env for `codex_cli` |
 | `DATABASE_URL` | postgresql+psycopg://... | Set by docker-compose; PostgreSQL is required |
-| `DEFAULT_SPACE_ID` | `personal` | |
-| `DEFAULT_USER_ID` | `default_user` | |
+| `DEFAULT_USER_ID` | `default_user` | Bootstrap owner; the default space is this owner's personal space (a generated UUID, no fixed space id) |
 | `REFLECTOR_MODE` | `pattern` | Set to `llm` to enable AI reflection |
 | `MAX_CONCURRENT_DOCKER_RUNS` | `3` | Sandbox concurrency cap |

@@ -6,15 +6,13 @@ import { ThemeProvider } from './contexts/ThemeContext'
 import { TooltipProvider } from './components/ui/tooltip'
 import Shell from './core/Shell'
 import ErrorBoundary from './core/ErrorBoundary'
-import { MODULE_REGISTRY } from './modules/registry'
+import { MODULE_REGISTRY, type Module } from './modules/registry'
 import { Skeleton } from './components/ui/skeleton'
 import LoginPage from './pages/LoginPage'
 import AcceptInvitationPage from './pages/AcceptInvitationPage'
 import { useAuth } from './contexts/AuthContext'
-import { useSpace } from './contexts/SpaceContext'
 
-const HomeGalleryPage = lazy(() => import('./modules/home/HomeGalleryPage'))
-const PersonalViewPage = lazy(() => import('./modules/personal/PersonalViewPage'))
+const HomePage = lazy(() => import('./modules/home/HomePage'))
 
 function PageLoader() {
   return (
@@ -49,61 +47,55 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-function PerspectiveIndex() {
-  const { perspective } = useSpace()
-  return perspective === 'personal' ? <PersonalViewPage /> : <HomeGalleryPage />
+/** A registered module rendered as a route element. */
+function moduleRoute({ path, component: Page, hasSubRoutes }: Module) {
+  const routePath = hasSubRoutes ? path.replace(/^\//, '') + '/*' : path.replace(/^\//, '')
+  return (
+    <Route
+      key={path}
+      path={routePath}
+      element={<SuspensePage><Page /></SuspensePage>}
+    />
+  )
 }
+
+// Space-scoped modules live under /spaces/:spaceId/…; neutral system surfaces stay top-level.
+const SPACE_MODULES = MODULE_REGISTRY.filter(m => m.perspectiveType === 'space-scoped')
+const TOP_LEVEL_MODULES = MODULE_REGISTRY.filter(m => m.perspectiveType !== 'space-scoped')
 
 export default function App() {
   return (
     <ThemeProvider>
     <AuthProvider>
-      <SpaceProvider>
-        <TooltipProvider delayDuration={400}>
-          <BrowserRouter>
+      <BrowserRouter>
+        <SpaceProvider>
+          <TooltipProvider delayDuration={400}>
             <Routes>
               {/* Public routes — outside Shell */}
               <Route path="/login" element={<LoginPage />} />
               <Route path="/invitations/:token" element={<AcceptInvitationPage />} />
 
               <Route path="/" element={<RequireAuth><Shell /></RequireAuth>}>
-                {/* Home / App Gallery — default landing */}
-                <Route
-                  index
-                  element={
-                    <SuspensePage>
-                      <PerspectiveIndex />
-                    </SuspensePage>
-                  }
-                />
-                <Route
-                  path="personal"
-                  element={
-                    <SuspensePage>
-                      <PersonalViewPage />
-                    </SuspensePage>
-                  }
-                />
+                {/* Default landing → user-scoped Home (not a Space) */}
+                <Route index element={<Navigate to="/home" replace />} />
+                <Route path="home" element={<SuspensePage><HomePage /></SuspensePage>} />
 
-                {/* Module pages — auto-registered from MODULE_REGISTRY */}
-                {MODULE_REGISTRY.map(({ path, component: Page, hasSubRoutes }) => (
-                  <Route
-                    key={path}
-                    path={hasSubRoutes
-                      ? path.replace(/^\//, '') + '/*'
-                      : path.replace(/^\//, '')}
-                    element={
-                      <SuspensePage>
-                        <Page />
-                      </SuspensePage>
-                    }
-                  />
-                ))}
+                {/* Neutral, user-level system surfaces — never carry a Space in the URL. */}
+                {TOP_LEVEL_MODULES.map(moduleRoute)}
+
+                {/* Space-scoped workspace — every module here operates on the URL's Space. */}
+                <Route path="spaces/:spaceId">
+                  <Route index element={<Navigate to="today" replace />} />
+                  {SPACE_MODULES.map(moduleRoute)}
+                </Route>
+
+                {/* Unknown paths fall back to Home. */}
+                <Route path="*" element={<Navigate to="/home" replace />} />
               </Route>
             </Routes>
-          </BrowserRouter>
-        </TooltipProvider>
-      </SpaceProvider>
+          </TooltipProvider>
+        </SpaceProvider>
+      </BrowserRouter>
     </AuthProvider>
     </ThemeProvider>
   )

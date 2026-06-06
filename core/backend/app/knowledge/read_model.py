@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-from ..models import KnowledgeItem, KnowledgeRelation
-from .schemas import KnowledgeItemOut, KnowledgeItemSummaryOut, KnowledgeRelationOut
+from ..models import KnowledgeItem, KnowledgeItemRelation, KnowledgeItemSource, Source
+from .schemas import (
+    KnowledgeItemOut,
+    KnowledgeItemRelationOut,
+    KnowledgeItemSourceOut,
+    KnowledgeItemSummaryOut,
+    SourceOut,
+    SourceSummaryOut,
+)
 
 
 def _preview(content: str, *, limit: int = 240) -> str:
@@ -30,7 +37,6 @@ def knowledge_item_to_out(item: KnowledgeItem) -> KnowledgeItemOut:
         tags=list(item.tags_json or []),
         confidence=item.confidence,
         source_url=item.source_url,
-        source_refs=list(item.source_refs_json or []),
         owner_user_id=item.owner_user_id,
         created_by_user_id=item.created_by_user_id,
         created_by_agent_id=item.created_by_agent_id,
@@ -66,8 +72,8 @@ def knowledge_item_to_summary_out(item: KnowledgeItem) -> KnowledgeItemSummaryOu
     )
 
 
-def knowledge_relation_to_out(relation: KnowledgeRelation) -> KnowledgeRelationOut:
-    return KnowledgeRelationOut(
+def knowledge_item_relation_to_out(relation: KnowledgeItemRelation) -> KnowledgeItemRelationOut:
+    return KnowledgeItemRelationOut(
         id=relation.id,
         space_id=relation.space_id,
         from_item_id=relation.from_item_id,
@@ -75,11 +81,60 @@ def knowledge_relation_to_out(relation: KnowledgeRelation) -> KnowledgeRelationO
         relation_type=relation.relation_type,  # type: ignore[arg-type]
         status=relation.status,  # type: ignore[arg-type]
         confidence=relation.confidence,
-        evidence_summary=relation.evidence_summary,
+        note=relation.note,
         source_proposal_id=relation.source_proposal_id,
         created_by_user_id=relation.created_by_user_id,
         created_by_agent_id=relation.created_by_agent_id,
         created_from_assessment_id=relation.created_from_assessment_id,
         created_at=relation.created_at,
         updated_at=relation.updated_at,
+    )
+
+
+def source_to_out(source: Source) -> SourceOut:
+    return SourceOut(
+        id=source.id,
+        space_id=source.space_id,
+        source_type=source.source_type,  # type: ignore[arg-type]
+        title=source.title,
+        uri=source.uri,
+        content_ref=source.content_ref,
+        raw_text=source.raw_text,
+        summary=source.summary,
+        metadata=dict(source.metadata_json or {}),
+        status=source.status,  # type: ignore[arg-type]
+        source_activity_id=source.source_activity_id,
+        created_by_user_id=source.created_by_user_id,
+        created_at=source.created_at,
+        updated_at=source.updated_at,
+    )
+
+
+def source_to_summary_out(source: Source) -> SourceSummaryOut:
+    return SourceSummaryOut(
+        id=source.id,
+        space_id=source.space_id,
+        source_type=source.source_type,  # type: ignore[arg-type]
+        title=source.title,
+        uri=source.uri,
+        status=source.status,  # type: ignore[arg-type]
+        source_activity_id=source.source_activity_id,
+        created_at=source.created_at,
+        updated_at=source.updated_at,
+    )
+
+
+def knowledge_item_source_to_out(link: KnowledgeItemSource) -> KnowledgeItemSourceOut:
+    return KnowledgeItemSourceOut(
+        id=link.id,
+        space_id=link.space_id,
+        knowledge_item_id=link.knowledge_item_id,
+        source_id=link.source_id,
+        relation_type=link.relation_type,  # type: ignore[arg-type]
+        locator=link.locator,
+        quote=link.quote,
+        note=link.note,
+        confidence=link.confidence,
+        created_by_user_id=link.created_by_user_id,
+        created_at=link.created_at,
     )

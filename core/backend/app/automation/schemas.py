@@ -116,6 +116,8 @@ class AutomationOut(BaseModel):
     status: str
     preflight_snapshot_json: Optional[dict]
     config_json: Optional[dict]
+    next_run_at: Optional[datetime] = None
+    last_fired_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
