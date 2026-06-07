@@ -672,6 +672,7 @@ class ProposalAcceptOut(BaseModel):
         "egress_review",
         "follow_up_task",
         "agent_version",
+        "capability_overlay",
         "knowledge_item",
         "knowledge_relation",
     ]

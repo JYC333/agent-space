@@ -36,9 +36,9 @@ def normalize_database_url(v: str) -> str:
 # dev/, test/, prod/ mode dirs (that host-side parent is ASPACE_ROOT, used only
 # by scripts/). In the Docker backend container it is the bind mount /aspace;
 # for a direct local backend run it is a concrete mode root such as
-# $HOME/aspace/dev. Defaults to ~/aspace when unset.
+# $HOME/.aspace/dev. Defaults to ~/.aspace when unset.
 _ASPACE_HOME = Path(
-    os.getenv("AGENT_SPACE_HOME", str(Path.home() / "aspace"))
+    os.getenv("AGENT_SPACE_HOME", str(Path.home() / ".aspace"))
 ).expanduser().resolve()
 
 

@@ -8,7 +8,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-agent_space_dev_password}
       - PGDATA=/var/lib/postgresql/data
     volumes:
-      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/dev}/db/postgres:/var/lib/postgresql/data
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/dev}/db/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_space} -d ${POSTGRES_DB:-agent_space}"]
       interval: 5s
@@ -30,12 +30,12 @@ services:
       - ../../core/backend/alembic.ini:/app/alembic.ini:ro
       - ../../core/backend/migrations:/app/migrations:ro
       - ../../core/agent_templates:/app/agent_templates:ro
-      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/dev}:/aspace
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/dev}:/aspace
       - claude-home:/home/agentspace/.claude
     group_add:
       - "${DOCKER_GID:-989}"
     env_file:
-      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/dev}/.env
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/dev}/.env
     environment:
       - AGENT_SPACE_HOME=/aspace
       - INSTANCE_ROOT=/aspace
@@ -78,7 +78,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../../:/repo:rw
-      - ${AGENT_SPACE_MODE_ROOT:-$HOME/aspace/dev}:/aspace
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/dev}:/aspace
     user: "1000:989"
     environment:
       - DEPLOYER_SOCKET=/aspace/run/deployer.sock

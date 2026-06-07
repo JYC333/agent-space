@@ -50,11 +50,15 @@ EXPECTED_INTERNAL_FKS = {
 
 SOFT_REFERENCE_ALLOWLIST = {
     ("auth_accounts", "provider_user_id"): "External identity-provider subject, not an internal row.",
+    ("capability_overlays", "scope_id"): "Polymorphic capability overlay scope keyed by scope_type.",
+    ("capability_versions", "scope_id"): "Polymorphic capability version scope keyed by scope_type.",
     ("cli_credential_events", "credential_profile_id"): "Credential profile IDs are external CLI profile names.",
     ("context_digests", "scope_id"): "Polymorphic digest scope keyed by digest_type.",
     ("context_snapshot_items", "item_id"): "Polymorphic context item keyed by item_type; references memory, knowledge_item, source, etc.",
     ("context_digests", "created_from_run_id"): "Optional provenance retained even if the run is pruned.",
     ("evidence_links", "target_id"): "Polymorphic evidence target keyed by target_type.",
+    ("evolution_signals", "source_id"): "Polymorphic evolution signal source keyed by source_type.",
+    ("evolution_targets", "target_ref_id"): "Polymorphic evolution target reference keyed by target_ref_type.",
     ("external_run_records", "vendor_run_id"): "External vendor/platform run identifier.",
     ("extracted_evidence", "source_object_id"): "Polymorphic source keyed by source_object_type.",
     ("extraction_jobs", "source_object_id"): "Polymorphic extraction source keyed by source_object_type.",

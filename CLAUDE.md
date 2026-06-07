@@ -19,7 +19,7 @@ within a single deployment instance. FastAPI backend with PostgreSQL, React fron
   docs/                   Architecture documentation
   scripts/                Utility scripts (start.sh)
 
-~/aspace/               ← ASPACE_ROOT: host-side parent holding the mode roots (override with ASPACE_ROOT)
+~/.aspace/               ← ASPACE_ROOT: host-side parent holding the mode roots (override with ASPACE_ROOT)
   dev/                  ← default mode root (./scripts/start.sh); bind-mounted as /aspace in Docker
     .env                  created from deployments/local/.env.dev.example on first run
     config/ db/ logs/ …   app-created dirs under this mode tree
@@ -31,25 +31,25 @@ secrets, db files, or logs. Two environment variables control data layout, and t
 different things:
 
 - **`ASPACE_ROOT`** (scripts only) — the host-side parent directory that holds the
-  `dev/`, `test/`, `prod/` mode roots. Default `~/aspace`. `scripts/start.sh` derives a
+  `dev/`, `test/`, `prod/` mode roots. Default `~/.aspace`. `scripts/start.sh` derives a
   mode root as `$ASPACE_ROOT/<mode>` and never treats `AGENT_SPACE_HOME` as this parent.
 - **`AGENT_SPACE_HOME`** (the running app instance root) — the single data root for the
   currently running environment. In Docker backend containers it is the bind mount
   **`/aspace`**; for a direct local backend run it is a concrete mode root such as
-  `$HOME/aspace/dev`. It is **never** the parent that contains `dev/`/`test/`/`prod/`.
+  `$HOME/.aspace/dev`. It is **never** the parent that contains `dev/`/`test/`/`prod/`.
 
 ## Starting the system
 
 ```bash
 ./scripts/start.sh           # Docker Compose — dev (default): backend + frontend + deployer
-./scripts/start.sh --test    # isolated test ports; data under ~/aspace/test
+./scripts/start.sh --test    # isolated test ports; data under ~/.aspace/test
 ./scripts/start.sh --prod
 ./scripts/start.sh --build   # Docker Compose with image rebuild
 ```
 
-On first run, `start.sh` creates `~/aspace/<mode>/` and copies the matching template
+On first run, `start.sh` creates `~/.aspace/<mode>/` and copies the matching template
 (`deployments/local/.env.dev.example`, `.env.test.example`, or `.env.prod.example`) to
-`~/aspace/<mode>/.env` when missing. Edit that file to set credentials, then re-run.
+`~/.aspace/<mode>/.env` when missing. Edit that file to set credentials, then re-run.
 For `--prod`, replace the placeholder `POSTGRES_PASSWORD`; startup rejects empty,
 placeholder, and development passwords. The `.env` file is never stored in the repo.
 All local DB/system scripts use `scripts/lib/local-compose.sh` for the same mode/env
@@ -67,7 +67,7 @@ Without Docker, set the data root to a **mode directory** so paths match compose
 
 ```bash
 cd core/backend
-export AGENT_SPACE_HOME="$HOME/aspace/dev"
+export AGENT_SPACE_HOME="$HOME/.aspace/dev"
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
@@ -127,7 +127,7 @@ python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v
 
 ```
 # Instance data root for the running environment (NOT the dev/test/prod parent).
-# Docker backend: /aspace. Direct local backend run: a concrete mode root, e.g. $HOME/aspace/dev.
+# Docker backend: /aspace. Direct local backend run: a concrete mode root, e.g. $HOME/.aspace/dev.
 AGENT_SPACE_HOME=/aspace
 # LLM provider API keys are NOT env/config — users add them in the app (Providers page),
 # stored as encrypted ModelProvider Credentials (ADR 0010). The CLI runtime likewise gets
@@ -145,7 +145,7 @@ DEFAULT_USER_ID=default_user   # bootstrap owner; the default space is this owne
 # SANDBOX_ROOT=$AGENT_SPACE_HOME/sandboxes
 ```
 
-`scripts/` (host side) use `ASPACE_ROOT` (default `~/aspace`) as the parent that holds
+`scripts/` (host side) use `ASPACE_ROOT` (default `~/.aspace`) as the parent that holds
 `dev/`, `test/`, `prod/`, derive `MODE_ROOT="$ASPACE_ROOT/<mode>"`, and never source a
 mode `.env` as shell code just to read values.
 

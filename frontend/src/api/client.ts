@@ -19,6 +19,8 @@ import type {
   PersonalMemoryGrantCreateRequest, PersonalMemoryGrantResponse,
   PersonalMemoryGrantAuditResponse,
   EgressApprovalRequest, ProposalApprovalResponse,
+  EvolutionSummaryOut, EvolutionTarget, EvolutionTargetCreateBody, EvolutionTargetUpdateBody, EvolutionSignal, EvolutionSignalCreateBody,
+  EvolutionRunListItem, EvolutionRunResult, EvolutionProposal, EvolutionValidationResult,
   Project, ProjectCreate, ProjectUpdate, ProjectWorkspaceLinkCreate, ProjectWorkspaceLinkOut, ProjectSummary,
   SourceConnector, SourceConnection, SourceConnectionCreate, IntakeItem, ExtractionJob,
   ExtractedEvidence, EvidenceLink, WorkspaceIntakeProfile, WorkspaceSourceBinding,
@@ -369,6 +371,51 @@ export const proposalsApi = {
   reject: (id: string) => post<Proposal>(`/proposals/${id}/reject`),
   approveEgressGrantingUserProposal: (id: string, input: EgressApprovalRequest = {}) =>
     post<ProposalApprovalResponse>(`/proposals/${id}/approvals/egress-granting-user`, input),
+}
+
+// ── Evolution ─────────────────────────────────────────────────────────────
+export const evolutionApi = {
+  summary: () => get<EvolutionSummaryOut>('/evolution/summary'),
+  targets: (params: { status?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    const query = new URLSearchParams(q).toString()
+    return get<EvolutionTarget[]>(query ? `/evolution/targets?${query}` : '/evolution/targets')
+  },
+  createTarget: (body: EvolutionTargetCreateBody) =>
+    post<EvolutionTarget>('/evolution/targets', body),
+  target: (id: string) => get<EvolutionTarget>(`/evolution/targets/${id}`),
+  updateTarget: (id: string, body: EvolutionTargetUpdateBody) =>
+    patch<EvolutionTarget>(`/evolution/targets/${id}`, body),
+  signals: (params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<EvolutionSignal[]>('/evolution/signals?' + new URLSearchParams(q))
+  },
+  targetSignals: (targetId: string, params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<EvolutionSignal[]>(`/evolution/targets/${targetId}/signals?` + new URLSearchParams(q))
+  },
+  createSignal: (targetId: string, body: EvolutionSignalCreateBody) =>
+    post<EvolutionSignal>(`/evolution/targets/${targetId}/signals`, body),
+  runs: (params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<EvolutionRunListItem[]>('/evolution/runs?' + new URLSearchParams(q))
+  },
+  runTarget: (targetId: string, body: { engine?: string } = {}) =>
+    post<EvolutionRunResult>(`/evolution/targets/${targetId}/run`, body),
+  proposals: (params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<EvolutionProposal[]>('/evolution/proposals?' + new URLSearchParams(q))
+  },
+  validation: () => get<EvolutionValidationResult[]>('/evolution/validation'),
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────

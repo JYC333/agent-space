@@ -28,7 +28,7 @@ from ..visibility.auth import can_read_scoped_object
 
 
 _VALID_MODES = {"live", "dry_run"}
-_VALID_RUN_TYPES = {"agent", "system", "workflow", "validation", "reflection", "export"}
+_VALID_RUN_TYPES = {"agent", "system", "workflow", "validation", "reflection", "export", "evolution"}
 _VALID_TRIGGER_ORIGINS = {"manual", "automation", "job", "system"}
 _TERMINAL_STATUSES = {"succeeded", "failed", "degraded", "cancelled"}
 _STOPABLE_STATUSES = {"queued", "running", "waiting_for_review"}

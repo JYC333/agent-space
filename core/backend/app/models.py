@@ -1328,7 +1328,7 @@ class Run(Base):
         ),
         CheckConstraint("mode in ('live', 'dry_run')", name="ck_runs_mode"),
         CheckConstraint(
-            "run_type in ('agent', 'system', 'workflow', 'validation', 'reflection', 'export')",
+            "run_type in ('agent', 'system', 'workflow', 'validation', 'reflection', 'export', 'evolution')",
             name="ck_runs_run_type",
         ),
         CheckConstraint(
@@ -1684,6 +1684,159 @@ class ProposalApproval(Base):
             postgresql_where=text("status = 'approved'"),
         ),
         Index("ix_proposal_approvals_created_at", "created_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Evolution substrate — targets, signals, and scoped capability artifacts
+# ---------------------------------------------------------------------------
+
+
+class CapabilityVersion(Base):
+    """Proposal-approved capability artifact version.
+
+    Core capability manifests remain file-defined defaults. Rows here represent
+    scoped forks or imported/manual/evolved artifacts and point at artifact
+    storage rather than embedding large prompt bodies.
+    """
+
+    __tablename__ = "capability_versions"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    capability_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    scope_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    parent_version_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("capability_versions.id", name="fk_capability_versions_parent_version_id"),
+        nullable=True,
+        index=True,
+    )
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="evolution", index=True)
+    artifact_uri: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    content_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft", index=True)
+    proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    parent_version: Mapped[Optional["CapabilityVersion"]] = relationship("CapabilityVersion", remote_side="CapabilityVersion.id")
+
+    __table_args__ = (
+        Index(
+            "ix_capability_versions_key_scope_status",
+            "capability_key",
+            "scope_type",
+            "scope_id",
+            "status",
+        ),
+    )
+
+
+class CapabilityOverlay(Base):
+    """Scoped capability overlay layered over a core/default capability version."""
+
+    __tablename__ = "capability_overlays"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    capability_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    scope_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    base_version_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("capability_versions.id", name="fk_capability_overlays_base_version_id"),
+        nullable=True,
+        index=True,
+    )
+    overlay_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    patch_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft", index=True)
+    proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    base_version: Mapped[Optional[CapabilityVersion]] = relationship("CapabilityVersion")
+
+    __table_args__ = (
+        Index(
+            "ix_capability_overlays_key_scope_status",
+            "capability_key",
+            "scope_type",
+            "scope_id",
+            "status",
+        ),
+    )
+
+
+class EvolutionTarget(Base):
+    """Product/system object that can receive evolution signals and proposals."""
+
+    __tablename__ = "evolution_targets"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=True, index=True)
+    target_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_ref_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    target_ref_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    capability_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    current_version_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("capability_versions.id", name="fk_evolution_targets_current_version_id"),
+        nullable=True,
+        index=True,
+    )
+    risk_level: Mapped[str] = mapped_column(String(32), nullable=False, default="medium", index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    engine_policy_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    current_version: Mapped[Optional[CapabilityVersion]] = relationship("CapabilityVersion")
+    signals: Mapped[list["EvolutionSignal"]] = relationship("EvolutionSignal", back_populates="target")
+
+    __table_args__ = (
+        Index(
+            "ix_evolution_targets_space_type_ref_status",
+            "space_id",
+            "target_type",
+            "target_ref_id",
+            "status",
+        ),
+    )
+
+
+class EvolutionSignal(Base):
+    """Queryable evidence that an evolution target may need improvement."""
+
+    __tablename__ = "evolution_signals"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[Optional[str]] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=True, index=True)
+    target_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("evolution_targets.id"), nullable=False, index=True)
+    signal_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="medium", index=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    target: Mapped[EvolutionTarget] = relationship("EvolutionTarget", back_populates="signals")
+
+    __table_args__ = (
+        Index(
+            "ix_evolution_signals_space_target_type_created",
+            "space_id",
+            "target_id",
+            "signal_type",
+            "created_at",
+        ),
     )
 
 

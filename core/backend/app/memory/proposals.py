@@ -22,7 +22,19 @@ from sqlalchemy import and_, case, func, not_, or_
 from sqlalchemy.orm.attributes import flag_modified
 
 from ..db_uow import UnitOfWork
-from ..models import AgentVersion, KnowledgeItem, KnowledgeItemRelation, MemoryEntry, Policy, Proposal, Run, Task, Workspace
+from ..models import (
+    AgentVersion,
+    CapabilityOverlay,
+    CapabilityVersion,
+    KnowledgeItem,
+    KnowledgeItemRelation,
+    MemoryEntry,
+    Policy,
+    Proposal,
+    Run,
+    Task,
+    Workspace,
+)
 from ..param_binding import duplicate_mapper
 from ..policy.gateway import PolicyCheckRequest, PolicyGateway
 from ..projects.service import assert_project_in_space
@@ -47,6 +59,8 @@ class ProposalAcceptResult:
     egress_review: bool = False
     task: Optional[Task] = None
     agent_version: Optional[AgentVersion] = None
+    capability_version: Optional[CapabilityVersion] = None
+    capability_overlay: Optional[CapabilityOverlay] = None
     knowledge_item: Optional[KnowledgeItem] = None
     knowledge_relation: Optional[KnowledgeItemRelation] = None
 
@@ -1048,6 +1062,8 @@ class ProposalService:
             egress_review=result.egress_review,
             task=result.task,
             agent_version=result.agent_version,
+            capability_version=result.capability_version,
+            capability_overlay=result.capability_overlay,
             knowledge_item=result.knowledge_item,
             knowledge_relation=result.knowledge_relation,
         )

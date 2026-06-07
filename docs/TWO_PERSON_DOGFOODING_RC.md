@@ -126,7 +126,7 @@ No automation, connector marketplace, crawler, or self-evolution controls appear
 
 ## D. RC Config Requirements
 
-The following config must be set in `~/aspace/<mode>/.env` before dogfooding begins.
+The following config must be set in `~/.aspace/<mode>/.env` before dogfooding begins.
 
 ### Required backup config
 
@@ -178,14 +178,14 @@ Multi-user dogfooding requires each user to authenticate with their own credenti
 
 ### Where config lives
 
-- Host: `~/aspace/<mode>/.env` (never stored in the repo).
+- Host: `~/.aspace/<mode>/.env` (never stored in the repo).
 - In Docker: mounted at `/aspace/.env` through the Compose volume.
 - See `deployments/local/docker-compose.dev.yml` for volume mapping.
 
 ### Where runtime data lives
 
 ```
-AGENT_SPACE_HOME/          (default: ~/aspace/dev/)
+AGENT_SPACE_HOME/          (default: ~/.aspace/dev/)
   db/                      PostgreSQL data volume + pg_dump archives
   storage/                 Artifact storage files
   secrets/                 Encrypted provider key files
@@ -370,7 +370,7 @@ curl -s http://localhost:8000/api/v1/system/backups \
 
 Inspect the manifest:
 ```bash
-tar -xOf ~/aspace/dev/backups/manual-*.tar.gz backup_manifest.json | python3 -m json.tool
+tar -xOf ~/.aspace/dev/backups/manual-*.tar.gz backup_manifest.json | python3 -m json.tool
 # Expected: backup_format="agent-space-backup.v1", included_paths lists db/ etc.
 ```
 
@@ -564,11 +564,11 @@ Run this before first write session and periodically during dogfooding.
 ### Verify automatic backup is configured
 
 ```bash
-grep BACKUP_ENABLED ~/aspace/dev/.env
+grep BACKUP_ENABLED ~/.aspace/dev/.env
 # Expected: BACKUP_ENABLED=true
 
 # Check backend startup logs for scheduler confirmation
-grep "backup scheduler" ~/aspace/dev/logs/backend.log
+grep "backup scheduler" ~/.aspace/dev/logs/backend.log
 # Expected: "backup scheduler started"
 ```
 
@@ -584,7 +584,7 @@ curl -s -X POST http://localhost:8000/api/v1/system/backups/manual \
 **Offline full-system CLI (backend not running, postgres up):**
 ```bash
 scripts/system/backup.sh --mode dev
-# Archives to ~/aspace/dev/backups/system-<timestamp>.tar.gz
+# Archives to ~/.aspace/dev/backups/system-<timestamp>.tar.gz
 # Same archive format as BackupService (PostgreSQL snapshot + files + backup_manifest.json)
 ```
 
@@ -596,13 +596,13 @@ curl -s http://localhost:8000/api/v1/system/backups \
 # Expected: JSON list of archives with name, size, created_at
 
 # Or list on filesystem
-ls -lh ~/aspace/dev/backups/
+ls -lh ~/.aspace/dev/backups/
 ```
 
 ### Inspect backup_manifest.json
 
 ```bash
-ARCHIVE=$(ls ~/aspace/dev/backups/auto-*.tar.gz | tail -1)
+ARCHIVE=$(ls ~/.aspace/dev/backups/auto-*.tar.gz | tail -1)
 tar -xOf "$ARCHIVE" backup_manifest.json | python3 -m json.tool
 ```
 
@@ -628,7 +628,7 @@ docker compose -p agent-space-test -f deployments/local/docker-compose.test.yml 
 
 **Restore:**
 ```bash
-ARCHIVE=~/aspace/dev/backups/auto-<timestamp>.tar.gz
+ARCHIVE=~/.aspace/dev/backups/auto-<timestamp>.tar.gz
 
 # Full-system restore into the disposable test mode (database + files)
 scripts/system/restore.sh "$ARCHIVE" --mode test --force
@@ -640,7 +640,7 @@ scripts/system/restore.sh "$ARCHIVE" --mode test --force
 
 ```bash
 # The restore above targeted --mode test, so start that mode to verify it.
-# (start.sh derives the mode root from ASPACE_ROOT, default ~/aspace; it does not
+# (start.sh derives the mode root from ASPACE_ROOT, default ~/.aspace; it does not
 #  read AGENT_SPACE_HOME — that is the in-container instance root.)
 ./scripts/start.sh --test
 curl -s http://localhost:8100/health
@@ -705,7 +705,7 @@ docker compose -f deployments/local/docker-compose.dev.yml stop
 
 Before overwriting anything, copy the current data root:
 ```bash
-cp -a ~/aspace/dev ~/aspace/dev-pre-rollback-$(date +%Y%m%d-%H%M%S)
+cp -a ~/.aspace/dev ~/.aspace/dev-pre-rollback-$(date +%Y%m%d-%H%M%S)
 ```
 
 This preserves the failing state for incident analysis.
@@ -731,7 +731,7 @@ git reset --hard <known-good-commit>
 # Bring postgres back up so pg_restore can connect (the app stays stopped)
 docker compose -p agent-space-dev -f deployments/local/docker-compose.dev.yml up -d postgres
 
-ARCHIVE=$(ls ~/aspace/dev/backups/auto-*.tar.gz | sort | tail -2 | head -1)
+ARCHIVE=$(ls ~/.aspace/dev/backups/auto-*.tar.gz | sort | tail -2 | head -1)
 scripts/system/restore.sh "$ARCHIVE" --mode dev --force
 ```
 
@@ -740,7 +740,7 @@ already be corrupted).
 
 ### Step 7 — Disable implicated surface
 
-Edit `~/aspace/dev/.env` to disable the problematic surface:
+Edit `~/.aspace/dev/.env` to disable the problematic surface:
 ```bash
 # Examples:
 ENABLE_SYSTEM_EVOLUTION=false    # if self-evolution implicated

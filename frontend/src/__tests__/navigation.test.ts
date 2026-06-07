@@ -21,14 +21,25 @@ describe('navigation model', () => {
     expect(labels).not.toContain('my view')
     expect(labels).not.toContain('personalview')
     expect(labels).toEqual(expect.arrayContaining([
-      'home', 'inbox', 'review', 'wiki', 'tasks', 'agents', 'workspaces', 'settings',
+      'home', 'inbox', 'review', 'wiki', 'tasks', 'agents', 'evolution', 'workspaces', 'settings',
     ]))
+  })
+
+  it('places Evolution after Agents and before Workspaces without a badge model', () => {
+    const ids = RAIL_ITEMS.map(i => i.id)
+    expect(ids.indexOf('evolution')).toBe(ids.indexOf('agents') + 1)
+    expect(ids.indexOf('workspaces')).toBe(ids.indexOf('evolution') + 1)
+    const evolution = RAIL_ITEMS.find(i => i.id === 'evolution')
+    expect(evolution?.label).toBe('Evolution')
+    expect(evolution?.to).toBe('/evolution')
+    expect(evolution && 'badge' in evolution).toBe(false)
   })
 
   it('marks Home and Settings as user-scoped rail items and the rest as space-scoped', () => {
     const byId = Object.fromEntries(RAIL_ITEMS.map(i => [i.id, i.scope]))
     expect(byId.home).toBe('home')
     expect(byId.settings).toBe('home')
+    expect(byId.evolution).toBe('home')
     expect(byId.inbox).toBe('space')
     expect(byId.review).toBe('space')
     expect(byId.wiki).toBe('space')
@@ -46,6 +57,7 @@ describe('navigation model', () => {
     expect(sceneForPath('/spaces/x/workspaces')?.id).toBe('workspaces')
     // Home requires no scene sidebar.
     expect(sceneForPath('/home')).toBeNull()
+    expect(sceneForPath('/evolution')).toBeNull()
     expect(sceneForPath('/spaces/x/activity')?.id).not.toBe(sceneForPath('/spaces/x/knowledge')?.id)
   })
 })
@@ -60,6 +72,7 @@ describe('spacePath / stripSpacePrefix', () => {
   it('leaves user-scoped, already-scoped, and missing-space paths untouched', () => {
     expect(spacePath('team-1', '/home')).toBe('/home')
     expect(spacePath('team-1', '/settings')).toBe('/settings')
+    expect(spacePath('team-1', '/evolution')).toBe('/evolution')
     expect(spacePath('team-1', '/spaces/other/today')).toBe('/spaces/other/today')
     expect(spacePath(null, '/proposals')).toBe('/proposals')
   })

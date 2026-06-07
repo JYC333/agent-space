@@ -26,7 +26,7 @@ local_compose_init() {
   COMPOSE_DIR="$REPO_ROOT/deployments/local"
 
   # ASPACE_ROOT is the host-side parent of mode roots: dev/, test/, prod/.
-  ASPACE_ROOT="${ASPACE_ROOT:-$HOME/aspace}"
+  ASPACE_ROOT="${ASPACE_ROOT:-$HOME/.aspace}"
   ASPACE_ROOT="${ASPACE_ROOT/#\~/$HOME}"
   export ASPACE_ROOT
 

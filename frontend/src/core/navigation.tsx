@@ -1,5 +1,6 @@
 import {
   Home, Inbox, CheckCircle, BookOpen, ListTodo, Bot, Folder, Settings,
+  GitBranch,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -42,6 +43,7 @@ export const RAIL_ITEMS: RailItem[] = [
   { id: 'wiki',       label: 'Wiki',       to: '/knowledge',   icon: BookOpen,    scope: 'space' },
   { id: 'tasks',      label: 'Tasks',      to: '/tasks',       icon: ListTodo,    scope: 'space', mobile: true },
   { id: 'agents',     label: 'Agents',     to: '/agents',      icon: Bot,         scope: 'space' },
+  { id: 'evolution',  label: 'Evolution',  to: '/evolution',   icon: GitBranch,   scope: 'home' },
   { id: 'workspaces', label: 'Workspaces', to: '/workspaces',  icon: Folder,      scope: 'space' },
   { id: 'settings',   label: 'Settings',   to: '/settings',    icon: Settings,    scope: 'home',  footer: true },
 ]
@@ -174,7 +176,7 @@ export type RouteScope = 'home' | 'space'
  * Top-level paths that are NOT inside a Space, so they never get a `/spaces/:id` prefix.
  * Home is user-scoped (cross-space); Settings/Time/Cards are neutral system surfaces.
  */
-const USER_SCOPED_PREFIXES = ['/home', '/settings', '/time', '/cards', '/login']
+const USER_SCOPED_PREFIXES = ['/home', '/settings', '/time', '/cards', '/evolution', '/login']
 
 function isUserScopedPath(path: string): boolean {
   return USER_SCOPED_PREFIXES.some(p => path === p || path.startsWith(`${p}/`))

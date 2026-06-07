@@ -22,6 +22,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from .agents.template_seeder import seed_system_templates
+from .evolution.services import EvolutionTargetRegistry
 from .execution_planes.seeder import seed_default_execution_planes
 from .models import Space, SpaceMembership, User
 from .spaces.defaults import personal_space_id_for_owner
@@ -53,6 +54,7 @@ def bootstrap_instance(
     # System agent templates are global factories (no space/owner) — seed them
     # once, idempotently, independent of any space.
     created["system_templates"] = seed_system_templates(db) > 0
+    EvolutionTargetRegistry(db).ensure_default_target_for_capture_memory_extraction()
 
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:

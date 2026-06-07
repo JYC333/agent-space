@@ -1,0 +1,52 @@
+id: capture-memory-extraction
+name: Capture Memory Extraction
+version: "0.1.0"
+description: >
+  Extracts memory candidates from raw capture and produces proposal-first
+  memory updates. Core defaults are intentionally generic and must not include
+  individual user preferences.
+
+enabled: true
+
+entrypoint:
+  type: none
+
+memory_access:
+  read:
+    - scope: user
+      types: [preference, semantic, episodic, procedural, project]
+    - scope: system
+      types: [semantic]
+  write:
+    - scope: user
+      types: [preference, semantic, episodic, procedural, project]
+      requires_proposal: true
+
+tools: []
+
+permissions:
+  network:
+    allow: []
+  filesystem:
+    read: []
+    write: []
+  subprocess:
+    allow: false
+
+prompts:
+  main: prompts/main.md
+
+outputs:
+  artifact_types:
+    - memory.extraction.context.v1
+  proposal_types:
+    - memory_create
+    - memory_update
+
+validation:
+  metrics:
+    - memory_candidate_reject_rate
+    - memory_candidate_edit_rate
+    - exploration_misclassified_as_decision_count
+    - stable_preference_missed_count
+

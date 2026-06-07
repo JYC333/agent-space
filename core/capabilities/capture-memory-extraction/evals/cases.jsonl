@@ -1,0 +1,2 @@
+{"id":"exploration-not-memory","input":"Maybe we should try SQLite first, but I am not sure yet.","expected":{"classification":"unresolved_question","requires_proposal":false}}
+{"id":"accepted-decision-proposal","input":"Let's use Postgres for production. Please remember this decision.","expected":{"classification":"accepted_decision","requires_proposal":true}}

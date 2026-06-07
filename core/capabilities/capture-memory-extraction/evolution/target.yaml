@@ -1,0 +1,50 @@
+target_type: prompt
+capability_key: capture-memory-extraction
+risk_level: medium
+allowed_proposal_types:
+  - prompt_update
+allowed_engines:
+  - llm_prompt_review
+validation:
+  window: 14d
+  metrics:
+    - id: memory_candidate_reject_rate
+      label: Memory candidate reject rate
+      evaluator: rate
+      numerator:
+        source: signals
+        signal_type: memory_candidate_rejected
+      denominator:
+        source: signals
+        signal_type: memory_candidate_proposed
+      goal:
+        direction: decrease
+        threshold: 0.2
+    - id: memory_candidate_edit_rate
+      label: Memory candidate edit rate
+      evaluator: rate
+      numerator:
+        source: signals
+        signal_type: memory_candidate_edited
+      denominator:
+        source: signals
+        signal_type: memory_candidate_proposed
+      goal:
+        direction: decrease
+        threshold: 0.3
+    - id: exploration_misclassified_as_decision_count
+      label: Exploration misclassified as decision
+      evaluator: count_signals
+      source: signals
+      signal_type: exploration_misclassified_as_decision
+      goal:
+        direction: decrease
+        threshold: 0
+    - id: stable_preference_missed_count
+      label: Stable preference missed
+      evaluator: count_signals
+      source: signals
+      signal_type: stable_preference_missed
+      goal:
+        direction: decrease
+        threshold: 0

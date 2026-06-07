@@ -31,6 +31,7 @@ User input
 | `AgentService` | Agent CRUD + delegation policy enforcement |
 | `RunService` | Create and list queued Runs, link tasks, manage snapshots |
 | `RunExecutionService` | Adapter dispatch, sandbox routing, terminal status updates |
+| `EvolutionRunService` | Create proposal-first evolution runs, artifacts, and reviewable proposals without direct mutation |
 
 ## Agent kernel vs adapter boundary
 
@@ -60,6 +61,15 @@ Agents can delegate to other agents. The kernel enforces:
 - `agents` — agent profiles, model config, memory policy, runtime policy
 - `tasks` + `agent_runs` + `tool_calls` + `artifacts` — run logging
 - `approvals` — general-purpose approval records
+- `evolution_targets` + `evolution_signals` — product targets and evidence for reviewable evolution
+
+## Evolution Module
+
+Evolution is a first-level product module at `/evolution`. It reads
+`/api/v1/evolution` DTOs for overview counts, targets, signals, runs, proposals,
+and validation metrics. Triggering an evolution review creates a Run plus
+artifacts and a pending Proposal; it does not directly mutate prompts, memory,
+capabilities, policies, files, or code.
 
 ## Space model
 

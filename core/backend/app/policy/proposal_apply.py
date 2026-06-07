@@ -23,6 +23,7 @@ _PROPOSAL_TYPE_RISK: dict[str, RiskLevel] = {
     "policy_change": RiskLevel.HIGH,
     "egress_review": RiskLevel.HIGH,
     "agent_config_update": RiskLevel.HIGH,
+    "prompt_update": RiskLevel.MEDIUM,
     "knowledge_create": RiskLevel.MEDIUM,
     "knowledge_update": RiskLevel.MEDIUM,
     "knowledge_archive": RiskLevel.MEDIUM,

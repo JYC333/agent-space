@@ -753,7 +753,7 @@ def upgrade() -> None:
     sa.Column('externality_level', sa.String(length=32), nullable=True),
     sa.Column('project_id', sa.String(length=36), nullable=True),
     sa.CheckConstraint("mode in ('live', 'dry_run')", name='ck_runs_mode'),
-    sa.CheckConstraint("run_type in ('agent', 'system', 'workflow', 'validation', 'reflection', 'export')", name='ck_runs_run_type'),
+    sa.CheckConstraint("run_type in ('agent', 'system', 'workflow', 'validation', 'reflection', 'export', 'evolution')", name='ck_runs_run_type'),
     sa.CheckConstraint("status in ('queued', 'running', 'succeeded', 'degraded', 'failed', 'cancelled', 'waiting_for_review')", name='ck_runs_status'),
     sa.CheckConstraint("trigger_origin in ('manual', 'automation', 'job', 'system')", name='ck_runs_trigger_origin'),
     sa.CheckConstraint("required_sandbox_level in ('none', 'dry_run', 'worktree', 'one_shot_docker')", name='ck_runs_required_sandbox_level'),
@@ -1005,6 +1005,108 @@ def upgrade() -> None:
     op.create_index(op.f('ix_artifacts_source_execution_plane_id'), 'artifacts', ['source_execution_plane_id'], unique=False)
     op.create_index(op.f('ix_artifacts_space_id'), 'artifacts', ['space_id'], unique=False)
     op.create_index('ix_artifacts_project_id', 'artifacts', ['project_id'])
+    op.create_table('capability_versions',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('capability_key', sa.String(length=128), nullable=False),
+        sa.Column('scope_type', sa.String(length=32), nullable=False),
+        sa.Column('scope_id', sa.String(length=128), nullable=True),
+        sa.Column('parent_version_id', sa.String(length=36), nullable=True),
+        sa.Column('version', sa.String(length=64), nullable=False),
+        sa.Column('source', sa.String(length=32), nullable=False),
+        sa.Column('artifact_uri', sa.String(length=1024), nullable=True),
+        sa.Column('content_ref', sa.String(length=1024), nullable=True),
+        sa.Column('content_hash', sa.String(length=128), nullable=True),
+        sa.Column('status', sa.String(length=32), nullable=False),
+        sa.Column('proposal_id', sa.String(length=36), nullable=True),
+        sa.Column('metadata_json', postgresql.JSONB(), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(['parent_version_id'], ['capability_versions.id'], name='fk_capability_versions_parent_version_id'),
+        sa.ForeignKeyConstraint(['proposal_id'], ['proposals.id'], ),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_capability_versions_capability_key'), 'capability_versions', ['capability_key'], unique=False)
+    op.create_index(op.f('ix_capability_versions_scope_type'), 'capability_versions', ['scope_type'], unique=False)
+    op.create_index(op.f('ix_capability_versions_scope_id'), 'capability_versions', ['scope_id'], unique=False)
+    op.create_index(op.f('ix_capability_versions_parent_version_id'), 'capability_versions', ['parent_version_id'], unique=False)
+    op.create_index(op.f('ix_capability_versions_source'), 'capability_versions', ['source'], unique=False)
+    op.create_index(op.f('ix_capability_versions_status'), 'capability_versions', ['status'], unique=False)
+    op.create_index(op.f('ix_capability_versions_proposal_id'), 'capability_versions', ['proposal_id'], unique=False)
+    op.create_index('ix_capability_versions_key_scope_status', 'capability_versions', ['capability_key', 'scope_type', 'scope_id', 'status'], unique=False)
+    op.create_table('capability_overlays',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('capability_key', sa.String(length=128), nullable=False),
+        sa.Column('scope_type', sa.String(length=32), nullable=False),
+        sa.Column('scope_id', sa.String(length=128), nullable=True),
+        sa.Column('base_version_id', sa.String(length=36), nullable=True),
+        sa.Column('overlay_type', sa.String(length=64), nullable=False),
+        sa.Column('patch_json', postgresql.JSONB(), nullable=False),
+        sa.Column('status', sa.String(length=32), nullable=False),
+        sa.Column('proposal_id', sa.String(length=36), nullable=True),
+        sa.Column('metadata_json', postgresql.JSONB(), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(['base_version_id'], ['capability_versions.id'], name='fk_capability_overlays_base_version_id'),
+        sa.ForeignKeyConstraint(['proposal_id'], ['proposals.id'], ),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_capability_overlays_capability_key'), 'capability_overlays', ['capability_key'], unique=False)
+    op.create_index(op.f('ix_capability_overlays_scope_type'), 'capability_overlays', ['scope_type'], unique=False)
+    op.create_index(op.f('ix_capability_overlays_scope_id'), 'capability_overlays', ['scope_id'], unique=False)
+    op.create_index(op.f('ix_capability_overlays_base_version_id'), 'capability_overlays', ['base_version_id'], unique=False)
+    op.create_index(op.f('ix_capability_overlays_overlay_type'), 'capability_overlays', ['overlay_type'], unique=False)
+    op.create_index(op.f('ix_capability_overlays_status'), 'capability_overlays', ['status'], unique=False)
+    op.create_index(op.f('ix_capability_overlays_proposal_id'), 'capability_overlays', ['proposal_id'], unique=False)
+    op.create_index('ix_capability_overlays_key_scope_status', 'capability_overlays', ['capability_key', 'scope_type', 'scope_id', 'status'], unique=False)
+    op.create_table('evolution_targets',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('space_id', sa.String(length=36), nullable=True),
+        sa.Column('target_type', sa.String(length=64), nullable=False),
+        sa.Column('target_ref_type', sa.String(length=64), nullable=True),
+        sa.Column('target_ref_id', sa.String(length=128), nullable=True),
+        sa.Column('capability_key', sa.String(length=128), nullable=True),
+        sa.Column('current_version_id', sa.String(length=36), nullable=True),
+        sa.Column('risk_level', sa.String(length=32), nullable=False),
+        sa.Column('status', sa.String(length=32), nullable=False),
+        sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.text('true')),
+        sa.Column('engine_policy_json', postgresql.JSONB(), nullable=False),
+        sa.Column('metadata_json', postgresql.JSONB(), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(['current_version_id'], ['capability_versions.id'], name='fk_evolution_targets_current_version_id'),
+        sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_evolution_targets_space_id'), 'evolution_targets', ['space_id'], unique=False)
+    op.create_index(op.f('ix_evolution_targets_target_type'), 'evolution_targets', ['target_type'], unique=False)
+    op.create_index(op.f('ix_evolution_targets_target_ref_id'), 'evolution_targets', ['target_ref_id'], unique=False)
+    op.create_index(op.f('ix_evolution_targets_capability_key'), 'evolution_targets', ['capability_key'], unique=False)
+    op.create_index(op.f('ix_evolution_targets_current_version_id'), 'evolution_targets', ['current_version_id'], unique=False)
+    op.create_index(op.f('ix_evolution_targets_risk_level'), 'evolution_targets', ['risk_level'], unique=False)
+    op.create_index(op.f('ix_evolution_targets_status'), 'evolution_targets', ['status'], unique=False)
+    op.create_index('ix_evolution_targets_space_type_ref_status', 'evolution_targets', ['space_id', 'target_type', 'target_ref_id', 'status'], unique=False)
+    op.create_table('evolution_signals',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('space_id', sa.String(length=36), nullable=True),
+        sa.Column('target_id', sa.String(length=36), nullable=False),
+        sa.Column('signal_type', sa.String(length=128), nullable=False),
+        sa.Column('source_type', sa.String(length=64), nullable=False),
+        sa.Column('source_id', sa.String(length=128), nullable=True),
+        sa.Column('severity', sa.String(length=32), nullable=False),
+        sa.Column('summary', sa.Text(), nullable=True),
+        sa.Column('payload_json', postgresql.JSONB(), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+        sa.ForeignKeyConstraint(['target_id'], ['evolution_targets.id'], ),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_evolution_signals_space_id'), 'evolution_signals', ['space_id'], unique=False)
+    op.create_index(op.f('ix_evolution_signals_target_id'), 'evolution_signals', ['target_id'], unique=False)
+    op.create_index(op.f('ix_evolution_signals_signal_type'), 'evolution_signals', ['signal_type'], unique=False)
+    op.create_index(op.f('ix_evolution_signals_source_type'), 'evolution_signals', ['source_type'], unique=False)
+    op.create_index(op.f('ix_evolution_signals_source_id'), 'evolution_signals', ['source_id'], unique=False)
+    op.create_index(op.f('ix_evolution_signals_severity'), 'evolution_signals', ['severity'], unique=False)
+    op.create_index('ix_evolution_signals_space_target_type_created', 'evolution_signals', ['space_id', 'target_id', 'signal_type', 'created_at'], unique=False)
     op.create_table('knowledge_items',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -3131,6 +3233,41 @@ def downgrade() -> None:
     op.drop_index('ix_projects_status', table_name='projects')
     op.drop_index('ix_projects_space_id', table_name='projects')
     op.drop_table('projects')
+    op.drop_index('ix_evolution_signals_space_target_type_created', table_name='evolution_signals')
+    op.drop_index(op.f('ix_evolution_signals_severity'), table_name='evolution_signals')
+    op.drop_index(op.f('ix_evolution_signals_source_id'), table_name='evolution_signals')
+    op.drop_index(op.f('ix_evolution_signals_source_type'), table_name='evolution_signals')
+    op.drop_index(op.f('ix_evolution_signals_signal_type'), table_name='evolution_signals')
+    op.drop_index(op.f('ix_evolution_signals_target_id'), table_name='evolution_signals')
+    op.drop_index(op.f('ix_evolution_signals_space_id'), table_name='evolution_signals')
+    op.drop_table('evolution_signals')
+    op.drop_index('ix_evolution_targets_space_type_ref_status', table_name='evolution_targets')
+    op.drop_index(op.f('ix_evolution_targets_status'), table_name='evolution_targets')
+    op.drop_index(op.f('ix_evolution_targets_risk_level'), table_name='evolution_targets')
+    op.drop_index(op.f('ix_evolution_targets_current_version_id'), table_name='evolution_targets')
+    op.drop_index(op.f('ix_evolution_targets_capability_key'), table_name='evolution_targets')
+    op.drop_index(op.f('ix_evolution_targets_target_ref_id'), table_name='evolution_targets')
+    op.drop_index(op.f('ix_evolution_targets_target_type'), table_name='evolution_targets')
+    op.drop_index(op.f('ix_evolution_targets_space_id'), table_name='evolution_targets')
+    op.drop_table('evolution_targets')
+    op.drop_index('ix_capability_overlays_key_scope_status', table_name='capability_overlays')
+    op.drop_index(op.f('ix_capability_overlays_proposal_id'), table_name='capability_overlays')
+    op.drop_index(op.f('ix_capability_overlays_status'), table_name='capability_overlays')
+    op.drop_index(op.f('ix_capability_overlays_overlay_type'), table_name='capability_overlays')
+    op.drop_index(op.f('ix_capability_overlays_base_version_id'), table_name='capability_overlays')
+    op.drop_index(op.f('ix_capability_overlays_scope_id'), table_name='capability_overlays')
+    op.drop_index(op.f('ix_capability_overlays_scope_type'), table_name='capability_overlays')
+    op.drop_index(op.f('ix_capability_overlays_capability_key'), table_name='capability_overlays')
+    op.drop_table('capability_overlays')
+    op.drop_index('ix_capability_versions_key_scope_status', table_name='capability_versions')
+    op.drop_index(op.f('ix_capability_versions_proposal_id'), table_name='capability_versions')
+    op.drop_index(op.f('ix_capability_versions_status'), table_name='capability_versions')
+    op.drop_index(op.f('ix_capability_versions_source'), table_name='capability_versions')
+    op.drop_index(op.f('ix_capability_versions_parent_version_id'), table_name='capability_versions')
+    op.drop_index(op.f('ix_capability_versions_scope_id'), table_name='capability_versions')
+    op.drop_index(op.f('ix_capability_versions_scope_type'), table_name='capability_versions')
+    op.drop_index(op.f('ix_capability_versions_capability_key'), table_name='capability_versions')
+    op.drop_table('capability_versions')
     op.drop_index(op.f('ix_artifacts_source_execution_plane_id'), table_name='artifacts')
     op.drop_index(op.f('ix_artifacts_source_runtime_adapter_id'), table_name='artifacts')
     op.drop_index(op.f('ix_artifacts_owner_user_id'), table_name='artifacts')

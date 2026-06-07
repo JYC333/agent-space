@@ -36,7 +36,7 @@ The bundled PostgreSQL containers have stable names per mode:
 ## Data locations
 
 > **Path semantics.** `ASPACE_ROOT` is the host-side parent directory that holds the
-> `dev/`, `test/`, `prod/` mode roots (default `~/aspace`); the scripts locate a mode
+> `dev/`, `test/`, `prod/` mode roots (default `~/.aspace`); the scripts locate a mode
 > root as `$ASPACE_ROOT/<mode>`. Inside containers the running backend sees that mode
 > root as `AGENT_SPACE_HOME=/aspace`. `AGENT_SPACE_HOME` is never the parent of the mode dirs.
 > The DB/system scripts share `scripts/lib/local-compose.sh` with `scripts/start.sh`,
@@ -172,7 +172,7 @@ When app services are stopped, produce an identical-format archive with:
 
 ```bash
 # Stop writers first; backup starts postgres automatically if needed.
-docker compose --env-file "${ASPACE_ROOT:-$HOME/aspace}/dev/.env" -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend deployer
+docker compose --env-file "${ASPACE_ROOT:-$HOME/.aspace}/dev/.env" -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend deployer
 
 scripts/system/backup.sh --mode dev
 scripts/system/backup.sh --mode prod --include-logs
@@ -191,13 +191,13 @@ Restore rebuilds the database and the file data from one archive. Stop `backend`
 
 ```bash
 # 1. Stop the app (leave postgres running)
-docker compose --env-file "${ASPACE_ROOT:-$HOME/aspace}/dev/.env" -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend deployer
+docker compose --env-file "${ASPACE_ROOT:-$HOME/.aspace}/dev/.env" -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend deployer
 
 # 2. Keep or start postgres only
-docker compose --env-file "${ASPACE_ROOT:-$HOME/aspace}/dev/.env" -p agent-space-dev -f deployments/local/docker-compose.dev.yml up -d postgres
+docker compose --env-file "${ASPACE_ROOT:-$HOME/.aspace}/dev/.env" -p agent-space-dev -f deployments/local/docker-compose.dev.yml up -d postgres
 
 # 3. Restore database + files from one archive
-scripts/system/restore.sh ~/aspace/dev/backups/auto-20260101-120000.tar.gz --mode dev --force
+scripts/system/restore.sh ~/.aspace/dev/backups/auto-20260101-120000.tar.gz --mode dev --force
 
 # 4. Start the app after restore succeeds, then verify
 scripts/start.sh --dev
@@ -224,7 +224,7 @@ To dump or restore only the database (no file data):
 
 ```bash
 scripts/db/dump.sh --mode dev                       # → db/dumps/dump-<ts>.dump
-scripts/db/restore.sh ~/aspace/dev/db/dumps/dump-<ts>.dump --mode dev
+scripts/db/restore.sh ~/.aspace/dev/db/dumps/dump-<ts>.dump --mode dev
 ```
 
 DB-only dump/restore/reset start `postgres` automatically and stop it afterward only if that script started it. Restore and reset refuse to run while app services are active; stop `backend`, `frontend`, and `deployer` first. `scripts/db/restore.sh` validates the dump with `pg_restore --list` before any destructive drop, so an unreadable archive is rejected before the database is touched.
@@ -258,8 +258,8 @@ curl -s "http://localhost:8000/api/v1/runs/<run_id>/steps?space_id=personal"   #
 
 ## Rollback strategy
 
-1. Stop writes: `docker compose --env-file "${ASPACE_ROOT:-$HOME/aspace}/dev/.env" -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend deployer`.
-2. Snapshot current state: `cp -a ~/aspace/dev ~/aspace/dev-pre-rollback-$(date +%Y%m%d-%H%M%S)`.
+1. Stop writes: `docker compose --env-file "${ASPACE_ROOT:-$HOME/.aspace}/dev/.env" -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend deployer`.
+2. Snapshot current state: `cp -a ~/.aspace/dev ~/.aspace/dev-pre-rollback-$(date +%Y%m%d-%H%M%S)`.
 3. Restore from the last known-good archive: `scripts/system/restore.sh <archive> --mode dev --force`.
 4. Restart: `scripts/start.sh --dev`.
 5. Verify with `scripts/system/verify-restore.sh --mode dev`.

@@ -36,7 +36,7 @@ agent-space/
 ```
 
 Runtime data (DB, config, secrets, logs, workspaces, sandboxes) never lives in the repo.
-It lives under a host-side parent `ASPACE_ROOT` (default `~/aspace`), one mode root per
+It lives under a host-side parent `ASPACE_ROOT` (default `~/.aspace`), one mode root per
 environment: `$ASPACE_ROOT/dev`, `$ASPACE_ROOT/test`, `$ASPACE_ROOT/prod`. Each mode root
 is bind-mounted into the containers as `AGENT_SPACE_HOME=/aspace`.
 Local DB/system scripts use the same compose/env path as `scripts/start.sh`: mode validation,
@@ -48,15 +48,15 @@ The local PostgreSQL containers use stable names: `agent-space-dev-postgres`,
 ## Quick Start
 
 ```bash
-# 1. Start everything (creates ~/aspace/dev/ and .env from template on first run)
+# 1. Start everything (creates ~/.aspace/dev/ and .env from template on first run)
 ./scripts/start.sh
 
 # 2. Add a model provider in the app
 #    Open the web app → Providers and paste your API key (stored encrypted; never in .env).
-#    ~/aspace/dev/.env holds infra-only settings (e.g. POSTGRES_PASSWORD for --prod).
+#    ~/.aspace/dev/.env holds infra-only settings (e.g. POSTGRES_PASSWORD for --prod).
 ```
 
-`start.sh` builds the sandbox image on first run, then starts backend + frontend + deployer via Docker Compose. Data lives under **`~/aspace/<mode>/`** (default mode `dev`).
+`start.sh` builds the sandbox image on first run, then starts backend + frontend + deployer via Docker Compose. Data lives under **`~/.aspace/<mode>/`** (default mode `dev`).
 
 ```
 Web UI:           http://localhost:3000   # Docker maps container 5173 → host 3000 (dev compose)
@@ -68,7 +68,7 @@ Interactive docs: http://localhost:8000/docs
 
 ```bash
 ./scripts/start.sh           # Docker Compose — dev (default)
-./scripts/start.sh --test    # separate ports + ~/aspace/test
+./scripts/start.sh --test    # separate ports + ~/.aspace/test
 ./scripts/start.sh --prod
 ./scripts/start.sh --build   # force image rebuild
 ```

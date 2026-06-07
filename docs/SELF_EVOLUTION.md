@@ -7,7 +7,7 @@ agent-space supports a protected self-evolution deployment structure where syste
 ## Directory Structure
 
 ```
-~/aspace/                    # ASPACE_ROOT: host-side parent (default ~/aspace), holds mode roots
+~/.aspace/                    # ASPACE_ROOT: host-side parent (default ~/.aspace), holds mode roots
 ├── dev/                     # one mode root; bind-mounted as AGENT_SPACE_HOME=/aspace in containers
 │   ├── .env
 │   ├── config/              # app config (.env, cli-credentials.yaml)
@@ -114,7 +114,7 @@ Communicate through Unix socket only. Accepts structured allowlisted jobs only.
    ```
    deployer: create_system_worktree(RUN_ID=<run_id>)
    ```
-3. **Backend Agent edits only** the worktree at `~/aspace/dev/sandboxes/system-evolution/<run_id>`
+3. **Backend Agent edits only** the worktree at `~/.aspace/dev/sandboxes/system-evolution/<run_id>`
 4. **Backend asks deployer to collect diff**
    ```
    deployer: collect_system_diff(WORKTREE_DIR=<path>)
@@ -153,7 +153,7 @@ Communicate through Unix socket only. Accepts structured allowlisted jobs only.
 - `SYSTEM_CORE_REPO_PATH=/path/to/agent-space-repo` (must be an existing git repo)
 - `SYSTEM_CORE_BASE_BRANCH=master`
 - `SYSTEM_CORE_OWNER_EMAIL=<developer email>`
-- `SYSTEM_EVOLUTION_SANDBOX_ROOT=~/aspace/dev/sandboxes/system-evolution`
+- `SYSTEM_EVOLUTION_SANDBOX_ROOT=~/.aspace/dev/sandboxes/system-evolution`
 
 ## System-Core Workspace Policy
 
@@ -204,5 +204,5 @@ High-risk proposals:
 Or with Docker Compose directly:
 
 ```bash
-docker compose -p agent-space-dev -f deployments/local/docker-compose.dev.yml --env-file ~/aspace/dev/.env up
+docker compose -p agent-space-dev -f deployments/local/docker-compose.dev.yml --env-file ~/.aspace/dev/.env up
 ```

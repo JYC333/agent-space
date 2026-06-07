@@ -3,7 +3,7 @@
 ``app.config`` / ``app.db`` resolve ``AGENT_SPACE_HOME`` at import time. Before any
 ``from app…`` import, we point ``AGENT_SPACE_HOME`` at an ephemeral directory so
 ``TestClient`` lifespan ``init_db()`` never touches the developer's real
-``~/aspace/dev``. That directory is **not** ``~/aspace/test`` (reserved for
+``~/.aspace/dev``. That directory is **not** ``~/.aspace/test`` (reserved for
 human ``./scripts/start.sh --test`` stacks).
 
 Escape hatch (integration / debugging against a real tree)::
@@ -27,9 +27,9 @@ Override where ephemeral session dirs are created::
   teardown.  Engine-direct tests that really need committed cross-connection state
   opt in to ``db_engine_isolated``.
 
-Host tree root (defaults to ``~/aspace`` — the directory that contains ``dev/``,
+Host tree root (defaults to ``~/.aspace`` — the directory that contains ``dev/``,
 ``test/``, ``prod/`` mode dirs; pytest uses ``<ASPACE_ROOT>/.cache/pytest-runs/``,
-not ``~/aspace/test``)::
+not ``~/.aspace/test``)::
 
     ASPACE_ROOT=/data/aspace pytest …
 """
@@ -50,7 +50,7 @@ def _aspace_host_root() -> Path:
     raw = os.environ.get("ASPACE_ROOT")
     if raw:
         return Path(raw).expanduser().resolve()
-    return (Path.home() / "aspace").expanduser().resolve()
+    return (Path.home() / ".aspace").expanduser().resolve()
 
 
 def _default_pytest_parent() -> Path:

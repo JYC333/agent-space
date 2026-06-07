@@ -6,7 +6,7 @@ The `core/` directory is the agent system kernel. It contains the memory system,
 context builder, capability registry, session, **task board**, agent run models, and API.
 It is designed to be open-sourceable and must not contain real user data or secrets.
 
-All runtime data lives in `~/aspace/` (the `AGENT_SPACE_HOME` data root), not inside this repo.
+All runtime data lives in `~/.aspace/` (the `AGENT_SPACE_HOME` data root), not inside this repo.
 
 ## Running the backend
 
@@ -46,7 +46,7 @@ python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v
 ## Environment variables
 
 ```
-AGENT_SPACE_HOME=~/aspace    # data root; DB, workspaces, sandboxes, secrets all live here
+AGENT_SPACE_HOME=~/.aspace    # data root; DB, workspaces, sandboxes, secrets all live here
 # LLM provider API keys are entered in the app (Providers page) and stored as encrypted
 # ModelProvider Credentials — never set them in env/config (ADR 0010).
 DEFAULT_MODEL=claude-sonnet-4-6

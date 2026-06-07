@@ -36,7 +36,7 @@ proposals first. `app/activity/`.
 
 **Artifact**
 Persistent output of an agent run: file, diff, log, report. Survives sandbox cleanup
-(stored in `~/aspace/artifacts/`, not in sandbox directories). Exportable via
+(stored in `~/.aspace/artifacts/`, not in sandbox directories). Exportable via
 `GET /api/v1/artifacts/{id}/export`. Artifact types: `diff | patch | report | log | context |
 validation | file | export`.
 

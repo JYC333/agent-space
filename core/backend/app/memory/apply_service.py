@@ -37,6 +37,8 @@ from sqlalchemy.orm.attributes import flag_modified
 from ..models import (
     ActivityRecord,
     AgentVersion,
+    CapabilityOverlay,
+    CapabilityVersion,
     KnowledgeItem,
     KnowledgeItemRelation,
     MemoryEntry,
@@ -86,6 +88,8 @@ class ApplyResult:
     egress_review: bool = False
     task: Optional[Task] = None
     agent_version: Optional[AgentVersion] = None
+    capability_version: Optional[CapabilityVersion] = None
+    capability_overlay: Optional[CapabilityOverlay] = None
     knowledge_item: Optional[KnowledgeItem] = None
     knowledge_relation: Optional[KnowledgeItemRelation] = None
 
@@ -1037,6 +1041,19 @@ class ProposalApplyService:
             result = ApplyResult(proposal=proposal, agent_version=version)
             self._mark_affected_digests_dirty(proposal, result)
             return result
+
+        if ptype == "prompt_update":
+            try:
+                from ..evolution.services import CapabilityVersioningService
+
+                applied = CapabilityVersioningService(self._db).apply_prompt_update(proposal)
+            except Exception as exc:  # noqa: BLE001
+                raise ProposalApplyError(str(exc)) from exc
+            return ApplyResult(
+                proposal=proposal,
+                capability_version=applied.version,
+                capability_overlay=applied.overlay,
+            )
 
         if ptype == "knowledge_create":
             try:

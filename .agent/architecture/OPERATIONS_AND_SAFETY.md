@@ -6,10 +6,10 @@ See also: [docs/BACKUP_AND_RESTORE.md](../../docs/BACKUP_AND_RESTORE.md) and [do
 
 All runtime data for the running environment lives under `AGENT_SPACE_HOME` — the single
 instance root (in Docker it is the `/aspace` bind mount; for a direct local backend run it is a
-concrete mode root such as `~/aspace/dev`). Never store runtime data in the source repository.
+concrete mode root such as `~/.aspace/dev`). Never store runtime data in the source repository.
 
 `AGENT_SPACE_HOME` is **not** the parent of the `dev/`/`test/`/`prod/` mode dirs. That host-side
-parent is `ASPACE_ROOT` (default `~/aspace`), used only by `scripts/`, which derive
+parent is `ASPACE_ROOT` (default `~/.aspace`), used only by `scripts/`, which derive
 `MODE_ROOT="$ASPACE_ROOT/<mode>"`.
 
 ```
@@ -101,7 +101,7 @@ docker compose -p agent-space-dev -f deployments/local/docker-compose.dev.yml st
 scripts/start.sh --dev
 
 # 3. Restore database + files from one archive
-scripts/system/restore.sh ~/aspace/dev/backups/auto-<timestamp>.tar.gz --mode dev --force
+scripts/system/restore.sh ~/.aspace/dev/backups/auto-<timestamp>.tar.gz --mode dev --force
 ```
 
 `scripts/system/restore.sh` runs `pg_restore` against the database and restores the file directories; `--force` overwrites existing file data. The live `db/postgres` directory is never touched.
@@ -173,7 +173,7 @@ Dogfooding must stop immediately on any of these:
 ## Rollback Procedure
 
 1. Stop writes: `docker compose stop backend worker`.
-2. Snapshot current state: `cp -a ~/aspace/dev ~/aspace/dev-pre-rollback-$(date +%Y%m%d-%H%M%S)`.
+2. Snapshot current state: `cp -a ~/.aspace/dev ~/.aspace/dev-pre-rollback-$(date +%Y%m%d-%H%M%S)`.
 3. Identify known-good revision: `git log --oneline -10`.
 4. Revert app: `git checkout <known-good-commit>`.
 5. If data integrity is suspect, restore from last known-good backup (not the latest, which may already contain the problem).

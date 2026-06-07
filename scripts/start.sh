@@ -8,11 +8,11 @@
 #   ./scripts/start.sh --prod       — prod environment (port 80/8000)
 #   ./scripts/start.sh --build      — same as above with image rebuild
 #
-# Data layout: $ASPACE_ROOT/<mode>/ (e.g. ~/aspace/dev). Override the host-side
+# Data layout: $ASPACE_ROOT/<mode>/ (e.g. ~/.aspace/dev). Override the host-side
 # parent directory with ASPACE_ROOT when you need a non-default location.
 # AGENT_SPACE_HOME is NOT this parent: inside containers it is the mounted mode
 # root (/aspace); for direct local backend runs it is a concrete mode root such
-# as $HOME/aspace/dev.
+# as $HOME/.aspace/dev.
 
 set -euo pipefail
 

@@ -1,0 +1,9 @@
+metrics:
+  memory_candidate_reject_rate:
+    direction: decrease
+  memory_candidate_edit_rate:
+    direction: decrease
+  exploration_misclassified_as_decision_count:
+    direction: decrease
+  stable_preference_missed_count:
+    direction: decrease

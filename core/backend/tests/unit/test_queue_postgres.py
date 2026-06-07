@@ -5,11 +5,11 @@ so concurrent workers never claim the same job, and that all queue semantics
 (priority, scheduled_at ordering, retry, reclaim, heartbeat, terminal-state
 protection) work against a real PostgreSQL backend.
 
-Every test that touches the database uses the ``queue_service`` fixture, which is
-bound to the committed test engine and TRUNCATE + reseeds before and after each
-test.  Queue code opens its own independent sessions, so it needs committed
-cross-session state; the ``queue_service`` fixture guarantees that committed rows
-from one test never leak into another.
+Tests use local committed-engine fixtures that clear only the durable rows this
+file creates before and after each test. Queue code opens its own independent
+sessions, so it needs committed cross-session state; the fixtures guarantee that
+committed rows from one test never leak into another without paying the cost of
+truncating the whole schema for every queue behavior case.
 """
 from __future__ import annotations
 
@@ -31,6 +31,82 @@ def _space_user() -> tuple[str, str]:
     """Return (space_id, user_id) guaranteed to exist in test DB."""
     from tests.support.ids import DEFAULT_USER_ID, PERSONAL_SPACE_ID
     return PERSONAL_SPACE_ID, DEFAULT_USER_ID
+
+
+def _reset_queue_test_rows(db_engine) -> None:
+    """Remove committed rows created by this test module.
+
+    The global ``db_engine_isolated`` fixture truncates the whole schema. That is
+    useful for generic committed-engine tests, but it dominates the runtime of
+    this queue file. These tests only create queue rows, default tenant rows, and
+    a small Run/Agent FK chain for agent_run reclaim cases.
+    """
+    space_id, user_id = _space_user()
+    Session = sessionmaker(bind=db_engine)
+    with Session() as db:
+        db.execute(text("DELETE FROM run_execution_locks"))
+        db.execute(text("DELETE FROM job_events"))
+        db.execute(text("DELETE FROM jobs"))
+        db.execute(text("DELETE FROM runs"))
+        db.execute(text("DELETE FROM context_snapshots"))
+        db.execute(text("UPDATE agents SET current_version_id = NULL"))
+        db.execute(text("DELETE FROM agent_versions"))
+        db.execute(text("DELETE FROM agents"))
+        db.execute(
+            text(
+                "DELETE FROM space_memberships "
+                "WHERE id = 'default_membership' OR space_id = :space_id OR user_id = :user_id"
+            ),
+            {"space_id": space_id, "user_id": user_id},
+        )
+        db.execute(text("DELETE FROM users WHERE id = :user_id"), {"user_id": user_id})
+        db.execute(text("DELETE FROM spaces WHERE id = :space_id"), {"space_id": space_id})
+        db.commit()
+
+
+def _seed_queue_defaults(db_engine) -> None:
+    space_id, user_id = _space_user()
+    Session = sessionmaker(bind=db_engine)
+    with Session() as db:
+        db.execute(
+            text(
+                "INSERT INTO spaces (id, name, type, created_at, updated_at) "
+                "VALUES (:space_id, 'Personal', 'personal', now(), now())"
+            ),
+            {"space_id": space_id},
+        )
+        db.execute(
+            text(
+                "INSERT INTO users (id, email, display_name, status, created_at, updated_at) "
+                "VALUES (:user_id, 'default@example.com', 'Default User', 'active', now(), now())"
+            ),
+            {"user_id": user_id},
+        )
+        db.execute(
+            text(
+                "INSERT INTO space_memberships "
+                "(id, space_id, user_id, role, status, created_at, updated_at) "
+                "VALUES ('default_membership', :space_id, :user_id, 'owner', 'active', now(), now())"
+            ),
+            {"space_id": space_id, "user_id": user_id},
+        )
+        db.commit()
+
+
+@pytest.fixture(scope="function")
+def queue_db_engine(db_engine):
+    _reset_queue_test_rows(db_engine)
+    _seed_queue_defaults(db_engine)
+    try:
+        yield db_engine
+    finally:
+        _reset_queue_test_rows(db_engine)
+
+
+@pytest.fixture(scope="function")
+def queue_service(queue_db_engine):
+    Session = sessionmaker(bind=queue_db_engine)
+    return PostgresQueueService(Session)
 
 
 def _enqueue(q, job_type="test_job", *, space_id, user_id, priority=0,
@@ -945,15 +1021,15 @@ class TestCrossFixtureIsolation:
     """Prove committed rows do not leak across separate tests / fixtures.
 
     ``test_a`` commits a job and intentionally does no cleanup; ``test_b`` then
-    asserts the queue starts empty.  If TRUNCATE + reseed isolation were broken,
-    the committed job from ``test_a`` would survive into ``test_b`` and fail it.
+    asserts the queue starts empty. If committed-engine cleanup were broken, the
+    committed job from ``test_a`` would survive into ``test_b`` and fail it.
     Method names enforce execution order within the class.
     """
 
     def test_a_producer_leaves_committed_job(self, queue_service):
         space_id, user_id = _space_user()
         _enqueue(queue_service, job_type="leak_probe", space_id=space_id, user_id=user_id)
-        # No cleanup: db_engine_isolated TRUNCATEs on teardown.
+        # No explicit cleanup: queue_service cleanup runs on teardown.
 
     def test_b_consumer_sees_clean_slate(self, queue_service):
         space_id, user_id = _space_user()
@@ -1003,39 +1079,39 @@ class TestSchemaConstraints:
         refreshed = asyncio.run(queue_service.get_job(job.id))
         assert refreshed.scheduled_at is not None
 
-    def test_scheduled_at_server_default_fills_omitted_value(self, db_engine_isolated):
+    def test_scheduled_at_server_default_fills_omitted_value(self, queue_db_engine):
         """A direct insert omitting scheduled_at falls back to the server default."""
-        self._insert(db_engine_isolated, id="job-sched-default")
-        Session = sessionmaker(bind=db_engine_isolated)
+        self._insert(queue_db_engine, id="job-sched-default")
+        Session = sessionmaker(bind=queue_db_engine)
         with Session() as db:
             sched = db.execute(
                 text("SELECT scheduled_at FROM jobs WHERE id = 'job-sched-default'")
             ).scalar()
         assert sched is not None, "scheduled_at must be populated by the server default"
 
-    def test_explicit_null_scheduled_at_is_rejected(self, db_engine_isolated):
+    def test_explicit_null_scheduled_at_is_rejected(self, queue_db_engine):
         """scheduled_at is NOT NULL — an explicit NULL must fail."""
         from sqlalchemy.exc import IntegrityError
         with pytest.raises(IntegrityError):
-            self._insert(db_engine_isolated, id="job-null-sched", scheduled_at=None)
+            self._insert(queue_db_engine, id="job-null-sched", scheduled_at=None)
 
-    def test_invalid_status_is_rejected(self, db_engine_isolated):
+    def test_invalid_status_is_rejected(self, queue_db_engine):
         """ck_jobs_status rejects a status outside the allowed set."""
         from sqlalchemy.exc import IntegrityError
         with pytest.raises(IntegrityError):
-            self._insert(db_engine_isolated, id="job-bad-status", status="bogus")
+            self._insert(queue_db_engine, id="job-bad-status", status="bogus")
 
-    def test_negative_attempts_is_rejected(self, db_engine_isolated):
+    def test_negative_attempts_is_rejected(self, queue_db_engine):
         """ck_jobs_attempts_nonneg rejects attempts < 0."""
         from sqlalchemy.exc import IntegrityError
         with pytest.raises(IntegrityError):
-            self._insert(db_engine_isolated, id="job-neg-attempts", attempts=-1)
+            self._insert(queue_db_engine, id="job-neg-attempts", attempts=-1)
 
-    def test_nonpositive_max_attempts_is_rejected(self, db_engine_isolated):
+    def test_nonpositive_max_attempts_is_rejected(self, queue_db_engine):
         """ck_jobs_max_attempts_positive rejects max_attempts <= 0."""
         from sqlalchemy.exc import IntegrityError
         with pytest.raises(IntegrityError):
-            self._insert(db_engine_isolated, id="job-zero-max", max_attempts=0)
+            self._insert(queue_db_engine, id="job-zero-max", max_attempts=0)
 
 
 # ── claim_next error propagation ───────────────────────────────────────────────

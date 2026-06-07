@@ -56,7 +56,7 @@ def test_start_prod_rejects_development_and_placeholder_passwords():
 def test_local_compose_helper_centralizes_mode_root_and_compose_command():
     text = LOCAL_COMPOSE_HELPER.read_text()
     assert "dev|test|prod" in text
-    assert 'ASPACE_ROOT="${ASPACE_ROOT:-$HOME/aspace}"' in text
+    assert 'ASPACE_ROOT="${ASPACE_ROOT:-$HOME/.aspace}"' in text
     assert 'MODE_ROOT="$ASPACE_ROOT/$MODE"' in text
     assert 'ENV_FILE="$MODE_ROOT/.env"' in text
     assert 'COMPOSE_PROJECT="agent-space-$MODE"' in text

@@ -3,7 +3,7 @@
 ## Quick Start
 
 ```bash
-# Start everything (Docker Compose). First run creates ~/aspace/dev/.env from template.
+# Start everything (Docker Compose). First run creates ~/.aspace/dev/.env from template.
 ./scripts/start.sh
 
 # Other profiles

@@ -292,6 +292,15 @@ export const MODULE_REGISTRY: Module[] = [
     perspectiveType: 'space-scoped',
     component: lazy(() => import('./job_queue/JobQueuePage')),
   },
+  {
+    id: 'evolution', label: 'Evolution', path: '/evolution',
+    section: 'agents', group: 'agents', icon: 'git-branch',
+    description: 'Review evolution targets, signals, runs, proposals, and validation metrics.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'neutral',
+    component: lazy(() => import('./evolution/EvolutionPage')),
+  },
 
   // ── Workspace ─────────────────────────────────────────────────────────────
   {

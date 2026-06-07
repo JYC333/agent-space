@@ -79,6 +79,31 @@ def _build_proposal_accept_out(
             },
         )
 
+    if result.capability_overlay is not None or result.capability_version is not None:
+        return ProposalAcceptOut(
+            proposal=prop_out,
+            result_type="capability_overlay",
+            result={
+                "capability_key": (
+                    result.capability_overlay.capability_key
+                    if result.capability_overlay is not None
+                    else result.capability_version.capability_key
+                ),
+                "capability_version_id": result.capability_version.id if result.capability_version else None,
+                "capability_overlay_id": result.capability_overlay.id if result.capability_overlay else None,
+                "scope_type": (
+                    result.capability_overlay.scope_type
+                    if result.capability_overlay is not None
+                    else result.capability_version.scope_type
+                ),
+                "scope_id": (
+                    result.capability_overlay.scope_id
+                    if result.capability_overlay is not None
+                    else result.capability_version.scope_id
+                ),
+            },
+        )
+
     if result.knowledge_item is not None:
         return ProposalAcceptOut(
             proposal=prop_out,

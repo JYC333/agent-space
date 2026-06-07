@@ -1054,6 +1054,146 @@ export interface ProposalApprovalResponse {
   revoked_at: string | null
 }
 
+export interface EvolutionSummaryOut {
+  active_targets: number
+  signals_collected: number
+  pending_proposals: number
+  recent_runs: number
+}
+
+export interface EvolutionTarget {
+  id: string
+  space_id: string | null
+  target_name: string | null
+  target_type: string
+  target_ref_type: string | null
+  target_ref_id: string | null
+  capability_key: string | null
+  current_version_id: string | null
+  current_version: string | null
+  scope: string | null
+  purpose: string | null
+  risk_level: string
+  status: string
+  enabled: boolean
+  recent_signal_count: number
+  last_run_at: string | null
+  engine_policy_json: Record<string, unknown>
+  metadata_json: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface EvolutionTargetCreateBody {
+  target_type: string
+  target_ref_type?: string | null
+  target_ref_id?: string | null
+  capability_key?: string | null
+  current_version_id?: string | null
+  risk_level?: string
+  enabled?: boolean
+  status?: string
+  target_name?: string | null
+  purpose?: string | null
+  engine_policy_json?: Record<string, unknown>
+  metadata_json?: Record<string, unknown>
+}
+
+export interface EvolutionTargetUpdateBody {
+  target_type?: string | null
+  target_ref_type?: string | null
+  target_ref_id?: string | null
+  capability_key?: string | null
+  current_version_id?: string | null
+  risk_level?: string | null
+  enabled?: boolean | null
+  status?: string | null
+  target_name?: string | null
+  purpose?: string | null
+  engine_policy_json?: Record<string, unknown> | null
+  metadata_json?: Record<string, unknown> | null
+}
+
+export interface EvolutionSignal {
+  id: string
+  space_id: string | null
+  target_id: string
+  target_name: string | null
+  target_type: string | null
+  capability_key: string | null
+  signal_type: string
+  source_type: string
+  source_id: string | null
+  severity: string
+  summary: string | null
+  payload_json: Record<string, unknown>
+  created_at: string
+}
+
+export interface EvolutionSignalCreateBody {
+  signal_type: string
+  source_type: string
+  source_id?: string | null
+  severity?: string
+  summary?: string | null
+  payload_json?: Record<string, unknown>
+}
+
+export interface EvolutionRunListItem {
+  run_id: string
+  target_id: string | null
+  target_name: string | null
+  target_type: string | null
+  capability_key: string | null
+  engine: string | null
+  status: string
+  created_at: string
+  started_at: string | null
+  artifact_count: number
+  proposal_id: string | null
+}
+
+export interface EvolutionRunResult {
+  run_id: string
+  target_id: string
+  context_artifact_id: string
+  report_artifact_id: string
+  revision_artifact_id: string
+  proposal_id: string
+  proposal_type: string
+  run_status: string
+}
+
+export interface EvolutionProposal {
+  id: string
+  proposal_type: string
+  target_id: string | null
+  target_name: string | null
+  target_type: string | null
+  capability_key: string | null
+  status: string
+  summary: string | null
+  created_at: string
+  created_by_run_id: string | null
+}
+
+export interface EvolutionValidationResult {
+  metric_id: string
+  label: string
+  evaluator: string
+  target_id: string
+  target_name: string | null
+  value: unknown | null
+  status: string
+  window: string | null
+  goal: Record<string, unknown>
+  sample_size: number
+  numerator_count: number | null
+  denominator_count: number | null
+  updated_at: string | null
+  metadata_json: Record<string, unknown>
+}
+
 export interface AgentModelSummary {
   provider_id: string | null
   provider_name: string | null
