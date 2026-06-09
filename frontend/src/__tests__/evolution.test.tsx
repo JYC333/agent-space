@@ -11,6 +11,8 @@ import type {
   EvolutionValidationResult,
 } from '../types/api'
 
+const routerFuture = { v7_relativeSplatPath: true, v7_startTransition: true } as const
+
 const emptySummary: EvolutionSummaryOut = {
   active_targets: 0,
   signals_collected: 0,
@@ -175,7 +177,7 @@ function mockEvolutionData({
 
 function renderPage() {
   return render(
-    <MemoryRouter initialEntries={['/evolution']}>
+    <MemoryRouter initialEntries={['/evolution']} future={routerFuture}>
       <EvolutionPage />
     </MemoryRouter>,
   )

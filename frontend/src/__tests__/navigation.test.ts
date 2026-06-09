@@ -21,7 +21,7 @@ describe('navigation model', () => {
     expect(labels).not.toContain('my view')
     expect(labels).not.toContain('personalview')
     expect(labels).toEqual(expect.arrayContaining([
-      'home', 'inbox', 'review', 'wiki', 'tasks', 'agents', 'evolution', 'workspaces', 'settings',
+      'home', 'inbox', 'review', 'knowledge', 'tasks', 'agents', 'evolution', 'workspaces', 'settings',
     ]))
   })
 
@@ -42,7 +42,7 @@ describe('navigation model', () => {
     expect(byId.evolution).toBe('home')
     expect(byId.inbox).toBe('space')
     expect(byId.review).toBe('space')
-    expect(byId.wiki).toBe('space')
+    expect(byId.knowledge).toBe('space')
   })
 
   it('keeps Home as the first mobile tab', () => {
@@ -51,14 +51,16 @@ describe('navigation model', () => {
 
   it('selects a scene per route, ignoring the /spaces/:id prefix', () => {
     expect(sceneForPath('/spaces/x/activity')?.id).toBe('inbox')
-    expect(sceneForPath('/spaces/x/knowledge')?.id).toBe('wiki')
     expect(sceneForPath('/spaces/x/proposals')?.id).toBe('review')
     expect(sceneForPath('/spaces/x/agents')?.id).toBe('agents')
     expect(sceneForPath('/spaces/x/workspaces')?.id).toBe('workspaces')
+    // Knowledge intentionally has no scene sidebar — it uses an in-header breadcrumb switcher.
+    expect(sceneForPath('/spaces/x/knowledge')).toBeNull()
+    expect(sceneForPath('/spaces/x/knowledge/notes')).toBeNull()
     // Home requires no scene sidebar.
     expect(sceneForPath('/home')).toBeNull()
     expect(sceneForPath('/evolution')).toBeNull()
-    expect(sceneForPath('/spaces/x/activity')?.id).not.toBe(sceneForPath('/spaces/x/knowledge')?.id)
+    expect(sceneForPath('/spaces/x/activity')?.id).not.toBe(sceneForPath('/spaces/x/proposals')?.id)
   })
 })
 

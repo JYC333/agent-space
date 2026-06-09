@@ -51,7 +51,7 @@ def test_items_never_cross_space_boundary(db):
 
     # Create data in the foreign space.
     factories.create_test_knowledge_item(
-        db, space_id=other_space, title="Foreign", content="secret", item_type="knowledge"
+        db, space_id=other_space, title="Foreign", content="secret", item_type="concept"
     )
     factories.create_test_activity(
         db, space_id=other_space, title="Foreign act", content="nope"
@@ -88,7 +88,7 @@ def test_agent_version_not_mutated_after_build_with_items(db):
 
     # Build with lots of content.
     factories.create_test_knowledge_item(
-        db, space_id=PERSONAL_SPACE_ID, title="KI", content="knowledge", item_type="knowledge"
+        db, space_id=PERSONAL_SPACE_ID, title="KI", content="knowledge", item_type="concept"
     )
     req = _req(
         agent_version_id=version.id,
@@ -112,7 +112,7 @@ def test_agent_version_not_mutated_after_build_with_items(db):
 @pytest.mark.parametrize("disabled_type,factory_args", [
     (
         "knowledge_item",
-        dict(title="Should be blocked", content="blocked content", item_type="knowledge"),
+        dict(title="Should be blocked", content="blocked content", item_type="concept"),
     ),
     (
         "activity_record",
@@ -169,10 +169,7 @@ _ALLOWED_ITEM_TYPES = frozenset(
 def test_all_persisted_item_types_are_in_allowed_enum(db):
     ws = factories.create_test_workspace(db, space_id=PERSONAL_SPACE_ID)
     factories.create_test_knowledge_item(
-        db, space_id=PERSONAL_SPACE_ID, title="KI", content="ki content", item_type="knowledge"
-    )
-    factories.create_test_knowledge_item(
-        db, space_id=PERSONAL_SPACE_ID, title="Idea", content="idea content", item_type="idea"
+        db, space_id=PERSONAL_SPACE_ID, title="KI", content="ki content", item_type="concept"
     )
     factories.create_test_activity(db, space_id=PERSONAL_SPACE_ID, title="Act", content="body")
     manual = [{"title": "M", "content": "manual"}]
@@ -285,7 +282,7 @@ def test_snapshot_space_id_matches_request(db):
 def test_two_builds_from_same_request_produce_equivalent_bundles(db):
     """Repeated builds with the same request produce the same item set."""
     factories.create_test_knowledge_item(
-        db, space_id=PERSONAL_SPACE_ID, title="Stable", content="stable content", item_type="knowledge"
+        db, space_id=PERSONAL_SPACE_ID, title="Stable", content="stable content", item_type="concept"
     )
     req = _req(manual_context=[{"title": "M", "content": "manual"}])
 

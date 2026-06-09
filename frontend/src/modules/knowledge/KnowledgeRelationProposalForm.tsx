@@ -41,7 +41,7 @@ interface KnowledgeRelationProposalFormProps {
 export default function KnowledgeRelationProposalForm({ currentItemId, onProposalCreated }: KnowledgeRelationProposalFormProps) {
   const [form, setForm] = useState<RelationForm>({
     manual_item_id: '',
-    relation_type: 'related',
+    relation_type: 'related_to',
     status: 'active',
     confidence: '',
     evidence_summary: '',
@@ -112,7 +112,7 @@ export default function KnowledgeRelationProposalForm({ currentItemId, onProposa
       onProposalCreated(p)
       setForm({
         manual_item_id: '',
-        relation_type: 'related',
+        relation_type: 'related_to',
         status: 'active',
         confidence: '',
         evidence_summary: '',

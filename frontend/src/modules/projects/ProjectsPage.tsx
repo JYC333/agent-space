@@ -18,6 +18,7 @@ import { EmptyState } from '../../components/ui/empty-state'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -192,6 +193,9 @@ export default function ProjectsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>New project</DialogTitle>
+            <DialogDescription className="sr-only">
+              Create a project with optional description and current focus.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">

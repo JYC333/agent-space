@@ -272,13 +272,19 @@ def test_memory_reflector_cannot_write_memory(db):
     assert tv.tool_policy_json["allowed_tools"] == []
 
 
-def test_knowledge_curator_no_source_or_answer_item_types(db):
-    """Knowledge Curator: source is not a KnowledgeItem type; answer is a relation."""
+def test_knowledge_curator_no_dedicated_source_or_answer_proposal_types(db):
+    """Knowledge Curator emits no dedicated source/answer proposal output types.
+
+    ``source`` is not a KnowledgeItem type at all (it is the Source table).
+    ``answer`` *is* a canonical KnowledgeItem type, but it is created through the
+    generic ``knowledge_item_proposal`` output (item_type=answer), never a special
+    ``answer_create_proposal`` output type.
+    """
     seed_system_templates(db)
     tv = _version(db, _get_system_template(db, "knowledge_curator"))
     types = set(tv.output_policy_json["allowed_output_types"])
 
-    # source/answer must never appear as a KnowledgeItem create type.
+    # No dedicated source/answer create proposal output types exist.
     assert "source_create_proposal" not in types
     assert "answer_create_proposal" not in types
     assert not any("source_create" in t for t in types)

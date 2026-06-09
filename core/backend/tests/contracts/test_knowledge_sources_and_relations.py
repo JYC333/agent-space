@@ -2,10 +2,11 @@
 
 Covers:
   * KnowledgeItem type validation allows the 9 semantic types and rejects
-    the removed ``source`` / ``answer`` types (API + proposal-apply layers).
+    the removed ``source`` / ``idea`` / ``experience`` / ``reflection`` types
+    (API + proposal-apply layers).
   * Source is an independent provenance object (direct CRUD, not proposals).
   * KnowledgeItemSource links items to sources (derived_from / supported_by).
-  * KnowledgeItemRelation links items to items (answers / summarizes / updates).
+  * KnowledgeItemRelation links items to items (explains / summarizes / updates).
 """
 from __future__ import annotations
 
@@ -22,14 +23,13 @@ def _params(space_id: str) -> dict[str, str]:
 
 
 SEMANTIC_ITEM_TYPES = [
-    "knowledge",
-    "idea",
-    "experience",
-    "reflection",
+    "concept",
+    "claim",
     "lesson",
     "procedure",
     "decision",
     "question",
+    "answer",
     "summary",
 ]
 
@@ -59,7 +59,7 @@ def test_create_proposal_accepts_each_semantic_type(db, same_space_pair, item_ty
     del ua
 
 
-@pytest.mark.parametrize("bad_type", ["source", "answer"])
+@pytest.mark.parametrize("bad_type", ["source", "idea", "experience", "reflection"])
 def test_create_proposal_rejects_removed_types_at_api(db, same_space_pair, bad_type):
     space = same_space_pair["space_id"]
     r = same_space_pair["client_a"].post(
@@ -72,7 +72,7 @@ def test_create_proposal_rejects_removed_types_at_api(db, same_space_pair, bad_t
     assert db.query(func.count(KnowledgeItem.id)).filter(KnowledgeItem.space_id == space).scalar() == 0
 
 
-@pytest.mark.parametrize("bad_type", ["source", "answer"])
+@pytest.mark.parametrize("bad_type", ["source", "idea", "experience", "reflection"])
 def test_proposal_apply_rejects_removed_types_in_payload(db, same_space_pair, bad_type):
     """A hand-built proposal payload smuggling a removed type must fail on accept."""
     space = same_space_pair["space_id"]
@@ -237,12 +237,12 @@ def test_duplicate_evidence_link_is_rejected(db, same_space_pair):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("relation_type", ["answers", "summarizes", "updates"])
+@pytest.mark.parametrize("relation_type", ["explains", "summarizes", "updates"])
 def test_item_to_item_relation_types(db, same_space_pair, relation_type):
     space = same_space_pair["space_id"]
     ua = same_space_pair["user_a"]
-    # e.g. a knowledge item --answers--> a question item.
-    from_item = factories.create_test_knowledge_item(db, space_id=space, item_type="knowledge", commit=False)
+    # e.g. an answer item --explains--> a question item.
+    from_item = factories.create_test_knowledge_item(db, space_id=space, item_type="answer", commit=False)
     to_item = factories.create_test_knowledge_item(db, space_id=space, item_type="question", commit=True)
 
     r = same_space_pair["client_a"].post(
@@ -253,7 +253,7 @@ def test_item_to_item_relation_types(db, same_space_pair, relation_type):
             "to_item_id": to_item.id,
             "relation_type": relation_type,
             "status": "active",
-            "note": "linked",
+            "evidence_summary": "linked",
         },
     )
     assert r.status_code == 202, r.text
@@ -266,7 +266,7 @@ def test_item_to_item_relation_types(db, same_space_pair, relation_type):
     relation = db.get(KnowledgeItemRelation, relation_id)
     assert relation is not None
     assert relation.relation_type == relation_type
-    assert relation.note == "linked"
+    assert relation.evidence_summary == "linked"
     del ua
 
 
@@ -280,7 +280,7 @@ def test_relation_proposal_rejects_removed_relation_type(db, same_space_pair):
         json={
             "from_item_id": from_item.id,
             "to_item_id": to_item.id,
-            "relation_type": "example_of",  # removed from vocabulary
+            "relation_type": "answers",  # removed from vocabulary
         },
     )
     assert r.status_code == 422

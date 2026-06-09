@@ -71,8 +71,8 @@ Rules enforced by the frontend:
 ### Home (`/home`) — user-level Today Command Center
 
 Prioritizes, all cross-space with source-Space badges:
-- **Personal Assistant entry** — a space-aware entry point (memory, projects, wiki, captures,
-  runs, proposals). Opening expands into the Assistant surface; chat execution is not wired yet,
+- **Personal Assistant entry** — a space-aware entry point (memory, projects, notes, wiki,
+  captures, runs, proposals). Opening expands into the Assistant surface; chat execution is not wired yet,
   so it never fabricates a reply. It is labelled **Personal Assistant**, never "DirectChat".
 - **Needs attention** — pending proposals, assigned tasks, failed runs.
 - **Review packets** — pending proposals grouped/labelled by source Space; opening enters the
@@ -97,13 +97,19 @@ accept/reject, intake, projects, providers, runtime, recent. Writes default to t
 Two stable tiers plus per-scene context (`src/core/navigation.tsx`, `src/components/shell/`):
 
 - **Global Rail** (`RAIL_ITEMS`) — narrow, icon-only desktop rail of major destinations, Home
-  first and stable: Home · Inbox · Review · Wiki · Tasks · Agents · Workspaces · Settings.
+  first and stable: Home · Inbox · Review · Knowledge · Tasks · Agents · Workspaces · Settings.
   Collapsible/expandable. On mobile this becomes the bottom tab bar (`MOBILE_TAB_ITEMS`).
 - **Scene Sidebar** (`SCENES`) — second-level navigation for the current scene, changes by
-  scene (Inbox / Wiki / Review / Agents / Workspaces). Collapsible; when collapsed the expand
-  handle is shown in the main header next to the scene title (e.g. "☰ Wiki"). Home needs no
-  scene sidebar. On mobile it becomes a horizontal tab strip. Filter scenes (Inbox/Wiki/Review)
-  drive a single real, API-backed query param the page reads — no fabricated views.
+  scene (Inbox / Review / Agents / Workspaces). Collapsible; when collapsed the expand
+  handle is shown in the main header next to the scene title (e.g. "☰ Agents"). Home needs no
+  scene sidebar. On mobile it becomes a horizontal tab strip. Filter scenes (Inbox / Review)
+  drive a single real, API-backed query param the page reads — no fabricated views; route
+  scenes (Agents / Workspaces) link real sibling routes.
+- **Knowledge has no scene.** It switches sub-areas via a lightweight in-header breadcrumb
+  switcher (`Knowledge / Notes ▼`, `KnowledgeSectionHeader`) so each workspace owns its own
+  layout — notably the backend-driven Notes collection tree, which would collide with a
+  persistent section sidebar or tab strip. The Notes tree is local to the Notes workspace
+  and is never a global nav tier; PARA is only the default initialization template.
 - **Right Inspector** — scene/object-specific and owned by individual pages, never an
   app-level feature menu.
 
@@ -148,8 +154,8 @@ not be navigable.
 | **Today** (Space) | Enabled | Space-scoped dashboard at `/spaces/:spaceId/today` for the active Space |
 | **Inbox** (Activity) | Enabled | Capture intake (rail label "Inbox"; route `/activity`) |
 | **Review** (Proposals) | Enabled | Proposal review (rail label "Review"; route `/proposals`) |
-| **Wiki** (Knowledge) | Enabled | Structured knowledge browser (rail label "Wiki"; route `/knowledge`) |
-| **Cards** | `enabled: false, visible: false` | Hidden until backend spaced-repetition model exists |
+| **Knowledge** | Enabled | First-level unified module (rail label "Knowledge"; route `/knowledge`). `/knowledge` redirects to the last-used workspace (default `/knowledge/notes`); `/knowledge/home` is an optional overview hub, never the forced landing. Sub-areas switch via an in-header breadcrumb (no scene sidebar): **Notes** (working-knowledge workspace — configurable collection tree + open-note tabs), **Wiki** (canonical, KnowledgeItem-backed, `/knowledge/wiki`), **Sources**, **Cards** |
+| **Cards** | `enabled: false, visible: false` | Standalone module hidden; surfaced as the Knowledge › Cards placeholder until the spaced-repetition model exists |
 | Time | `planned: true` | Shows "soon" badge |
 
 Future modules (Editor, Calendar, Automation, Knowledge Graph) should only be enabled when
@@ -240,7 +246,6 @@ These are improvements to collect from real use, not pre-conditions for dogfoodi
 
 | Module | Backend prerequisite |
 |---|---|
-| Knowledge | KnowledgeItem / KnowledgeItemRelation + Source / KnowledgeItemSource model + CRUD API |
 | Cards | Spaced-repetition card model + review API |
 | Time | Time entry model + activity linkage |
 | Editor | File editor backend + save API |

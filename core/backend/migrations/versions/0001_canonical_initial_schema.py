@@ -1115,9 +1115,15 @@ def upgrade() -> None:
     sa.Column('root_item_id', sa.String(length=36), nullable=True),
     sa.Column('supersedes_item_id', sa.String(length=36), nullable=True),
     sa.Column('item_type', sa.String(length=32), nullable=False),
+    sa.Column('slug', sa.String(length=512), nullable=True),
+    sa.Column('aliases_json', postgresql.JSONB(), nullable=True),
     sa.Column('title', sa.String(length=512), nullable=False),
     sa.Column('content', sa.Text(), nullable=False),
+    sa.Column('content_json', postgresql.JSONB(), nullable=True),
     sa.Column('content_format', sa.String(length=32), nullable=False),
+    sa.Column('content_schema_version', sa.Integer(), nullable=False),
+    sa.Column('plain_text', sa.Text(), nullable=True),
+    sa.Column('excerpt', sa.String(length=512), nullable=True),
     sa.Column('status', sa.String(length=32), nullable=False),
     sa.Column('visibility', sa.String(length=32), nullable=False),
     sa.Column('verification_status', sa.String(length=32), nullable=False),
@@ -1133,13 +1139,15 @@ def upgrade() -> None:
     sa.Column('source_artifact_id', sa.String(length=36), nullable=True),
     sa.Column('created_from_proposal_id', sa.String(length=36), nullable=True),
     sa.Column('approved_by_user_id', sa.String(length=36), nullable=True),
+    sa.Column('redirect_to_item_id', sa.String(length=36), nullable=True),
     sa.Column('version', sa.Integer(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('archived_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('deprecated_at', sa.DateTime(timezone=True), nullable=True),
     sa.CheckConstraint("confidence is null or (confidence >= 0 and confidence <= 1)", name='ck_knowledge_items_confidence'),
-    sa.CheckConstraint("content_format in ('markdown', 'plain')", name='ck_knowledge_items_content_format'),
-    sa.CheckConstraint("item_type in ('knowledge', 'idea', 'experience', 'reflection', 'lesson', 'procedure', 'decision', 'question', 'summary')", name='ck_knowledge_items_item_type'),
+    sa.CheckConstraint("content_format in ('markdown', 'plain', 'prosemirror_json')", name='ck_knowledge_items_content_format'),
+    sa.CheckConstraint("item_type in ('concept', 'claim', 'lesson', 'procedure', 'decision', 'question', 'answer', 'summary')", name='ck_knowledge_items_item_type'),
     sa.CheckConstraint("reflection_status in ('unreviewed', 'reviewed', 'distilled')", name='ck_knowledge_items_reflection_status'),
     sa.CheckConstraint("status in ('draft', 'active', 'superseded', 'archived')", name='ck_knowledge_items_status'),
     sa.CheckConstraint("verification_status in ('unverified', 'needs_review', 'verified')", name='ck_knowledge_items_verification_status'),
@@ -1151,6 +1159,11 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['created_from_proposal_id'], ['proposals.id'], ),
     sa.ForeignKeyConstraint(['owner_user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['project_id'], ['projects.id'], ),
+    sa.ForeignKeyConstraint(
+        ['redirect_to_item_id'], ['knowledge_items.id'],
+        name='fk_knowledge_items_redirect_to_item_id_knowledge_items',
+        ondelete='SET NULL',
+    ),
     sa.ForeignKeyConstraint(
         ['root_item_id'], ['knowledge_items.id'],
         name='fk_knowledge_items_root_item_id_knowledge_items',
@@ -1171,7 +1184,10 @@ def upgrade() -> None:
     op.create_index(op.f('ix_knowledge_items_item_type'), 'knowledge_items', ['item_type'], unique=False)
     op.create_index(op.f('ix_knowledge_items_owner_user_id'), 'knowledge_items', ['owner_user_id'], unique=False)
     op.create_index(op.f('ix_knowledge_items_project_id'), 'knowledge_items', ['project_id'], unique=False)
+    op.create_index(op.f('ix_knowledge_items_redirect_to_item_id'), 'knowledge_items', ['redirect_to_item_id'], unique=False)
     op.create_index(op.f('ix_knowledge_items_root_item_id'), 'knowledge_items', ['root_item_id'], unique=False)
+    op.create_index(op.f('ix_knowledge_items_slug'), 'knowledge_items', ['slug'], unique=False)
+    op.create_index('ix_knowledge_items_space_slug', 'knowledge_items', ['space_id', 'slug'], unique=False)
     op.create_index(op.f('ix_knowledge_items_space_id'), 'knowledge_items', ['space_id'], unique=False)
     op.create_index(op.f('ix_knowledge_items_status'), 'knowledge_items', ['status'], unique=False)
     op.create_index(op.f('ix_knowledge_items_supersedes_item_id'), 'knowledge_items', ['supersedes_item_id'], unique=False)
@@ -1185,7 +1201,7 @@ def upgrade() -> None:
     sa.Column('relation_type', sa.String(length=64), nullable=False),
     sa.Column('status', sa.String(length=32), nullable=False),
     sa.Column('confidence', sa.Float(), nullable=True),
-    sa.Column('note', sa.Text(), nullable=True),
+    sa.Column('evidence_summary', sa.Text(), nullable=True),
     sa.Column('source_proposal_id', sa.String(length=36), nullable=True),
     sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
     sa.Column('created_by_agent_id', sa.String(length=36), nullable=True),
@@ -1193,7 +1209,7 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint("confidence is null or (confidence >= 0 and confidence <= 1)", name='ck_knowledge_item_relations_confidence'),
-    sa.CheckConstraint("relation_type in ('related_to', 'derived_from', 'supports', 'contradicts', 'answers', 'summarizes', 'depends_on', 'updates')", name='ck_knowledge_item_relations_relation_type'),
+    sa.CheckConstraint("relation_type in ('related_to', 'explains', 'depends_on', 'prerequisite_of', 'part_of', 'example_of', 'applies_to', 'supports', 'contradicts', 'derived_from', 'summarizes', 'updates')", name='ck_knowledge_item_relations_relation_type'),
     sa.CheckConstraint("status in ('candidate', 'active', 'rejected', 'archived')", name='ck_knowledge_item_relations_status'),
     sa.ForeignKeyConstraint(['created_by_agent_id'], ['agents.id'], ),
     sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
@@ -1261,6 +1277,169 @@ def upgrade() -> None:
     op.create_index(op.f('ix_knowledge_item_sources_source_id'), 'knowledge_item_sources', ['source_id'], unique=False)
     op.create_index(op.f('ix_knowledge_item_sources_space_id'), 'knowledge_item_sources', ['space_id'], unique=False)
     op.create_index('ix_knowledge_item_sources_unique', 'knowledge_item_sources', ['knowledge_item_id', 'source_id', 'relation_type'], unique=True)
+    op.create_table('note_collections',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('parent_id', sa.String(length=36), nullable=True),
+    sa.Column('name', sa.String(length=256), nullable=False),
+    sa.Column('system_role', sa.String(length=32), nullable=False),
+    sa.Column('sort_order', sa.Integer(), nullable=False),
+    sa.Column('is_system', sa.Boolean(), nullable=False),
+    sa.Column('is_hidden', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("parent_id is null or parent_id <> id", name='ck_note_collections_not_self_parent'),
+    sa.CheckConstraint("system_role in ('normal', 'inbox', 'archive')", name='ck_note_collections_system_role'),
+    sa.ForeignKeyConstraint(['parent_id'], ['note_collections.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_note_collections_one_archive_per_space', 'note_collections', ['space_id'], unique=True, postgresql_where=sa.text("system_role = 'archive'"))
+    op.create_index('ix_note_collections_one_inbox_per_space', 'note_collections', ['space_id'], unique=True, postgresql_where=sa.text("system_role = 'inbox'"))
+    op.create_index('ix_note_collections_parent_sort', 'note_collections', ['space_id', 'parent_id', 'sort_order'], unique=False)
+    op.create_index(op.f('ix_note_collections_parent_id'), 'note_collections', ['parent_id'], unique=False)
+    op.create_index(op.f('ix_note_collections_space_id'), 'note_collections', ['space_id'], unique=False)
+    op.create_index(op.f('ix_note_collections_system_role'), 'note_collections', ['system_role'], unique=False)
+    op.create_table('notes',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('title', sa.String(length=512), nullable=False),
+    sa.Column('content_json', postgresql.JSONB(), nullable=True),
+    sa.Column('content_format', sa.String(length=32), nullable=False),
+    sa.Column('content_schema_version', sa.Integer(), nullable=False),
+    sa.Column('plain_text', sa.Text(), nullable=True),
+    sa.Column('excerpt', sa.String(length=512), nullable=True),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('primary_project_id', sa.String(length=36), nullable=True),
+    sa.Column('created_from_activity_id', sa.String(length=36), nullable=True),
+    sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('archived_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
+    sa.CheckConstraint("content_format in ('markdown', 'plain', 'prosemirror_json')", name='ck_notes_content_format'),
+    sa.CheckConstraint("status in ('active', 'archived', 'deleted')", name='ck_notes_status'),
+    sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['created_from_activity_id'], ['activity_records.id'], ),
+    sa.ForeignKeyConstraint(['primary_project_id'], ['projects.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_notes_created_by_user_id'), 'notes', ['created_by_user_id'], unique=False)
+    op.create_index(op.f('ix_notes_deleted_at'), 'notes', ['deleted_at'], unique=False)
+    op.create_index(op.f('ix_notes_primary_project_id'), 'notes', ['primary_project_id'], unique=False)
+    op.create_index(op.f('ix_notes_space_id'), 'notes', ['space_id'], unique=False)
+    op.create_index(op.f('ix_notes_status'), 'notes', ['status'], unique=False)
+    op.create_table('note_collection_items',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('collection_id', sa.String(length=36), nullable=False),
+    sa.Column('note_id', sa.String(length=36), nullable=False),
+    sa.Column('sort_order', sa.Integer(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['collection_id'], ['note_collections.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['note_id'], ['notes.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('collection_id', 'note_id', name='uq_note_collection_items_collection_note')
+    )
+    op.create_index(op.f('ix_note_collection_items_collection_id'), 'note_collection_items', ['collection_id'], unique=False)
+    op.create_index(op.f('ix_note_collection_items_note_id'), 'note_collection_items', ['note_id'], unique=False)
+    op.create_table('entity_links',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('source_type', sa.String(length=32), nullable=False),
+    sa.Column('source_id', sa.String(length=36), nullable=False),
+    sa.Column('target_type', sa.String(length=32), nullable=False),
+    sa.Column('target_id', sa.String(length=36), nullable=False),
+    sa.Column('link_type', sa.String(length=32), nullable=False),
+    sa.Column('confidence', sa.Float(), nullable=True),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("confidence is null or (confidence >= 0 and confidence <= 1)", name='ck_entity_links_confidence'),
+    sa.CheckConstraint("link_type in ('references', 'related_to', 'belongs_to', 'captured_from', 'source_for', 'derived_from')", name='ck_entity_links_link_type'),
+    sa.CheckConstraint("source_type in ('note', 'knowledge_item', 'source', 'project', 'workspace', 'activity', 'run', 'proposal')", name='ck_entity_links_source_type'),
+    sa.CheckConstraint("status in ('suggested', 'accepted', 'rejected')", name='ck_entity_links_status'),
+    sa.CheckConstraint("target_type in ('note', 'knowledge_item', 'source', 'project', 'workspace', 'activity', 'run', 'proposal')", name='ck_entity_links_target_type'),
+    sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_entity_links_link_type'), 'entity_links', ['link_type'], unique=False)
+    op.create_index(op.f('ix_entity_links_source_id'), 'entity_links', ['source_id'], unique=False)
+    op.create_index(op.f('ix_entity_links_source_type'), 'entity_links', ['source_type'], unique=False)
+    op.create_index(op.f('ix_entity_links_space_id'), 'entity_links', ['space_id'], unique=False)
+    op.create_index(op.f('ix_entity_links_status'), 'entity_links', ['status'], unique=False)
+    op.create_index(op.f('ix_entity_links_target_id'), 'entity_links', ['target_id'], unique=False)
+    op.create_index(op.f('ix_entity_links_target_type'), 'entity_links', ['target_type'], unique=False)
+    op.create_index('ix_entity_links_unique_accepted', 'entity_links', ['space_id', 'source_type', 'source_id', 'target_type', 'target_id', 'link_type'], unique=True, postgresql_where=sa.text("status = 'accepted'"))
+    op.create_table('cards',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('space_id', sa.String(length=36), nullable=False),
+    sa.Column('card_type', sa.String(length=32), nullable=False),
+    sa.Column('front', sa.Text(), nullable=False),
+    sa.Column('back', sa.Text(), nullable=False),
+    sa.Column('source_type', sa.String(length=32), nullable=True),
+    sa.Column('source_id', sa.String(length=36), nullable=True),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('created_by_user_id', sa.String(length=36), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('archived_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('metadata_json', postgresql.JSONB(), nullable=True),
+    sa.CheckConstraint("card_type in ('basic', 'cloze')", name='ck_cards_card_type'),
+    sa.CheckConstraint("source_type is null or source_type in ('note', 'knowledge_item', 'source', 'activity', 'run', 'proposal')", name='ck_cards_source_type'),
+    sa.CheckConstraint("status in ('draft', 'active', 'suspended', 'archived')", name='ck_cards_status'),
+    sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['space_id'], ['spaces.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_cards_card_type'), 'cards', ['card_type'], unique=False)
+    op.create_index(op.f('ix_cards_created_at'), 'cards', ['created_at'], unique=False)
+    op.create_index('ix_cards_source', 'cards', ['source_type', 'source_id'], unique=False)
+    op.create_index(op.f('ix_cards_source_id'), 'cards', ['source_id'], unique=False)
+    op.create_index(op.f('ix_cards_source_type'), 'cards', ['source_type'], unique=False)
+    op.create_index(op.f('ix_cards_space_id'), 'cards', ['space_id'], unique=False)
+    op.create_index(op.f('ix_cards_status'), 'cards', ['status'], unique=False)
+    op.create_table('card_review_states',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('card_id', sa.String(length=36), nullable=False),
+    sa.Column('user_id', sa.String(length=36), nullable=False),
+    sa.Column('due_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('stability', sa.Float(), nullable=True),
+    sa.Column('difficulty', sa.Float(), nullable=True),
+    sa.Column('elapsed_days', sa.Float(), nullable=True),
+    sa.Column('scheduled_days', sa.Float(), nullable=True),
+    sa.Column('reps', sa.Integer(), nullable=False),
+    sa.Column('lapses', sa.Integer(), nullable=False),
+    sa.Column('state', sa.String(length=32), nullable=True),
+    sa.Column('last_reviewed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("state is null or state in ('new', 'learning', 'review', 'relearning')", name='ck_card_review_states_state'),
+    sa.ForeignKeyConstraint(['card_id'], ['cards.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('card_id', 'user_id', name='uq_card_review_states_card_user')
+    )
+    op.create_index(op.f('ix_card_review_states_card_id'), 'card_review_states', ['card_id'], unique=False)
+    op.create_index('ix_card_review_states_user_due', 'card_review_states', ['user_id', 'due_at'], unique=False)
+    op.create_table('card_reviews',
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('card_id', sa.String(length=36), nullable=False),
+    sa.Column('user_id', sa.String(length=36), nullable=False),
+    sa.Column('rating', sa.String(length=16), nullable=False),
+    sa.Column('reviewed_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('review_state_snapshot_json', postgresql.JSONB(), nullable=True),
+    sa.Column('duration_ms', sa.Integer(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("rating in ('again', 'hard', 'good', 'easy')", name='ck_card_reviews_rating'),
+    sa.ForeignKeyConstraint(['card_id'], ['cards.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_card_reviews_card_id'), 'card_reviews', ['card_id'], unique=False)
+    op.create_index(op.f('ix_card_reviews_rating'), 'card_reviews', ['rating'], unique=False)
+    op.create_index('ix_card_reviews_user_reviewed_at', 'card_reviews', ['user_id', 'reviewed_at'], unique=False)
     op.create_table('boards',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('space_id', sa.String(length=36), nullable=False),
@@ -3196,6 +3375,45 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_boards_workspace_id'), table_name='boards')
     op.drop_index(op.f('ix_boards_space_id'), table_name='boards')
     op.drop_table('boards')
+    op.drop_index('ix_card_reviews_user_reviewed_at', table_name='card_reviews')
+    op.drop_index(op.f('ix_card_reviews_rating'), table_name='card_reviews')
+    op.drop_index(op.f('ix_card_reviews_card_id'), table_name='card_reviews')
+    op.drop_table('card_reviews')
+    op.drop_index('ix_card_review_states_user_due', table_name='card_review_states')
+    op.drop_index(op.f('ix_card_review_states_card_id'), table_name='card_review_states')
+    op.drop_table('card_review_states')
+    op.drop_index(op.f('ix_cards_status'), table_name='cards')
+    op.drop_index(op.f('ix_cards_space_id'), table_name='cards')
+    op.drop_index(op.f('ix_cards_source_type'), table_name='cards')
+    op.drop_index(op.f('ix_cards_source_id'), table_name='cards')
+    op.drop_index('ix_cards_source', table_name='cards')
+    op.drop_index(op.f('ix_cards_created_at'), table_name='cards')
+    op.drop_index(op.f('ix_cards_card_type'), table_name='cards')
+    op.drop_table('cards')
+    op.drop_index('ix_entity_links_unique_accepted', table_name='entity_links')
+    op.drop_index(op.f('ix_entity_links_target_type'), table_name='entity_links')
+    op.drop_index(op.f('ix_entity_links_target_id'), table_name='entity_links')
+    op.drop_index(op.f('ix_entity_links_status'), table_name='entity_links')
+    op.drop_index(op.f('ix_entity_links_space_id'), table_name='entity_links')
+    op.drop_index(op.f('ix_entity_links_source_type'), table_name='entity_links')
+    op.drop_index(op.f('ix_entity_links_source_id'), table_name='entity_links')
+    op.drop_index(op.f('ix_entity_links_link_type'), table_name='entity_links')
+    op.drop_table('entity_links')
+    op.drop_index(op.f('ix_note_collection_items_note_id'), table_name='note_collection_items')
+    op.drop_index(op.f('ix_note_collection_items_collection_id'), table_name='note_collection_items')
+    op.drop_table('note_collection_items')
+    op.drop_index(op.f('ix_notes_status'), table_name='notes')
+    op.drop_index(op.f('ix_notes_space_id'), table_name='notes')
+    op.drop_index(op.f('ix_notes_primary_project_id'), table_name='notes')
+    op.drop_index(op.f('ix_notes_created_by_user_id'), table_name='notes')
+    op.drop_table('notes')
+    op.drop_index(op.f('ix_note_collections_system_role'), table_name='note_collections')
+    op.drop_index(op.f('ix_note_collections_space_id'), table_name='note_collections')
+    op.drop_index(op.f('ix_note_collections_parent_id'), table_name='note_collections')
+    op.drop_index('ix_note_collections_parent_sort', table_name='note_collections')
+    op.drop_index('ix_note_collections_one_inbox_per_space', table_name='note_collections', postgresql_where=sa.text("system_role = 'inbox'"))
+    op.drop_index('ix_note_collections_one_archive_per_space', table_name='note_collections', postgresql_where=sa.text("system_role = 'archive'"))
+    op.drop_table('note_collections')
     op.drop_index('ix_knowledge_item_sources_unique', table_name='knowledge_item_sources')
     op.drop_index(op.f('ix_knowledge_item_sources_space_id'), table_name='knowledge_item_sources')
     op.drop_index(op.f('ix_knowledge_item_sources_source_id'), table_name='knowledge_item_sources')

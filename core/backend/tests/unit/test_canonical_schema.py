@@ -120,6 +120,14 @@ REQUIRED_TABLES = {
     "evidence_links",
     "workspace_intake_profiles",
     "workspace_source_bindings",
+    # Knowledge — Notes, EntityLink, Cards
+    "note_collections",
+    "note_collection_items",
+    "notes",
+    "entity_links",
+    "cards",
+    "card_review_states",
+    "card_reviews",
 }
 
 
@@ -249,17 +257,20 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
     knowledge_columns = {column["name"] for column in inspector.get_columns("knowledge_items")}
     assert {
         "id", "space_id", "project_id", "workspace_id", "root_item_id",
-        "supersedes_item_id", "item_type", "title", "content", "content_format",
+        "supersedes_item_id", "redirect_to_item_id", "item_type", "slug", "aliases_json",
+        "title", "content", "content_json", "content_format", "content_schema_version",
+        "plain_text", "excerpt",
         "status", "visibility", "verification_status", "reflection_status",
         "tags_json", "confidence", "source_url",
         "owner_user_id", "created_by_user_id", "created_by_agent_id", "created_by_run_id",
         "source_activity_id", "source_artifact_id", "created_from_proposal_id",
         "approved_by_user_id", "version", "created_at", "updated_at", "archived_at",
+        "deprecated_at",
     }.issubset(knowledge_columns)
     knowledge_relation_columns = {column["name"] for column in inspector.get_columns("knowledge_item_relations")}
     assert {
         "id", "space_id", "from_item_id", "to_item_id", "relation_type", "status",
-        "confidence", "note", "source_proposal_id", "created_by_user_id",
+        "confidence", "evidence_summary", "source_proposal_id", "created_by_user_id",
         "created_by_agent_id", "created_from_assessment_id", "created_at", "updated_at",
     }.issubset(knowledge_relation_columns)
     knowledge_indexes = {tuple(i["column_names"]) for i in inspector.get_indexes("knowledge_items")}
@@ -466,7 +477,7 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
             space_id=space.id,
             workspace_id=workspace.id,
             root_item_id="knowledge-1",
-            item_type="knowledge",
+            item_type="concept",
             title="Knowledge",
             content="Approved knowledge",
             content_format="markdown",

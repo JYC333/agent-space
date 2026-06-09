@@ -646,7 +646,10 @@ class DailyCaptureReportService:
             ]
             payload: dict = {
                 "operation": "create",
-                "item_type": "experience",
+                # Daily-capture experience candidates are digests of confirmed
+                # activity captures; "experience" is no longer a canonical Wiki
+                # item type, so they land as canonical "summary" KnowledgeItems.
+                "item_type": "summary",
                 "title": cand.title,
                 "content": cand.content,
                 "content_format": "markdown",

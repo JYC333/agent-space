@@ -18,9 +18,11 @@ vi.mock('../contexts/SpaceContext', () => ({
 
 import { FloatingQuickCapture } from '../components/FloatingQuickCapture'
 
+const routerFuture = { v7_relativeSplatPath: true, v7_startTransition: true } as const
+
 describe('FloatingQuickCapture on Home', () => {
   it('shows an explicit write target defaulting to Personal Space', () => {
-    render(<MemoryRouter><FloatingQuickCapture scope="home" /></MemoryRouter>)
+    render(<MemoryRouter future={routerFuture}><FloatingQuickCapture scope="home" /></MemoryRouter>)
     // Opens from the floating button.
     fireEvent.click(screen.getByLabelText('Quick capture'))
     expect(screen.getByText('Save to:')).toBeInTheDocument()
@@ -29,7 +31,7 @@ describe('FloatingQuickCapture on Home', () => {
   })
 
   it('shows the active space as target on space-scoped routes', () => {
-    render(<MemoryRouter><FloatingQuickCapture scope="space" /></MemoryRouter>)
+    render(<MemoryRouter future={routerFuture}><FloatingQuickCapture scope="space" /></MemoryRouter>)
     fireEvent.click(screen.getByLabelText('Quick capture'))
     expect(screen.getByText('Save to:')).toBeInTheDocument()
     expect(screen.getByText('Acme Team')).toBeInTheDocument()

@@ -25,6 +25,7 @@ import { EmptyState } from '../../components/ui/empty-state'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -113,6 +114,9 @@ function EditProjectDialog({ project, open, onOpenChange, onSaved }: EditDialogP
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Edit project</DialogTitle>
+          <DialogDescription className="sr-only">
+            Update this project's name, description, and current focus.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
@@ -196,10 +200,10 @@ function LinkWorkspaceDialog({ projectId, existingIds, open, onOpenChange, onLin
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Link workspace</DialogTitle>
+          <DialogDescription>
+            Link workspaces that this project uses for code, docs, data, deployment, or reference material.
+          </DialogDescription>
         </DialogHeader>
-        <p className="text-xs text-muted-foreground">
-          Link workspaces that this project uses for code, docs, data, deployment, or reference material.
-        </p>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label>Workspace</Label>

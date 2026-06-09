@@ -40,21 +40,36 @@ vi.mock('../contexts/AuthContext', () => ({
 import { meApi, homeApi } from '../api/client'
 import HomePage from '../modules/home/HomePage'
 
+const routerFuture = { v7_relativeSplatPath: true, v7_startTransition: true } as const
+
+function renderHome() {
+  render(<MemoryRouter future={routerFuture}><HomePage /></MemoryRouter>)
+}
+
+async function waitForHomeData() {
+  await screen.findAllByText('A team proposal')
+}
+
 describe('HomePage (user-scoped Today Command Center)', () => {
-  it('reads the /me aggregate, never the space-scoped Space Today endpoint', () => {
-    render(<MemoryRouter><HomePage /></MemoryRouter>)
+  it('reads the /me aggregate, never the space-scoped Space Today endpoint', async () => {
+    renderHome()
+    await waitForHomeData()
+
     expect(meApi.summary).toHaveBeenCalled()
     expect(homeApi.summary).not.toHaveBeenCalled()
   })
 
-  it('shows the Personal Assistant entry and no DirectChat wording', () => {
-    render(<MemoryRouter><HomePage /></MemoryRouter>)
+  it('shows the Personal Assistant entry and no DirectChat wording', async () => {
+    renderHome()
+    await waitForHomeData()
+
     expect(screen.getByText('Personal Assistant')).toBeInTheDocument()
     expect(screen.queryByText(/DirectChat/i)).toBeNull()
   })
 
   it('labels cross-space aggregated items with a source Space badge', async () => {
-    render(<MemoryRouter><HomePage /></MemoryRouter>)
+    renderHome()
+
     expect((await screen.findAllByText('A team proposal')).length).toBeGreaterThan(0)
     expect((await screen.findAllByText('Acme Team')).length).toBeGreaterThan(0)
   })

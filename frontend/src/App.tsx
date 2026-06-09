@@ -67,7 +67,7 @@ export default function App() {
   return (
     <ThemeProvider>
     <AuthProvider>
-      <BrowserRouter>
+      <BrowserRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
         <SpaceProvider>
           <TooltipProvider delayDuration={400}>
             <Routes>

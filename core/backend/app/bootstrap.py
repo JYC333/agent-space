@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from .agents.template_seeder import seed_system_templates
 from .evolution.services import EvolutionTargetRegistry
 from .execution_planes.seeder import seed_default_execution_planes
+from .knowledge.seeder import seed_default_note_collections
 from .models import Space, SpaceMembership, User
 from .spaces.defaults import personal_space_id_for_owner
 
@@ -48,6 +49,7 @@ def bootstrap_instance(
         "user": False,
         "membership": False,
         "execution_planes": False,
+        "note_collections": False,
         "system_templates": False,
     }
 
@@ -99,6 +101,8 @@ def bootstrap_instance(
             )
         )
         created["membership"] = True
+
+    created["note_collections"] = seed_default_note_collections(db, space_id) > 0
 
     db.commit()
 

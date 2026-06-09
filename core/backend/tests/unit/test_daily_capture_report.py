@@ -347,7 +347,7 @@ def test_experience_proposals_created_when_enabled_and_above_threshold(db):
     prop = db.query(Proposal).filter(Proposal.id == result.experience_proposal_ids[0]).first()
     assert prop.proposal_type == "knowledge_create"
     payload = prop.payload_json or {}
-    assert payload.get("item_type") == "experience"
+    assert payload.get("item_type") == "summary"
     assert payload.get("verification_status") == "unverified"
     assert "daily-capture-report" in payload.get("tags", [])
 
@@ -394,7 +394,7 @@ def test_accepting_experience_proposal_creates_knowledge_item(db):
     prop_id = result.experience_proposal_ids[0]
     accept_result = ProposalService(db).accept(prop_id, space_id=space_id, user_id=user_id)
     assert accept_result.knowledge_item is not None
-    assert accept_result.knowledge_item.item_type == "experience"
+    assert accept_result.knowledge_item.item_type == "summary"
     assert db.query(KnowledgeItem).filter(KnowledgeItem.space_id == space_id).count() == 1
 
 

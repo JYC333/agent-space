@@ -1875,9 +1875,15 @@ class KnowledgeItem(Base):
         index=True,
     )
     item_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    slug: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, index=True)
+    aliases_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     content_format: Mapped[str] = mapped_column(String(32), nullable=False, default="markdown")
+    content_schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    plain_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    excerpt: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
     visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="space_shared", index=True)
     verification_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unverified")
@@ -1895,18 +1901,32 @@ class KnowledgeItem(Base):
         UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True
     )
     approved_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
+    redirect_to_item_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey(
+            "knowledge_items.id",
+            name="fk_knowledge_items_redirect_to_item_id_knowledge_items",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    deprecated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         CheckConstraint(
-            "item_type in ('knowledge', 'idea', 'experience', 'reflection', 'lesson', "
-            "'procedure', 'decision', 'question', 'summary')",
+            "item_type in ('concept', 'claim', 'lesson', 'procedure', 'decision', "
+            "'question', 'answer', 'summary')",
             name="ck_knowledge_items_item_type",
         ),
-        CheckConstraint("content_format in ('markdown', 'plain')", name="ck_knowledge_items_content_format"),
+        CheckConstraint(
+            "content_format in ('markdown', 'plain', 'prosemirror_json')",
+            name="ck_knowledge_items_content_format",
+        ),
         CheckConstraint(
             "status in ('draft', 'active', 'superseded', 'archived')",
             name="ck_knowledge_items_status",
@@ -1924,6 +1944,10 @@ class KnowledgeItem(Base):
             name="ck_knowledge_items_reflection_status",
         ),
         CheckConstraint("confidence is null or (confidence >= 0 and confidence <= 1)", name="ck_knowledge_items_confidence"),
+        # Slug is for readable URLs only; it is intentionally NOT globally unique
+        # because version history keeps multiple rows per logical item sharing a
+        # slug. Stable page identity is root_item_id / id, not slug.
+        Index("ix_knowledge_items_space_slug", "space_id", "slug"),
     )
 
 
@@ -1931,9 +1955,9 @@ class KnowledgeItemRelation(Base):
     """Semantic wiki graph relation between two same-space KnowledgeItem rows.
 
     This is the item-to-item layer. Evidence/provenance links from an item to a
-    Source live on KnowledgeItemSource, not here. ``answers`` is a relation type
-    here (a knowledge/summary/... item answering a question item); there is no
-    KnowledgeItem type ``answer``.
+    Source live on KnowledgeItemSource, not here. A question item and its answer
+    item (both first-class KnowledgeItem types) are linked with a generic
+    ``related_to`` relation; there is no dedicated ``answers`` relation type.
     """
 
     __tablename__ = "knowledge_item_relations"
@@ -1945,7 +1969,7 @@ class KnowledgeItemRelation(Base):
     relation_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    evidence_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source_proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True)
     created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
     created_by_agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True)
@@ -1956,8 +1980,9 @@ class KnowledgeItemRelation(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "relation_type in ('related_to', 'derived_from', 'supports', 'contradicts', "
-            "'answers', 'summarizes', 'depends_on', 'updates')",
+            "relation_type in ('related_to', 'explains', 'depends_on', 'prerequisite_of', "
+            "'part_of', 'example_of', 'applies_to', 'supports', 'contradicts', "
+            "'derived_from', 'summarizes', 'updates')",
             name="ck_knowledge_item_relations_relation_type",
         ),
         CheckConstraint(
@@ -2062,6 +2087,306 @@ class KnowledgeItemSource(Base):
             "relation_type",
             unique=True,
         ),
+    )
+
+
+class Note(Base):
+    """Working knowledge: freely-editable notes (direct CRUD, no proposal gate).
+
+    Notes are the *working* layer of the Knowledge domain. Unlike KnowledgeItem
+    (canonical wiki content, proposal-gated and versioned) a note evolves freely
+    and is edited directly by its owner — meeting notes, design notes, research
+    and thinking notes. Promotion of a note into canonical wiki knowledge happens
+    later through the normal KnowledgeItem proposal flow; the relationship is then
+    recorded on the generic EntityLink layer (e.g. ``source_for`` / ``derived_from``).
+
+    Content is stored as ``content_json`` (ProseMirror JSON once a rich editor is
+    wired) plus the derived ``plain_text`` / ``excerpt`` projections used for list
+    previews and future search. The current editor ships markdown/plain text.
+    """
+
+    __tablename__ = "notes"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    content_format: Mapped[str] = mapped_column(String(32), nullable=False, default="markdown")
+    content_schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    plain_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    excerpt: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    primary_project_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL, ForeignKey("projects.id"), nullable=True, index=True
+    )
+    created_from_activity_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL, ForeignKey("activity_records.id"), nullable=True
+    )
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "content_format in ('markdown', 'plain', 'prosemirror_json')",
+            name="ck_notes_content_format",
+        ),
+        CheckConstraint(
+            "status in ('active', 'archived', 'deleted')",
+            name="ck_notes_status",
+        ),
+    )
+
+
+class NoteCollection(Base):
+    """Space-scoped, user-configurable folders for Notes.
+
+    PARA is seeded as an initial folder template, but collection rows are the
+    source of truth for the Notes tree. ``system_role`` is internal behavior:
+    only Inbox and Archive receive special protection.
+    """
+
+    __tablename__ = "note_collections"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    parent_id: Mapped[Optional[str]] = mapped_column(
+        UUID_COL,
+        ForeignKey("note_collections.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    system_role: Mapped[str] = mapped_column(String(32), nullable=False, default="normal", index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint("system_role in ('normal', 'inbox', 'archive')", name="ck_note_collections_system_role"),
+        CheckConstraint("parent_id is null or parent_id <> id", name="ck_note_collections_not_self_parent"),
+        Index(
+            "ix_note_collections_one_inbox_per_space",
+            "space_id",
+            unique=True,
+            postgresql_where=text("system_role = 'inbox'"),
+        ),
+        Index(
+            "ix_note_collections_one_archive_per_space",
+            "space_id",
+            unique=True,
+            postgresql_where=text("system_role = 'archive'"),
+        ),
+        Index("ix_note_collections_parent_sort", "space_id", "parent_id", "sort_order"),
+    )
+
+
+class NoteCollectionItem(Base):
+    """Membership of a Note in a collection."""
+
+    __tablename__ = "note_collection_items"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    collection_id: Mapped[str] = mapped_column(
+        UUID_COL, ForeignKey("note_collections.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    note_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("notes.id", ondelete="CASCADE"), nullable=False, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    __table_args__ = (
+        UniqueConstraint("collection_id", "note_id", name="uq_note_collection_items_collection_note"),
+    )
+
+
+class EntityLink(Base):
+    """Generic directional relation between two same-space domain objects.
+
+    The cross-object link layer for the Knowledge domain: it connects a note to
+    another note, a wiki KnowledgeItem, a Source, a Project, a Workspace, an
+    ActivityRecord, a Run, or a Proposal without hardcoding a join table per pair.
+    ``source_id`` / ``target_id`` are polymorphic (resolved via ``source_type`` /
+    ``target_type``) and are therefore intentionally not foreign keys.
+
+    EntityLink complements — and does not replace — the type-specific tables:
+      * KnowledgeItemRelation — governed wiki item <-> item semantic graph.
+      * KnowledgeItemSource   — wiki item <-> Source evidence links.
+      * ProvenanceLink        — provenance into memory/policy/knowledge targets.
+    It is the user-facing working relation layer (direct CRUD), primarily for notes.
+    """
+
+    __tablename__ = "entity_links"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_id: Mapped[str] = mapped_column(UUID_COL, nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    target_id: Mapped[str] = mapped_column(UUID_COL, nullable=False, index=True)
+    link_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="accepted", index=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "source_type in ('note', 'knowledge_item', 'source', 'project', "
+            "'workspace', 'activity', 'run', 'proposal')",
+            name="ck_entity_links_source_type",
+        ),
+        CheckConstraint(
+            "target_type in ('note', 'knowledge_item', 'source', 'project', "
+            "'workspace', 'activity', 'run', 'proposal')",
+            name="ck_entity_links_target_type",
+        ),
+        CheckConstraint(
+            "link_type in ('references', 'related_to', 'belongs_to', "
+            "'captured_from', 'source_for', 'derived_from')",
+            name="ck_entity_links_link_type",
+        ),
+        CheckConstraint(
+            "status in ('suggested', 'accepted', 'rejected')",
+            name="ck_entity_links_status",
+        ),
+        CheckConstraint(
+            "confidence is null or (confidence >= 0 and confidence <= 1)",
+            name="ck_entity_links_confidence",
+        ),
+        Index(
+            "ix_entity_links_unique_accepted",
+            "space_id",
+            "source_type",
+            "source_id",
+            "target_type",
+            "target_id",
+            "link_type",
+            unique=True,
+            postgresql_where=text("status = 'accepted'"),
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cards (knowledge review / spaced-repetition foundation)
+# ---------------------------------------------------------------------------
+
+
+class Card(Base):
+    """Shared card content derived from knowledge objects.
+
+    Card content is space-scoped; review scheduling and history are user-specific
+    (CardReviewState / CardReview). source_type / source_id are polymorphic
+    back-references to the originating object and are intentionally not FKs
+    (allowlisted in the DDL semantics test).
+    """
+
+    __tablename__ = "cards"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    card_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    front: Mapped[str] = mapped_column(Text, nullable=False)
+    back: Mapped[str] = mapped_column(Text, nullable=False)
+    source_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    source_id: Mapped[Optional[str]] = mapped_column(UUID_COL, nullable=True, index=True)  # polymorphic, no FK
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    review_states: Mapped[list["CardReviewState"]] = relationship(
+        "CardReviewState", back_populates="card", cascade="all, delete-orphan"
+    )
+    reviews: Mapped[list["CardReview"]] = relationship(
+        "CardReview", back_populates="card", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint("card_type in ('basic', 'cloze')", name="ck_cards_card_type"),
+        CheckConstraint(
+            "status in ('draft', 'active', 'suspended', 'archived')",
+            name="ck_cards_status",
+        ),
+        CheckConstraint(
+            "source_type is null or source_type in "
+            "('note', 'knowledge_item', 'source', 'activity', 'run', 'proposal')",
+            name="ck_cards_source_type",
+        ),
+        Index("ix_cards_source", "source_type", "source_id"),
+    )
+
+
+class CardReviewState(Base):
+    """Per-user FSRS scheduling state for a card. One row per (card, user) pair.
+
+    FSRS fields (stability, difficulty, elapsed_days, scheduled_days, state) are
+    populated by the review scheduler once implemented. The row can exist before
+    the first review is processed — all scheduling fields are nullable.
+    """
+
+    __tablename__ = "card_review_states"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    card_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("cards.id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=False)
+    due_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    stability: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    difficulty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    elapsed_days: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    scheduled_days: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    reps: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lapses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    state: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    last_reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    card: Mapped["Card"] = relationship("Card", back_populates="review_states")
+
+    __table_args__ = (
+        CheckConstraint(
+            "state is null or state in ('new', 'learning', 'review', 'relearning')",
+            name="ck_card_review_states_state",
+        ),
+        UniqueConstraint("card_id", "user_id", name="uq_card_review_states_card_user"),
+        Index("ix_card_review_states_user_due", "user_id", "due_at"),
+    )
+
+
+class CardReview(Base):
+    """Append-only review history entry recorded each time a user rates a card.
+
+    Ratings follow the FSRS scale: again | hard | good | easy.
+    review_state_snapshot_json captures the CardReviewState at review time for
+    scheduler replay/audit. duration_ms is the display time before the user rated.
+    """
+
+    __tablename__ = "card_reviews"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    card_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("cards.id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=False)
+    rating: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    review_state_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    card: Mapped["Card"] = relationship("Card", back_populates="reviews")
+
+    __table_args__ = (
+        CheckConstraint(
+            "rating in ('again', 'hard', 'good', 'easy')",
+            name="ck_card_reviews_rating",
+        ),
+        Index("ix_card_reviews_user_reviewed_at", "user_id", "reviewed_at"),
     )
 
 

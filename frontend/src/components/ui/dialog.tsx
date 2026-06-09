@@ -1,3 +1,4 @@
+import { forwardRef } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { cn } from '../../lib/utils'
@@ -7,9 +8,13 @@ export const Dialog        = DialogPrimitive.Root
 export const DialogTrigger = DialogPrimitive.Trigger
 export const DialogClose   = DialogPrimitive.Close
 
-function DialogOverlay({ className, ...props }: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>) {
+const DialogOverlay = forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Overlay>,
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
+>(function DialogOverlay({ className, ...props }, ref) {
   return (
     <DialogPrimitive.Overlay
+      ref={ref}
       className={cn(
         'fixed inset-0 z-50 bg-black/60',
         'data-[state=open]:animate-in   data-[state=closed]:animate-out',
@@ -19,17 +24,21 @@ function DialogOverlay({ className, ...props }: React.ComponentPropsWithoutRef<t
       {...props}
     />
   )
-}
+})
 
 interface DialogContentProps extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
   showClose?: boolean
 }
 
-export function DialogContent({ className, children, showClose = true, ...props }: DialogContentProps) {
+export const DialogContent = forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Content>,
+  DialogContentProps
+>(function DialogContent({ className, children, showClose = true, ...props }, ref) {
   return (
     <DialogPrimitive.Portal>
       <DialogOverlay />
       <DialogPrimitive.Content
+        ref={ref}
         className={cn(
           'fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2',
           'w-full max-w-lg rounded-lg bg-card border border-border p-6 shadow-xl',
@@ -52,29 +61,37 @@ export function DialogContent({ className, children, showClose = true, ...props 
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   )
-}
+})
 
 export function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return <div className={cn('mb-5', className)} {...props} />
 }
 
-export function DialogTitle({ className, ...props }: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>) {
+export const DialogTitle = forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Title>,
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
+>(function DialogTitle({ className, ...props }, ref) {
   return (
     <DialogPrimitive.Title
+      ref={ref}
       className={cn('text-base font-semibold text-foreground leading-tight', className)}
       {...props}
     />
   )
-}
+})
 
-export function DialogDescription({ className, ...props }: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>) {
+export const DialogDescription = forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Description>,
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>
+>(function DialogDescription({ className, ...props }, ref) {
   return (
     <DialogPrimitive.Description
+      ref={ref}
       className={cn('mt-1.5 text-sm text-muted-foreground', className)}
       {...props}
     />
   )
-}
+})
 
 export function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (

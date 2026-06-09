@@ -255,7 +255,7 @@ def test_knowledge_items_included_when_available(db):
         space_id=PERSONAL_SPACE_ID,
         title="How to deploy",
         content="Run ./scripts/start.sh to deploy.",
-        item_type="knowledge",
+        item_type="concept",
     )
 
     req = _req()
@@ -266,30 +266,13 @@ def test_knowledge_items_included_when_available(db):
     assert any(i.item_id == ki.id for i in ki_items)
 
 
-def test_idea_items_use_idea_item_type(db):
-    idea = factories.create_test_knowledge_item(
-        db,
-        space_id=PERSONAL_SPACE_ID,
-        title="Product idea",
-        content="What if we added search?",
-        item_type="idea",
-    )
-
-    req = _req()
-    builder = ChatContextBuilder(db)
-    bundle = builder.build(req)
-
-    idea_items = [i for i in bundle.items if i.item_type == "idea"]
-    assert any(i.item_id == idea.id for i in idea_items)
-
-
 def test_knowledge_items_excluded_when_policy_disables_them(db):
     factories.create_test_knowledge_item(
         db,
         space_id=PERSONAL_SPACE_ID,
         title="Excluded doc",
         content="Should not appear.",
-        item_type="knowledge",
+        item_type="concept",
     )
     agent = factories.create_test_agent(db, space_id=PERSONAL_SPACE_ID, owner_user_id=DEFAULT_USER_ID)
     version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
@@ -300,7 +283,7 @@ def test_knowledge_items_excluded_when_policy_disables_them(db):
     builder = ChatContextBuilder(db)
     bundle = builder.build(req)
 
-    assert not any(i.item_type in ("knowledge_item", "idea") for i in bundle.items)
+    assert not any(i.item_type == "knowledge_item" for i in bundle.items)
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +331,7 @@ def test_activity_records_excluded_when_policy_disables_them(db):
 def test_max_items_truncation(db):
     for i in range(5):
         factories.create_test_knowledge_item(
-            db, space_id=PERSONAL_SPACE_ID, title=f"Doc {i}", content="x" * 100, item_type="knowledge"
+            db, space_id=PERSONAL_SPACE_ID, title=f"Doc {i}", content="x" * 100, item_type="concept"
         )
     for i in range(5):
         factories.create_test_activity(
@@ -371,7 +354,7 @@ def test_max_tokens_truncation(db):
             space_id=PERSONAL_SPACE_ID,
             title=f"Big doc {i}",
             content="x" * 200,
-            item_type="knowledge",
+            item_type="concept",
         )
 
     req = _req(max_tokens=60, max_items=100)
@@ -575,7 +558,7 @@ def test_knowledge_items_from_other_space_excluded(db):
     db.flush()
 
     factories.create_test_knowledge_item(
-        db, space_id=other_space, title="Foreign doc", content="Secret.", item_type="knowledge"
+        db, space_id=other_space, title="Foreign doc", content="Secret.", item_type="concept"
     )
 
     req = _req()  # Uses PERSONAL_SPACE_ID.

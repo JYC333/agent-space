@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.auth.session import SESSION_COOKIE, UserSessionService
 from app.evolution.constants import DEFAULT_CAPTURE_CAPABILITY_KEY
 from app.main import app as _app
@@ -10,6 +12,8 @@ from app.providers.invocation import CompletionResult
 from starlette.testclient import TestClient
 from tests.support import factories
 from tests.support.ids import DEFAULT_USER_ID, PERSONAL_SPACE_ID
+
+pytestmark = pytest.mark.usefixtures("app_db_override")
 
 
 def _params() -> dict[str, str]:
@@ -180,7 +184,7 @@ def test_evolution_run_requires_signal(db):
         json={"engine": "llm_prompt_review"},
     )
     assert run.status_code == 422
-    assert "requires at least one signal" in run.json()["detail"]
+    assert "requires at least one signal" in run.json()["message"]
     assert db.query(Proposal).count() == 0
 
 
@@ -207,7 +211,7 @@ def test_evolution_run_requires_default_model_provider(db):
         json={"engine": "llm_prompt_review"},
     )
     assert run.status_code == 422
-    assert "No default provider configured" in run.json()["detail"]
+    assert "No default provider configured" in run.json()["message"]
     assert db.query(Proposal).count() == 0
 
 

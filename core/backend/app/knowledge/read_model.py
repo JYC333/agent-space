@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from ..models import KnowledgeItem, KnowledgeItemRelation, KnowledgeItemSource, Source
+from ..models import EntityLink, KnowledgeItem, KnowledgeItemRelation, KnowledgeItemSource, Note, NoteCollection, Source
 from .schemas import (
+    EntityLinkOut,
     KnowledgeItemOut,
     KnowledgeItemRelationOut,
     KnowledgeItemSourceOut,
     KnowledgeItemSummaryOut,
+    NoteCollectionOut,
+    NoteOut,
+    NoteSummaryOut,
     SourceOut,
     SourceSummaryOut,
 )
@@ -26,10 +30,17 @@ def knowledge_item_to_out(item: KnowledgeItem) -> KnowledgeItemOut:
         workspace_id=item.workspace_id,
         root_item_id=item.root_item_id,
         supersedes_item_id=item.supersedes_item_id,
+        redirect_to_item_id=item.redirect_to_item_id,
         item_type=item.item_type,  # type: ignore[arg-type]
+        slug=item.slug,
+        aliases=list(item.aliases_json or []),
         title=item.title,
         content=item.content,
+        content_json=item.content_json,
         content_format=item.content_format,  # type: ignore[arg-type]
+        content_schema_version=item.content_schema_version,
+        plain_text=item.plain_text,
+        excerpt=item.excerpt,
         status=item.status,  # type: ignore[arg-type]
         visibility=item.visibility,  # type: ignore[arg-type]
         verification_status=item.verification_status,  # type: ignore[arg-type]
@@ -49,6 +60,7 @@ def knowledge_item_to_out(item: KnowledgeItem) -> KnowledgeItemOut:
         created_at=item.created_at,
         updated_at=item.updated_at,
         archived_at=item.archived_at,
+        deprecated_at=item.deprecated_at,
     )
 
 
@@ -59,8 +71,10 @@ def knowledge_item_to_summary_out(item: KnowledgeItem) -> KnowledgeItemSummaryOu
         project_id=item.project_id,
         workspace_id=item.workspace_id,
         item_type=item.item_type,  # type: ignore[arg-type]
+        slug=item.slug,
         title=item.title,
         content_preview=_preview(item.content),
+        excerpt=item.excerpt,
         status=item.status,  # type: ignore[arg-type]
         visibility=item.visibility,  # type: ignore[arg-type]
         verification_status=item.verification_status,  # type: ignore[arg-type]
@@ -81,7 +95,7 @@ def knowledge_item_relation_to_out(relation: KnowledgeItemRelation) -> Knowledge
         relation_type=relation.relation_type,  # type: ignore[arg-type]
         status=relation.status,  # type: ignore[arg-type]
         confidence=relation.confidence,
-        note=relation.note,
+        evidence_summary=relation.evidence_summary,
         source_proposal_id=relation.source_proposal_id,
         created_by_user_id=relation.created_by_user_id,
         created_by_agent_id=relation.created_by_agent_id,
@@ -135,6 +149,75 @@ def knowledge_item_source_to_out(link: KnowledgeItemSource) -> KnowledgeItemSour
         quote=link.quote,
         note=link.note,
         confidence=link.confidence,
+        created_by_user_id=link.created_by_user_id,
+        created_at=link.created_at,
+    )
+
+
+def note_to_out(note: Note, *, collection_id: str | None = None) -> NoteOut:
+    return NoteOut(
+        id=note.id,
+        space_id=note.space_id,
+        title=note.title,
+        content_json=note.content_json,
+        content_format=note.content_format,  # type: ignore[arg-type]
+        content_schema_version=note.content_schema_version,
+        plain_text=note.plain_text,
+        excerpt=note.excerpt,
+        status=note.status,  # type: ignore[arg-type]
+        primary_project_id=note.primary_project_id,
+        collection_id=collection_id,
+        created_from_activity_id=note.created_from_activity_id,
+        created_by_user_id=note.created_by_user_id,
+        created_at=note.created_at,
+        updated_at=note.updated_at,
+        archived_at=note.archived_at,
+        deleted_at=note.deleted_at,
+    )
+
+
+def note_to_summary_out(note: Note, *, collection_id: str | None = None) -> NoteSummaryOut:
+    return NoteSummaryOut(
+        id=note.id,
+        space_id=note.space_id,
+        title=note.title,
+        excerpt=note.excerpt,
+        status=note.status,  # type: ignore[arg-type]
+        content_format=note.content_format,  # type: ignore[arg-type]
+        primary_project_id=note.primary_project_id,
+        collection_id=collection_id,
+        created_at=note.created_at,
+        updated_at=note.updated_at,
+        deleted_at=note.deleted_at,
+    )
+
+
+def note_collection_to_out(collection: NoteCollection) -> NoteCollectionOut:
+    return NoteCollectionOut(
+        id=collection.id,
+        space_id=collection.space_id,
+        parent_id=collection.parent_id,
+        name=collection.name,
+        system_role=collection.system_role,  # type: ignore[arg-type]
+        sort_order=collection.sort_order,
+        is_system=collection.is_system,
+        is_hidden=collection.is_hidden,
+        created_at=collection.created_at,
+        updated_at=collection.updated_at,
+    )
+
+
+def entity_link_to_out(link: EntityLink) -> EntityLinkOut:
+    return EntityLinkOut(
+        id=link.id,
+        space_id=link.space_id,
+        source_type=link.source_type,  # type: ignore[arg-type]
+        source_id=link.source_id,
+        target_type=link.target_type,  # type: ignore[arg-type]
+        target_id=link.target_id,
+        link_type=link.link_type,  # type: ignore[arg-type]
+        confidence=link.confidence,
+        status=link.status,  # type: ignore[arg-type]
         created_by_user_id=link.created_by_user_id,
         created_at=link.created_at,
     )

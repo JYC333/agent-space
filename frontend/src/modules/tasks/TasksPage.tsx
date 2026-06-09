@@ -18,6 +18,7 @@ import { WriteTargetPicker, useWriteTarget } from '../../components/WriteTargetP
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -272,6 +273,9 @@ export default function TasksPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>New task</DialogTitle>
+            <DialogDescription className="sr-only">
+              Create a task in the selected write target.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-2">
             <WriteTargetPicker />

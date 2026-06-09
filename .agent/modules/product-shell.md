@@ -28,7 +28,7 @@ Today               — digest: recent activity, due cards, pending proposals
 Assistant           — chat / quick capture
 Activity Inbox      — raw activity_records
 Memory              — memory review and governance
-Knowledge           — structured knowledge
+Knowledge           — Notes, Wiki (KnowledgeItem), Sources, Cards (in-header section switcher)
 Cards / Review      — spaced repetition queue
 Agents              — agent list, runs, capabilities
 Workspaces          — workspace console and file browser

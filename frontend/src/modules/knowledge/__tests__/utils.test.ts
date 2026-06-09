@@ -1,0 +1,37 @@
+import { describe, it, expect } from 'vitest'
+import { KNOWLEDGE_ITEM_TYPES, KNOWLEDGE_RELATION_TYPES } from '../utils'
+
+// These lock the frontend canonical Wiki vocabularies to the backend-accepted
+// sets so a form can never offer a value the backend rejects with a 422.
+
+describe('Knowledge canonical item types', () => {
+  it('exposes exactly the canonical KnowledgeItem types', () => {
+    expect([...KNOWLEDGE_ITEM_TYPES].sort()).toEqual(
+      ['answer', 'claim', 'concept', 'decision', 'lesson', 'procedure', 'question', 'summary'],
+    )
+  })
+
+  it('drops the removed working-note item types', () => {
+    for (const removed of ['knowledge', 'idea', 'experience', 'reflection', 'source']) {
+      expect(KNOWLEDGE_ITEM_TYPES).not.toContain(removed)
+    }
+  })
+})
+
+describe('Knowledge canonical relation types', () => {
+  it('exposes exactly the canonical KnowledgeRelation types', () => {
+    expect([...KNOWLEDGE_RELATION_TYPES].sort()).toEqual(
+      [
+        'applies_to', 'contradicts', 'depends_on', 'derived_from', 'example_of',
+        'explains', 'part_of', 'prerequisite_of', 'related_to', 'summarizes',
+        'supports', 'updates',
+      ],
+    )
+  })
+
+  it('drops removed relation types', () => {
+    for (const removed of ['related', 'answers']) {
+      expect(KNOWLEDGE_RELATION_TYPES).not.toContain(removed)
+    }
+  })
+})

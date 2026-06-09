@@ -85,7 +85,7 @@ function PersonalAssistantEntry() {
             <Badge variant="secondary">space-aware</Badge>
           </div>
           <p className="text-[13px] text-muted-foreground mt-0.5">
-            Ask about your memory, projects, wiki, captures, runs, and proposals. The assistant is aware of your
+            Ask about your memory, projects, notes, wiki, captures, runs, and proposals. The assistant is aware of your
             spaces and context — it is not a raw chat box.
           </p>
 

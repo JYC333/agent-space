@@ -22,6 +22,7 @@ from typing import Any, TypeVar
 
 from sqlalchemy.orm import Session as DBSession
 
+from app.knowledge.seeder import seed_default_note_collections
 from app.models import (
     Actor,
     ActivityRecord,
@@ -93,6 +94,7 @@ def create_test_space(
         created_by_user_id=created_by_user_id,
     )
     db.add(row)
+    seed_default_note_collections(db, row.id)
     return _finish(db, row, commit=commit)
 
 
@@ -552,7 +554,7 @@ def create_test_knowledge_item(
     space_id: str,
     title: str = "Knowledge item",
     content: str = "knowledge content",
-    item_type: str = "knowledge",
+    item_type: str = "concept",
     status: str = "active",
     visibility: str = "space_shared",
     project_id: str | None = None,

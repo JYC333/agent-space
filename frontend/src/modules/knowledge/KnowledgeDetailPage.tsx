@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
 import { ArrowLeft } from 'lucide-react'
@@ -15,16 +15,10 @@ import KnowledgeProposalNotice from './KnowledgeProposalNotice'
 import KnowledgeRelationProposalForm from './KnowledgeRelationProposalForm'
 import KnowledgeRelationsPanel from './KnowledgeRelationsPanel'
 import KnowledgeUpdateProposalForm from './KnowledgeUpdateProposalForm'
-import { getKnowledgeDisplayName } from './display'
 
 export default function KnowledgeDetailPage() {
   const { itemId = '' } = useParams()
-  const { activeSpaceId, activeSpaceName, spaces } = useSpace()
-  const activeSpace = useMemo(
-    () => spaces.find(s => s.id === activeSpaceId) ?? null,
-    [spaces, activeSpaceId],
-  )
-  const displayName = getKnowledgeDisplayName(activeSpace)
+  const { activeSpaceId, activeSpaceName } = useSpace()
   const [item, setItem] = useState<KnowledgeItem | null>(null)
   const [relations, setRelations] = useState<KnowledgeRelation[]>([])
   const [loadingItem, setLoadingItem] = useState(true)
@@ -92,7 +86,7 @@ export default function KnowledgeDetailPage() {
   return (
     <div className="p-6 space-y-6 max-w-5xl">
       <Button variant="ghost" size="sm" asChild>
-        <Link to="/knowledge"><ArrowLeft className="size-4 mr-1" />{displayName}</Link>
+        <Link to="/knowledge/wiki"><ArrowLeft className="size-4 mr-1" />Wiki</Link>
       </Button>
 
       {loadingItem && <Skeleton className="h-48 w-full" />}

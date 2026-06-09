@@ -49,31 +49,32 @@ export type MemoryVisibility = 'private' | 'space_shared' | 'workspace_shared' |
 export type ObjectVisibility = 'private' | 'space_shared' | 'restricted' | string
 export type ProposalStatus   = 'pending' | 'accepted' | 'rejected'
 export type KnowledgeItemType =
-  | 'knowledge'
-  | 'experience'
+  | 'concept'
+  | 'claim'
   | 'lesson'
   | 'procedure'
   | 'decision'
-  | 'reflection'
-  | 'source'
   | 'question'
   | 'answer'
   | 'summary'
-export type KnowledgeContentFormat = 'markdown' | 'plain'
+export type KnowledgeContentFormat = 'markdown' | 'plain' | 'prosemirror_json'
 export type KnowledgeItemStatus = 'draft' | 'active' | 'superseded' | 'archived'
 export type KnowledgeVisibility = 'private' | 'space_shared' | 'workspace_shared' | 'restricted'
 export type KnowledgeVerificationStatus = 'unverified' | 'needs_review' | 'verified'
 export type KnowledgeReflectionStatus = 'unreviewed' | 'reviewed' | 'distilled'
 export type KnowledgeRelationType =
-  | 'related'
-  | 'derived_from'
+  | 'related_to'
+  | 'explains'
+  | 'depends_on'
+  | 'prerequisite_of'
+  | 'part_of'
   | 'example_of'
+  | 'applies_to'
   | 'supports'
   | 'contradicts'
-  | 'part_of'
-  | 'prerequisite_of'
-  | 'applies_to'
-  | 'answers'
+  | 'derived_from'
+  | 'summarizes'
+  | 'updates'
 export type KnowledgeRelationStatus = 'candidate' | 'active' | 'rejected' | 'archived'
 export type ActivityStatus     = 'raw' | 'processed' | 'proposals_generated' | 'archived'
 export type ActivitySourceType =
@@ -511,8 +512,10 @@ export interface KnowledgeItemSummary {
   project_id: string | null
   workspace_id: string | null
   item_type: KnowledgeItemType
+  slug: string | null
   title: string
   content_preview: string
+  excerpt: string | null
   status: KnowledgeItemStatus
   visibility: KnowledgeVisibility
   verification_status: KnowledgeVerificationStatus
@@ -526,8 +529,13 @@ export interface KnowledgeItemSummary {
 export interface KnowledgeItem extends KnowledgeItemSummary {
   root_item_id: string | null
   supersedes_item_id: string | null
+  redirect_to_item_id: string | null
+  aliases: string[]
   content: string
+  content_json: Record<string, unknown> | null
   content_format: KnowledgeContentFormat
+  content_schema_version: number
+  plain_text: string | null
   source_url: string | null
   source_refs: Record<string, unknown>[]
   owner_user_id: string | null
@@ -540,6 +548,7 @@ export interface KnowledgeItem extends KnowledgeItemSummary {
   approved_by_user_id: string | null
   created_at: string
   archived_at: string | null
+  deprecated_at: string | null
 }
 
 export interface KnowledgeRelation {
@@ -562,8 +571,12 @@ export interface KnowledgeRelation {
 export interface KnowledgeCreateProposalBody {
   item_type: KnowledgeItemType
   title: string
+  slug?: string | null
+  aliases?: string[]
   content: string
+  content_json?: Record<string, unknown> | null
   content_format: KnowledgeContentFormat
+  content_schema_version?: number
   visibility: KnowledgeVisibility
   project_id?: string | null
   workspace_id?: string | null
@@ -579,8 +592,12 @@ export interface KnowledgeCreateProposalBody {
 
 export interface KnowledgeUpdateProposalBody {
   title: string
+  slug?: string | null
+  aliases?: string[]
   content: string
+  content_json?: Record<string, unknown> | null
   content_format: KnowledgeContentFormat
+  content_schema_version?: number
   tags: string[]
   confidence?: number | null
   rationale?: string | null
@@ -596,6 +613,134 @@ export interface KnowledgeRelationProposalBody {
   confidence?: number | null
   evidence_summary?: string | null
   rationale?: string | null
+}
+
+// ── Notes (working knowledge; direct CRUD) ─────────────────────────────────
+export type NoteStatus = 'active' | 'archived' | 'deleted'
+export type NoteContentFormat = 'markdown' | 'plain' | 'prosemirror_json'
+export type NoteCollectionSystemRole = 'normal' | 'inbox' | 'archive'
+
+export interface NoteCollection {
+  id: string
+  space_id: string
+  parent_id: string | null
+  name: string
+  system_role: NoteCollectionSystemRole
+  sort_order: number
+  is_system: boolean
+  is_hidden: boolean
+  created_at: string
+  updated_at: string
+  deleted_at?: string | null
+}
+
+export interface NoteCollectionCreateBody {
+  name: string
+  parent_id?: string | null
+  sort_order?: number | null
+}
+
+export interface NoteCollectionUpdateBody {
+  name?: string
+  parent_id?: string | null
+  sort_order?: number | null
+  is_hidden?: boolean
+}
+
+export interface NoteSummary {
+  id: string
+  space_id: string
+  title: string
+  excerpt: string | null
+  status: NoteStatus
+  content_format: NoteContentFormat
+  primary_project_id: string | null
+  /** Folder this note belongs to (first membership); null/absent if uncategorized. */
+  collection_id?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Note extends NoteSummary {
+  content_json: Record<string, unknown> | null
+  content_schema_version: number
+  plain_text: string | null
+  created_from_activity_id: string | null
+  created_by_user_id: string | null
+  archived_at: string | null
+  deleted_at: string | null
+}
+
+export interface NoteCreateBody {
+  title: string
+  plain_text?: string | null
+  content_json?: Record<string, unknown> | null
+  content_format?: NoteContentFormat
+  content_schema_version?: number
+  status?: 'active'
+  primary_project_id?: string | null
+  created_from_activity_id?: string | null
+  collection_id?: string | null
+}
+
+export interface NoteUpdateBody {
+  title?: string
+  plain_text?: string | null
+  content_json?: Record<string, unknown> | null
+  content_format?: NoteContentFormat
+  content_schema_version?: number
+  status?: NoteStatus
+  primary_project_id?: string | null
+}
+
+// ── Entity links (generic cross-object relation layer) ─────────────────────
+export type EntityType =
+  | 'note' | 'knowledge_item' | 'source' | 'project'
+  | 'workspace' | 'activity' | 'run' | 'proposal'
+export type EntityLinkType =
+  | 'references' | 'related_to' | 'belongs_to'
+  | 'captured_from' | 'source_for' | 'derived_from'
+export type EntityLinkStatus = 'suggested' | 'accepted' | 'rejected'
+
+export interface EntityLink {
+  id: string
+  space_id: string
+  source_type: EntityType
+  source_id: string
+  target_type: EntityType
+  target_id: string
+  link_type: EntityLinkType
+  confidence: number | null
+  status: EntityLinkStatus
+  created_by_user_id: string | null
+  created_at: string
+}
+
+export interface NoteLinkCreateBody {
+  target_type: EntityType
+  target_id: string
+  link_type?: EntityLinkType
+  confidence?: number | null
+  direction?: 'outgoing' | 'incoming'
+}
+
+export interface KnowledgeSummary {
+  notes: { active: number; archived: number; deleted: number; total: number }
+  wiki: { active: number }
+  sources: { total: number }
+}
+
+// ── Sources (provenance / evidence layer) ──────────────────────────────────
+export interface KnowledgeSourceSummary {
+  id: string
+  space_id: string
+  source_type: string
+  title: string
+  uri: string | null
+  status: string
+  source_activity_id: string | null
+  created_at: string
+  updated_at: string
 }
 
 /** Activity inbox (`GET /activity`) — distinct from run-scoped activity records. */

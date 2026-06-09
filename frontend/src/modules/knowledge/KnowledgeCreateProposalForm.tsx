@@ -47,7 +47,7 @@ interface CreateForm {
 }
 
 const EMPTY_CREATE_FORM: CreateForm = {
-  item_type: 'knowledge',
+  item_type: 'concept',
   title: '',
   content: '',
   content_format: 'markdown',

@@ -8,7 +8,7 @@ Selection priority (highest → lowest):
   1. Explicit / manual context
   2. Current workspace and project metadata
   3. Approved memory (via MemoryRetriever)
-  4. Knowledge items / ideas
+  4. Knowledge items
   5. Sources
   6. Recent activity records
 
@@ -49,7 +49,6 @@ _ALL_SOURCES: frozenset[str] = frozenset(
         "source",
         "activity_record",
         "task",
-        "idea",
         "project",
         "workspace",
         "run",
@@ -223,17 +222,15 @@ class ChatContextBuilder:
         type_filter: list[str] = []
         if "knowledge_item" in allowed:
             type_filter += [
-                "knowledge",
-                "experience",
-                "reflection",
+                "concept",
+                "claim",
                 "lesson",
                 "procedure",
                 "decision",
                 "question",
+                "answer",
                 "summary",
             ]
-        if "idea" in allowed:
-            type_filter.append("idea")
         if not type_filter:
             return []
 
@@ -260,11 +257,9 @@ class ChatContextBuilder:
         items: list[ContextBundleItem] = []
         for ki in q:
             text = ki.content or ""
-            # Map knowledge_item native item_type to ContextSnapshotItem item_type.
-            snapshot_type = "idea" if ki.item_type == "idea" else "knowledge_item"
             items.append(
                 ContextBundleItem(
-                    item_type=snapshot_type,
+                    item_type="knowledge_item",
                     item_id=ki.id,
                     title=ki.title,
                     excerpt=_excerpt(text),
@@ -385,8 +380,8 @@ class ChatContextBuilder:
             if remaining > 0:
                 _add(self._select_memory(request, limit=remaining))
 
-        # 5. Knowledge items / ideas.
-        if "knowledge_item" in allowed or "idea" in allowed:
+        # 5. Knowledge items.
+        if "knowledge_item" in allowed:
             remaining = max_items - len(items)
             if remaining > 0:
                 _add(self._select_knowledge_items(request, allowed, limit=remaining))

@@ -25,8 +25,10 @@ vi.mock('../contexts/AuthContext', () => ({
 
 import { SpaceSwitcher } from '../components/SpaceSwitcher'
 
+const routerFuture = { v7_relativeSplatPath: true, v7_startTransition: true } as const
+
 function open() {
-  render(<MemoryRouter><SpaceSwitcher /></MemoryRouter>)
+  render(<MemoryRouter future={routerFuture}><SpaceSwitcher /></MemoryRouter>)
   fireEvent.click(screen.getByLabelText('Switch space'))
 }
 

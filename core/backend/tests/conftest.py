@@ -125,6 +125,7 @@ async def _inline_anyio_run_sync(func, *args, **kwargs):
 anyio.to_thread.run_sync = _inline_anyio_run_sync
 
 from app.db import get_db
+from app.knowledge.seeder import seed_default_note_collections
 from app.main import app
 from app.models import Space, SpaceMembership, User
 from tests.support.ids import DEFAULT_USER_ID, PERSONAL_SPACE_ID
@@ -177,6 +178,7 @@ def _seed_defaults(session) -> None:
         role="owner",
         status="active",
     ))
+    seed_default_note_collections(session, SPACE)
     session.commit()
 
 

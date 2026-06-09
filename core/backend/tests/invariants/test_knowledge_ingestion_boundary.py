@@ -134,7 +134,7 @@ def test_agent_knowledge_candidate_creates_pending_proposal_only(db, cross_space
         created_by_agent_id=agent.id,
         payload_json={
             "operation": "create",
-            "item_type": "knowledge",
+            "item_type": "concept",
             "title": "Agent-derived insight",
             "content": "Agent observed a recurring pattern",
             "content_format": "markdown",
@@ -178,7 +178,7 @@ def test_accepting_knowledge_create_proposal_creates_active_item(db, cross_space
         created_by_user_id=ua.id,
         payload_json={
             "operation": "create",
-            "item_type": "knowledge",
+            "item_type": "concept",
             "title": "Accepted knowledge",
             "content": "This content lands only on accept",
             "content_format": "markdown",
@@ -225,7 +225,7 @@ def test_reject_knowledge_create_proposal_creates_no_knowledge_item(api_client, 
         "/api/v1/knowledge/items/proposals",
         params=_params(space),
         json={
-            "item_type": "knowledge",
+            "item_type": "concept",
             "title": "Knowledge to be rejected",
             "content": "This must never become active",
             "content_format": "markdown",

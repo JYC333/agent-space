@@ -135,7 +135,7 @@ html, body, #root {
 }
 
 /* Scrollbar */
-::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
@@ -149,4 +149,193 @@ pre {
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Rich text editor */
+.rich-text-editor-surface {
+  min-height: inherit;
+  padding: 14px;
+  outline: none;
+  line-height: 1.65;
+}
+
+/* Page (full-bleed document) variant: drop the box padding so the body aligns
+   flush with the borderless title above it; the surrounding column owns the
+   horizontal gutter. */
+.rich-text-page .rich-text-editor-surface {
+  padding: 0.25rem 0 4rem;
+}
+
+/* SVG-based Chrome-style note tabs. The silhouette (rounded top + curved feet)
+   is drawn by an inline SVG: a closed fill path plus a separate open stroke path
+   that traces the top, sides, and feet but skips the bottom edge — so the active
+   tab's 1px outline follows the curve yet still merges into the editor below.
+   `vector-effect: non-scaling-stroke` (set on the element) keeps the border 1px
+   as the equal-width tabs shrink. */
+.note-tab__bg {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  width: 100%;
+}
+
+.note-tab__fill {
+  fill: transparent;
+}
+
+.note-tab--active .note-tab__fill {
+  fill: var(--background);
+}
+
+.note-tab__stroke {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 1px;
+}
+
+.note-tab--active .note-tab__stroke {
+  stroke: var(--border);
+}
+
+.note-tab {
+  --note-tab-body-inset: 8px;
+  --note-tab-label-left: 18px;
+  --note-tab-label-right: 36px;
+  --note-tab-close-right: 12px;
+}
+
+.note-tab + .note-tab {
+  margin-left: -11px;
+}
+
+.note-tab__label {
+  position: absolute;
+  inset-block: 0;
+  left: var(--note-tab-label-left);
+  right: var(--note-tab-label-right);
+  display: flex;
+  align-items: center;
+  text-align: left;
+  font-size: 12px;
+  transition-property: color;
+  transition-duration: 150ms;
+}
+
+.note-tab__close {
+  position: absolute;
+  right: var(--note-tab-close-right);
+  top: 50%;
+  z-index: 20;
+  display: inline-flex;
+  flex-shrink: 0;
+  transform: translateY(-50%);
+  border-radius: 0.25rem;
+  padding: 0.125rem;
+  color: var(--muted-foreground);
+  opacity: 0.6;
+  transition-property: color, background-color, opacity;
+  transition-duration: 150ms;
+}
+
+.note-tab__close:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.note-tab:hover .note-tab__close {
+  opacity: 1;
+}
+
+/* Chrome-style inactive hover: a rounded rectangle inside the equal-width tab
+   slot. The active SVG stays in its own slot, so adjacent tabs do not overlap. */
+.note-tab__hover {
+  position: absolute;
+  inset: 3px var(--note-tab-body-inset);
+  border-radius: 8px;
+  background: transparent;
+  pointer-events: none;
+}
+
+.note-tab:not(.note-tab--active):hover .note-tab__hover {
+  background: color-mix(in oklch, var(--foreground) 10%, transparent);
+}
+
+.note-tab--active .note-tab__hover {
+  display: none;
+}
+
+.note-tabs-strip {
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+}
+
+.note-tabs-strip:hover {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.note-tabs-strip::-webkit-scrollbar {
+  height: 0;
+}
+
+.note-tabs-strip:hover::-webkit-scrollbar {
+  height: 6px;
+}
+
+.note-tabs-strip::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.note-tabs-strip::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: transparent;
+}
+
+.note-tabs-strip:hover::-webkit-scrollbar-thumb {
+  background: var(--border);
+}
+
+
+.rich-text-editor-surface > * + * {
+  margin-top: 0.75rem;
+}
+
+.rich-text-editor-surface h1,
+.rich-text-editor-surface h2,
+.rich-text-editor-surface h3 {
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.rich-text-editor-surface h1 { font-size: 1.45rem; }
+.rich-text-editor-surface h2 { font-size: 1.2rem; }
+.rich-text-editor-surface h3 { font-size: 1rem; }
+
+.rich-text-editor-surface ul,
+.rich-text-editor-surface ol {
+  padding-left: 1.35rem;
+}
+
+.rich-text-editor-surface ul { list-style: disc; }
+.rich-text-editor-surface ol { list-style: decimal; }
+
+.rich-text-editor-surface blockquote {
+  border-left: 3px solid var(--border);
+  color: var(--muted-foreground);
+  padding-left: 0.9rem;
+}
+
+.rich-text-editor-surface code {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  padding: 0.05rem 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.rich-text-editor-surface pre code {
+  border: 0;
+  padding: 0;
+  background: transparent;
 }

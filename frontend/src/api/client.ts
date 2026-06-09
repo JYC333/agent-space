@@ -13,6 +13,8 @@ import type {
   SpaceAssistantSettingsOut, SpaceAssistantSettingsUpdate,
   ActivityRecord, ActivitySourceType,
   KnowledgeCreateProposalBody, KnowledgeItem, KnowledgeItemSummary, KnowledgeRelation, KnowledgeRelationProposalBody, KnowledgeUpdateProposalBody,
+  KnowledgeSummary, KnowledgeSourceSummary,
+  Note, NoteSummary, NoteCreateBody, NoteUpdateBody, NoteCollection, NoteCollectionCreateBody, NoteCollectionUpdateBody, EntityLink, NoteLinkCreateBody,
   FileNode, FileContent, GitStatus, RuntimeInfo, ConsoleSession, WorkspaceInfo,
   HomeSummaryOut, MeSummaryOut, MeTimelineEntry, MeTaskItem, MePendingProposalItem,
   PersonalMemoryGrantPreviewRequest, PersonalMemoryGrantPreviewResponse,
@@ -162,6 +164,7 @@ export const knowledgeApi = {
   },
   get: (id: string) => get<KnowledgeItem>(`/knowledge/items/${id}`),
   relations: (id: string) => get<KnowledgeRelation[]>(`/knowledge/items/${id}/relations`),
+  backlinks: (id: string) => get<EntityLink[]>(`/knowledge/items/${id}/backlinks`),
   proposeCreate: (body: KnowledgeCreateProposalBody) =>
     post<Proposal>('/knowledge/items/proposals', body),
   proposeUpdate: (id: string, body: KnowledgeUpdateProposalBody) =>
@@ -172,6 +175,52 @@ export const knowledgeApi = {
     post<Proposal>('/knowledge/relations/proposals', body),
   proposeRelationArchive: (id: string) =>
     del<Proposal>(`/knowledge/relations/${id}`),
+  summary: () => get<KnowledgeSummary>('/knowledge/summary'),
+}
+
+// ── Notes (working knowledge; direct CRUD) ─────────────────────────────────
+export const notesCollectionsApi = {
+  list: () => get<NoteCollection[]>('/notes/collections'),
+  create: (body: NoteCollectionCreateBody) => post<NoteCollection>('/notes/collections', body),
+  update: (id: string, body: NoteCollectionUpdateBody) => patch<NoteCollection>(`/notes/collections/${id}`, body),
+  delete: (id: string) => del<void>(`/notes/collections/${id}`),
+}
+
+export const notesApi = {
+  list: (params: { status?: string; project_id?: string; collection_id?: string; q?: string; limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    if (params.project_id !== undefined) q.project_id = params.project_id
+    if (params.collection_id !== undefined) q.collection_id = params.collection_id
+    if (params.q !== undefined) q.q = params.q
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<NoteSummary>>('/knowledge/notes?' + new URLSearchParams(q))
+  },
+  get: (id: string) => get<Note>(`/knowledge/notes/${id}`),
+  create: (body: NoteCreateBody) => post<Note>('/knowledge/notes', body),
+  update: (id: string, body: NoteUpdateBody) => patch<Note>(`/knowledge/notes/${id}`, body),
+  delete: (id: string) => del<Note>(`/knowledge/notes/${id}`),
+  purgeDeleted: () => post<{ deleted: number; retention_days: number }>('/knowledge/notes/deleted/purge'),
+  links: (id: string) => get<EntityLink[]>(`/knowledge/notes/${id}/links`),
+  backlinks: (id: string) => get<EntityLink[]>(`/knowledge/notes/${id}/backlinks`),
+  createLink: (id: string, body: NoteLinkCreateBody) =>
+    post<EntityLink>(`/knowledge/notes/${id}/links`, body),
+  deleteLink: (id: string, linkId: string) =>
+    del<void>(`/knowledge/notes/${id}/links/${linkId}`),
+}
+
+// ── Sources (provenance / evidence layer) ──────────────────────────────────
+export const sourcesApi = {
+  list: (params: { source_type?: string; status?: string; q?: string; limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.source_type !== undefined) q.source_type = params.source_type
+    if (params.status !== undefined) q.status = params.status
+    if (params.q !== undefined) q.q = params.q
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<KnowledgeSourceSummary>>('/knowledge/sources?' + new URLSearchParams(q))
+  },
 }
 
 // ── Sessions ──────────────────────────────────────────────────────────────

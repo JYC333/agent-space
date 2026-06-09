@@ -23,6 +23,8 @@ def on_space_created(db: Session, space_id: str, *, seeded_by_user_id: str) -> N
     """
     from ..memory.seeder import seed_system_memories_for_space
     from ..execution_planes.seeder import seed_default_execution_planes
+    from ..knowledge.seeder import seed_default_note_collections
 
     seed_system_memories_for_space(db, space_id)
     seed_default_execution_planes(db, space_id)
+    seed_default_note_collections(db, space_id)

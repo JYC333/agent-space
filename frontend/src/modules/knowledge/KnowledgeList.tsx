@@ -100,7 +100,7 @@ export default function KnowledgeList({
       {!loading && items.length > 0 && (
         <div className="divide-y divide-border">
           {items.map(item => (
-            <Link key={item.id} to={`/knowledge/${item.id}`} className="block py-4 first:pt-2 hover:bg-accent/30 -mx-2 px-2 rounded-md">
+            <Link key={item.id} to={`/knowledge/wiki/${item.id}`} className="block py-4 first:pt-2 hover:bg-accent/30 -mx-2 px-2 rounded-md">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-1.5 mb-1">

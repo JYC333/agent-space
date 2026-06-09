@@ -40,7 +40,7 @@ export const RAIL_ITEMS: RailItem[] = [
   { id: 'home',       label: 'Home',       to: '/home',        icon: Home,        scope: 'home',  mobile: true },
   { id: 'inbox',      label: 'Inbox',      to: '/activity',    icon: Inbox,       scope: 'space', mobile: true },
   { id: 'review',     label: 'Review',     to: '/proposals',   icon: CheckCircle, scope: 'space', mobile: true },
-  { id: 'wiki',       label: 'Wiki',       to: '/knowledge',   icon: BookOpen,    scope: 'space' },
+  { id: 'knowledge',  label: 'Knowledge',  to: '/knowledge',   icon: BookOpen,    scope: 'space' },
   { id: 'tasks',      label: 'Tasks',      to: '/tasks',       icon: ListTodo,    scope: 'space', mobile: true },
   { id: 'agents',     label: 'Agents',     to: '/agents',      icon: Bot,         scope: 'space' },
   { id: 'evolution',  label: 'Evolution',  to: '/evolution',   icon: GitBranch,   scope: 'home' },
@@ -105,25 +105,10 @@ export const SCENES: Scene[] = [
       { label: 'Archived',           value: 'archived' },
     ],
   },
-  {
-    kind: 'filter',
-    id: 'wiki',
-    title: 'Wiki',
-    icon: BookOpen,
-    segments: ['knowledge'],
-    base: '/knowledge',
-    filterKey: 'item_type',
-    defaultValue: '',
-    items: [
-      { label: 'All items',  value: '' },
-      { label: 'Ideas',      value: 'idea' },
-      { label: 'Decisions',  value: 'decision' },
-      { label: 'Questions',  value: 'question' },
-      { label: 'Procedures', value: 'procedure' },
-      { label: 'Summaries',  value: 'summary' },
-      { label: 'Sources',    value: 'source' },
-    ],
-  },
+  // Knowledge intentionally has NO scene: cross-section navigation is the lightweight
+  // breadcrumb switcher in each page header (KnowledgeSectionHeader), and each workspace
+  // owns its own layout (e.g. the Notes collection tree). A persistent section sidebar/tab
+  // strip here would collide with that — see .agent/modules/knowledge-base.md.
   {
     kind: 'filter',
     id: 'review',

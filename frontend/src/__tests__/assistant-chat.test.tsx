@@ -25,9 +25,11 @@ vi.mock('../contexts/SpaceContext', () => ({
 
 import AssistantChatPage from '../modules/agents/AssistantChatPage'
 
+const routerFuture = { v7_relativeSplatPath: true, v7_startTransition: true } as const
+
 function renderPage() {
   render(
-    <MemoryRouter initialEntries={['/agents/a1/chat']}>
+    <MemoryRouter initialEntries={['/agents/a1/chat']} future={routerFuture}>
       <Routes>
         <Route path="/agents/:agentId/chat" element={<AssistantChatPage />} />
       </Routes>

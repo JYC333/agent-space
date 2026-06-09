@@ -13,7 +13,7 @@ def _params(space_id: str, user_id: str) -> dict[str, str]:
 
 def _create_payload(**overrides):
     payload = {
-        "item_type": "knowledge",
+        "item_type": "concept",
         "title": "HTTP Knowledge",
         "content": "approved only after proposal accept",
         "content_format": "markdown",
@@ -114,6 +114,110 @@ def test_accept_knowledge_create_creates_active_item(api_client, db, cross_space
     assert item.root_item_id == item.id
 
 
+def test_create_rejects_removed_item_types(api_client, db, cross_space_pair):
+    """source/idea/experience/reflection are no longer canonical Wiki item types."""
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    for removed in ("source", "idea", "experience", "reflection"):
+        r = cross_space_pair["client_a"].post(
+            "/api/v1/knowledge/items/proposals",
+            params=_params(a, ua.id),
+            json=_create_payload(item_type=removed),
+        )
+        assert r.status_code == 422, f"{removed!r} must be rejected, got {r.status_code}"
+
+
+def test_create_accepts_all_canonical_item_types(api_client, db, cross_space_pair):
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    canonical = ["concept", "claim", "lesson", "procedure", "decision", "question", "answer", "summary"]
+    for item_type in canonical:
+        r = cross_space_pair["client_a"].post(
+            "/api/v1/knowledge/items/proposals",
+            params=_params(a, ua.id),
+            json=_create_payload(item_type=item_type, title=f"K {item_type}"),
+        )
+        assert r.status_code == 202, f"{item_type!r} should be accepted: {r.text}"
+
+
+def test_create_stores_wiki_ready_fields_and_projection(api_client, db, cross_space_pair):
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    content_json = {"type": "doc", "content": [
+        {"type": "paragraph", "content": [{"type": "text", "text": "Structured body text"}]}
+    ]}
+    r = cross_space_pair["client_a"].post(
+        "/api/v1/knowledge/items/proposals",
+        params=_params(a, ua.id),
+        json=_create_payload(
+            title="Wiki Page",
+            content="markdown body",
+            slug="wiki-page",
+            aliases=["wp", "page"],
+            content_json=content_json,
+            content_schema_version=2,
+        ),
+    )
+    proposal_id = r.json()["id"]
+    accepted = cross_space_pair["client_a"].post(
+        f"/api/v1/proposals/{proposal_id}/accept", params=_params(a, ua.id)
+    )
+    assert accepted.status_code == 200
+    item_id = accepted.json()["result"]["knowledge_item"]["id"]
+
+    db.expire_all()
+    item = db.get(KnowledgeItem, item_id)
+    assert item.slug == "wiki-page"
+    assert item.aliases_json == ["wp", "page"]
+    assert item.content_json == content_json
+    assert item.content_format == "markdown"
+    assert item.content_schema_version == 2
+    # plain_text projection flattens content_json text; excerpt is derived.
+    assert item.plain_text and "Structured body text" in item.plain_text
+    assert item.plain_text and "Wiki Page" in item.plain_text
+    assert item.excerpt
+
+    # Fields round-trip through the read API.
+    got = cross_space_pair["client_a"].get(f"/api/v1/knowledge/items/{item_id}", params=_params(a, ua.id))
+    body = got.json()
+    assert body["slug"] == "wiki-page"
+    assert body["aliases"] == ["wp", "page"]
+    assert body["content_json"] == content_json
+    assert body["content_schema_version"] == 2
+    assert body["plain_text"]
+    assert body["excerpt"]
+    assert body["redirect_to_item_id"] is None
+    assert body["deprecated_at"] is None
+
+
+def test_knowledge_item_backlinks_returns_entity_links(api_client, db, same_space_pair):
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    item = factories.create_test_knowledge_item(db, space_id=space, title="Target", commit=True)
+    note = same_space_pair["client_a"].post(
+        "/api/v1/knowledge/notes", params=_params(space, ua.id), json={"title": "Note A"}
+    )
+    note_id = note.json()["id"]
+    # note -> knowledge_item generic EntityLink.
+    link = same_space_pair["client_a"].post(
+        f"/api/v1/knowledge/notes/{note_id}/links",
+        params=_params(space, ua.id),
+        json={"target_type": "knowledge_item", "target_id": item.id, "link_type": "references"},
+    )
+    assert link.status_code == 201, link.text
+
+    backlinks = same_space_pair["client_a"].get(
+        f"/api/v1/knowledge/items/{item.id}/backlinks", params=_params(space, ua.id)
+    )
+    assert backlinks.status_code == 200
+    rows = backlinks.json()
+    assert len(rows) == 1
+    assert rows[0]["source_type"] == "note"
+    assert rows[0]["source_id"] == note_id
+    assert rows[0]["target_type"] == "knowledge_item"
+    assert rows[0]["target_id"] == item.id
+
+
 def test_knowledge_create_source_refs_become_provenance_links(api_client, db, cross_space_pair):
     """source_refs (internal provenance pointers) are persisted as ProvenanceLink
     rows (target_type="knowledge"), not on a source_refs_json column."""
@@ -198,7 +302,7 @@ def test_knowledge_create_rejects_payload_owner_different_from_creator(db, same_
         created_by_user_id=ua.id,
         payload_json={
             "operation": "create",
-            "item_type": "knowledge",
+            "item_type": "concept",
             "title": "Bad owner",
             "content": "body",
             "content_format": "markdown",

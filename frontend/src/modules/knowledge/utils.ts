@@ -8,13 +8,11 @@ import type {
 } from '../../types/api'
 
 export const KNOWLEDGE_ITEM_TYPES: KnowledgeItemType[] = [
-  'knowledge',
-  'experience',
+  'concept',
+  'claim',
   'lesson',
   'procedure',
   'decision',
-  'reflection',
-  'source',
   'question',
   'answer',
   'summary',
@@ -25,15 +23,18 @@ export const KNOWLEDGE_VISIBILITIES: KnowledgeVisibility[] = ['private', 'space_
 export const KNOWLEDGE_FORMATS: KnowledgeContentFormat[] = ['markdown', 'plain']
 
 export const KNOWLEDGE_RELATION_TYPES: KnowledgeRelationType[] = [
-  'related',
-  'derived_from',
+  'related_to',
+  'explains',
+  'depends_on',
+  'prerequisite_of',
+  'part_of',
   'example_of',
+  'applies_to',
   'supports',
   'contradicts',
-  'part_of',
-  'prerequisite_of',
-  'applies_to',
-  'answers',
+  'derived_from',
+  'summarizes',
+  'updates',
 ]
 
 export const KNOWLEDGE_RELATION_STATUSES: Extract<KnowledgeRelationStatus, 'candidate' | 'active'>[] = ['candidate', 'active']
@@ -67,4 +68,53 @@ export function parseSourceRefs(value: string): Record<string, unknown>[] {
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+// ── Knowledge section navigation ───────────────────────────────────────────
+/**
+ * Sub-areas of the first-level Knowledge module. `home` is the optional overview
+ * hub; the other four are the working workspaces. `/knowledge` opens the last-used
+ * *workspace* (never `home`, which stays an intentional destination) and defaults
+ * to `notes` on a fresh client. See KnowledgeModule / KnowledgeSectionHeader.
+ */
+export type KnowledgeSection = 'home' | 'notes' | 'wiki' | 'sources' | 'cards'
+
+/** Sections eligible to be remembered as the `/knowledge` redirect target. */
+export const KNOWLEDGE_WORKSPACE_SECTIONS: Exclude<KnowledgeSection, 'home'>[] = [
+  'notes',
+  'wiki',
+  'sources',
+  'cards',
+]
+
+export const DEFAULT_KNOWLEDGE_SECTION: KnowledgeSection = 'notes'
+
+const LAST_SECTION_KEY = 'agent-space:knowledge-section'
+
+function isWorkspaceSection(value: string): value is Exclude<KnowledgeSection, 'home'> {
+  return (KNOWLEDGE_WORKSPACE_SECTIONS as string[]).includes(value)
+}
+
+/** The section `/knowledge` should redirect to: last-used workspace, else Notes. */
+export function readLastKnowledgeSection(): Exclude<KnowledgeSection, 'home'> {
+  try {
+    const v = localStorage.getItem(LAST_SECTION_KEY)
+    if (v && isWorkspaceSection(v)) return v
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_KNOWLEDGE_SECTION as Exclude<KnowledgeSection, 'home'>
+}
+
+/**
+ * Remember the active workspace so `/knowledge` reopens it next time. `home` is
+ * intentionally not persisted — the overview must never become the default landing.
+ */
+export function rememberKnowledgeSection(section: KnowledgeSection): void {
+  if (!isWorkspaceSection(section)) return
+  try {
+    localStorage.setItem(LAST_SECTION_KEY, section)
+  } catch {
+    /* ignore */
+  }
 }

@@ -245,9 +245,9 @@ export const MODULE_REGISTRY: Module[] = [
 
   // ── Knowledge ─────────────────────────────────────────────────────────────
   {
-    id: 'knowledge', label: 'Wiki', path: '/knowledge',
+    id: 'knowledge', label: 'Knowledge', path: '/knowledge',
     section: 'knowledge', group: 'knowledge', icon: 'book-open', accent: true,
-    description: 'Structured knowledge — concepts, claims, sources, questions.',
+    description: 'Working notes, canonical wiki knowledge, sources, and review material.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
