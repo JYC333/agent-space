@@ -171,7 +171,7 @@ Dynamic escalation to `FAIL_CLOSED` (regardless of per-action default):
 - Protection is achieved through `PolicyGateway.enforce_proposal_apply()` in `ProposalService.accept()`.
 - `proposal.apply` is the fail_closed audit and approval gate for all of these actions.
 - `RunService`, `AgentService`, `PreflightService`, and `AutomationPolicyPreflightService` use `PolicyEngine` directly for non-mutating simulation — they do not write `PolicyDecisionRecord` rows. Real enforcement is exclusively in `RunExecutionService`.
-- Automation remains manual-only skeleton: its create/update/manual-fire service paths use `PolicyGateway.enforce()` for automation management; create/fire then run runtime preflight and policy preflight simulation. No scheduler, external event trigger, or credential allowance is implemented.
+- Automation supports manual and schedule-triggered fire. Its create/update/fire service paths use `PolicyGateway.enforce()` for automation management; create/fire then run runtime preflight and policy preflight simulation. Schedule ticks invoke the same `AutomationService.fire()` path; no external event trigger is implemented. Scheduled automations can carry same-space `AutomationCredentialGrant` pre-authorization.
 
 ---
 
@@ -238,9 +238,9 @@ PolicyGateway section above for the allowed preflight-only sites.
 | `proposal.create` | `ProposalService.create_proposal()` and `code_patch_collector.py` via `enforce()` | `target_visibility`, `target_scope` | Code patch collection uses `force_record=True`. |
 | `proposal.apply` | `ProposalService.accept()` via `enforce_proposal_apply()` | `payload` scanned for approval-proof flags | Unsupported types deny; role/risk matrix determines supported actions. **fail_closed**. |
 | `workspace.write_patch` | `apply_code_patch_payload()` via `enforce()` before any file writes | `proposal_id`, `proposal_type`, `proposal_apply_allowed` | Safe patch summary only; **fail_closed**. |
-| `automation.create` | `AutomationService.create()` | membership role and manual trigger metadata | Skeleton-only create path; no scheduler. **fail_closed** audit before creation; then runtime preflight and policy preflight must pass before the Automation row is written. |
-| `automation.update` | `AutomationService.update()` | membership role | Skeleton-only update path. **fail_closed** audit before mutation. |
-| `automation.fire` | `AutomationService.fire()` | membership role and `trigger_origin="automation"` | Manually queues a run only; no credential allowance. **fail_closed** audit before queuing; reruns runtime preflight and policy preflight before creating the queued Run. |
+| `automation.create` | `AutomationService.create()` | membership role and trigger metadata | Creates manual or schedule automations. **fail_closed** audit before creation; then runtime preflight and policy preflight must pass before the Automation row is written. Schedule automations receive an `AutomationCredentialGrant`. |
+| `automation.update` | `AutomationService.update()` | membership role | Updates manual or schedule automations. **fail_closed** audit before mutation. |
+| `automation.fire` | `AutomationService.fire()` | membership role and `trigger_origin="automation"` | Queues a run for manual or schedule trigger. **fail_closed** audit before queuing; reruns runtime preflight and policy preflight before creating the queued Run. Scheduled automations may use active same-space `AutomationCredentialGrant` pre-authorization. |
 
 ### Persisted Policy Effect Contract
 
@@ -264,8 +264,8 @@ wired.
 
 ### Automation Policy Preflight
 
-`AutomationPolicyPreflightService` is a simulation-only preflight layer for the
-manual-only automation skeleton. It dry-runs the policy decisions that would be
+`AutomationPolicyPreflightService` is a simulation-only preflight layer for
+manual and schedule-triggered automations. It dry-runs the policy decisions that would be
 encountered before adapter invocation for `runtime.execute`,
 `runtime.use_credential`, `context.inject_memory`, and
 `context.render_for_runtime`.
@@ -292,9 +292,9 @@ Unknown non-empty adapter types fail with a stable configuration error instead
 of silently using `model_provider_mode=none`.
 
 Policy preflight is not enforcement. Real runtime enforcement, durable audit, and
-terminal run failure semantics remain in `RunExecutionService`. Automation
-remains manual-only: it has no scheduler, external event trigger, credential
-allowance, or direct execution path.
+terminal run failure semantics remain in `RunExecutionService`. Automation has
+manual and schedule-triggered fire, but no external event trigger or direct
+execution path.
 
 ### WIRED_VIA_PROPOSAL Actions
 

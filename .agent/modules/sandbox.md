@@ -75,7 +75,7 @@ diff / artifacts in /workspace → visible on host via volume mount
 
 Planned one-shot Docker runs use a separately built image:
 ```bash
-docker build --network=host -t agent-space-sandbox deployments/sandbox/
+docker build --network=host -t agent-space-sandbox sandbox/
 ```
 
 The backend Dockerfile also installs `claude` and `codex` for high-risk worktree runs.
@@ -115,16 +115,16 @@ Adapters check `self.sandbox_dir is not None`:
 - File changes from the worktree become a `code_patch` proposal; real workspace mutation happens only after the proposal is accepted
 
 ## Related Files
-- `core/backend/app/runs/sandbox_manager.py` — execution_workspace context manager
-- `core/backend/app/runs/workspace_worktree.py` — workspace_git_worktree (detached git worktree creation)
-- `core/backend/app/runs/worktree_manager.py` — isolated_run_workdir (plain temp dir fallback)
-- `core/backend/app/workspace/root_validation.py` — validate_workspace_root_for_execution
-- `core/backend/app/runs/runtime_policy.py` — validate_file_access_adapter_policy, risk→sandbox mapping
-- `core/backend/app/runtimes/local_executor.py` — local subprocess execution
-- `core/backend/app/runtimes/adapters/cli_runtime.py` — generic local CLI runtime path
-- `core/backend/Dockerfile` — installs claude + codex for high-risk worktree runs
-- `deployments/sandbox/Dockerfile` — sandbox image for critical-risk one_shot_docker runs
-- `deployments/local/docker-compose.<mode>.yml` — mounts Docker socket for critical-risk container spawning
+- `backend/app/runs/sandbox_manager.py` — execution_workspace context manager
+- `backend/app/runs/workspace_worktree.py` — workspace_git_worktree (detached git worktree creation)
+- `backend/app/runs/worktree_manager.py` — isolated_run_workdir (plain temp dir fallback)
+- `backend/app/workspace/root_validation.py` — validate_workspace_root_for_execution
+- `backend/app/runs/runtime_policy.py` — validate_file_access_adapter_policy, risk→sandbox mapping
+- `backend/app/runtimes/local_executor.py` — local subprocess execution
+- `backend/app/runtimes/adapters/cli_runtime.py` — generic local CLI runtime path
+- `backend/Dockerfile` — installs claude + codex for high-risk worktree runs
+- `sandbox/Dockerfile` — sandbox image for critical-risk one_shot_docker runs
+- `ops/compose/docker-compose.<mode>.yml` — mounts Docker socket for critical-risk container spawning
 
 ## Related Decisions
 - [0005-desktop-runtime.md](../decisions/0005-desktop-runtime.md)

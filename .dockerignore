@@ -1,0 +1,26 @@
+# Root .dockerignore — applies only to builds that use the repo root as their
+# build context. Today that covers backend and control-plane. The web frontend
+# and deployer images build from their own subdirectory contexts, each with its
+# own .dockerignore, and are unaffected by this file.
+#
+# Keep repo-root build contexts small and free of host/runtime artifacts.
+
+**/node_modules
+**/dist
+**/.venv
+.git
+.agent
+.claude
+.pytest_cache
+**/__pycache__
+**/*.pyc
+**/.mypy_cache
+**/.ruff_cache
+*.log
+
+# Runtime data trees / secrets are never part of an image build.
+instance/
+workspaces/
+sandboxes/
+ops/env/.env
+**/db/postgres/

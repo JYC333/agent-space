@@ -86,9 +86,9 @@ Appears in review queue
 - Audio/video review always offers a text transcript fallback
 
 ## Related Files
-- `core/backend/app/models.py` — TODO: add MediaCard model
-- `core/backend/app/api/cards.py` — TODO: extend with media endpoints
-- `frontend/src/pages/` — TODO: media card creator and review renderer
+- `backend/app/models.py` — TODO: add MediaCard model
+- `backend/app/api/cards.py` — TODO: extend with media endpoints
+- `apps/web/src/pages/` — TODO: media card creator and review renderer
 
 ## Related Modules
 - [spaced-repetition.md](spaced-repetition.md) — core FSRS scheduling

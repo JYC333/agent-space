@@ -213,9 +213,9 @@ fail closed via `unknown_policy_action` DENY if ever passed to `PolicyEngine` or
 | `workspace.write_patch` | `memory/code_patch_apply.py` | Uses `enforce()` before workspace file writes. **fail_closed**. |
 | `workspace.read` | `workspace_console/api.py` | Uses `enforce()` before workspace tree/file/status/diff reads. Uses actual `Workspace.space_id` as `resource_space_id`. Normal project reads default allow; system_core, external-root, protected/restricted, full diff, and secret-like path reads use `force_record=True`. PathPolicy still blocks traversal and secret-like paths before content is returned. Full diff is bounded and secret-like diff values are redacted; secret-like diff paths are denied. |
 | `artifact.persist` | `runs/artifact_persistence.py` | Uses `enforce()` before egress guard or persistence. Blocked decisions are audited once through `write_blocked_gate_audit()` and write no file or row. **fail_closed**. |
-| `proposal.create` | `memory/proposals.py` | Uses `enforce()` for user-created memory proposals. |
+| `proposal.create` | `proposals/service.py` | Uses `enforce()` for user-created memory proposals. |
 | `proposal.create` | `runs/code_patch_collector.py` | Uses `enforce()` with `force_record=True` for system-created code_patch proposals. |
-| `proposal.apply` | `memory/proposals.py` | Uses `enforce_proposal_apply()`; unsupported types deny first. **fail_closed**. |
+| `proposal.apply` | `proposals/service.py` | Uses `enforce_proposal_apply()`; unsupported types deny first. **fail_closed**. |
 | `agent.config_update` | `agents/agent_service.py` | Uses `enforce()` before creating `agent_config_update` proposals. This is the domain-specific proposal creation audit; accepted mutation still goes through `proposal.apply`. Metadata includes changed field names and safe IDs only, not raw system prompt or policy blobs. |
 | `automation.create` | `automation/service.py` | **Uses `enforce()`** — raises `PolicyGateBlocked` on denial, global handler writes durable record. Runtime preflight and policy preflight simulation must pass before the Automation row is written. `membership_role`, `agent_id`, `trigger_type` in `context`. **fail_closed** — persistence failure blocks creation. |
 | `automation.update` | `automation/service.py` | **Uses `enforce()`**. `membership_role`, `agent_id` in `context`. **fail_closed**. |
@@ -276,9 +276,10 @@ action inventories because they are not enforcement and must not emit
 `PolicyDecisionRecord`.
 **Real enforcement runs exclusively in `RunExecutionService`.**
 
-Automation remains a manual-only skeleton. Policy preflight is not enforcement:
-it does not call `PolicyGateway.enforce()`, decrypt credentials, or mutate Run,
-Automation, MemoryEntry, Proposal, Policy, Credential, or Artifact rows.
+Automation supports manual and schedule-triggered fire. Policy preflight is not
+enforcement: it does not call `PolicyGateway.enforce()`, decrypt credentials, or
+mutate Run, Automation, MemoryEntry, Proposal, Policy, Credential, or Artifact
+rows.
 Runtime requirements decide whether provider defaults apply: `echo`,
 `capability`, `claude_code`, and `codex_cli` never inherit the space default
 ModelProvider. Runtime-scoped provider defaults decide which provider is used
@@ -300,9 +301,9 @@ instead of silently using `model_provider_mode=none`.
 | `context.render_for_runtime` | `runs/execution.py` PolicyGateway (`has_personal_grant_context` in `context`) | PolicyDecisionRecord on DENY |
 | `workspace.read` | `workspace_console/api.py` PolicyGateway (`read_kind`, `relative_path`, workspace posture in `context`) | PolicyDecisionRecord on DENY/REQUIRE_APPROVAL and forced audit for system_core/external-root/restricted/full-diff/secret-like reads |
 | `artifact.persist` | `runs/artifact_persistence.py` PolicyGateway (`target_space_id`, `derived_from_personal_memory_grant`, `raw_private_memory_included` in `context`; DENY+REQUIRE_APPROVAL block) | PolicyDecisionRecord (audit_required=True) |
-| `proposal.create` | `memory/proposals.py` + `runs/code_patch_collector.py` (`target_visibility`, `target_scope` in `context` for memory proposals) | PolicyDecisionRecord (force_record=True for code_patch) |
-| `proposal.apply` | `memory/proposals.py` PolicyGateway | PolicyDecisionRecord (audit_required=True). Unsupported proposal types deny at gate (`audit_code="unsupported_proposal_type"`) before any role check. Role matrix: owner=all, admin=low/medium/high, reviewer=low/medium. |
-| `knowledge.*` | `memory/proposals.py` + `knowledge/service.py` via `proposal.apply` | No direct write gate. Accepted `knowledge_*` proposals create/version/archive KnowledgeItem or archive/create KnowledgeItemRelation rows. |
+| `proposal.create` | `proposals/service.py` + `runs/code_patch_collector.py` (`target_visibility`, `target_scope` in `context` for memory proposals) | PolicyDecisionRecord (force_record=True for code_patch) |
+| `proposal.apply` | `proposals/service.py` PolicyGateway | PolicyDecisionRecord (audit_required=True). Unsupported proposal types deny at gate (`audit_code="unsupported_proposal_type"`) before any role check. Role matrix: owner=all, admin=low/medium/high, reviewer=low/medium. |
+| `knowledge.*` | `proposals/service.py` + `knowledge/service.py` via `proposal.apply` | No direct write gate. Accepted `knowledge_*` proposals create/version/archive KnowledgeItem or archive/create KnowledgeItemRelation rows. |
 | `agent.config_update` | `agents/agent_service.py` PolicyGateway before `agent_config_update` proposal creation | PolicyDecisionRecord (audit_required=True, safe metadata only) |
 | `automation.create` | `automation/service.py` PolicyGateway | PolicyDecisionRecord (audit_required=True, fail_closed). `membership_role` in context; requires admin/owner. Runtime preflight + policy preflight snapshots are stored in `preflight_snapshot_json`. |
 | `automation.update` | `automation/service.py` PolicyGateway | PolicyDecisionRecord (audit_required=True, fail_closed). `membership_role` in context; requires admin/owner. |

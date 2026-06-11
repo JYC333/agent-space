@@ -34,7 +34,7 @@ This document describes current capability lines and known future risks. It is o
 
 ### 3. Backup / Restore / Offsite Safety
 
-**Current state:** `BackupService` is the canonical full-system backup (pg_dump custom-format snapshot + files + manifest, local lock; live `db/postgres` never archived). `scripts/system/backup.sh` and `scripts/system/restore.sh` are the offline full-system equivalents (same archive format; restore rebuilds database and files in one command). `scripts/db/dump.sh` / `scripts/db/restore.sh` are DB-only pg_dump/pg_restore operator tools. Single-host advisory lock. 7-archive retention.
+**Current state:** `BackupService` is the canonical full-system backup (pg_dump custom-format snapshot + files + manifest, local lock; live `db/postgres` never archived). `ops/scripts/system/backup.sh` and `ops/scripts/system/restore.sh` are the offline full-system equivalents (same archive format; restore rebuilds database and files in one command). `ops/scripts/db/dump.sh` / `ops/scripts/db/restore.sh` are DB-only pg_dump/pg_restore operator tools. Single-host advisory lock. 7-archive retention.
 
 **Why it matters:** Dogfood data has no recovery path without reliable backups and a tested restore procedure.
 
@@ -171,8 +171,9 @@ silently pick up stale or shared auth state. Failure code:
 1. `memory.create/update/archive` enforcement points at MemoryStore level (currently only
    at proposal.apply gate).
 2. `capability.enable`, `tool_binding.enable` — when capability management API is built.
-3. Automation credential allowance is not implemented; automation-origin credential use currently requires
-   explicit approval via `rule_use_credential`; explicit `CredentialAllowance` model deferred.
+3. Schedule automation credential pre-authorization exists through
+   `AutomationCredentialGrant`; broader per-run/per-tool credential scoping and
+   user-facing allowance management remain deferred.
 
 **Not now:** Full enterprise RBAC/ABAC, user-facing policy editor, global route rewrite, policy DSL, lab/scientific identity roles, agent-to-agent delegation (deferred).
 
@@ -238,7 +239,7 @@ silently pick up stale or shared auth state. Failure code:
   - `incomplete_patch` is surfaced on proposals so partial changes are never silently accepted.
 
 **Not implemented:**
-  - Cron scheduler.
+  - External event trigger registry.
   - External event triggers.
   - Credential allowances for automation-origin runs.
   - Docker sandbox for critical-risk automation runs.
@@ -356,8 +357,8 @@ User request
 - `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update` — proposals created by `ReflectionProposalBuilder`; accepting them raises `UnsupportedProposalTypeError`. Apply handlers are deferred.
 
 `RunReflection` is not automatically created by `RunEvaluationService` or
-`TaskEvaluationService`. Automation supports manual fire only; no scheduler or
-external trigger is implemented.
+`TaskEvaluationService`. Automation supports manual and schedule-triggered fire;
+external triggers are not implemented.
 
 **PostRunFinalizationService — canonical post-run boundary (implemented):**
 
@@ -426,7 +427,7 @@ external trigger is implemented.
 | Broader policy enforcement | Some enforcement points are intentionally proposal-mediated or deferred | Memory create/update/archive are proposal-mediated; workspace.read is wired direct; capability/deployment/export actions remain deferred |
 | Credential access grants | No per-run/per-tool credential scope; credential resolver is a single boundary | Resolver boundary set; grants deferred |
 | Broad Intake/Evidence ingestion | External data can pollute trusted Memory without trust gates | Candidate-only lifecycle implemented; broad crawling/indexing deferred |
-| Automation scope creep | Background work without ownership/policy can silently mutate data | `Automation`/`AutomationRun` models and CRUD API implemented; `automation.create/update/fire` WIRED_DIRECT via PolicyGateway.enforce() with durable audit; admin/owner role required; manual-only remains; credential allowances deferred |
+| Automation scope creep | Background work without ownership/policy can silently mutate data | `Automation`/`AutomationRun` models and CRUD API implemented; `automation.create/update/fire` WIRED_DIRECT via PolicyGateway.enforce() with durable audit; admin/owner role required; manual and schedule-triggered fire supported; broader credential scoping deferred |
 | Self-evolution scope creep | Agents expanding their own permissions or target domain | Disabled by default; deployer-only gate |
 | Code patch operational risk | Partial apply with rollback failure leaves filesystem inconsistent | Explicit compensation logic; partial-apply errors surfaced |
 | Frontend exposing disabled surfaces | Planned-but-not-built modules appearing interactive | Registry `planned: true` pattern; "soon" badges enforced |

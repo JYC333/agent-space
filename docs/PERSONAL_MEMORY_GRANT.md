@@ -267,10 +267,10 @@ See `docs/FUTURE_ROADMAP.md` for deferred items including:
 - `docs/SOURCE_POINTER.md` — SourcePointer metadata model
 - `docs/POLICY_AND_PRIVACY_BOUNDARIES.md` — policy enforcement inventory
 - `docs/FUTURE_ROADMAP.md` — future work
-- `core/backend/app/personal_memory_grants/` — implementation
-- `core/backend/app/proposals/approvals.py` — approval gate
-- `core/backend/app/personal_memory_grants/egress_guard.py` — egress guard
-- `core/backend/app/personal_memory_grants/egress_review.py` — egress review proposal creation
-- `core/backend/tests/invariants/test_personal_memory_egress_guard_invariants.py`
-- `core/backend/tests/invariants/test_personal_memory_egress_approval_invariants.py`
-- `core/backend/tests/invariants/test_personal_memory_grant_security_boundary.py`
+- `backend/app/personal_memory_grants/` — implementation
+- `backend/app/proposals/approvals.py` — approval gate
+- `backend/app/personal_memory_grants/egress_guard.py` — egress guard
+- `backend/app/personal_memory_grants/egress_review.py` — egress review proposal creation
+- `backend/tests/invariants/test_personal_memory_egress_guard_invariants.py`
+- `backend/tests/invariants/test_personal_memory_egress_approval_invariants.py`
+- `backend/tests/invariants/test_personal_memory_grant_security_boundary.py`

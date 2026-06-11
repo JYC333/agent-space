@@ -125,11 +125,11 @@ POST /api/v1/cards/{id}/review
 - Cards are never deleted — status transitions to `suspended` or `archived` instead
 
 ## Related Files
-- `core/backend/app/models.py` — TODO: add FlashCard, CardReview
-- `core/backend/app/cards/` — TODO: review queue + FSRS module
-- `core/backend/app/api/cards.py` — TODO: review API
-- `frontend/src/pages/` — TODO: review session page
-- `frontend/src/components/ReviewCard.tsx` — TODO: card component (swipe support)
+- `backend/app/models.py` — TODO: add FlashCard, CardReview
+- `backend/app/cards/` — TODO: review queue + FSRS module
+- `backend/app/api/cards.py` — TODO: review API
+- `apps/web/src/pages/` — TODO: review session page
+- `apps/web/src/components/ReviewCard.tsx` — TODO: card component (swipe support)
 
 ## Related Modules
 - [knowledge-base.md](knowledge-base.md) — primary source of card content

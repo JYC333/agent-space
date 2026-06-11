@@ -10,7 +10,7 @@ Accepted - 2026-05-20
 > requirement was credential *channel isolation* — keeping an Anthropic API key out of
 > the Claude Code CLI subprocess environment — not forbidding the Anthropic API. ADR 0010
 > restates the invariant correctly and permits the in-process encrypted API channel
-> (reflector, `/providers/chat`, the future `model_api` adapter) to serve any provider,
+> (reflector, `/providers/chat`, the `model_api` adapter) to serve any provider,
 > Anthropic included. The retained invariants below (CLI subprocess env hygiene, no
 > ambient key fallback, vendor-neutral runtime standard) remain in force under 0010.
 

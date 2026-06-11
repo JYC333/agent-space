@@ -7,10 +7,8 @@
 # Temporary agent execution environments
 /sandboxes/
 
-# Local deployment secrets/state
-/deployments/**/.env
-/deployments/**/data/
-/deployments/**/volumes/
+# Local operation secrets/state
+/ops/env/.env
 
 # Environment files
 .env
@@ -23,11 +21,9 @@
 *.dump
 
 # Keep folder placeholders
-!/core/.gitkeep
 !/instance/.gitkeep
 !/workspaces/.gitkeep
 !/sandboxes/.gitkeep
-!/deployments/.gitkeep
 
 # Python
 __pycache__/
@@ -43,10 +39,10 @@ htmlcov/
 
 # Frontend dependencies and build output
 node_modules/
-frontend/dist/
+apps/web/dist/
 
 # Rust / Tauri
-frontend/src-tauri/target/
+apps/web/src-tauri/target/
 
 # Logs and caches
 *.log

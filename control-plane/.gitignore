@@ -1,0 +1,5 @@
+# Compiled output (produced by `npm run build`)
+dist/
+
+# Dependencies (also covered by the repo-root .gitignore)
+node_modules/

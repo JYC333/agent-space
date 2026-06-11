@@ -88,10 +88,10 @@ DiffAnnotation:
 - Agent-sourced diffs always display run attribution — never shown as "human change"
 
 ## Related Files
-- `core/backend/app/models.py` — TODO: add DiffReview, DiffAnnotation models
-- `core/backend/app/api/` — TODO: add diff-review router
-- `frontend/src/components/DiffViewer.tsx` — TODO: DiffViewer primitive
-- `frontend/src/pages/` — TODO: diff review page
+- `backend/app/models.py` — TODO: add DiffReview, DiffAnnotation models
+- `backend/app/api/` — TODO: add diff-review router
+- `apps/web/src/components/DiffViewer.tsx` — TODO: DiffViewer primitive
+- `apps/web/src/pages/` — TODO: diff review page
 
 ## Related Modules
 - [workspace-console.md](workspace-console.md) — file browser and workspace operations

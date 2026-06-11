@@ -133,5 +133,5 @@ a user's personal-space private memory as reasoning-only context. Federation and
 - `docs/POLICY_AND_PRIVACY_BOUNDARIES.md` — policy enforcement inventory
 - `docs/FEDERATED_ACCESS_MODEL.md` — federated access (deferred)
 - `docs/PUBLISH_PROJECTION.md` — public publish pipeline (deferred)
-- `core/backend/app/memory/read_auth.py` — `can_read_memory()` implementation
-- `core/backend/app/memory/store.py` — `MemoryStore.create()` write-layer enforcement
+- `backend/app/memory/read_auth.py` — `can_read_memory()` implementation
+- `backend/app/memory/store.py` — `MemoryStore.create()` write-layer enforcement

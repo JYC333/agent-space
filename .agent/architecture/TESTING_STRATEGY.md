@@ -9,7 +9,7 @@ This document defines the current backend testing architecture. The suite is org
 Canonical backend tests live under:
 
 ```text
-core/backend/tests/
+backend/tests/
   unit/
   contracts/
   invariants/
@@ -135,7 +135,7 @@ Tests should protect these durable behaviors:
 Pytest configures an isolated `AGENT_SPACE_HOME` in `tests/conftest.py` before importing the app. Use the canonical layered suite command:
 
 ```bash
-cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
+cd backend && python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
 ```
 
 Do not point tests at a real mode data tree. Use `AGENT_SPACE_PYTEST_USE_REAL_HOME=1` only for explicit manual debugging.

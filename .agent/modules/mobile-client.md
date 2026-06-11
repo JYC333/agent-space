@@ -96,10 +96,10 @@ Left and right panels (from desktop layout) become:
 - Bottom navigation covers the 4 most common actions; all other nav via "More" drawer
 
 ## Related Files
-- `frontend/public/manifest.json` — TODO: PWA manifest
-- `frontend/src/service-worker.js` — TODO: service worker
-- `frontend/src/App.jsx` — TODO: mobile layout detection + routing
-- `frontend/src/components/` — TODO: MobileLayout, FAB, BottomNav, SwipeCardReview
+- `apps/web/public/manifest.json` — TODO: PWA manifest
+- `apps/web/src/service-worker.js` — TODO: service worker
+- `apps/web/src/App.tsx` — TODO: mobile layout detection + routing
+- `apps/web/src/components/` — TODO: MobileLayout, FAB, BottomNav, SwipeCardReview
 
 ## Related Modules
 - [frontend-layout.md](frontend-layout.md) — desktop layout that mobile adapts

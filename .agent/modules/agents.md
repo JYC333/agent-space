@@ -231,7 +231,7 @@ version creation via `POST /agents/{id}/versions` remains disabled.
 
 ## Frontend Agent Configuration Surfaces
 
-The React `agents` module (`frontend/src/modules/agents/`) renders the product-level UI over
+The React `agents` module (`apps/web/src/modules/agents/`) renders the product-level UI over
 the backend AgentTemplate → AgentVersion model. No mock/hardcoded template or agent data
 remains; every card is backed by an API call.
 
@@ -346,22 +346,22 @@ one in fixtures (`tests/support/factories.py`), not via production seeding.
 
 ## Related Files
 
-- `core/backend/app/agents/agent_service.py` — AgentService CRUD and run creation helpers
-- `core/backend/app/runs/run_service.py` — Run creation and listing
-- `core/backend/app/runs/execution.py` — `RunExecutionService` (canonical orchestrator)
-- `core/backend/app/runs/runtime_policy.py` — risk→sandbox mapping, file-access adapter validation
-- `core/backend/app/runtimes/registry.py` — adapter registration
-- `core/backend/app/runtimes/specs.py` — RuntimeAdapterSpec catalog
-- `core/backend/app/runtimes/adapters/cli_runtime.py` — GenericCliRuntimeAdapter local CLI execution
-- `core/backend/app/runtimes/local_executor.py` — local subprocess execution
-- `core/backend/app/agents/template_seeder.py` — system AgentTemplate seeding (factories)
-- `core/backend/app/agents/template_service.py` — `AgentTemplateService` (copy-on-create)
-- `core/backend/app/agents/version_service.py` — `AgentVersionService` (append-only versions)
-- `core/backend/app/agents/api.py` — agent HTTP API incl. `/config`, `/current-version`,
+- `backend/app/agents/agent_service.py` — AgentService CRUD and run creation helpers
+- `backend/app/runs/run_service.py` — Run creation and listing
+- `backend/app/runs/execution.py` — `RunExecutionService` (canonical orchestrator)
+- `backend/app/runs/runtime_policy.py` — risk→sandbox mapping, file-access adapter validation
+- `backend/app/runtimes/registry.py` — adapter registration
+- `backend/app/runtimes/specs.py` — RuntimeAdapterSpec catalog
+- `backend/app/runtimes/adapters/cli_runtime.py` — GenericCliRuntimeAdapter local CLI execution
+- `backend/app/runtimes/local_executor.py` — local subprocess execution
+- `backend/app/agents/template_seeder.py` — system AgentTemplate seeding (factories)
+- `backend/app/agents/template_service.py` — `AgentTemplateService` (copy-on-create)
+- `backend/app/agents/version_service.py` — `AgentVersionService` (append-only versions)
+- `backend/app/agents/api.py` — agent HTTP API incl. `/config`, `/current-version`,
   `/versions/{id}/restore`, `/proposals`
-- `core/backend/app/agent_templates/api.py` — template HTTP API incl. version detail
-- `frontend/src/modules/agents/policyMap.ts` + `ConfigCards.tsx` — policy/config JSON → product cards
-- `frontend/src/modules/agents/{TemplateLibraryPage,TemplateDetailPage,CreateFromTemplatePage,AgentDetailPage}.tsx`
+- `backend/app/agent_templates/api.py` — template HTTP API incl. version detail
+- `apps/web/src/modules/agents/policyMap.ts` + `ConfigCards.tsx` — policy/config JSON → product cards
+- `apps/web/src/modules/agents/{TemplateLibraryPage,TemplateDetailPage,CreateFromTemplatePage,AgentDetailPage}.tsx`
 
 ## Related Decisions
 

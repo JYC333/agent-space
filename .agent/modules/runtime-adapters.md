@@ -7,7 +7,7 @@ Vendor CLIs are runtime adapters only.
 ## Canonical Standard
 
 `RuntimeAdapterSpec` is the source of truth for adapter behavior. Built-in specs
-live in `core/backend/app/runtimes/specs.py` and define:
+live in `backend/app/runtimes/specs.py` and define:
 
 - runtime kind and implementation status
 - executable detection and version probes

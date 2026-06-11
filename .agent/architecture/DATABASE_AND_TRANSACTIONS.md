@@ -2,7 +2,7 @@
 
 ## UnitOfWork Pattern
 
-`UnitOfWork` (`core/backend/app/db_uow.py`) owns transaction control: commit, rollback, flush, savepoint, and explicit failed-session detection.
+`UnitOfWork` (`backend/app/db_uow.py`) owns transaction control: commit, rollback, flush, savepoint, and explicit failed-session detection.
 
 - Wraps an existing SQLAlchemy `Session`.
 - Exposes `flush()` without hiding SQLAlchemy.
@@ -66,7 +66,7 @@ Required pattern:
 - `BackupService` uses `pg_dump -Fc` (custom format) for a consistent PostgreSQL database snapshot, independent from the ORM Session. `db_snapshot_method` is `"pg_dump_custom"` in the manifest.
 - If `pg_dump` fails, the backup fails closed — no partial archive is produced.
 - Full-system backup also copies file data. The database dump and file copies are not one cross-resource transaction, so restore verification checks artifact rows against restored files.
-- Run `scripts/system/verify-restore.sh` after restore to verify Alembic state, core table counts, and `artifacts.storage_path` file consistency.
+- Run `ops/scripts/system/verify-restore.sh` after restore to verify Alembic state, core table counts, and `artifacts.storage_path` file consistency.
 - Long-running app transactions must be avoided so backups stay fresh.
 - Backup metadata and manifests must not contain raw secrets.
 - `backups/` is always excluded from backup archives (recursion prevention).
@@ -75,10 +75,10 @@ Required pattern:
   directory is not a supported backup. The manifest records `db/postgres/ (live PostgreSQL data)`
   in its excluded paths.
 - **Manifest version metadata.** Every manifest (online `BackupService` and offline
-  `scripts/system/backup.sh`) records `backup_format`, `app_version`, `git_commit`,
+  `ops/scripts/system/backup.sh`) records `backup_format`, `app_version`, `git_commit`,
   `alembic_revision`, `postgres_server_version`, and `pg_dump_version`. Each value is
   best-effort and may be `null`; gathering it never aborts a backup.
-- **Restore preflight validates version metadata.** `scripts/system/restore.sh` reads the
+- **Restore preflight validates version metadata.** `ops/scripts/system/restore.sh` reads the
   manifest, prints the recorded versions, and warns clearly on `backup_format` or PostgreSQL
   major-version mismatch. Manifest metadata is never silently ignored.
 
@@ -87,25 +87,25 @@ Required pattern:
 - **PostgreSQL is the server database.** `DATABASE_URL` accepts
   `postgresql+psycopg://...` and normalizes `postgresql://...` to the canonical
   psycopg form. The app rejects non-PostgreSQL URLs at startup.
-- **Local compose/env resolution** is shared by `scripts/start.sh`, `scripts/db/*.sh`,
-  and `scripts/system/*.sh` through `scripts/lib/local-compose.sh`: mode validation,
+- **Local compose/env resolution** is shared by `ops/scripts/start.sh`, `ops/scripts/db/*.sh`,
+  and `ops/scripts/system/*.sh` through `ops/scripts/lib/local-compose.sh`: mode validation,
   `ASPACE_ROOT`, `$ASPACE_ROOT/<mode>`, `$MODE_ROOT/.env`, `AGENT_SPACE_MODE_ROOT`,
   compose project/file, and `docker compose --env-file "$ENV_FILE"` are one path.
 - Local PostgreSQL containers have stable mode-specific names:
   `agent-space-dev-postgres`, `agent-space-test-postgres`, and `agent-space-prod-postgres`.
-- Schema is owned by Alembic migrations (`core/backend/migrations/`); application startup runs
+- Schema is owned by Alembic migrations (`backend/migrations/`); application startup runs
   `alembic upgrade head` (`app.db.init_db`) and never creates schema via `create_all()`.
 - Boolean defaults are PostgreSQL-native (`true`/`false`).
-- **Migration command path** (`scripts/db/migrate.sh`): defaults to Docker-native — it runs
+- **Migration command path** (`ops/scripts/db/migrate.sh`): defaults to Docker-native — it runs
   Alembic *inside the backend service* via Compose, so it uses the in-network `postgres` host
   (Postgres is not published to the host) and the matching client/deps from the backend image.
   `--host` runs Alembic on the host only against an explicitly configured, reachable external
-  Postgres, with a connectivity preflight. `scripts/db/reset-postgres.sh` reuses this path so a
+  Postgres, with a connectivity preflight. `ops/scripts/db/reset-postgres.sh` reuses this path so a
   freshly dropped/created DB is always migrated (never left empty/unmigrated).
   If Docker-native migration starts the compose `postgres` service, it stops that service on
   exit; DB-only dump/restore/reset and offline system backup/restore/verify use the same
   start/stop ownership rule. They leave a pre-existing running database untouched.
-- **Pre-migration backup safety** (`scripts/db/migrate.sh`): `--mode prod` requires a
+- **Pre-migration backup safety** (`ops/scripts/db/migrate.sh`): `--mode prod` requires a
   pre-migration `pg_dump -Fc` backup before Alembic runs, written to
   `$ASPACE_ROOT/<mode>/db/dumps/pre-migrate-<timestamp>.dump`. If that dump fails, migration
   aborts before Alembic touches the schema. Non-prod modes skip it for convenience; opt in with
@@ -115,8 +115,10 @@ Required pattern:
   active membership, and the default execution planes — the usable initial state.
 - PostgreSQL data lives under `$ASPACE_ROOT/<mode>/db/postgres` (bind-mounted into the postgres container).
 - Database dumps live under `$ASPACE_ROOT/<mode>/db/dumps`.
-- Local test mode keeps host API `localhost:8100`, but the backend container listens on
-  internal port `8000` and compose-internal clients use `http://backend:8000`.
+- Local test mode publishes the control-plane API at `localhost:8110`. The backend
+  container listens on internal port `8000` and is mapped to host `localhost:8100`
+  only for direct Python debugging; compose-internal web traffic uses
+  `http://control-plane:8010`.
 - Job queue uses `SELECT ... FOR UPDATE SKIP LOCKED` for safe concurrent claim. `jobs.scheduled_at`
   is NOT NULL with a server default, and DB CHECK constraints enforce the allowed `status` set,
   `attempts >= 0`, and `max_attempts > 0`.

@@ -14,7 +14,7 @@ Before the codebase grew too large, we needed a structure that makes adding and 
 
 The pre-0007 layout had:
 - Backend: all HTTP routes in a flat `app/api/` directory; routers hardcoded in `main.py`
-- Frontend: all pages in a flat `src/pages/`; routes hardcoded in `App.jsx`
+- Frontend: all pages in a flat `src/pages/`; routes hardcoded in `App.tsx`
 
 This made it impossible to exclude a module at build time without deleting files.
 
@@ -47,9 +47,9 @@ Optional modules (planned: `cards`) are listed but commented out in the registry
 ```
 src/
   core/
-    Shell.jsx       ← persistent app shell with NavRail
+    Shell.tsx       ← persistent app shell with NavRail
   modules/
-    registry.js     ← module manifest + lazy-loaded component map
+    registry.ts     ← module manifest + lazy-loaded component map
     memory/         ← MemoriesPage, ProposalsPage, ContextPreviewPage
     agents/         ← AgentsPage (runs + versions)
     sessions/       ← SessionsPage
@@ -57,10 +57,10 @@ src/
     activity/       ← ActivityInboxPage (planned stub)
     knowledge/      <- KnowledgePage (planned stub)
     cards/          ← CardReviewPage (planned stub)
-  App.jsx           ← routes generated from MODULE_REGISTRY; React.lazy per module
+  App.tsx           ← routes generated from MODULE_REGISTRY; React.lazy per module
 ```
 
-`MODULE_REGISTRY` in `src/modules/registry.js` is the single source of truth for navigation and routing. Each entry uses `React.lazy()` so Vite produces a separate JS chunk per module — unvisited routes are never downloaded.
+`MODULE_REGISTRY` in `apps/web/src/modules/registry.ts` is the single source of truth for navigation and routing. Each entry uses `React.lazy()` so Vite produces a separate JS chunk per module — unvisited routes are never downloaded.
 
 The `planned: true` flag renders nav items as greyed-out with a "soon" badge; the route still exists so clicking it shows a planned stub rather than a 404.
 

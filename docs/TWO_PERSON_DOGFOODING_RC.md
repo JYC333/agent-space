@@ -73,8 +73,8 @@ The following surfaces are allowed after all release gates pass:
 
 **Backup and restore**
 - Automatic local backups through `BackupService` (primary — `BACKUP_ENABLED=true` required).
-- Manual backup via `POST /api/v1/system/backups/manual` or, offline, `scripts/system/backup.sh`.
-- Full-system restore through `scripts/system/restore.sh`. DB-only tools under `scripts/db/`.
+- Manual backup via `POST /api/v1/system/backups/manual` or, offline, `ops/scripts/system/backup.sh`.
+- Full-system restore through `ops/scripts/system/restore.sh`. DB-only tools under `ops/scripts/db/`.
 - Restore is always manual and explicit.
 
 **Deployment**
@@ -141,8 +141,9 @@ BACKUP_ON_STARTUP=true
 `BACKUP_ENABLED=true` is the minimum required setting. Without it, no automatic backups
 are created and dogfood data is unprotected.
 
-`BACKUP_ON_STARTUP=true` is the default. It causes `BackupScheduler` to run one backup
-immediately on startup, so you can verify the service is working before any writes occur.
+`BACKUP_ON_STARTUP=true` is the default. It causes the SchedulerRegistry-registered
+backup task to run one backup immediately on startup, so you can verify the service is
+working before any writes occur.
 Leave it at the default for dogfooding.
 
 `BACKUP_ROOT` defaults to `AGENT_SPACE_HOME/backups/`. Override only if you need a
@@ -180,7 +181,7 @@ Multi-user dogfooding requires each user to authenticate with their own credenti
 
 - Host: `~/.aspace/<mode>/.env` (never stored in the repo).
 - In Docker: mounted at `/aspace/.env` through the Compose volume.
-- See `deployments/local/docker-compose.dev.yml` for volume mapping.
+- See `ops/compose/docker-compose.dev.yml` for volume mapping.
 
 ### Where runtime data lives
 
@@ -224,7 +225,7 @@ Run all of these before declaring RC ready.
 ### Full backend suite
 
 ```bash
-cd core/backend
+cd backend
 python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -q --tb=short
 ```
 
@@ -233,8 +234,8 @@ Expected: 640 passed, 0 failed.
 ### Frontend typecheck
 
 ```bash
-cd frontend
-npx tsc --noEmit
+cd apps/web
+npm run typecheck
 ```
 
 Expected: no output (no errors).
@@ -242,7 +243,7 @@ Expected: no output (no errors).
 ### Frontend build
 
 ```bash
-cd frontend
+cd apps/web
 npm run build
 ```
 
@@ -251,7 +252,7 @@ Expected: clean build with no TypeScript or bundler errors.
 ### Script syntax check
 
 ```bash
-bash -n scripts/system/backup.sh scripts/system/restore.sh scripts/db/*.sh
+bash -n ops/scripts/system/backup.sh ops/scripts/system/restore.sh ops/scripts/db/*.sh
 ```
 
 Expected: no output (no syntax errors).
@@ -259,13 +260,13 @@ Expected: no output (no syntax errors).
 ### Optional: shellcheck
 
 ```bash
-shellcheck scripts/system/backup.sh scripts/system/restore.sh scripts/db/*.sh
+shellcheck ops/scripts/system/backup.sh ops/scripts/system/restore.sh ops/scripts/db/*.sh
 ```
 
 ### Focused test groups by boundary
 
 ```bash
-cd core/backend
+cd backend
 
 # Space contracts, auth, two-user isolation
 python3 -m pytest \
@@ -341,29 +342,29 @@ python3 -m pytest \
 
 This is a manual test. Run it before first dogfood writes.
 
-**Prerequisites:** Backend and frontend running with dogfood config. `BACKUP_ENABLED=true`.
+**Prerequisites:** frontend, control-plane, and backend running with dogfood config. `BACKUP_ENABLED=true`.
 
 ### Step 1 — Startup and backup verification
 
 ```bash
-./scripts/start.sh
-# Wait for backend to start, then:
-curl -s http://localhost:8000/health
+./ops/scripts/start.sh
+# Wait for control-plane and backend to start, then:
+curl -s http://localhost:8010/health
 # Expected: {"status": "ok", ...}
 ```
 
-Verify BackupService is active in startup logs:
+Verify the scheduler registry started the backup task in startup logs:
 ```
-INFO  backup scheduler started, interval=24h
+INFO  scheduler registry started tasks=...backup_scheduler...
 ```
 
 Or trigger a manual backup and confirm:
 ```bash
-curl -s -X POST http://localhost:8000/api/v1/system/backups/manual \
+curl -s -X POST http://localhost:8010/api/v1/system/backups/manual \
   -H "X-API-Key: <dogfood-api-key>"
 # Expected: {"status": "ok", "backup": "manual-YYYYMMDD-HHMMSS.tar.gz"}
 
-curl -s http://localhost:8000/api/v1/system/backups \
+curl -s http://localhost:8010/api/v1/system/backups \
   -H "X-API-Key: <dogfood-api-key>"
 # Expected: list with at least one archive containing backup_manifest.json
 ```
@@ -383,17 +384,17 @@ Create or confirm two users with distinct credentials:
 
 ```bash
 # As User A: list spaces
-curl -s "http://localhost:8000/api/v1/spaces" \
+curl -s "http://localhost:8010/api/v1/spaces" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: personal space for User A
 
 # As User B: list spaces
-curl -s "http://localhost:8000/api/v1/spaces" \
+curl -s "http://localhost:8010/api/v1/spaces" \
   -H "X-API-Key: <user-b-api-key>"
 # Expected: personal space for User B
 
 # As either user: confirm household space membership
-curl -s "http://localhost:8000/api/v1/spaces?space_type=household" \
+curl -s "http://localhost:8010/api/v1/spaces?space_type=household" \
   -H "X-API-Key: <user-a-api-key>"
 ```
 
@@ -401,12 +402,12 @@ curl -s "http://localhost:8000/api/v1/spaces?space_type=household" \
 
 ```bash
 # User B attempts to access User A's personal space — must be 403
-curl -s "http://localhost:8000/api/v1/memory?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:8010/api/v1/memory?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-b-api-key>"
 # Expected: HTTP 403
 
 # User A attempts to access User B's personal space — must be 403
-curl -s "http://localhost:8000/api/v1/memory?space_id=<user-b-personal-space-id>" \
+curl -s "http://localhost:8010/api/v1/memory?space_id=<user-b-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: HTTP 403
 ```
@@ -415,11 +416,11 @@ curl -s "http://localhost:8000/api/v1/memory?space_id=<user-b-personal-space-id>
 
 ```bash
 # Both users can read household space memory
-curl -s "http://localhost:8000/api/v1/memory?space_id=<household-space-id>&status=active" \
+curl -s "http://localhost:8010/api/v1/memory?space_id=<household-space-id>&status=active" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: 200 (may be empty list)
 
-curl -s "http://localhost:8000/api/v1/memory?space_id=<household-space-id>&status=active" \
+curl -s "http://localhost:8010/api/v1/memory?space_id=<household-space-id>&status=active" \
   -H "X-API-Key: <user-b-api-key>"
 # Expected: 200 (same list)
 ```
@@ -428,14 +429,14 @@ curl -s "http://localhost:8000/api/v1/memory?space_id=<household-space-id>&statu
 
 ```bash
 # User A captures a thought — must create ActivityRecord, not Session
-curl -s -X POST "http://localhost:8000/api/v1/activity" \
+curl -s -X POST "http://localhost:8010/api/v1/activity" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"space_id": "<user-a-personal-space-id>", "content": "Test thought for RC smoke test", "source_type": "user_capture", "activity_type": "capture"}'
 # Expected: 201 with ActivityRecord id
 
 # Confirm it appears in Activity Inbox
-curl -s "http://localhost:8000/api/v1/activity?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:8010/api/v1/activity?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: list including the new ActivityRecord
 ```
@@ -445,13 +446,13 @@ curl -s "http://localhost:8000/api/v1/activity?space_id=<user-a-personal-space-i
 Trigger consolidation or create a proposal manually:
 ```bash
 # Consolidate activity into proposal
-curl -s -X POST "http://localhost:8000/api/v1/activity/consolidate" \
+curl -s -X POST "http://localhost:8010/api/v1/activity/consolidate" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"space_id": "<user-a-personal-space-id>"}'
 
 # Check proposals
-curl -s "http://localhost:8000/api/v1/proposals?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:8010/api/v1/proposals?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: at least one proposal with provenance_entries referencing the ActivityRecord
 ```
@@ -460,14 +461,14 @@ curl -s "http://localhost:8000/api/v1/proposals?space_id=<user-a-personal-space-
 
 ```bash
 # Accept the proposal
-curl -s -X POST "http://localhost:8000/api/v1/proposals/<proposal-id>/accept" \
+curl -s -X POST "http://localhost:8010/api/v1/proposals/<proposal-id>/accept" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"space_id": "<user-a-personal-space-id>"}'
 # Expected: 200 with resulting_memory_id
 
 # Confirm MemoryEntry has source_activity_id set
-curl -s "http://localhost:8000/api/v1/memory/<memory-id>?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:8010/api/v1/memory/<memory-id>?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: source_activity_id not null; source_trust present
 ```
@@ -476,18 +477,18 @@ curl -s "http://localhost:8000/api/v1/memory/<memory-id>?space_id=<user-a-person
 
 ```bash
 # Archive the memory (must return proposal, not direct delete)
-curl -s -X DELETE "http://localhost:8000/api/v1/memory/<memory-id>?space_id=<user-a-personal-space-id>" \
+curl -s -X DELETE "http://localhost:8010/api/v1/memory/<memory-id>?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: 202 with memory_archive proposal
 
 # Accept archive proposal
-curl -s -X POST "http://localhost:8000/api/v1/proposals/<archive-proposal-id>/accept" \
+curl -s -X POST "http://localhost:8010/api/v1/proposals/<archive-proposal-id>/accept" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"space_id": "<user-a-personal-space-id>"}'
 
 # Confirm archived memory is excluded from active reads
-curl -s "http://localhost:8000/api/v1/memory?space_id=<user-a-personal-space-id>&status=active" \
+curl -s "http://localhost:8010/api/v1/memory?space_id=<user-a-personal-space-id>&status=active" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: archived entry not in list
 ```
@@ -496,14 +497,14 @@ curl -s "http://localhost:8000/api/v1/memory?space_id=<user-a-personal-space-id>
 
 ```bash
 # Create a run (echo adapter — no credentials required)
-curl -s -X POST "http://localhost:8000/api/v1/runs" \
+curl -s -X POST "http://localhost:8010/api/v1/runs" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"space_id": "<user-a-personal-space-id>", "adapter_type": "echo", "input": "smoke test"}'
 # Note run_id
 
 # Check RunSteps (may need to wait for run to complete)
-curl -s "http://localhost:8000/api/v1/runs/<run-id>/steps?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:8010/api/v1/runs/<run-id>/steps?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: ordered list of RunStep records
 ```
@@ -512,16 +513,16 @@ curl -s "http://localhost:8000/api/v1/runs/<run-id>/steps?space_id=<user-a-perso
 
 ```bash
 # List artifacts for the run
-curl -s "http://localhost:8000/api/v1/artifacts?space_id=<user-a-personal-space-id>&run_id=<run-id>" \
+curl -s "http://localhost:8010/api/v1/artifacts?space_id=<user-a-personal-space-id>&run_id=<run-id>" \
   -H "X-API-Key: <user-a-api-key>"
 
 # Export artifact inline
-curl -s "http://localhost:8000/api/v1/artifacts/<artifact-id>/export?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:8010/api/v1/artifacts/<artifact-id>/export?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: artifact content
 
 # Cross-space export must fail
-curl -s "http://localhost:8000/api/v1/artifacts/<artifact-id>/export?space_id=<user-b-personal-space-id>" \
+curl -s "http://localhost:8010/api/v1/artifacts/<artifact-id>/export?space_id=<user-b-personal-space-id>" \
   -H "X-API-Key: <user-b-api-key>"
 # Expected: 404
 ```
@@ -529,7 +530,7 @@ curl -s "http://localhost:8000/api/v1/artifacts/<artifact-id>/export?space_id=<u
 ### Step 11 — Home summary
 
 ```bash
-curl -s "http://localhost:8000/api/v1/home/summary?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:8010/api/v1/home/summary?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: 200 with read-only summary object
 ```
@@ -538,14 +539,14 @@ curl -s "http://localhost:8000/api/v1/home/summary?space_id=<user-a-personal-spa
 
 ```bash
 # Deployment jobs must be 501
-curl -s -X POST "http://localhost:8000/api/v1/deployments/jobs" \
+curl -s -X POST "http://localhost:8010/api/v1/deployments/jobs" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"job_type": "arbitrary", "target": "local"}'
 # Expected: 501
 
 # Deployment jobs list must be empty
-curl -s "http://localhost:8000/api/v1/deployments/jobs" \
+curl -s "http://localhost:8010/api/v1/deployments/jobs" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: []
 ```
@@ -568,22 +569,22 @@ grep BACKUP_ENABLED ~/.aspace/dev/.env
 # Expected: BACKUP_ENABLED=true
 
 # Check backend startup logs for scheduler confirmation
-grep "backup scheduler" ~/.aspace/dev/logs/backend.log
-# Expected: "backup scheduler started"
+grep "backup_scheduler" ~/.aspace/dev/logs/backend.log
+# Expected: scheduler registry started with backup_scheduler
 ```
 
 ### Trigger a manual backup (API, or offline CLI)
 
 **API (backend running):**
 ```bash
-curl -s -X POST http://localhost:8000/api/v1/system/backups/manual \
+curl -s -X POST http://localhost:8010/api/v1/system/backups/manual \
   -H "X-API-Key: <dogfood-api-key>"
 # Expected: {"status": "ok", "backup": "manual-YYYYMMDD-HHMMSS.tar.gz"}
 ```
 
 **Offline full-system CLI (backend not running, postgres up):**
 ```bash
-scripts/system/backup.sh --mode dev
+ops/scripts/system/backup.sh --mode dev
 # Archives to ~/.aspace/dev/backups/system-<timestamp>.tar.gz
 # Same archive format as BackupService (PostgreSQL snapshot + files + backup_manifest.json)
 ```
@@ -591,7 +592,7 @@ scripts/system/backup.sh --mode dev
 ### List backup archives
 
 ```bash
-curl -s http://localhost:8000/api/v1/system/backups \
+curl -s http://localhost:8010/api/v1/system/backups \
   -H "X-API-Key: <dogfood-api-key>"
 # Expected: JSON list of archives with name, size, created_at
 
@@ -622,8 +623,8 @@ Rehearse against the disposable `test` mode so the live `dev` data is untouched.
 
 **Stop the app, leave postgres running:**
 ```bash
-docker compose -p agent-space-test -f deployments/local/docker-compose.test.yml stop backend frontend deployer
-docker compose -p agent-space-test -f deployments/local/docker-compose.test.yml up -d postgres
+docker compose -p agent-space-test -f ops/compose/docker-compose.test.yml stop backend frontend deployer
+docker compose -p agent-space-test -f ops/compose/docker-compose.test.yml up -d postgres
 ```
 
 **Restore:**
@@ -631,7 +632,7 @@ docker compose -p agent-space-test -f deployments/local/docker-compose.test.yml 
 ARCHIVE=~/.aspace/dev/backups/auto-<timestamp>.tar.gz
 
 # Full-system restore into the disposable test mode (database + files)
-scripts/system/restore.sh "$ARCHIVE" --mode test --force
+ops/scripts/system/restore.sh "$ARCHIVE" --mode test --force
 ```
 
 `--force` overwrites existing file data; the database is rebuilt with `pg_restore`. The live `db/postgres` directory is never touched.
@@ -642,15 +643,15 @@ scripts/system/restore.sh "$ARCHIVE" --mode test --force
 # The restore above targeted --mode test, so start that mode to verify it.
 # (start.sh derives the mode root from ASPACE_ROOT, default ~/.aspace; it does not
 #  read AGENT_SPACE_HOME — that is the in-container instance root.)
-./scripts/start.sh --test
-curl -s http://localhost:8100/health
+./ops/scripts/start.sh --test
+curl -s http://localhost:8110/health
 # Expected: {"status": "ok", ...}
 ```
 
 ### Verify key data survives restore
 
 ```bash
-BASE="http://localhost:8000/api/v1"
+BASE="http://localhost:8010/api/v1"
 KEY="X-API-Key: <dogfood-api-key>"
 SPACE="<space-id>"
 
@@ -690,7 +691,7 @@ Use this procedure when a stop condition triggers or a serious incident occurs.
 
 Prevent new writes from entering the database:
 ```bash
-docker compose -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend deployer
+docker compose -p agent-space-dev -f ops/compose/docker-compose.dev.yml stop backend frontend deployer
 ```
 
 Keep postgres running so restore tooling can connect.
@@ -698,7 +699,7 @@ Keep postgres running so restore tooling can connect.
 ### Step 2 — Stop all services
 
 ```bash
-docker compose -f deployments/local/docker-compose.dev.yml stop
+docker compose -f ops/compose/docker-compose.dev.yml stop
 ```
 
 ### Step 3 — Snapshot current state
@@ -729,10 +730,10 @@ git reset --hard <known-good-commit>
 
 ```bash
 # Bring postgres back up so pg_restore can connect (the app stays stopped)
-docker compose -p agent-space-dev -f deployments/local/docker-compose.dev.yml up -d postgres
+docker compose -p agent-space-dev -f ops/compose/docker-compose.dev.yml up -d postgres
 
 ARCHIVE=$(ls ~/.aspace/dev/backups/auto-*.tar.gz | sort | tail -2 | head -1)
-scripts/system/restore.sh "$ARCHIVE" --mode dev --force
+ops/scripts/system/restore.sh "$ARCHIVE" --mode dev --force
 ```
 
 Use the backup immediately before the problem started, not the latest one (which may
@@ -747,7 +748,7 @@ ENABLE_SYSTEM_EVOLUTION=false    # if self-evolution implicated
 BACKUP_ENABLED=false             # temporarily if backup itself is problematic
 ```
 
-Or comment out the module in `core/backend/app/modules/registry.py` if a specific
+Or comment out the module in `backend/app/modules/registry.py` if a specific
 module is implicated.
 
 ### Step 8 — Record incident note
@@ -757,7 +758,7 @@ File an incident note immediately (see §J template) before resuming or discussi
 ### Step 9 — Re-run the failed gate
 
 ```bash
-cd core/backend
+cd backend
 python3 -m pytest tests/<implicated-tests> -v
 ```
 
@@ -766,7 +767,7 @@ Do not resume dogfooding until the failing gate passes.
 ### Step 10 — Resume
 
 ```bash
-./scripts/start.sh
+./ops/scripts/start.sh
 ```
 
 Resume dogfooding only after the failed gate passes and the incident note is filed.
@@ -799,7 +800,7 @@ Resume dogfooding only after the failed gate passes and the incident note is fil
 7. **Backup fails repeatedly** — `BackupService` cannot complete a backup or produce
    `backup_manifest.json` after two consecutive automatic intervals.
 
-8. **Restore rehearsal fails** — `scripts/system/restore.sh` fails, or the restored app
+8. **Restore rehearsal fails** — `ops/scripts/system/restore.sh` fails, or the restored app
    fails to start, or key data is missing after restore.
 
 9. **Workspace scan deletes metadata** — `POST /workspaces/scan` hard-deletes a

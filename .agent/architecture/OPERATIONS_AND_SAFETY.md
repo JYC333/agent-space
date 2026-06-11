@@ -9,13 +9,13 @@ instance root (in Docker it is the `/aspace` bind mount; for a direct local back
 concrete mode root such as `~/.aspace/dev`). Never store runtime data in the source repository.
 
 `AGENT_SPACE_HOME` is **not** the parent of the `dev/`/`test/`/`prod/` mode dirs. That host-side
-parent is `ASPACE_ROOT` (default `~/.aspace`), used only by `scripts/`, which derive
+parent is `ASPACE_ROOT` (default `~/.aspace`), used only by `ops/scripts/`, which derive
 `MODE_ROOT="$ASPACE_ROOT/<mode>"`.
 
 ```
 AGENT_SPACE_HOME/
   db/postgres/ Live PostgreSQL data directory (bind-mounted into the postgres container; never archived)
-  db/dumps/    pg_dump custom-format dump files (written by scripts/db/dump.sh)
+  db/dumps/    pg_dump custom-format dump files (written by ops/scripts/db/dump.sh)
   storage/     Artifact storage files
   secrets/     Encrypted provider key files (AES key, CLI credentials)
   config/      Runtime configuration
@@ -28,7 +28,7 @@ AGENT_SPACE_HOME/
 
 ## Backup — Canonical: BackupService
 
-`BackupService` (`core/backend/app/backups/service.py`) is the canonical full-system backup mechanism. It runs automatically on schedule and writes a structured manifest into every archive. The full procedure lives in [docs/BACKUP_AND_RESTORE.md](../../docs/BACKUP_AND_RESTORE.md).
+`BackupService` (`backend/app/backups/service.py`) is the canonical full-system backup mechanism. It runs automatically on schedule and writes a structured manifest into every archive. The full procedure lives in [docs/BACKUP_AND_RESTORE.md](../../docs/BACKUP_AND_RESTORE.md).
 
 **Enable in `$ASPACE_ROOT/<mode>/.env`:**
 
@@ -58,9 +58,9 @@ Without `BACKUP_ENABLED=true`, no automatic backups are created. For dogfooding,
 
 **PostgreSQL backup:** `BackupService` uses `pg_dump -Fc --no-owner --no-acl` (custom format) for a consistent snapshot. Fails closed if `pg_dump` fails — no partial archive is produced. `db_snapshot_method` in the manifest is `"pg_dump_custom"`. The dump is restored with `pg_restore`. The live `db/postgres` data directory is **never** copied into an archive — the database is only captured logically.
 
-**Manifest version metadata:** every manifest records `backup_format`, `app_version`, `git_commit`, `alembic_revision`, `postgres_server_version`, and `pg_dump_version` (best-effort, `null` when undeterminable). `scripts/system/restore.sh` reads these during preflight and **fails** on an incompatible `backup_format` or a PostgreSQL major-version mismatch unless `--force-incompatible-backup` is supplied — the metadata is never silently ignored.
+**Manifest version metadata:** every manifest records `backup_format`, `app_version`, `git_commit`, `alembic_revision`, `postgres_server_version`, and `pg_dump_version` (best-effort, `null` when undeterminable). `ops/scripts/system/restore.sh` reads these during preflight and **fails** on an incompatible `backup_format` or a PostgreSQL major-version mismatch unless `--force-incompatible-backup` is supplied — the metadata is never silently ignored.
 
-**Pre-migration backup:** `scripts/db/migrate.sh --mode prod` takes a `pg_dump` custom-format dump to `$ASPACE_ROOT/<mode>/db/dumps/pre-migrate-<ts>.dump` before Alembic runs and aborts if it fails; non-prod opts in via `PRE_MIGRATION_BACKUP=1` / `--pre-migration-backup`.
+**Pre-migration backup:** `ops/scripts/db/migrate.sh --mode prod` takes a `pg_dump` custom-format dump to `$ASPACE_ROOT/<mode>/db/dumps/pre-migrate-<ts>.dump` before Alembic runs and aborts if it fails; non-prod opts in via `PRE_MIGRATION_BACKUP=1` / `--pre-migration-backup`.
 
 **Archive naming:**
 - Auto: `$ASPACE_ROOT/<mode>/backups/auto-YYYYMMDD-HHMMSS.tar.gz`
@@ -75,19 +75,19 @@ Without `BACKUP_ENABLED=true`, no automatic backups are created. For dogfooding,
 
 **Manual trigger:**
 ```bash
-curl -X POST http://localhost:8000/api/v1/system/backups/manual -H "X-API-Key: <key>"
+curl -X POST http://localhost:8010/api/v1/system/backups/manual -H "X-API-Key: <key>"
 ```
 
-## Backup — Offline: scripts/system/backup.sh
+## Backup — Offline: ops/scripts/system/backup.sh
 
-Use `scripts/system/backup.sh` when the backend is not running. It produces the same archive format as `BackupService` (PostgreSQL snapshot + file data + `backup_manifest.json`). PostgreSQL must be running.
+Use `ops/scripts/system/backup.sh` when the backend is not running. It produces the same archive format as `BackupService` (PostgreSQL snapshot + file data + `backup_manifest.json`). PostgreSQL must be running.
 
 ```bash
-scripts/system/backup.sh --mode dev
-scripts/system/backup.sh --mode prod --include-logs
+ops/scripts/system/backup.sh --mode dev
+ops/scripts/system/backup.sh --mode prod --include-logs
 ```
 
-DB-only expert tools live under `scripts/db/` (`dump.sh`, `restore.sh`).
+DB-only expert tools live under `ops/scripts/db/` (`dump.sh`, `restore.sh`).
 
 ## Restore
 
@@ -95,19 +95,19 @@ Restore is always **manual and explicit**. There is no automatic restore. One co
 
 ```bash
 # 1. Stop the app, leaving postgres running
-docker compose -p agent-space-dev -f deployments/local/docker-compose.dev.yml stop backend frontend
+docker compose -p agent-space-dev -f ops/compose/docker-compose.dev.yml stop frontend control-plane backend deployer
 
 # 2. Ensure PostgreSQL is up
-scripts/start.sh --dev
+ops/scripts/start.sh --dev
 
 # 3. Restore database + files from one archive
-scripts/system/restore.sh ~/.aspace/dev/backups/auto-<timestamp>.tar.gz --mode dev --force
+ops/scripts/system/restore.sh ~/.aspace/dev/backups/auto-<timestamp>.tar.gz --mode dev --force
 ```
 
-`scripts/system/restore.sh` runs `pg_restore` against the database and restores the file directories; `--force` overwrites existing file data. The live `db/postgres` directory is never touched.
+`ops/scripts/system/restore.sh` runs `pg_restore` against the database and restores the file directories; `--force` overwrites existing file data. The live `db/postgres` directory is never touched.
 
 **After restore, verify before resuming writes:**
-1. `curl -s http://localhost:8000/health` — expected: `{"status": "ok"}`
+1. `curl -s http://localhost:8010/health` — expected: `{"status": "ok", "service": "control-plane"}`
 2. Spaces and users readable.
 3. Memory, artifacts, proposals, and runs readable.
 4. Activity inbox survives.

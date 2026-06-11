@@ -1,50 +1,59 @@
-# Documentation Index
+# Documentation
 
-## Core Architecture
+This is the index for design and operations docs. The root
+[README.md](../README.md) is the project quick start and development guide.
+
+## Start Here
+
+| Need | Read |
+|---|---|
+| Product quick start and local development | [../README.md](../README.md) |
+| High-level architecture | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| How to run backups, restore, and DB scripts | [BACKUP_AND_RESTORE.md](BACKUP_AND_RESTORE.md) |
+| AI-agent working context | [../.agent/INDEX.md](../.agent/INDEX.md) |
+
+## Architecture
 
 | Document | Description |
 |---|---|
-| [SPACE_MODEL.md](SPACE_MODEL.md) | Space types, personal space convention, visibility model, private memory definition |
-| [TARGET_VIEW_MODEL.md](TARGET_VIEW_MODEL.md) | Target concepts: Space, Owner, Visibility, PersonalView, ExecutionContext, ParticipationRecord, SourcePointer, PublishProjection |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | High-level system architecture |
-
-## Memory and Provenance
-
-| Document | Description |
-|---|---|
+| [SPACE_MODEL.md](SPACE_MODEL.md) | Spaces, membership, visibility, and private memory conventions |
+| [TARGET_VIEW_MODEL.md](TARGET_VIEW_MODEL.md) | Target, owner, visibility, PersonalView, SourcePointer, PublishProjection concepts |
 | [MEMORY_MODEL.md](MEMORY_MODEL.md) | Memory data model and lifecycle |
-| [MEMORY_CONTEXT_ROADMAP.md](MEMORY_CONTEXT_ROADMAP.md) | Memory context future directions |
+| [SOURCE_POINTER.md](SOURCE_POINTER.md) | Provenance pointers without implicit access |
+| [PUBLISH_PROJECTION.md](PUBLISH_PROJECTION.md) | Deferred public publish projection |
 
-## Access Control and Privacy
-
-| Document | Description |
-|---|---|
-| [PERSONAL_MEMORY_GRANT.md](PERSONAL_MEMORY_GRANT.md) | PersonalMemoryGrant MVP — data model, lifecycle, API, egress guard, approval gate, UI, invariants |
-| [SOURCE_POINTER.md](SOURCE_POINTER.md) | SourcePointer metadata model — provenance without access |
-| [POLICY_AND_PRIVACY_BOUNDARIES.md](POLICY_AND_PRIVACY_BOUNDARIES.md) | Policy enforcement inventory — all current enforcement points and hard invariants |
-
-## Future and Deferred
+## Access And Policy
 
 | Document | Description |
 |---|---|
-| [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md) | Explicitly deferred work items and future design requirements |
-| [FEDERATED_ACCESS_MODEL.md](FEDERATED_ACCESS_MODEL.md) | Federated access across deployments (deferred) |
-| [PUBLISH_PROJECTION.md](PUBLISH_PROJECTION.md) | Public publish pipeline (deferred) |
+| [PERSONAL_MEMORY_GRANT.md](PERSONAL_MEMORY_GRANT.md) | Personal memory grants, egress guard, approval gates |
+| [POLICY_AND_PRIVACY_BOUNDARIES.md](POLICY_AND_PRIVACY_BOUNDARIES.md) | Policy enforcement inventory and invariants |
+| [THREAT_MODEL.md](THREAT_MODEL.md) | Threat model and sandbox/security assumptions |
+| [SANDBOX_POLICY.md](SANDBOX_POLICY.md) | Sandbox execution policy |
+| [FEDERATED_ACCESS_MODEL.md](FEDERATED_ACCESS_MODEL.md) | Deferred federated access model |
+
+## Runtime And Agents
+
+| Document | Description |
+|---|---|
+| [MULTI_AGENT.md](MULTI_AGENT.md) | Multi-agent runtime and delegation model |
+| [CAPABILITY_SYSTEM.md](CAPABILITY_SYSTEM.md) | Capability manifests, registry, enable state, execution |
+| [EVOLVER_INTEGRATION.md](EVOLVER_INTEGRATION.md) | Evolver integration |
+| [SELF_EVOLUTION.md](SELF_EVOLUTION.md) | Self-evolution constraints and gates |
+| [DAILY_CAPTURE_REPORT.md](DAILY_CAPTURE_REPORT.md) | Daily capture/report behavior |
 
 ## Operations
 
 | Document | Description |
 |---|---|
-| [BACKUP_AND_RESTORE.md](BACKUP_AND_RESTORE.md) | Backup and restore procedures |
-| [SANDBOX_POLICY.md](SANDBOX_POLICY.md) | Sandbox execution policy |
-| [CAPABILITY_SYSTEM.md](CAPABILITY_SYSTEM.md) | Capability manifest and loader |
+| [BACKUP_AND_RESTORE.md](BACKUP_AND_RESTORE.md) | Backup, restore, DB dump/restore, verification |
+| [TWO_PERSON_DOGFOODING_RC.md](TWO_PERSON_DOGFOODING_RC.md) | Dogfooding release criteria |
 
-## Multi-Agent and Runtime
+## Roadmaps
 
 | Document | Description |
 |---|---|
-| [MULTI_AGENT.md](MULTI_AGENT.md) | Multi-agent run model |
-| [SELF_EVOLUTION.md](SELF_EVOLUTION.md) | Self-evolution constraints and gates |
-| [EVOLVER_INTEGRATION.md](EVOLVER_INTEGRATION.md) | Evolver integration |
-| [TWO_PERSON_DOGFOODING_RC.md](TWO_PERSON_DOGFOODING_RC.md) | Two-person dogfooding release criteria |
-| [THREAT_MODEL.md](THREAT_MODEL.md) | Threat model |
+| [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md) | Explicitly deferred work items |
+| [MEMORY_CONTEXT_ROADMAP.md](MEMORY_CONTEXT_ROADMAP.md) | Memory context future directions |
+| [architecture/evolution-substrate.md](architecture/evolution-substrate.md) | Evolution substrate notes |

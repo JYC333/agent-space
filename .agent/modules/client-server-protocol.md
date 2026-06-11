@@ -4,7 +4,7 @@
 **PLANNED** — REST API exists. WebSocket / real-time layer not yet built.
 
 ## Purpose
-Define how the frontend and mobile clients communicate with the FastAPI backend. Covers the REST API conventions already in place, the planned real-time event layer (WebSocket or SSE), and streaming agent output. This module is the contract between frontend and backend — changes here affect both sides.
+Define how frontend and mobile clients communicate with the client-facing API entrypoint. The default path is `apps/web` → `control-plane` → TS-owned routes or the temporary legacy proxy → FastAPI/Python authority. Covers the REST API conventions already in place, the planned real-time event layer (WebSocket or SSE), and streaming agent output. This module is the contract between clients, control-plane routing, and backend-owned business APIs — changes here affect both sides.
 
 ## Owns
 - REST API conventions (request/response shape, error format, pagination)
@@ -113,10 +113,10 @@ data: {"done": true, "exit_code": 0}
 - Error responses always include `detail` string — never return empty 500
 
 ## Related Files
-- `core/backend/app/api/` — all REST routers
-- `core/backend/app/main.py` — app entry, CORS config
-- `core/backend/app/auth/` — API key validation middleware
-- `frontend/src/` — TODO: API client layer, WebSocket hook
+- `backend/app/api/` — all REST routers
+- `backend/app/main.py` — app entry, CORS config
+- `backend/app/auth/` — API key validation middleware
+- `apps/web/src/` — TODO: API client layer, WebSocket hook
 
 ## Related Modules
 - [product-shell.md](product-shell.md) — shell connects to WebSocket for live proposal badges

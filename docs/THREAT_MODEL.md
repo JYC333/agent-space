@@ -56,7 +56,7 @@ for each.
 
 **Mitigations**:
 - New capability code must flow through review-gated workspace changes.
-- `CapabilityRegistry.reload()` reads only from `core/capabilities/` (not agent-writable at runtime).
+- `CapabilityRegistry.reload()` reads only from `catalog/capabilities/` (not agent-writable at runtime).
 - `Capability.status` lifecycle: `draft → proposed → testing → enabled`; agents cannot jump to `enabled`.
 - `CapabilityVersion` + `CapabilityTest` require passing tests before promotion.
 - `PathPolicy` prevents agents from writing `.py`/`.sh` files directly.

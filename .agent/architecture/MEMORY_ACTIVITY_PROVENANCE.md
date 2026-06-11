@@ -110,7 +110,7 @@ when useful; they are not silently reused as evidence trust.
 
 ## SourceMonitoring Trust Gate
 
-`SourceMonitoringService` (`core/backend/app/memory/source_monitoring.py`) is the deterministic trust gate before any durable memory or policy apply.
+`SourceMonitoringService` (`backend/app/memory/source_monitoring.py`) is the deterministic trust gate before any durable memory or policy apply.
 
 Hard rules:
 - `agent_inferred` alone → **reject** (cannot back active semantic memory or policy).

@@ -89,8 +89,8 @@ claude login
 # Step 2: copy the resulting ~/.claude into the managed profile dir
 cp -r ~/.claude /app/instance/secrets/cli-credentials/claude_code/default/
 
-# Step 3: verify the broker sees it
-curl localhost:8000/api/v1/credentials/cli/profiles?runtime=claude_code
+# Step 3: verify the broker sees it through the default control-plane entrypoint
+curl localhost:8010/api/v1/credentials/cli/profiles?runtime=claude_code
 ```
 
 ## Runtime Adapter Credential Spec
@@ -132,13 +132,13 @@ POST /api/v1/credentials/cli/profiles/{id}/detect     — check if source_path e
 
 ## Related Files
 
-- `core/backend/app/credentials/broker.py` — CredentialBroker, CredentialProfile, CredentialGrant
-- `core/backend/app/credentials/api.py` — FastAPI routes
-- `core/backend/app/runtimes/base.py` — CredentialSpec dataclass
-- `core/backend/app/runtimes/adapters/cli_runtime.py` — GenericCliRuntimeAdapter profile grant behavior
-- `core/backend/app/runtimes/local_executor.py` — local subprocess execution
-- `core/backend/app/runs/execution.py` — runtime execution integration
-- `core/backend/app/runs/sandbox_manager.py` — execution workspace credential mount
-- `core/backend/app/models.py` — CliCredentialEvent
+- `backend/app/credentials/broker.py` — CredentialBroker, CredentialProfile, CredentialGrant
+- `backend/app/credentials/api.py` — FastAPI routes
+- `backend/app/runtimes/base.py` — CredentialSpec dataclass
+- `backend/app/runtimes/adapters/cli_runtime.py` — GenericCliRuntimeAdapter profile grant behavior
+- `backend/app/runtimes/local_executor.py` — local subprocess execution
+- `backend/app/runs/execution.py` — runtime execution integration
+- `backend/app/runs/sandbox_manager.py` — execution workspace credential mount
+- `backend/app/models.py` — CliCredentialEvent
 - `instance/config/cli-credentials.yaml` — profile config (private)
 - `instance/secrets/cli-credentials/` — credential directories (gitignored)

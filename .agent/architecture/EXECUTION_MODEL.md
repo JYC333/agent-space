@@ -72,9 +72,9 @@ Existing Run and Proposal rows use separate nullable `*_user_id` and `*_agent_id
 
 ## Canonical Runtime Path
 
-- **Canonical adapter catalog:** `RuntimeAdapterSpec` entries in `core/backend/app/runtimes/specs.py`
+- **Canonical adapter catalog:** `RuntimeAdapterSpec` entries in `backend/app/runtimes/specs.py`
 - **Configured runtime instances:** `RuntimeAdapter` rows scoped to a space
-- **Generic local CLI execution:** `core/backend/app/runtimes/adapters/cli_runtime.py` renders commands, grants CLI credential profiles, invokes `LocalExecutor`, and parses output
+- **Generic local CLI execution:** `backend/app/runtimes/adapters/cli_runtime.py` renders commands, grants CLI credential profiles, invokes `LocalExecutor`, and parses output
 
 Do not add new adapters to `app.agents` — it contains Agent/AgentVersion CRUD only.
 
@@ -171,7 +171,7 @@ The finalize endpoint is the single write surface.
 ### What finalization does
 
 1. Calls `RunEvaluationService.evaluate()` to create one `RunEvaluation`.
-2. If a `TaskRun` link exists, calls `TaskEvaluationService.create_from_run_evaluation()` to create one `TaskEvaluation` bridge row.
+2. Dispatches the run-finalized hooks (`app.runs.lifecycle_hooks.RunFinalizedHookRegistry`). The tasks-owned `task_evaluation_bridge` hook creates one `TaskEvaluation` bridge row via `TaskEvaluationService.create_from_run_evaluation()` when a `TaskRun` link exists (`runs` never imports `tasks`; `tasks` registers the hook through the module registry).
 3. Creates one `RunFinalization` row with `status=completed`.
 4. Appends one `run_finalized` `RunEvent`.
 
@@ -280,7 +280,7 @@ Materialization error codes → `tool` failure_layer (all via exact map):
 
 - **Append-only.** Each `TaskEvaluationService` call creates a new row. Old rows are never overwritten or deleted.
 - **Task ↔ Run source of truth is `TaskRun`.** `Run.task_id` is a denormalized shortcut only. All task-run linkage checks use `TaskRun` rows.
-- **RunEvaluation bridge.** `TaskEvaluationService.create_from_run_evaluation()` maps an existing `RunEvaluation` to a new `TaskEvaluation` row. This method is invoked by `PostRunFinalizationService` when `TaskRun` linkage exists — do not call it directly from API routes.
+- **RunEvaluation bridge.** `TaskEvaluationService.create_from_run_evaluation()` maps an existing `RunEvaluation` to a new `TaskEvaluation` row. It is invoked by the tasks-owned `task_evaluation_bridge` run-finalized hook (`app.tasks.run_lifecycle`) during finalization when `TaskRun` linkage exists — do not call it directly from API routes.
 - **Does not mutate Task.status.**
 - **Does not write MemoryEntry, Policy, Proposal, RunReflection, or any learning object.**
 - **Invoked by finalization.** `POST /runs/{id}/finalize` orchestrates both RunEvaluation and TaskEvaluation bridge through `PostRunFinalizationService`. There is no separate public API for creating TaskEvaluation bridge rows from a Run.
@@ -320,9 +320,10 @@ Bridge rows do not create `TaskArtifact` rows as a side effect.
 **Unsupported apply types (remain pending-only):**
 - `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update` — accepted proposals raise `UnsupportedProposalTypeError`.
 
-Automation manual fire queues runs through the existing runtime gates. No scheduler,
-external trigger, or credential allowance is implemented. No proposal type
-auto-applies without user acceptance.
+Automation manual and schedule-triggered fire queue runs through the existing
+runtime gates. Schedule automations can carry same-space
+`AutomationCredentialGrant` pre-authorization. No external trigger is
+implemented. No proposal type auto-applies without user acceptance.
 
 ### Future Work
 

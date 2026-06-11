@@ -124,9 +124,9 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 **B34** — Every module's HTTP routes must live in `<module>/api.py` (plus optional `<module>/*_api.py` for large route groups). Routes must not be defined in `main.py` or in any shared `api/` directory.
 
-**B35** — The backend module registry (`app/modules/registry.py`) and frontend module registry (`src/modules/registry.js`) are the single sources of truth for which features are active. Do not hardcode route lists or nav items elsewhere.
+**B35** — The backend module registry (`app/modules/registry.py`) and frontend module registry (`apps/web/src/modules/registry.ts`) are the single sources of truth for which features are active. Do not hardcode route lists or nav items elsewhere.
 
-**B36** — Frontend module pages must use `React.lazy()` entry points. A module must not be eagerly imported in `App.jsx` or `Shell.jsx`. This preserves Vite's ability to produce separate chunks per module for build-time exclusion.
+**B36** — Frontend module pages must use `React.lazy()` entry points. A module must not be eagerly imported in `apps/web/src/App.tsx` or `apps/web/src/core/Shell.tsx`. This preserves Vite's ability to produce separate chunks per module for build-time exclusion.
 
 **B37** — `planned: true` modules must have a working stub page (not a blank component, not a 404). The stub must name the feature, state that it is planned, and reference the relevant `.agent/modules/` doc.
 
@@ -153,6 +153,10 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 **B48** — Credential profiles are never written back from the sandbox automatically. If a CLI updates its login state during a run, only the profile's source directory is affected (via symlink for worktree, via writable volume for Docker). No automatic propagation to other profiles.
 
 **B49** — The CredentialBroker never exposes raw secret values through the API. The credentials API returns path metadata only (source_path, exists, non_empty).
+
+## API Entrypoint Boundaries
+
+**B50** — `control-plane` is the default client-facing API entrypoint for web, dev, test, and prod. Existing Python-owned `/api/v1/*` routes continue through the temporary legacy Python proxy; the permanent gateway module inside `control-plane` owns routing and request context. Backend remains the Python authority for existing routes, writes, commands, policy, proposals, memory, runs, jobs, artifacts, provider invocation, and migrations. No business authority moves to TypeScript without an explicit later ownership decision.
 
 ---
 

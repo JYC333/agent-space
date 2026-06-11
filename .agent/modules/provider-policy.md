@@ -55,7 +55,7 @@ These are deferred until commercial need. The env-var approach is sufficient for
 No other changes needed for the current personal-use deployment model.
 
 ## Related Files
-- `core/backend/app/config.py` — `anthropic_api_key`, `default_model`
-- `core/backend/app/workspace/sandbox_manager.py` — env forwarding to Docker containers
-- `core/backend/app/agents/` — runtime adapter implementations
+- `backend/app/config.py` — `anthropic_api_key`, `default_model`
+- `backend/app/workspace/sandbox_manager.py` — env forwarding to Docker containers
+- `backend/app/agents/` — runtime adapter implementations
 - `.agent/modules/runtime-adapters.md` — adapter registry and license notes

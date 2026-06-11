@@ -38,7 +38,7 @@ enable `visibility=public`**, public routes, or proposal apply for type `publish
 
 Registered as **future / deferred** only. Executable accept types remain:
 `memory_create`, `memory_update`, `memory_archive`, `policy_change`, `code_patch`
-(see `app.memory.proposals._SUPPORTED_ACCEPT_TYPES`).
+(see `app.proposals.ProposalApplyService.supported_types()`).
 
 ## Not implemented
 

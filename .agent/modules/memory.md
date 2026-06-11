@@ -106,20 +106,20 @@ MemoryReadTrace:
 - `policy_change` → marks `policy_bundle` digest dirty; also workspace/agent digests if policy `applies_to_json` specifies those scopes.
 
 ## Related Files
-- `core/backend/app/memory/store.py`
-- `core/backend/app/memory/provider.py`
-- `core/backend/app/memory/internal_writer.py`
-- `core/backend/app/memory/apply_service.py`
-- `core/backend/app/memory/source_monitoring.py`
-- `core/backend/app/memory/retriever.py`
-- `core/backend/app/memory/context_builder.py`
-- `core/backend/app/memory/context_compiler.py`
-- `core/backend/app/memory/digest_service.py` — `ContextDigestService`
-- `core/backend/app/memory/consolidation/service.py`
-- `core/backend/app/memory/evolver.py`
-- `core/backend/app/memory/access_log.py`
-- `core/backend/app/runs/context_snapshot_populator.py`
-- `core/backend/app/schemas.py`
+- `backend/app/memory/store.py`
+- `backend/app/memory/provider.py`
+- `backend/app/memory/internal_writer.py`
+- `backend/app/proposals/apply_service.py` (proposal-owned orchestration; memory owns registered appliers)
+- `backend/app/memory/source_monitoring.py`
+- `backend/app/memory/retriever.py`
+- `backend/app/memory/context_builder.py`
+- `backend/app/memory/context_compiler.py`
+- `backend/app/memory/digest_service.py` — `ContextDigestService`
+- `backend/app/memory/consolidation/service.py`
+- `backend/app/memory/evolver.py`
+- `backend/app/memory/access_log.py`
+- `backend/app/runs/context_snapshot_populator.py`
+- `backend/app/schemas.py`
 
 ## Related Decisions
 - [0003-memory-proposal-flow.md](../decisions/0003-memory-proposal-flow.md)

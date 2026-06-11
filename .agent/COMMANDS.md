@@ -4,20 +4,20 @@
 
 ```bash
 # Start everything (Docker Compose). First run creates ~/.aspace/dev/.env from template.
-./scripts/start.sh
+./ops/scripts/start.sh
 
 # Other profiles
-./scripts/start.sh --test
-./scripts/start.sh --prod
+./ops/scripts/start.sh --test
+./ops/scripts/start.sh --prod
 
 # Force rebuild images
-./scripts/start.sh --build
+./ops/scripts/start.sh --build
 ```
 
 ## Backend
 
 ```bash
-cd core/backend
+cd backend
 
 # Install runtime dependencies
 pip install -r requirements.txt
@@ -32,7 +32,7 @@ uvicorn app.main:app --reload --port 8000
 # Lint  [TODO: add ruff/flake8 config]
 # ruff check app/
 
-# Database migrations (Alembic — run from core/backend/, against a reachable DB)
+# Database migrations (Alembic — run from backend/, against a reachable DB)
 alembic revision --autogenerate -m "description"
 alembic upgrade head
 ```
@@ -40,12 +40,13 @@ alembic upgrade head
 For the default Docker Compose setup, Postgres is **not** published to the host, so prefer the
 helper which runs Alembic inside the backend container (see below) over bare `alembic`.
 
-API docs (interactive): http://localhost:8000/docs
+Default client-facing API (control-plane): http://localhost:8010
+FastAPI docs (backend debug-only): http://localhost:8000/docs
 
 Canonical backend test command (from repo root):
 
 ```bash
-cd core/backend
+cd backend
 pip install -r requirements.txt -r requirements-test.txt
 python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
 ```
@@ -56,43 +57,43 @@ python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v
 # Run migrations (Docker-native by default: Alembic runs INSIDE the backend
 # container, using the in-network postgres service — reliable even though
 # Postgres is not published to the host).
-./scripts/db/migrate.sh [--mode dev|test|prod]
+./ops/scripts/db/migrate.sh [--mode dev|test|prod]
 
 # Host mode: only when DATABASE_URL points to a reachable external Postgres
 # (runs a connectivity preflight first, then bare alembic on the host).
-DATABASE_URL=postgresql+psycopg://... ./scripts/db/migrate.sh --host [--mode dev|test|prod]
+DATABASE_URL=postgresql+psycopg://... ./ops/scripts/db/migrate.sh --host [--mode dev|test|prod]
 
 # Pre-migration backup: --mode prod ALWAYS takes a pg_dump custom-format dump to
 # $ASPACE_ROOT/<mode>/db/dumps/pre-migrate-<ts>.dump before Alembic runs, and
 # aborts if it fails. Opt into the same safety for non-prod modes:
-PRE_MIGRATION_BACKUP=1 ./scripts/db/migrate.sh --mode dev
-./scripts/db/migrate.sh --mode dev --pre-migration-backup
+PRE_MIGRATION_BACKUP=1 ./ops/scripts/db/migrate.sh --mode dev
+./ops/scripts/db/migrate.sh --mode dev --pre-migration-backup
 
 # Dump database to $ASPACE_ROOT/<mode>/db/dumps/
-./scripts/db/dump.sh
+./ops/scripts/db/dump.sh
 
 # Restore database from a pg_dump custom-format archive
-./scripts/db/restore.sh <path/to/dump.dump> [--mode dev|test|prod]
+./ops/scripts/db/restore.sh <path/to/dump.dump> [--mode dev|test|prod]
 
 # Drop + recreate + migrate (destructive; reuses the Docker-native migrate path)
-./scripts/db/reset-postgres.sh [--mode dev|test|prod]
+./ops/scripts/db/reset-postgres.sh [--mode dev|test|prod]
 
 # Open a psql shell
-./scripts/db/shell.sh [--mode dev|test|prod]
+./ops/scripts/db/shell.sh [--mode dev|test|prod]
 ```
 
 ## Backup and restore (run from repo root)
 
 ```bash
 # Full-system backup with app services stopped (PostgreSQL snapshot + files + manifest).
-# Stop backend/frontend/deployer first; postgres must remain running.
+# Stop frontend/control-plane/backend/deployer first; postgres must remain running.
 # When the backend is running, the BackupService API is canonical:
 #   POST /api/v1/system/backups/manual
-./scripts/system/backup.sh [--mode dev|test|prod] [--include-logs] [--force-running]
+./ops/scripts/system/backup.sh [--mode dev|test|prod] [--include-logs] [--force-running]
 
 # Full-system restore (database + files) from one archive.
-# Stop backend/frontend/deployer first; postgres must remain running.
-./scripts/system/restore.sh <archive.tar.gz> [--mode dev|test|prod] [--force] [--force-running]
+# Stop frontend/control-plane/backend/deployer first; postgres must remain running.
+./ops/scripts/system/restore.sh <archive.tar.gz> [--mode dev|test|prod] [--force] [--force-running]
 ```
 
 See [docs/BACKUP_AND_RESTORE.md](../docs/BACKUP_AND_RESTORE.md) for the full model.
@@ -102,7 +103,7 @@ See [docs/BACKUP_AND_RESTORE.md](../docs/BACKUP_AND_RESTORE.md) for the full mod
 ## Frontend
 
 ```bash
-cd frontend
+cd apps/web
 
 # Install dependencies
 npm ci
@@ -126,35 +127,35 @@ npm run preview
 The sandbox image must be built before running local CLI runtimes such as `claude_code` or `codex_cli`:
 
 ```bash
-docker build --network=host -t agent-space-sandbox deployments/sandbox/
+docker build --network=host -t agent-space-sandbox sandbox/
 ```
 
-This is done automatically by `./scripts/start.sh` in Docker mode.
+This is done automatically by `./ops/scripts/start.sh` in Docker mode.
 
 ## Docker
 
 ```bash
 # Start all services (dev mode — default)
-docker compose -f deployments/local/docker-compose.dev.yml up
+docker compose -f ops/compose/docker-compose.dev.yml up
 
 # Rebuild and restart
-docker compose -f deployments/local/docker-compose.dev.yml up --build
+docker compose -f ops/compose/docker-compose.dev.yml up --build
 
 # Recreate a single service
-docker compose -f deployments/local/docker-compose.dev.yml up backend --force-recreate
+docker compose -f ops/compose/docker-compose.dev.yml up backend --force-recreate
 
 # View logs
-docker compose -f deployments/local/docker-compose.dev.yml logs -f backend
+docker compose -f ops/compose/docker-compose.dev.yml logs -f backend
 
 # Check PostgreSQL health
-docker compose -f deployments/local/docker-compose.dev.yml exec postgres \
+docker compose -f ops/compose/docker-compose.dev.yml exec postgres \
   pg_isready -U agent_space -d agent_space
 ```
 
 ## Environment Variables
 
-See `deployments/local/.env.dev.example`, `.env.test.example`, and `.env.prod.example`
-for the full list. `scripts/start.sh --prod` rejects empty, placeholder, and
+See `ops/env/.env.dev.example`, `.env.test.example`, and `.env.prod.example`
+for the full list. `ops/scripts/start.sh --prod` rejects empty, placeholder, and
 development `POSTGRES_PASSWORD` values. Key vars:
 
 | Variable | Default | Notes |

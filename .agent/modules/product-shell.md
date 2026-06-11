@@ -56,9 +56,9 @@ Settings            — space config, user prefs, API keys, runtime
 - Navigation items that have no data must show empty state, not hide entirely
 
 ## Related Files
-- `frontend/src/App.jsx` — current top-level app (shell redesign pending)
-- `frontend/src/pages/` — page-level components (each needs space awareness)
-- `frontend/src/components/` — reusable component library
+- `apps/web/src/App.tsx` — current top-level app
+- `apps/web/src/modules/` — module page components (each needs space awareness)
+- `apps/web/src/components/` — reusable component library
 
 ## Related Decisions
 - [0001-space-model.md](../decisions/0001-space-model.md)

@@ -381,7 +381,7 @@ Stores in `ContextSnapshot`:
 
 ---
 
-## 9. ProposalApplyService (`memory/apply_service.py`)
+## 9. ProposalApplyService (`proposals/apply_service.py`)
 
 **Primary durable write boundary** for accepted proposals. Supports two additional write paths with explicit provenance controls (see write boundary table in section 1).
 
@@ -392,7 +392,8 @@ Supported proposal types:
 - `memory_update` → new version of existing memory, supersedes old
 - `memory_archive` → sets `status="archived"` (no hard delete)
 - `policy_change` → creates / supersedes `Policy` row
-- `code_patch` → delegates to `CodePatchProposalApplier`
+- `code_patch` -> dispatches through `ProposalApplierRegistry` to the memory-owned
+  code-patch proposal applier
 - `egress_review` → metadata-only update on `PersonalMemoryGrant`
 
 After applying `memory_create` / `memory_update` / `memory_archive`:
@@ -416,15 +417,15 @@ After applying `memory_create` / `memory_update` / `memory_archive`:
 | Per-run execution lock | `runs/execution_lock.py:RunExecutionLockService` | RunExecutionService |
 | **context.inject_memory** | `PolicyGateway` in `runs/context_snapshot_populator.py` | Before ContextBuilder.build() |
 | **context.render_for_runtime** | `PolicyGateway` in `runs/execution.py` | Before adapter.execute() |
-| **proposal.create** | `PolicyGateway.enforce()` in `memory/proposals.py`, `runs/code_patch_collector.py` | Before Proposal row insert |
-| **proposal.apply** | `PolicyGateway.enforce_proposal_apply()` in `memory/proposals.py` | Before ProposalApplyService.apply() |
-| ProposalApplyService accept_context | `memory/apply_service.py` | Defense-in-depth at apply() entry |
+| **proposal.create** | `PolicyGateway.enforce()` in `proposals/service.py`, `runs/code_patch_collector.py` | Before Proposal row insert |
+| **proposal.apply** | `PolicyGateway.enforce_proposal_apply()` in `proposals/service.py` | Before ProposalApplyService.apply() |
+| ProposalApplyService accept_context | `proposals/apply_service.py` | Defense-in-depth at apply() entry |
 
 ---
 
 ## 11. Deferred capabilities
 
-- **Automation triggers**: `Automation` and `AutomationRun` support manual fire only. No scheduler, external event trigger, or credential allowance is implemented.
+- **Automation triggers**: `Automation` and `AutomationRun` support manual and schedule-triggered fire. Scheduled automations can carry same-space `AutomationCredentialGrant` pre-authorization. No external event trigger is implemented.
 - **Vector/embedding search**: MemoryRetriever embedding stage is a stub that delegates to keyword.
 - **Cross-space federation**: PersonalMemoryGrant exists but FederatedAccess / PublishProjection are not yet built.
 - **LLM-based condensing**: SessionCondenser is pattern-based (`condenser_version="pattern.v1"`). Future: `condenser_version="llm.v1"`.

@@ -50,7 +50,7 @@ External frameworks (OpenAI Agents SDK, LangGraph, CrewAI, Letta, etc.) can be
 added as adapters without touching the kernel:
 
 ```python
-# core/backend/app/agents/my_framework_adapter.py
+# backend/app/agents/my_framework_adapter.py
 from .base import AgentAdapter, RuntimeExecutionResult
 
 class MyFrameworkAdapter(AgentAdapter):

@@ -70,11 +70,11 @@ raw input → ActivityRecord (status=raw, source_trust assigned)
 - Consolidation is idempotent: duplicate proposals are blocked by `proposal_dedupe_key`
 
 ## Related Files
-- `core/backend/app/models.py`
-- `core/backend/app/activity/service.py`
-- `core/backend/app/activity/api.py`
-- `core/backend/app/memory/consolidation/service.py`
-- `frontend/src/modules/activity/ActivityInboxPage.tsx`
+- `backend/app/models.py`
+- `backend/app/activity/service.py`
+- `backend/app/activity/api.py`
+- `backend/app/memory/consolidation/service.py`
+- `apps/web/src/modules/activity/ActivityInboxPage.tsx`
 
 ## Related Decisions
 - [0003-memory-proposal-flow.md](../decisions/0003-memory-proposal-flow.md)

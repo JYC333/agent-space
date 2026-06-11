@@ -196,13 +196,13 @@ High-risk proposals:
 ## Starting the System
 
 ```bash
-./scripts/start.sh --dev    # dev environment (hot reload)
-./scripts/start.sh --test   # test environment (isolated)
-./scripts/start.sh --prod   # prod environment
+./ops/scripts/start.sh --dev    # dev environment (hot reload)
+./ops/scripts/start.sh --test   # test environment (isolated)
+./ops/scripts/start.sh --prod   # prod environment
 ```
 
 Or with Docker Compose directly:
 
 ```bash
-docker compose -p agent-space-dev -f deployments/local/docker-compose.dev.yml --env-file ~/.aspace/dev/.env up
+docker compose -p agent-space-dev -f ops/compose/docker-compose.dev.yml --env-file ~/.aspace/dev/.env up
 ```

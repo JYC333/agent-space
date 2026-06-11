@@ -7,7 +7,7 @@ Approval workflow. Durable memory and code changes must go through a Proposal be
 - `Proposal` model (generalized, any type)
 - `ProposalApproval` — egress_granting_user approval gate (MVP: this approval type only)
 - `Artifact` (persistent output of agent runs)
-- `ProposalApplyService` — validates source trust, writes provenance links, dispatches to type-specific applier
+- `ProposalApplyService` — validates source trust, writes provenance links, and dispatches through `ProposalApplierRegistry` to module-owned appliers
 - `SourceMonitoringService` — gates semantic/policy acceptance by source trust
 
 ## Key Models
@@ -45,7 +45,7 @@ ProposalApproval:
    - Rejects already-accepted or rejected proposals
    - Enforces `SourceMonitoringService` for semantic/policy types
    - Writes `ProvenanceLink` rows for accepted memory/policy changes
-   - Dispatches to type-specific applier (`MemoryUpdateProposalApplier`, `PolicyChangeApplier`, etc.)
+   - Dispatches through `ProposalApplierRegistry` to the target module's registered applier
 4. `proposal.status = "accepted"`, `decided_at` set, commit — durable write completes. No separate approval-event row is created for normal accept/reject. `ProposalApproval` rows are a distinct gate for `egress_review` proposals only (written via `/proposals/{id}/approvals/egress-granting-user`).
 
 ## `accept_context` Values
@@ -68,17 +68,19 @@ ProposalApproval:
 - Accepted proposals cannot be re-applied
 - Rejected proposals do not create memory or relations
 - `ProposalApplyService` is the only normal durable write path
+- Target modules own proposal business mutations; `proposals` owns the registry and approval/apply orchestration
 - `provenance_links` are required for accepted memory and policy changes
 - Agents generate Proposals; humans approve
 
 ## Related Files
-- `core/backend/app/models.py`
-- `core/backend/app/proposals/`
-- `core/backend/app/memory/apply_service.py`
-- `core/backend/app/memory/source_monitoring.py`
-- `core/backend/app/memory/internal_writer.py`
-- `core/backend/app/artifacts/`
-- `core/backend/app/memory/reflector.py`
+- `backend/app/models.py`
+- `backend/app/proposals/`
+- `backend/app/proposals/apply_service.py`
+- `backend/app/*/proposal_appliers.py`
+- `backend/app/memory/source_monitoring.py`
+- `backend/app/memory/internal_writer.py`
+- `backend/app/artifacts/`
+- `backend/app/memory/reflector.py`
 
 ## Related Decisions
 - [0003-memory-proposal-flow.md](../decisions/0003-memory-proposal-flow.md)

@@ -11,7 +11,7 @@ These are facts the codebase doesn't make obvious at a glance.
 
 `POST /api/v1/workspaces` now calls `Path.mkdir()` on `workspace_root/<id>/`
 when no explicit `path` is supplied. This only works if the container can write
-to the workspaces mount. In the `deployments/local/docker-compose.<mode>.yml`
+to the workspaces mount. In the `ops/compose/docker-compose.<mode>.yml`
 files the workspaces mount must not be `:ro` (read-only), which would silently
 block mkdir. PathPolicy still enforces read-only access at the API layer
 for the file browser — the `:ro` Docker flag was redundant.
@@ -49,7 +49,7 @@ and an optional `dropUp` flag.
 
 Agents may not write these directly; they must go through a `code_patch`
 Proposal. Read access is allowed. The forbidden write suffixes are declared in
-`_FORBIDDEN_WRITE_SUFFIXES` in `core/backend/app/workspace/path_policy.py`.
+`_FORBIDDEN_WRITE_SUFFIXES` in `backend/app/workspace/path_policy.py`.
 
 ---
 
@@ -66,8 +66,8 @@ Policy: Console sessions are local CLI runtimes (claude_code, codex_cli). Per AD
 invariant is **credential channel isolation** — an Anthropic API key must never enter a Claude
 Code CLI subprocess env (enforced by `local_executor.build_subprocess_env`'s allowlist). The
 in-process encrypted API channel (the reflector, `/providers/chat`) passes the key as a litellm
-parameter, never via env, and may serve any provider including Anthropic. A generic
-vendor-neutral API *runtime* adapter (`model_api`) is sanctioned but not yet built.
+parameter, never via env, and may serve any provider including Anthropic. The generic
+vendor-neutral API *runtime* adapter (`model_api`) uses that same in-process channel.
 
 Frontend polls `GET /workspace-console/sessions/{id}` every 2 s while
 `session.status === "running"`, then replays events with animation once done.
@@ -75,7 +75,7 @@ Frontend polls `GET /workspace-console/sessions/{id}` every 2 s while
 **RuntimeAdapterSpec owns local CLI command semantics.**
 
 Model flags, permission bypass flags, executable detection, and output parser
-selection are declared in `core/backend/app/runtimes/specs.py`. Host detection
+selection are declared in `backend/app/runtimes/specs.py`. Host detection
 uses `/api/v1/runtime-adapters/detect`; configured instance status uses
 `/api/v1/runtime-adapters/{id}/status`.
 

@@ -1,0 +1,154 @@
+/**
+ * Canonical model contracts — provider-agnostic shapes for LLM invocation and
+ * **streaming events**. Contracts only: this package provides no model client,
+ * no transport, no agent loop, no authority. The Python provider facade
+ * (litellm-backed) remains the sole invocation authority today; these shapes
+ * exist so the future SSE/WS streaming edge and the TS runtime host speak one
+ * event vocabulary across providers (migration roadmap absorption P1).
+ *
+ * Field names stay lockstep with what the Python facade already emits:
+ * usage is `input_tokens`/`output_tokens`/`total_tokens`, streamed text is a
+ * `delta`, and termination carries a `finish_reason`. Coded string fields
+ * (roles, finish reasons) stay permissive per `common.ts` philosophy.
+ *
+ * Depends only on `./common` and `zod`.
+ */
+
+import { z } from "zod";
+import { ISODateTimeSchema } from "./common";
+
+// ---------------------------------------------------------------------------
+// Messages, tools, usage
+// ---------------------------------------------------------------------------
+
+/** Documented role values. Message `role` stays a permissive string. */
+export const MODEL_ROLE_VALUES = ["system", "user", "assistant", "tool"] as const;
+export type ModelRoleValue = (typeof MODEL_ROLE_VALUES)[number];
+export function isModelRole(value: string): value is ModelRoleValue {
+  return (MODEL_ROLE_VALUES as readonly string[]).includes(value);
+}
+
+/** A tool invocation requested by the model (arguments kept as raw JSON text). */
+export const CanonicalToolCallSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  /** JSON-encoded arguments exactly as the provider produced them. */
+  arguments_json: z.string(),
+});
+export type CanonicalToolCall = z.infer<typeof CanonicalToolCallSchema>;
+
+export const CanonicalMessageSchema = z.object({
+  role: z.string().min(1),
+  /** Text content; `null` for assistant messages that only carry tool calls. */
+  content: z.string().nullable(),
+  tool_calls: z.array(CanonicalToolCallSchema).optional(),
+  /** For `role: "tool"` result messages — the tool call being answered. */
+  tool_call_id: z.string().optional(),
+  name: z.string().optional(),
+});
+export type CanonicalMessage = z.infer<typeof CanonicalMessageSchema>;
+
+/** A tool offered to the model. `input_schema` is a JSON Schema document. */
+export const CanonicalToolDefinitionSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  input_schema: z.unknown().optional(),
+});
+export type CanonicalToolDefinition = z.infer<typeof CanonicalToolDefinitionSchema>;
+
+/** Token usage as serialised by the Python provider facade. */
+export const CanonicalUsageSchema = z.object({
+  input_tokens: z.number().int().nonnegative().optional(),
+  output_tokens: z.number().int().nonnegative().optional(),
+  total_tokens: z.number().int().nonnegative().optional(),
+});
+export type CanonicalUsage = z.infer<typeof CanonicalUsageSchema>;
+
+// ---------------------------------------------------------------------------
+// Request
+// ---------------------------------------------------------------------------
+
+export const CanonicalModelRequestSchema = z.object({
+  model: z.string().min(1),
+  messages: z.array(CanonicalMessageSchema).min(1),
+  temperature: z.number().optional(),
+  max_tokens: z.number().int().positive().optional(),
+  tools: z.array(CanonicalToolDefinitionSchema).optional(),
+  stream: z.boolean().optional(),
+});
+export type CanonicalModelRequest = z.infer<typeof CanonicalModelRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// Streaming events
+// ---------------------------------------------------------------------------
+
+/**
+ * Model stream event discriminators. Dot-namespaced like the domain
+ * `EventType` values in `events.ts`, under the `model.` prefix.
+ */
+export const ModelEventType = {
+  MessageStart: "model.message_start",
+  TextDelta: "model.text_delta",
+  ToolCallDelta: "model.tool_call_delta",
+  Usage: "model.usage",
+  MessageStop: "model.message_stop",
+  Error: "model.error",
+} as const;
+export type ModelEventTypeValue = (typeof ModelEventType)[keyof typeof ModelEventType];
+
+export const ModelMessageStartEventSchema = z.object({
+  type: z.literal(ModelEventType.MessageStart),
+  /** Resolved model id, when the provider reports it. */
+  model: z.string().optional(),
+  occurred_at: ISODateTimeSchema.optional(),
+});
+export type ModelMessageStartEvent = z.infer<typeof ModelMessageStartEventSchema>;
+
+export const ModelTextDeltaEventSchema = z.object({
+  type: z.literal(ModelEventType.TextDelta),
+  delta: z.string(),
+});
+export type ModelTextDeltaEvent = z.infer<typeof ModelTextDeltaEventSchema>;
+
+/** Incremental tool-call assembly; `index` correlates deltas of one call. */
+export const ModelToolCallDeltaEventSchema = z.object({
+  type: z.literal(ModelEventType.ToolCallDelta),
+  index: z.number().int().nonnegative(),
+  id: z.string().optional(),
+  name: z.string().optional(),
+  arguments_delta: z.string().optional(),
+});
+export type ModelToolCallDeltaEvent = z.infer<typeof ModelToolCallDeltaEventSchema>;
+
+export const ModelUsageEventSchema = z.object({
+  type: z.literal(ModelEventType.Usage),
+  usage: CanonicalUsageSchema,
+});
+export type ModelUsageEvent = z.infer<typeof ModelUsageEventSchema>;
+
+export const ModelMessageStopEventSchema = z.object({
+  type: z.literal(ModelEventType.MessageStop),
+  /** Provider finish reason (e.g. `stop`, `length`, `tool_calls`); permissive. */
+  finish_reason: z.string().nullable().optional(),
+});
+export type ModelMessageStopEvent = z.infer<typeof ModelMessageStopEventSchema>;
+
+export const ModelErrorEventSchema = z.object({
+  type: z.literal(ModelEventType.Error),
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+  }),
+});
+export type ModelErrorEvent = z.infer<typeof ModelErrorEventSchema>;
+
+/** Any canonical model stream event, discriminated on `type`. */
+export const CanonicalModelEventSchema = z.discriminatedUnion("type", [
+  ModelMessageStartEventSchema,
+  ModelTextDeltaEventSchema,
+  ModelToolCallDeltaEventSchema,
+  ModelUsageEventSchema,
+  ModelMessageStopEventSchema,
+  ModelErrorEventSchema,
+]);
+export type CanonicalModelEvent = z.infer<typeof CanonicalModelEventSchema>;

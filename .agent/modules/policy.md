@@ -98,8 +98,8 @@ registry `default_decision`. Not full RBAC/ABAC — they express intent and defa
 | `context.render_for_runtime` | context | low | allow | `runs/execution.py` |
 | `workspace.write_patch` | workspace | high | require_approval | `memory/code_patch_apply.py` |
 | `artifact.persist` | artifact | low | allow (audit_required) | `runs/artifact_persistence.py` |
-| `proposal.create` | proposal | low | allow | `memory/proposals.py` + `runs/code_patch_collector.py` via `enforce()` |
-| `proposal.apply` | proposal | medium | require_approval | `memory/proposals.py` via `enforce_proposal_apply()` |
+| `proposal.create` | proposal | low | allow | `proposals/service.py` + `runs/code_patch_collector.py` via `enforce()` |
+| `proposal.apply` | proposal | medium | require_approval | `proposals/service.py` via `enforce_proposal_apply()` |
 | `workspace.read` | workspace | low | allow | `workspace_console/api.py` via `enforce()` |
 | `agent.config_update` | agent | high | allow (audit_required) | `agents/agent_service.py` via `enforce()` before config proposal creation |
 | `intake.connection_manage` | source_connection | medium | allow (audit_required) | `intake/api.py` via `enforce()` |
@@ -197,7 +197,7 @@ At proposal accept time:
 ## Additional Enforcement Boundaries
 
 ### proposal.apply gate (wired)
-`ProposalService.accept()` in `app/memory/proposals.py` calls
+`ProposalService.accept()` in `app/proposals/service.py` calls
 `PolicyGateway.enforce_proposal_apply(...)` before any call to `ProposalApplyService.apply()`.
 
 - Accepted proposals represent the human approval event.
@@ -244,10 +244,10 @@ the policy package except for the documented non-mutating simulation paths:
 | `context.inject_memory` | `runs/context_snapshot_populator.py` | Before ContextBuilder.build() |
 | `context.render_for_runtime` | `runs/execution.py` | After context snapshot, before adapter.execute() |
 | `artifact.persist` | `runs/artifact_persistence.py` via `enforce()` | Before egress guard and filesystem/row persistence; fail-closed audit |
-| `proposal.create` | `memory/proposals.py`, `runs/code_patch_collector.py` via `enforce()` | Code patch collection uses `force_record=True` |
-| `proposal.apply` | `memory/proposals.py` via `enforce_proposal_apply()` | Before ProposalApplyService.apply() |
+| `proposal.create` | `proposals/service.py`, `runs/code_patch_collector.py` via `enforce()` | Code patch collection uses `force_record=True` |
+| `proposal.apply` | `proposals/service.py` via `enforce_proposal_apply()` | Before ProposalApplyService.apply() |
 | `workspace.write_patch` | `memory/code_patch_apply.py` via `enforce()` | Before any workspace file writes |
-| `policy.change` | `memory/proposals.py` via `enforce_proposal_apply()` | Protected by the `proposal.apply` gate for `policy_change` proposals |
+| `policy.change` | `proposals/service.py` via `enforce_proposal_apply()` | Protected by the `proposal.apply` gate for `policy_change` proposals |
 
 **runtime.execute context fields**: Rule-relevant fields (`agent_status`, `agent_tool_permissions`,
 `tool_name`, `adapter_type`, `trigger_origin`, `risk_level`, etc.) are passed in

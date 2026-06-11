@@ -13,15 +13,22 @@ within a single deployment instance. FastAPI backend with PostgreSQL, React fron
 
 ```
 ~/agent-space/          ← source code repo (this directory; never store runtime data here)
-  core/                   Agent system kernel (memory, context, capabilities, API)
-  frontend/               React/Vite web frontend + PWA (desktop deferred)
-  deployments/            Deployment templates
+  control-plane/          Future official TypeScript backend / control plane
+  backend/                Current Python backend, migration-period authority
+  catalog/                Built-in system definitions
+    agent_templates/      System AgentTemplate factories
+    capabilities/         Built-in capability manifests and code
+  apps/web/               React/Vite web frontend + PWA (desktop deferred)
+  ops/                    Compose files, env templates, and utility scripts
+    compose/              docker-compose files for dev/test/prod
+    env/                  tracked .env templates; local .env is ignored
+    scripts/              start.sh, db/, system/
+  sandbox/                Dockerfile for the agent execution sandbox image
   docs/                   Architecture documentation
-  scripts/                Utility scripts (start.sh)
 
 ~/.aspace/               ← ASPACE_ROOT: host-side parent holding the mode roots (override with ASPACE_ROOT)
-  dev/                  ← default mode root (./scripts/start.sh); bind-mounted as /aspace in Docker
-    .env                  created from deployments/local/.env.dev.example on first run
+  dev/                  ← default mode root (./ops/scripts/start.sh); bind-mounted as /aspace in Docker
+    .env                  created from ops/env/.env.dev.example on first run
     config/ db/ logs/ …   app-created dirs under this mode tree
   test/ prod/             other modes (--test / --prod)
 ```
@@ -31,7 +38,7 @@ secrets, db files, or logs. Two environment variables control data layout, and t
 different things:
 
 - **`ASPACE_ROOT`** (scripts only) — the host-side parent directory that holds the
-  `dev/`, `test/`, `prod/` mode roots. Default `~/.aspace`. `scripts/start.sh` derives a
+  `dev/`, `test/`, `prod/` mode roots. Default `~/.aspace`. `ops/scripts/start.sh` derives a
   mode root as `$ASPACE_ROOT/<mode>` and never treats `AGENT_SPACE_HOME` as this parent.
 - **`AGENT_SPACE_HOME`** (the running app instance root) — the single data root for the
   currently running environment. In Docker backend containers it is the bind mount
@@ -41,18 +48,18 @@ different things:
 ## Starting the system
 
 ```bash
-./scripts/start.sh           # Docker Compose — dev (default): backend + frontend + deployer
-./scripts/start.sh --test    # isolated test ports; data under ~/.aspace/test
-./scripts/start.sh --prod
-./scripts/start.sh --build   # Docker Compose with image rebuild
+./ops/scripts/start.sh           # Docker Compose — dev (default): backend + frontend + deployer
+./ops/scripts/start.sh --test    # isolated test ports; data under ~/.aspace/test
+./ops/scripts/start.sh --prod
+./ops/scripts/start.sh --build   # Docker Compose with image rebuild
 ```
 
 On first run, `start.sh` creates `~/.aspace/<mode>/` and copies the matching template
-(`deployments/local/.env.dev.example`, `.env.test.example`, or `.env.prod.example`) to
+(`ops/env/.env.dev.example`, `.env.test.example`, or `.env.prod.example`) to
 `~/.aspace/<mode>/.env` when missing. Edit that file to set credentials, then re-run.
 For `--prod`, replace the placeholder `POSTGRES_PASSWORD`; startup rejects empty,
 placeholder, and development passwords. The `.env` file is never stored in the repo.
-All local DB/system scripts use `scripts/lib/local-compose.sh` for the same mode/env
+All local DB/system scripts use `ops/scripts/lib/local-compose.sh` for the same mode/env
 resolution path as `start.sh`: `ASPACE_ROOT`, `MODE_ROOT`, `ENV_FILE`,
 `AGENT_SPACE_MODE_ROOT`, compose project/file, and `docker compose --env-file ...`.
 Test mode exposes the API on `localhost:8100`, but the backend container still listens
@@ -66,7 +73,7 @@ stop postgres after completion only when that script started it.
 Without Docker, set the data root to a **mode directory** so paths match compose:
 
 ```bash
-cd core/backend
+cd backend
 export AGENT_SPACE_HOME="$HOME/.aspace/dev"
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
@@ -81,7 +88,7 @@ Canonical backend tests live under ``tests/unit``, ``tests/contracts``,
 isolated ``AGENT_SPACE_HOME`` before importing the app.
 
 ```bash
-cd core/backend
+cd backend
 pip install -r requirements.txt -r requirements-test.txt
 python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
 ```
@@ -110,18 +117,18 @@ python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v
 
 ## Key files
 
-- `core/backend/app/config.py` — `AppPaths` class + `Settings`; all runtime paths derive from `AGENT_SPACE_HOME` (the instance root)
-- `core/backend/app/models.py` — SQLAlchemy ORM (Space, Memory, Session, **Task board** `Task`/`Board`/…, Run, Job, etc.)
-- `core/backend/app/modules/registry.py` — backend module loader (which features are active)
-- `core/backend/app/memory/store.py` — MemoryStore CRUD
-- `core/backend/app/memory/context_builder.py` — context package assembly (requires space_id)
-- `core/backend/app/proposals/api.py` — proposal review API
-- `core/backend/app/memory/reflector.py` — session → memory proposals
-- `core/backend/app/runs/execution.py` — RunExecutionService (canonical run orchestration)
-- `core/backend/app/runtimes/specs.py` — RuntimeAdapterSpec catalog
-- `core/backend/app/runtimes/adapters/cli_runtime.py` — GenericCliRuntimeAdapter local CLI execution
-- `core/backend/app/capabilities/registry.py` — capability loader
-- `frontend/src/modules/registry.js` — frontend module loader (nav + lazy routes)
+- `backend/app/config.py` — `AppPaths` class + `Settings`; all runtime paths derive from `AGENT_SPACE_HOME` (the instance root)
+- `backend/app/models.py` — SQLAlchemy ORM (Space, Memory, Session, **Task board** `Task`/`Board`/…, Run, Job, etc.)
+- `backend/app/modules/registry.py` — backend module loader (which features are active)
+- `backend/app/memory/store.py` — MemoryStore CRUD
+- `backend/app/memory/context_builder.py` — context package assembly (requires space_id)
+- `backend/app/proposals/api.py` — proposal review API
+- `backend/app/memory/reflector.py` — session → memory proposals
+- `backend/app/runs/execution.py` — RunExecutionService (canonical run orchestration)
+- `backend/app/runtimes/specs.py` — RuntimeAdapterSpec catalog
+- `backend/app/runtimes/adapters/cli_runtime.py` — GenericCliRuntimeAdapter local CLI execution
+- `backend/app/capabilities/registry.py` — capability loader
+- `apps/web/src/modules/registry.js` — frontend module loader (nav + lazy routes)
 
 ## Environment variables
 
@@ -145,28 +152,28 @@ DEFAULT_USER_ID=default_user   # bootstrap owner; the default space is this owne
 # SANDBOX_ROOT=$AGENT_SPACE_HOME/sandboxes
 ```
 
-`scripts/` (host side) use `ASPACE_ROOT` (default `~/.aspace`) as the parent that holds
+`ops/scripts/` (host side) use `ASPACE_ROOT` (default `~/.aspace`) as the parent that holds
 `dev/`, `test/`, `prod/`, derive `MODE_ROOT="$ASPACE_ROOT/<mode>"`, and never source a
 mode `.env` as shell code just to read values.
 
 ## Adding a new feature module
 
 **Backend:**
-1. Create `core/backend/app/<module_id>/api.py` with `router = APIRouter(...)`
-2. Add a `Module(...)` entry to `core/backend/app/modules/registry.py`
+1. Create `backend/app/<module_id>/api.py` with `router = APIRouter(...)`
+2. Add a `Module(...)` entry to `backend/app/modules/registry.py`
 
 **Frontend:**
-1. Create `frontend/src/modules/<module_id>/<PageName>.jsx`
-2. Add an entry to `frontend/src/modules/registry.js` (use `React.lazy`)
+1. Create `apps/web/src/modules/<module_id>/<PageName>.jsx`
+2. Add an entry to `apps/web/src/modules/registry.js` (use `React.lazy`)
 
 ## Adding a new capability
 
-1. Create `core/capabilities/<your-id>/capability.yaml`
+1. Create `catalog/capabilities/<your-id>/capability.yaml`
 2. `POST /api/v1/capabilities/reload` or restart the server
 
 ## Adding a new runtime adapter
 
-1. For a local CLI tool, add a `RuntimeAdapterSpec` in `core/backend/app/runtimes/specs.py`
+1. For a local CLI tool, add a `RuntimeAdapterSpec` in `backend/app/runtimes/specs.py`
 2. Use `runtime_kind="local_cli"` and define executable, invocation, credentials, sandbox, usage, and output semantics
 3. Do not add a vendor-specific runtime class unless the adapter truly needs native behavior beyond `GenericCliRuntimeAdapter`
-4. For a native adapter, subclass `BaseRuntimeAdapter` and register it in `core/backend/app/runtimes/registry.py`
+4. For a native adapter, subclass `BaseRuntimeAdapter` and register it in `backend/app/runtimes/registry.py`

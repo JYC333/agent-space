@@ -30,9 +30,9 @@ ActivityRecord:
 - `source_activity_id` set on all derived `memory_update` proposals
 
 ## Related Files
-- `core/backend/app/activity/service.py`
-- `core/backend/app/activity/api.py`
-- `core/backend/app/models.py`
+- `backend/app/activity/service.py`
+- `backend/app/activity/api.py`
+- `backend/app/models.py`
 
 ## Related Decisions
 - [0003-memory-proposal-flow.md](../decisions/0003-memory-proposal-flow.md)

@@ -81,9 +81,9 @@ The sync layer must be pluggable — the choice of transport must not leak into 
 - Sync is disabled by default; opt-in per deployment via config
 
 ## Related Files
-- `core/backend/app/models.py` — all models must have UUID PKs and immutable `created_at`
-- `core/backend/app/config.py` — TODO: add `sync_enabled` flag
-- `frontend/src/components/` — TODO: SyncStatusIndicator in RuntimeStatusBar
+- `backend/app/models.py` — all models must have UUID PKs and immutable `created_at`
+- `backend/app/config.py` — TODO: add `sync_enabled` flag
+- `apps/web/src/components/` — TODO: SyncStatusIndicator in RuntimeStatusBar
 
 ## Related Modules
 - [server-status.md](server-status.md) — sync status shown in RuntimeStatusBar

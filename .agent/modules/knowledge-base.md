@@ -115,7 +115,7 @@ separate per-project note system.
   `/api/v1/notes/collections` direct CRUD for the Notes collection tree;
   `/api/v1/knowledge/sources` direct CRUD; `/api/v1/knowledge/summary`
 - Knowledge proposal apply handlers (wiki only)
-- Frontend Knowledge module (breadcrumb switcher, Notes workspace, Wiki/Sources/Cards, overview hub) under `frontend/src/modules/knowledge/`
+- Frontend Knowledge module (breadcrumb switcher, Notes workspace, Wiki/Sources/Cards, overview hub) under `apps/web/src/modules/knowledge/`
 - Relation and evidence-link records backed by database rows, not only Markdown links
 
 ## Does Not Own
@@ -358,18 +358,18 @@ not replaced by Source.
 - Payload validation is enforced at apply time in `KnowledgeProposalApplier`: `item_type`, `content_format`, `visibility`, `verification_status`, `reflection_status`, and `confidence` for items; `relation_type`, `status`, and `confidence` for relations.
 
 ## Related Files
-- `core/backend/app/knowledge/` - API, service (Knowledge/Note/EntityLink/SourceService), schemas, read models
-- `core/backend/app/models.py` - `Note`, `EntityLink`, `Card`, `CardReviewState`, `CardReview`, `KnowledgeItem`, `KnowledgeItemRelation`, `Source`, `KnowledgeItemSource`
-- `core/backend/migrations/versions/0001_canonical_initial_schema.py` - canonical schema tables (incl. `notes`, `entity_links`, `cards`, `card_review_states`, `card_reviews`)
-- `core/backend/tests/unit/test_cards_schema.py` - ORM metadata + live schema tests for Cards layer
-- `core/backend/app/policy/actions.py` - Knowledge policy actions wired via proposal
-- `core/backend/app/policy/proposal_apply.py` - supported Knowledge proposal type names
-- `core/backend/app/modules/registry.py` - active backend module registry entry
-- `frontend/src/modules/knowledge/` - `KnowledgeModule` (index redirect + routes), `KnowledgeSectionHeader` (breadcrumb switcher), `utils.ts` (last-used section storage + canonical vocabularies), `KnowledgeOverviewPage` (`/knowledge/home`), `NotesPage` workspace + `NoteEditor`, `KnowledgePage`/`KnowledgeDetailPage` (Wiki), `SourcesPage`, `KnowledgeCardsPanel`
-- `frontend/src/core/navigation.tsx` - first-level "Knowledge" rail item only (Knowledge has **no** scene; sections switch via the in-header breadcrumb)
-- `core/backend/tests/invariants/test_knowledge_ingestion_boundary.py` - ingestion/review boundary invariant tests
-- `core/backend/tests/contracts/test_knowledge_api.py` - wiki API contract tests (accept, versioning, visibility, relations)
-- `core/backend/tests/contracts/test_notes_api.py` - notes/links/backlinks/summary contract tests
+- `backend/app/knowledge/` - API, service (Knowledge/Note/EntityLink/SourceService), schemas, read models
+- `backend/app/models.py` - `Note`, `EntityLink`, `Card`, `CardReviewState`, `CardReview`, `KnowledgeItem`, `KnowledgeItemRelation`, `Source`, `KnowledgeItemSource`
+- `backend/migrations/versions/0001_canonical_initial_schema.py` - canonical schema tables (incl. `notes`, `entity_links`, `cards`, `card_review_states`, `card_reviews`)
+- `backend/tests/unit/test_cards_schema.py` - ORM metadata + live schema tests for Cards layer
+- `backend/app/policy/actions.py` - Knowledge policy actions wired via proposal
+- `backend/app/policy/proposal_apply.py` - supported Knowledge proposal type names
+- `backend/app/modules/registry.py` - active backend module registry entry
+- `apps/web/src/modules/knowledge/` - `KnowledgeModule` (index redirect + routes), `KnowledgeSectionHeader` (breadcrumb switcher), `utils.ts` (last-used section storage + canonical vocabularies), `KnowledgeOverviewPage` (`/knowledge/home`), `NotesPage` workspace + `NoteEditor`, `KnowledgePage`/`KnowledgeDetailPage` (Wiki), `SourcesPage`, `KnowledgeCardsPanel`
+- `apps/web/src/core/navigation.tsx` - first-level "Knowledge" rail item only (Knowledge has **no** scene; sections switch via the in-header breadcrumb)
+- `backend/tests/invariants/test_knowledge_ingestion_boundary.py` - ingestion/review boundary invariant tests
+- `backend/tests/contracts/test_knowledge_api.py` - wiki API contract tests (accept, versioning, visibility, relations)
+- `backend/tests/contracts/test_notes_api.py` - notes/links/backlinks/summary contract tests
 
 ## Related Modules
 - [../architecture/INTAKE_EVIDENCE_FOUNDATION.md](../architecture/INTAKE_EVIDENCE_FOUNDATION.md) - the two evidence stacks (intake candidate vs curated wiki `Source`/`KnowledgeItemSource`), their hard separation, and the intake→wiki promotion rule spec

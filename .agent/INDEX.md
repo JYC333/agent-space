@@ -15,10 +15,10 @@ durable position on this boundary.
 **Source of truth hierarchy:**
 
 1. **Code** — implementation truth; always wins over docs
-2. `core/backend/app/models.py` — canonical data model
-3. `core/backend/app/schemas.py` — API contracts
-4. `core/backend/app/modules/registry.py` — active backend modules and routes
-5. `frontend/src/modules/registry.js` — active frontend modules and nav items
+2. `backend/app/models.py` — canonical data model
+3. `backend/app/schemas.py` — API contracts
+4. `backend/app/modules/registry.py` — active backend modules and routes
+5. `apps/web/src/modules/registry.ts` — active frontend modules and nav items
 6. `.agent/BOUNDARIES.md` — architectural invariants; load for any structural change
 7. `.agent/decisions/` — accepted architectural decisions
 
@@ -65,6 +65,8 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 
 | Doc | What it covers |
 |---|---|
+| [architecture/MODULES.md](architecture/MODULES.md) | Current backend module map, support packages, ownership, registries, facades |
+| [architecture/MODULE_DEVELOPMENT_GUIDE.md](architecture/MODULE_DEVELOPMENT_GUIDE.md) | How to add/change backend modules and extension hooks |
 | [architecture/DATABASE_AND_TRANSACTIONS.md](architecture/DATABASE_AND_TRANSACTIONS.md) | UnitOfWork, transaction ownership, external call boundary, PostgreSQL rules |
 | [architecture/MEMORY_MODEL.md](architecture/MEMORY_MODEL.md) | Memory scopes, visibility, access control |
 | [architecture/PROPOSALS.md](architecture/PROPOSALS.md) | Proposal types, lifecycle, apply flow |
@@ -79,6 +81,15 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 | [architecture/EXECUTION_MODEL.md](architecture/EXECUTION_MODEL.md) | Run, RunStep, Job, Artifact, Proposal, actor identity, credential resolver |
 | [architecture/RUNS_AND_OUTPUTS.md](architecture/RUNS_AND_OUTPUTS.md) | Run outputs, materialization, boundaries |
 
+### Control Plane / TS Migration
+
+| Doc | What it covers |
+|---|---|
+| [architecture/TS_MIGRATION_STRATEGY.md](architecture/TS_MIGRATION_STRATEGY.md) | Binding migration rules (§8 invariants), seam layer, context order |
+| [architecture/TS_MIGRATION_ROADMAP.md](architecture/TS_MIGRATION_ROADMAP.md) | Staged Python→TS migration plan + PilotDeck/Hermes absorption maps |
+| [architecture/TS_CONTROL_PLANE_FOUNDATION.md](architecture/TS_CONTROL_PLANE_FOUNDATION.md) | The control-plane service: gateway, legacy proxy, compose wiring |
+| [architecture/CONTROL_PLANE_MODULE_CONVENTION.md](architecture/CONTROL_PLANE_MODULE_CONVENTION.md) | TS-owned module structure, route registry, error envelope |
+
 ### Memory / Activity / Proposal
 
 | Doc | What it covers |
@@ -86,6 +97,7 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 | [architecture/MEMORY_ACTIVITY_PROVENANCE.md](architecture/MEMORY_ACTIVITY_PROVENANCE.md) | Activity-first capture, provenance chain, trust gate, memory write boundaries |
 | [architecture/MEMORY_MODEL.md](architecture/MEMORY_MODEL.md) | Memory scopes, visibility, access control |
 | [architecture/PROPOSALS.md](architecture/PROPOSALS.md) | Proposal types, lifecycle, apply flow |
+| [architecture/MEMORY_EVOLUTION_PLAN.md](architecture/MEMORY_EVOLUTION_PLAN.md) | Planned memory-quality work (gbrain absorption): weighted claims, hybrid retrieval, synthesis + gap loop, consolidation cycle |
 
 ### Workspace / Sandbox / Artifact
 
@@ -96,7 +108,7 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 
 ### Frontend Information Architecture
 
-The frontend module registry (`frontend/src/modules/registry.js`) and shell (`frontend/src/core/Shell.jsx`)
+The frontend module registry (`apps/web/src/modules/registry.ts`) and shell (`apps/web/src/core/Shell.tsx`)
 are source of truth for active nav and routes. For UI decisions, see the module docs below:
 
 | Doc | What it covers |
@@ -214,7 +226,8 @@ Additional agent rules:
 - Never write vendor context files to the real workspace — write to sandbox only.
 - Read `BOUNDARIES.md` before making structural changes.
 - New module routes go in `app/<module>/api.py`, registered in `app/modules/registry.py`.
-- New frontend pages go in `src/modules/<module>/`, registered in `src/modules/registry.js`.
+- New frontend pages go in `apps/web/src/modules/<module>/`, registered in
+  `apps/web/src/modules/registry.ts`.
 - Do not treat `.agent/reports/` content as durable source of truth.
 - `.agent/architecture/` docs describe **current state**. Do not add target-state aspirations
   without a scoped implementation task.

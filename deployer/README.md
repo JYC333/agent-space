@@ -16,8 +16,8 @@ jobs submitted by the backend.
 sudo mkdir -p /var/run/agent-space
 
 # Then bring up the full stack (deployer starts automatically)
-cd deployments/local
-docker compose up -d
+cd /path/to/agent-space
+ops/scripts/start.sh
 ```
 
 The deployer container has Docker socket access and shares `/var/run/agent-space` with the

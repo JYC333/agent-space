@@ -17,7 +17,7 @@ Specifically:
 - Agent loop, sandbox execution, and API server run on Linux or WSL2
 - The browser UI (React SPA) is the primary client — works on any OS
 - A desktop app (Tauri), if built later, is only a launcher/control panel — it does not run the backend
-- The Tauri scaffolding in `frontend/src-tauri/` is kept but deferred
+- The Tauri scaffolding in `apps/web/src-tauri/` is kept but deferred
 
 ## Consequences
 
@@ -25,6 +25,6 @@ Specifically:
 - Primary client: browser at localhost:5173
 - Windows users access via browser pointing at WSL2 runtime
 - No Windows-native agent execution path
-- `frontend/src-tauri/` exists but is not built or maintained in MVP
+- `apps/web/src-tauri/` exists but is not built or maintained in MVP
 - Documentation and setup guides target WSL2 + Docker
 - Future desktop app scope: launcher, tray icon, auth, notifications — not backend

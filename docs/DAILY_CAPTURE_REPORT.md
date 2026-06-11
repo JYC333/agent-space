@@ -127,7 +127,7 @@ The scheduler scans immediately on startup, then sleeps between subsequent scans
 
 ## Module location
 
-`core/backend/app/daily_reports/`
+`backend/app/daily_reports/`
 
 - `schemas.py` — Pydantic schemas (settings, run request/response, structured report)
 - `service.py` — `DailyCaptureReportService`, `DailyCaptureReportSettingsService`

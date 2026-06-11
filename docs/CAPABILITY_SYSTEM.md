@@ -16,15 +16,15 @@ capabilities/<capability-id>/
 ## capability.yaml fields
 
 ```yaml
-id: agent.echo
-name: Echo Agent
+id: research_intake
+name: Research Intake
 version: 0.1.0
-description: Minimal echo capability
-enabled: true
+description: Parse an intake payload into structured research output
+enabled: false
 
 entrypoint:
   type: python_module
-  module: capabilities.agent_echo.main
+  module: capabilities.research_intake.main
   function: execute
 
 permissions:
@@ -38,7 +38,7 @@ permissions:
 
 outputs:
   artifact_types:
-    - agent.echo.result.v1
+    - research_intake.result.v1
 ```
 
 Only `entrypoint.type: python_module` is executable in the current backend. Shell commands, remote code loading, network/filesystem permissions beyond empty allowlists, and subprocess execution are rejected by the capability runtime.
@@ -47,7 +47,7 @@ Only `entrypoint.type: python_module` is executable in the current backend. Shel
 
 The `CapabilityRegistry` loads capabilities from two sources:
 
-1. **Builtin** — manifests under `core/capabilities/` (bundled with the backend).
+1. **Builtin** — manifests under `catalog/capabilities/` (bundled with the backend).
 2. **External workspace** — manifests under local roots registered on a `capability_library` workspace.
 
 Reload happens on backend startup and on `POST /api/v1/capabilities/reload`.
@@ -97,7 +97,6 @@ This is not a marketplace or remote install system.
 | ID | Purpose |
 |---|---|
 | `memory.reflect` | Analyze sessions, generate memory proposals |
-| `agent.echo` | Dev/test: echo prompt and context back |
 
 ## Execution
 
@@ -105,7 +104,7 @@ Capability runs use `adapter_type="capability"` on a `Run`. The runtime adapter 
 
 ## Related code
 
-- `core/backend/app/capabilities/registry.py`
-- `core/backend/app/capabilities/enabled_store.py`
-- `core/backend/app/capabilities/loader.py`
-- `core/backend/app/runtimes/adapters/capability.py`
+- `backend/app/capabilities/registry.py`
+- `backend/app/capabilities/enabled_store.py`
+- `backend/app/capabilities/loader.py`
+- `backend/app/runtimes/adapters/capability.py`

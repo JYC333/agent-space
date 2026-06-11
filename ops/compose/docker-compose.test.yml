@@ -1,0 +1,112 @@
+services:
+  postgres:
+    container_name: agent-space-test-postgres
+    image: postgres:${POSTGRES_MAJOR:-18}
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-agent_space}
+      - POSTGRES_USER=${POSTGRES_USER:-agent_space}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-agent_space_dev_password}
+      - PGDATA=/var/lib/postgresql/data
+    volumes:
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/test}/db/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_space} -d ${POSTGRES_DB:-agent_space}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../../
+      dockerfile: backend/Dockerfile
+      network: host
+      args:
+        PG_MAJOR: ${POSTGRES_MAJOR:-18}
+    ports:
+      - "8100:8000"
+    volumes:
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/test}:/aspace
+      - claude-home:/home/agentspace/.claude
+    group_add:
+      - "${DOCKER_GID:-989}"
+    env_file:
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/test}/.env
+    environment:
+      - AGENT_SPACE_HOME=/aspace
+      - INSTANCE_ROOT=/aspace
+      - STORAGE_ROOT=/aspace/storage
+      - LOG_ROOT=/aspace/logs
+      - CAPABILITIES_DIR=/app/capabilities
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-agent_space}:${POSTGRES_PASSWORD:-agent_space_dev_password}@postgres:5432/${POSTGRES_DB:-agent_space}}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - DEPLOYER_SOCKET_PATH=/aspace/run/deployer.sock
+      - CLAUDE_HOME=/home/agentspace/.claude
+      - AGENT_SPACE_ENV=test
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  # Official TS control plane (test stack). Available/callable on host port 8110;
+  # proxies /api/v1/* to the isolated `backend`. The Python pytest suite is
+  # independent of this compose stack and is unaffected by this service.
+  control-plane:
+    build:
+      context: ../../
+      dockerfile: control-plane/Dockerfile
+      network: host
+    container_name: agent-space-test-control-plane
+    ports:
+      - "8110:8010"
+    environment:
+      - CONTROL_PLANE_HOST=${CONTROL_PLANE_HOST:-0.0.0.0}
+      - CONTROL_PLANE_PORT=${CONTROL_PLANE_PORT:-8010}
+      - LEGACY_PYTHON_API_BASE_URL=${LEGACY_PYTHON_API_BASE_URL:-http://backend:8000}
+      - CONTROL_PLANE_ENABLE_LEGACY_PROXY=${CONTROL_PLANE_ENABLE_LEGACY_PROXY:-true}
+      - CONTROL_PLANE_LOG_LEVEL=${CONTROL_PLANE_LOG_LEVEL:-info}
+      - CONTROL_PLANE_REQUEST_TIMEOUT_MS=${CONTROL_PLANE_REQUEST_TIMEOUT_MS:-300000}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../../apps/web
+      dockerfile: Dockerfile
+      network: host
+      target: dev
+    ports:
+      - "3100:5173"
+    volumes:
+      - ../../apps/web:/app
+      - /app/node_modules
+    environment:
+      - CONTROL_PLANE_API_URL=${CONTROL_PLANE_API_URL:-http://control-plane:8010}
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      control-plane:
+        condition: service_healthy
+
+  deployer:
+    build:
+      context: ../../deployer
+      dockerfile: Dockerfile
+      network: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../../:/repo:rw
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/test}:/aspace
+    user: "1000:989"
+    environment:
+      - DEPLOYER_SOCKET=/aspace/run/deployer.sock
+      - REPO_ROOT=/repo
+      - AGENT_SPACE_HOME=/aspace
+      - AGENT_SPACE_ENV=test
+    restart: unless-stopped
+
+volumes:
+  claude-home:

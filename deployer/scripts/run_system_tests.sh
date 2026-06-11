@@ -23,8 +23,8 @@ echo "[run_system_tests] profile=$TEST_PROFILE worktree=$WORKSPACE_DIR"
 case "$TEST_PROFILE" in
     backend)
         echo "=== Running backend tests ==="
-        if [[ -d "$WORKSPACE_DIR/core/backend" ]]; then
-            cd "$WORKSPACE_DIR/core/backend"
+        if [[ -d "$WORKSPACE_DIR/backend" ]]; then
+            cd "$WORKSPACE_DIR/backend"
             if [[ -f requirements.txt ]]; then
                 pip install -q -r requirements.txt 2>&1 | tail -5
             fi
@@ -37,8 +37,8 @@ case "$TEST_PROFILE" in
         ;;
     frontend)
         echo "=== Running frontend tests ==="
-        if [[ -d "$WORKSPACE_DIR/frontend" ]]; then
-            cd "$WORKSPACE_DIR/frontend"
+        if [[ -d "$WORKSPACE_DIR/apps/web" ]]; then
+            cd "$WORKSPACE_DIR/apps/web"
             if [[ -f package.json ]]; then
                 npm ci --silent 2>&1 | tail -5
                 npm test -- --passWithNoTests 2>&1
@@ -53,8 +53,8 @@ case "$TEST_PROFILE" in
         ;;
     typecheck)
         echo "=== Running typecheck ==="
-        if [[ -d "$WORKSPACE_DIR/frontend" ]] && [[ -f "$WORKSPACE_DIR/frontend/tsconfig.json" ]]; then
-            cd "$WORKSPACE_DIR/frontend"
+        if [[ -d "$WORKSPACE_DIR/apps/web" ]] && [[ -f "$WORKSPACE_DIR/apps/web/tsconfig.json" ]]; then
+            cd "$WORKSPACE_DIR/apps/web"
             npx tsc --noEmit 2>&1
         else
             echo "ERROR: frontend tsconfig.json not found" >&2
@@ -63,8 +63,8 @@ case "$TEST_PROFILE" in
         ;;
     lint)
         echo "=== Running lint ==="
-        if [[ -d "$WORKSPACE_DIR/frontend" ]]; then
-            cd "$WORKSPACE_DIR/frontend"
+        if [[ -d "$WORKSPACE_DIR/apps/web" ]]; then
+            cd "$WORKSPACE_DIR/apps/web"
             if [[ -f package.json ]]; then
                 npm run lint 2>&1 || echo "lint: no lint script found"
             fi
@@ -72,14 +72,14 @@ case "$TEST_PROFILE" in
         ;;
     build)
         echo "=== Running build ==="
-        if [[ -d "$WORKSPACE_DIR/frontend" ]]; then
-            cd "$WORKSPACE_DIR/frontend"
+        if [[ -d "$WORKSPACE_DIR/apps/web" ]]; then
+            cd "$WORKSPACE_DIR/apps/web"
             if [[ -f package.json ]]; then
                 npm ci --silent 2>&1 | tail -3
                 npm run build 2>&1
             fi
-        elif [[ -d "$WORKSPACE_DIR/core/backend" ]]; then
-            cd "$WORKSPACE_DIR/core/backend"
+        elif [[ -d "$WORKSPACE_DIR/backend" ]]; then
+            cd "$WORKSPACE_DIR/backend"
             if [[ -f requirements.txt ]]; then
                 pip install -q -r requirements.txt 2>&1 | tail -3
             fi

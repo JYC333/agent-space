@@ -21,7 +21,7 @@ Two credential channels exist and are already architecturally separate:
   explicitly injects for a configured credential profile). Ambient `os.environ` is NOT
   inherited wholesale.
 - **In-process API channel** — the reflector (`memory/provider_client.py`),
-  `/api/v1/providers/chat`, and any future `model_api` runtime adapter resolve the key
+  `/api/v1/providers/chat`, and the `model_api` runtime adapter resolve the key
   from the encrypted `ModelProvider` Credential (`resolve_provider_api_key`) and pass it
   to litellm as a parameter. This channel never writes `os.environ`, so it is
   unreachable from any subprocess.
@@ -59,5 +59,5 @@ Consequences of this reframing:
 
 The distinction is now by **execution shape**, not vendor: tool-using / filesystem /
 agentic work uses a CLI runtime adapter; no-tools text generation for any provider uses
-the in-process API channel (`model_api` when built). Anthropic is permitted on both,
+the in-process API channel (`model_api`). Anthropic is permitted on both,
 subject to the isolation invariant.

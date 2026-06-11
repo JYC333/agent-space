@@ -127,7 +127,7 @@ applicable, the scene sidebar). There is no module gallery.
 
 Unimplemented modules must not appear as clickable primary modules. Modules are hidden using
 `enabled: false, visible: false` in the frontend module registry
-(`frontend/src/modules/registry.js`). A module with backend prerequisites not yet met must
+(`apps/web/src/modules/registry.ts`). A module with backend prerequisites not yet met must
 not be navigable.
 
 **Current module visibility state:**

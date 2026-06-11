@@ -11,14 +11,14 @@ cd "$REPO_PATH"
 echo "[run_prod_deploy] deploying from canonical repo"
 echo "[run_prod_deploy] project=agent-space-prod"
 
-COMPOSE_FILE="$REPO_PATH/deployments/local/docker-compose.prod.yml"
+COMPOSE_FILE="$REPO_PATH/ops/compose/docker-compose.prod.yml"
 
 if [[ ! -f "$COMPOSE_FILE" ]]; then
     echo "ERROR: prod compose file not found: $COMPOSE_FILE" >&2
     exit 1
 fi
 
-ASPACE_HOME="$INSTANCE_ROOT" docker compose \
+AGENT_SPACE_MODE_ROOT="$INSTANCE_ROOT" docker compose \
     -p agent-space-prod \
     -f "$COMPOSE_FILE" \
     --env-file "$INSTANCE_ROOT/.env" \

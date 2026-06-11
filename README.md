@@ -24,24 +24,29 @@ agent-space/
 ├── README.md
 ├── CLAUDE.md
 ├── .gitignore
-├── scripts/          # Utility scripts (start.sh, db/, system/)
+├── ops/              # Compose files, env templates, and utility scripts
+│   ├── compose/      # docker-compose files for dev/test/prod
+│   ├── env/          # tracked .env templates; local .env is ignored
+│   └── scripts/      # start.sh, db/, system/
 ├── docs/             # Architecture and design documentation
 │
-├── core/             # Agent system kernel (FastAPI backend + capabilities)
-├── frontend/         # React/Vite web frontend (PWA)
+├── control-plane/    # Default client-facing TypeScript API entrypoint/control plane
+├── backend/          # Current Python backend, migration-period authority
+├── catalog/          # Built-in system definitions
+│   ├── agent_templates/
+│   └── capabilities/
+├── apps/web/         # React/Vite web frontend (PWA)
 ├── deployer/         # Host-side deployer (holds the Docker socket; spawns sandbox containers)
-└── deployments/      # Deployment templates
-    ├── local/        # docker-compose for local development
-    └── sandbox/      # Dockerfile for the agent execution sandbox image
+└── sandbox/          # Dockerfile for the agent execution sandbox image
 ```
 
 Runtime data (DB, config, secrets, logs, workspaces, sandboxes) never lives in the repo.
 It lives under a host-side parent `ASPACE_ROOT` (default `~/.aspace`), one mode root per
 environment: `$ASPACE_ROOT/dev`, `$ASPACE_ROOT/test`, `$ASPACE_ROOT/prod`. Each mode root
 is bind-mounted into the containers as `AGENT_SPACE_HOME=/aspace`.
-Local DB/system scripts use the same compose/env path as `scripts/start.sh`: mode validation,
+Local DB/system scripts use the same compose/env path as `ops/scripts/start.sh`: mode validation,
 `$ASPACE_ROOT/<mode>`, `$ASPACE_ROOT/<mode>/.env`, `AGENT_SPACE_MODE_ROOT`, compose project,
-and `docker compose --env-file ...` are centralized in `scripts/lib/local-compose.sh`.
+and `docker compose --env-file ...` are centralized in `ops/scripts/lib/local-compose.sh`.
 The local PostgreSQL containers use stable names: `agent-space-dev-postgres`,
 `agent-space-test-postgres`, and `agent-space-prod-postgres`.
 
@@ -49,40 +54,61 @@ The local PostgreSQL containers use stable names: `agent-space-dev-postgres`,
 
 ```bash
 # 1. Start everything (creates ~/.aspace/dev/ and .env from template on first run)
-./scripts/start.sh
+./ops/scripts/start.sh
 
 # 2. Add a model provider in the app
 #    Open the web app → Providers and paste your API key (stored encrypted; never in .env).
 #    ~/.aspace/dev/.env holds infra-only settings (e.g. POSTGRES_PASSWORD for --prod).
 ```
 
-`start.sh` builds the sandbox image on first run, then starts backend + frontend + deployer via Docker Compose. Data lives under **`~/.aspace/<mode>/`** (default mode `dev`).
+`start.sh` builds the sandbox image on first run, then starts frontend + control-plane + backend + deployer via Docker Compose. Data lives under **`~/.aspace/<mode>/`** (default mode `dev`). Browser API traffic goes through the control-plane service; Python remains the authority behind the legacy proxy.
 
 ```
 Web UI:           http://localhost:3000   # Docker maps container 5173 → host 3000 (dev compose)
-API:              http://localhost:8000
-Interactive docs: http://localhost:8000/docs
+API:              http://localhost:8010   # control-plane entrypoint
+Backend debug:    http://localhost:8000   # direct Python access; not the normal web path
+FastAPI docs:     http://localhost:8000/docs
 ```
 
 ### Options
 
 ```bash
-./scripts/start.sh           # Docker Compose — dev (default)
-./scripts/start.sh --test    # separate ports + ~/.aspace/test
-./scripts/start.sh --prod
-./scripts/start.sh --build   # force image rebuild
+./ops/scripts/start.sh           # Docker Compose — dev (default)
+./ops/scripts/start.sh --test    # separate ports + ~/.aspace/test
+./ops/scripts/start.sh --prod
+./ops/scripts/start.sh --build   # force image rebuild
 ```
 
-Test mode keeps the external API at `http://localhost:8100`, while the backend container
-still listens on internal port `8000`; the test frontend talks to `http://backend:8000`.
-Docker-native `scripts/db/migrate.sh`, DB-only `scripts/db/{dump,restore,reset-postgres}.sh`,
-and offline `scripts/system/{backup,restore,verify-restore}.sh` start PostgreSQL
+Test mode exposes the control-plane API at `http://localhost:8110`; the backend container
+still listens on internal port `8000` and is mapped to host `8100` only for direct debugging.
+The test frontend talks to the control-plane service.
+Docker-native `ops/scripts/db/migrate.sh`, DB-only `ops/scripts/db/{dump,restore,reset-postgres}.sh`,
+and offline `ops/scripts/system/{backup,restore,verify-restore}.sh` start PostgreSQL
 when needed and stop it after completion only when that script had to start it;
 they leave already-running app stacks alone.
 
+## Development
+
+For backend-only work, run against a reachable PostgreSQL database via `DATABASE_URL`:
+
+```bash
+cd backend
+pip install -r requirements.txt
+export AGENT_SPACE_HOME="$HOME/.aspace/dev"
+uvicorn app.main:app --reload --port 8000
+```
+
+Run backend tests from `backend`:
+
+```bash
+python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
+```
+
+`tests/conftest.py` sets an isolated `AGENT_SPACE_HOME` before importing the app, so the suite does not open a real mode database.
+
 ### Runtime target
 
-The runtime is **Linux / WSL / server + browser UI**. A `frontend/src-tauri/` directory exists
+The runtime is **Linux / WSL / server + browser UI**. An `apps/web/src-tauri/` directory exists
 but desktop support is **deferred and not part of the current product**. If it ships later it
 will be a lightweight launcher (start/stop the server, open the browser) — not a reimplementation
 of the backend.
@@ -107,16 +133,8 @@ See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for the full threat analysis.
 ## Authentication
 
 Local development runs without authentication. Optional Google OAuth sign-in is supported when
-`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` are configured (see `core/backend/app/config.py`).
+`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` are configured (see `backend/app/config.py`).
 Persisted API keys are feature-gated and not enabled in the current build.
-
-## Running Tests
-
-```bash
-cd core/backend && python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
-```
-
-``tests/conftest.py`` sets an isolated ``AGENT_SPACE_HOME`` before importing the app, so the suite does not open a real mode database.
 
 ## Key Concepts
 
@@ -155,11 +173,7 @@ Memory reflection is also exposed as an internal service (`MemoryReflector` via 
 
 ## Documentation
 
+- [Documentation Index](docs/README.md)
 - [Architecture](docs/ARCHITECTURE.md)
-- [Multi-Agent Runtime](docs/MULTI_AGENT.md)
-- [Space Model](docs/SPACE_MODEL.md)
-- [Memory Model](docs/MEMORY_MODEL.md)
-- [Capability System](docs/CAPABILITY_SYSTEM.md)
-- [Sandbox Policy](docs/SANDBOX_POLICY.md)
+- [Backup and Restore](docs/BACKUP_AND_RESTORE.md)
 - [Threat Model](docs/THREAT_MODEL.md)
-- [Memory Evolver Integration](docs/EVOLVER_INTEGRATION.md)

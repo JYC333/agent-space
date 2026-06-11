@@ -21,15 +21,15 @@ Capabilities are installed, file-defined units of backend behavior that can be e
 ## Manifest Shape
 
 ```yaml
-id: agent.echo
-name: Echo Agent
+id: research_intake
+name: Research Intake
 version: 0.1.0
-description: Minimal echo capability
-enabled: true
+description: Parse an intake payload into structured research output
+enabled: false
 
 entrypoint:
   type: python_module
-  module: capabilities.agent_echo.main
+  module: capabilities.research_intake.main
   function: execute
 
 permissions:
@@ -43,7 +43,7 @@ permissions:
 
 outputs:
   artifact_types:
-    - agent.echo.result.v1
+    - research_intake.result.v1
 ```
 
 Only `entrypoint.type: python_module` is executable in the current backend. Shell commands, remote code loading, package installation, network permissions, filesystem permissions, and subprocess execution are not supported by the capability runtime.
@@ -52,7 +52,7 @@ Only `entrypoint.type: python_module` is executable in the current backend. Shel
 
 The registry loads two sources:
 
-- `builtin`: diagnostic/example capabilities bundled under `core/capabilities/`.
+- `builtin`: diagnostic/example capabilities bundled under `catalog/capabilities/`.
 - `external_workspace`: workflow capabilities stored in a local registered Workspace.
 
 External capability roots are configured on a workspace registered as a capability library:
@@ -127,10 +127,9 @@ Returned artifacts are materialized as `Artifact` rows linked to the Run and pro
 
 ## Related Files
 
-- `core/backend/app/capabilities/registry.py`
-- `core/backend/app/capabilities/enabled_store.py`
-- `core/backend/app/capabilities/loader.py`
-- `core/backend/app/runtimes/adapters/capability.py`
-- `core/backend/app/runs/run_output_materialization.py`
-- `core/capabilities/agent_echo/`
-- `core/capabilities/memory_reflect/`
+- `backend/app/capabilities/registry.py`
+- `backend/app/capabilities/enabled_store.py`
+- `backend/app/capabilities/loader.py`
+- `backend/app/runtimes/adapters/capability.py`
+- `backend/app/runs/run_output_materialization.py`
+- `catalog/capabilities/memory_reflect/`

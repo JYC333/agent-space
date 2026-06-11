@@ -78,12 +78,12 @@ ContextCompiler.compile(context, target, task_goal, sandbox_dir,
 - Missing digest never blocks execution; populator falls back gracefully
 
 ## Related Files
-- `core/backend/app/memory/context_compiler.py`
-- `core/backend/app/memory/context_builder.py`
-- `core/backend/app/memory/digest_service.py` — `ContextDigestService`
-- `core/backend/app/memory/security.py`
-- `core/backend/app/models.py` — `ContextSnapshot`, `ContextDigest`
-- `core/backend/app/runs/context_snapshot_populator.py`
+- `backend/app/memory/context_compiler.py`
+- `backend/app/memory/context_builder.py`
+- `backend/app/memory/digest_service.py` — `ContextDigestService`
+- `backend/app/memory/security.py`
+- `backend/app/models.py` — `ContextSnapshot`, `ContextDigest`
+- `backend/app/runs/context_snapshot_populator.py`
 - `.agent/context-bundles.yaml`
 
 ## Related Decisions

@@ -17,7 +17,7 @@ if [[ ! -d "$WORKSPACE_DIR" ]]; then
     exit 1
 fi
 
-COMPOSE_PATH="$WORKSPACE_DIR/deployments/local/$COMPOSE_FILE"
+COMPOSE_PATH="$WORKSPACE_DIR/ops/compose/$COMPOSE_FILE"
 
 if [[ ! -f "$COMPOSE_PATH" ]]; then
     echo "ERROR: compose file not found: $COMPOSE_PATH" >&2
@@ -29,7 +29,7 @@ cd "$WORKSPACE_DIR"
 echo "[run_test_deploy] deploying from $COMPOSE_PATH"
 echo "[run_test_deploy] project=agent-space-test"
 
-ASPACE_HOME="$INSTANCE_ROOT" docker compose \
+AGENT_SPACE_MODE_ROOT="$INSTANCE_ROOT" docker compose \
     -p agent-space-test \
     -f "$COMPOSE_PATH" \
     --env-file "$INSTANCE_ROOT/.env" \

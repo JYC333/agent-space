@@ -26,9 +26,9 @@ The deployer runs **on the host** and is the only process that can trigger compo
 
 | Job Type              | Script                    | Effect                              |
 |-----------------------|---------------------------|-------------------------------------|
-| `rebuild_agent_space` | `scripts/rebuild.sh`      | docker compose build + up -d        |
-| `restart_agent_space` | `scripts/restart.sh`      | docker compose restart              |
-| `health_check`        | `scripts/health_check.sh` | curl /health                        |
+| `rebuild_agent_space` | `deployer/scripts/rebuild.sh`      | docker compose build + up -d        |
+| `restart_agent_space` | `deployer/scripts/restart.sh`      | docker compose restart              |
+| `health_check`        | `deployer/scripts/health_check.sh` | curl /health                        |
 
 No other commands are accepted. The deployer never executes arbitrary shell input.
 
@@ -78,11 +78,11 @@ clear error with instructions.
 - `deployer/deployer.py` — host deployer process
 - `deployer/protocol.py` — wire protocol constants
 - `deployer/scripts/` — whitelisted deploy scripts
-- `core/backend/app/deployment/client.py` — DeployerClient
-- `core/backend/app/deployment/api.py` — HTTP routes
-- `core/backend/app/models.py` — DeploymentJob model
-- `core/backend/app/config.py` — `deployer_socket_path`
-- `deployments/local/docker-compose.<mode>.yml` — mounts /var/run/agent-space into backend
+- `backend/app/deployment/client.py` — DeployerClient
+- `backend/app/deployment/api.py` — HTTP routes
+- `backend/app/models.py` — DeploymentJob model
+- `backend/app/config.py` — `deployer_socket_path`
+- `ops/compose/docker-compose.<mode>.yml` — mounts /var/run/agent-space into backend
 
 ## Related Boundaries
 - B41, B42, B43 in BOUNDARIES.md

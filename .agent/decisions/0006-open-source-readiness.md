@@ -25,7 +25,7 @@ This means:
 - `core/` must never contain: real user data, real memories, real credentials, private config
 - `instance/` holds all deployment-specific state and is gitignored
 - Tests use seeded example data (`SPACE=personal`, `USER=default_user`)
-- Capability manifests in `core/capabilities/` are templates — no private capability logic
+- Capability manifests in `catalog/capabilities/` are templates — no private capability logic
 - The ANTHROPIC_API_KEY and other secrets are loaded from `.env` (gitignored) only
 - If open-sourcing later: scrub git history, add LICENSE, write CONTRIBUTING.md
-- The `core/` directory is the open-source candidate; `instance/` and `deployments/local/.env` remain private
+- The `core/` directory is the open-source candidate; `instance/` and `ops/env/.env` remain private

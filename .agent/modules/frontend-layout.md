@@ -73,9 +73,9 @@ Define the structural layout pattern for the product UI. The layout should be mo
 - Mobile: collapse to single column; left and right panels become drawers/sheets
 
 ## Related Files
-- `frontend/src/App.jsx` — routing (needs shell + layout integration)
-- `frontend/src/components/` — primitive components (need PanelLayout, EntityCard, etc.)
-- `frontend/src/pages/` — page components (each uses PageShell / PanelLayout)
+- `apps/web/src/App.tsx` — routing
+- `apps/web/src/components/` — primitive components (need PanelLayout, EntityCard, etc.)
+- `apps/web/src/modules/` — page components (each uses PageShell / PanelLayout)
 
 ## Related Modules
 - [product-shell.md](product-shell.md) — navigation chrome that wraps this layout

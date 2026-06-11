@@ -30,11 +30,11 @@ security-access:
     - .agent/BOUNDARIES.md
     - .agent/modules/policy.md
   code_roots:
-    - core/backend/app/policy
-    - core/backend/app/auth
-    - core/backend/app/memory/context_builder.py
-    - core/backend/tests/invariants
-    - core/backend/tests/contracts
+    - backend/app/policy
+    - backend/app/auth
+    - backend/app/memory/context_builder.py
+    - backend/tests/invariants
+    - backend/tests/contracts
 
 backend-domain:
   docs:
@@ -47,9 +47,9 @@ backend-domain:
     - .agent/architecture/POLICY_ENFORCEMENT_INVENTORY.md
     - .agent/architecture/SECURITY_AND_ACCESS_BOUNDARIES.md
   code_roots:
-    - core/backend/app/models.py
-    - core/backend/app/schemas.py
-    - core/backend/app/modules/registry.py
+    - backend/app/models.py
+    - backend/app/schemas.py
+    - backend/app/modules/registry.py
 
 frontend-product:
   docs:
@@ -63,10 +63,10 @@ frontend-product:
     - .agent/BOUNDARIES.md
     - .agent/COMMANDS.md
   code_roots:
-    - frontend/src/core
-    - frontend/src/modules
-    - frontend/src/api/client.js
-    - frontend/vite.config.js
+    - apps/web/src/core
+    - apps/web/src/modules
+    - apps/web/src/api/client.js
+    - apps/web/vite.config.ts
 
 runtime-agent:
   docs:
@@ -79,10 +79,10 @@ runtime-agent:
     - .agent/decisions/0004-context-wrapper.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/agents
-    - core/backend/app/workspace/sandbox_manager.py
-    - core/backend/tests/invariants/test_agent_version_immutability.py
-    - core/backend/tests/workflows/test_run_execution_workflow.py
+    - backend/app/agents
+    - backend/app/workspace/sandbox_manager.py
+    - backend/tests/invariants/test_agent_version_immutability.py
+    - backend/tests/workflows/test_run_execution_workflow.py
 
 memory-activity-proposal:
   docs:
@@ -96,13 +96,13 @@ memory-activity-proposal:
     - .agent/decisions/0003-memory-proposal-flow.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/memory
-    - core/backend/app/activity
-    - core/backend/app/proposals
-    - core/backend/tests/contracts/test_memory_api.py
-    - core/backend/tests/invariants/test_memory_proposal_boundary.py
-    - core/backend/tests/unit/test_memory_store_get_for_space.py
-    - core/backend/tests/workflows/test_activity_to_memory_workflow.py
+    - backend/app/memory
+    - backend/app/activity
+    - backend/app/proposals
+    - backend/tests/contracts/test_memory_api.py
+    - backend/tests/invariants/test_memory_proposal_boundary.py
+    - backend/tests/unit/test_memory_store_get_for_space.py
+    - backend/tests/workflows/test_activity_to_memory_workflow.py
 
 workspace-artifact:
   docs:
@@ -114,10 +114,10 @@ workspace-artifact:
     - .agent/decisions/0004-context-wrapper.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/workspace
-    - core/backend/app/artifacts
-    - core/backend/app/runtimes/adapters/cli_runtime.py
-    - deployments/sandbox
+    - backend/app/workspace
+    - backend/app/artifacts
+    - backend/app/runtimes/adapters/cli_runtime.py
+    - sandbox
 
 local-first-compatibility:
   docs:
@@ -127,7 +127,7 @@ local-first-compatibility:
     - .agent/modules/client-server-protocol.md
     - .agent/architecture/PRODUCT_AND_BOUNDARIES.md
   code_roots:
-    - core/backend/app/models.py   # UUID PKs and sync-relevant columns
+    - backend/app/models.py   # UUID PKs and sync-relevant columns
 
 # ---------------------------------------------------------------------------
 # Detailed domain-specific bundles (use when the primary bundle is too broad)
@@ -141,12 +141,12 @@ memory:
     - .agent/decisions/0003-memory-proposal-flow.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/memory
-    - core/backend/app/activity
-    - core/backend/tests/contracts/test_memory_api.py
-    - core/backend/tests/invariants/test_memory_proposal_boundary.py
-    - core/backend/tests/unit/test_memory_store_get_for_space.py
-    - core/backend/tests/workflows/test_activity_to_memory_workflow.py
+    - backend/app/memory
+    - backend/app/activity
+    - backend/tests/contracts/test_memory_api.py
+    - backend/tests/invariants/test_memory_proposal_boundary.py
+    - backend/tests/unit/test_memory_store_get_for_space.py
+    - backend/tests/workflows/test_activity_to_memory_workflow.py
 
 agents:
   docs:
@@ -157,18 +157,18 @@ agents:
     - .agent/decisions/0007-plugin-module-architecture.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/agents
-    - core/backend/app/modules/registry.py
-    - core/backend/app/workspace/sandbox_manager.py
-    - core/backend/tests/invariants/test_agent_version_immutability.py
-    - core/backend/tests/workflows/test_run_execution_workflow.py
+    - backend/app/agents
+    - backend/app/modules/registry.py
+    - backend/app/workspace/sandbox_manager.py
+    - backend/tests/invariants/test_agent_version_immutability.py
+    - backend/tests/workflows/test_run_execution_workflow.py
 
 policy:
   docs:
     - .agent/modules/policy.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/policy
+    - backend/app/policy
 
 capability:
   docs:
@@ -176,20 +176,20 @@ capability:
     - .agent/modules/context-compiler.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/capabilities
-    - core/backend/app/capabilities
-    - core/backend/tests/invariants/test_runtime_provider_separation.py
+    - catalog/capabilities
+    - backend/app/capabilities
+    - backend/tests/invariants/test_runtime_provider_separation.py
 
 proposals:
   docs:
     - .agent/modules/proposals.md
     - .agent/decisions/0003-memory-proposal-flow.md
   code_roots:
-    - core/backend/app/proposals
-    - core/backend/app/memory
-    - core/backend/app/memory/reflector.py
-    - core/backend/tests/contracts/test_general_proposal_api.py
-    - core/backend/tests/invariants/test_proposal_approval_boundary.py
+    - backend/app/proposals
+    - backend/app/memory
+    - backend/app/memory/reflector.py
+    - backend/tests/contracts/test_general_proposal_api.py
+    - backend/tests/invariants/test_proposal_approval_boundary.py
 
 sandbox:
   docs:
@@ -197,9 +197,9 @@ sandbox:
     - .agent/modules/context-compiler.md
     - .agent/decisions/0004-context-wrapper.md
   code_roots:
-    - core/backend/app/workspace
-    - core/backend/app/runtimes/adapters/cli_runtime.py
-    - deployments/sandbox
+    - backend/app/workspace
+    - backend/app/runtimes/adapters/cli_runtime.py
+    - sandbox
 
 workspace_console:
   docs:
@@ -208,8 +208,8 @@ workspace_console:
     - .agent/modules/sandbox.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/workspace
-    - frontend/src/modules/workspace    # TODO: not yet created
+    - backend/app/workspace
+    - apps/web/src/modules/workspace    # TODO: not yet created
 
 activity:
   docs:
@@ -218,8 +218,8 @@ activity:
     - .agent/modules/assistant-capture.md
     - .agent/decisions/0003-memory-proposal-flow.md
   code_roots:
-    - core/backend/app/activity
-    - core/backend/app/models.py
+    - backend/app/activity
+    - backend/app/models.py
 
 knowledge:
   docs:
@@ -228,8 +228,8 @@ knowledge:
     - .agent/modules/proposals.md
     - .agent/decisions/0007-plugin-module-architecture.md
   code_roots:
-    - core/backend/app/knowledge
-    - frontend/src/modules/knowledge/KnowledgePage.tsx   # stub exists
+    - backend/app/knowledge
+    - apps/web/src/modules/knowledge/KnowledgePage.tsx   # stub exists
 
 cards:
   docs:
@@ -239,8 +239,8 @@ cards:
     - .agent/modules/proposals.md
     - .agent/decisions/0007-plugin-module-architecture.md
   code_roots:
-    - core/backend/app/cards            # TODO: not yet created
-    - frontend/src/modules/cards/CardReviewPage.jsx   # stub exists
+    - backend/app/cards            # TODO: not yet created
+    - apps/web/src/modules/cards/CardReviewPage.tsx   # stub exists
 
 assistant:
   docs:
@@ -248,8 +248,8 @@ assistant:
     - .agent/modules/activity-inbox.md
     - .agent/modules/memory.md
   code_roots:
-    - core/backend/app/agents
-    - core/backend/app/memory/context_builder.py
+    - backend/app/agents
+    - backend/app/memory/context_builder.py
 
 run:
   docs:
@@ -259,10 +259,10 @@ run:
     - .agent/modules/agents.md
     - .agent/modules/proposals.md
   code_roots:
-    - core/backend/app/agents/runner.py
-    - core/backend/app/models.py
-    - core/backend/app/schemas.py
-    - core/backend/app/memory/context_builder.py
+    - backend/app/agents/runner.py
+    - backend/app/models.py
+    - backend/app/schemas.py
+    - backend/app/memory/context_builder.py
 
 runtime_status:
   docs:
@@ -270,8 +270,8 @@ runtime_status:
     - .agent/modules/product-shell.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/main.py
-    - core/backend/app/agents/runner.py
+    - backend/app/main.py
+    - backend/app/agents/runner.py
 
 sync:
   docs:
@@ -279,7 +279,7 @@ sync:
     - .agent/modules/client-server-protocol.md
     - .agent/modules/mobile-client.md
   code_roots:
-    - core/backend/app/models.py
+    - backend/app/models.py
 
 mobile:
   docs:
@@ -289,29 +289,31 @@ mobile:
     - .agent/modules/activity-inbox.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - frontend/src
-    - frontend/public
+    - apps/web/src
+    - apps/web/public
 
 module_registry:
   docs:
+    - .agent/architecture/MODULES.md
+    - .agent/architecture/MODULE_DEVELOPMENT_GUIDE.md
     - .agent/decisions/0007-plugin-module-architecture.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/modules/registry.py
-    - core/backend/app/main.py
-    - frontend/src/modules/registry.js
-    - frontend/src/core/Shell.jsx
-    - frontend/src/App.jsx
+    - backend/app/modules/registry.py
+    - backend/app/main.py
+    - apps/web/src/modules/registry.ts
+    - apps/web/src/core/Shell.tsx
+    - apps/web/src/App.tsx
 
 credentials:
   docs:
     - .agent/modules/credentials.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/credentials/
-    - core/backend/app/runtimes/
-    - core/backend/app/runs/execution.py
-    - core/backend/app/workspace/sandbox_manager.py
+    - backend/app/credentials/
+    - backend/app/runtimes/
+    - backend/app/runs/execution.py
+    - backend/app/workspace/sandbox_manager.py
 
 runtime_adapters:
   docs:
@@ -319,10 +321,10 @@ runtime_adapters:
     - .agent/decisions/0008-multi-cli-mvp.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/runtimes/
-    - core/backend/app/runtime_adapters/
-    - core/backend/app/runs/
-    - frontend/src/modules/runtime_adapters/
+    - backend/app/runtimes/
+    - backend/app/runtime_adapters/
+    - backend/app/runs/
+    - apps/web/src/modules/runtime_adapters/
 
 deployment:
   docs:
@@ -331,8 +333,8 @@ deployment:
     - .agent/BOUNDARIES.md
   code_roots:
     - deployer/
-    - core/backend/app/deployment/
-    - core/backend/app/models.py
+    - backend/app/deployment/
+    - backend/app/models.py
 
 space:
   docs:
@@ -340,6 +342,6 @@ space:
     - .agent/decisions/0001-space-model.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - core/backend/app/models.py
-    - core/backend/app/config.py
-    - core/backend/app/memory/context_builder.py
+    - backend/app/models.py
+    - backend/app/config.py
+    - backend/app/memory/context_builder.py
