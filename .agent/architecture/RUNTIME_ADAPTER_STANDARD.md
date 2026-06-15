@@ -7,31 +7,28 @@ Agent-space owns run lifecycle, context snapshots, policy gates, credential
 gating, sandbox/worktree governance, artifacts, proposals, and audit/events.
 Vendor CLIs such as Claude Code and Codex CLI are local CLI runtime adapters.
 
-`RuntimeAdapterSpec` defines built-in adapter semantics: detection, credential
-mode, sandbox requirement, context target, invocation template, permission
-bypass capability, usage behavior, output parser, and catalog display.
-`RuntimeAdapter` rows configure space-local instances: enabled state,
-credential profile binding, executable override, health status, quota status,
-and non-secret adapter config.
+`RuntimeAdapterSpec` defines built-in adapter semantics: credential mode,
+sandbox requirement, context target, invocation template, permission bypass
+capability, usage behavior, output parser, and catalog display.
+`RuntimeAdapter` rows no longer configure space-local instances. They remain
+only as legacy nullable FK targets for trace/read-model compatibility.
 
 `GenericCliRuntimeAdapter` executes all implemented local CLI specs through the
 same command rendering, credential, context, subprocess, output parser, and
-usage provider path. Native adapters are limited to `echo` and `capability`.
+usage provider path. Native adapters are limited to `capability`.
 
-Use `/runtime-adapters` and RuntimeAdapter/RuntimeAdapterSpec terminology.
+Use `/runtime-tools` for CLI binary installation/status and
+`RuntimeAdapterSpec` / `adapter_type` for runtime semantics. The old
+`/runtime-adapters` instance API is retired.
 
-Host detection is spec-level and non-mutating: it checks executable
-availability and credential profile readiness without creating runs, sandboxes,
-events, credential grants, or model calls. Configured adapter status is
-instance-specific and may use the row's executable override.
+Runtime tool status is non-mutating: it checks the active allowlisted binary
+under `$AGENT_SPACE_HOME/runtime-tools` and credential profile readiness without
+creating runs, sandboxes, events, credential grants, or model calls.
 
-Probe is also non-mutating. It validates the configured runtime instance enough
-to report readiness, but it does not execute a prompt or create a run.
-
-Credential profile binding is explicit through
-`runtime_adapters.credential_profile_id`. Permission bypass is policy controlled
-and denied before invocation unless both adapter config and runtime policy allow
-it under worktree isolation.
+Credential profile binding uses stable profile ids such as
+`claude_code/default` and `codex_cli/default`. Permission bypass is policy
+controlled and denied before invocation unless both runtime config and runtime
+policy allow it under worktree isolation.
 
 Credential profile readiness requires the selected source path to exist.
 

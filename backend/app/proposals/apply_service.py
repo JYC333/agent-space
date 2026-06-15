@@ -824,7 +824,7 @@ class ProposalApplyService:
 
         # Unregistered types fail first — before the accept-context guard,
         # egress approval, and source monitoring — matching pre-registry order.
-        # UnknownProposalApplierError is a ProposalApplyError with the legacy
+        # UnknownProposalApplierError is a ProposalApplyError with the pre-registry
         # "unsupported proposal type: …" message.
         if registry.get(proposal.proposal_type) is None:
             raise UnknownProposalApplierError(proposal.proposal_type)

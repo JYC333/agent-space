@@ -236,7 +236,8 @@ class TestAutomationCreate:
             metadata_json=None,
         )
 
-        with patch("app.automation.service.PolicyGateway.enforce", side_effect=denied):
+        with patch("app.automation.service.get_policy_port") as policy_port:
+            policy_port.return_value.enforce.side_effect = denied
             with patch("app.automation.service.PreflightService.check") as check:
                 with pytest.raises(PolicyGateBlocked):
                     AutomationService(db).create(

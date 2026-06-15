@@ -4,7 +4,7 @@
 **PLANNED** — REST API exists. WebSocket / real-time layer not yet built.
 
 ## Purpose
-Define how frontend and mobile clients communicate with the client-facing API entrypoint. The default path is `apps/web` → `control-plane` → TS-owned routes or the temporary legacy proxy → FastAPI/Python authority. Covers the REST API conventions already in place, the planned real-time event layer (WebSocket or SSE), and streaming agent output. This module is the contract between clients, control-plane routing, and backend-owned business APIs — changes here affect both sides.
+Define how frontend and mobile clients communicate with the client-facing API entrypoint. The default path is `apps/web` -> `control-plane` -> TS-owned routes or the Python fallback proxy -> FastAPI/Python authority. Covers the REST API conventions already in place, the planned real-time event layer (WebSocket or SSE), and streaming agent output. This module is the contract between clients, control-plane routing, and backend-owned business APIs — changes here affect both sides.
 
 ## Owns
 - REST API conventions (request/response shape, error format, pagination)

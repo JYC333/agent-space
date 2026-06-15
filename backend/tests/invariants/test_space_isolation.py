@@ -19,7 +19,6 @@ from app.models import (
     Policy,
     Proposal,
     Run,
-    RuntimeAdapter,
     Workspace,
 )
 from app.runs.run_service import RunService
@@ -137,14 +136,10 @@ def test_policy_runtime_row_isolated_by_space(db, cross_space_pair_db):
     pol = factories.create_test_policy(db, space_id=a, name="pol-a", commit=False)
     cred = factories.create_test_credential_stub(db, space_id=a, commit=False)
     mp = factories.create_test_model_provider(db, space_id=a, commit=False)
-    rt = factories.create_test_runtime_adapter(db, space_id=a, commit=False)
     db.flush()
     assert db.query(Policy).filter(Policy.id == pol.id, Policy.space_id == b).first() is None
     assert db.query(Credential).filter(Credential.id == cred.id, Credential.space_id == b).first() is None
     assert db.query(ModelProvider).filter(ModelProvider.id == mp.id, ModelProvider.space_id == b).first() is None
-    assert (
-        db.query(RuntimeAdapter).filter(RuntimeAdapter.id == rt.id, RuntimeAdapter.space_id == b).first()
-    ) is None
 
 
 def test_artifact_and_proposal_counts_other_space_empty(db, cross_space_pair_db):

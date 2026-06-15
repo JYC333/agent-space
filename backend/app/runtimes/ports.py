@@ -34,7 +34,6 @@ class RuntimeEvent:
     summary: str | None = None
     error_code: str | None = None
     error_message: str | None = None
-    runtime_adapter_id: str | None = None
     workspace_id: str | None = None
     metadata: dict[str, Any] | None = field(default=None)
     log_context: str = ""

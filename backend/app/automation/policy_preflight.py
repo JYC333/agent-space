@@ -145,7 +145,6 @@ class AutomationPolicyPreflightService:
         )
         resolved_runtime_adapter = ResolvedRuntimeAdapter(
             adapter_type=adapter_type,
-            runtime_adapter_row=resolved_adapter.runtime_adapter_row,
             merged_config={},
         )
         runtime_execute_req = build_runtime_execute_policy_request(

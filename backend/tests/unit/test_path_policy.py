@@ -96,7 +96,7 @@ def test_trusted_code_patch_apply_bypasses_script_write_suffix_block(tmp_path):
     assert resolved == script.resolve()
 
 
-def test_secret_like_read_paths_are_denied_but_env_example_is_allowed(tmp_path):
+def test_secret_like_read_paths_are_denied(tmp_path):
     root = tmp_path / "root"
     root.mkdir()
     policy = _policy(tmp_path)
@@ -117,11 +117,3 @@ def test_secret_like_read_paths_are_denied_but_env_example_is_allowed(tmp_path):
         path.write_text("secret", encoding="utf-8")
         with pytest.raises(PathPolicyError):
             policy.validate(str(path), allowed_root=str(root), mode="read")
-
-    env_example = root / ".env.example"
-    env_example.write_text("API_KEY=example", encoding="utf-8")
-    assert policy.validate(str(env_example), allowed_root=str(root), mode="read") == env_example.resolve()
-
-    env_dev_example = root / ".env.dev.example"
-    env_dev_example.write_text("POSTGRES_PASSWORD=agent_space_dev_password", encoding="utf-8")
-    assert policy.validate(str(env_dev_example), allowed_root=str(root), mode="read") == env_dev_example.resolve()

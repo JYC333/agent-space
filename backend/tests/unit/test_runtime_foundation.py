@@ -50,9 +50,9 @@ class TestCliRuntimeRegistry:
         from app.runtimes.registry import is_adapter_type_implemented
         assert is_adapter_type_implemented("codex_cli")
 
-    def test_echo_in_registry(self):
+    def test_model_api_in_registry(self):
         from app.runtimes.registry import is_adapter_type_implemented
-        assert is_adapter_type_implemented("echo")
+        assert is_adapter_type_implemented("model_api")
 
     def test_claude_code_has_file_access_flag(self):
         from app.runtimes.registry import instantiate_runtime_adapter
@@ -237,7 +237,7 @@ class TestCriticalRiskLevelFails:
         version.runtime_policy_json = {
             **dict(version.runtime_policy_json or {}),
             "risk_level": "critical",
-            "default_adapter_type": "echo",
+            "default_adapter_type": "model_api",
         }
         db.commit()
 
@@ -304,14 +304,14 @@ class TestHighRiskWorktreePolicy:
         assert error is not None
         assert "codex_cli" in error
 
-    def test_echo_at_low_risk_is_fine(self):
+    def test_model_api_at_low_risk_is_fine(self):
         from app.runs.runtime_policy import RuntimePolicyDecision, validate_file_access_adapter_policy
         decision = RuntimePolicyDecision(
             required_sandbox_level="none",
             risk_level="low",
             policy_snapshot={},
         )
-        error = validate_file_access_adapter_policy(adapter_type="echo", decision=decision)
+        error = validate_file_access_adapter_policy(adapter_type="model_api", decision=decision)
         assert error is None
 
 
@@ -818,27 +818,27 @@ class TestPreflightService:
         req = PreflightRequest(agent_id=agent.id)
         result = PreflightService(db).check(req, space_id=space_id)
         assert result.executable is True
-        assert result.adapter_type == "echo"
+        assert result.adapter_type == "model_api"
         assert result.errors == []
 
-    def test_preflight_echo_adapter_succeeds(self, db):
+    def test_preflight_model_api_adapter_succeeds(self, db):
         from tests.support import factories
         from app.runs.preflight import PreflightRequest, PreflightService
         from app.models import AgentVersion
 
-        space_id = "test-preflight-echo"
+        space_id = "test-preflight-model-api"
         factories.create_test_space(db, space_id=space_id, commit=True)
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
         db.commit()
 
         req = PreflightRequest(agent_id=agent.id)
         result = PreflightService(db).check(req, space_id=space_id)
         assert result.executable is True
-        assert result.adapter_type == "echo"
+        assert result.adapter_type == "model_api"
         assert result.required_sandbox_level == "none"
         assert result.errors == []
 
@@ -853,7 +853,7 @@ class TestPreflightService:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "critical", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "critical", "default_adapter_type": "model_api"}
         db.commit()
 
         req = PreflightRequest(agent_id=agent.id)
@@ -959,12 +959,12 @@ class TestPreflightService:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
-        # Use echo so risk/workspace checks pass; echo is native, so credential checks skip
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
+        # Use model_api so risk/workspace checks pass; it is non-CLI, so credential profile checks skip.
         db.commit()
 
         req = PreflightRequest(agent_id=agent.id, trigger_origin="automation")
-        # Echo runtime does not require a CLI credential profile
+        # model_api runtime does not require a CLI credential profile.
         result = PreflightService(db).check(req, space_id=space_id)
         assert result.executable is True
 
@@ -1019,26 +1019,26 @@ class TestPreflightExecutionAgreement:
     """Preflight and RunExecutionService must resolve the same adapter_type and
     required_sandbox_level for any given AgentVersion configuration."""
 
-    def test_echo_low_risk_preflight_matches_execution(self, db, monkeypatch):
-        """echo / low-risk: both preflight and execution resolve adapter=echo, sandbox=none."""
+    def test_model_api_low_risk_preflight_matches_execution(self, db, monkeypatch):
+        """model_api / low-risk: both preflight and execution resolve adapter=model_api, sandbox=none."""
         from tests.support import factories
         from app.runs.preflight import PreflightRequest, PreflightService
         from app.runs.execution import RunExecutionService
         from app.models import AgentVersion, Run
 
-        space_id = "test-agreement-echo"
+        space_id = "test-agreement-model-api"
         factories.create_test_space(db, space_id=space_id, commit=True)
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
         db.commit()
 
         req = PreflightRequest(agent_id=agent.id)
         preflight = PreflightService(db).check(req, space_id=space_id)
         assert preflight.executable is True
-        assert preflight.adapter_type == "echo"
+        assert preflight.adapter_type == "model_api"
         assert preflight.required_sandbox_level == "none"
 
         # Execute the run and verify execution used the same adapter_type / sandbox_level
@@ -1061,7 +1061,7 @@ class TestPreflightExecutionAgreement:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
         db.commit()
 
         # PreflightRequest has no risk_level field — confirm it is not accepted
@@ -1069,13 +1069,6 @@ class TestPreflightExecutionAgreement:
         assert not hasattr(req, "risk_level")
         result = PreflightService(db).check(req, space_id=space_id)
         assert result.required_sandbox_level == "none"  # from policy, not from any request field
-
-    def test_runtime_adapter_id_not_accepted_in_request(self):
-        """PreflightRequest must not have a runtime_adapter_id field."""
-        from app.runs.preflight import PreflightRequest
-
-        req = PreflightRequest(agent_id="a")
-        assert not hasattr(req, "runtime_adapter_id")
 
     def test_space_id_not_accepted_in_request(self):
         """PreflightRequest must not expose space_id — it must come from auth."""
@@ -1105,7 +1098,7 @@ class TestCancellationRace:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
         db.commit()
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
@@ -1142,7 +1135,7 @@ class TestCancellationRace:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
         db.commit()
 
         _patch_success_adapter_without_artifact(monkeypatch)

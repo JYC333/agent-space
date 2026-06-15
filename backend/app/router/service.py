@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
-from ..models import AgentVersion, Run, RuntimeAdapter
+from ..models import AgentVersion, Run
 from ..runtimes import RuntimeAdapterSpec, get_runtime_adapter_spec
 from .decisions import (
     AdapterDecision,
@@ -20,8 +20,8 @@ from .decisions import (
 
 RuntimeSpecGetter = Callable[[str], RuntimeAdapterSpec]
 ImplementationChecker = Callable[[str], bool]
-# (adapter_type, effective adapter-row provider_id or None) -> None
-AdapterPolicyValidator = Callable[[str, "str | None"], None]
+# (adapter_type, effective adapter provider_id or None) -> None
+AdapterPolicyValidator = Callable[[str], None]
 
 
 class RouterService:
@@ -167,7 +167,6 @@ class RouterService:
         *,
         space_id: str,
         version: AgentVersion,
-        runtime_adapter_id: str | None = None,
         requested_adapter_type: str | None = None,
     ) -> str | None:
         """Resolve the adapter type used by Run creation previews.
@@ -178,36 +177,14 @@ class RouterService:
         while leaving catalog, enabled-state, and policy failures to the
         existing creation/execution checks.
         """
-        db = self._require_db()
-        if runtime_adapter_id:
-            row = (
-                db.query(RuntimeAdapter)
-                .filter(
-                    RuntimeAdapter.id == runtime_adapter_id,
-                    RuntimeAdapter.space_id == space_id,
-                )
-                .first()
-            )
-            return row.adapter_type if row is not None else None
-
-        if version.runtime_adapter_id:
-            row = (
-                db.query(RuntimeAdapter)
-                .filter(
-                    RuntimeAdapter.id == version.runtime_adapter_id,
-                    RuntimeAdapter.space_id == space_id,
-                )
-                .first()
-            )
-            return row.adapter_type if row is not None else None
-
+        del space_id
         runtime_config = dict(version.runtime_config_json or {})
         policy = dict(version.runtime_policy_json or {})
         return (
             (requested_adapter_type or "").strip()
             or (runtime_config.get("adapter_type") or "").strip()
             or (str(policy.get("default_adapter_type") or "").strip())
-            or "echo"
+            or "model_api"
         )
 
     def resolve_runtime_adapter(
@@ -221,82 +198,30 @@ class RouterService:
         """Resolve the concrete adapter for an executable Run.
 
         Resolution order:
-          1. Run.runtime_adapter_id
-          2. AgentVersion.runtime_adapter_id
-          3. Run.adapter_type
-          4. AgentVersion.runtime_config_json.adapter_type
-          5. AgentVersion.runtime_policy_json.default_adapter_type
-          6. system default echo
+          1. Run.adapter_type
+          2. AgentVersion.runtime_config_json.adapter_type
+          3. AgentVersion.runtime_policy_json.default_adapter_type
+          4. system default model_api
         """
-        db = self._require_db()
-        row: RuntimeAdapter | None = None
-        if run.runtime_adapter_id:
-            row = (
-                db.query(RuntimeAdapter)
-                .filter(
-                    RuntimeAdapter.id == run.runtime_adapter_id,
-                    RuntimeAdapter.space_id == run.space_id,
-                )
-                .first()
-            )
-            if row is None:
-                raise AdapterResolutionError(
-                    "adapter_not_configured",
-                    "Run.runtime_adapter_id points to a missing RuntimeAdapter row",
-                )
-        elif version.runtime_adapter_id:
-            row = (
-                db.query(RuntimeAdapter)
-                .filter(
-                    RuntimeAdapter.id == version.runtime_adapter_id,
-                    RuntimeAdapter.space_id == run.space_id,
-                )
-                .first()
-            )
-            if row is None:
-                raise AdapterResolutionError(
-                    "adapter_not_configured",
-                    "AgentVersion.runtime_adapter_id points to a missing RuntimeAdapter row",
-                )
-
-        if row is not None:
-            if row.space_id != run.space_id:
-                raise AdapterResolutionError(
-                    "adapter_space_mismatch",
-                    "RuntimeAdapter.space_id does not match Run.space_id",
-                )
-            if not row.enabled:
-                raise AdapterResolutionError(
-                    "adapter_disabled",
-                    f"RuntimeAdapter '{row.id}' is disabled",
-                )
-            adapter_type = row.adapter_type
-            merged = {
-                **(version.runtime_config_json or {}),
-                **(row.config_json or {}),
-                "credential_profile_id": getattr(row, "credential_profile_id", None),
-            }
-        else:
-            runtime_config = dict(version.runtime_config_json or {})
-            adapter_type = (
-                (run.adapter_type or "").strip()
-                or (runtime_config.get("adapter_type") or "").strip()
-                or (str(policy.get("default_adapter_type") or "").strip())
-                or "echo"
-            )
-            merged = runtime_config
+        runtime_config = dict(version.runtime_config_json or {})
+        adapter_type = (
+            (run.adapter_type or "").strip()
+            or (runtime_config.get("adapter_type") or "").strip()
+            or (str(policy.get("default_adapter_type") or "").strip())
+            or "model_api"
+        )
+        merged = runtime_config
 
         self._validate_runtime_catalog(adapter_type)
         self._validate_allowed_adapter(adapter_type, policy)
         if validate_policy is not None:
-            validate_policy(adapter_type, row.provider_id if row is not None else None)
+            validate_policy(adapter_type)
         self._validate_implemented(adapter_type)
         if adapter_type == "capability" and run.capability_id:
             merged = self._merge_capability_config(run, merged)
 
         return ResolvedRuntimeAdapter(
             adapter_type=adapter_type,
-            runtime_adapter_row=row,
             merged_config=merged,
         )
 
@@ -308,52 +233,20 @@ class RouterService:
         requested_adapter_type: str | None = None,
     ) -> ResolvedRuntimeAdapter:
         """Resolve adapter type for Run preflight's visible inputs."""
-        db = self._require_db()
-        row: RuntimeAdapter | None = None
-        adapter_type: str | None = None
-        merged: dict[str, Any] = {}
-
-        if version.runtime_adapter_id:
-            row = (
-                db.query(RuntimeAdapter)
-                .filter(
-                    RuntimeAdapter.id == version.runtime_adapter_id,
-                    RuntimeAdapter.space_id == space_id,
-                )
-                .first()
-            )
-            if row is None:
-                raise AdapterResolutionError(
-                    "adapter_not_configured",
-                    f"RuntimeAdapter '{version.runtime_adapter_id}' from AgentVersion was not found",
-                )
-            merged = {
-                **(version.runtime_config_json or {}),
-                **(row.config_json or {}),
-                "credential_profile_id": getattr(row, "credential_profile_id", None),
-            }
-            if not row.enabled:
-                raise AdapterResolutionError(
-                    "adapter_disabled",
-                    "RuntimeAdapter row is disabled",
-                )
-            adapter_type = row.adapter_type
-
-        if not adapter_type:
-            runtime_config = dict(version.runtime_config_json or {})
-            adapter_type = (
-                (requested_adapter_type or "").strip()
-                or (runtime_config.get("adapter_type") or "").strip()
-                or (str((version.runtime_policy_json or {}).get("default_adapter_type") or "").strip())
-                or "echo"
-            )
-            merged = runtime_config
+        del space_id
+        runtime_config = dict(version.runtime_config_json or {})
+        adapter_type = (
+            (requested_adapter_type or "").strip()
+            or (runtime_config.get("adapter_type") or "").strip()
+            or (str((version.runtime_policy_json or {}).get("default_adapter_type") or "").strip())
+            or "model_api"
+        )
+        merged = runtime_config
 
         self._validate_runtime_catalog(adapter_type)
         self._validate_implemented(adapter_type)
         return ResolvedRuntimeAdapter(
             adapter_type=adapter_type,
-            runtime_adapter_row=row,
             merged_config=merged,
         )
 
@@ -365,60 +258,18 @@ class RouterService:
     ) -> AdapterDecision:
         """Resolve adapter metadata for automation policy simulation.
 
-        This preserves automation preflight's historical behavior: it reports
-        missing/disabled RuntimeAdapter rows, but leaves catalog/requirements
-        validation to the runtime requirements step and does not apply an echo
-        fallback when no adapter is configured.
+        Automation policy simulation resolves adapter type from AgentVersion
+        config/policy only.
         """
-        db = self._require_db()
-        row: RuntimeAdapter | None = None
-        adapter_type: str | None = None
-        merged: dict[str, Any] = {}
-
-        if version.runtime_adapter_id:
-            row = (
-                db.query(RuntimeAdapter)
-                .filter(
-                    RuntimeAdapter.id == version.runtime_adapter_id,
-                    RuntimeAdapter.space_id == version.space_id,
-                )
-                .first()
-            )
-            if row is None:
-                return AdapterDecision(
-                    adapter_type=None,
-                    runtime_adapter_row=None,
-                    error_code="adapter_not_configured",
-                    message=(
-                        "AgentVersion.runtime_adapter_id points to a missing "
-                        "RuntimeAdapter row"
-                    ),
-                )
-            merged = {
-                **(version.runtime_config_json or {}),
-                **(row.config_json or {}),
-                "credential_profile_id": getattr(row, "credential_profile_id", None),
-            }
-            if not row.enabled:
-                return AdapterDecision(
-                    adapter_type=row.adapter_type,
-                    runtime_adapter_row=row,
-                    merged_config=merged,
-                    error_code="adapter_disabled",
-                    message=f"RuntimeAdapter '{row.id}' is disabled",
-                )
-            adapter_type = row.adapter_type
-        else:
-            runtime_config = dict(version.runtime_config_json or {})
-            adapter_type = (
-                (runtime_config.get("adapter_type") or "").strip()
-                or (str(policy.get("default_adapter_type") or "").strip())
-            )
-            merged = runtime_config
+        runtime_config = dict(version.runtime_config_json or {})
+        adapter_type = (
+            (runtime_config.get("adapter_type") or "").strip()
+            or (str(policy.get("default_adapter_type") or "").strip())
+        )
+        merged = runtime_config
 
         return AdapterDecision(
             adapter_type=adapter_type,
-            runtime_adapter_row=row,
             merged_config=merged,
         )
 

@@ -56,13 +56,17 @@ function PersonalAssistantEntry() {
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
 
+  function assistantTargetSpace() {
+    return personalSpaceId ?? writeTargetSpaceId ?? preferredSpaceId
+  }
+
   async function openAssistant() {
     setBusy(true)
     try {
       // The Personal Assistant is the user's Personal Space default assistant. Open its
       // dedicated Chat page inside that Space's URL. The draft is carried in the URL (?draft=)
       // so the destination is deep-linkable; the Chat page auto-sends it on arrival.
-      const target = personalSpaceId ?? writeTargetSpaceId ?? preferredSpaceId
+      const target = assistantTargetSpace()
       const agent = await agentsApi.ensureDefaultAssistant()
       const q = draft.trim() ? `?draft=${encodeURIComponent(draft.trim())}` : ''
       navigate(spacePath(target, `/agents/${agent.id}/chat${q}`))
@@ -71,6 +75,15 @@ function PersonalAssistantEntry() {
     } finally {
       setBusy(false)
     }
+  }
+
+  function openHistory() {
+    const target = assistantTargetSpace()
+    if (!target) {
+      toast.error('No space is available for chat history')
+      return
+    }
+    navigate(spacePath(target, '/sessions'))
   }
 
   return (
@@ -112,6 +125,13 @@ function PersonalAssistantEntry() {
           <p className="text-[11px] text-muted-foreground mt-1.5">
             Opens your assistant's Chat and sends your question. Long-term changes always come back as proposals you approve.
           </p>
+          <button
+            type="button"
+            onClick={openHistory}
+            className="mt-2 inline-flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground underline-offset-4 hover:underline"
+          >
+            <Clock className="size-3.5" /> Chat history
+          </button>
         </div>
       </div>
     </Card>

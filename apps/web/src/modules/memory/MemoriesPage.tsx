@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Brain, FolderKanban, X } from 'lucide-react'
+import { SpaceLink as Link } from '../../core/spaceNav'
+import { Brain, FolderKanban, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { memoryApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -40,6 +41,9 @@ export default function MemoriesPage() {
 
   const [memories, setMemories] = useState<Memory[]>([])
   const [form, setForm]         = useState<MemoryForm>(EMPTY_FORM)
+  const [query, setQuery]       = useState('')
+  const [searchResults, setSearchResults] = useState<Memory[] | null>(null)
+  const [searching, setSearching] = useState(false)
 
   const load = useCallback(async () => {
     if (!activeSpaceId) {
@@ -57,8 +61,36 @@ export default function MemoriesPage() {
 
   useEffect(() => { load() }, [load])
 
+  const displayedMemories = searchResults ?? memories
+  const showingSearch = searchResults !== null
+
   function setField<K extends keyof MemoryForm>(k: K, v: MemoryForm[K]) {
     setForm(f => ({ ...f, [k]: v }))
+  }
+
+  async function runSearch() {
+    const q = query.trim()
+    if (!activeSpaceId) {
+      toast.error('Select an operational space before searching memory')
+      return
+    }
+    if (!q) {
+      setSearchResults(null)
+      return
+    }
+    setSearching(true)
+    try {
+      setSearchResults(await memoryApi.search({ query: q, limit: 50 }))
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  function clearSearch() {
+    setQuery('')
+    setSearchResults(null)
   }
 
   async function addMemory() {
@@ -150,10 +182,38 @@ export default function MemoriesPage() {
       </Card>
 
       <Card>
-        <CardTitle>Active Memories ({memories.length})</CardTitle>
-        {memories.length === 0
+        <div className="flex flex-col gap-3 mb-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <CardTitle>{showingSearch ? 'Search Results' : 'Active Memories'} ({displayedMemories.length})</CardTitle>
+          </div>
+          <form
+            className="flex gap-2 w-full lg:w-auto"
+            onSubmit={e => {
+              e.preventDefault()
+              void runSearch()
+            }}
+          >
+            <Input
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search memory…"
+              className="min-w-0 lg:w-72"
+            />
+            <Button type="submit" variant="outline" disabled={!activeSpaceId || searching}>
+              <Search className="size-4" /> Search
+            </Button>
+            {showingSearch && (
+              <Button type="button" variant="ghost" onClick={clearSearch}>
+                <X className="size-4" /> Clear
+              </Button>
+            )}
+          </form>
+        </div>
+        {displayedMemories.length === 0
           ? <p className="text-muted-foreground text-center py-10 text-sm">
-              {activeSpaceId ? 'No active memories.' : 'Select an operational space to browse memories.'}
+              {activeSpaceId
+                ? showingSearch ? 'No memories matched this search.' : 'No active memories.'
+                : 'Select an operational space to browse memories.'}
             </p>
           : (
             <Table>
@@ -166,13 +226,18 @@ export default function MemoriesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {memories.map(m => (
+                {displayedMemories.map(m => (
                   <TableRow key={m.id}>
-                    <TableCell className="max-w-[200px] truncate">{m.title}</TableCell>
+                    <TableCell className="max-w-[220px]">
+                      <Link to={`/memory/${m.id}`} className="font-medium text-accent-foreground hover:underline">
+                        {m.title || 'Untitled memory'}
+                      </Link>
+                      {m.content && <p className="text-xs text-muted-foreground truncate mt-0.5">{m.content}</p>}
+                    </TableCell>
                     <TableCell><Badge variant="secondary">{m.type}</Badge></TableCell>
                     <TableCell className="text-muted-foreground">{m.scope}</TableCell>
                     <TableCell><ScopeBadge visibility={m.visibility} /></TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{m.namespace}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">{m.namespace ?? '—'}</TableCell>
                     <TableCell className="text-muted-foreground">{m.importance.toFixed(1)}</TableCell>
                     <TableCell className="text-muted-foreground text-xs">{fmt(m.created_at)}</TableCell>
                     <TableCell>

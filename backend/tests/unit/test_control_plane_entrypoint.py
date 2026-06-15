@@ -28,10 +28,23 @@ def test_control_plane_is_in_every_compose_stack_and_depends_on_backend():
         assert "dockerfile: control-plane/Dockerfile" in control_plane
         assert "depends_on:\n      backend:\n        condition: service_healthy" in control_plane
         assert (
-            "LEGACY_PYTHON_API_BASE_URL=${LEGACY_PYTHON_API_BASE_URL:-http://backend:8000}"
+            "CONTROL_PLANE_PYTHON_API_BASE_URL=${CONTROL_PLANE_PYTHON_API_BASE_URL:-http://backend:8000}"
             in control_plane
         )
-        assert "CONTROL_PLANE_ENABLE_LEGACY_PROXY=${CONTROL_PLANE_ENABLE_LEGACY_PROXY:-true}" in control_plane
+        assert "CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY=${CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY:-true}" in control_plane
+        assert "CONTROL_PLANE_RUNS_AUTHORITY=${CONTROL_PLANE_RUNS_AUTHORITY:-python}" in control_plane
+        assert "CONTROL_PLANE_POLICY_AUTHORITY=${CONTROL_PLANE_POLICY_AUTHORITY:-python}" in control_plane
+        assert "CONTROL_PLANE_PROPOSALS_AUTHORITY=${CONTROL_PLANE_PROPOSALS_AUTHORITY:-python}" in control_plane
+        assert "CONTROL_PLANE_SESSIONS_AUTHORITY=${CONTROL_PLANE_SESSIONS_AUTHORITY:-python}" in control_plane
+        assert "CONTROL_PLANE_CHAT_TURN_AUTHORITY=${CONTROL_PLANE_CHAT_TURN_AUTHORITY:-python}" in control_plane
+        backend = _service_block(text, "backend")
+        assert "CONTROL_PLANE_RUNS_AUTHORITY=${CONTROL_PLANE_RUNS_AUTHORITY:-python}" in backend
+        assert "CONTROL_PLANE_POLICY_AUTHORITY=${CONTROL_PLANE_POLICY_AUTHORITY:-python}" in backend
+        assert "CONTROL_PLANE_PROPOSALS_AUTHORITY=${CONTROL_PLANE_PROPOSALS_AUTHORITY:-python}" in backend
+        # Stage 6 sessions slice: the Python guard reads this in the backend service too.
+        assert "CONTROL_PLANE_SESSIONS_AUTHORITY=${CONTROL_PLANE_SESSIONS_AUTHORITY:-python}" in backend
+        # Stage 6 chat-turn slice: the Python guard reads this in the backend service too.
+        assert "CONTROL_PLANE_CHAT_TURN_AUTHORITY=${CONTROL_PLANE_CHAT_TURN_AUTHORITY:-python}" in backend
 
 
 def test_frontend_routes_to_control_plane_in_dev_and_test():

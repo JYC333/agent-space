@@ -6,7 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 ItemT = TypeVar('ItemT')
 
 RuntimeHealthStatus = Literal["unknown", "ok", "warning", "error", "unimplemented", "disabled"]
-RuntimeQuotaStatus = Literal["unknown", "enough", "medium", "low", "exhausted"]
 
 
 class Page(BaseModel, Generic[ItemT]):
@@ -36,13 +35,12 @@ DEFAULT_MEMORY_POLICY: dict = {
 DEFAULT_RUNTIME_POLICY: dict = {
     "risk_level": "medium",  # low | medium | high | critical — controls sandbox level
     "max_run_time_seconds": 300,
-    # adapter_ids this agent may use; matches RuntimeAdapter.adapter_id or adapter_type
+    # adapter_type values this agent may use.
     # model_api (ADR 0010) is the in-process, provider-agnostic, no-tools LLM adapter:
     # it selects any configured ModelProvider + model (Anthropic included) and passes the
     # key via litellm parameter, never env. claude_code stays the CLI path for tool-using /
     # filesystem Claude work.
     "allowed_adapter_types": [
-        "echo",
         "capability",
         "model_api",
         "claude_code",
@@ -50,8 +48,8 @@ DEFAULT_RUNTIME_POLICY: dict = {
         "opencode",
         "gemini_cli",
     ],
-    # Used when no RuntimeAdapter FK and no explicit adapter_type on Run / runtime_config_json.
-    "default_adapter_type": "echo",
+    # Used when no explicit adapter_type is set on Run / runtime_config_json.
+    "default_adapter_type": "model_api",
 }
 
 
@@ -117,7 +115,6 @@ class AgentVersionOut(BaseModel):
     version_label: str
     model_provider_id: Optional[str]
     model_name: Optional[str]
-    runtime_adapter_id: Optional[str]
     system_prompt: Optional[str]
     model_config_json: dict
     runtime_config_json: dict
@@ -150,7 +147,6 @@ class AgentVersionCreate(BaseModel):
     version_label: Optional[str] = None
     model_provider_id: Optional[str] = None
     model_name: Optional[str] = None
-    runtime_adapter_id: Optional[str] = None
     system_prompt: Optional[str] = None
     model_config_json: dict = Field(default_factory=lambda: dict(DEFAULT_MODEL_CONFIG))
     runtime_config_json: dict = Field(default_factory=lambda: dict(DEFAULT_RUNTIME_POLICY))
@@ -171,7 +167,6 @@ class AgentConfigProposalCreate(BaseModel):
     base_version_id: str
     model_provider_id: Optional[str] = None
     model_name: Optional[str] = None
-    runtime_adapter_id: Optional[str] = None
     system_prompt: Optional[str] = None
     model_config_json: Optional[dict] = None
     runtime_config_json: Optional[dict] = None
@@ -218,7 +213,6 @@ class AgentUpdate(BaseModel):
     default_model: Optional[str] = None
     model_provider_id: Optional[str] = None
     model_name: Optional[str] = None
-    runtime_adapter_id: Optional[str] = None
     system_prompt: Optional[str] = None
     # Execution config fields require an agent_config_update proposal when provided.
     model_config_json: Optional[dict] = None
@@ -238,8 +232,8 @@ class AgentConfigUpdate(BaseModel):
     then repoints Agent.current_version_id. The previous AgentVersion is never
     mutated. Only the fields below are editable; hard-safety snapshots
     (tool_policy_json, tool_permissions_json, capabilities_json, runtime_policy_json,
-    runtime_config_json, runtime_adapter_id) are copied verbatim and can never be
-    loosened here. Within memory/output policy the write-access and proposal-only
+    runtime_config_json) are copied verbatim and can never be loosened here.
+    Within memory/output policy the write-access and proposal-only
     guarantees are re-stamped from the source version so a frontend override cannot
     grant direct memory write or disable proposal-only outputs.
     """
@@ -279,6 +273,11 @@ class AgentOut(BaseModel):
     source_template_id: Optional[str] = None
     source_template_version_id: Optional[str] = None
     model: Optional[AgentModelSummary] = None
+    # Effective runtime adapter (from the current version's runtime policy) and
+    # whether that runtime needs a space model provider. CLI runtimes manage
+    # their own model/login, so they do not require a provider.
+    adapter_type: Optional[str] = None
+    requires_model_provider: bool = True
     system_prompt: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -435,8 +434,7 @@ class RunRequest(BaseModel):
     prompt: str
     workspace_id: Optional[str] = None
     workspace_path: Optional[str] = None
-    runtime_adapter_id: Optional[str] = None
-    adapter_type: str = "echo"
+    adapter_type: str = "model_api"
     # cli_default | cli_model_override | agent_space_provider
     model_selection_mode: str = "cli_default"
     model_override_json: Optional[dict] = None
@@ -1215,7 +1213,6 @@ class RunCreate(BaseModel):
     # Execution plane hints — used by the service to resolve and snapshot plane metadata.
     # source is NOT accepted from the client; it is always set to "managed" by the service.
     execution_plane_id: Optional[str] = None
-    runtime_adapter_id: Optional[str] = None
     model_provider_id: Optional[str] = None
     model: Optional[str] = None
 
@@ -1288,7 +1285,6 @@ class RunTraceAgentVersionOut(BaseModel):
     version_label: str
     model_provider_id: Optional[str] = None
     model_name: Optional[str] = None
-    runtime_adapter_id: Optional[str] = None
     system_prompt_present: bool = False
     system_prompt_sha256: Optional[str] = None
     model_config_json: dict = Field(default_factory=dict)
@@ -1303,18 +1299,6 @@ class RunTraceAgentVersionOut(BaseModel):
     created_at: datetime
     published_at: Optional[datetime] = None
     archived_at: Optional[datetime] = None
-
-
-class RunTraceRuntimeAdapterOut(BaseModel):
-    id: str
-    space_id: str
-    name: str
-    adapter_type: str
-    enabled: bool
-    provider_id: Optional[str] = None
-    credential_configured: bool = False
-    health_status: RuntimeHealthStatus = "unknown"
-    execution_plane_id: Optional[str] = None
 
 
 class RunTraceModelProviderOut(BaseModel):
@@ -1344,7 +1328,6 @@ class RunTraceContextSnapshotOut(BaseModel):
     policy_bundle_version: Optional[str] = None
     memory_digest_version: Optional[str] = None
     workspace_digest_version: Optional[str] = None
-    target_runtime_adapter_id: Optional[str] = None
     execution_plane_id: Optional[str] = None
     included_memory_refs_json: Optional[list] = None
     included_evidence_refs_json: Optional[list] = None
@@ -1395,89 +1378,6 @@ class RunStatusOut(BaseModel):
     error_message: Optional[str]
 
     model_config = {"from_attributes": True}
-
-
-# ---------------------------------------------------------------------------
-# Runtime Adapters
-# ---------------------------------------------------------------------------
-
-class RuntimeAdapterCreate(BaseModel):
-    adapter_type: str
-    name: str
-    enabled: bool = True
-    executable_path: Optional[str] = None
-    default_mode: str = "headless"
-    health_status: RuntimeHealthStatus = "unknown"
-    quota_status: RuntimeQuotaStatus = "unknown"
-    credential_id: Optional[str] = None
-    credential_profile_id: Optional[str] = None
-    provider_id: Optional[str] = None
-    config_json: dict = Field(default_factory=dict)
-    notes: Optional[str] = None
-
-
-class RuntimeAdapterUpdate(BaseModel):
-    name: Optional[str] = None
-    enabled: Optional[bool] = None
-    executable_path: Optional[str] = None
-    default_mode: Optional[str] = None
-    health_status: Optional[RuntimeHealthStatus] = None
-    quota_status: Optional[RuntimeQuotaStatus] = None
-    credential_id: Optional[str] = None
-    credential_profile_id: Optional[str] = None
-    provider_id: Optional[str] = None
-    config_json: Optional[dict] = None
-    notes: Optional[str] = None
-    permission_bypass: Optional[bool] = None
-
-
-class RuntimeAdapterOut(BaseModel):
-    id: str
-    space_id: str
-    adapter_type: str
-    name: str
-    enabled: bool
-    provider_id: Optional[str] = None
-    credential_id: Optional[str] = None
-    credential_profile_id: Optional[str] = None
-    config_json: dict
-    executable_path: Optional[str]
-    default_mode: str
-    health_status: RuntimeHealthStatus
-    quota_status: RuntimeQuotaStatus
-    notes: Optional[str]
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-class RuntimeAdapterStatusOut(BaseModel):
-    runtime_adapter_id: Optional[str] = None
-    adapter_type: str
-    implementation_status: str
-    configured_count: int = 0
-    configured: bool = False
-    enabled: bool = False
-    installed: bool = False
-    executable_path: Optional[str] = None
-    version: Optional[str] = None
-    credential_required: bool = False
-    credential_profile_id: Optional[str] = None
-    credential_ready: bool = False
-    model_provider_required: bool = False
-    model_provider_ready: bool = False
-    supports_headless: bool = False
-    supports_interactive: bool = False
-    supports_model_override: bool = False
-    supports_usage_probe: bool = False
-    usage_accuracy: str = "unknown"
-    minimum_sandbox_level: str = "none"
-    last_run_status: Optional[str] = None
-    last_error_code: Optional[str] = None
-    health_status: RuntimeHealthStatus = "unknown"
-    quota_status: RuntimeQuotaStatus = "unknown"
-    warnings: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1647,7 +1547,6 @@ class RunStepOut(BaseModel):
     step_type: str
     status: str
     title: Optional[str] = None
-    runtime_adapter_id: Optional[str] = None
     workspace_id: Optional[str] = None
     session_id: Optional[str] = None
     task_id: Optional[str] = None
@@ -1685,7 +1584,6 @@ class RunEventOut(BaseModel):
     summary: Optional[str] = None
     error_code: Optional[str] = None
     error_message: Optional[str] = None
-    runtime_adapter_id: Optional[str] = None
     workspace_id: Optional[str] = None
     artifact_id: Optional[str] = None
     proposal_id: Optional[str] = None
@@ -1701,7 +1599,6 @@ class RunTraceOut(BaseModel):
     run: RunOut
     agent: Optional[AgentOut] = None
     agent_version: Optional[RunTraceAgentVersionOut] = None
-    runtime_adapter: Optional[RunTraceRuntimeAdapterOut] = None
     model_provider: Optional[RunTraceModelProviderOut] = None
     context_snapshot: Optional[RunTraceContextSnapshotOut] = None
     steps: list[RunStepOut] = Field(default_factory=list)

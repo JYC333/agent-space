@@ -4,13 +4,13 @@ Invariants verified:
   1.  Unrelated SECRET_*, TOKEN_*, API_KEY_* env vars from the host are NOT
       inherited by CLI subprocesses.
   2.  Allowed host vars (PATH, LANG, LC_*, TERM, SHELL) ARE forwarded.
-  3.  Credential env vars (HOME, ANTHROPIC_API_KEY) supplied via the `env`
-      kwarg (CredentialBroker grant.env) ARE injected.
+  3.  Credential HOME supplied via the `env` kwarg
+      (CredentialBroker grant.env) IS injected.
   4.  Credential env vars NOT in `env` are NOT inherited from os.environ.
   5.  Process-group SIGKILL is sent on timeout (whole group, not just parent).
   6.  LANG_TOKEN / LANG_SECRET are NOT forwarded (LANG is exact match only).
   7.  Disallowed extras in the `env` kwarg are silently dropped.
-  8.  Only broker-documented keys (HOME, *_API_KEY) are accepted in extras.
+  8.  Only broker-documented keys (HOME) are accepted in extras.
 """
 
 from __future__ import annotations
@@ -70,12 +70,12 @@ def test_build_env_allows_term_and_shell(monkeypatch):
 
 
 def test_build_env_extra_injected_over_allowlist(monkeypatch):
-    """Extras from CredentialBroker grant.env (HOME, ANTHROPIC_API_KEY) are injected."""
+    """Extras from CredentialBroker grant.env inject HOME but not API keys."""
     monkeypatch.setenv("PATH", "/usr/bin")
     extra = {"HOME": "/tmp/run-home", "ANTHROPIC_API_KEY": "sk-test"}
     result = _build_subprocess_env(extra)
     assert result["HOME"] == "/tmp/run-home"
-    assert result["ANTHROPIC_API_KEY"] == "sk-test"
+    assert "ANTHROPIC_API_KEY" not in result
     assert result["PATH"] == "/usr/bin"  # still present
 
 
@@ -136,8 +136,8 @@ def test_executor_subprocess_cannot_see_host_api_key(tmp_path, monkeypatch):
     assert "NOT_SET" in result.stdout
 
 
-def test_executor_subprocess_receives_explicit_api_key(tmp_path):
-    """ANTHROPIC_API_KEY injected via env kwarg IS available to subprocess."""
+def test_executor_subprocess_drops_explicit_api_key(tmp_path):
+    """ANTHROPIC_API_KEY injected via env kwarg is not available to subprocess."""
     exe = LocalExecutor()
     result = exe.run_command(
         ["python3", "-c",
@@ -147,7 +147,8 @@ def test_executor_subprocess_receives_explicit_api_key(tmp_path):
         env={"ANTHROPIC_API_KEY": "grant-provided-key"},
     )
     assert result.returncode == 0
-    assert "grant-provided-key" in result.stdout
+    assert "grant-provided-key" not in result.stdout
+    assert "NOT_SET" in result.stdout
 
 
 def test_executor_subprocess_sees_path_from_host(tmp_path, monkeypatch):
@@ -252,23 +253,25 @@ def test_build_env_disallowed_extra_keys_are_dropped():
     """Keys not in _BROKER_INJECTED_EXTRA_KEYS are silently dropped from extra."""
     extra = {
         "HOME": "/run/home",             # allowed
-        "ANTHROPIC_API_KEY": "sk-test",  # allowed
+        "ANTHROPIC_API_KEY": "sk-test",  # NOT allowed for CLI auth
+        "OPENAI_API_KEY": "sk-openai",   # NOT allowed for codex_cli
         "SOME_SECRET": "leaked_value",   # NOT allowed
         "CUSTOM_VAR": "should_drop",     # NOT allowed
     }
     result = _build_subprocess_env(extra)
 
     assert result["HOME"] == "/run/home"
-    assert result["ANTHROPIC_API_KEY"] == "sk-test"
+    assert "ANTHROPIC_API_KEY" not in result
+    assert "OPENAI_API_KEY" not in result
     assert "SOME_SECRET" not in result
     assert "CUSTOM_VAR" not in result
 
 
-def test_build_env_gemini_api_key_allowed_in_extra():
-    """GEMINI_API_KEY (documented broker key) is allowed in extras."""
+def test_build_env_gemini_api_key_dropped_in_extra():
+    """GEMINI_API_KEY is not a CLI credential channel."""
     extra = {"GEMINI_API_KEY": "gemini-key"}
     result = _build_subprocess_env(extra)
-    assert result["GEMINI_API_KEY"] == "gemini-key"
+    assert "GEMINI_API_KEY" not in result
 
 
 def test_executor_subprocess_cannot_see_lang_token(tmp_path, monkeypatch):

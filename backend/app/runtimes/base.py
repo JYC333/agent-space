@@ -10,8 +10,11 @@ Adapters return ``RuntimeAdapterResult`` only — execution services map this
 onto ``Run`` rows, artifacts, and jobs without exposing adapter-specific types.
 
 Credential rule (M4):
-  Adapters must read API keys from ``ctx.resolved_credentials``, not from
-  ``ctx.adapter_config`` raw fields or environment variables.
+  Python-resolved API-key adapters must read API keys from
+  ``ctx.resolved_credentials``, not from ``ctx.adapter_config`` raw fields or
+  environment variables. Control-plane-brokered adapters must not read or
+  forward raw keys; they call the sanctioned internal control-plane channel
+  after the metadata-only policy gate.
 """
 
 from __future__ import annotations
@@ -28,8 +31,10 @@ from .ports import RuntimeEventSink, RuntimeProcessRegistry
 class RuntimeExecutionContext:
     """Narrow inputs passed into a runtime adapter execute call.
 
-    Credential rule: adapters must read API keys from ``resolved_credentials``,
-    not from ``adapter_config`` raw fields or environment variables.
+    Credential rule: Python-resolved API-key adapters must read API keys from
+    ``resolved_credentials``, not from ``adapter_config`` raw fields or
+    environment variables. Control-plane-brokered adapters must not read or
+    forward raw keys.
     ``adapter_config`` is pre-sanitized (secret fields stripped) before being
     passed to the adapter — it is safe for logging.
     """
@@ -56,7 +61,7 @@ class RuntimeExecutionContext:
     resolved_credentials: dict[str, Any] = field(default_factory=dict)
     # Serialised ContextPackage dict (ContextPackage.model_dump()) for CLI adapters.
     # CLI runtime adapters pass this to ContextCompiler to render CLAUDE.md / AGENTS.md.
-    # Non-CLI adapters (echo, capability) should ignore this field.
+    # Non-CLI adapters should ignore this field.
     context_package: dict[str, Any] = field(default_factory=dict)
     # Runtime policy values propagated from RuntimePolicyDecision so that
     # CredentialBroker and other execution infrastructure receive the real
@@ -70,8 +75,6 @@ class RuntimeExecutionContext:
     # durable audit events (CliCredentialEvent) inline.  Non-CLI adapters ignore this.
     # Use Any to avoid circular imports; callers pass an SQLAlchemy Session.
     db: Any | None = None
-    # Runtime adapter DB row id for audit linkage (passed from resolved adapter row).
-    runtime_adapter_id: str | None = None
     # Runtime ports injected by the runs-owned composition root
     # (app.runs.execution builds app.runs.runtime_bridge implementations).
     # Adapters emit run evidence and register subprocess handles only through
@@ -111,7 +114,7 @@ class BaseRuntimeAdapter(ABC):
 
     Credential paths — two mutually exclusive patterns:
 
-    **api_key_runtime** (e.g. ``capability``, ``echo`` adapters):
+    **api_key_runtime** (e.g. ``model_api``):
       The execution service resolves credentials from a ``Credential`` DB row
       via ``runtimes.credentials.resolve_runtime_credentials()`` and passes the
       decrypted API key through ``ctx.resolved_credentials["api_key"]``.
@@ -121,12 +124,15 @@ class BaseRuntimeAdapter(ABC):
     **cli_login_state_runtime** (e.g. ``claude_code``, ``codex_cli`` adapters):
       The ``CliRuntimeAdapter`` subclass calls
       ``CredentialBroker.grant_for_run()`` to obtain a per-run temp HOME
-      directory with the CLI login state symlinked inside it.  If the profile
-      contains an ``api_key.txt``, the env var (e.g. ``ANTHROPIC_API_KEY``) is
-      injected via ``CredentialGrant.env`` into the subprocess only — it is
-      never placed in ``ctx.resolved_credentials`` and never inherited from the
-      host environment. CLI runtimes fail with
+      directory with the CLI login state symlinked inside it. CLI runtimes fail with
       ``runtime_credential_profile_required`` when no explicit profile exists.
+
+    **control_plane_brokered_api_key_runtime** (e.g. ``ts_agent_host``):
+      The execution service enforces the same metadata-only
+      ``runtime.use_credential`` policy gate, but does not place the decrypted
+      key in ``ctx.resolved_credentials``. The adapter calls the internal
+      control-plane runtime-host endpoint, where provider-key release happens
+      through the provider credential broker.
     """
 
     adapter_type: str
@@ -144,7 +150,7 @@ class BaseRuntimeAdapter(ABC):
     # Declare whether this adapter authenticates via CredentialBroker CLI
     # login-state grants (True) rather than ModelProvider API keys (False).
     # Used by automation preflight to skip the CLI credential-profile check for
-    # API-key-based adapters (echo, capability) that have no login state.
+    # adapters that have no CLI login state.
     uses_cli_credentials: bool = False
 
     # Model config consumption metadata (used by Run API resolved_model summary).
@@ -158,6 +164,7 @@ class BaseRuntimeAdapter(ABC):
     def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
         """Run the adapter; must not mutate ORM rows directly.
 
-        Read credentials from ``ctx.resolved_credentials["api_key"]``.
+        Read credentials from ``ctx.resolved_credentials["api_key"]`` only for
+        Python-resolved API-key adapters.
         Read non-secret config (model, max_tokens, etc.) from ``ctx.adapter_config``.
         """

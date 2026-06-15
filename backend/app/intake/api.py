@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_identity
 from ..db import get_db
-from ..policy import PolicyCheckRequest, PolicyGateway
+from ..policy import PolicyCheckRequest, get_policy_port
 from ..schemas import Page
 from ..activity import (
     InputSummaryProviderMissingError,
@@ -65,7 +65,7 @@ def _enforce(
     resource_id: str | None = None,
     metadata: dict | None = None,
 ) -> None:
-    PolicyGateway(db).enforce(
+    get_policy_port(db).enforce(
         PolicyCheckRequest(
             action=action,
             actor_type="user",

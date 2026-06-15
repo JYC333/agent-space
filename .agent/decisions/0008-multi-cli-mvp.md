@@ -41,7 +41,7 @@ Runtime Adapters are adapters to the core, not the foundation.
 | Layer | What it is | Examples |
 |---|---|---|
 | Agent (product layer) | Configured actor with policy, memory, delegation rules | system.coding-agent |
-| Runtime Adapter | Execution backend selected for a run | claude_code, codex_cli, echo |
+| Runtime Adapter | Execution backend selected for a run | claude_code, codex_cli, capability, model_api |
 | Model Provider | LLM API (future optional) | Anthropic, OpenAI, Google |
 
 ## Model Selection Modes
@@ -64,7 +64,7 @@ override, credential profile id, and health/usage status. There is no separate
 configured-adapter product model.
 
 Implemented local CLI specs execute through `GenericCliRuntimeAdapter`.
-Native adapters are `echo` and `capability`.
+The native adapter is `capability`.
 
 ## Usage Tracking
 

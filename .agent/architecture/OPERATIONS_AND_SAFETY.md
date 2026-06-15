@@ -41,6 +41,9 @@ BACKUP_ON_STARTUP=true
 ```
 
 Without `BACKUP_ENABLED=true`, no automatic backups are created. For dogfooding, this setting is required.
+`BACKUP_ON_STARTUP=true` triggers the first automatic backup in the background
+after backend startup; readiness and dependent services must not wait for the
+archive to finish.
 
 **What is backed up:**
 

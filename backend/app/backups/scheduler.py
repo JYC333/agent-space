@@ -10,6 +10,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from ..scheduler import ScheduledTask
+
 if TYPE_CHECKING:
     from .service import BackupService
 
@@ -53,6 +55,26 @@ class BackupScheduler:
         async with self._lock:
             path = await asyncio.to_thread(self.service.create_backup, "manual")
             return path
+
+
+def make_backup_scheduled_task(
+    scheduler: BackupScheduler,
+    *,
+    interval_hours: int,
+    run_on_start: bool,
+) -> ScheduledTask:
+    """Build the periodic backup task.
+
+    Startup-triggered backups are intentionally non-blocking: readiness should
+    not wait for pg_dump or archive compression to finish.
+    """
+    return ScheduledTask(
+        name="backup_scheduler",
+        interval_seconds=interval_hours * 3600,
+        run=scheduler.run_scheduled_backup,
+        run_on_start=run_on_start,
+        await_run_on_start=False,
+    )
 
 
 def get_scheduler() -> BackupScheduler | None:

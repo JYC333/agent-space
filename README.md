@@ -61,7 +61,7 @@ The local PostgreSQL containers use stable names: `agent-space-dev-postgres`,
 #    ~/.aspace/dev/.env holds infra-only settings (e.g. POSTGRES_PASSWORD for --prod).
 ```
 
-`start.sh` builds the sandbox image on first run, then starts frontend + control-plane + backend + deployer via Docker Compose. Data lives under **`~/.aspace/<mode>/`** (default mode `dev`). Browser API traffic goes through the control-plane service; Python remains the authority behind the legacy proxy.
+`start.sh` builds the sandbox image on first run, then starts frontend + control-plane + backend + deployer via Docker Compose. Data lives under **`~/.aspace/<mode>/`** (default mode `dev`). Browser API traffic goes through the control-plane service; Python remains the authority behind the fallback proxy for unowned routes.
 
 ```
 Web UI:           http://localhost:3000   # Docker maps container 5173 → host 3000 (dev compose)

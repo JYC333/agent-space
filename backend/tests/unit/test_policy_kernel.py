@@ -228,10 +228,10 @@ class TestPolicyMetadataSanitizer:
         assert sanitize_policy_metadata(None) is None
 
     def test_safe_metadata_passes_through(self):
-        data = {"ops_count": 3, "adapter_type": "echo", "run_id": "abc123"}
+        data = {"ops_count": 3, "adapter_type": "model_api", "run_id": "abc123"}
         result = sanitize_policy_metadata(data)
         assert result["ops_count"] == 3
-        assert result["adapter_type"] == "echo"
+        assert result["adapter_type"] == "model_api"
 
     def test_password_key_is_redacted(self):
         data = {"password": "hunter2", "user": "alice"}

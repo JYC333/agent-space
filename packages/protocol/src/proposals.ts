@@ -1,0 +1,177 @@
+/**
+ * Proposal review contracts.
+ *
+ * These schemas describe the wire DTOs for the existing proposal review API and
+ * the internal Python proposal ports used while per-proposal business appliers
+ * are split by migration slice. Schemas only: route ownership and persistence
+ * authority live in the services that register the routes.
+ */
+
+import { z } from "zod";
+import { IdSchema, ISODateTimeSchema, SecretResponseGuards } from "./common.js";
+
+const JsonObjectSchema = z.record(z.unknown());
+
+export const ProposalOutSchema = z
+  .object({
+    id: IdSchema,
+    space_id: IdSchema,
+    user_id: z.string(),
+    workspace_id: IdSchema.nullish(),
+    source_session_id: IdSchema.nullish(),
+    source_task_id: IdSchema.nullish(),
+    source_run_id: IdSchema.nullish(),
+    created_by_run_id: IdSchema.nullish(),
+    proposal_type: z.string(),
+    target_scope: z.string(),
+    target_namespace: z.string(),
+    memory_type: z.string(),
+    proposed_title: z.string(),
+    proposed_content: z.string(),
+    rationale: z.string(),
+    status: z.string(),
+    risk_level: z.string(),
+    urgency: z.string(),
+    visibility: z.string(),
+    preview: z.boolean(),
+    review_deadline: ISODateTimeSchema.nullish(),
+    expires_at: ISODateTimeSchema.nullish(),
+    expired: z.boolean(),
+    created_at: ISODateTimeSchema,
+    decided_at: ISODateTimeSchema.nullish(),
+    resulting_memory_id: IdSchema.nullish(),
+    owner_user_id: IdSchema.nullish(),
+    subject_user_id: IdSchema.nullish(),
+    sensitivity_level: z.string().nullish(),
+    selected_user_ids: z.array(z.unknown()).nullish(),
+    provenance_entries: z.array(JsonObjectSchema).nullish(),
+    source_activity_id: IdSchema.nullish(),
+    grant_id: IdSchema.nullish(),
+    required_approver_user_id: IdSchema.nullish(),
+    requires_approval_type: z.string().nullish(),
+    egress_approval_status: z.string().nullish(),
+    egress_approval_id: IdSchema.nullish(),
+    project_id: IdSchema.nullish(),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProposalOut = z.infer<typeof ProposalOutSchema>;
+
+export const ProposalPageSchema = z
+  .object({
+    items: z.array(ProposalOutSchema),
+    total: z.number().int().nonnegative(),
+    limit: z.number().int().nonnegative(),
+    offset: z.number().int().nonnegative(),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProposalPage = z.infer<typeof ProposalPageSchema>;
+
+export const ProposalAcceptResultTypeSchema = z.enum([
+  "memory_entry",
+  "code_patch_apply",
+  "policy_version",
+  "egress_review",
+  "follow_up_task",
+  "agent_version",
+  "capability_overlay",
+  "knowledge_item",
+  "knowledge_relation",
+]);
+export type ProposalAcceptResultType = z.infer<
+  typeof ProposalAcceptResultTypeSchema
+>;
+
+export const ProposalAcceptOutSchema = z
+  .object({
+    proposal: ProposalOutSchema,
+    result_type: ProposalAcceptResultTypeSchema,
+    result: JsonObjectSchema,
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProposalAcceptOut = z.infer<typeof ProposalAcceptOutSchema>;
+
+export const ProposalApprovalOutSchema = z
+  .object({
+    id: IdSchema,
+    proposal_id: IdSchema,
+    approval_type: z.string(),
+    approver_user_id: IdSchema,
+    grant_id: IdSchema.nullish(),
+    target_space_id: IdSchema.nullish(),
+    status: z.string(),
+    metadata_json: JsonObjectSchema.nullish(),
+    created_at: ISODateTimeSchema,
+    revoked_at: ISODateTimeSchema.nullish(),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProposalApprovalOut = z.infer<typeof ProposalApprovalOutSchema>;
+
+export const ProposalPythonPortOperationSchema = z.enum([
+  "proposal.accept",
+  "proposal.reject",
+  "proposal.egress_approval",
+  "memory.apply_gate",
+]);
+export type ProposalPythonPortOperation = z.infer<
+  typeof ProposalPythonPortOperationSchema
+>;
+
+export const ProposalPythonPortDescriptorSchema = z
+  .object({
+    operation: ProposalPythonPortOperationSchema,
+    owner: z.literal("proposals"),
+    implemented: z.boolean(),
+    auth: z.literal("internal_service_token"),
+    writes: z.array(z.string()).default([]),
+    notes: z.string().nullish(),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProposalPythonPortDescriptor = z.infer<
+  typeof ProposalPythonPortDescriptorSchema
+>;
+
+export const ProposalPythonPortManifestResponseSchema = z
+  .object({
+    service: z.literal("python_proposals_context_ports"),
+    ports: z.array(ProposalPythonPortDescriptorSchema),
+    generated_at: ISODateTimeSchema,
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProposalPythonPortManifestResponse = z.infer<
+  typeof ProposalPythonPortManifestResponseSchema
+>;
+
+export const ProposalAcceptDispatchRequestSchema = z.object({
+  proposal_id: IdSchema,
+  space_id: IdSchema,
+  user_id: IdSchema,
+  confirm_incomplete_patch: z.boolean().default(false),
+});
+export type ProposalAcceptDispatchRequest = z.infer<
+  typeof ProposalAcceptDispatchRequestSchema
+>;
+
+export const ProposalRejectDispatchRequestSchema = z.object({
+  proposal_id: IdSchema,
+  space_id: IdSchema,
+  user_id: IdSchema,
+});
+export type ProposalRejectDispatchRequest = z.infer<
+  typeof ProposalRejectDispatchRequestSchema
+>;
+
+export const ProposalEgressApprovalDispatchRequestSchema = z.object({
+  proposal_id: IdSchema,
+  space_id: IdSchema,
+  user_id: IdSchema,
+  grant_id: IdSchema.nullish(),
+});
+export type ProposalEgressApprovalDispatchRequest = z.infer<
+  typeof ProposalEgressApprovalDispatchRequestSchema
+>;

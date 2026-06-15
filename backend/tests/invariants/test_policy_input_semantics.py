@@ -363,7 +363,7 @@ class TestExistingPathsUnaffected:
                 },
                 metadata_json={
                     "resolution_source": "run.model_provider_id",
-                    "adapter_type": "echo",
+                    "adapter_type": "model_api",
                 },
             ),
         )

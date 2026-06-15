@@ -46,6 +46,8 @@ const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
   waiting_for_review: 'warning',
   archived:   'muted',
   superseded: 'muted',
+  inactive:   'muted',
+  disabled:   'destructive',
 }
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {

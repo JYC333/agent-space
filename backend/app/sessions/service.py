@@ -92,7 +92,7 @@ class SessionService:
         space_id: str,
         user_id: str,
     ) -> Message | None:
-        session = self.get_session(session_id)
+        session = self.get_session(session_id, space_id=space_id, user_id=user_id)
         if not session:
             return None
 

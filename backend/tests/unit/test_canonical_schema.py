@@ -69,7 +69,6 @@ REQUIRED_TABLES = {
     "sessions",
     "messages",
     "model_providers",
-    "runtime_adapters",
     "credentials",
     "source_pointers",
     "context_snapshots",
@@ -178,7 +177,6 @@ def test_canonical_initial_migration_builds_baseline_schema_from_empty_database(
         "parent_run_id",
         "workspace_id",
         "model_provider_id",
-        "runtime_adapter_id",
         "error_message",
         "error_json",
         "output_json",
@@ -333,13 +331,6 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
             provider_type="test",
             credential_id=credential.id,
         )
-        adapter = models.RuntimeAdapter(
-            id="adapter-1",
-            space_id=space.id,
-            name="Echo Adapter",
-            adapter_type="echo",
-            provider_id=provider.id,
-        )
         agent = models.Agent(id="agent-1", space_id=space.id, owner_user_id=user.id, name="Agent")
         version = models.AgentVersion(
             id="version-1",
@@ -347,7 +338,6 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
             space_id=space.id,
             version_label="v1",
             model_provider_id=provider.id,
-            runtime_adapter_id=adapter.id,
             system_prompt="You are useful.",
         )
         workspace = models.Workspace(id="workspace-1", space_id=space.id, name="Workspace")
@@ -363,7 +353,6 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
             session_id=session.id,
             instructed_by_user_id=user.id,
             model_provider_id=provider.id,
-            runtime_adapter_id=adapter.id,
             run_type="agent",
             trigger_origin="manual",
             prompt="hello",
@@ -437,9 +426,6 @@ def test_canonical_relationships_can_be_persisted_after_migration(canonical_conn
         db.commit()
 
         db.add(provider)
-        db.commit()
-
-        db.add(adapter)
         db.commit()
 
         db.add(agent)
@@ -1216,28 +1202,6 @@ def test_execution_planes_check_constraints_exist(canonical_engine):
     assert "ck_execution_planes_credential_mode" in ddl
 
 
-def test_runtime_adapters_extended_with_execution_plane(canonical_engine):
-    """runtime_adapters has execution_plane_id FK to execution_planes and capability_support_json column."""
-    inspector = inspect(canonical_engine)
-    col_names = {c["name"] for c in inspector.get_columns("runtime_adapters")}
-    assert "execution_plane_id" in col_names, "runtime_adapters.execution_plane_id missing"
-    assert "capability_support_json" in col_names, "runtime_adapters.capability_support_json missing"
-    assert "credential_profile_id" in col_names
-    assert "quota_status" in col_names
-    fks = _foreign_keys(inspector, "runtime_adapters")
-    assert ("execution_plane_id", "execution_planes", "id") in fks
-
-
-def test_runtime_adapter_health_and_quota_constraints(canonical_engine):
-    """runtime_adapters validates health_status and quota_status enum values."""
-    from sqlalchemy import text as sa_text
-
-    with canonical_engine.connect() as conn:
-        ddl = _pg_constraints_info(conn, "runtime_adapters")
-    assert "ck_runtime_adapters_health_status" in ddl
-    assert "ck_runtime_adapters_quota_status" in ddl
-
-
 def test_runs_extended_with_execution_plane_and_externality_fields(canonical_engine):
     """runs has execution_plane_id FK and all externality/observability snapshot fields."""
     inspector = inspect(canonical_engine)
@@ -1272,7 +1236,6 @@ def test_context_snapshots_has_runtime_facing_fields(canonical_engine):
     inspector = inspect(canonical_engine)
     col_names = {c["name"] for c in inspector.get_columns("context_snapshots")}
     required = {
-        "target_runtime_adapter_id",
         "execution_plane_id",
         "included_memory_refs_json",
         "included_evidence_refs_json",
@@ -1285,19 +1248,16 @@ def test_context_snapshots_has_runtime_facing_fields(canonical_engine):
     }
     assert required.issubset(col_names), f"Missing context_snapshot columns: {required - col_names}"
     fks = _foreign_keys(inspector, "context_snapshots")
-    assert ("target_runtime_adapter_id", "runtime_adapters", "id") in fks
     assert ("execution_plane_id", "execution_planes", "id") in fks
 
 
 def test_artifacts_extended_with_source_plane_fields(canonical_engine):
-    """artifacts has source_runtime_adapter_id and source_execution_plane_id with FKs, plus trust_level."""
+    """artifacts has source_execution_plane_id with FK, plus trust_level."""
     inspector = inspect(canonical_engine)
     col_names = {c["name"] for c in inspector.get_columns("artifacts")}
-    assert "source_runtime_adapter_id" in col_names, "artifacts.source_runtime_adapter_id missing"
     assert "source_execution_plane_id" in col_names, "artifacts.source_execution_plane_id missing"
     assert "trust_level" in col_names, "artifacts.trust_level missing"
     fks = _foreign_keys(inspector, "artifacts")
-    assert ("source_runtime_adapter_id", "runtime_adapters", "id") in fks
     assert ("source_execution_plane_id", "execution_planes", "id") in fks
 
 
@@ -1327,7 +1287,7 @@ def test_workspace_profiles_required_columns_exist(canonical_engine):
     col_names = {c["name"] for c in inspector.get_columns("workspace_profiles")}
     required = {
         "id", "space_id", "workspace_id",
-        "validation_recipe_id", "preferred_runtime_adapter_id",
+        "validation_recipe_id",
         "cloud_allowed", "max_data_exposure_level", "min_observability_level",
         "created_at", "updated_at",
     }
@@ -1335,13 +1295,12 @@ def test_workspace_profiles_required_columns_exist(canonical_engine):
 
 
 def test_workspace_profiles_fks_exist(canonical_engine):
-    """workspace_profiles has FKs to spaces, workspaces, validation_recipes, and runtime_adapters."""
+    """workspace_profiles has FKs to spaces, workspaces, and validation_recipes."""
     inspector = inspect(canonical_engine)
     fks = _foreign_keys(inspector, "workspace_profiles")
     assert ("space_id", "spaces", "id") in fks
     assert ("workspace_id", "workspaces", "id") in fks
     assert ("validation_recipe_id", "validation_recipes", "id") in fks
-    assert ("preferred_runtime_adapter_id", "runtime_adapters", "id") in fks
 
 
 def test_workspace_profiles_unique_workspace_constraint_exists(canonical_engine):
@@ -1354,11 +1313,11 @@ def test_workspace_profiles_unique_workspace_constraint_exists(canonical_engine)
 
 
 def test_external_run_records_required_columns_and_fks_exist(canonical_engine):
-    """external_run_records has required columns and FKs to runs, runtime_adapters, and execution_planes."""
+    """external_run_records has required columns and FKs to runs and execution_planes."""
     inspector = inspect(canonical_engine)
     col_names = {c["name"] for c in inspector.get_columns("external_run_records")}
     required = {
-        "id", "space_id", "run_id", "vendor", "runtime_adapter_id",
+        "id", "space_id", "run_id", "vendor", "runtime_adapter_type",
         "execution_plane_id", "observability_level", "data_exposure_level",
         "status", "created_at",
     }
@@ -1366,7 +1325,6 @@ def test_external_run_records_required_columns_and_fks_exist(canonical_engine):
     fks = _foreign_keys(inspector, "external_run_records")
     assert ("space_id", "spaces", "id") in fks
     assert ("run_id", "runs", "id") in fks
-    assert ("runtime_adapter_id", "runtime_adapters", "id") in fks
     assert ("execution_plane_id", "execution_planes", "id") in fks
 
 
@@ -1404,11 +1362,11 @@ def test_run_reflections_does_not_have_mutation_columns(canonical_engine):
 
 
 def test_runtime_tool_bindings_required_columns_and_fks_exist(canonical_engine):
-    """runtime_tool_bindings has required columns and FKs to spaces, runtime_adapters, and execution_planes."""
+    """runtime_tool_bindings has required columns and FKs to spaces and execution_planes."""
     inspector = inspect(canonical_engine)
     col_names = {c["name"] for c in inspector.get_columns("runtime_tool_bindings")}
     required = {
-        "id", "space_id", "workspace_id", "agent_id", "runtime_adapter_id",
+        "id", "space_id", "workspace_id", "agent_id", "runtime_adapter_type",
         "execution_plane_id", "external_type", "external_ref", "display_name",
         "data_exposure_level", "observability_level", "side_effect_level",
         "approval_required", "enabled", "created_at", "updated_at",
@@ -1418,7 +1376,6 @@ def test_runtime_tool_bindings_required_columns_and_fks_exist(canonical_engine):
     assert ("space_id", "spaces", "id") in fks
     assert ("workspace_id", "workspaces", "id") in fks
     assert ("agent_id", "agents", "id") in fks
-    assert ("runtime_adapter_id", "runtime_adapters", "id") in fks
     assert ("execution_plane_id", "execution_planes", "id") in fks
 
 
@@ -1505,7 +1462,7 @@ def test_default_execution_planes_are_seeded(canonical_conn):
 
 
 def test_control_plane_orm_relationships_navigate_correctly(canonical_conn):
-    """ORM relationships for Space→ExecutionPlane, RuntimeAdapter→ExecutionPlane, Run→ExecutionPlane,
+    """ORM relationships for Space→ExecutionPlane, Run→ExecutionPlane,
     Workspace→WorkspaceProfile, Run→ExternalRunRecord, and Run→RunReflection are wired correctly."""
     Session = sessionmaker(bind=canonical_conn, join_transaction_mode="create_savepoint")
     db = Session()
@@ -1545,22 +1502,13 @@ def test_control_plane_orm_relationships_navigate_correctly(canonical_conn):
             id="cp-prov-1", space_id=space.id, name="P",
             provider_type="test", credential_id=credential.id,
         )
-        adapter = models.RuntimeAdapter(
-            id="cp-adapter-1", space_id=space.id, name="Adapter",
-            adapter_type="echo", provider_id=provider.id,
-            execution_plane_id=plane.id,
-        )
-        db.add_all([credential, provider, adapter])
+        db.add_all([credential, provider])
         db.commit()
-
-        # RuntimeAdapter → ExecutionPlane
-        loaded_adapter = db.get(models.RuntimeAdapter, adapter.id)
-        assert loaded_adapter.execution_plane.id == plane.id
 
         agent = models.Agent(id="cp-agent-1", space_id=space.id, owner_user_id=user.id, name="A")
         version = models.AgentVersion(
             id="cp-ver-1", agent_id=agent.id, space_id=space.id, version_label="v1",
-            model_provider_id=provider.id, runtime_adapter_id=adapter.id,
+            model_provider_id=provider.id,
             system_prompt="test",
         )
         workspace = models.Workspace(id="cp-ws-1", space_id=space.id, name="WS", created_by_user_id=user.id)
@@ -1576,7 +1524,7 @@ def test_control_plane_orm_relationships_navigate_correctly(canonical_conn):
             id="cp-run-1", space_id=space.id, agent_id=agent.id,
             agent_version_id=version.id, context_snapshot_id=snapshot.id,
             workspace_id=workspace.id, instructed_by_user_id=user.id,
-            model_provider_id=provider.id, runtime_adapter_id=adapter.id,
+            model_provider_id=provider.id,
             execution_plane_id=plane.id,
             run_type="agent", trigger_origin="manual", prompt="test",
             mode="dry_run", status="queued",
@@ -1602,7 +1550,7 @@ def test_control_plane_orm_relationships_navigate_correctly(canonical_conn):
         # Run → ExternalRunRecord
         ext = models.ExternalRunRecord(
             id="cp-ext-1", space_id=space.id, run_id=run.id,
-            vendor="manual", execution_plane_id=plane.id,
+            vendor="manual", runtime_adapter_type="model_api", execution_plane_id=plane.id,
         )
         db.add(ext)
         db.commit()

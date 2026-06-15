@@ -15,10 +15,22 @@ function tsFiles(dir: string): string[] {
 /**
  * Bare module specifiers the control plane is allowed to import. Relative imports
  * (`./`, `../`), `node:` builtins, and `@agent-space/protocol` are allowed.
- * Anything else (frontend, Python backend, database/ORM packages, migration
- * tooling, sandbox/deployer internals, local-host) must not appear.
+ * Anything else (frontend, Python backend, ORM packages, migration tooling,
+ * sandbox/deployer internals, local-host) must not appear.
  */
 const ALLOWED_BARE = new Set(["fastify", "undici", "yaml", "@agent-space/protocol"]);
+
+/**
+ * Packages allowed only from specific files. `pg` is the providers/credentials
+ * DB driver (a raw client, deliberately not an ORM) and must stay confined to
+ * the single shared pool module so database access cannot spread
+ * module-by-module without showing up here. `node-pty` is the CLI login PTY
+ * host and must stay confined to the login engine.
+ */
+const ALLOWED_BARE_BY_FILE = new Map<string, string>([
+  ["pg", join("src", "db", "pool.ts")],
+  ["node-pty", join("src", "modules", "providers", "cliLoginEngine.ts")],
+]);
 
 /** Substrings that must never appear in any import specifier. */
 const FORBIDDEN_SUBSTRINGS = [
@@ -51,7 +63,7 @@ const FORBIDDEN_SUBSTRINGS = [
 const importRe = /\b(?:from|import)\s+["']([^"']+)["']/g;
 
 describe("control-plane import boundaries", () => {
-  it("imports only fastify, undici, @agent-space/protocol, node: builtins and relative modules", () => {
+  it("imports only approved runtime packages, node: builtins and relative modules", () => {
     const offenders: string[] = [];
     for (const file of tsFiles(srcDir)) {
       const text = readFileSync(file, "utf8");
@@ -65,6 +77,13 @@ describe("control-plane import boundaries", () => {
         const pkg = spec.startsWith("@")
           ? spec.split("/").slice(0, 2).join("/")
           : spec.split("/")[0];
+        const scopedAllowance = ALLOWED_BARE_BY_FILE.get(pkg);
+        if (scopedAllowance) {
+          if (!file.endsWith(scopedAllowance)) {
+            offenders.push(`${file}: ${spec} (allowed only from ${scopedAllowance})`);
+          }
+          continue;
+        }
         if (!ALLOWED_BARE.has(pkg)) offenders.push(`${file}: ${spec}`);
       }
     }

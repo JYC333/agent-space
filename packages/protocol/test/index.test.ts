@@ -7,7 +7,11 @@ import {
   AnyEventSchema,
   CommandType,
   EventType,
+  ModelProviderDTOSchema,
+  ProviderChatRequestSchema,
+  isCredentialChannel,
   type ActivityDTO,
+  type ModelProviderDTO,
   type StartRunCommand,
   type RunStatusChangedEvent,
 } from "../src/index";
@@ -35,6 +39,24 @@ describe("index smoke import", () => {
     expect(protocol.AnyCommandSchema).toBeDefined();
     expect(protocol.EventEnvelopeSchema).toBeDefined();
     expect(protocol.AnyEventSchema).toBeDefined();
+
+    // Provider + credential-channel contracts
+    expect(protocol.ModelProviderDTOSchema).toBeDefined();
+    expect(protocol.ModelProviderCreateRequestSchema).toBeDefined();
+    expect(protocol.ProviderChatRequestSchema).toBeDefined();
+    expect(protocol.CredentialChannelMetadataSchema).toBeDefined();
+
+    expect(protocol.ProviderCredentialsAuthoritySchema).toBeDefined();
+    expect(protocol.RuntimeCredentialResolveRequestSchema).toBeDefined();
+    expect(protocol.RuntimeHostExecuteRequestSchema).toBeDefined();
+    expect(protocol.RuntimeHostExecuteResponseSchema).toBeDefined();
+    expect(protocol.ProposalOutSchema).toBeDefined();
+    expect(protocol.ProposalAcceptOutSchema).toBeDefined();
+    expect(protocol.ProposalPythonPortManifestResponseSchema).toBeDefined();
+    expect(protocol.SessionOutSchema).toBeDefined();
+    expect(protocol.MessageOutSchema).toBeDefined();
+    expect(protocol.MemoryOutSchema).toBeDefined();
+    expect(protocol.Stage6PythonPortManifestResponseSchema).toBeDefined();
   });
 
   it("exposes stable value sets", () => {
@@ -42,6 +64,7 @@ describe("index smoke import", () => {
     expect(VISIBILITY_VALUES).toContain("space_shared");
     expect(CommandType.StartRun).toBe("run.start");
     expect(EventType.RunStatusChanged).toBe("run.status_changed");
+    expect(isCredentialChannel("model_provider_api_key")).toBe(true);
   });
 
   it("exposes the discriminated unions", () => {
@@ -54,7 +77,11 @@ describe("type-level contracts (typecheck test)", () => {
   it("infers DTO and envelope types from schemas", () => {
     expectTypeOf<ActivityDTO>().toHaveProperty("space_id");
     expectTypeOf<ActivityDTO["space_id"]>().toEqualTypeOf<string>();
+    expectTypeOf<ModelProviderDTO>().toHaveProperty("has_api_key");
+    expectTypeOf<ModelProviderDTO["has_api_key"]>().toEqualTypeOf<boolean>();
     expectTypeOf<StartRunCommand["type"]>().toEqualTypeOf<"run.start">();
     expectTypeOf<RunStatusChangedEvent["type"]>().toEqualTypeOf<"run.status_changed">();
+    expect(ModelProviderDTOSchema).toBeDefined();
+    expect(ProviderChatRequestSchema).toBeDefined();
   });
 });

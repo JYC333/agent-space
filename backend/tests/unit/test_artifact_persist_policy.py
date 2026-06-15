@@ -180,7 +180,7 @@ class TestArtifactPersistDenyDurableAudit:
             run_id=str(run.id),
         )
 
-        with patch("app.runs.artifact_persistence.PolicyGateway") as MockGW:
+        with patch("app.runs.artifact_persistence.get_policy_port") as MockGW:
             MockGW.return_value.enforce.side_effect = exc
             with pytest.raises(PersonalMemoryEgressError):
                 ArtifactPersistenceService(db).persist_text_file(
@@ -203,7 +203,7 @@ class TestArtifactPersistDenyDurableAudit:
         run = _make_run(db)
         before = db.query(Artifact).filter(Artifact.run_id == run.id).count()
 
-        with patch("app.runs.artifact_persistence.PolicyGateway") as MockGW:
+        with patch("app.runs.artifact_persistence.get_policy_port") as MockGW:
             MockGW.return_value.enforce.side_effect = _blocked_exc(
                 run_id=str(run.id),
                 actor_id=str(run.id),
@@ -222,7 +222,7 @@ class TestArtifactPersistDenyDurableAudit:
         monkeypatch.setattr(settings, "artifact_storage_root", str(art_root))
         run = _make_run(db)
 
-        with patch("app.runs.artifact_persistence.PolicyGateway") as MockGW:
+        with patch("app.runs.artifact_persistence.get_policy_port") as MockGW:
             MockGW.return_value.enforce.side_effect = _blocked_exc(
                 run_id=str(run.id),
                 actor_id=str(run.id),
@@ -239,7 +239,7 @@ class TestArtifactPersistDenyDurableAudit:
         monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
         run = _make_run(db)
 
-        with patch("app.runs.artifact_persistence.PolicyGateway") as MockGW:
+        with patch("app.runs.artifact_persistence.get_policy_port") as MockGW:
             MockGW.return_value.enforce.side_effect = _blocked_exc(
                 run_id=str(run.id),
                 actor_id=str(run.id),
@@ -255,7 +255,7 @@ class TestArtifactPersistDenyDurableAudit:
         monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
         run = _make_run(db)
 
-        with patch("app.runs.artifact_persistence.PolicyGateway") as MockGW:
+        with patch("app.runs.artifact_persistence.get_policy_port") as MockGW:
             MockGW.return_value.enforce.side_effect = _blocked_exc(
                 requires_approval=True,
                 run_id=str(run.id),
@@ -301,7 +301,7 @@ class TestArtifactPersistAuditFailure:
         before = db.query(Artifact).filter(Artifact.run_id == run.id).count()
 
         with (
-            patch("app.runs.artifact_persistence.PolicyGateway") as gateway,
+            patch("app.runs.artifact_persistence.get_policy_port") as gateway,
             patch(
                 "app.runs.artifact_persistence.write_blocked_gate_audit",
                 side_effect=RuntimeError("audit down"),

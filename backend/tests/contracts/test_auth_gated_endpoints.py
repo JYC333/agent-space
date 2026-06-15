@@ -6,9 +6,6 @@ Covers:
 - POST /capabilities/reload        401 without auth, 200 with auth
 - GET  /jobs/handlers              401 without auth, 200 with auth
 - GET  /workspace-console/runtimes 401 without auth, 200 with auth
-- GET  /runtime-adapters/catalog       401 without auth, 200 with auth
-- GET  /runtime-adapters/detect        401 without auth, 200 with auth
-- GET  /runtime-adapters/{id}/detect   401 without auth, 200 with auth
 - GET  /providers/litellm-providers 401 without auth, 200 with auth
 - GET  /providers/catalog           401 without auth, 200 with auth
 """
@@ -98,47 +95,6 @@ class TestWorkspaceConsoleRuntimesAuth:
         )
         assert r.status_code == 200
         assert "runtimes" in r.json()
-
-
-# ===========================================================================
-# Runtime adapter catalog / detect
-# ===========================================================================
-
-class TestRuntimeAdaptersAuth:
-    def test_catalog_unauthenticated_returns_401(self, api_client):
-        r = api_client.get("/api/v1/runtime-adapters/catalog")
-        assert r.status_code == 401
-
-    def test_detect_all_unauthenticated_returns_401(self, api_client):
-        r = api_client.get("/api/v1/runtime-adapters/detect")
-        assert r.status_code == 401
-
-    def test_detect_one_unauthenticated_returns_401(self, api_client):
-        r = api_client.get("/api/v1/runtime-adapters/claude_code/detect")
-        assert r.status_code == 401
-
-    def test_catalog_authenticated_succeeds(self, api_client, db, cross_space_pair):
-        r = cross_space_pair["client_a"].get(
-            "/api/v1/runtime-adapters/catalog",
-            params=_params(cross_space_pair),
-        )
-        assert r.status_code == 200
-        assert isinstance(r.json(), list)
-
-    def test_detect_all_authenticated_succeeds(self, api_client, db, cross_space_pair):
-        r = cross_space_pair["client_a"].get(
-            "/api/v1/runtime-adapters/detect",
-            params=_params(cross_space_pair),
-        )
-        assert r.status_code == 200
-        assert isinstance(r.json(), list)
-
-    def test_detect_one_authenticated_succeeds(self, api_client, db, cross_space_pair):
-        r = cross_space_pair["client_a"].get(
-            "/api/v1/runtime-adapters/claude_code/detect",
-            params=_params(cross_space_pair),
-        )
-        assert r.status_code == 200
 
 
 # ===========================================================================

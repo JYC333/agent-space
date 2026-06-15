@@ -9,7 +9,7 @@ Invariants covered:
   2. medium/dry_run cannot execute a file-access CLI runtime — blocked pre-execution.
   3. high/worktree can execute a file-access CLI runtime — permitted.
   4. critical/one_shot_docker returns the explicit unsupported error, not silent fallback.
-  5. No runtime silently falls back to echo.
+  5. No runtime silently falls back to the default adapter.
   6. failed git diff/status collection produces materialization_error, not silent no-op.
   7. "codex_cli" is canonical; "codex" alone does not instantiate a runtime adapter.
 """
@@ -61,7 +61,7 @@ class TestFileAccessAdapterRequiresWorktree:
         from app.runtimes.specs import get_runtime_adapter_spec
         assert get_runtime_adapter_spec("claude_code").sandbox.requires_file_access is True
         assert get_runtime_adapter_spec("codex_cli").sandbox.requires_file_access is True
-        assert get_runtime_adapter_spec("echo").sandbox.requires_file_access is False
+        assert get_runtime_adapter_spec("model_api").sandbox.requires_file_access is False
 
     def test_claude_code_high_risk_allowed(self):
         from app.runs.runtime_policy import validate_file_access_adapter_policy
@@ -108,10 +108,10 @@ class TestMediumRiskBlocksFileAccess:
 # ---------------------------------------------------------------------------
 
 class TestNonFileAccessAdaptersNotBlocked:
-    def test_echo_low_risk_not_blocked(self):
+    def test_model_api_low_risk_not_blocked(self):
         from app.runs.runtime_policy import validate_file_access_adapter_policy
         assert validate_file_access_adapter_policy(
-            adapter_type="echo", decision=_decision("low")
+            adapter_type="model_api", decision=_decision("low")
         ) is None
 
     def test_capability_low_risk_not_blocked(self):
@@ -120,10 +120,10 @@ class TestNonFileAccessAdaptersNotBlocked:
             adapter_type="capability", decision=_decision("low")
         ) is None
 
-    def test_echo_medium_risk_not_blocked(self):
+    def test_model_api_medium_risk_not_blocked(self):
         from app.runs.runtime_policy import validate_file_access_adapter_policy
         assert validate_file_access_adapter_policy(
-            adapter_type="echo", decision=_decision("medium")
+            adapter_type="model_api", decision=_decision("medium")
         ) is None
 
 
@@ -144,27 +144,27 @@ class TestCriticalRiskMapsToOneShot:
 
 
 # ---------------------------------------------------------------------------
-# 5. No silent fallback to echo — registry raises on unknown adapter_type
+# 5. No silent fallback to default adapter — registry raises on unknown adapter_type
 # ---------------------------------------------------------------------------
 
-class TestNoSilentFallbackToEcho:
+class TestNoSilentFallbackToDefault:
     def test_unknown_adapter_type_raises_key_error(self):
         from app.runtimes.registry import instantiate_runtime_adapter
         with pytest.raises(KeyError):
             instantiate_runtime_adapter("totally_unknown_adapter")
 
-    def test_instantiate_echo_is_explicit(self):
+    def test_instantiate_capability_is_explicit(self):
         from app.runtimes.registry import instantiate_runtime_adapter
-        from app.runtimes.adapters.echo import EchoRuntimeAdapter
-        adapter = instantiate_runtime_adapter("echo")
-        assert isinstance(adapter, EchoRuntimeAdapter)
+        from app.runtimes.adapters.capability import CapabilityRuntimeAdapter
+        adapter = instantiate_runtime_adapter("capability")
+        assert isinstance(adapter, CapabilityRuntimeAdapter)
 
     def test_registry_is_not_exhausted_on_unknown(self):
         """is_adapter_type_implemented returns False, not True, for unknowns."""
         from app.runtimes.registry import is_adapter_type_implemented
         assert not is_adapter_type_implemented("unknown_fallback_type")
         assert not is_adapter_type_implemented("")
-        assert not is_adapter_type_implemented("echo_fallback")
+        assert not is_adapter_type_implemented("default_fallback")
 
 
 # ---------------------------------------------------------------------------

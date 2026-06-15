@@ -47,6 +47,7 @@ class PolicyGateBlocked(Exception):
     run_id          Run context if applicable.
     proposal_id     Proposal context if applicable.
     metadata_json   Sanitized audit-only metadata bag (no secrets / raw payload).
+    audit_already_persisted True when the authority already handled durable audit.
     http_status_code HTTP status code for the response (default 403).
     error_code      "policy_denied" | "policy_requires_approval".
     """
@@ -66,6 +67,7 @@ class PolicyGateBlocked(Exception):
         proposal_id: Optional[str],
         metadata_json: Optional[dict[str, Any]],
         http_status_code: int = 403,
+        audit_already_persisted: bool = False,
     ) -> None:
         self.decision = decision
         self.action = action
@@ -79,6 +81,7 @@ class PolicyGateBlocked(Exception):
         self.proposal_id = proposal_id
         self.metadata_json = metadata_json
         self.http_status_code = http_status_code
+        self.audit_already_persisted = audit_already_persisted
 
         if decision.decision == Decision.DENY:
             self.error_code = "policy_denied"

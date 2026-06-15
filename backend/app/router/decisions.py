@@ -75,14 +75,12 @@ class RoutingDecision:
 @dataclass(frozen=True)
 class ResolvedRuntimeAdapter:
     adapter_type: str | None
-    runtime_adapter_row: Any | None
     merged_config: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class AdapterDecision:
     adapter_type: str | None
-    runtime_adapter_row: Any | None
     merged_config: dict[str, Any] = field(default_factory=dict)
     error_code: str | None = None
     message: str | None = None

@@ -96,6 +96,55 @@ def _mock_litellm_response(content: str):
 
 
 class TestCompleteText:
+    def test_control_plane_authority_forwards_without_litellm(self, db, test_space, monkeypatch):
+        from app.config import settings
+        from app.providers.invocation import complete_text
+        from tests.support import factories
+
+        mp = factories.create_test_model_provider(
+            db,
+            space_id=test_space.id,
+            provider_type="openai",
+            with_api_key=False,
+            default_model="gpt-4o-mini",
+            enabled=True,
+        )
+        calls = []
+
+        def _fake_complete(**payload):
+            calls.append(payload)
+            return {"text": "from-ts", "model": "gpt-4o-mini", "usage": {"total_tokens": 3}}
+
+        monkeypatch.setattr(settings, "control_plane_providers_credentials_authority", "ts")
+        monkeypatch.setattr(
+            "app.providers.invocation.complete_text_via_control_plane",
+            _fake_complete,
+        )
+
+        with patch("litellm.completion") as mock_litellm:
+            result = complete_text(
+                db,
+                provider_id=mp.id,
+                model=None,
+                system="sys",
+                user="usr",
+            )
+
+        mock_litellm.assert_not_called()
+        assert result.text == "from-ts"
+        assert result.usage == {"total_tokens": 3}
+        assert calls == [
+            {
+                "space_id": test_space.id,
+                "provider_id": mp.id,
+                "model": None,
+                "system": "sys",
+                "user": "usr",
+                "max_tokens": 2048,
+                "task": None,
+            }
+        ]
+
     def test_openai_calls_litellm(self, db, test_space):
         from app.providers.invocation import complete_text
         from tests.support import factories

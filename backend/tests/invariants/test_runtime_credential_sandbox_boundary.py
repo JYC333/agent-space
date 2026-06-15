@@ -38,10 +38,6 @@ class TestRunExecutionUsesCanonicalRuntimeRegistry:
         assert "from ..agents" not in source
         assert "import agents" not in source
 
-    def test_runtime_registry_exposes_echo_adapter(self):
-        from app.runtimes.registry import is_adapter_type_implemented
-        assert is_adapter_type_implemented("echo")
-
     def test_local_cli_runtime_types_registered_via_spec(self):
         """claude_code and codex_cli must execute through RuntimeAdapterSpec."""
         from app.runtimes.registry import is_adapter_type_implemented

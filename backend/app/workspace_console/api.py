@@ -45,7 +45,7 @@ from ..config import settings
 from ..db import get_db
 from ..feature_gates import feature_not_implemented
 from ..models import Workspace
-from ..policy import PolicyCheckRequest, PolicyGateway
+from ..policy import PolicyCheckRequest, get_policy_port
 from ..workspace.disk_path import workspace_absolute_root
 from ..workspace.path_policy import PathPolicy, PathPolicyError
 
@@ -87,7 +87,7 @@ def _enforce_workspace_read(
         read_kind=read_kind,
         relative_path=relative_path,
     )
-    PolicyGateway(db).enforce(
+    get_policy_port(db).enforce(
         PolicyCheckRequest(
             action="workspace.read",
             actor_type="user",

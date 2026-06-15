@@ -7,7 +7,7 @@ import type { AgentOut } from '../../types/api'
 import { useSpace } from '../../contexts/SpaceContext'
 import { Button } from '../../components/ui/button'
 import { Card, CardTitle } from '../../components/ui/card'
-import { Badge } from '../../components/ui/badge'
+import { Badge, StatusBadge } from '../../components/ui/badge'
 import { errMsg } from '../../lib/utils'
 
 /**
@@ -74,7 +74,9 @@ export default function AgentsPage() {
       return
     }
     setLoading(true)
-    agentsApi.list()
+    // Include disabled/inactive agents so a disabled agent stays visible and can
+    // be re-enabled from its detail page (archived agents stay hidden).
+    agentsApi.list({ status: 'active,disabled,inactive' })
       // The system-managed default Assistant is represented by the card above —
       // exclude it from the agent list so it is not listed twice.
       .then(list => setAgents(list.filter(a => a.agent_kind !== 'system_assistant')))
@@ -114,8 +116,11 @@ export default function AgentsPage() {
         <div className="space-y-3">
           {agents.map(a => (
             <Link key={a.id} to={`/agents/${a.id}`} className="block">
-              <Card className="hover:bg-accent/40 transition-colors">
-                <CardTitle>{a.name}</CardTitle>
+              <Card className={`hover:bg-accent/40 transition-colors ${a.status !== 'active' ? 'opacity-70' : ''}`}>
+                <CardTitle className="flex items-center gap-2">
+                  {a.name}
+                  {a.status !== 'active' && <StatusBadge status={a.status} />}
+                </CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">{a.description ?? 'No description'}</p>
                 {a.model?.provider_name ? (
                   <p className="text-xs font-mono mt-2">{a.model.provider_name} · {a.model.model ?? 'default model'}</p>

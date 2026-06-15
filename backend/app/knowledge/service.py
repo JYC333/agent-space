@@ -952,7 +952,7 @@ def derive_note_projection(
     plain_text: str | None = None,
     excerpt: str | None = None,
 ) -> tuple[str | None, str | None]:
-    """Derive stored note text projections from structured JSON or legacy text."""
+    """Derive stored note text projections from structured JSON or stored plain text."""
 
     projected_plain_text = _flatten_content_json(content_json) if content_json is not None else plain_text
     if projected_plain_text is not None and not projected_plain_text.strip():

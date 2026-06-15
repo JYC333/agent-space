@@ -77,7 +77,7 @@ Lazy facades currently exist for `memory` and `runs` to keep import-time side ef
 ## Dependency Rules
 
 - Python remains the authority for existing business behavior until a specific migration moves
-  a bounded context.
+  a bounded context or command.
 - Modules should use public facades, ports, registries, or hooks rather than importing peer
   internals.
 - Do not create package cycles.
@@ -89,8 +89,9 @@ Lazy facades currently exist for `memory` and `runs` to keep import-time side ef
 - `runtimes` own adapter execution and use injected ports for run evidence/process handles.
 - `providers` own model invocation and provider credentials.
 - `tasks` own task-board behavior, task-run product linkage, and task evaluation.
-- `proposals` own proposal API/read model/status lifecycle/applier registry; target modules
-  own proposal business mutations.
+- `proposals` own approval/apply orchestration and the applier registry; target modules
+  own proposal business mutations. The external proposal review API/read model is TS-owned
+  when `CONTROL_PLANE_PROPOSALS_AUTHORITY=ts`.
 
 `ProposalService` and `ProposalApplyService` live under `backend/app/proposals/`
 (`service.py`, `apply_service.py`), matching their logical ownership (moved from

@@ -1,0 +1,574 @@
+[
+  {
+    "request": {
+      "action": "made.up.action"
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "high",
+      "reason_code": "unknown_policy_action",
+      "required_approver_role": null,
+      "policy_rule_id": "unknown_action_deny",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "unknown_policy_action",
+      "resource_type": null,
+      "message": "Unknown policy action 'made.up.action'.",
+      "action": "made.up.action"
+    }
+  },
+  {
+    "request": {
+      "action": "artifact.export"
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "high",
+      "reason_code": "policy_action_not_implemented",
+      "required_approver_role": "owner",
+      "policy_rule_id": "action_not_implemented",
+      "policy_source": "registry",
+      "approval_capability": null,
+      "audit_code": "policy_action_not_implemented",
+      "resource_type": "artifact",
+      "message": "Policy action 'artifact.export' is reserved and has no enforcement point. Reserved actions always fail closed until the action is wired to a real enforcement point.",
+      "action": "artifact.export"
+    }
+  },
+  {
+    "request": {
+      "action": "memory.create"
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "medium",
+      "reason_code": "policy_action_via_proposal_only",
+      "required_approver_role": "owner",
+      "policy_rule_id": "action_via_proposal_only",
+      "policy_source": "registry",
+      "approval_capability": "approve_memory_change",
+      "audit_code": "policy_action_via_proposal_only",
+      "resource_type": "memory",
+      "message": "Policy action 'memory.create' is enforced via the proposal.apply gate and must not be enforced as a standalone action. Use PolicyGateway.enforce_proposal_apply() instead.",
+      "action": "memory.create"
+    }
+  },
+  {
+    "request": {
+      "action": "knowledge.update"
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "medium",
+      "reason_code": "policy_action_via_proposal_only",
+      "required_approver_role": "owner",
+      "policy_rule_id": "action_via_proposal_only",
+      "policy_source": "registry",
+      "approval_capability": "approve_knowledge_change",
+      "audit_code": "policy_action_via_proposal_only",
+      "resource_type": "knowledge",
+      "message": "Policy action 'knowledge.update' is enforced via the proposal.apply gate and must not be enforced as a standalone action. Use PolicyGateway.enforce_proposal_apply() instead.",
+      "action": "knowledge.update"
+    }
+  },
+  {
+    "request": {
+      "action": "runtime.execute"
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "medium",
+      "reason_code": "registry_default",
+      "required_approver_role": null,
+      "policy_rule_id": "registry_default",
+      "policy_source": "registry",
+      "approval_capability": null,
+      "audit_code": null,
+      "resource_type": "run",
+      "message": "No rule matched; registry default for 'runtime.execute' is allow",
+      "action": "runtime.execute"
+    }
+  },
+  {
+    "request": {
+      "action": "runtime.execute",
+      "context": {
+        "risk_level": "high"
+      }
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "high",
+      "reason_code": "runtime_execute_risk_level",
+      "required_approver_role": null,
+      "policy_rule_id": "runtime_execute_risk_level",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "runtime_execute_risk_level",
+      "resource_type": "run",
+      "message": "runtime.execute allowed with effective risk_level=high",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "runtime.execute",
+      "context": {
+        "tool_name": "codex_cli",
+        "agent_tool_permissions": [
+          "claude_code"
+        ]
+      }
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "high",
+      "reason_code": "tool_not_permitted",
+      "required_approver_role": null,
+      "policy_rule_id": "tool_permission",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "tool_not_permitted",
+      "resource_type": "run",
+      "message": "Tool 'codex_cli' is not in agent's tool_permissions_json",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "runtime.execute",
+      "context": {
+        "agent_status": "disabled"
+      }
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "high",
+      "reason_code": "agent_status",
+      "required_approver_role": null,
+      "policy_rule_id": "agent_status",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "agent_not_active",
+      "resource_type": "run",
+      "message": "Agent is not active (status=disabled)",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "runtime.use_credential",
+      "space_id": "s1",
+      "resource_space_id": "s1",
+      "context": {
+        "trigger_origin": "manual"
+      }
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "high",
+      "reason_code": "credential_same_space_manual",
+      "required_approver_role": null,
+      "policy_rule_id": "credential_same_space_manual_allow",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "credential_same_space_manual",
+      "resource_type": "credential",
+      "message": "Same-space manual credential use allowed.",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "runtime.use_credential",
+      "space_id": "s1",
+      "resource_space_id": "s1",
+      "context": {
+        "trigger_origin": "automation"
+      }
+    },
+    "decision": {
+      "decision": "require_approval",
+      "risk_level": "high",
+      "reason_code": "credential_automation_origin",
+      "required_approver_role": "owner",
+      "policy_rule_id": "credential_automation_require_approval",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "credential_automation_origin",
+      "resource_type": "credential",
+      "message": "Automation-origin credential use requires explicit approval.",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "runtime.use_credential",
+      "space_id": "s1",
+      "resource_space_id": "s1",
+      "context": {
+        "trigger_origin": "automation",
+        "automation_pre_authorized": true
+      }
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "high",
+      "reason_code": "credential_automation_preauthorized",
+      "required_approver_role": null,
+      "policy_rule_id": "credential_automation_preauthorized_allow",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "credential_automation_preauthorized",
+      "resource_type": "credential",
+      "message": "Automation-origin credential use allowed by standing pre-authorization.",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "runtime.use_credential",
+      "space_id": "s1",
+      "resource_space_id": "s2"
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "critical",
+      "reason_code": "space_boundary",
+      "required_approver_role": null,
+      "policy_rule_id": "space_boundary",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "cross_space_access_denied",
+      "resource_type": "credential",
+      "message": "Cross-space access denied: requesting=s1, resource=s2",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "context.inject_memory",
+      "space_id": "s1",
+      "resource_space_id": "s2"
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "critical",
+      "reason_code": "hard_invariant_cross_space_memory",
+      "required_approver_role": null,
+      "policy_rule_id": "hard_invariant_cross_space_memory",
+      "policy_source": "hard_invariant",
+      "approval_capability": null,
+      "audit_code": "cross_space_memory_denied",
+      "resource_type": "memory",
+      "message": "Cross-space memory read denied: requesting_space='s1', resource_space='s2'. A PersonalMemoryGrant is required for cross-space personal memory access.",
+      "action": "context.inject_memory"
+    }
+  },
+  {
+    "request": {
+      "action": "context.inject_memory",
+      "space_id": "s1",
+      "resource_space_id": "s2",
+      "context": {
+        "has_personal_memory_grant": true
+      }
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "critical",
+      "reason_code": "space_boundary",
+      "required_approver_role": null,
+      "policy_rule_id": "space_boundary",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "cross_space_access_denied",
+      "resource_type": "memory",
+      "message": "Cross-space access denied: requesting=s1, resource=s2",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "context.inject_memory",
+      "space_id": "s1",
+      "resource_space_id": "s1"
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "low",
+      "reason_code": "registry_default",
+      "required_approver_role": null,
+      "policy_rule_id": "registry_default",
+      "policy_source": "registry",
+      "approval_capability": null,
+      "audit_code": null,
+      "resource_type": "memory",
+      "message": "No rule matched; registry default for 'context.inject_memory' is allow",
+      "action": "context.inject_memory"
+    }
+  },
+  {
+    "request": {
+      "action": "artifact.persist",
+      "context": {
+        "raw_private_memory_included": true
+      }
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "critical",
+      "reason_code": "hard_invariant_raw_private_memory_egress",
+      "required_approver_role": null,
+      "policy_rule_id": "hard_invariant_raw_private_memory_egress",
+      "policy_source": "hard_invariant",
+      "approval_capability": null,
+      "audit_code": "raw_private_memory_egress_blocked",
+      "resource_type": "artifact",
+      "message": "raw_private_memory_included=true blocks all egress. Private memory content must never leave the personal space context.",
+      "action": "artifact.persist"
+    }
+  },
+  {
+    "request": {
+      "action": "artifact.persist",
+      "context": {
+        "derived_from_personal_memory_grant": true,
+        "target_visibility": "public"
+      }
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "critical",
+      "reason_code": "hard_invariant_public_visibility_grant_derived",
+      "required_approver_role": null,
+      "policy_rule_id": "hard_invariant_public_visibility_grant_derived",
+      "policy_source": "hard_invariant",
+      "approval_capability": null,
+      "audit_code": "grant_derived_public_visibility_blocked",
+      "resource_type": "artifact",
+      "message": "Grant-derived output cannot be published with public visibility. Personal memory grant output must remain within approved scopes.",
+      "action": "artifact.persist"
+    }
+  },
+  {
+    "request": {
+      "action": "artifact.persist",
+      "context": {
+        "target_space_id": "  "
+      }
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "critical",
+      "reason_code": "hard_invariant_unknown_target_space",
+      "required_approver_role": null,
+      "policy_rule_id": "hard_invariant_unknown_target_space",
+      "policy_source": "hard_invariant",
+      "approval_capability": null,
+      "audit_code": "unknown_target_space_egress",
+      "resource_type": "artifact",
+      "message": "Unknown or empty target_space_id in egress-sensitive action. Cannot resolve target space; failing closed.",
+      "action": "artifact.persist"
+    }
+  },
+  {
+    "request": {
+      "action": "artifact.persist",
+      "space_id": "s1"
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "low",
+      "reason_code": "registry_default",
+      "required_approver_role": null,
+      "policy_rule_id": "registry_default",
+      "policy_source": "registry",
+      "approval_capability": null,
+      "audit_code": null,
+      "resource_type": "artifact",
+      "message": "No rule matched; registry default for 'artifact.persist' is allow",
+      "action": "artifact.persist"
+    }
+  },
+  {
+    "request": {
+      "action": "workspace.write_patch",
+      "proposal_id": "p1",
+      "context": {
+        "proposal_type": "code_patch",
+        "proposal_apply_allowed": true
+      }
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "high",
+      "reason_code": "workspace_write_patch_via_proposal",
+      "required_approver_role": null,
+      "policy_rule_id": "workspace_write_patch_via_proposal",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "workspace_write_via_proposal",
+      "resource_type": "workspace",
+      "message": "workspace.write_patch via accepted code_patch proposal",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "workspace.write_patch"
+    },
+    "decision": {
+      "decision": "require_approval",
+      "risk_level": "high",
+      "reason_code": "registry_default",
+      "required_approver_role": "owner",
+      "policy_rule_id": "registry_default",
+      "policy_source": "registry",
+      "approval_capability": "approve_code_patch",
+      "audit_code": null,
+      "resource_type": "workspace",
+      "message": "No rule matched; registry default for 'workspace.write_patch' is require_approval",
+      "action": "workspace.write_patch"
+    }
+  },
+  {
+    "request": {
+      "action": "automation.create",
+      "context": {
+        "membership_role": "admin"
+      }
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "high",
+      "reason_code": "automation_admin_allow",
+      "required_approver_role": null,
+      "policy_rule_id": "automation_admin_allow",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "automation_allowed",
+      "resource_type": "automation",
+      "message": "automation.create allowed for role=admin",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "automation.create",
+      "context": {
+        "membership_role": "member"
+      }
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "high",
+      "reason_code": "automation_insufficient_role",
+      "required_approver_role": null,
+      "policy_rule_id": "automation_insufficient_role",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "automation_denied",
+      "resource_type": "automation",
+      "message": "automation.create requires admin or owner authority; role=member",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "automation.fire",
+      "context": {
+        "membership_role": "owner"
+      }
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "high",
+      "reason_code": "automation_admin_allow",
+      "required_approver_role": null,
+      "policy_rule_id": "automation_admin_allow",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "automation_allowed",
+      "resource_type": "automation",
+      "message": "automation.fire allowed for role=owner",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "proposal.create",
+      "space_id": "s1"
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "low",
+      "reason_code": "registry_default",
+      "required_approver_role": null,
+      "policy_rule_id": "registry_default",
+      "policy_source": "registry",
+      "approval_capability": null,
+      "audit_code": null,
+      "resource_type": "proposal",
+      "message": "No rule matched; registry default for 'proposal.create' is allow",
+      "action": "proposal.create"
+    }
+  },
+  {
+    "request": {
+      "action": "agent.config_update",
+      "space_id": "s1"
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "high",
+      "reason_code": "registry_default",
+      "required_approver_role": "owner",
+      "policy_rule_id": "registry_default",
+      "policy_source": "registry",
+      "approval_capability": "approve_agent_config_change",
+      "audit_code": null,
+      "resource_type": "agent",
+      "message": "No rule matched; registry default for 'agent.config_update' is allow",
+      "action": "agent.config_update"
+    }
+  },
+  {
+    "request": {
+      "action": "intake.item_create",
+      "space_id": "s1"
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "low",
+      "reason_code": "registry_default",
+      "required_approver_role": null,
+      "policy_rule_id": "registry_default",
+      "policy_source": "registry",
+      "approval_capability": null,
+      "audit_code": null,
+      "resource_type": "intake_item",
+      "message": "No rule matched; registry default for 'intake.item_create' is allow",
+      "action": "intake.item_create"
+    }
+  },
+  {
+    "request": {
+      "action": "context.select_evidence",
+      "space_id": "s1"
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "low",
+      "reason_code": "registry_default",
+      "required_approver_role": null,
+      "policy_rule_id": "registry_default",
+      "policy_source": "registry",
+      "approval_capability": null,
+      "audit_code": null,
+      "resource_type": "evidence",
+      "message": "No rule matched; registry default for 'context.select_evidence' is allow",
+      "action": "context.select_evidence"
+    }
+  }
+]

@@ -9,7 +9,7 @@ Define AI agents and wire them to execution. An agent is a configured product-le
 ```
 Agent            — product-level actor (owned by user/space/workspace, has policy)
     ↓ dispatches via
-Runtime Adapter  — technical execution backend (echo, claude_code, codex_cli, …)
+Runtime Adapter  — technical execution backend (capability, model_api, claude_code, codex_cli, …)
     ↓ calls
 Model Provider   — underlying LLM (Anthropic, OpenAI, Ollama, …)
 ```
@@ -37,7 +37,7 @@ Agent                    — the runtime instance
     → AgentVersion           — immutable runtime config snapshot; the ONLY thing execution reads
 ```
 
-Rules (clean model — no legacy paths):
+Rules (clean model — no old paths):
 - A **template is a factory**, never executed. No `Run` / model-call path reads an
   `AgentTemplate` or `AgentTemplateVersion`.
 - **Agent always runs from** `Agent.current_version_id` → `AgentVersion`.
@@ -208,7 +208,7 @@ There are two paths, by who is making the change:
    `output_policy_json`, `schedule_config_json`, `output_schema_json`.
    **Hard-safety snapshots are copied verbatim and cannot be loosened here:**
    `tool_policy_json`, `tool_permissions_json`, `capabilities_json`, `runtime_policy_json`,
-   `runtime_config_json`, `runtime_adapter_id`. Within memory/output policy the
+   `runtime_config_json`. Within memory/output policy the
    `writable_scopes` and `requires_proposal` (memory) and `proposal_only` (output) guarantees
    are **re-stamped from the source version**, so a frontend override can never grant direct
    memory write, unlock tools, or turn off proposal-only outputs.
@@ -271,8 +271,8 @@ for use rather than authoring new ones).
 
 ## Built-in Templates (no built-in concrete agents)
 
-There are **no** seeded per-space concrete agents. Legacy built-in agents
-(`system.echo-agent`, `system.memory-curator-agent`) and `agents/seeder.py` were
+There are **no** seeded per-space concrete agents. The old built-in concrete
+agent seeder (`agents/seeder.py`) was
 **removed** — built-in product behavior comes from system **templates** (factories),
 and a concrete Agent is created only on demand via copy-on-create.
 
@@ -315,16 +315,17 @@ Memory reflection (`POST /sessions/{id}/reflect`) is an explicit **internal serv
 through a concrete built-in agent. The `memory_reflector` template is the factory for users who
 want a standalone reflection Agent instance.
 
-The `echo` runtime adapter still exists for tests/demos; tests that need an echo Agent create
-one in fixtures (`tests/support/factories.py`), not via production seeding.
+Runtime tests use explicit fake adapters or the `capability` adapter when they
+need a native, no-credential execution path.
 
 ## Adapter Registry
 
 | Adapter       | Required risk_level | Sandbox Level   | Notes                                                     |
 |---------------|---------------------|-----------------|-----------------------------------------------------------|
-| `echo`        | any                 | none            | Test/demo only; always available; no file access          |
-| `claude_code` | **high** (required) | worktree        | CLI installed in backend image; fails validation if risk_level < high |
-| `codex_cli`   | **high** (required) | worktree        | CLI installed in backend image; fails validation if risk_level < high |
+| `capability`  | any                 | none            | Local enabled capability execution; no file access by default |
+| `model_api`   | any                 | none            | Managed API runtime; credentials resolved through ModelProvider |
+| `claude_code` | none (no workspace) / high (workspace) | `ephemeral` / `worktree` | No workspace → ephemeral run-scope dir; workspace bound → requires high → worktree. Never runs at none/dry_run |
+| `codex_cli`   | none (no workspace) / high (workspace) | `ephemeral` / `worktree` | No workspace → ephemeral run-scope dir; workspace bound → requires high → worktree. Never runs at none/dry_run |
 
 ## Invariants
 

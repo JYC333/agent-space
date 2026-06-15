@@ -1,16 +1,16 @@
-"""ProposalApplierRegistry — dispatch mechanics, coverage, and legacy-dispatch removal.
+"""ProposalApplierRegistry — dispatch mechanics, coverage, and pre-registry dispatch removal.
 
 Covers:
 - registration mechanics (duplicate/invalid fail fast, sorted key listing)
 - dispatch mechanics (registered applier invoked once, async appliers awaited,
   applier exceptions propagate unchanged)
 - unknown-type failure semantics (UnknownProposalApplierError is a
-  ProposalApplyError carrying the legacy ``unsupported proposal type`` message)
+  ProposalApplyError carrying the pre-registry ``unsupported proposal type`` message)
 - default registry coverage: every previously supported proposal type is
   registered exactly once by its owning module and matches the policy risk
   table (SUPPORTED_PROPOSAL_TYPES)
 - the policy apply gate derives supported-ness from the registry
-- no legacy hardcoded per-type apply dispatch remains in
+- no hardcoded per-type apply dispatch remains in
   ``ProposalApplyService.apply``
 - the proposals public facade exports the registry API
 """
@@ -127,7 +127,7 @@ def test_async_applier_is_awaited():
     assert result.task == "task-sentinel"
 
 
-def test_unknown_type_raises_typed_error_with_legacy_message():
+def test_unknown_type_raises_typed_error_with_pre_registry_message():
     registry = ProposalApplierRegistry()
     with pytest.raises(UnknownProposalApplierError, match="unsupported proposal type"):
         registry.apply(_context("workspace_profile_update"))
@@ -263,7 +263,7 @@ def test_policy_gate_supported_check_follows_registry():
 
 
 # ---------------------------------------------------------------------------
-# Legacy dispatch removal — no hardcoded per-type apply branch remains
+# Pre-registry dispatch removal — no hardcoded per-type apply branch remains
 # ---------------------------------------------------------------------------
 
 
@@ -277,7 +277,7 @@ def _method_ast(path: Path, class_name: str, method_name: str) -> ast.FunctionDe
     raise AssertionError(f"{class_name}.{method_name} not found in {path}")
 
 
-def test_no_legacy_hardcoded_apply_dispatch_remains():
+def test_no_hardcoded_apply_dispatch_remains():
     """``ProposalApplyService.apply`` must contain no proposal-type string
     comparisons or per-type branches — all type dispatch goes through the
     registry. (Cross-cutting helpers like source monitoring / digest marking

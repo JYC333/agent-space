@@ -40,6 +40,7 @@ htmlcov/
 # Frontend dependencies and build output
 node_modules/
 apps/web/dist/
+packages/protocol/dist/
 
 # Rust / Tauri
 apps/web/src-tauri/target/

@@ -68,7 +68,7 @@ def test_default_provider_is_not_resolved_for_non_model_provider_runtimes(db):
         commit=False,
     )
 
-    for adapter_type in ("echo", "capability", "claude_code", "codex_cli"):
+    for adapter_type in ("capability", "claude_code", "codex_cli"):
         assert resolve_default_provider_for_runtime(db, space_id, adapter_type) is None
 
 

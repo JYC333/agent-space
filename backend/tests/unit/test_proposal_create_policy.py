@@ -114,7 +114,7 @@ def test_public_memory_create_policy_deny_returns_403_and_no_proposal(db, cross_
     before_rows = db.query(Proposal).count()
     blocked = _blocked_exc(actor_type="user", actor_id=ua.id, space_id=a, proposal_type="memory_create")
 
-    with patch("app.proposals.service.PolicyGateway") as gateway:
+    with patch("app.proposals.service.get_policy_port") as gateway:
         gateway.return_value.enforce.side_effect = blocked
         resp = cross_space_pair["client_a"].post(
             "/api/v1/memory",
@@ -150,7 +150,7 @@ def test_public_memory_update_policy_deny_returns_403_and_no_proposal(db, cross_
     before_rows = db.query(Proposal).count()
     blocked = _blocked_exc(actor_type="user", actor_id=ua.id, space_id=a, proposal_type="memory_update")
 
-    with patch("app.proposals.service.PolicyGateway") as gateway:
+    with patch("app.proposals.service.get_policy_port") as gateway:
         gateway.return_value.enforce.side_effect = blocked
         resp = cross_space_pair["client_a"].patch(
             f"/api/v1/memory/{mem.id}",
@@ -180,7 +180,7 @@ def test_public_memory_delete_policy_deny_returns_403_and_no_proposal(db, cross_
     before_rows = db.query(Proposal).count()
     blocked = _blocked_exc(actor_type="user", actor_id=ua.id, space_id=a, proposal_type="memory_archive")
 
-    with patch("app.proposals.service.PolicyGateway") as gateway:
+    with patch("app.proposals.service.get_policy_port") as gateway:
         gateway.return_value.enforce.side_effect = blocked
         resp = cross_space_pair["client_a"].delete(
             f"/api/v1/memory/{mem.id}",
@@ -204,7 +204,7 @@ def test_policy_gate_blocked_handler_persists_proposal_create_denial(db):
     before_rows = db.query(Proposal).count()
     blocked = _blocked_exc(actor_type="user", actor_id=user.id, space_id=space_id)
 
-    with patch("app.proposals.service.PolicyGateway") as gateway:
+    with patch("app.proposals.service.get_policy_port") as gateway:
         gateway.return_value.enforce.side_effect = blocked
         with pytest.raises(PolicyGateBlocked) as exc_info:
             _create_memory_proposal(db, space_id=space_id, user_id=user.id)
@@ -244,7 +244,7 @@ def test_code_patch_proposal_create_deny_writes_durable_audit_and_no_row(db, tmp
 
     with (
         patch("app.runs.code_patch_collector.collect_worktree_changes", return_value=(ops, [])),
-        patch("app.runs.code_patch_collector.PolicyGateway") as gateway,
+        patch("app.runs.code_patch_collector.get_policy_port") as gateway,
     ):
         gateway.return_value.enforce.side_effect = blocked
         result = collect_and_create_code_patch_proposal(db, run=run, worktree_path=Path(tmp_path))

@@ -19,7 +19,7 @@ from ..personal_memory_grants.egress_guard import (
 )
 from ..policy import write_blocked_gate_audit
 from ..policy import PolicyAuditPersistError, PolicyGateBlocked
-from ..policy import PolicyGateway, PolicyCheckRequest
+from ..policy import PolicyCheckRequest, get_policy_port
 
 
 def _new_id() -> str:
@@ -59,7 +59,7 @@ def _enforce_artifact_persist_policy(
         metadata_json.update(extra_metadata)
 
     try:
-        PolicyGateway(db).enforce(
+        get_policy_port(db).enforce(
             PolicyCheckRequest(
                 action="artifact.persist",
                 actor_type="run",

@@ -81,10 +81,10 @@ afterEach(async () => {
 });
 
 function configFor(baseUrl: string, extra: Record<string, string> = {}): ControlPlaneConfig {
-  return loadConfig({ LEGACY_PYTHON_API_BASE_URL: baseUrl, ...extra });
+  return loadConfig({ CONTROL_PLANE_PYTHON_API_BASE_URL: baseUrl, ...extra });
 }
 
-describe("legacy python fallback proxy", () => {
+describe("python fallback proxy", () => {
   it("forwards GET method, path and query string unchanged", async () => {
     upstream = await startMockUpstream();
     app = buildServer(configFor(upstream.baseUrl), { logger: false });
@@ -307,7 +307,7 @@ describe("legacy python fallback proxy", () => {
     expect(res.payload).toBe(events);
   });
 
-  it("returns a sanitized 502 when the legacy Python backend is unavailable", async () => {
+  it("returns a sanitized 502 when the Python backend is unavailable", async () => {
     // Point at a closed port — connection refused.
     app = buildServer(configFor("http://127.0.0.1:9"), { logger: false });
     const res = await app.inject({
@@ -360,14 +360,14 @@ describe("legacy python fallback proxy", () => {
     expect(logged).not.toContain("topsecret");
   });
 
-  it("returns 503 sanitized when the legacy proxy is disabled", async () => {
+  it("returns 503 sanitized when the Python fallback proxy is disabled", async () => {
     app = buildServer(
-      configFor("http://127.0.0.1:9", { CONTROL_PLANE_ENABLE_LEGACY_PROXY: "false" }),
+      configFor("http://127.0.0.1:9", { CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false" }),
       { logger: false },
     );
     const res = await app.inject({ method: "GET", url: "/api/v1/me" });
     expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({ error: "legacy_proxy_disabled" });
+    expect(res.json()).toMatchObject({ error: "python_fallback_proxy_disabled" });
   });
 
   it("serves TS-owned control-plane routes ahead of the proxy", async () => {

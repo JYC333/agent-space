@@ -88,10 +88,6 @@ def build_runtime_execute_policy_request(
             "agent_version_id": (
                 str(run.agent_version_id) if getattr(run, "agent_version_id", None) else None
             ),
-            "runtime_adapter_id": (
-                str(resolved_adapter.runtime_adapter_row.id)
-                if resolved_adapter.runtime_adapter_row else None
-            ),
             "adapter_type": resolved_adapter.adapter_type,
             "workspace_id": str(run.workspace_id) if getattr(run, "workspace_id", None) else None,
             "trigger_origin": trigger_origin,
@@ -148,27 +144,6 @@ def _provider_subject(
     )
 
 
-def _credential_subject(
-    db: Session,
-    *,
-    run: Run,
-    credential_id: str,
-    source: str,
-) -> CredentialPolicySubject:
-    credential = db.query(Credential).filter(Credential.id == credential_id).first()
-    if credential is None:
-        raise CredentialPolicyMetadataError(
-            f"Credential row missing for credential_id={credential_id!r} "
-            f"(via {source}); failing closed before secret resolution."
-        )
-    return CredentialPolicySubject(
-        credential_id=credential_id,
-        credential_space_id=credential.space_id,
-        resolution_source=source,
-        has_model_provider=False,
-    )
-
-
 def resolve_runtime_credential_policy_metadata(
     db: Session,
     run: Run,
@@ -188,29 +163,12 @@ def resolve_runtime_credential_policy_metadata(
             source="run.model_provider_id",
         )
 
-    row = resolved_adapter.runtime_adapter_row
-    if row is not None and getattr(row, "provider_id", None):
-        return _provider_subject(
-            db,
-            run=run,
-            provider_id=row.provider_id,
-            source="runtime_adapter.provider_id",
-        )
-
     if getattr(agent_version, "model_provider_id", None):
         return _provider_subject(
             db,
             run=run,
             provider_id=agent_version.model_provider_id,
             source="agent_version.model_provider_id",
-        )
-
-    if row is not None and getattr(row, "credential_id", None):
-        return _credential_subject(
-            db,
-            run=run,
-            credential_id=str(row.credential_id),
-            source="runtime_adapter.credential_id",
         )
 
     return None

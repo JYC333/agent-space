@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import pytest
-
 from app.automation.policy_preflight import AutomationPolicyPreflightService
-from app.models import AgentVersion, RuntimeAdapter
+from app.models import AgentVersion
 from app.runs.adapter_resolution import ResolvedRuntimeAdapter
 from app.runs.policy_inputs import (
     CredentialPolicyMetadataError,
@@ -48,9 +46,9 @@ def test_preflight_and_execution_runtime_execute_inputs_are_equivalent(db, cross
     run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent)
     run.trigger_origin = "automation"
     version = _version(db, run)
-    _set_adapter(version, "echo")
+    _set_adapter(version, "model_api")
     decision = compute_runtime_policy_decision(run=run, version=version)
-    resolved = ResolvedRuntimeAdapter(adapter_type="echo", runtime_adapter_row=None, merged_config={})
+    resolved = ResolvedRuntimeAdapter(adapter_type="model_api", merged_config={})
 
     execution_req = build_runtime_execute_policy_request(
         run, version, resolved, decision, agent.status
@@ -73,7 +71,7 @@ def test_cli_runtime_does_not_build_model_provider_credential_policy_subject(db,
     provider = factories.create_test_model_provider(db, space_id=space_id, with_api_key=True)
     version.model_provider_id = provider.id
     decision = compute_runtime_policy_decision(run=run, version=version)
-    resolved = ResolvedRuntimeAdapter(adapter_type="claude_code", runtime_adapter_row=None, merged_config={})
+    resolved = ResolvedRuntimeAdapter(adapter_type="claude_code", merged_config={})
     subject = resolve_runtime_credential_policy_metadata(
         db, run, version, resolved, get_runtime_requirements("claude_code")
     )
@@ -89,7 +87,7 @@ def test_credential_metadata_resolver_does_not_expose_secret_ref(db, cross_space
     version = _version(db, run)
     provider = factories.create_test_model_provider(db, space_id=space_id, with_api_key=True)
     version.model_provider_id = provider.id
-    resolved = ResolvedRuntimeAdapter(adapter_type="claude_code", runtime_adapter_row=None, merged_config={})
+    resolved = ResolvedRuntimeAdapter(adapter_type="claude_code", merged_config={})
 
     subject = resolve_runtime_credential_policy_metadata(
         db, run, version, resolved, get_runtime_requirements("claude_code")
@@ -98,8 +96,7 @@ def test_credential_metadata_resolver_does_not_expose_secret_ref(db, cross_space
     assert subject is None
 
 
-@pytest.mark.parametrize("case", ["cross_space_provider", "missing_provider", "missing_credential"])
-def test_cli_runtime_credential_metadata_ignores_model_provider_rows(db, cross_space_pair_db, case):
+def test_cli_runtime_credential_metadata_ignores_model_provider_rows(db, cross_space_pair_db):
     space_id = cross_space_pair_db["space_a_id"]
     other_space = cross_space_pair_db["space_b_id"]
     user_id = cross_space_pair_db["user_a"].id
@@ -107,35 +104,9 @@ def test_cli_runtime_credential_metadata_ignores_model_provider_rows(db, cross_s
     run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent)
     version = _version(db, run)
     _set_adapter(version, "claude_code")
-    if case == "cross_space_provider":
-        provider = factories.create_test_model_provider(db, space_id=other_space, with_api_key=True)
-        version.model_provider_id = provider.id
-        adapter_row = None
-    elif case == "missing_provider":
-        adapter_row = RuntimeAdapter(
-            id="00000000-0000-0000-0000-000000000077",
-            space_id=space_id,
-            name="detached",
-            adapter_type="claude_code",
-            enabled=True,
-            provider_id="00000000-0000-0000-0000-000000000099",
-            config_json={},
-        )
-    else:
-        adapter_row = RuntimeAdapter(
-            id="00000000-0000-0000-0000-000000000066",
-            space_id=space_id,
-            name="detached",
-            adapter_type="claude_code",
-            enabled=True,
-            credential_id="00000000-0000-0000-0000-000000000088",
-            config_json={},
-        )
-    resolved = ResolvedRuntimeAdapter(
-        adapter_type="claude_code",
-        runtime_adapter_row=adapter_row,
-        merged_config={},
-    )
+    provider = factories.create_test_model_provider(db, space_id=other_space, with_api_key=True)
+    version.model_provider_id = provider.id
+    resolved = ResolvedRuntimeAdapter(adapter_type="claude_code", merged_config={})
 
     subject = resolve_runtime_credential_policy_metadata(
         db, run, version, resolved, get_runtime_requirements("claude_code")

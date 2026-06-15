@@ -9,7 +9,7 @@ User input
 → AgentService        (validates policy, prepares agent identity)
 → RunService          (creates queued Run rows + snapshots)
 → RunExecutionService (selects adapter, executes, persists outputs)
-→ AgentAdapter        (pure execution backend — echo / claude_code / codex_cli / …)
+→ AgentAdapter        (pure execution backend — capability / model_api / claude_code / codex_cli / …)
 → Run record          (output, status, delegation_depth logged)
 → Memory Reflection   (proposals from the MemoryReflector service / memory.reflect capability)
 → User Approval       (accept / reject proposals)

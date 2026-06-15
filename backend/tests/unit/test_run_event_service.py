@@ -130,7 +130,7 @@ class TestAppendEventOrdering:
             run_id=run.id, space_id=SPACE,
             event_type="adapter_invoked", status="running",
             summary="adapter started",
-            metadata_json={"adapter_type": "echo", "executor_mode": "local"},
+            metadata_json={"adapter_type": "model_api", "executor_mode": "local"},
         )
         db.flush()
 
@@ -139,7 +139,7 @@ class TestAppendEventOrdering:
         assert fetched.event_type == "adapter_invoked"
         assert fetched.status == "running"
         assert fetched.summary == "adapter started"
-        assert fetched.metadata_json["adapter_type"] == "echo"
+        assert fetched.metadata_json["adapter_type"] == "model_api"
 
 
 # ---------------------------------------------------------------------------
@@ -208,12 +208,12 @@ class TestRedaction:
         ev = svc.append_event(
             run_id=run.id, space_id=SPACE,
             event_type="context_compiled", status="succeeded",
-            metadata_json={"adapter_type": "echo", "api_key": "sk-secret-12345678"},
+            metadata_json={"adapter_type": "model_api", "api_key": "sk-secret-12345678"},
         )
         db.flush()
         assert ev.metadata_json is not None
         assert ev.metadata_json.get("api_key") == "[REDACTED]"
-        assert ev.metadata_json.get("adapter_type") == "echo"
+        assert ev.metadata_json.get("adapter_type") == "model_api"
 
     def test_safe_metadata_is_preserved(self, db):
         _setup(db)

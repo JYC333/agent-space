@@ -50,6 +50,169 @@ class _FailingAdapter:
             yield None
 
 
+def _assert_no_provider_secret_fields(data: dict) -> None:
+    forbidden = {"api_key", "secret_ref", "encrypted_key", "credential_secret_ref"}
+    assert forbidden.isdisjoint(data.keys())
+    assert "sk-" not in str(data)
+
+
+# Wire shape of ModelProviderOut, kept in lockstep with the shared TS contract
+# (packages/protocol/src/providers.ts, ModelProviderDTOSchema). Adding or
+# renaming a response field must update both sides together.
+PROVIDER_WIRE_CONTRACT: dict[str, tuple[type, ...]] = {
+    "id": (str,),
+    "space_id": (str,),
+    "name": (str,),
+    "provider_type": (str,),
+    "base_url": (str, type(None)),
+    "default_model": (str, type(None)),
+    "available_models": (list,),
+    "enabled": (bool,),
+    "is_default": (bool,),
+    "has_api_key": (bool,),
+    "created_at": (str,),
+    "updated_at": (str,),
+}
+
+
+def _assert_provider_wire_shape(data: dict) -> None:
+    assert set(data.keys()) == set(PROVIDER_WIRE_CONTRACT.keys())
+    for field, allowed in PROVIDER_WIRE_CONTRACT.items():
+        assert isinstance(data[field], allowed), f"{field}={data[field]!r}"
+    assert all(isinstance(m, str) for m in data["available_models"])
+
+
+def test_provider_read_responses_match_shared_wire_contract(
+    api_client, db, cross_space_pair, tmp_path, monkeypatch
+):
+    """Pin the exact ModelProviderOut JSON shape consumed by the TS edge facade."""
+    _isolate_crypto_home(monkeypatch, tmp_path)
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    db.commit()
+
+    create = cross_space_pair["client_a"].post(
+        "/api/v1/providers",
+        params=_params(a, ua.id),
+        json={
+            "name": "WireShapeCfg",
+            "provider_type": "openai",
+            "api_key": "sk-wire-shape",
+            "available_models": ["gpt-4o-mini"],
+            "default_model": "gpt-4o-mini",
+        },
+    )
+    assert create.status_code == 201
+    _assert_provider_wire_shape(create.json())
+    pid = create.json()["id"]
+    db.commit()
+
+    detail = cross_space_pair["client_a"].get(
+        f"/api/v1/providers/{pid}", params=_params(a, ua.id)
+    )
+    assert detail.status_code == 200
+    _assert_provider_wire_shape(detail.json())
+
+    listing = cross_space_pair["client_a"].get(
+        "/api/v1/providers", params=_params(a, ua.id)
+    )
+    assert listing.status_code == 200
+    assert isinstance(listing.json(), list)
+    for item in listing.json():
+        _assert_provider_wire_shape(item)
+
+
+def test_provider_static_read_shapes_match_shared_wire_contract(
+    api_client, db, cross_space_pair
+):
+    """Pin /providers/catalog and /providers/litellm-providers shapes; the TS
+    edge claims these static routes explicitly and validates them."""
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    db.commit()
+
+    catalog = cross_space_pair["client_a"].get(
+        "/api/v1/providers/catalog", params=_params(a, ua.id)
+    )
+    assert catalog.status_code == 200
+    info = catalog.json()
+    _assert_no_provider_secret_fields(info)
+    # Exact values, pinned against PROVIDER_CATALOG_INFO in
+    # packages/protocol/src/providers.ts. The TS provider authority serves this
+    # payload, so the two must stay identical.
+    assert info == {
+        "id": "litellm",
+        "name": "LiteLLM (Open Format)",
+        "description": (
+            "Configure OpenAI, Anthropic, OpenRouter, Ollama, or custom "
+            "OpenAI-compatible endpoints."
+        ),
+        "model_hint": "Set default_model and/or available_models on the provider",
+        "supported_params": ["model", "temperature", "max_tokens", "system"],
+    }
+
+    litellm_providers = cross_space_pair["client_a"].get(
+        "/api/v1/providers/litellm-providers", params=_params(a, ua.id)
+    )
+    assert litellm_providers.status_code == 200
+    payload = litellm_providers.json()
+    assert isinstance(payload, list)
+    assert all(isinstance(p, str) for p in payload)
+
+
+def test_provider_crud_responses_are_secret_free(
+    api_client, db, cross_space_pair, tmp_path, monkeypatch
+):
+    _isolate_crypto_home(monkeypatch, tmp_path)
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    db.commit()
+
+    create = cross_space_pair["client_a"].post(
+        "/api/v1/providers",
+        params=_params(a, ua.id),
+        json={
+            "name": "SecretFreeCfg",
+            "provider_type": "openai",
+            "api_key": "sk-secret-free",
+            "available_models": ["gpt-4o-mini"],
+            "default_model": "gpt-4o-mini",
+            "is_default": True,
+        },
+    )
+    assert create.status_code == 201
+    created = create.json()
+    _assert_no_provider_secret_fields(created)
+    assert created["has_api_key"] is True
+    pid = created["id"]
+    db.commit()
+
+    get = cross_space_pair["client_a"].get(
+        f"/api/v1/providers/{pid}",
+        params=_params(a, ua.id),
+    )
+    assert get.status_code == 200
+    _assert_no_provider_secret_fields(get.json())
+
+    list_response = cross_space_pair["client_a"].get(
+        "/api/v1/providers",
+        params=_params(a, ua.id),
+    )
+    assert list_response.status_code == 200
+    for item in list_response.json():
+        _assert_no_provider_secret_fields(item)
+
+    update = cross_space_pair["client_a"].patch(
+        f"/api/v1/providers/{pid}",
+        params=_params(a, ua.id),
+        json={"api_key": "sk-secret-free-replacement"},
+    )
+    assert update.status_code == 200
+    updated = update.json()
+    _assert_no_provider_secret_fields(updated)
+    assert updated["has_api_key"] is True
+
+
 def test_provider_chat_uses_test_db_session(api_client, db, cross_space_pair, tmp_path, monkeypatch):
     _isolate_crypto_home(monkeypatch, tmp_path)
     a = cross_space_pair["space_a_id"]

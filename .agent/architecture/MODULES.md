@@ -8,8 +8,8 @@
 
 | Path | Role |
 |---|---|
-| `backend/` | Current Python FastAPI/PostgreSQL authority. Existing commands, writes, policy, proposals, memory, runs, jobs, schedulers, credentials, provider invocation, and migrations live here. |
-| `control-plane/` | Default client-facing TypeScript API entrypoint/control plane. It owns only explicitly registered TS routes; unowned API paths proxy to Python. The gateway module is permanent; the legacy Python proxy is temporary. |
+| `backend/` | Python FastAPI/PostgreSQL service. Auth/membership, schema migrations, Python-owned product contexts, and routes not explicitly moved to TS live here. |
+| `control-plane/` | Default client-facing TypeScript API entrypoint/control plane. It owns explicitly registered TS routes listed in `TS_CONTROL_PLANE_OWNERSHIP.md`; unowned API paths proxy to Python. The gateway module is permanent; the Python fallback proxy is temporary. |
 | `apps/web/` | Web client. It consumes APIs and shared protocol types; it is not a business-rule authority. |
 | `catalog/` | Built-in definitions, including agent templates and capabilities. |
 | `packages/protocol/` | Shared TypeScript protocol package only. No handlers, persistence, routing, or authority. |
@@ -17,7 +17,10 @@
 | `deployer/` | Host deployment subsystem behind the deployer boundary. |
 | `sandbox/` | First-level sandbox subsystem. Runtime code uses documented interfaces rather than importing internals. |
 
-No business authority has moved to TypeScript. Backend remains the Python authority for existing routes and writes; existing Python-owned routes continue through the control-plane proxy.
+Current TS/Python ownership is summarized in
+[`TS_CONTROL_PLANE_OWNERSHIP.md`](TS_CONTROL_PLANE_OWNERSHIP.md). Backend remains
+the Python authority for unowned routes and writes; Python-owned routes continue
+through the control-plane fallback proxy.
 
 ## Module Kinds
 
@@ -60,10 +63,9 @@ All current registered modules are `always_on=True`.
 | `memory` | kernel | `/memory`, `/context` | yes, lazy | Memory entries, context build/compile, retrieval, reflection, source monitoring, proposal service placement exception. |
 | `personal_memory_grants` | kernel | `/personal-memory-grants` | empty | Personal memory grants, egress guard/review/resolution. |
 | `projects` | product | `/projects` | yes | Projects and project-workspace links. |
-| `proposals` | kernel | `/proposals` | yes | Proposal API/read model/status lifecycle, approvals, applier registry. |
+| `proposals` | kernel | `/proposals` | yes | Proposal approval/apply orchestration, approvals, applier registry; external review API/read model is TS-owned when `CONTROL_PLANE_PROPOSALS_AUTHORITY=ts`. |
 | `providers` | infra | `/providers` | yes | Model providers, provider catalog/validation, litellm invocation facade. |
 | `runs` | kernel | `/runs` | yes, lazy | Run lifecycle, execution, events, finalization, runtime bridge, outputs/artifacts. |
-| `runtime_adapters` | infra | `/runtime-adapters` | empty | Runtime adapter database records. |
 | `runtime_tool_bindings` | infra | `/runtime-tool-bindings` | empty | Runtime tool binding records/services. |
 | `sessions` | product | `/sessions` | empty | Conversation sessions, messages, condenser. |
 | `source_pointers` | product | `/source-pointers` | empty | Source pointer creation/validation. |
@@ -101,8 +103,8 @@ All current registered modules are `always_on=True`.
 | Run-finalized side effects | `app.runs.lifecycle_hooks.RunFinalizedHookRegistry` | Module declares `run_finalized_hooks="<submodule>"`; used for task evaluation bridge. |
 | Proposal application | `app.proposals.applier_registry.ProposalApplierRegistry` | Module declares `proposal_appliers="<submodule>"`; target modules own mutation logic. |
 | Routing decisions | `app.router.RouterService` | Single owner for intent classification, adapter resolution, and `needs_cli`. |
-| Runtime execution | `app.runtimes` | Runtime adapters implement `BaseRuntimeAdapter`; `runs` injects runtime ports for events/process handles. |
-| Model invocation | `app.providers` | `model_api` runtime adapter calls provider invocation through the provider facade. |
+| Runtime execution | control-plane `runs` / `app.runtimes` | Stage 4 `POST /runs/{id}/execute`, `PATCH /runs/{id}/stop`, the internal execute port, and `agent_run` dispatch (control-plane worker loop) are TS-owned when `CONTROL_PLANE_RUNS_AUTHORITY=ts`; policy gates resolve through `PolicyPort` and are TS-owned when `CONTROL_PLANE_POLICY_AUTHORITY=ts`; adapter-config resolution stays Python-owned behind runs context ports. Python `app.runtimes` remains for unowned Python paths and shared adapter specs during migration. |
+| Model invocation | control-plane `providers` / `runtimeHost` | TS-owned run orchestration calls the TS runtime-host/provider broker for `model_api` and `ts_agent_host` no-tool runs. Python provider facades remain for unowned Python routes. |
 
 ## Current Boundary Status
 
@@ -115,7 +117,10 @@ All current registered modules are `always_on=True`.
 - Router compatibility wrappers are removed; do not recreate `IntentRouter` or `TaskRouter`.
 - `runtimes` does not import `runs`; runtime evidence/process registration flows through
   injected ports implemented by `runs`.
-- `runs` does not import `tasks`; task-board side effects use run-finalized hooks.
+- TS-owned runs do not call Python hook registries directly; finalization and
+  task-board side effects use the explicit Python `finalization.finalize` port.
+- Python `runs` does not import `tasks`; task-board side effects use
+  run-finalized hooks.
 - Proposal apply dispatch goes through `ProposalApplierRegistry`; no hardcoded proposal-type
   apply chain remains.
 

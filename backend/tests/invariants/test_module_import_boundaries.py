@@ -1,7 +1,7 @@
 """Static module-boundary guard for backend Python imports.
 
 This guard rejects cross-package deep imports, obvious package import cycles,
-and reintroduced legacy dispatch paths. Keep the deep-import allowlist empty by
+and reintroduced retired dispatch paths. Keep the deep-import allowlist empty by
 default; add narrow public facades or ports instead of expanding exceptions.
 """
 
@@ -432,7 +432,7 @@ def test_router_consumers_use_public_facade():
     )
 
 
-def test_router_has_no_legacy_wrapper_modules():
+def test_router_has_no_retired_wrapper_modules():
     """The pre-convergence ``IntentRouter`` / ``TaskRouter`` wrappers are gone.
 
     Reintroducing them would create a second public dispatch surface for routing
@@ -448,7 +448,7 @@ def test_router_has_no_legacy_wrapper_modules():
     ]
 
     assert stale_paths == [], (
-        "legacy router wrapper modules must not be reintroduced:\n"
+        "retired router wrapper modules must not be reintroduced:\n"
         + "\n".join(f"- {path}" for path in stale_paths)
     )
 

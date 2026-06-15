@@ -43,7 +43,6 @@ from app.models import (
     Proposal,
     Run,
     RunStep,
-    RuntimeAdapter,
     Space,
     SpaceMembership,
     User,
@@ -221,30 +220,6 @@ def create_test_model_provider(
         db.add(cred)
         db.flush()
         row.credential_id = cred.id
-    return _finish(db, row, commit=commit)
-
-
-def create_test_runtime_adapter(
-    db: DBSession,
-    *,
-    space_id: str,
-    name: str = "test-runtime-adapter",
-    adapter_type: str = "echo",
-    provider_id: str | None = None,
-    credential_id: str | None = None,
-    enabled: bool = True,
-    commit: bool = False,
-) -> RuntimeAdapter:
-    row = RuntimeAdapter(
-        id=_new_id(),
-        space_id=space_id,
-        name=name,
-        adapter_type=adapter_type,
-        enabled=enabled,
-        provider_id=provider_id,
-        credential_id=credential_id,
-    )
-    db.add(row)
     return _finish(db, row, commit=commit)
 
 

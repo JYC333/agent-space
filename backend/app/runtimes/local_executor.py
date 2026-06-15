@@ -23,12 +23,7 @@ class ExecutionResult:
 
 _LOCAL_ENV_ALLOWED_KEYS: frozenset[str] = frozenset({"PATH", "TERM", "SHELL", "LANG"})
 _LOCAL_ENV_ALLOWED_PREFIXES: tuple[str, ...] = ("LC_",)
-_BROKER_INJECTED_EXTRA_KEYS: frozenset[str] = frozenset({
-    "HOME",
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "GEMINI_API_KEY",
-})
+_BROKER_INJECTED_EXTRA_KEYS: frozenset[str] = frozenset({"HOME"})
 
 
 def build_subprocess_env(extra: dict | None) -> dict[str, str]:

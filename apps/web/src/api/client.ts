@@ -2,8 +2,8 @@ import type {
   Memory, Session, Message, Task,
   Capability, ContextPackage, Feature, Workspace, WorkspaceCreateBody, WorkspaceUpdateBody, Page,
   CapabilitiesReloadResult, ReflectResult, ApiError,
-  RuntimeAdapter, RuntimeAdapterStatus, RuntimeAdapterSpec,
-  CredentialLoginMethod, CredentialStatus, LoginEvent,
+  RuntimeToolDefinition, RuntimeToolInstallResult, RuntimeToolStatus, RuntimeToolLatest,
+  CredentialLoginMethod, CredentialStatus, CliUsageEntry, CliUsageAutoRefreshSettings, LoginEvent,
   CurrentUser, SpaceWithMembership, SpaceMember, SpaceInvitationOut,
   Job, JobEvent, ActivityInboxRecord,
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
@@ -52,6 +52,8 @@ function spaceParams(spaceId = _spaceId, userId = _userId): string {
 }
 
 function formatApiErrorMessage(err: ApiError, fallback: string): string {
+  if (typeof err.detail === 'string') return err.detail
+  if (err.detail && typeof err.detail === 'object') return JSON.stringify(err.detail)
   const m = err.message
   if (typeof m === 'string') return m
   if (m && typeof m === 'object') {
@@ -107,6 +109,7 @@ async function request<T = unknown>(method: string, path: string, body?: unknown
 
 const get   = <T>(path: string, options?: RequestOptions)                => request<T>('GET',    path, undefined, options)
 const post  = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('POST',   path, body, options)
+const put   = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PUT',    path, body, options)
 const patch = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PATCH',  path, body, options)
 const del   = <T>(path: string, options?: RequestOptions)                => request<T>('DELETE', path, undefined, options)
 
@@ -133,13 +136,19 @@ export const memoryApi = {
     if (params.offset !== undefined) q.offset = String(params.offset)
     return get<Page<Memory>>('/memory?' + new URLSearchParams(q))
   },
+  get: (id: string, params: { workspace_id?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
+    const suffix = Object.keys(q).length ? '?' + new URLSearchParams(q) : ''
+    return get<Memory>(`/memory/${id}${suffix}`)
+  },
   create: (data: Partial<Memory>) =>
     post<Proposal>('/memory', { space_id: _spaceId, owner_user_id: _userId, ...data }),
   update: (id: string, data: Partial<Memory>) =>
     patch<Proposal>(`/memory/${id}`, data),
   delete: (id: string) =>
     del<Proposal>(`/memory/${id}`),
-  search: (data: { query: string; scope?: string; type?: string }) =>
+  search: (data: { query: string; scope?: string; namespace?: string; type?: string; workspace_id?: string; limit?: number }) =>
     post<Memory[]>('/memory/search', { space_id: _spaceId, user_id: _userId, ...data }),
 }
 
@@ -552,29 +561,27 @@ export const contextApi = {
     post<ContextPackage>('/context/build', data),
 }
 
-// ── Runtime Adapters ──────────────────────────────────────────────────────
-export const runtimeAdaptersApi = {
-  list:   () => get<RuntimeAdapter[]>('/runtime-adapters'),
-  create: (data: Partial<RuntimeAdapter>) => post<RuntimeAdapter>('/runtime-adapters', data),
-  update: (id: string, data: Partial<RuntimeAdapter>) => patch<RuntimeAdapter>(`/runtime-adapters/${id}`, data),
-  delete: (id: string) => del<null>(`/runtime-adapters/${id}`),
-  get:    (id: string) => get<RuntimeAdapter>(`/runtime-adapters/${id}`),
-  status: (id: string) => get<RuntimeAdapterStatus>(`/runtime-adapters/${id}/status`),
-  probe:  (id: string) => post<RuntimeAdapterStatus>(`/runtime-adapters/${id}/probe`, {}),
-  usage:  (id: string) => get<Record<string, unknown>>(`/runtime-adapters/${id}/usage`),
-  refreshUsage: (id: string) => post<Record<string, unknown>>(`/runtime-adapters/${id}/usage/refresh`, {}),
-  catalog: () => get<RuntimeAdapterSpec[]>('/runtime-adapters/catalog'),
-  detectAll: () => get<RuntimeAdapterStatus[]>('/runtime-adapters/detect'),
-  detectOne: (adapterId: string) => get<RuntimeAdapterStatus>(`/runtime-adapters/${adapterId}/detect`),
+export const runtimeToolsApi = {
+  catalog: () => get<RuntimeToolDefinition[]>('/runtime-tools/catalog'),
+  list: () => get<RuntimeToolStatus[]>('/runtime-tools'),
+  get: (runtime: string) => get<RuntimeToolStatus>(`/runtime-tools/${encodeURIComponent(runtime)}`),
+  latest: (runtime: string) => get<RuntimeToolLatest>(`/runtime-tools/${encodeURIComponent(runtime)}/latest`),
+  install: (runtime: string, data: { version?: string | null; activate?: boolean; force?: boolean } = {}) =>
+    post<RuntimeToolInstallResult>(`/runtime-tools/${encodeURIComponent(runtime)}/install`, data),
+  activate: (runtime: string, version: string) =>
+    post<RuntimeToolStatus>(`/runtime-tools/${encodeURIComponent(runtime)}/activate`, { version }),
 }
 
 // ── Credentials / Login ───────────────────────────────────────────────────
 export const credentialsApi = {
   methods: () => get<CredentialLoginMethod[]>('/credentials/cli/methods'),
   status:  () => get<CredentialStatus[]>('/credentials/cli/status'),
-
-  saveApiKey: (runtime: string, apiKey: string) =>
-    post<{ status: string; profile_id: string }>('/credentials/cli/apikey', { runtime, api_key: apiKey }),
+  usage:   () => get<CliUsageEntry[]>('/credentials/cli/usage'),
+  usageAutoRefresh: () => get<CliUsageAutoRefreshSettings>('/credentials/cli/usage/auto-refresh'),
+  setUsageAutoRefresh: (enabled: boolean) =>
+    put<CliUsageAutoRefreshSettings>('/credentials/cli/usage/auto-refresh', { enabled }),
+  refreshUsage: (runtime: string) =>
+    post<CliUsageEntry>(`/credentials/cli/usage/refresh?runtime=${encodeURIComponent(runtime)}`, {}),
 
   sendLoginInput: (runtime: string, input: string) =>
     post<{ status: string }>(`/credentials/cli/login/input?runtime=${encodeURIComponent(runtime)}`, { input }),

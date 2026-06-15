@@ -15,7 +15,7 @@
  */
 
 import { z } from "zod";
-import { ISODateTimeSchema } from "./common";
+import { ISODateTimeSchema } from "./common.js";
 
 // ---------------------------------------------------------------------------
 // Messages, tools, usage

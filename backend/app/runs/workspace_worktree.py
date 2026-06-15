@@ -123,6 +123,35 @@ def workspace_git_worktree(
     git repository — CLI adapters must not fall back to an empty directory.
     Raises :class:`RuntimeError` when ``git worktree add`` fails.
     """
+    wt_path = create_workspace_git_worktree(
+        space_id=space_id,
+        run_id=run_id,
+        workspace_root=workspace_root,
+    )
+
+    try:
+        yield str(wt_path)
+    finally:
+        cleanup_workspace_git_worktree(
+            space_id=space_id,
+            run_id=run_id,
+            workspace_root=workspace_root,
+            worktree_path=wt_path,
+        )
+
+
+def create_workspace_git_worktree(
+    *,
+    space_id: str,
+    run_id: str,
+    workspace_root: Path,
+) -> Path:
+    """Create a detached git worktree and return its path.
+
+    Unlike :func:`workspace_git_worktree`, this helper does not clean up on
+    scope exit. It is used by service-to-service execution where TypeScript owns
+    adapter lifetime and calls an explicit cleanup port afterward.
+    """
     if not _is_git_repo(workspace_root):
         raise WorkspaceNotGitRepoError(
             f"Workspace at '{workspace_root}' is not a git repository. "
@@ -137,6 +166,8 @@ def workspace_git_worktree(
     _ensure_under_root(wt_path, wt_base)
 
     wt_path.parent.mkdir(parents=True, exist_ok=True)
+    if wt_path.exists():
+        _cleanup_worktree(workspace_root, wt_path, run_id)
 
     add_result = subprocess.run(
         ["git", "worktree", "add", "--detach", str(wt_path), "HEAD"],
@@ -155,11 +186,23 @@ def workspace_git_worktree(
         "git worktree created space=%s run=%s path=%s",
         space_id, run_id, wt_path,
     )
+    return wt_path
 
-    try:
-        yield str(wt_path)
-    finally:
-        _cleanup_worktree(workspace_root, wt_path, run_id)
+
+def cleanup_workspace_git_worktree(
+    *,
+    space_id: str,
+    run_id: str,
+    workspace_root: Path,
+    worktree_path: Path | str | None = None,
+) -> None:
+    """Remove a detached git worktree under the configured sandbox root."""
+    root = Path(settings.sandbox_root).resolve()
+    wt_base = (root / "worktrees").resolve()
+    _ensure_under_root(wt_base, root)
+    wt_path = Path(worktree_path).resolve() if worktree_path else (wt_base / space_id / run_id).resolve()
+    _ensure_under_root(wt_path, wt_base)
+    _cleanup_worktree(workspace_root, wt_path, run_id)
 
 
 def _cleanup_worktree(workspace_root: Path, wt_path: Path, run_id: str) -> None:

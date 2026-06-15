@@ -54,7 +54,6 @@ class AgentVersionService:
             version_label=version_label,
             model_provider_id=data.model_provider_id,
             model_name=data.model_name,
-            runtime_adapter_id=data.runtime_adapter_id,
             system_prompt=data.system_prompt,
             model_config_json=data.model_config_json,
             runtime_config_json=data.runtime_config_json,

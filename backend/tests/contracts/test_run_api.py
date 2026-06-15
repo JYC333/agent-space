@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from tests.support import factories
-from app.models import AgentVersion
 
 
 def _params(space_id: str, user_id: str) -> dict[str, str]:
@@ -167,38 +166,22 @@ def test_run_execution_surfaces_run_steps(api_client, db, cross_space_pair):
     assert ("completed" in step_types) or ("failed" in step_types)
 
 
-def test_execute_with_disabled_runtime_adapter_marks_run_failed(api_client, db, cross_space_pair):
+def test_execute_with_planned_adapter_type_marks_run_failed(api_client, db, cross_space_pair):
     """Product contract: POST execute attempts execution and returns the updated Run.
 
-    A disabled ``RuntimeAdapter`` is not a client request validation error: the
-    server performs resolution, marks the run **failed**, and returns **HTTP 200**
-    with ``error_json.error_code == adapter_disabled``. This matches
-    ``RunExecutionService`` semantics (mutation + auditable failure), not
-    ``409`` pre-flight rejection.
+    A planned adapter type is not a client request validation error at execute
+    time: the server performs resolution, marks the run failed, and returns
+    HTTP 200 with a stable runtime error code.
     """
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
-    disabled = factories.create_test_runtime_adapter(
-        db,
-        space_id=a,
-        name="disabled-echo",
-        adapter_type="echo",
-        enabled=False,
-        commit=True,
-    )
-    agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
-    ver_row = (
-        db.query(AgentVersion)
-        .filter(AgentVersion.id == agent.current_version_id)
-        .first()
-    )
-    assert ver_row is not None
-    ver_row.runtime_adapter_id = disabled.id
-    db.commit()
+    agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
 
     run = factories.create_test_run(
         db, space_id=a, user_id=ua.id, agent=agent, commit=True,
     )
+    run.adapter_type = "opencode"
+    db.commit()
     r = cross_space_pair["client_a"].post(
         f"/api/v1/runs/{run.id}/execute",
         params=_params(a, ua.id),
@@ -207,4 +190,4 @@ def test_execute_with_disabled_runtime_adapter_marks_run_failed(api_client, db, 
     body = r.json()
     assert body.get("status") == "failed"
     err = body.get("error_json") or {}
-    assert err.get("error_code") == "adapter_disabled"
+    assert err.get("error_code") == "adapter_planned_not_executable"

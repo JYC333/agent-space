@@ -31,7 +31,6 @@ services:
       - ../../backend/migrations:/app/migrations:ro
       - ../../catalog/agent_templates:/app/agent_templates:ro
       - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/dev}:/aspace
-      - claude-home:/home/agentspace/.claude
     group_add:
       - "${DOCKER_GID:-989}"
     env_file:
@@ -46,36 +45,85 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - DEPLOYER_SOCKET_PATH=/aspace/run/deployer.sock
-      - CLAUDE_HOME=/home/agentspace/.claude
+      - CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY=${CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY:-python}
+      - CONTROL_PLANE_RUNS_AUTHORITY=${CONTROL_PLANE_RUNS_AUTHORITY:-python}
+      - CONTROL_PLANE_POLICY_AUTHORITY=${CONTROL_PLANE_POLICY_AUTHORITY:-python}
+      - CONTROL_PLANE_PROPOSALS_AUTHORITY=${CONTROL_PLANE_PROPOSALS_AUTHORITY:-python}
+      - CONTROL_PLANE_SESSIONS_AUTHORITY=${CONTROL_PLANE_SESSIONS_AUTHORITY:-python}
+      - CONTROL_PLANE_CHAT_TURN_AUTHORITY=${CONTROL_PLANE_CHAT_TURN_AUTHORITY:-python}
+      - CONTROL_PLANE_CONTEXT_AUTHORITY=${CONTROL_PLANE_CONTEXT_AUTHORITY:-python}
+      - CONTROL_PLANE_MEMORY_AUTHORITY=${CONTROL_PLANE_MEMORY_AUTHORITY:-python}
+      - CONTROL_PLANE_MEMORY_APPLY_AUTHORITY=${CONTROL_PLANE_MEMORY_APPLY_AUTHORITY:-python}
+      - CONTROL_PLANE_INTERNAL_URL=${CONTROL_PLANE_INTERNAL_URL:-http://control-plane:8010}
+      - CONTROL_PLANE_INTERNAL_TOKEN=${CONTROL_PLANE_INTERNAL_TOKEN:-}
       - AGENT_SPACE_ENV=dev
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      start_period: 180s
+      start_interval: 2s
+      interval: 30s
+      timeout: 5s
+      retries: 3
     working_dir: /app
     command: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
   # Official TS control plane — the default client-facing entrypoint. It serves
-  # TS-owned /api/v1/control-plane/* routes and proxies everything else under
-  # /api/v1/* to the legacy `backend` (Python), which remains the sole authority.
+  # TS-owned routes and proxies unowned /api/v1/* paths to `backend` (Python).
   control-plane:
     build:
       context: ../../
       dockerfile: control-plane/Dockerfile
+      target: dev-runtime
       network: host
     container_name: agent-space-dev-control-plane
     ports:
       - "8010:8010"
+    volumes:
+      - ../../control-plane/src:/app/control-plane/src:ro
+      - ../../control-plane/tsconfig.json:/app/control-plane/tsconfig.json:ro
+      - ../../packages/protocol/src:/app/packages/protocol/src:ro
+      - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/dev}:/aspace
     environment:
+      - AGENT_SPACE_HOME=/aspace
       - CONTROL_PLANE_HOST=${CONTROL_PLANE_HOST:-0.0.0.0}
       - CONTROL_PLANE_PORT=${CONTROL_PLANE_PORT:-8010}
-      # The Python authority service in this stack is named `backend`.
-      - LEGACY_PYTHON_API_BASE_URL=${LEGACY_PYTHON_API_BASE_URL:-http://backend:8000}
-      - CONTROL_PLANE_ENABLE_LEGACY_PROXY=${CONTROL_PLANE_ENABLE_LEGACY_PROXY:-true}
+      # The Python service in this stack is named `backend`.
+      - CONTROL_PLANE_PYTHON_API_BASE_URL=${CONTROL_PLANE_PYTHON_API_BASE_URL:-http://backend:8000}
+      - CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY=${CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY:-true}
       - CONTROL_PLANE_LOG_LEVEL=${CONTROL_PLANE_LOG_LEVEL:-info}
       - CONTROL_PLANE_REQUEST_TIMEOUT_MS=${CONTROL_PLANE_REQUEST_TIMEOUT_MS:-300000}
+      - CONTROL_PLANE_PROVIDERS_AUTHORITY=${CONTROL_PLANE_PROVIDERS_AUTHORITY:-python}
+      - CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY=${CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY:-python}
+      - CONTROL_PLANE_RUNS_AUTHORITY=${CONTROL_PLANE_RUNS_AUTHORITY:-python}
+      - CONTROL_PLANE_POLICY_AUTHORITY=${CONTROL_PLANE_POLICY_AUTHORITY:-python}
+      - CONTROL_PLANE_PROPOSALS_AUTHORITY=${CONTROL_PLANE_PROPOSALS_AUTHORITY:-python}
+      - CONTROL_PLANE_SESSIONS_AUTHORITY=${CONTROL_PLANE_SESSIONS_AUTHORITY:-python}
+      - CONTROL_PLANE_CHAT_TURN_AUTHORITY=${CONTROL_PLANE_CHAT_TURN_AUTHORITY:-python}
+      - CONTROL_PLANE_CONTEXT_AUTHORITY=${CONTROL_PLANE_CONTEXT_AUTHORITY:-python}
+      - CONTROL_PLANE_MEMORY_AUTHORITY=${CONTROL_PLANE_MEMORY_AUTHORITY:-python}
+      - CONTROL_PLANE_MEMORY_APPLY_AUTHORITY=${CONTROL_PLANE_MEMORY_APPLY_AUTHORITY:-python}
+      - CONTROL_PLANE_PROVIDERS_SHADOW=${CONTROL_PLANE_PROVIDERS_SHADOW:-false}
+      - CONTROL_PLANE_DATABASE_URL=${CONTROL_PLANE_DATABASE_URL:-}
+      - CONTROL_PLANE_INTERNAL_TOKEN=${CONTROL_PLANE_INTERNAL_TOKEN:-}
+      - CONTROL_PLANE_CLI_TOOLS_ROOT=${CONTROL_PLANE_CLI_TOOLS_ROOT:-/aspace/runtime-tools}
+      - TSC_WATCHFILE=${TSC_WATCHFILE:-PriorityPollingInterval}
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:8010/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      start_period: 60s
+      start_interval: 2s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    command: >
+      sh -c "npm --prefix /app/packages/protocol run build -- --watch --preserveWatchOutput &
+             npm run build -- --watch --preserveWatchOutput &
+             node --watch dist/index.js"
     restart: unless-stopped
 
   frontend:
@@ -115,6 +163,3 @@ services:
       - AGENT_SPACE_HOME=/aspace
       - AGENT_SPACE_ENV=dev
     restart: unless-stopped
-
-volumes:
-  claude-home:

@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/spaceNav'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { agentsApi } from '../../api/client'
+import { agentsApi, credentialsApi } from '../../api/client'
+import type { CredentialStatus } from '../../types/api'
 import { useSpace } from '../../contexts/SpaceContext'
 import ProviderSelector from '../providers/ProviderSelector'
 import { Button } from '../../components/ui/button'
@@ -23,10 +24,21 @@ export default function AgentFormPage() {
   const [description, setDescription] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
   const [modelSelection, setModelSelection] = useState<{ provider_id: string; model: string } | null>(null)
-  const [runtime, setRuntime] = useState<'model_api' | 'claude_code'>('model_api')
+  const [runtime, setRuntime] = useState<string>('model_api')
+  const [cliRuntimes, setCliRuntimes] = useState<CredentialStatus[]>([])
   const [saving, setSaving] = useState(false)
 
-  const providerRequired = runtime === 'model_api'
+  // CLI runtimes are offered only when a login profile exists for them; the
+  // catalog of installed-and-logged-in CLIs comes from the credential status
+  // endpoint rather than a hardcoded list.
+  useEffect(() => {
+    credentialsApi.status()
+      .then(list => setCliRuntimes(list.filter(c => c.logged_in)))
+      .catch(() => setCliRuntimes([]))
+  }, [])
+
+  const isCli = runtime !== 'model_api'
+  const providerRequired = !isCli
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -42,8 +54,9 @@ export default function AgentFormPage() {
         description: description.trim() || null,
         system_prompt: systemPrompt.trim() || null,
         adapter_type: runtime,
-        default_model_provider_id: modelSelection?.provider_id ?? null,
-        default_model: modelSelection?.model || null,
+        // CLI runtimes manage their own model; never carry a provider/model.
+        default_model_provider_id: isCli ? null : (modelSelection?.provider_id ?? null),
+        default_model: isCli ? null : (modelSelection?.model || null),
       })
       toast.success('Agent created')
       navigate(`/agents/${created.id}`)
@@ -89,19 +102,23 @@ export default function AgentFormPage() {
               <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Runtime</label>
               <select
                 value={runtime}
-                onChange={e => setRuntime(e.target.value as 'model_api' | 'claude_code')}
+                onChange={e => setRuntime(e.target.value)}
                 className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
               >
                 <option value="model_api">API — call a model provider (no tools)</option>
-                <option value="claude_code">Claude Code CLI (tools, filesystem)</option>
+                {cliRuntimes.map(c => (
+                  <option key={c.runtime} value={c.runtime}>{c.label} (tools, filesystem)</option>
+                ))}
               </select>
               <p className="text-xs text-muted-foreground">
-                {runtime === 'model_api'
-                  ? 'Runs a prompt against a configured model provider. Pick the provider below.'
-                  : 'Uses Claude Code with its own CLI login; the model provider below is optional.'}
+                {isCli
+                  ? 'Uses the CLI with its own login; the model is managed by the CLI runtime.'
+                  : 'Runs a prompt against a configured model provider. Pick the provider below.'}
               </p>
             </div>
-            <ProviderSelector value={modelSelection} onChange={setModelSelection} required={providerRequired} />
+            {!isCli && (
+              <ProviderSelector value={modelSelection} onChange={setModelSelection} required={providerRequired} />
+            )}
           </div>
           <div className="flex gap-2">
             <Button type="submit" disabled={saving}>{saving ? <Loader2 className="size-4 animate-spin" /> : 'Create agent'}</Button>

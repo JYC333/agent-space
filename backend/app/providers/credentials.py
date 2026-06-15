@@ -13,6 +13,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..models import Credential, ModelProvider
+from .control_plane_client import (
+    ControlPlaneProviderError,
+    provider_credentials_owned_by_control_plane,
+    resolve_credential_api_key_via_control_plane,
+    resolve_model_provider_api_key_via_control_plane,
+)
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +43,23 @@ def resolve_provider_credentials(
     context: str = "direct",
 ) -> dict[str, Any]:
     """Fetch and decrypt API-key material for a ``ModelProvider`` row."""
+
+    if provider_credentials_owned_by_control_plane():
+        provider = db.query(ModelProvider.space_id).filter(ModelProvider.id == provider_id).first()
+        if provider is None:
+            raise CredentialResolutionError(
+                f"ModelProvider '{provider_id}' not found (referenced via {context})",
+                adapter_type=adapter_type,
+            )
+        try:
+            return {
+                "api_key": resolve_model_provider_api_key_via_control_plane(
+                    space_id=str(provider[0]),
+                    provider_id=provider_id,
+                )
+            }
+        except ControlPlaneProviderError as exc:
+            raise CredentialResolutionError(str(exc), adapter_type=adapter_type) from exc
 
     provider = db.query(ModelProvider).filter(ModelProvider.id == provider_id).first()
     if provider is None:
@@ -97,6 +120,21 @@ def resolve_credential_api_key(
     context: str = "unknown",
 ) -> str:
     """Resolve API-key material from ``Credential.secret_ref``."""
+
+    if provider_credentials_owned_by_control_plane():
+        cred_ref = db.query(Credential.space_id).filter(Credential.id == credential_id).first()
+        if cred_ref is None:
+            raise CredentialResolutionError(
+                f"Credential '{credential_id}' not found (referenced via {context})",
+                adapter_type=adapter_type,
+            )
+        try:
+            return resolve_credential_api_key_via_control_plane(
+                space_id=str(cred_ref[0]),
+                credential_id=credential_id,
+            )
+        except ControlPlaneProviderError as exc:
+            raise CredentialResolutionError(str(exc), adapter_type=adapter_type) from exc
 
     cred = db.query(Credential).filter(Credential.id == credential_id).first()
     if cred is None:

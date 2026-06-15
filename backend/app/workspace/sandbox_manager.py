@@ -127,27 +127,40 @@ def _resolve_host_path(container_path: str) -> str:
     """
     Translate a path inside the backend container to the corresponding host path.
     Falls back to the original path when running outside Docker.
+
+    mountinfo semantics (proc(5)): for a bind mount, field 4 is the mount point
+    in this namespace and field 3 (``root``) is the bound directory's path on
+    its filesystem — the host-side path for host-dir binds. The LONGEST
+    matching mount point wins so the overlay root mount (``/``) never shadows
+    a specific bind like ``/aspace``. (Kept in lockstep with the control-plane
+    ``hostPath.ts`` resolver.)
     """
     target = str(Path(container_path).resolve())
+    best_mount: str | None = None
+    best_root = ""
     try:
         with open("/proc/self/mountinfo") as f:
             for line in f:
                 parts = line.split()
                 if len(parts) < 10:
                     continue
-                mount_point = parts[4]
                 try:
-                    sep = parts.index("-", 6)
-                    source = parts[sep + 2]
-                except (ValueError, IndexError):
+                    parts.index("-", 6)
+                except ValueError:
                     continue
-                mount_point = mount_point.rstrip("/")
+                mount_point = parts[4].rstrip("/")
+                root = parts[3].rstrip("/")
                 if target == mount_point or target.startswith(mount_point + "/"):
-                    relative = target[len(mount_point):]
-                    return source.rstrip("/") + relative
+                    if best_mount is None or len(mount_point) > len(best_mount):
+                        best_mount = mount_point
+                        best_root = root
     except Exception:
         pass
-    return container_path
+    # An empty root means the best match is a whole-filesystem mount (e.g. the
+    # container's overlay root) — no translation is possible or needed.
+    if best_mount is None or not best_root:
+        return container_path
+    return best_root + target[len(best_mount):]
 
 
 def _is_git_repo(path: str) -> bool:

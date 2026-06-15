@@ -260,7 +260,6 @@ class GenericCliRuntimeAdapter(BaseRuntimeAdapter):
             ctx.event_sink.emit(RuntimeEvent(
                 event_type="runtime_context_rendered",
                 status="succeeded",
-                runtime_adapter_id=ctx.runtime_adapter_id,
                 workspace_id=ctx.workspace_id,
                 metadata={
                     "context_snapshot_id": ctx.adapter_config.get("context_snapshot_id"),
@@ -295,7 +294,6 @@ class GenericCliRuntimeAdapter(BaseRuntimeAdapter):
                 ctx.space_id,
                 grant,
                 runtime_adapter_type=self.adapter_type,
-                runtime_adapter_id=ctx.runtime_adapter_id,
                 trigger_origin=ctx.trigger_origin,
                 fallback_used=bool(cred_meta.get("fallback_used")),
                 fallback_reason=cred_meta.get("fallback_reason"),

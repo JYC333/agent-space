@@ -142,7 +142,7 @@ def test_post_activity_normalizes_user_input_source_type_to_user_capture(api_cli
     r = cross_space_pair["client_a"].post(
         "/api/v1/activity",
         params=_params(a, ua.id),
-        json={"source_type": "user_input", "content": "legacy", "title": "legacy"},
+        json={"source_type": "user_input", "content": "old", "title": "old"},
     )
 
     assert r.status_code == 200, r.text

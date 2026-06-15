@@ -24,10 +24,11 @@ afterEach(async () => {
 });
 
 describe("route registry", () => {
-  it("registers TS-owned module routes before the legacy proxy catch-all (proxy last)", () => {
+  it("registers TS-owned module routes before the Python fallback catch-all (proxy last)", () => {
     const registered: Array<{ method: string; url: string }> = [];
     const fakeApp = {
       get: (url: string) => registered.push({ method: "GET", url }),
+      post: (url: string) => registered.push({ method: "POST", url }),
       all: (url: string) => registered.push({ method: "ALL", url }),
       setErrorHandler: () => undefined,
       addHook: () => undefined,
@@ -39,7 +40,16 @@ describe("route registry", () => {
     expect(urls).toContain("/health");
     expect(urls).toContain("/api/v1/control-plane/health");
     expect(urls).toContain("/api/v1/control-plane/features");
-    // The legacy proxy catch-all must be the very last registration.
+    expect(urls).toContain("/api/v1/runs/:runId/events/stream");
+    expect(urls).toContain("/api/v1/control-plane/notifications/webhooks/dispatch");
+    expect(urls).toContain("/api/v1/providers");
+    expect(urls).toContain("/api/v1/providers/catalog");
+    expect(urls).toContain("/api/v1/providers/litellm-providers");
+    expect(urls).toContain("/api/v1/providers/:configId");
+    expect(urls).toContain("/api/v1/home/summary");
+    expect(urls).toContain("/api/v1/me/summary");
+    expect(urls).toContain("/api/v1/workspace-console/workspaces");
+    // The Python fallback proxy catch-all must be the very last registration.
     expect(registered[registered.length - 1]).toEqual({ method: "ALL", url: "/api/v1/*" });
     expect(urls.filter((u) => u === "/api/v1/*")).toHaveLength(1);
   });
@@ -48,8 +58,24 @@ describe("route registry", () => {
     expect(systemModule.name).toBe("system");
     expect(typeof systemModule.registerRoutes).toBe("function");
     expect(TS_OWNED_MODULES).toContain(systemModule);
-    // The legacy proxy is bridge code, not a TS-owned module.
-    expect(TS_OWNED_MODULES.map((m) => m.name)).not.toContain("legacy");
+    expect(TS_OWNED_MODULES.map((m) => m.name)).toEqual([
+      "system",
+      "catalog",
+      "streaming",
+      "notifications",
+      "runtimeTools",
+      "providers",
+      "runtime_host",
+      "runs",
+      "policy",
+      "proposals",
+      "sessions",
+      "agents",
+      "memory",
+      "frontend_support",
+    ]);
+    // The Python fallback proxy is bridge code, not a TS-owned module.
+    expect(TS_OWNED_MODULES.map((m) => m.name)).not.toContain("pythonFallback");
   });
 });
 
@@ -130,8 +156,8 @@ describe("error envelope for TS-owned routes", () => {
     expect(res.payload).not.toContain("topsecret");
   });
 
-  it("does not change the legacy proxy's sanitized 502 body shape", async () => {
-    app = buildServer(loadConfig({ LEGACY_PYTHON_API_BASE_URL: "http://127.0.0.1:9" }), {
+  it("does not change the fallback proxy's sanitized 502 body shape", async () => {
+    app = buildServer(loadConfig({ CONTROL_PLANE_PYTHON_API_BASE_URL: "http://127.0.0.1:9" }), {
       logger: false,
     });
     const res = await app.inject({ method: "GET", url: "/api/v1/me" });

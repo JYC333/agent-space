@@ -1,7 +1,7 @@
 """Runtime adapter package (product execution).
 
 Registered adapters live under ``app.runtimes.adapters`` and are wired through
-``app.runtimes.registry``. Tests use the echo adapter or direct DB fixtures;
+``app.runtimes.registry``. Tests use explicit fake adapters or direct DB fixtures;
 obsolete ``runtime`` query overrides are not executed in production.
 
 This package is a lower-level execution layer: it must not import ``app.runs``.

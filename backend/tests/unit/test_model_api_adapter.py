@@ -42,6 +42,7 @@ class TestModelApiSpecAndRegistry:
         assert spec.runtime_kind == "managed_api"
         assert spec.implementation_status == "implemented"
         assert spec.credentials.credential_mode == "model_provider_api_key"
+        assert spec.credentials.credential_release_channel == "python_runtime"
         assert spec.model.model_provider_mode == "required"
         assert spec.sandbox.requires_file_access is False
         assert spec.sandbox.minimum_sandbox_level == "none"

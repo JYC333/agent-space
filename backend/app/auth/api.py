@@ -38,6 +38,20 @@ me_router = APIRouter(prefix="/me", tags=["me"])
 extra_routers = [me_router]
 
 
+# ── Identity introspection for control-plane modules ─────────────────────────
+#
+# Exposes the `get_identity` resolution as a port for the TS control plane.
+# Python stays the sole authentication/membership authority: the control plane
+# forwards the caller's Authorization header / session cookie / space_id query
+# here and never validates credentials itself. Response carries identifiers
+# only — no token, session, or key material.
+
+@router.get("/introspect")
+def introspect_identity(ids: tuple[str, str] = Depends(get_identity)):
+    space_id, user_id = ids
+    return {"space_id": space_id, "user_id": user_id}
+
+
 # ── API Key routes (existing) ─────────────────────────────────────────────────
 
 @router.post("/keys", response_model=ApiKeyCreatedOut, status_code=201)

@@ -5,7 +5,7 @@ import { FileCheck, FolderKanban, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { proposalsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
-import { errMsg } from '../../lib/utils'
+import { cn, errMsg } from '../../lib/utils'
 import type { Proposal, ProposalAcceptOut } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
@@ -18,11 +18,35 @@ import { EgressReviewNotice, isGrantDerivedProposal } from './EgressReviewNotice
 
 function fmt(dt: string | null | undefined) { return dt ? new Date(dt).toLocaleString() : '—' }
 
+type ProposalTypeFilter = '' | 'memory' | 'knowledge' | 'code_patch' | 'follow_up_task'
+
+const TYPE_FILTERS: { value: ProposalTypeFilter; label: string }[] = [
+  { value: '', label: 'All' },
+  { value: 'memory', label: 'Memory' },
+  { value: 'knowledge', label: 'Knowledge' },
+  { value: 'code_patch', label: 'Code' },
+  { value: 'follow_up_task', label: 'Tasks' },
+]
+
 const RISK_VARIANT: Record<string, 'default' | 'secondary' | 'muted' | 'destructive'> = {
   low:      'muted',
   medium:   'secondary',
   high:     'default',
   critical: 'destructive',
+}
+
+function apiTypesForFilter(type: string): (string | undefined)[] {
+  if (!type) return [undefined]
+  if (type === 'memory') return ['memory_create', 'memory_update', 'memory_archive']
+  if (type === 'knowledge') return ['knowledge_create', 'knowledge_update', 'knowledge_archive']
+  return [type]
+}
+
+function proposalMatchesTypeFilter(p: Proposal, type: string): boolean {
+  if (!type) return true
+  if (type === 'memory') return p.proposal_type.startsWith('memory_')
+  if (type === 'knowledge') return p.proposal_type.startsWith('knowledge_')
+  return p.proposal_type === type
 }
 
 export default function ProposalsPage() {
@@ -32,16 +56,23 @@ export default function ProposalsPage() {
 
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [filterStatus, setFilterStatus]       = useState('pending')
-  const [filterType, setFilterType]           = useState('')
   const [filterUrgency, setFilterUrgency]     = useState('')
   const [filterExpired, setFilterExpired]     = useState<string>('')
   const [approvingId, setApprovingId] = useState<string | null>(null)
 
-  // The Review scene sidebar drives the proposal-type filter through the URL (?type=…).
-  const urlType = searchParams.get('type') ?? ''
-  useEffect(() => {
-    setFilterType(prev => (prev === urlType ? prev : urlType))
-  }, [urlType])
+  // Proposal type grouping is local to this page; the Review sidebar only switches
+  // between real review surfaces (Proposals and Memory).
+  const rawUrlType = searchParams.get('type') ?? ''
+  const urlType = rawUrlType === 'task_create' ? 'follow_up_task' : rawUrlType
+
+  function setTypeFilter(type: ProposalTypeFilter) {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (type) next.set('type', type)
+      else next.delete('type')
+      return next
+    })
+  }
 
   const load = useCallback(async () => {
     if (!activeSpaceId) {
@@ -49,17 +80,20 @@ export default function ProposalsPage() {
       return
     }
     try {
-      const r = await proposalsApi.list({
-        status: filterStatus === '' ? 'all' : filterStatus,
-        type: filterType || undefined,
-        urgency: filterUrgency || undefined,
-        expired: filterExpired === '' ? undefined : filterExpired === 'true',
-        project_id: projectFilter || undefined,
-        limit: 80,
-      })
-      setProposals(r.items)
+      const pages = await Promise.all(apiTypesForFilter(urlType).map(type =>
+        proposalsApi.list({
+          status: filterStatus === '' ? 'all' : filterStatus,
+          type,
+          urgency: filterUrgency || undefined,
+          expired: filterExpired === '' ? undefined : filterExpired === 'true',
+          project_id: projectFilter || undefined,
+          limit: 80,
+        }),
+      ))
+      const items = pages.flatMap(page => page.items)
+      setProposals(items.filter(p => proposalMatchesTypeFilter(p, urlType)))
     } catch (e) { toast.error(errMsg(e)) }
-  }, [filterStatus, filterType, filterUrgency, filterExpired, projectFilter, activeSpaceId])
+  }, [filterStatus, urlType, filterUrgency, filterExpired, projectFilter, activeSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -164,15 +198,6 @@ export default function ProposalsPage() {
             />
           </div>
           <div className="min-w-[120px]">
-            <Label className="text-xs">proposal_type</Label>
-            <input
-              className="flex h-9 w-full rounded-md border border-border bg-transparent px-2 text-xs font-mono"
-              placeholder="type…"
-              value={filterType}
-              onChange={e => setFilterType(e.target.value)}
-            />
-          </div>
-          <div className="min-w-[120px]">
             <Label className="text-xs">urgency</Label>
             <Select
               value={filterUrgency}
@@ -199,6 +224,32 @@ export default function ProposalsPage() {
             />
           </div>
         </div>
+      </div>
+
+      <div className="flex flex-wrap gap-1 rounded-md border border-border bg-card p-1 w-fit max-w-full">
+        {TYPE_FILTERS.map(filter => {
+          const active = urlType === filter.value || (
+            filter.value === 'memory' && urlType.startsWith('memory_')
+          ) || (
+            filter.value === 'knowledge' && urlType.startsWith('knowledge_')
+          )
+          return (
+            <button
+              key={filter.label}
+              type="button"
+              aria-pressed={active}
+              onClick={() => setTypeFilter(filter.value)}
+              className={cn(
+                'h-8 rounded px-3 text-xs font-medium transition-colors',
+                active
+                  ? 'bg-primary/10 text-accent-foreground'
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+              )}
+            >
+              {filter.label}
+            </button>
+          )
+        })}
       </div>
 
       {proposals.length === 0

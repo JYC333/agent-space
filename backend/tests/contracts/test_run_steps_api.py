@@ -122,7 +122,7 @@ def test_steps_endpoint_cross_space_returns_404(api_client, db, cross_space_pair
 def test_steps_endpoint_execution_step_types_present_after_success(
     api_client, db, cross_space_pair, tmp_path, monkeypatch
 ):
-    """Contract: a successful echo run must surface the coarse execution step types."""
+    """Contract: an executed run must surface the coarse execution step types."""
     from app.config import settings
 
     art_root = tmp_path / "artifacts"

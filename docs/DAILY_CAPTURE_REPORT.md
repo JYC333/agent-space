@@ -46,7 +46,7 @@ DailyCaptureReportService.generate_for_date()
 - **Scheduler jobs are idempotent.** Each setting's `next_run_at` is committed immediately
   after a successful enqueue, not after all settings. A duplicate scan skips already-advanced
   slots; a failed enqueue leaves `next_run_at` unchanged so the slot is retried next scan.
-- **No legacy `/activity/{id}/process` endpoint.** That route was removed. Use `/review` for
+- **No removed `/activity/{id}/process` endpoint.** That route was removed. Use `/review` for
   status-only transitions and `/consolidate` for proposal generation.
 
 ## Settings (`DailyCaptureReportSetting`)

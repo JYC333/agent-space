@@ -20,18 +20,10 @@ def test_run_trace_aggregates_failed_run_replay_spine(api_client, db, cross_spac
     client = cross_space_pair["client_a"]
 
     provider = factories.create_test_model_provider(db, space_id=a, name="Trace Provider")
-    adapter = factories.create_test_runtime_adapter(
-        db,
-        space_id=a,
-        name="Trace Runtime",
-        adapter_type="echo",
-        provider_id=provider.id,
-    )
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, name="Trace Agent")
     version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).one()
     version.model_provider_id = provider.id
     version.model_name = "trace-model"
-    version.runtime_adapter_id = adapter.id
     version.system_prompt = "hidden trace prompt"
 
     parent = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent)
@@ -40,7 +32,7 @@ def test_run_trace_aggregates_failed_run_replay_spine(api_client, db, cross_spac
     run.status = "failed"
     run.error_message = "adapter failed"
     run.model_provider_id = provider.id
-    run.runtime_adapter_id = adapter.id
+    run.adapter_type = "model_api"
     run.context_snapshot.retrieval_trace_json = [{"stage": "test"}]
     run.context_snapshot.compiled_prefix_text = "raw compiled context must not be in trace"
     child = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent)
@@ -76,7 +68,6 @@ def test_run_trace_aggregates_failed_run_replay_spine(api_client, db, cross_spac
         event_type="adapter_completed",
         status="failed",
         step_id=step.id,
-        runtime_adapter_id=adapter.id,
         artifact_id=artifact.id,
         proposal_id=proposal.id,
         error_message="adapter failed",
@@ -95,7 +86,7 @@ def test_run_trace_aggregates_failed_run_replay_spine(api_client, db, cross_spac
     assert body["agent_version"]["system_prompt_sha256"] == hashlib.sha256(
         b"hidden trace prompt"
     ).hexdigest()
-    assert body["runtime_adapter"]["id"] == adapter.id
+    assert "runtime_adapter" not in body
     assert body["model_provider"]["id"] == provider.id
     assert body["context_snapshot"]["id"] == run.context_snapshot_id
     assert body["context_snapshot"]["has_compiled_prefix_text"] is True

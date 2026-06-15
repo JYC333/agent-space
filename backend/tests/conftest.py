@@ -143,18 +143,7 @@ USER = DEFAULT_USER_ID
 pytest_plugins = ("tests.support.fixtures",)
 
 
-def _postgres_major_from_env_example() -> str:
-    env_example = REPO_ROOT / "ops" / "env" / ".env.dev.example"
-    for line in env_example.read_text().splitlines():
-        if line.startswith("POSTGRES_MAJOR="):
-            major = line.split("=", 1)[1].strip()
-            if major.isdigit():
-                return major
-            break
-    raise RuntimeError("ops/env/.env.dev.example must declare POSTGRES_MAJOR=<major>")
-
-
-POSTGRES_MAJOR = _postgres_major_from_env_example()
+POSTGRES_MAJOR = os.environ.get("POSTGRES_MAJOR", "18")
 
 
 def _migrate_test_database(database_url: str) -> None:

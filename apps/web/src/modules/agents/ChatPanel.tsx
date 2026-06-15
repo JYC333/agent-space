@@ -2,38 +2,73 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Send, Loader2, Sparkles, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { agentsApi } from '../../api/client'
-import type { AgentOut } from '../../types/api'
+import { agentsApi, sessionsApi } from '../../api/client'
+import type { AgentOut, Message } from '../../types/api'
 import { Button } from '../../components/ui/button'
 import { Textarea } from '../../components/ui/textarea'
 import { EmptyState } from '../../components/ui/empty-state'
 import { errMsg } from '../../lib/utils'
 
-interface ChatMessage { role: 'user' | 'assistant'; content: string; error?: boolean }
+interface ChatMessage { id?: string; role: string; content: string; error?: boolean }
 
 /**
  * Synchronous chat surface for the space's Personal Assistant. Each turn calls
  * POST /agents/{id}/chat, which runs the no-tools model_api path server-side and
- * returns the reply. The conversation is held in component state for the session;
- * a model-provider-missing failure renders an inline hint rather than a fake reply.
+ * returns the reply. The active session id is reflected in the URL by the parent
+ * so a refresh can reload persisted messages through the sessions API.
  */
-export default function ChatPanel({ agent, initialDraft }: { agent: AgentOut; initialDraft?: string | null }) {
+export default function ChatPanel({
+  agent,
+  initialDraft,
+  initialSessionId,
+  onSessionChange,
+}: {
+  agent: AgentOut
+  initialDraft?: string | null
+  initialSessionId?: string | null
+  onSessionChange?: (sessionId: string) => void
+}) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [sessionId, setSessionId] = useState<string | undefined>(undefined)
+  const [sessionId, setSessionId] = useState<string | undefined>(initialSessionId ?? undefined)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [loadingHistory, setLoadingHistory] = useState(Boolean(initialSessionId))
   const scrollRef = useRef<HTMLDivElement>(null)
   const autoSentRef = useRef(false)
 
+  useEffect(() => {
+    const id = initialSessionId?.trim()
+    if (!id) {
+      setLoadingHistory(false)
+      return
+    }
+    let cancelled = false
+    setLoadingHistory(true)
+    sessionsApi.messages(id)
+      .then((rows: Message[]) => {
+        if (cancelled) return
+        setSessionId(id)
+        setMessages(rows.map(m => ({ id: m.id, role: m.role, content: m.content })))
+      })
+      .catch(e => {
+        if (!cancelled) toast.error(errMsg(e))
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingHistory(false)
+      })
+    return () => { cancelled = true }
+  }, [initialSessionId])
+
   const send = useCallback(async (text: string) => {
     const message = text.trim()
-    if (!message || sending) return
+    if (!message || sending || loadingHistory) return
     setInput('')
     setMessages(m => [...m, { role: 'user', content: message }])
     setSending(true)
     try {
       const res = await agentsApi.chat(agent.id, { message, session_id: sessionId }, { spaceId: agent.space_id })
       setSessionId(res.session_id)
+      onSessionChange?.(res.session_id)
       if (res.ok) {
         setMessages(m => [...m, { role: 'assistant', content: res.reply ?? '' }])
       } else {
@@ -48,15 +83,15 @@ export default function ChatPanel({ agent, initialDraft }: { agent: AgentOut; in
     } finally {
       setSending(false)
     }
-  }, [agent.id, agent.space_id, sessionId, sending])
+  }, [agent.id, agent.space_id, loadingHistory, onSessionChange, sessionId, sending])
 
   // Auto-send a draft carried from Home's assistant entry (the user already hit "Open").
   useEffect(() => {
-    if (initialDraft && initialDraft.trim() && !autoSentRef.current) {
+    if (initialDraft && initialDraft.trim() && !autoSentRef.current && !loadingHistory) {
       autoSentRef.current = true
       void send(initialDraft)
     }
-  }, [initialDraft, send])
+  }, [initialDraft, loadingHistory, send])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -66,8 +101,19 @@ export default function ChatPanel({ agent, initialDraft }: { agent: AgentOut; in
 
   return (
     <div className="flex flex-col h-full min-h-0">
+      {sessionId && (
+        <div className="mb-2 flex items-center justify-end">
+          <Link to={`/sessions?open=${sessionId}`} className="text-[12px] text-muted-foreground hover:text-foreground underline-offset-4 hover:underline">
+            Chat history
+          </Link>
+        </div>
+      )}
       <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-lg border border-border bg-card p-4">
-        {messages.length === 0 && !sending ? (
+        {loadingHistory ? (
+          <div className="h-full min-h-[220px] flex items-center justify-center text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin mr-2" /> Loading conversation…
+          </div>
+        ) : messages.length === 0 && !sending ? (
           <EmptyState
             title="Ask your assistant"
             description="It is aware of your space — memory, projects, captures, runs, and proposals. Long-term changes are always proposals you approve."
@@ -126,7 +172,7 @@ export default function ChatPanel({ agent, initialDraft }: { agent: AgentOut; in
           rows={2}
           className="resize-none flex-1"
         />
-        <Button type="submit" disabled={sending || !input.trim()}>
+        <Button type="submit" disabled={sending || loadingHistory || !input.trim()}>
           {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
         </Button>
       </form>

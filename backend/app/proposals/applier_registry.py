@@ -35,7 +35,7 @@ mapping is preserved (``ProposalApplyError`` → HTTP 422,
 ``CodePatchApplyError`` → HTTP 400, egress errors, …). An unregistered
 proposal type raises :class:`UnknownProposalApplierError`, which **is a**
 :class:`ProposalApplyError` carrying the pre-registry message
-(``unsupported proposal type: '<type>'``) so legacy failure handling and
+(``unsupported proposal type: '<type>'``) so pre-registry failure handling and
 failure codes are unchanged.
 
 Appliers may be synchronous or ``async``. Proposal apply runs on sync request

@@ -271,9 +271,8 @@ class RunService:
         self.db.add(snapshot)
 
         # 8. Validate and resolve execution plane; snapshot its observability/exposure/trust metadata.
-        # Priority: runtime_adapter_id → execution_plane_id → adapter_type lookup.
+        # Priority: execution_plane_id → adapter_type lookup.
         execution_plane_id = getattr(data, "execution_plane_id", None)
-        runtime_adapter_id = getattr(data, "runtime_adapter_id", None)
 
         version = self.db.query(AgentVersion).filter(
             AgentVersion.id == agent.current_version_id
@@ -286,7 +285,6 @@ class RunService:
         effective_adapter_type = RouterService(self.db).preview_run_adapter_type(
             space_id=space_id,
             version=version,
-            runtime_adapter_id=runtime_adapter_id,
             requested_adapter_type=data.adapter_type,
         )
         try:
@@ -303,15 +301,6 @@ class RunService:
         model_provider_id = resolved_model.model_provider_id
 
         # Validate FK references belong to this space (prevent cross-space injection).
-        if runtime_adapter_id:
-            from ..models import RuntimeAdapter as _RA
-            if not self.db.query(_RA).filter(
-                _RA.id == runtime_adapter_id, _RA.space_id == space_id
-            ).first():
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"RuntimeAdapter '{runtime_adapter_id}' not found in this space",
-                )
         if model_provider_id:
             from ..models import ModelProvider as _MP
             mp_row = self.db.query(_MP).filter(
@@ -334,13 +323,9 @@ class RunService:
         externality_level = None
 
         resolved_plane = None
-        if runtime_adapter_id or execution_plane_id or data.adapter_type:
+        if execution_plane_id or data.adapter_type:
             from ..execution_planes.service import ExecutionPlaneService
             ep_svc = ExecutionPlaneService(self.db)
-            if runtime_adapter_id:
-                resolved_plane = ep_svc.resolve_execution_plane_for_runtime(
-                    runtime_adapter_id, space_id
-                )
             if not resolved_plane and execution_plane_id:
                 resolved_plane = ep_svc.get_execution_plane(execution_plane_id, space_id)
             if not resolved_plane and data.adapter_type:
@@ -372,12 +357,11 @@ class RunService:
             prompt=data.prompt,
             instruction=data.instruction,
             scheduled_at=data.scheduled_at,
-            adapter_type=data.adapter_type,
+            adapter_type=effective_adapter_type,
             capability_id=data.capability_id,
             required_sandbox_level="none",
             source="managed",
             execution_plane_id=execution_plane_id,
-            runtime_adapter_id=runtime_adapter_id,
             model_provider_id=model_provider_id,
             model_override_json={
                 "model": resolved_model.model_name,

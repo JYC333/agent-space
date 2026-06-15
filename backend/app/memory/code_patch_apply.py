@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from ..models import ActivityRecord, Workspace
 from ..policy import PolicyAuditPersistError
-from ..policy import PolicyGateway, PolicyCheckRequest
+from ..policy import PolicyCheckRequest, get_policy_port
 from ..workspace.path_policy import PathPolicy, PathPolicyError
 from ..workspace.disk_path import workspace_absolute_root
 
@@ -269,7 +269,7 @@ def apply_code_patch_payload(
         if isinstance(op, dict)
     ]
     try:
-        PolicyGateway(db).enforce(
+        get_policy_port(db).enforce(
             PolicyCheckRequest(
                 action="workspace.write_patch",
                 actor_type="user",

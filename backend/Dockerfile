@@ -13,7 +13,6 @@
 
 FROM python:3.12-slim
 
-# Node.js  — required for claude and codex CLI tools (npm packages)
 # git      — required for SandboxManager.create_worktree() (git worktree add)
 # curl     — healthcheck
 # postgresql-client-${PG_MAJOR} — provides pg_dump / psql required by BackupService.
@@ -38,13 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
          > /etc/apt/sources.list.d/pgdg.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends "postgresql-client-${PG_MAJOR}" \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
-
-# Claude Code CLI + Codex CLI
-RUN npm install -g @anthropic-ai/claude-code \
-    && npm install -g @openai/codex
 
 WORKDIR /app
 
@@ -63,10 +56,6 @@ COPY catalog/capabilities/ ./capabilities/
 RUN useradd -m -u 1000 agentspace && chown -R agentspace /app
 # Pre-create aspace subdirectories so bind-mounts don't create them as root
 RUN mkdir -p /aspace/run && chown agentspace:agentspace /aspace
-# Pre-create .claude owned by agentspace so the named volume inherits the right
-# permissions when Docker seeds it on first mount (new empty volumes copy the
-# image directory including ownership).
-RUN mkdir -p /home/agentspace/.claude && chown agentspace:agentspace /home/agentspace/.claude
 USER agentspace
 
 EXPOSE 8000

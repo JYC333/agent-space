@@ -8,6 +8,7 @@ from ..schemas import (
     SessionCreate, SessionOut, MessageCreate, MessageOut, ReflectResponse, ProposalOut, Page
 )
 from .service import SessionService
+from .authority import reject_python_session_command_when_ts_authority
 from ..memory import MemoryReflector
 from ..proposals import proposal_to_out
 from ..auth import get_identity
@@ -21,6 +22,7 @@ def create_session(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
+    reject_python_session_command_when_ts_authority("create")
     space_id, user_id = ids
     if not data.space_id:
         data.space_id = space_id
@@ -37,6 +39,7 @@ def list_sessions(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
+    reject_python_session_command_when_ts_authority("list")
     space_id, user_id = ids
     svc = SessionService(db)
     total = svc.count_sessions(space_id=space_id, user_id=user_id)
@@ -50,6 +53,7 @@ def get_session(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
+    reject_python_session_command_when_ts_authority("get")
     space_id, user_id = ids
     svc = SessionService(db)
     session = svc.get_session(session_id, space_id=space_id, user_id=user_id)
@@ -65,6 +69,7 @@ def add_message(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
+    reject_python_session_command_when_ts_authority("add_message")
     space_id, user_id = ids
     svc = SessionService(db)
     msg = svc.add_message(session_id, data, space_id=space_id, user_id=user_id)
@@ -81,6 +86,7 @@ def get_messages(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
+    reject_python_session_command_when_ts_authority("messages")
     space_id, user_id = ids
     svc = SessionService(db)
     session = svc.get_session(session_id, space_id=space_id, user_id=user_id)
@@ -97,7 +103,7 @@ def reflect_session(
 ):
     space_id, user_id = ids
     svc = SessionService(db)
-    session = svc.get_session(session_id)
+    session = svc.get_session(session_id, space_id=space_id, user_id=user_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 

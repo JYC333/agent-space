@@ -53,6 +53,11 @@ def _supported_proposal_types() -> frozenset[str]:
     registered = frozenset(get_proposal_applier_registry().registered_appliers())
     return registered & SUPPORTED_PROPOSAL_TYPES
 
+
+def supported_proposal_apply_types() -> frozenset[str]:
+    """Public read-only view of live proposal types accepted by proposal.apply."""
+    return _supported_proposal_types()
+
 # Proposal types whose type-default risk is MEDIUM or lower.
 # Effective risk = max(type_default, declared_risk). For types in this set the
 # effective risk can be MEDIUM or lower when declared_risk is also <= MEDIUM.

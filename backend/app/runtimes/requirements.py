@@ -16,6 +16,7 @@ from .specs import get_runtime_adapter_spec
 
 ModelProviderMode = Literal["none", "optional", "required"]
 CredentialMode = Literal["none", "model_provider_api_key", "cli_profile"]
+CredentialReleaseChannel = Literal["python_runtime", "control_plane_runtime_host"]
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class RuntimeRequirements:
     model_provider_mode: ModelProviderMode
     credential_mode: CredentialMode
     supports_model_override: bool
+    credential_release_channel: CredentialReleaseChannel = "python_runtime"
 
 
 class UnknownRuntimeRequirementsError(ValueError):
@@ -43,6 +45,7 @@ def get_runtime_requirements(adapter_type: str | None) -> RuntimeRequirements:
             model_provider_mode="none",
             credential_mode="none",
             supports_model_override=False,
+            credential_release_channel="python_runtime",
         )
     try:
         spec = get_runtime_adapter_spec(normalized)
@@ -52,6 +55,7 @@ def get_runtime_requirements(adapter_type: str | None) -> RuntimeRequirements:
         model_provider_mode=spec.model.model_provider_mode,
         credential_mode=spec.credentials.credential_mode,
         supports_model_override=spec.model.supports_model_override,
+        credential_release_channel=spec.credentials.credential_release_channel,
     )
 
 

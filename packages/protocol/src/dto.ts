@@ -21,7 +21,7 @@ import type {
   ArtifactDTOSchema,
   MemoryDTOSchema,
   KnowledgeItemDTOSchema,
-} from "./schemas";
+} from "./schemas.js";
 
 // References
 export type SpaceRef = z.infer<typeof SpaceRefSchema>;

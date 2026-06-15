@@ -42,9 +42,9 @@ def test_unauthenticated_knowledge_endpoint_returns_401(api_client):
     assert r.status_code == 401
 
 
-def test_legacy_route_is_not_registered(api_client):
-    legacy = "".join(("/api/v1/wi", "ki/items"))
-    r = api_client.get(legacy)
+def test_removed_route_is_not_registered(api_client):
+    removed_route = "".join(("/api/v1/wi", "ki/items"))
+    r = api_client.get(removed_route)
     assert r.status_code == 404
 
 

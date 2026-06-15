@@ -53,6 +53,7 @@ class LLMPromptEvolutionEngine:
             system=_system_prompt(),
             user=_user_prompt(context),
             max_tokens=8000,
+            task="evolution",
         )
         raw = _parse_json_object(response.text)
         report = raw.get("report")

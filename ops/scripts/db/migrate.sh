@@ -55,6 +55,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 local_compose_init "$MODE"
+local_compose_ensure_mode_env_file
+local_compose_ensure_control_plane_ts_authority_env
 BACKEND_DIR="$REPO_ROOT/backend"
 trap 'local_compose_stop_postgres_if_started "migrate"' EXIT
 
@@ -204,8 +206,16 @@ else
   echo "          Opt in with PRE_MIGRATION_BACKUP=1 or --pre-migration-backup."
 fi
 
+if [[ "$RUN_MODE" == "host" ]] && local_compose_control_plane_ts_authority_enabled; then
+  echo "ERROR: automatic control-plane DB role provisioning currently supports docker-native migrations only." >&2
+  echo "       Re-run without --host, or provision the external database role separately." >&2
+  exit 1
+fi
+
 if [[ "$RUN_MODE" == "host" ]]; then
   run_host
 else
   run_docker
 fi
+
+local_compose_provision_control_plane_db_role "control-plane DB role provisioning"

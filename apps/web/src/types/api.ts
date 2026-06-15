@@ -45,7 +45,7 @@ export interface SpaceInvitationOut {
 export type MemoryType       = 'preference' | 'semantic' | 'episodic' | 'procedural' | 'project'
 export type MemoryScope      = 'user' | 'workspace' | 'capability' | 'agent' | 'system' | 'space'
 export type MemoryStatus     = 'active' | 'archived' | 'proposed' | 'rejected' | 'superseded'
-export type MemoryVisibility = 'private' | 'space_shared' | 'workspace_shared' | 'restricted' | 'public_template'
+export type MemoryVisibility = 'private' | 'space_shared' | 'workspace_shared' | 'selected_users' | 'summary_only' | 'restricted' | 'public_template'
 export type ObjectVisibility = 'private' | 'space_shared' | 'restricted' | string
 export type ProposalStatus   = 'pending' | 'accepted' | 'rejected'
 export type KnowledgeItemType =
@@ -104,131 +104,65 @@ export type WorkspaceStatus  = 'active' | 'archived'
 export type WorkspaceType    = 'project' | 'repo' | 'knowledge_base' | 'personal' | 'team' | 'system_core'
 export type WorkspaceCreateType = Exclude<WorkspaceType, 'system_core'>
 
-// Runtime Adapters
-export type RuntimeAdapterType =
-  | 'claude_code'
-  | 'codex_cli'
-  | 'opencode'
-  | 'gemini_cli'
-  | 'custom'
-  | 'echo'
-  | 'capability'
-
-export type RuntimeQuotaStatus = 'unknown' | 'enough' | 'medium' | 'low' | 'exhausted'
-export type RuntimeHealthStatus = 'unknown' | 'ok' | 'warning' | 'error' | 'unimplemented' | 'disabled'
-
 export type ModelSelectionMode = 'cli_default' | 'cli_model_override' | 'agent_space_provider'
 
-export interface RuntimeAdapterSpec {
-  adapter_type: RuntimeAdapterType
-  display_name: string
-  runtime_kind: 'native' | 'local_cli' | 'remote_cli' | 'managed_api' | 'custom'
-  implementation_status: 'implemented' | 'planned' | 'disabled'
-  enabled_by_default: boolean
-  executable: {
-    command: string | null
-    version_command: string[] | null
-    detect_command: string[] | null
-    allow_path_override: boolean
-  }
-  context: {
-    context_file_type: 'CLAUDE.md' | 'AGENTS.md' | 'prompt.md' | 'custom'
-    context_target_format: string
-    writes_vendor_context_file: boolean
-  }
-  credentials: {
-    credential_mode: 'none' | 'cli_profile' | 'model_provider_api_key'
-    credential_runtime_name: string | null
-    default_target_path: string | null
-    env_auth_var: string | null
-  }
-  sandbox: {
-    requires_file_access: boolean
-    minimum_sandbox_level: 'none' | 'dry_run' | 'worktree' | 'one_shot_docker'
-    supports_worktree: boolean
-    supports_one_shot_docker: boolean
-    requires_workspace_for_execution: boolean
-  }
-  model: {
-    model_provider_mode: 'none' | 'optional' | 'required'
-    supports_model_override: boolean
-    model_config_behavior: 'uses_model' | 'not_applicable' | 'unsupported'
-  }
-  permissions: {
-    supports_permission_bypass: boolean
-  }
-  usage: {
-    usage_accuracy: 'precise' | 'estimated' | 'unknown'
-    supports_usage_probe: boolean
-    usage_probe_kind: string | null
-    usage_parser_type: string
-  }
-  output: {
-    output_parser_type: 'generic' | 'plain_text'
-    patch_strategy: string
-    artifact_path_strategy: string
-  }
+export interface RuntimeToolManifest {
+  schema_version: 1
+  runtime: string
+  source: 'npm'
+  package_name: string
+  requested_version: string
+  version: string
+  bin_name: string
+  bin_relative_path: string
+  installed_at: string
 }
 
-export interface RuntimeAdapterStatus {
-  runtime_adapter_id: string | null
-  adapter_type: string
-  implementation_status: 'implemented' | 'planned' | 'disabled'
-  configured_count: number
-  configured: boolean
-  enabled: boolean
+export interface RuntimeToolDefinition {
+  runtime: string
+  label: string
+  source: 'npm'
+  package_name: string
+  bin_name: string
+  bin_relative_path: string
+  package_json_relative_path: string
+  default_version: string
+}
+
+export interface RuntimeToolStatus {
+  runtime: string
+  label: string
+  source: 'npm'
+  package_name: string
+  bin_name: string
   installed: boolean
-  version: string | null
+  active_version: string | null
   executable_path: string | null
-  credential_required: boolean
-  credential_profile_id: string | null
-  credential_ready: boolean
-  model_provider_required: boolean
-  model_provider_ready: boolean
-  supports_headless: boolean
-  supports_interactive: boolean
-  supports_model_override: boolean
-  supports_usage_probe: boolean
-  usage_accuracy: 'precise' | 'estimated' | 'unknown'
-  minimum_sandbox_level: 'none' | 'dry_run' | 'worktree' | 'one_shot_docker'
-  last_run_status: string | null
-  last_error_code: string | null
-  health_status: RuntimeHealthStatus
-  quota_status: RuntimeQuotaStatus
+  executable_exists: boolean
+  manifest: RuntimeToolManifest | null
   warnings: string[]
 }
 
-export interface RuntimeAdapter {
-  id: string
-  space_id: string
-  adapter_type: RuntimeAdapterType
-  name: string
-  enabled: boolean
-  provider_id: string | null
-  credential_id: string | null
-  credential_profile_id: string | null
-  config_json: Record<string, unknown>
-  executable_path: string | null
-  default_mode: 'interactive' | 'headless'
-  health_status: RuntimeHealthStatus
-  quota_status: RuntimeQuotaStatus
-  notes: string | null
-  created_at: string
-  updated_at: string
+export interface RuntimeToolInstallResult extends RuntimeToolStatus {
+  installed_version: string
+  activated: boolean
+}
+
+export interface RuntimeToolLatest {
+  runtime: string
+  package_name: string
+  latest_version: string | null
 }
 
 // CLI Credentials / Login
 
-export type LoginMethod = 'cli' | 'api_key'
+export type LoginMethod = 'cli'
 
 export interface CredentialLoginMethod {
   runtime: string
   method: LoginMethod
   label: string
   hint_cli: string
-  hint_api_key: string
-  env_var: string | null
-  supports_api_key: boolean
   supports_cli: boolean
 }
 
@@ -241,7 +175,42 @@ export interface CredentialStatus {
   file_count: number
 }
 
-export type LoginEventType = 'output' | 'error' | 'warning' | 'hint' | 'synced' | 'done' | 'needs_input'
+export interface TokenUsage {
+  available: boolean
+  source: 'transcripts' | 'codex_sessions' | 'unsupported'
+  input_tokens: number
+  output_tokens: number
+  cache_creation_input_tokens: number
+  cache_read_input_tokens: number
+  cost_usd: number
+  message_count: number
+  session_count: number
+}
+
+export interface QuotaUsage {
+  available: boolean
+  session_pct: number | null
+  session_resets: string | null
+  week_pct: number | null
+  week_resets: string | null
+  checked_at: string | null
+  error: string | null
+}
+
+export interface CliUsageEntry {
+  runtime: string
+  label: string
+  tokens: TokenUsage
+  quota: QuotaUsage | null
+}
+
+export interface CliUsageAutoRefreshSettings {
+  enabled: boolean
+  interval_ms: number
+  updated_at: string | null
+}
+
+export type LoginEventType = 'output' | 'error' | 'warning' | 'hint' | 'synced' | 'done' | 'needs_input' | 'device_auth'
 
 export interface LoginEvent {
   type: LoginEventType
@@ -250,6 +219,9 @@ export interface LoginEvent {
   profile_id?: string
   prompt?: string
   step?: string
+  url?: string
+  code?: string
+  expires_in_minutes?: number
 }
 
 export interface Page<T> {
@@ -480,30 +452,42 @@ export interface JobEvent {
 export interface Memory {
   id: string
   space_id: string
-  owner_user_id: string
+  subject_user_id?: string | null
+  owner_user_id: string | null
   workspace_id: string | null
-  agent_id: string | null
-  capability_id: string | null
-  source_activity_id: string | null
-  source_artifact_id: string | null
-  approved_by: string | null
-  title: string
-  content: string
+  title: string | null
+  content: string | null
   type: MemoryType
   scope: MemoryScope
-  namespace: string
+  namespace: string | null
   status: MemoryStatus
   visibility: MemoryVisibility
+  sensitivity_level?: string
+  selected_user_ids?: string[] | null
+  last_confirmed_at?: string | null
   confidence: number
   importance: number
   source_id: string | null
-  created_by: string
+  created_by: string | null
   version: number
-  access_count: number
+  access_count?: number
+  last_accessed_at?: string | null
   tags: string[] | null
   created_at: string
   updated_at: string
   deleted_at: string | null
+  agent_id?: string | null
+  capability_id?: string | null
+  source_activity_id?: string | null
+  source_artifact_id?: string | null
+  approved_by?: string | null
+  memory_layer?: string | null
+  memory_kind?: string | null
+  source_trust?: string | null
+  created_from_proposal_id?: string | null
+  root_memory_id?: string | null
+  supersedes_memory_id?: string | null
+  project_id?: string | null
 }
 
 export interface KnowledgeItemSummary {
@@ -1362,6 +1346,10 @@ export interface AgentOut {
   source_template_id: string | null
   source_template_version_id: string | null
   model: AgentModelSummary | null
+  // Effective runtime adapter and whether it needs a space model provider.
+  // CLI runtimes manage their own model/login and require no provider.
+  adapter_type: string | null
+  requires_model_provider: boolean
   system_prompt: string | null
   created_at: string
   updated_at: string
@@ -1374,7 +1362,6 @@ export interface AgentVersionOut {
   version_label: string
   model_provider_id: string | null
   model_name: string | null
-  runtime_adapter_id: string | null
   system_prompt: string | null
   model_config_json: Record<string, unknown>
   runtime_config_json: Record<string, unknown>
@@ -1598,7 +1585,7 @@ export interface ReflectResult {
 
 export interface ApiError {
   error: string
-  message: string | Record<string, unknown>
+  message?: string | Record<string, unknown>
   detail?: unknown
 }
 

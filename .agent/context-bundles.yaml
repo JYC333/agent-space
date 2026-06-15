@@ -315,16 +315,16 @@ credentials:
     - backend/app/runs/execution.py
     - backend/app/workspace/sandbox_manager.py
 
-runtime_adapters:
+runtime_tools:
   docs:
     - .agent/modules/runtime-adapters.md
     - .agent/decisions/0008-multi-cli-mvp.md
     - .agent/BOUNDARIES.md
   code_roots:
     - backend/app/runtimes/
-    - backend/app/runtime_adapters/
     - backend/app/runs/
-    - apps/web/src/modules/runtime_adapters/
+    - control-plane/src/modules/runtimeTools/
+    - apps/web/src/modules/runtime_tools/
 
 deployment:
   docs:

@@ -42,7 +42,7 @@ class FakeRuntimeConfig:
 
 
 class ConfigurableFakeRuntimeAdapter(BaseRuntimeAdapter):
-    """Returns configurable :class:`RuntimeAdapterResult` — mirrors ``EchoRuntimeAdapter`` hooks."""
+    """Returns configurable :class:`RuntimeAdapterResult` for execution tests."""
 
     adapter_type = "fake_test_runtime"
 

@@ -65,6 +65,29 @@ class TestCreateRunDoesNotPersistPolicyDecisionRecord:
             f"{pdr_after - pdr_before} new record(s) found"
         )
 
+    def test_create_run_snapshots_resolved_default_adapter_type(self, db):
+        space_id = "svc-policy-resolved-adapter"
+        factories.create_test_space(db, space_id=space_id, commit=True)
+        user = factories.create_test_user(db, space_id=space_id, commit=True)
+        agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
+        version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
+        version.runtime_config_json = {}
+        version.runtime_policy_json = {
+            **(version.runtime_policy_json or {}),
+            "allowed_adapter_types": ["model_api"],
+            "default_adapter_type": "model_api",
+        }
+        db.commit()
+
+        run = RunService(db).create_run(
+            agent_id=agent.id,
+            data=_make_run_create(),
+            space_id=space_id,
+            user_id=user.id,
+        )
+
+        assert run.adapter_type == "model_api"
+
     def test_disabled_agent_raises_409_with_no_pdr(self, db):
         space_id = "svc-policy-2"
         factories.create_test_space(db, space_id=space_id, commit=True)
@@ -98,11 +121,11 @@ class TestCreateRunDoesNotPersistPolicyDecisionRecord:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
-        # Restrict adapter types to only "echo"; request "claude_code" (not in list).
+        # Restrict adapter types to only "capability"; request "claude_code" (not in list).
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
         version.runtime_policy_json = {
             **(version.runtime_policy_json or {}),
-            "allowed_adapter_types": ["echo"],
+            "allowed_adapter_types": ["capability"],
         }
         db.commit()
 
@@ -195,13 +218,13 @@ class TestCreateRunRuntimeProviderDefaults:
         db.flush()
         return user, agent, provider
 
-    def test_space_default_provider_does_not_attach_to_echo_run(self, db):
-        space_id = "svc-runtime-provider-echo"
+    def test_space_default_provider_does_not_attach_to_capability_run(self, db):
+        space_id = "svc-runtime-provider-capability"
         user, agent, provider = self._make_agent_with_default_provider(db, space_id)
 
         run = RunService(db).create_run(
             agent_id=agent.id,
-            data=_make_run_create(adapter_type="echo"),
+            data=_make_run_create(adapter_type="capability"),
             space_id=space_id,
             user_id=user.id,
         )
@@ -210,13 +233,13 @@ class TestCreateRunRuntimeProviderDefaults:
         assert run.model_provider_id is None
         assert run.model_override_json is None
 
-    def test_explicit_provider_request_is_ignored_for_echo_run(self, db):
-        space_id = "svc-runtime-provider-echo-explicit"
+    def test_explicit_provider_request_is_ignored_for_capability_run(self, db):
+        space_id = "svc-runtime-provider-capability-explicit"
         user, agent, provider = self._make_agent_with_default_provider(db, space_id)
 
         run = RunService(db).create_run(
             agent_id=agent.id,
-            data=_make_run_create(adapter_type="echo", model_provider_id=provider.id),
+            data=_make_run_create(adapter_type="capability", model_provider_id=provider.id),
             space_id=space_id,
             user_id=user.id,
         )
@@ -232,7 +255,7 @@ class TestCreateRunRuntimeProviderDefaults:
         ).first()
         allowed = set((version.runtime_policy_json or {}).get("allowed_adapter_types") or [])
         allowed.add("model_api")
-        version.runtime_config_json = {"adapter_type": "echo"}
+        version.runtime_config_json = {"adapter_type": "capability"}
         version.runtime_policy_json = {
             **(version.runtime_policy_json or {}),
             "allowed_adapter_types": sorted(allowed),

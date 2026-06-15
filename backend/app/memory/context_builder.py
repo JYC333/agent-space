@@ -470,8 +470,12 @@ class ContextBuilder:
         }
         if session_id:
             try:
-                from ..sessions.condenser import SessionCondenser
-                summary = SessionCondenser(self.db).get_latest(session_id, space_id)
+                from ..sessions import get_session_summary_port
+
+                summary = get_session_summary_port(self.db).get_latest_for_context(
+                    session_id,
+                    space_id,
+                )
                 if summary is not None:
                     recent_session_summary = [{
                         "summary": summary.summary_text,
@@ -506,13 +510,16 @@ class ContextBuilder:
         retrieval_trace["session_summary"] = session_summary_trace
 
         # ── Linked evidence selection ───────────────────────────────────
+        # Evidence selection + usage-link recording is intake-owned; reach it
+        # through the published port instead of intake internals so this context
+        # builder can move to TS without importing intake's service layer. The
+        # policy decision stays here — context assembly is the policy boundary.
         evidence_items: list[dict] = []
         evidence_refs: list[dict] = []
-        from ..intake.evidence_selector import EvidenceSelector, evidence_ref
-        from ..intake.service import IntakeService
-        from ..policy import PolicyCheckRequest, PolicyGateway
+        from ..intake import get_context_evidence_port
+        from ..policy import PolicyCheckRequest, get_policy_port
 
-        PolicyGateway(self.db).enforce(
+        get_policy_port(self.db).enforce(
             PolicyCheckRequest(
                 action="context.select_evidence",
                 actor_type="run" if run_id else "user",
@@ -524,41 +531,16 @@ class ContextBuilder:
                 metadata_json={"workspace_id": workspace_id, "project_id": project_id},
             )
         )
-        selected_evidence = EvidenceSelector(self.db).select_for_context(
+        for selection in get_context_evidence_port(self.db).select_for_context(
             space_id=space_id,
             workspace_id=workspace_id,
             project_id=project_id,
             run_id=run_id,
-        )
-        intake_service = IntakeService(self.db)
-        for selected in selected_evidence:
-            ev = selected.evidence
-            if run_id:
-                intake_service.create_evidence_link(
-                    space_id=space_id,
-                    evidence_id=ev.id,
-                    target_type="run",
-                    target_id=run_id,
-                    link_type="used_in_context",
-                    status="active",
-                    created_by_run_id=run_id,
-                )
-            ref = evidence_ref(selected, section="dynamic_tail")
-            evidence_refs.append(ref)
-            dynamic_tail_refs.append(ref)
-            source_refs.append(ref)
-            evidence_items.append({
-                "id": ev.id,
-                "title": ev.title,
-                "content_excerpt": ev.content_excerpt,
-                "evidence_type": ev.evidence_type,
-                "trust_level": ev.trust_level,
-                "source_uri": ev.source_uri,
-                "artifact_id": ev.artifact_id,
-                "link_id": selected.link.id,
-                "target_type": selected.link.target_type,
-                "target_id": selected.link.target_id,
-            })
+        ):
+            evidence_refs.append(selection.ref)
+            dynamic_tail_refs.append(selection.ref)
+            source_refs.append(selection.ref)
+            evidence_items.append(selection.item)
         retrieval_trace["evidence_selection"] = {
             "selected_count": len(evidence_items),
             "evidence_refs": evidence_refs,

@@ -52,7 +52,7 @@ def test_no_adapter_type_uses_default_policy(db, test_space, test_user):
         name="default-agent", space_id=test_space.id, created_by_user_id=test_user.id,
     ))
     version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).one()
-    assert version.runtime_policy_json["default_adapter_type"] == "echo"
+    assert version.runtime_policy_json["default_adapter_type"] == "model_api"
 
 
 def test_system_prompt_is_stored_on_version(db, test_space, test_user):

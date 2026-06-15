@@ -51,7 +51,7 @@ class ExternalRunImport:
     source: str = "manual_import"             # manual_import|remote_import
     workspace_id: str | None = None
     vendor_run_id: str | None = None
-    runtime_adapter_id: str | None = None
+    runtime_adapter_type: str | None = None
     execution_plane_id: str | None = None
     external_url: str | None = None
     observability_level: str = "black_box"    # imported runs are opaque by default
@@ -75,7 +75,7 @@ class ExternalRunImportService:
 
     Does not execute code. Does not write to memory, policy, or workspace profile.
     Produces only Run + ExternalRunRecord + optional Artifacts.
-    All FK inputs (workspace_id, runtime_adapter_id, execution_plane_id) are
+    All FK inputs (workspace_id, execution_plane_id) are
     validated against space_id before any rows are created.
     """
 
@@ -93,17 +93,6 @@ class ExternalRunImportService:
             if not ws:
                 raise ValueError(
                     f"Workspace '{imp.workspace_id}' not found in space '{imp.space_id}'"
-                )
-
-        if imp.runtime_adapter_id:
-            from ..models import RuntimeAdapter
-            adapter = self.db.query(RuntimeAdapter).filter(
-                RuntimeAdapter.id == imp.runtime_adapter_id,
-                RuntimeAdapter.space_id == imp.space_id,
-            ).first()
-            if not adapter:
-                raise ValueError(
-                    f"RuntimeAdapter '{imp.runtime_adapter_id}' not found in space '{imp.space_id}'"
                 )
 
         if imp.execution_plane_id:
@@ -149,7 +138,6 @@ class ExternalRunImportService:
             required_sandbox_level="none",
             source=imp.source,
             execution_plane_id=imp.execution_plane_id,
-            runtime_adapter_id=imp.runtime_adapter_id,
             observability_level=imp.observability_level,
             data_exposure_level=imp.data_exposure_level,
             trust_level="unknown",
@@ -164,7 +152,7 @@ class ExternalRunImportService:
             run_id=run.id,
             vendor=imp.vendor,
             vendor_run_id=imp.vendor_run_id,
-            runtime_adapter_id=imp.runtime_adapter_id,
+            runtime_adapter_type=imp.runtime_adapter_type,
             execution_plane_id=imp.execution_plane_id,
             external_url=imp.external_url,
             observability_level=imp.observability_level,

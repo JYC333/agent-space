@@ -270,18 +270,19 @@ export const MODULE_REGISTRY: Module[] = [
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
-    component: lazy(() => import('./memory/MemoriesPage')),
+    hasSubRoutes: true,
+    component: lazy(() => import('./memory/MemoryModule')),
   },
 
   // ── Agents (execution & infrastructure) ─────────────────────────────────────
   {
-    id: 'runtime_adapters', label: 'Runtime', path: '/runtime-adapters',
+    id: 'runtime_tools', label: 'Runtime', path: '/runtime-tools',
     section: 'agents', group: 'agents', icon: 'activity',
-    description: 'Monitor runtime adapters, queues, and execution health.',
+    description: 'Install CLI runtime tools and manage runtime credentials.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
-    component: lazy(() => import('./runtime_adapters/RuntimeAdaptersPage')),
+    component: lazy(() => import('./runtime_tools/RuntimeToolsPage')),
   },
   {
     id: 'job_queue', label: 'Job Queue', path: '/jobs',
@@ -383,7 +384,7 @@ export const MODULE_REGISTRY: Module[] = [
 /**
  * Find the registered module that owns a path (used for route metadata lookups).
  * Navigation tiers live in `src/core/navigation.tsx`; the home/space scope split lives in
- * `routeScopeForPath`. The legacy "perspective" path classifier has been removed.
+ * `routeScopeForPath`. The old "perspective" path classifier has been removed.
  */
 export function moduleForPath(pathname: string): Module | undefined {
   return MODULE_REGISTRY.find(module => {

@@ -2,12 +2,12 @@
 
 from .capability import CapabilityRuntimeAdapter
 from .cli_runtime import GenericCliRuntimeAdapter
-from .echo import EchoRuntimeAdapter
 from .model_api import ModelApiRuntimeAdapter
+from .ts_agent_host import TsAgentHostRuntimeAdapter
 
 __all__ = [
     "CapabilityRuntimeAdapter",
-    "EchoRuntimeAdapter",
     "GenericCliRuntimeAdapter",
     "ModelApiRuntimeAdapter",
+    "TsAgentHostRuntimeAdapter",
 ]

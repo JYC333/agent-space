@@ -173,7 +173,7 @@ def test_dispatch_handles_async_callable_object():
 
 
 # ---------------------------------------------------------------------------
-# Worker dispatches through the registry (not legacy if/elif or a module dict)
+# Worker dispatches through the registry (not if/elif or a module dict)
 # ---------------------------------------------------------------------------
 
 class _FakeQueue:

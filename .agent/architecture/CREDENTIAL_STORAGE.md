@@ -20,15 +20,26 @@ Providers page, used by the `model_api` runtime adapter, the reflector, and `/pr
 
 ## Database layout
 
-The plaintext API key is **never** stored. Two rows hold the encrypted material:
+The plaintext API key is **never** stored. The encrypted material lives in:
 
 | Table | Field | Holds |
 |---|---|---|
-| `model_providers` | `credential_id` (FK) | pointer to the Credential row. `config_json` does **not** contain the key (any `encrypted_key` is popped before persist). |
+| `model_providers` | `credential_id` (FK) | pointer to the **primary** Credential row. `config_json` does **not** contain the key (any `encrypted_key` is popped before persist). |
 | `credentials` | `secret_ref` | `model_provider_api_key:v1:<ciphertext_b64>:<nonce_b64>`; `credential_type="api_key"`. |
+| `model_provider_credentials` | pool membership | 1→N credential **pool** per provider (Hermes H1): position, enabled, rotation health (`healthy`, `cooldown_until`, `last_failure_class`, request/failure counters). Holds **no secret material** — only FKs to `credentials`. The primary credential is lazily enrolled as the position-0 member. |
+| `provider_task_policies` | per-task chains | one ordered provider/model chain per (space, task) for auxiliary tasks (reflector, condenser, …) — Hermes H2. No secret material. |
 
 `secret_ref` scheme is defined in `app/secrets/secret_ref.py`
-(`encode_model_provider_api_key_secret_ref` / `resolve_api_key_from_secret_ref`).
+(`encode_model_provider_api_key_secret_ref` / `resolve_api_key_from_secret_ref`); the
+TypeScript side reads/writes the identical format in
+`control-plane/src/modules/providers/secretRefCrypto.ts`.
+
+Rotation strategy (`fill_first` | `round_robin` | `least_used` | `random`) and the
+provider fallback chain (`fallback_provider_ids`) are provider-level configuration in
+`model_providers.config_json` — same pattern as `is_default`.
+
+CLI login state is a distinct credential class: it is **never pooled or rotated**, and
+the pool tables never reference it.
 
 ## Save flow
 
@@ -45,6 +56,12 @@ written to `os.environ` — per [ADR 0010](../decisions/0010-credential-channel-
 leak into a Claude Code CLI subprocess environment. The shared call site is
 `app/providers/invocation.py::complete_text` (it may also accept a pre-resolved key from the execution
 service's `ctx.resolved_credentials`).
+
+Under `CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY=ts`, Python facades keep
+their signatures but resolve through the control plane's internal
+service-authenticated ports; the TS store draws keys from the credential pool
+with rotation/cooldown state and the same master-key file. Exactly one side
+decides credential release at any moment.
 
 ## Invariants
 

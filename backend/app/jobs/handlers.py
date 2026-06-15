@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 #
 # This handler is **infrastructure only**. The Job row is queue plumbing,
 # not a product Task. The handler routes intents to the shared
-# ``RunExecutionService`` (adapters from policy / ``RuntimeAdapter``).
+# ``RunExecutionService`` (adapter type resolved from run/version policy).
 # Removed ``payload.runtime`` overrides are rejected **before** execution: the
 # handler raises ``ValueError`` so the job fails with ``runtime_removed`` semantics
 # and no Run row is mutated for that path.
@@ -240,7 +240,6 @@ def _create_and_execute_agent_run(job, payload: dict, agent_id: str) -> dict:
                 instruction=payload.get("instruction"),
                 parent_run_id=payload.get("parent_run_id"),
                 adapter_type=payload.get("adapter_type"),
-                runtime_adapter_id=payload.get("runtime_adapter_id"),
             ),
             space_id=space_id,
             user_id=user_id,
@@ -287,6 +286,13 @@ def handle_agent_run(job) -> dict | None:
     ``job.result_json``. Re-raises on internal errors so the queue marks
     the Job as failed (with retry per ``max_attempts``).
     """
+    from ..runs.authority import runs_commands_owned_by_ts
+
+    if runs_commands_owned_by_ts():
+        raise RuntimeError(
+            "runs.execute is owned by the TypeScript control plane; "
+            "Python agent_run job handler is retired"
+        )
     payload = job.payload_json or {}
     _reject_removed_job_runtime(payload)
     run_id = payload.get("run_id")

@@ -13,6 +13,7 @@ from ..schemas import (
 )
 from .agent_service import AgentService
 from .chat_service import ChatTurnOut, ChatTurnRequest, run_chat_turn
+from .authority import reject_python_chat_turn_when_ts_authority
 from .version_service import AgentVersionService
 from app.runs import RunService
 from app.runs import run_to_out
@@ -331,8 +332,8 @@ async def run_agent(
     space_id, user_id = ids
 
     # Build context
-    from ..memory import ContextBuilder
-    context = ContextBuilder(db).build(
+    from ..memory import get_context_builder
+    context = get_context_builder(db).build(
         space_id=space_id,
         user_id=user_id,
         workspace_id=req.workspace_id,
@@ -348,7 +349,7 @@ async def run_agent(
             run_type="agent",
             trigger_origin="manual",
             workspace_id=req.workspace_id,
-            runtime_adapter_id=req.runtime_adapter_id,
+            adapter_type=req.adapter_type,
         ),
         space_id=space_id,
         user_id=user_id,
@@ -365,7 +366,6 @@ async def run_agent(
             "workspace_path": req.workspace_path,
             "timeout": 300,
             "risk_level": req.risk_level,
-            "runtime_adapter_id": req.runtime_adapter_id,
         },
         space_id=space_id,
         user_id=user_id,
@@ -453,6 +453,7 @@ def chat_with_agent(
     configured) returns ``ok=False`` with an ``error_code`` instead of raising.
     """
     space_id, user_id = ids
+    reject_python_chat_turn_when_ts_authority()
     return run_chat_turn(db, agent_id=agent_id, space_id=space_id, user_id=user_id, req=req)
 
 

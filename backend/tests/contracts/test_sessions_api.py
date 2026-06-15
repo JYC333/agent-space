@@ -69,6 +69,20 @@ def test_get_session_messages_requires_auth(api_client, db, cross_space_pair_db)
     assert r.status_code == 401
 
 
+def test_add_session_message_requires_auth(api_client, db, cross_space_pair_db):
+    space = cross_space_pair_db["space_a_id"]
+    ua = cross_space_pair_db["user_a"]
+    session = _make_session(db, space_id=space, user_id=ua.id)
+
+    r = api_client.post(
+        f"/api/v1/sessions/{session.id}/messages",
+        json={"role": "user", "content": "hello"},
+        params={"space_id": space},
+    )
+
+    assert r.status_code == 401
+
+
 # ---------------------------------------------------------------------------
 # Cross-space → 404 (session exists in space A, accessed by space B user)
 # ---------------------------------------------------------------------------
@@ -116,6 +130,49 @@ def test_cross_space_messages_response_contains_no_content(api_client, db, cross
     assert "top-secret" not in r.text
 
 
+def test_cross_space_cannot_add_session_message(api_client, db, cross_space_pair):
+    a = cross_space_pair["space_a_id"]
+    b = cross_space_pair["space_b_id"]
+    ua = cross_space_pair["user_a"]
+    session = _make_session(db, space_id=a, user_id=ua.id)
+
+    r = cross_space_pair["client_b"].post(
+        f"/api/v1/sessions/{session.id}/messages",
+        params={"space_id": b},
+        json={"role": "user", "content": "cross-space-write"},
+    )
+
+    assert r.status_code == 404
+    assert "cross-space-write" not in r.text
+    assert db.query(Message).filter(Message.session_id == session.id).count() == 0
+
+
+def test_cross_space_cannot_reflect_session(api_client, db, cross_space_pair, monkeypatch):
+    calls: list[dict] = []
+
+    class FakeReflector:
+        def __init__(self, db):
+            self.db = db
+
+        def reflect(self, **kwargs):
+            calls.append(kwargs)
+            return []
+
+    monkeypatch.setattr("app.sessions.api.MemoryReflector", FakeReflector)
+    a = cross_space_pair["space_a_id"]
+    b = cross_space_pair["space_b_id"]
+    ua = cross_space_pair["user_a"]
+    session = _make_session(db, space_id=a, user_id=ua.id)
+
+    r = cross_space_pair["client_b"].post(
+        f"/api/v1/sessions/{session.id}/reflect",
+        params={"space_id": b},
+    )
+
+    assert r.status_code == 404
+    assert calls == []
+
+
 # ---------------------------------------------------------------------------
 # Same-space non-owner → 404
 # ---------------------------------------------------------------------------
@@ -157,6 +214,47 @@ def test_same_space_non_owner_messages_contains_no_content(api_client, db, same_
     )
     assert r.status_code == 404
     assert "sensitive-payload" not in r.text
+
+
+def test_same_space_non_owner_cannot_add_session_message(api_client, db, same_space_pair):
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    session = _make_session(db, space_id=space, user_id=ua.id)
+
+    r = same_space_pair["client_b"].post(
+        f"/api/v1/sessions/{session.id}/messages",
+        params={"space_id": space},
+        json={"role": "user", "content": "non-owner-write"},
+    )
+
+    assert r.status_code == 404
+    assert "non-owner-write" not in r.text
+    assert db.query(Message).filter(Message.session_id == session.id).count() == 0
+
+
+def test_same_space_non_owner_cannot_reflect_session(api_client, db, same_space_pair, monkeypatch):
+    calls: list[dict] = []
+
+    class FakeReflector:
+        def __init__(self, db):
+            self.db = db
+
+        def reflect(self, **kwargs):
+            calls.append(kwargs)
+            return []
+
+    monkeypatch.setattr("app.sessions.api.MemoryReflector", FakeReflector)
+    space = same_space_pair["space_id"]
+    ua = same_space_pair["user_a"]
+    session = _make_session(db, space_id=space, user_id=ua.id)
+
+    r = same_space_pair["client_b"].post(
+        f"/api/v1/sessions/{session.id}/reflect",
+        params={"space_id": space},
+    )
+
+    assert r.status_code == 404
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------

@@ -56,7 +56,7 @@ from .runtime_preflight import RuntimePreflightService
 from .execution_lock import RunExecutionLockService
 from .run_output_materialization import MaterializationResult, RunOutputMaterializer
 from .runtime_policy import compute_runtime_policy_decision, validate_file_access_adapter_policy
-from ..policy import PolicyGateway, PolicyCheckRequest
+from ..policy import PolicyCheckRequest, get_policy_port
 from ..policy import PolicyGateBlocked, PolicyAuditPersistError
 from ..policy import write_blocked_gate_audit
 from .sandbox_manager import execution_workspace
@@ -368,7 +368,7 @@ class RunExecutionService:
             _agent_status,
         )
         try:
-            _exec_policy_decision = PolicyGateway(self.db).enforce(_exec_req)
+            _exec_policy_decision = get_policy_port(self.db).enforce(_exec_req)
         except PolicyGateBlocked as exc:
             try:
                 write_blocked_gate_audit(exc)
@@ -460,7 +460,7 @@ class RunExecutionService:
                 automation_pre_authorized=automation_credential_preauthorized(self.db, run),
             )
             try:
-                _cred_policy_decision = PolicyGateway(self.db).enforce(_cred_req)
+                _cred_policy_decision = get_policy_port(self.db).enforce(_cred_req)
             except PolicyGateBlocked as exc:
                 try:
                     write_blocked_gate_audit(exc)
@@ -509,13 +509,18 @@ class RunExecutionService:
                 )
 
         # Resolve credentials through the canonical boundary before execution.
-        # If the adapter requires credentials and none are configured, fail early
-        # with a sanitized error - never fall back to env vars.
-        if runtime_requirements.credential_mode == "model_provider_api_key":
+        # If the adapter consumes credentials in the Python runtime process and
+        # none are configured, fail early with a sanitized error. Control-plane
+        # brokered adapters still pass the metadata-only policy gate above, but
+        # release secrets inside control-plane over the internal channel.
+        if (
+            runtime_requirements.credential_mode == "model_provider_api_key"
+            and runtime_requirements.credential_release_channel == "python_runtime"
+        ):
             try:
                 resolved_credentials = resolve_runtime_credentials(
                     self.db,
-                    runtime_adapter_row=resolved.runtime_adapter_row,
+                    adapter_type=resolved.adapter_type,
                     version=version,
                     run_model_provider_id=run.model_provider_id,
                 )
@@ -622,9 +627,6 @@ class RunExecutionService:
         _emit(
             "runtime_selected", "succeeded",
             title=f"Runtime adapter selected: {resolved.adapter_type}",
-            runtime_adapter_id=(
-                resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
-            ),
         )
         safe_append_run_event(
             self.db,
@@ -632,9 +634,6 @@ class RunExecutionService:
             space_id=run.space_id,
             event_type="runtime_selected",
             status="succeeded",
-            runtime_adapter_id=(
-                resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
-            ),
             workspace_id=run.workspace_id,
             data_exposure_level=run.data_exposure_level,
             trust_level=run.trust_level,
@@ -712,9 +711,6 @@ class RunExecutionService:
                         step_type="adapter_started", status="running",
                         title=f"Adapter executing: {resolved.adapter_type}",
                         started_at=started_wall,
-                        runtime_adapter_id=(
-                            resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
-                        ),
                     )
             except Exception:
                 log.warning(
@@ -983,9 +979,6 @@ class RunExecutionService:
                         event_type="sandbox_created",
                         status="succeeded",
                         workspace_id=run.workspace_id,
-                        runtime_adapter_id=(
-                            resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
-                        ),
                         metadata_json={
                             "required_sandbox_level": decision.required_sandbox_level,
                             "sandbox_kind": "worktree",
@@ -1021,12 +1014,9 @@ class RunExecutionService:
                     )
                     else None
                 )
-                # Effective provider id must follow the same priority as
-                # credential resolution (run → adapter.provider_id → version),
-                # otherwise an adapter (e.g. model_api) can have a key resolved
-                # via RuntimeAdapter.provider_id yet receive model_provider_id=None.
+                # Effective provider id must follow credential resolution
+                # priority: run override, then AgentVersion default.
                 effective_model_provider_id = resolve_effective_model_provider_id(
-                    runtime_adapter_row=resolved.runtime_adapter_row,
                     version=version,
                     run_model_provider_id=run.model_provider_id,
                 )
@@ -1047,7 +1037,7 @@ class RunExecutionService:
                     simulate_failure=simulate_failure,
                     resolved_credentials=resolved_credentials,
                     # Serialised ContextPackage for CLI adapters (ContextCompiler input).
-                    # Non-CLI adapters (echo, capability) ignore this field.
+                    # Non-CLI adapters ignore this field.
                     context_package=context_pkg.model_dump(),
                     # Policy values for CredentialBroker and audit — use real
                     # decision values, not hardcoded defaults.
@@ -1062,9 +1052,6 @@ class RunExecutionService:
                     trigger_origin=getattr(run, "trigger_origin", "manual") or "manual",
                     # DB session for inline credential audit event writes (CLI adapters).
                     db=self.db,
-                    runtime_adapter_id=(
-                        resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
-                    ),
                     # Runs-owned runtime ports: adapters emit run evidence and
                     # register subprocess handles only through these bridges.
                     event_sink=RunEventRuntimeSink(
@@ -1100,7 +1087,7 @@ class RunExecutionService:
                     },
                 )
                 try:
-                    PolicyGateway(self.db).enforce(_ctx_req)
+                    get_policy_port(self.db).enforce(_ctx_req)
                 except PolicyGateBlocked as _pgb_ctx:
                     try:
                         write_blocked_gate_audit(_pgb_ctx)
@@ -1152,9 +1139,6 @@ class RunExecutionService:
                     space_id=run_space_id,
                     event_type="adapter_invoked",
                     status="running",
-                    runtime_adapter_id=(
-                        resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
-                    ),
                     workspace_id=run.workspace_id,
                     step_id=adapter_step.id if adapter_step is not None else None,
                     metadata_json={
@@ -1177,9 +1161,6 @@ class RunExecutionService:
                     space_id=run_space_id,
                     event_type="adapter_completed",
                     status=_adapter_completed_status,
-                    runtime_adapter_id=(
-                        resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
-                    ),
                     workspace_id=run.workspace_id,
                     step_id=adapter_step.id if adapter_step is not None else None,
                     error_code=_adapter_completed_error_code,
@@ -1452,9 +1433,6 @@ class RunExecutionService:
                 status="failed",
                 error_code="adapter_runtime_error",
                 error_message=safe_exc,
-                runtime_adapter_id=(
-                    resolved.runtime_adapter_row.id if resolved.runtime_adapter_row else None
-                ),
                 workspace_id=run.workspace_id,
                 step_id=adapter_step.id if adapter_step is not None else None,
                 metadata_json={"adapter_type": resolved.adapter_type},

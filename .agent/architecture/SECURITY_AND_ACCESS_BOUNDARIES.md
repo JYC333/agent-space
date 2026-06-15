@@ -25,10 +25,10 @@ All durable-data API routes require authentication via `get_identity()` or
 
 All other routes, including system-metadata endpoints, are auth-gated:
 
-- `GET/POST/GET /capabilities`, `/capabilities/{id}`, `POST /capabilities/reload`
+- `GET /capabilities`, `GET /capabilities/{id}`, `POST /capabilities/reload`
 - `GET /jobs/handlers`
 - `GET /workspace-console/runtimes`
-- `GET /runtime-adapters/catalog`, `/runtime-adapters/detect`, `/runtime-adapters/{id}/detect`
+- `GET /runtime-tools...`, `POST /runtime-tools/{runtime}/install`, `POST /runtime-tools/{runtime}/activate`
 - `GET /providers/litellm-providers`, `/providers/catalog`
 
 ---

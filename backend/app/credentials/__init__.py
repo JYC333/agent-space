@@ -1,9 +1,9 @@
 """Public facade for the ``credentials`` module.
 
 Re-exports the CLI credential broker entrypoints other modules import today
-(``runs``, ``runtimes``, ``runtime_adapters``). ``CredentialBroker`` is the
-single intended entrypoint (B45–B49). New callers should depend on
-``app.credentials`` rather than ``credentials.broker``.
+(``runs`` and ``runtimes``). ``CredentialBroker`` is the single intended
+entrypoint (B45-B49). New callers should depend on ``app.credentials`` rather
+than ``credentials.broker``.
 
 **Note:** existing call sites that obtain ``CredentialBroker`` via a *deferred*
 (function-level) import were intentionally **not** migrated to this facade. The

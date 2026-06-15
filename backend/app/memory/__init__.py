@@ -34,6 +34,7 @@ _EXPORTS: dict[str, str] = {
     "ContextBuilder": "context_builder",
     "ContextCompiler": "context_compiler",
     "TargetFormat": "context_compiler",
+    "memory_proposal_apply_owned_by_ts": "authority",
     "ContextDigestService": "digest_service",
     "MemoryInternalWriter": "internal_writer",
     "PolicyInternalWriter": "internal_writer",
@@ -65,6 +66,9 @@ _EXPORTS: dict[str, str] = {
     "monitoring_snapshot": "source_monitoring",
     # Interface-only seam over the concrete ``ContextBuilder`` (see ports.py).
     "ContextBuilderPort": "ports",
+    "ChatContextBuilderPort": "ports",
+    "get_context_builder": "ports",
+    "get_chat_context_builder": "ports",
 }
 
 __all__ = sorted(_EXPORTS)
@@ -99,12 +103,20 @@ if TYPE_CHECKING:  # give type checkers / IDEs the concrete symbols
         ContextCompiler as ContextCompiler,
         TargetFormat as TargetFormat,
     )
+    from .authority import (
+        memory_proposal_apply_owned_by_ts as memory_proposal_apply_owned_by_ts,
+    )
     from .digest_service import ContextDigestService as ContextDigestService
     from .internal_writer import (
         MemoryInternalWriter as MemoryInternalWriter,
         PolicyInternalWriter as PolicyInternalWriter,
     )
-    from .ports import ContextBuilderPort as ContextBuilderPort
+    from .ports import (
+        ChatContextBuilderPort as ChatContextBuilderPort,
+        ContextBuilderPort as ContextBuilderPort,
+        get_chat_context_builder as get_chat_context_builder,
+        get_context_builder as get_context_builder,
+    )
     from .proposal_payload import (
         ProvenanceEntry as ProvenanceEntry,
         SOURCE_TRUST_VALUES as SOURCE_TRUST_VALUES,

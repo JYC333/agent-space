@@ -8,17 +8,11 @@ from app.runtimes.adapter_metadata import get_adapter_model_config_metadata
 from tests.support import factories
 
 
-def test_adapter_metadata_echo_not_applicable():
-    meta = get_adapter_model_config_metadata("echo")
-    assert meta.uses_model_config is False
-    assert meta.model_config_behavior == "not_applicable"
-    assert meta.model_config_note == ""
-
-
 def test_adapter_metadata_capability_not_applicable():
     meta = get_adapter_model_config_metadata("capability")
     assert meta.uses_model_config is False
     assert meta.model_config_behavior == "not_applicable"
+    assert meta.model_config_note == ""
 
 
 def test_build_resolved_model_agent_default(db, cross_space_pair_db):
@@ -39,7 +33,7 @@ def test_build_resolved_model_agent_default(db, cross_space_pair_db):
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
     run.model_provider_id = mp.id
     run.model_override_json = {"model": "gpt-test", "source": "agent_default"}
-    run.adapter_type = "echo"
+    run.adapter_type = "capability"
     db.flush()
 
     resolved = build_run_resolved_model(db, run)

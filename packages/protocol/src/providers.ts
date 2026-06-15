@@ -1,0 +1,170 @@
+/**
+ * Provider and model-provider credential-channel contracts.
+ *
+ * These schemas mirror the current public Python provider API where possible and
+ * make the credential boundary explicit. They are contracts only: no provider
+ * client, no secret storage, no credential release, no transport, no authority.
+ */
+
+import { z } from "zod";
+import { IdSchema, ISODateTimeSchema, SecretResponseGuards } from "./common.js";
+
+export const PROVIDER_TYPE_VALUES = [
+  "openai",
+  "anthropic",
+  "openrouter",
+  "ollama",
+  "custom_openai_compatible",
+  "other",
+] as const;
+export type ProviderTypeValue = (typeof PROVIDER_TYPE_VALUES)[number];
+export function isProviderType(value: string): value is ProviderTypeValue {
+  return (PROVIDER_TYPE_VALUES as readonly string[]).includes(value);
+}
+
+export const CREDENTIAL_CHANNEL_VALUES = [
+  "model_provider_api_key",
+  "cli_login_state",
+] as const;
+export type CredentialChannelValue = (typeof CREDENTIAL_CHANNEL_VALUES)[number];
+export function isCredentialChannel(value: string): value is CredentialChannelValue {
+  return (CREDENTIAL_CHANNEL_VALUES as readonly string[]).includes(value);
+}
+
+/** Mirror of Python `ModelProviderOut`; response-only and secret-free. */
+export const ModelProviderDTOSchema = z
+  .object({
+    id: IdSchema,
+    space_id: IdSchema,
+    name: z.string(),
+    provider_type: z.string(),
+    base_url: z.string().nullish(),
+    default_model: z.string().nullish(),
+    available_models: z.array(z.string()),
+    enabled: z.boolean(),
+    is_default: z.boolean(),
+    has_api_key: z.boolean(),
+    created_at: ISODateTimeSchema,
+    updated_at: ISODateTimeSchema,
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ModelProviderDTO = z.infer<typeof ModelProviderDTOSchema>;
+
+/**
+ * Request body for creating or replacing a ModelProvider. `api_key` is
+ * request-only secret material and must never appear in `ModelProviderDTO`.
+ */
+export const ModelProviderCreateRequestSchema = z.object({
+  name: z.string().min(1),
+  provider_type: z.string().min(1),
+  base_url: z.string().nullish(),
+  api_key: z.string().nullish(),
+  default_model: z.string().nullish(),
+  available_models: z.array(z.string()).optional(),
+  enabled: z.boolean().optional(),
+  is_default: z.boolean().optional(),
+});
+export type ModelProviderCreateRequest = z.infer<typeof ModelProviderCreateRequestSchema>;
+
+/** Request body for patching a ModelProvider. All fields are optional. */
+export const ModelProviderUpdateRequestSchema = z.object({
+  name: z.string().min(1).optional(),
+  provider_type: z.string().min(1).optional(),
+  base_url: z.string().nullish(),
+  api_key: z.string().nullish(),
+  default_model: z.string().nullish(),
+  available_models: z.array(z.string()).optional(),
+  enabled: z.boolean().optional(),
+  is_default: z.boolean().optional(),
+});
+export type ModelProviderUpdateRequest = z.infer<typeof ModelProviderUpdateRequestSchema>;
+
+export const ModelProviderModelsResponseSchema = z.object({
+  models: z.array(z.string()),
+  source: z.union([z.literal("configured"), z.literal("live")]),
+});
+export type ModelProviderModelsResponse = z.infer<typeof ModelProviderModelsResponseSchema>;
+
+/** Mirror of Python `GET /providers/catalog` (`CATALOG_INFO`); static, secret-free. */
+export const ProviderCatalogInfoSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    description: z.string(),
+    model_hint: z.string(),
+    supported_params: z.array(z.string()),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProviderCatalogInfo = z.infer<typeof ProviderCatalogInfoSchema>;
+
+/** Mirror of Python `GET /providers/litellm-providers`: litellm chat provider ids. */
+export const LitellmProvidersResponseSchema = z.array(z.string());
+export type LitellmProvidersResponse = z.infer<typeof LitellmProvidersResponseSchema>;
+
+/**
+ * The catalog payload itself (Python `CATALOG_INFO`). Pinned by exact value on
+ * both sides. The TS provider authority serves this constant for the public
+ * catalog route.
+ */
+export const PROVIDER_CATALOG_INFO: ProviderCatalogInfo = {
+  id: "litellm",
+  name: "LiteLLM (Open Format)",
+  description:
+    "Configure OpenAI, Anthropic, OpenRouter, Ollama, or custom OpenAI-compatible endpoints.",
+  model_hint: "Set default_model and/or available_models on the provider",
+  supported_params: ["model", "temperature", "max_tokens", "system"],
+};
+
+export const ProviderConnectionTestResultSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  model: z.string().nullish(),
+});
+export type ProviderConnectionTestResult = z.infer<typeof ProviderConnectionTestResultSchema>;
+
+export const ProviderChatMessageSchema = z.object({
+  role: z.string().min(1),
+  content: z.string(),
+});
+export type ProviderChatMessage = z.infer<typeof ProviderChatMessageSchema>;
+
+export const ProviderChatRequestSchema = z.object({
+  provider_id: IdSchema.nullish(),
+  model: z.string().nullish(),
+  messages: z.array(ProviderChatMessageSchema).min(1),
+  system: z.string().nullish(),
+  temperature: z.number().optional(),
+  max_tokens: z.number().int().positive().optional(),
+});
+export type ProviderChatRequest = z.infer<typeof ProviderChatRequestSchema>;
+
+export const ProviderChatResponseSchema = z
+  .object({
+    content: z.string(),
+    provider: z.string(),
+    model: z.string(),
+    usage: z.record(z.unknown()),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProviderChatResponse = z.infer<typeof ProviderChatResponseSchema>;
+
+/**
+ * Public credential-channel metadata. This is not a secret carrier and does not
+ * model the encrypted `Credential.secret_ref` value.
+ */
+export const CredentialChannelMetadataSchema = z.discriminatedUnion("channel", [
+  z.object({
+    channel: z.literal("model_provider_api_key"),
+    pooled: z.boolean(),
+    rotated: z.boolean(),
+  }),
+  z.object({
+    channel: z.literal("cli_login_state"),
+    pooled: z.literal(false),
+    rotated: z.literal(false),
+  }),
+]);
+export type CredentialChannelMetadata = z.infer<typeof CredentialChannelMetadataSchema>;

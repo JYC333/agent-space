@@ -3,7 +3,7 @@
 Covers the registry's dispatch mechanics (deterministic order, duplicate
 detection, async rejection, failure propagation) and verifies that every module
 that previously seeded per-space state during Space creation is now registered
-exactly once — with no legacy direct seeder calls left in the spaces service.
+exactly once — with no old direct seeder calls left in the spaces service.
 """
 
 from __future__ import annotations
@@ -208,7 +208,7 @@ def test_spaces_facade_imports_cleanly():
 def test_on_space_created_produces_same_default_records(db):
     # End-to-end through the real registry: a new space gets system-policy
     # memories, default execution planes, and default note collections — the
-    # same side effects the legacy direct-seeding path produced.
+    # same side effects the old direct-seeding path produced.
     import uuid
 
     from app import models
@@ -272,9 +272,9 @@ def test_spaces_service_dispatches_through_registry_not_direct_seeders():
     # seeder imports/calls in the dispatch path.
     src = inspect.getsource(importlib.import_module("app.spaces.hooks"))
     assert "get_registry().run(" in src
-    for legacy in (
+    for old_call in (
         "seed_system_memories_for_space",
         "seed_default_execution_planes",
         "seed_default_note_collections",
     ):
-        assert legacy not in src, f"legacy direct seeder call still present: {legacy}"
+        assert old_call not in src, f"old direct seeder call still present: {old_call}"

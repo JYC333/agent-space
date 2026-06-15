@@ -4,15 +4,18 @@
 # It has no access to host files beyond the volumes explicitly mounted:
 #   /workspace          (rw) — the agent's working directory for this run
 #   /workspace/repo     (ro) — the source workspace repo (if provided)
-#   /home/sandbox/.claude (ro, optional) — host OAuth credentials for subscription auth
+#   /home/sandbox/.claude (ro, optional) — granted CLI profile state, when the
+#       future one-shot Docker path is implemented
 #
-# Network: controlled per run (bridge for LLM-calling agents, none for echo).
+# Network: controlled per run.
 # Resources: 1 GB RAM, 1 CPU (enforced by DockerExecutor at spawn time).
 #
 # Build:
 #   docker build -t agent-space-sandbox sandbox/
 #
-# Rebuild when adding new CLI tools or updating claude/codex versions.
+# Vendor CLIs are not baked into this image. They are installed as instance
+# runtime tools and mounted/resolved by the run launcher when Docker execution
+# becomes available.
 
 FROM node:20-slim
 
@@ -24,18 +27,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-# Claude Code CLI — uses ANTHROPIC_API_KEY or mounted ~/.claude OAuth credentials
-RUN npm install -g @anthropic-ai/claude-code \
-    --fetch-retry-mintimeout 20000 \
-    --fetch-retry-maxtimeout 120000 \
-    --fetch-retries 5
-
-# Codex CLI — uses OPENAI_API_KEY
-RUN npm install -g @openai/codex \
-    --fetch-retry-mintimeout 20000 \
-    --fetch-retry-maxtimeout 120000 \
-    --fetch-retries 5
 
 # Rename the built-in node user (UID 1000) to sandbox
 # node:20-slim ships with UID 1000 already claimed, so we reuse it

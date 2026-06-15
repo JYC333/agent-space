@@ -30,6 +30,9 @@ RBAC/ABAC platform — it is a lightweight, code-owned permission layer that rou
 - `PolicyDecision` — structured decision result with audit fields.
 - Approval resolver (`approval.py`) — `can_approve_policy_action`, `get_space_role`.
 - Proposal apply gate (`proposal_apply.py`) — `check_proposal_apply_policy`, `effective_proposal_risk`, `ProposalRiskLevelError`.
+- Active enforcement port (`PolicyPort`, `get_policy_port(db)`) — resolves to
+  Python `PolicyGateway` when `CONTROL_PLANE_POLICY_AUTHORITY=python`, or the
+  TS-backed internal policy client when `ts`.
 - Domain-specific persisted-policy enforcement (`enforcement.py`, `access.py`).
 - Policy decision tracing (`trace.py`).
 
@@ -74,10 +77,11 @@ Every sensitive action is registered in `app/policy/actions.py`. Unknown sensiti
 actions must raise through `require_action_definition()` — they do not silently fall
 through as allow.
 
-**PolicyGateway is the enforcement entry point.** `PolicyEngine` alone is not
-enforcement; it is the stateless rule evaluator inside `PolicyGateway`. Sensitive
-business actions use `PolicyGateway.enforce()` or
-`PolicyGateway.enforce_proposal_apply()`.
+**PolicyPort is the production enforcement entry point.** `PolicyEngine` alone
+is not enforcement; it is the stateless rule evaluator inside the active
+authority. Sensitive business actions call `get_policy_port(db).enforce()` or
+`get_policy_port(db).enforce_proposal_apply()`. Python `PolicyGateway` remains
+the local/fallback implementation and the direct parity-test target.
 
 The registry has three lifecycle categories:
 
@@ -187,18 +191,19 @@ Effective risk computation:
 - Invalid proposal.risk_level string raises `ProposalRiskLevelError` before any role check
 
 `supported_apply_type` in `metadata_json`:
-- `true` for the 7 supported types (memory_create, memory_update, memory_archive, policy_change, code_patch, egress_review, follow_up_task)
-- `false` for unsupported/unknown types — policy may allow but apply dispatch will raise `UnsupportedProposalTypeError`
+- `true` for proposal types with both a registered applier and an explicit policy
+  risk-table entry (`SUPPORTED_PROPOSAL_TYPES`)
+- `false` for unsupported/unknown types — proposal.apply denies before dispatch
 
 At proposal accept time:
 - `allow` → proceed to `ProposalApplyService.apply()`
-- `require_approval` or `deny` → `PolicyGateway.enforce_proposal_apply()` raises `PolicyGateBlocked`; proposal stays pending
+- `require_approval` or `deny` → `get_policy_port(db).enforce_proposal_apply()` raises `PolicyGateBlocked`; proposal stays pending
 
 ## Additional Enforcement Boundaries
 
 ### proposal.apply gate (wired)
 `ProposalService.accept()` in `app/proposals/service.py` calls
-`PolicyGateway.enforce_proposal_apply(...)` before any call to `ProposalApplyService.apply()`.
+`get_policy_port(db).enforce_proposal_apply(...)` before any call to `ProposalApplyService.apply()`.
 
 - Accepted proposals represent the human approval event.
 - The acting user must have approval authority for the proposal type and effective risk level.
@@ -214,15 +219,21 @@ At proposal accept time:
 
 ## Active Enforcement Points
 
-### PolicyGateway (enforcement entry point)
+### PolicyPort / PolicyGateway (enforcement entry point)
 
-`PolicyGateway.enforce(PolicyCheckRequest(...))` and
-`PolicyGateway.enforce_proposal_apply(...)` are the preferred enforcement entry
-points for sensitive policy decisions. Do not call `PolicyEngine` or
+`get_policy_port(db).enforce(PolicyCheckRequest(...))` and
+`get_policy_port(db).enforce_proposal_apply(...)` are the preferred production
+entry points for sensitive policy decisions. Do not call `PolicyEngine` or
 `HardInvariantGuard` directly to authorize or perform sensitive actions.
 The documented non-mutating simulation points may call `PolicyEngine`; they do
 not persist `PolicyDecisionRecord`, and actual runtime execution still uses
-`PolicyGateway`.
+the active `PolicyPort`.
+
+Python `PolicyGateway` implements the same interface locally. When
+`CONTROL_PLANE_POLICY_AUTHORITY=ts`, `get_policy_port(db)` returns
+`ControlPlanePolicyGateway`, which calls the service-authenticated TS policy
+internal ports; blocked decisions are marked as already audited so Python does
+not duplicate the TS durable audit write.
 
 `DurablePolicyAuditWriter` writes only `PolicyDecisionRecord` using an independent
 transaction. `PolicyGateBlocked` represents DENY and REQUIRE_APPROVAL. Local runtime
@@ -232,7 +243,7 @@ are never committed just to commit audit or lock rows.
 
 ### Wired enforcement points
 
-`PolicyGateway` is the only enforcement entry point. `PolicyEngine` is internal to
+`PolicyPort` is the only production enforcement entry point. `PolicyEngine` is internal to
 the policy package except for the documented non-mutating simulation paths:
 `PreflightService`, `RunService.create_run`, `AgentService._check_run`, and
 `AutomationPolicyPreflightService`.

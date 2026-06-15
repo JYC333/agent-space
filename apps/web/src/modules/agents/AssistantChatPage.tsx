@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { Loader2, Settings2, AlertTriangle } from 'lucide-react'
+import { Loader2, Settings2, AlertTriangle, MessageSquareText } from 'lucide-react'
 import { toast } from 'sonner'
 import { agentsApi, providersApi } from '../../api/client'
 import type { AgentOut } from '../../types/api'
@@ -29,6 +29,7 @@ export default function AssistantChatPage() {
   // Captured once so the Chat auto-sends it; the URL param is then cleared so a
   // refresh won't resend the same message.
   const [initialDraft] = useState(() => searchParams.get('draft'))
+  const sessionParam = searchParams.get('session')
   const [agent, setAgent] = useState<AgentOut | null>(null)
   // null = unknown (not loaded yet, or the providers check failed → fail open).
   const [hasDefaultProvider, setHasDefaultProvider] = useState<boolean | null>(null)
@@ -60,11 +61,23 @@ export default function AssistantChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const rememberSession = useCallback((sessionId: string) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      next.delete('draft')
+      next.set('session', sessionId)
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
+
   if (loading) return <div className="p-6 flex items-center gap-2 text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading…</div>
-  if (!agent) return <div className="p-6 text-muted-foreground">Assistant not found.</div>
+  if (!agent) return <div className="p-6 text-muted-foreground">Agent not found.</div>
 
   const isAssistant = agent.agent_kind === 'system_assistant'
-  const providerMissing = hasDefaultProvider === false
+  // Only runtimes that call a model provider (managed API) need one configured.
+  // CLI runtimes manage their own model/login, so the provider gate must not
+  // block them.
+  const providerMissing = agent.requires_model_provider && hasDefaultProvider === false
 
   return (
     <div className="flex flex-col h-full w-full max-w-3xl mx-auto p-4 md:p-6">
@@ -80,13 +93,23 @@ export default function AssistantChatPage() {
           <Button asChild size="sm" variant="outline">
             <Link to={`/agents/${agent.id}`}><Settings2 className="size-3.5 mr-1" />Settings</Link>
           </Button>
+          <Button asChild size="sm" variant="outline">
+            <Link to="/sessions"><MessageSquareText className="size-3.5 mr-1" />History</Link>
+          </Button>
         </div>
       </header>
 
       <div className="flex-1 min-h-0 mt-4">
         {providerMissing
           ? <NoProviderNotice />
-          : <ChatPanel agent={agent} initialDraft={initialDraft} />}
+          : (
+            <ChatPanel
+              agent={agent}
+              initialDraft={initialDraft}
+              initialSessionId={sessionParam}
+              onSessionChange={rememberSession}
+            />
+          )}
       </div>
     </div>
   )

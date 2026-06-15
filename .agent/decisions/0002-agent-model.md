@@ -34,4 +34,4 @@ An agent's behaviour is fully configured via its model record:
 - Memory policy on the agent restricts which memory scopes it can read — enforced by ContextBuilder
 - No built-in concrete agents are seeded. Built-in behavior comes from system
   AgentTemplates (factories); concrete agents are created on demand via copy-on-create.
-  (Superseded the legacy `echo` / `memory-curator` seeded system agents — removed.)
+  (Superseded the old seeded system agents — removed.)

@@ -40,9 +40,10 @@ The same agent record can use different adapters on different runs, subject to
 
 | adapter_type | Backend | Notes |
 |---|---|---|
-| `echo` | In-process string echo | Deterministic; no external deps |
-| `claude_cli` | Claude Code CLI subprocess | Requires `claude` binary |
-| `codex_cli` | OpenAI Codex CLI subprocess | Requires `codex` binary |
+| `capability` | Local capability execution | Deterministic when the selected capability is deterministic; no provider credentials |
+| `model_api` | Managed API runtime | Uses encrypted ModelProvider credentials |
+| `claude_code` | Claude Code CLI subprocess | Requires active `claude_code` runtime tool |
+| `codex_cli` | OpenAI Codex CLI subprocess | Requires active `codex_cli` runtime tool |
 
 **Wiring in an external framework**
 
@@ -96,8 +97,8 @@ Delegation chain is queryable via `GET /api/v1/agents/runs/{run_id}/chain`.
 
 ## Built-in system templates (no built-in concrete agents)
 
-There are **no** seeded built-in concrete agents. The legacy `echo-agent` and
-`memory-curator-agent` (and `agents/seeder.py`) were removed. Built-in product
+There are **no** seeded built-in concrete agents. The old seeded concrete agents
+and `agents/seeder.py` were removed. Built-in product
 behavior comes from system **AgentTemplates** — reusable factories, never runtime
 objects — seeded once globally by `agents/template_seeder.py`. A concrete `Agent`
 is created on demand via `AgentTemplateService.create_agent_from_template`

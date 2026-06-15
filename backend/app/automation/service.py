@@ -22,7 +22,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models import Automation, AutomationCredentialGrant, AutomationRun
-from ..policy import PolicyGateway, PolicyCheckRequest
+from ..policy import PolicyCheckRequest, get_policy_port
 from ..policy import get_space_role_normalized
 from ..runs import PreflightRequest, PreflightService
 from ..runs import RunService
@@ -80,7 +80,7 @@ class AutomationService:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         membership_role = get_space_role_normalized(self.db, owner_user_id, space_id) or "guest"
-        PolicyGateway(self.db).enforce(PolicyCheckRequest(
+        get_policy_port(self.db).enforce(PolicyCheckRequest(
             action="automation.create",
             actor_type="user",
             actor_id=owner_user_id,
@@ -197,7 +197,7 @@ class AutomationService:
             )
 
         membership_role = get_space_role_normalized(self.db, actor_user_id, space_id) or "guest"
-        PolicyGateway(self.db).enforce(PolicyCheckRequest(
+        get_policy_port(self.db).enforce(PolicyCheckRequest(
             action="automation.update",
             actor_type="user",
             actor_id=actor_user_id,
@@ -316,7 +316,7 @@ class AutomationService:
             )
 
         membership_role = get_space_role_normalized(self.db, actor_user_id, space_id) or "guest"
-        PolicyGateway(self.db).enforce(PolicyCheckRequest(
+        get_policy_port(self.db).enforce(PolicyCheckRequest(
             action="automation.fire",
             actor_type="user",
             actor_id=actor_user_id,

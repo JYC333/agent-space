@@ -75,6 +75,20 @@ def _recover_stale_runs() -> None:
         log.exception("Stale run recovery failed at startup — continuing")
 
 
+def claimable_job_types(registry: JobHandlerRegistry) -> list[str] | None:
+    """Job types this Python worker may claim. ``None`` means no type filter.
+
+    When the TypeScript control plane owns runs (CONTROL_PLANE_RUNS_AUTHORITY=ts),
+    ``agent_run`` jobs are consumed by the TS worker; claiming them here would
+    only fail them through the retired Python handler.
+    """
+    from ..runs.authority import runs_commands_owned_by_ts
+
+    if not runs_commands_owned_by_ts():
+        return None
+    return [t for t in registry.registered_job_types() if t != "agent_run"]
+
+
 async def _worker_loop(queue: QueueService, registry: JobHandlerRegistry) -> None:
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
     loop = asyncio.get_running_loop()
@@ -91,7 +105,13 @@ async def _worker_loop(queue: QueueService, registry: JobHandlerRegistry) -> Non
             # Acquire a concurrency slot before touching the DB
             await sem.acquire()
 
-            job = await queue.claim_next(WORKER_ID)
+            job_types = claimable_job_types(registry)
+            if job_types is not None and not job_types:
+                sem.release()
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
+
+            job = await queue.claim_next(WORKER_ID, job_types)
             if job is None:
                 sem.release()
                 await asyncio.sleep(POLL_INTERVAL)

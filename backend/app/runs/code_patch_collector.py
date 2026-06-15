@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 from ..policy import write_blocked_gate_audit
 from ..policy import PolicyAuditPersistError, PolicyGateBlocked
-from ..policy import PolicyCheckRequest, PolicyGateway
+from ..policy import PolicyCheckRequest, get_policy_port
 
 log = logging.getLogger(__name__)
 
@@ -331,7 +331,7 @@ def collect_and_create_code_patch_proposal(
     )
 
     try:
-        PolicyGateway(db).enforce(
+        get_policy_port(db).enforce(
             PolicyCheckRequest(
                 action="proposal.create",
                 actor_type="run",

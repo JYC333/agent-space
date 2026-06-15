@@ -21,10 +21,13 @@ authority out of ``ContextBuilder``. See
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Optional, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from ..schemas import ContextPackage
+    from sqlalchemy.orm import Session as DBSession
+
+    from ..models import ContextSnapshot
+    from ..schemas import ContextBundle, ContextPackage, ContextRequest
 
 
 @runtime_checkable
@@ -56,4 +59,59 @@ class ContextBuilderPort(Protocol):
         ...
 
 
-__all__ = ["ContextBuilderPort"]
+@runtime_checkable
+class ChatContextBuilderPort(Protocol):
+    """The Personal Assistant chat-turn context-assembly contract.
+
+    Mirrors the two methods :class:`app.memory.chat_context.ChatContextBuilder`
+    exposes to the chat-turn caller (``agents.chat_service``): assemble a bundle
+    for a session turn, then persist the audit snapshot for the created run. The
+    caller owns the transaction boundary (``persist_snapshot`` flushes but does
+    not commit).
+    """
+
+    def build(self, request: "ContextRequest") -> "ContextBundle":
+        ...
+
+    def persist_snapshot(
+        self,
+        bundle: "ContextBundle",
+        request: "ContextRequest",
+        context_snapshot_id: Optional[str] = None,
+    ) -> "ContextSnapshot":
+        ...
+
+
+def get_context_builder(db: "DBSession") -> ContextBuilderPort:
+    """Resolve the active context-assembly authority.
+
+    Python's :class:`~app.memory.context_builder.ContextBuilder` remains
+    authoritative until Stage 6 flips the context slice. Resolving through this
+    facade function — instead of constructing the concrete class at the call
+    site — gives the migration one place to route cross-context context builds to
+    the TS context engine later. Mirrors ``sessions.get_session_summary_port``.
+    """
+
+    from .context_builder import ContextBuilder
+
+    return ContextBuilder(db)
+
+
+def get_chat_context_builder(db: "DBSession") -> ChatContextBuilderPort:
+    """Resolve the active chat-turn context-assembly authority.
+
+    Same rationale as :func:`get_context_builder`, for the Personal Assistant
+    chat path's :class:`~app.memory.chat_context.ChatContextBuilder`.
+    """
+
+    from .chat_context import ChatContextBuilder
+
+    return ChatContextBuilder(db)
+
+
+__all__ = [
+    "ChatContextBuilderPort",
+    "ContextBuilderPort",
+    "get_chat_context_builder",
+    "get_context_builder",
+]

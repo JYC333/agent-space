@@ -74,7 +74,7 @@ BACKUP_INCLUDE_LOGS=false
 BACKUP_ON_STARTUP=true
 ```
 
-The backend reads these on startup, creates `BackupScheduler`, and registers its tick with `SchedulerRegistry`. `BACKUP_ON_STARTUP=true` triggers an immediate backup on first startup so you can verify the service is writing archives before any real writes occur.
+The backend reads these on startup, creates `BackupScheduler`, and registers its tick with `SchedulerRegistry`. `BACKUP_ON_STARTUP=true` triggers an immediate backup in the background after the backend starts; it does not block readiness or dependent services while `pg_dump` and archive compression run.
 
 ### Archive contents
 

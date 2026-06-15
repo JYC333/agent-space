@@ -27,7 +27,7 @@ from ..proposals import (
 
 
 def _apply_agent_config_update(context: ProposalApplyContext) -> ProposalApplyResult:
-    from ..models import ActivityRecord, Agent, AgentVersion, ModelProvider, RuntimeAdapter
+    from ..models import ActivityRecord, Agent, AgentVersion, ModelProvider
     from ..schemas import (
         DEFAULT_MEMORY_POLICY,
         DEFAULT_MODEL_CONFIG,
@@ -70,7 +70,6 @@ def _apply_agent_config_update(context: ProposalApplyContext) -> ProposalApplyRe
     version_dict = {
         "model_provider_id": base.model_provider_id,
         "model_name": base.model_name,
-        "runtime_adapter_id": base.runtime_adapter_id,
         "system_prompt": base.system_prompt,
         "model_config_json": base.model_config_json or dict(DEFAULT_MODEL_CONFIG),
         "runtime_config_json": base.runtime_config_json or dict(DEFAULT_RUNTIME_POLICY),
@@ -100,16 +99,6 @@ def _apply_agent_config_update(context: ProposalApplyContext) -> ProposalApplyRe
         if provider is None:
             raise ProposalApplyError("model_provider_id does not belong to this space")
 
-    runtime_adapter_id = version_dict.get("runtime_adapter_id")
-    if runtime_adapter_id:
-        adapter = (
-            db.query(RuntimeAdapter)
-            .filter(RuntimeAdapter.id == runtime_adapter_id, RuntimeAdapter.space_id == proposal.space_id)
-            .first()
-        )
-        if adapter is None:
-            raise ProposalApplyError("runtime_adapter_id does not belong to this space")
-
     existing_labels = [
         row[0]
         for row in (
@@ -132,7 +121,6 @@ def _apply_agent_config_update(context: ProposalApplyContext) -> ProposalApplyRe
         version_label=f"v{max_n + 1}",
         model_provider_id=version_data.model_provider_id,
         model_name=version_data.model_name,
-        runtime_adapter_id=version_data.runtime_adapter_id,
         system_prompt=version_data.system_prompt,
         model_config_json=version_data.model_config_json,
         runtime_config_json=version_data.runtime_config_json,

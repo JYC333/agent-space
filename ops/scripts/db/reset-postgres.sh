@@ -27,6 +27,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 local_compose_init "$MODE"
+local_compose_ensure_mode_env_file
+local_compose_ensure_control_plane_ts_authority_env
 
 PGDB="$(local_compose_setting_or_default POSTGRES_DB agent_space)"
 PGUSER="$(local_compose_setting_or_default POSTGRES_USER agent_space)"

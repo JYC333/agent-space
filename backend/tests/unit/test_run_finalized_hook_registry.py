@@ -3,7 +3,7 @@
 Covers the registry's dispatch mechanics (deterministic order, duplicate
 detection, async support, failure wrapping) and verifies that the tasks-owned
 RunEvaluation → TaskEvaluation bridge is registered exactly once through the
-module registry — with no legacy direct ``runs -> tasks`` call path left in
+module registry — with no old direct ``runs -> tasks`` call path left in
 finalization.
 """
 

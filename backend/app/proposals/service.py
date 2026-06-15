@@ -35,7 +35,7 @@ from ..models import (
     Task,
 )
 from ..param_binding import duplicate_mapper
-from ..policy import PolicyCheckRequest, PolicyGateway
+from ..policy import PolicyCheckRequest, get_policy_port
 from ..projects import assert_project_in_space
 from ..memory import (
     activity_provenance_entry,
@@ -400,7 +400,7 @@ class ProposalService:
             review_deadline=review_deadline,
             expires_at=expires_at,
         )
-        PolicyGateway(self.db).enforce(
+        get_policy_port(self.db).enforce(
             PolicyCheckRequest(
                 action="proposal.create",
                 actor_type="user",
@@ -498,7 +498,7 @@ class ProposalService:
         }
         if policy_metadata_json:
             base_metadata.update(policy_metadata_json)
-        PolicyGateway(self.db).enforce(
+        get_policy_port(self.db).enforce(
             PolicyCheckRequest(
                 action=policy_action,
                 actor_type="user",
@@ -913,7 +913,7 @@ class ProposalService:
         # Policy gate: enforce_proposal_apply writes one durable ALLOW record or
         # raises PolicyGateBlocked for the global HTTP handler to record.
         # ProposalRiskLevelError propagates to caller (invalid proposal.risk_level → 422).
-        PolicyGateway(self.db).enforce_proposal_apply(
+        get_policy_port(self.db).enforce_proposal_apply(
             user_id=user_id,
             space_id=space_id,
             proposal=proposal,

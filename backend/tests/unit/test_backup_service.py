@@ -666,6 +666,30 @@ class TestConfigAndIsolation:
         from app.config import settings
         assert settings.backup_enabled is False
 
+    def test_backup_on_startup_is_not_readiness_blocking(self):
+        """Startup backups should run in the scheduler background loop."""
+        from app.backups.scheduler import make_backup_scheduled_task
+
+        class DummyService:
+            def create_backup(self, kind):
+                raise AssertionError("task should not run while inspecting metadata")
+
+            def prune_old_backups(self):
+                raise AssertionError("task should not run while inspecting metadata")
+
+        scheduler = BackupScheduler(service=DummyService())
+
+        task = make_backup_scheduled_task(
+            scheduler,
+            interval_hours=24,
+            run_on_start=True,
+        )
+
+        assert task.name == "backup_scheduler"
+        assert task.interval_seconds == 24 * 3600
+        assert task.run_on_start is True
+        assert task.await_run_on_start is False
+
     def test_backup_service_requires_no_db_session(self, tmp_path):
         """BackupService must be constructable and usable without any DB session."""
         svc = _make_service(tmp_path)

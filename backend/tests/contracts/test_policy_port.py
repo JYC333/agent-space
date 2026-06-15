@@ -18,6 +18,7 @@ import pytest
 from app.policy import PolicyPort
 from app.policy.decisions import Decision
 from app.policy.exceptions import PolicyGateBlocked
+from app.policy.control_plane_client import ControlPlanePolicyGateway
 from app.policy.gateway import PolicyGateway
 from tests.support.fake_policy import FakePolicyGateway
 
@@ -25,6 +26,7 @@ from tests.support.fake_policy import FakePolicyGateway
 def test_concrete_gateway_satisfies_port():
     """The authority implementation must conform to the published seam."""
     assert issubclass(PolicyGateway, PolicyPort)
+    assert issubclass(ControlPlanePolicyGateway, PolicyPort)
 
 
 def test_port_is_reexported_from_facade():

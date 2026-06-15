@@ -110,20 +110,14 @@ export const SCENES: Scene[] = [
   // owns its own layout (e.g. the Notes collection tree). A persistent section sidebar/tab
   // strip here would collide with that — see .agent/modules/knowledge-base.md.
   {
-    kind: 'filter',
+    kind: 'route',
     id: 'review',
     title: 'Review',
     icon: CheckCircle,
     segments: ['proposals', 'memory'],
-    base: '/proposals',
-    filterKey: 'type',
-    defaultValue: '',
     items: [
-      { label: 'All',        value: '' },
-      { label: 'Memory',     value: 'memory_update' },
-      { label: 'Knowledge',  value: 'knowledge_create' },
-      { label: 'Code',       value: 'code_patch' },
-      { label: 'Tasks',      value: 'task_create' },
+      { label: 'Proposals', to: '/proposals' },
+      { label: 'Memory',    to: '/memory' },
     ],
   },
   {
@@ -131,13 +125,14 @@ export const SCENES: Scene[] = [
     id: 'agents',
     title: 'Agents',
     icon: Bot,
-    segments: ['agents', 'runs', 'automations', 'runtime-adapters', 'capabilities'],
+    segments: ['agents', 'sessions', 'runs', 'automations', 'runtime-tools', 'capabilities'],
     items: [
       { label: 'My agents',  to: '/agents' },
+      { label: 'Chat history', to: '/sessions' },
       { label: 'Templates',  to: '/agents/templates' },
       { label: 'Runs',       to: '/runs' },
       { label: 'Automations', to: '/automations' },
-      { label: 'Runtime',    to: '/runtime-adapters' },
+      { label: 'Runtime',    to: '/runtime-tools' },
     ],
   },
   {

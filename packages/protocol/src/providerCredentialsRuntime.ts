@@ -1,0 +1,262 @@
+/**
+ * Provider and credential runtime contracts.
+ *
+ * These schemas describe the durable boundary between provider commands,
+ * provider-key resolution, CLI credential brokering, and internal runtime
+ * callers. The protocol package owns schemas and types only.
+ */
+
+import { z } from "zod";
+import { IdSchema, SecretResponseGuards } from "./common.js";
+
+export const ProviderCredentialsAuthoritySchema = z.enum(["python", "ts"]);
+export type ProviderCredentialsAuthority = z.infer<
+  typeof ProviderCredentialsAuthoritySchema
+>;
+
+export const ProviderCompletionInternalRequestSchema = z.object({
+  space_id: IdSchema,
+  provider_id: IdSchema,
+  model: z.string().nullish(),
+  system: z.string().default(""),
+  user: z.string(),
+  max_tokens: z.number().int().positive().optional(),
+  /**
+   * Auxiliary-task name (e.g. "reflector", "condenser"). When the space has a
+   * ProviderTaskPolicy for this task, its chain takes precedence over
+   * `provider_id`, which then acts as the safety-net provider.
+   */
+  task: z.string().nullish(),
+});
+export type ProviderCompletionInternalRequest = z.infer<
+  typeof ProviderCompletionInternalRequestSchema
+>;
+
+export const ProviderCompletionInternalResponseSchema = z
+  .object({
+    text: z.string(),
+    model: z.string(),
+    usage: z.record(z.unknown()).nullish(),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProviderCompletionInternalResponse = z.infer<
+  typeof ProviderCompletionInternalResponseSchema
+>;
+
+export const RuntimeCredentialResolveRequestSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("model_provider_api_key"),
+    space_id: IdSchema,
+    provider_id: IdSchema,
+  }),
+  z.object({
+    kind: z.literal("credential_api_key"),
+    space_id: IdSchema,
+    credential_id: IdSchema,
+  }),
+  z.object({
+    kind: z.literal("cli_profile"),
+    runtime: z.string().min(1),
+    profile_id: z.string().nullish(),
+    require_existing: z.boolean().optional(),
+  }),
+]);
+export type RuntimeCredentialResolveRequest = z.infer<
+  typeof RuntimeCredentialResolveRequestSchema
+>;
+
+export const RuntimeCredentialResolveResponseSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("model_provider_api_key"),
+    provider_id: IdSchema,
+    api_key: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal("credential_api_key"),
+    credential_id: IdSchema,
+    api_key: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal("cli_profile"),
+    profile_id: z.string(),
+    runtime: z.string(),
+    source_path: z.string(),
+    target_path: z.string(),
+    readonly: z.boolean(),
+  }),
+]);
+export type RuntimeCredentialResolveResponse = z.infer<
+  typeof RuntimeCredentialResolveResponseSchema
+>;
+
+export const CliCredentialGrantRequestSchema = z.object({
+  run_id: z.string().min(1),
+  runtime: z.string().min(1),
+  risk_level: z.string().min(1),
+  executor_mode: z.enum(["worktree", "docker"]),
+  profile_id: z.string().nullish(),
+});
+export type CliCredentialGrantRequest = z.infer<typeof CliCredentialGrantRequestSchema>;
+
+export const CliCredentialGrantResponseSchema = z
+  .object({
+    granted: z.boolean(),
+    profile_id: z.string().nullish(),
+    runtime: z.string(),
+    executor_mode: z.enum(["worktree", "docker"]),
+    readonly: z.boolean(),
+    temp_home: z.string().nullish(),
+    host_source_path: z.string().nullish(),
+    target_path: z.string().nullish(),
+    env: z.record(z.string()),
+    fallback_reason: z.string().nullish(),
+  })
+  .passthrough();
+export type CliCredentialGrantResponse = z.infer<typeof CliCredentialGrantResponseSchema>;
+
+export const CliCredentialAuditRequestSchema = z.object({
+  space_id: IdSchema,
+  run_id: z.string().nullish(),
+  runtime_adapter_type: z.string().nullish(),
+  credential_profile_id: z.string().nullish(),
+  trigger_origin: z.string().nullish(),
+  fallback_used: z.boolean().optional(),
+  fallback_reason: z.string().nullish(),
+  broker_error: z.boolean().optional(),
+  cleanup_status: z.string().optional(),
+  action: z.string().optional(),
+});
+export type CliCredentialAuditRequest = z.infer<typeof CliCredentialAuditRequestSchema>;
+
+export const CliCredentialAuditResponseSchema = z
+  .object({
+    status: z.literal("recorded"),
+    event_id: IdSchema,
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type CliCredentialAuditResponse = z.infer<
+  typeof CliCredentialAuditResponseSchema
+>;
+
+export const ProviderResilienceFailureClassSchema = z.enum([
+  "rate_limit",
+  "payment_required",
+  "unauthorized",
+  "quota_exhausted",
+  "transient",
+  "permanent",
+]);
+export type ProviderResilienceFailureClass = z.infer<
+  typeof ProviderResilienceFailureClassSchema
+>;
+
+export const ProviderResilienceActionSchema = z.enum([
+  "retry_same_key_once",
+  "rotate_key",
+  "cooldown_24h",
+  "refresh_token",
+  "fallback_provider",
+  "fail",
+]);
+export type ProviderResilienceAction = z.infer<typeof ProviderResilienceActionSchema>;
+
+export const ProviderResilienceDecisionSchema = z.object({
+  failure_class: ProviderResilienceFailureClassSchema,
+  actions: z.array(ProviderResilienceActionSchema).min(1),
+  cooldown_seconds: z.number().int().nonnegative().optional(),
+});
+export type ProviderResilienceDecision = z.infer<
+  typeof ProviderResilienceDecisionSchema
+>;
+
+// ---------------------------------------------------------------------------
+// Credential pools (Hermes H1) and per-task provider chains (Hermes H2)
+// ---------------------------------------------------------------------------
+
+export const ProviderRotationStrategySchema = z.enum([
+  "fill_first",
+  "round_robin",
+  "least_used",
+  "random",
+]);
+export type ProviderRotationStrategy = z.infer<typeof ProviderRotationStrategySchema>;
+
+/**
+ * Pool membership + health state for one credential. Secret-free: the
+ * encrypted material stays in `credentials.secret_ref` server-side.
+ */
+export const ProviderPoolMemberDTOSchema = z
+  .object({
+    id: IdSchema,
+    credential_id: IdSchema,
+    name: z.string(),
+    position: z.number().int(),
+    enabled: z.boolean(),
+    healthy: z.boolean(),
+    cooldown_until: z.string().nullish(),
+    last_failure_class: ProviderResilienceFailureClassSchema.nullish(),
+    request_count: z.number().int().nonnegative(),
+    failure_count: z.number().int().nonnegative(),
+    last_used_at: z.string().nullish(),
+    created_at: z.string(),
+    updated_at: z.string(),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProviderPoolMemberDTO = z.infer<typeof ProviderPoolMemberDTOSchema>;
+
+export const ProviderPoolResponseSchema = z
+  .object({
+    provider_id: IdSchema,
+    rotation_strategy: ProviderRotationStrategySchema,
+    fallback_provider_ids: z.array(IdSchema),
+    members: z.array(ProviderPoolMemberDTOSchema),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProviderPoolResponse = z.infer<typeof ProviderPoolResponseSchema>;
+
+/** `api_key` is request-only secret material; it never appears in responses. */
+export const ProviderPoolCredentialAddRequestSchema = z.object({
+  api_key: z.string().min(1),
+  name: z.string().min(1).optional(),
+  position: z.number().int().optional(),
+});
+export type ProviderPoolCredentialAddRequest = z.infer<
+  typeof ProviderPoolCredentialAddRequestSchema
+>;
+
+export const ProviderPoolConfigUpdateRequestSchema = z.object({
+  rotation_strategy: ProviderRotationStrategySchema.optional(),
+  fallback_provider_ids: z.array(IdSchema).optional(),
+});
+export type ProviderPoolConfigUpdateRequest = z.infer<
+  typeof ProviderPoolConfigUpdateRequestSchema
+>;
+
+export const ProviderTaskChainEntrySchema = z.object({
+  provider_id: IdSchema,
+  model: z.string().nullish(),
+});
+export type ProviderTaskChainEntry = z.infer<typeof ProviderTaskChainEntrySchema>;
+
+export const ProviderTaskPolicyDTOSchema = z
+  .object({
+    task: z.string().min(1),
+    chain: z.array(ProviderTaskChainEntrySchema),
+    enabled: z.boolean(),
+    updated_at: z.string(),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProviderTaskPolicyDTO = z.infer<typeof ProviderTaskPolicyDTOSchema>;
+
+export const ProviderTaskPolicyPutRequestSchema = z.object({
+  chain: z.array(ProviderTaskChainEntrySchema).min(1),
+  enabled: z.boolean().optional(),
+});
+export type ProviderTaskPolicyPutRequest = z.infer<
+  typeof ProviderTaskPolicyPutRequestSchema
+>;

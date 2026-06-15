@@ -1,0 +1,364 @@
+import { afterEach, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { buildServer } from "../src/server";
+import { loadConfig } from "../src/config";
+import {
+  __setMemoryIdentityForTests,
+  __setMemoryServicesFactoryForTests,
+} from "../src/modules/memory";
+import { MemoryReadValidationError } from "../src/modules/memory/repository";
+
+let app: FastifyInstance;
+
+type MemoryServicesFactory = NonNullable<
+  Parameters<typeof __setMemoryServicesFactoryForTests>[0]
+>;
+type MemoryServices = ReturnType<MemoryServicesFactory>;
+
+afterEach(async () => {
+  __setMemoryIdentityForTests(null);
+  __setMemoryServicesFactoryForTests(null);
+  await app?.close();
+});
+
+function memoryConfig() {
+  return loadConfig({
+    CONTROL_PLANE_POLICY_AUTHORITY: "ts",
+    CONTROL_PLANE_PROPOSALS_AUTHORITY: "ts",
+    CONTROL_PLANE_MEMORY_AUTHORITY: "ts",
+    CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false",
+    CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
+    CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
+  });
+}
+
+function memoryOut(over: Record<string, unknown> = {}) {
+  return {
+    id: "memory-1",
+    space_id: "space-1",
+    scope: "user",
+    type: "fact",
+    status: "active",
+    visibility: "private",
+    sensitivity_level: "normal",
+    confidence: 1,
+    importance: 0.5,
+    created_at: "2026-06-15T10:00:00.000Z",
+    updated_at: "2026-06-15T10:00:00.000Z",
+    version: 1,
+    ...over,
+  };
+}
+
+function proposalOut(over: Record<string, unknown> = {}) {
+  return {
+    id: "proposal-1",
+    space_id: "space-1",
+    user_id: "user-1",
+    workspace_id: null,
+    source_session_id: null,
+    source_task_id: null,
+    source_run_id: null,
+    created_by_run_id: null,
+    proposal_type: "memory_create",
+    target_scope: "user",
+    target_namespace: "user.default",
+    memory_type: "fact",
+    proposed_title: "Remember",
+    proposed_content: "content",
+    rationale: "Memory creation requested via public API.",
+    status: "pending",
+    risk_level: "low",
+    urgency: "normal",
+    visibility: "space_shared",
+    preview: false,
+    review_deadline: null,
+    expires_at: null,
+    expired: false,
+    created_at: "2026-06-15T10:00:00.000Z",
+    decided_at: null,
+    resulting_memory_id: null,
+    owner_user_id: null,
+    subject_user_id: null,
+    sensitivity_level: "normal",
+    selected_user_ids: null,
+    provenance_entries: null,
+    source_activity_id: null,
+    grant_id: null,
+    required_approver_user_id: null,
+    requires_approval_type: null,
+    egress_approval_status: null,
+    egress_approval_id: null,
+    project_id: null,
+    ...over,
+  };
+}
+
+describe("memory read routes", () => {
+  it("lists memories with pagination passthrough", async () => {
+    __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    let seen: unknown = null;
+    __setMemoryServicesFactoryForTests(() => ({
+      repository: {
+        async list(
+          spaceId: string,
+          userId: string,
+          filters: { limit: number; offset: number; [key: string]: unknown },
+        ) {
+          seen = { spaceId, userId, filters };
+          return { items: [memoryOut()], total: 1, limit: filters.limit, offset: filters.offset };
+        },
+        async get() {
+          throw new Error("not used");
+        },
+        async search() {
+          throw new Error("not used");
+        },
+      } as unknown as MemoryServices["repository"],
+    }));
+    app = buildServer(memoryConfig(), { logger: false });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/memory?type=fact&status=active&limit=10&offset=5&workspace_id=ws-1",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ total: 1, limit: 10, offset: 5 });
+    expect(seen).toMatchObject({
+      spaceId: "space-1",
+      userId: "user-1",
+      filters: { memoryType: "fact", status: "active", workspaceId: "ws-1", limit: 10, offset: 5 },
+    });
+  });
+
+  it("returns 422 for an out-of-range limit", async () => {
+    __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setMemoryServicesFactoryForTests(() => ({
+      repository: {
+        async list() {
+          throw new Error("should not run");
+        },
+        async get() {
+          throw new Error("x");
+        },
+        async search() {
+          throw new Error("x");
+        },
+      } as unknown as MemoryServices["repository"],
+    }));
+    app = buildServer(memoryConfig(), { logger: false });
+    const res = await app.inject({ method: "GET", url: "/api/v1/memory?limit=999" });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it("maps a project filter validation error to 422", async () => {
+    __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setMemoryServicesFactoryForTests(() => ({
+      repository: {
+        async list() {
+          throw new MemoryReadValidationError("project_id 'p1' not found in space 'space-1'");
+        },
+        async get() {
+          throw new Error("x");
+        },
+        async search() {
+          throw new Error("x");
+        },
+      } as unknown as MemoryServices["repository"],
+    }));
+    app = buildServer(memoryConfig(), { logger: false });
+    const res = await app.inject({ method: "GET", url: "/api/v1/memory?project_id=p1" });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().detail).toContain("not found in space");
+  });
+
+  it("gets a memory or 404s when not readable", async () => {
+    __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setMemoryServicesFactoryForTests(() => ({
+      repository: {
+        async list() {
+          throw new Error("x");
+        },
+        async get(_s: string, _u: string, memoryId: string) {
+          return memoryId === "ok" ? memoryOut({ id: "ok" }) : null;
+        },
+        async search() {
+          throw new Error("x");
+        },
+      } as unknown as MemoryServices["repository"],
+    }));
+    app = buildServer(memoryConfig(), { logger: false });
+
+    expect((await app.inject({ method: "GET", url: "/api/v1/memory/ok" })).statusCode).toBe(200);
+    const missing = await app.inject({ method: "GET", url: "/api/v1/memory/nope" });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({ detail: "Memory not found" });
+  });
+
+  it("searches with body space/user overrides honored", async () => {
+    __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    let seen: unknown = null;
+    __setMemoryServicesFactoryForTests(() => ({
+      repository: {
+        async list() {
+          throw new Error("x");
+        },
+        async get() {
+          throw new Error("x");
+        },
+        async search(
+          spaceId: string,
+          userId: string,
+          filters: { query: string; limit: number; [key: string]: unknown },
+        ) {
+          seen = { spaceId, userId, filters };
+          return [memoryOut()];
+        },
+      } as unknown as MemoryServices["repository"],
+    }));
+    app = buildServer(memoryConfig(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/search",
+      payload: { query: "ts", space_id: "space-2", user_id: "user-9", limit: 3 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray(res.json())).toBe(true);
+    expect(seen).toMatchObject({
+      spaceId: "space-2",
+      userId: "user-9",
+      filters: { query: "ts", limit: 3 },
+    });
+  });
+
+  it("creates a memory_create proposal without mutating memory directly", async () => {
+    __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    let seen: unknown = null;
+    __setMemoryServicesFactoryForTests(() => ({
+      repository: {
+        async list() {
+          throw new Error("x");
+        },
+        async get() {
+          throw new Error("x");
+        },
+        async search() {
+          throw new Error("x");
+        },
+        async createMemoryProposal(
+          spaceId: string,
+          userId: string,
+          command: Record<string, unknown>,
+        ) {
+          seen = { spaceId, userId, command };
+          return proposalOut();
+        },
+        async updateMemoryProposal() {
+          throw new Error("x");
+        },
+        async archiveMemoryProposal() {
+          throw new Error("x");
+        },
+      } as unknown as MemoryServices["repository"],
+    }));
+    app = buildServer(memoryConfig(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory",
+      payload: {
+        title: "Remember",
+        content: "content",
+        type: "fact",
+        visibility: "space_shared",
+      },
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ proposal_type: "memory_create", status: "pending" });
+    expect(seen).toMatchObject({
+      spaceId: "space-1",
+      userId: "user-1",
+      command: { operation: "create", title: "Remember", content: "content" },
+    });
+  });
+
+  it("creates memory_update and memory_archive proposals for target memories", async () => {
+    __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    const calls: string[] = [];
+    __setMemoryServicesFactoryForTests(() => ({
+      repository: {
+        async list() {
+          throw new Error("x");
+        },
+        async get() {
+          throw new Error("x");
+        },
+        async search() {
+          throw new Error("x");
+        },
+        async createMemoryProposal() {
+          throw new Error("x");
+        },
+        async updateMemoryProposal(
+          spaceId: string,
+          userId: string,
+          memoryId: string,
+          workspaceId: string | null,
+          command: { content?: string | null },
+        ) {
+          calls.push(`update:${spaceId}:${userId}:${memoryId}:${workspaceId}:${command.content}`);
+          return proposalOut({ id: "proposal-update", proposal_type: "memory_update" });
+        },
+        async archiveMemoryProposal(
+          spaceId: string,
+          userId: string,
+          memoryId: string,
+          workspaceId: string | null,
+        ) {
+          calls.push(`archive:${spaceId}:${userId}:${memoryId}:${workspaceId}`);
+          return proposalOut({ id: "proposal-archive", proposal_type: "memory_archive" });
+        },
+      } as unknown as MemoryServices["repository"],
+    }));
+    app = buildServer(memoryConfig(), { logger: false });
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/memory/memory-1?workspace_id=ws-1",
+      payload: { content: "new content" },
+    });
+    const del = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/memory/memory-1?workspace_id=ws-1",
+    });
+
+    expect(patch.statusCode).toBe(202);
+    expect(patch.json()).toMatchObject({ proposal_type: "memory_update" });
+    expect(del.statusCode).toBe(202);
+    expect(del.json()).toMatchObject({ proposal_type: "memory_archive" });
+    expect(calls).toEqual([
+      "update:space-1:user-1:memory-1:ws-1:new content",
+      "archive:space-1:user-1:memory-1:ws-1",
+    ]);
+  });
+
+  it("does not own memory routes when authority is python", async () => {
+    app = buildServer(
+      loadConfig({ CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false" }),
+      { logger: false },
+    );
+    const res = await app.inject({ method: "GET", url: "/api/v1/memory" });
+    // No TS route registered → falls through to the (disabled) proxy.
+    expect(res.statusCode).toBe(503);
+    expect(res.payload).toContain("python_fallback_proxy_disabled");
+
+    const write = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory",
+      payload: { title: "t", content: "c", type: "fact" },
+    });
+    expect(write.statusCode).toBe(503);
+  });
+});

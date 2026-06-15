@@ -74,10 +74,10 @@ Frontend polls `GET /workspace-console/sessions/{id}` every 2 s while
 
 **RuntimeAdapterSpec owns local CLI command semantics.**
 
-Model flags, permission bypass flags, executable detection, and output parser
-selection are declared in `backend/app/runtimes/specs.py`. Host detection
-uses `/api/v1/runtime-adapters/detect`; configured instance status uses
-`/api/v1/runtime-adapters/{id}/status`.
+Model flags, permission bypass flags, invocation templates, and output parser
+selection are declared in `backend/app/runtimes/specs.py`. CLI binary install
+and status use the TS-controlled `/api/v1/runtime-tools` API; the retired
+`/api/v1/runtime-adapters` instance API must not be used.
 
 **Console sessions run in the workspace directory — no sandbox.**
 

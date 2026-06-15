@@ -42,6 +42,13 @@ from typing import Optional
 import yaml
 
 from ..config import settings
+from ..providers.control_plane_client import (
+    ControlPlaneProviderError,
+    audit_cli_credential_via_control_plane,
+    grant_cli_credential_via_control_plane,
+    provider_credentials_owned_by_control_plane,
+    resolve_cli_profile_via_control_plane,
+)
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +84,7 @@ class CredentialGrant:
       target_path      — container path where the volume is mounted
       readonly         — whether the volume is mounted read-only
       temp_home        — None (Docker uses direct volume mount)
-      env              — API key env vars (e.g. ANTHROPIC_API_KEY) if api_key.txt found
+      env              — no CLI API keys; Docker receives the mounted profile only
     """
     profile_id: str
     runtime: str
@@ -196,6 +203,9 @@ class CredentialBroker:
         Only the exact canonical adapter_type string is checked.
         Credential directories must use canonical names (e.g. claude_code, codex_cli).
         """
+        if provider_credentials_owned_by_control_plane():
+            return self.resolve_profile(runtime, None, require_existing=True)
+
         profiles = self._load_profiles()
 
         pid = f"{runtime}/default"
@@ -221,6 +231,14 @@ class CredentialBroker:
         grants.  When ``require_existing`` is true, a profile row whose
         ``source_path`` no longer exists is treated the same as no profile.
         """
+        if provider_credentials_owned_by_control_plane():
+            value = resolve_cli_profile_via_control_plane(
+                runtime=runtime,
+                profile_id=profile_id,
+                require_existing=require_existing,
+            )
+            return _profile_from_control_plane(value)
+
         profile = self.get_profile(profile_id) if profile_id else self.get_default_profile(runtime)
         if profile is None:
             return None
@@ -249,15 +267,21 @@ class CredentialBroker:
         None means no explicit profile was resolved. CLI runtime adapters must
         fail closed in that case.
         """
+        if provider_credentials_owned_by_control_plane():
+            value = grant_cli_credential_via_control_plane(
+                run_id=run_id,
+                runtime=runtime,
+                risk_level=risk_level,
+                executor_mode=executor_mode,
+                profile_id=profile_id,
+            )
+            return _grant_from_control_plane(value)
+
         profile = self.resolve_profile(runtime, profile_id, require_existing=True)
 
         if not profile:
             log.debug("no credential profile for runtime=%s", runtime)
             return None
-
-        # Check for an API key file inside the profile dir — takes priority over
-        # OAuth session for runtimes that support env-var auth (e.g. ANTHROPIC_API_KEY).
-        api_key_env = self._api_key_env(profile)
 
         if executor_mode == "docker":
             from ..workspace.sandbox_manager import _resolve_host_path
@@ -269,36 +293,19 @@ class CredentialBroker:
                 readonly=profile.readonly,
                 host_source_path=host_path,
                 target_path=profile.target_path,
-                env=api_key_env,
+                env={},
             )
 
-        # worktree: create temp HOME with symlink + optional API key env var
+        # worktree: create temp HOME with the login-state profile symlinked in
         temp_home = self._create_temp_home(run_id, profile)
-        env = {"HOME": temp_home, **api_key_env}
         return CredentialGrant(
             profile_id=profile.id,
             runtime=runtime,
             executor_mode="worktree",
             readonly=False,
             temp_home=temp_home,
-            env=env,
+            env={"HOME": temp_home},
         )
-
-    def _api_key_env(self, profile: CredentialProfile) -> dict:
-        """
-        If the profile dir contains api_key.txt, return {ENV_VAR: key} so the
-        adapter can authenticate without an OAuth session. Returns {} otherwise.
-        """
-        key_file = Path(profile.source_path) / "api_key.txt"
-        if not key_file.exists():
-            return {}
-        env_var = _API_KEY_ENV_VARS.get(profile.runtime)
-        if not env_var:
-            return {}
-        key = key_file.read_text(encoding="utf-8").strip()
-        if not key:
-            return {}
-        return {env_var: key}
 
     def _create_temp_home(self, run_id: str, profile: CredentialProfile) -> str:
         """
@@ -346,7 +353,6 @@ class CredentialBroker:
         grant: "CredentialGrant | None",
         *,
         runtime_adapter_type: str | None = None,
-        runtime_adapter_id: str | None = None,
         trigger_origin: str | None = None,
         fallback_used: bool = False,
         fallback_reason: str | None = None,
@@ -360,6 +366,32 @@ class CredentialBroker:
         or credential file contents.  This is a best-effort write; failures are
         logged but never re-raised.
         """
+        if provider_credentials_owned_by_control_plane():
+            try:
+                audit_cli_credential_via_control_plane(
+                    {
+                        "space_id": space_id,
+                        "run_id": run_id or None,
+                        "runtime_adapter_type": runtime_adapter_type,
+                        "credential_profile_id": (
+                            grant.profile_id if grant is not None else None
+                        ),
+                        "trigger_origin": trigger_origin,
+                        "fallback_used": fallback_used,
+                        "fallback_reason": fallback_reason,
+                        "broker_error": broker_error,
+                        "cleanup_status": cleanup_status,
+                        "action": action,
+                    }
+                )
+            except ControlPlaneProviderError:
+                log.warning(
+                    "control-plane credential audit failed run=%s",
+                    run_id,
+                    exc_info=True,
+                )
+            return
+
         try:
             from ..models import CliCredentialEvent
             import uuid as _uuid_mod
@@ -378,7 +410,6 @@ class CredentialBroker:
                 id=str(_uuid_mod.uuid4()),
                 space_id=space_id,
                 run_id=run_id or None,
-                runtime_adapter_id=runtime_adapter_id,
                 runtime_adapter_type=runtime_adapter_type,
                 credential_profile_id=credential_profile_id,
                 credential_source=credential_source,
@@ -405,6 +436,47 @@ class CredentialBroker:
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _profile_from_control_plane(value: dict | None) -> CredentialProfile | None:
+    if value is None:
+        return None
+    profile_id = str(value.get("profile_id") or "")
+    runtime = str(value.get("runtime") or "")
+    if not profile_id or not runtime:
+        return None
+    name = profile_id.split("/", 1)[1] if "/" in profile_id else "default"
+    return CredentialProfile(
+        id=profile_id,
+        runtime=runtime,
+        name=name,
+        source_path=str(value.get("source_path") or ""),
+        target_path=str(value.get("target_path") or _default_target_path(runtime)),
+        readonly=bool(value.get("readonly")),
+    )
+
+
+def _grant_from_control_plane(value: dict) -> CredentialGrant | None:
+    if not value.get("granted"):
+        return None
+    profile_id = str(value.get("profile_id") or "")
+    runtime = str(value.get("runtime") or "")
+    if not profile_id or not runtime:
+        return None
+    env = value.get("env")
+    return CredentialGrant(
+        profile_id=profile_id,
+        runtime=runtime,
+        executor_mode=str(value.get("executor_mode") or "worktree"),
+        readonly=bool(value.get("readonly")),
+        temp_home=value.get("temp_home") if isinstance(value.get("temp_home"), str) else None,
+        host_source_path=(
+            value.get("host_source_path")
+            if isinstance(value.get("host_source_path"), str)
+            else None
+        ),
+        target_path=value.get("target_path") if isinstance(value.get("target_path"), str) else None,
+        env=env if isinstance(env, dict) else {},
+    )
+
 # Canonical adapter_type → CLI config directory path inside the container HOME.
 # Credential directories on disk must use these exact names.
 _DEFAULT_TARGET_PATHS: dict[str, str] = {
@@ -413,14 +485,6 @@ _DEFAULT_TARGET_PATHS: dict[str, str] = {
     "opencode":    "/home/agent/.opencode",
     "gemini_cli":  "/home/agent/.gemini",
 }
-
-# Env var injected when api_key.txt is found in the profile dir.
-_API_KEY_ENV_VARS: dict[str, str] = {
-    "claude_code": "ANTHROPIC_API_KEY",
-    "codex_cli":   "OPENAI_API_KEY",
-    "gemini_cli":  "GEMINI_API_KEY",
-}
-
 
 def _default_target_path(runtime: str) -> str:
     return _DEFAULT_TARGET_PATHS.get(runtime, f"/home/agent/.{runtime}")

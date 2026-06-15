@@ -144,9 +144,9 @@ def test_local_cli_runtime_no_credential_profile_fails():
 
 
 def test_native_runtime_no_credential_profile_ok():
-    """echo / capability adapters do not use CLI login state, so no profile is needed."""
+    """Native non-CLI adapters do not use CLI login state, so no profile is needed."""
     result = SVC.check_automation_run(
-        resolved_adapter_type="echo",
+        resolved_adapter_type="model_api",
         requires_file_access=False,
         requires_cli_credential_profile=False,
         risk_level="low",
@@ -183,7 +183,7 @@ def test_file_access_without_workspace_fails():
 
 def test_non_file_access_adapter_no_workspace_ok():
     result = SVC.check_automation_run(
-        resolved_adapter_type="echo",
+        resolved_adapter_type="model_api",
         requires_file_access=False,
         requires_cli_credential_profile=False,
         risk_level="low",

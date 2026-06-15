@@ -418,6 +418,7 @@ class DailyCaptureReportService:
                 model=model,
                 system=system_prompt,
                 user=user_prompt,
+                task="daily_report",
             ).text
         except Exception as exc:
             log.warning("daily_report: LLM call failed run=%s: %s", run.id, exc)

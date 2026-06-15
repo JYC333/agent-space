@@ -88,7 +88,7 @@ def detect_profile(
 
 @router.get("/methods")
 def list_methods(ids: tuple[str, str] = Depends(get_identity)):
-    """Return the login method (cli or api_key) for each supported runtime."""
+    """Return the CLI login method for each supported runtime."""
     from .login import list_login_methods
     return list_login_methods()
 
@@ -138,39 +138,15 @@ async def login_input(
     ids: tuple[str, str] = Depends(get_identity),
 ):
     """
-    Write a line of text (e.g. an OAuth code) to the stdin of an active CLI
-    login subprocess started by /login/stream.  Returns 404 when no active
-    login process exists for that runtime.
+    Write a line of text (e.g. an OAuth code) to an active PTY login session
+    started by /login/stream. Returns 404 when no active login process exists
+    for that runtime.
     """
     from .login import send_login_input
     delivered = await send_login_input(runtime, body.input)
     if not delivered:
         raise HTTPException(status_code=404, detail=f"No active login session for runtime '{runtime}'")
     return {"status": "sent"}
-
-
-# ── API key save ──────────────────────────────────────────────────────────────
-
-class ApiKeyRequest(BaseModel):
-    runtime: str
-    api_key: str
-    profile_name: str = "default"
-
-
-@router.post("/apikey")
-def set_api_key(
-    body: ApiKeyRequest,
-    ids: tuple[str, str] = Depends(get_identity),
-):
-    """Save a user-provided API key into the managed credential profile dir."""
-    from .login import save_api_key
-    profile_dir = Path(settings.cli_credentials_dir) / body.runtime / body.profile_name
-    try:
-        save_api_key(body.runtime, body.api_key, profile_dir)
-        broker._reload()
-        return {"status": "saved", "profile_id": f"{body.runtime}/{body.profile_name}"}
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # ── Credential status summary ─────────────────────────────────────────────────
@@ -182,7 +158,7 @@ def credential_status(ids: tuple[str, str] = Depends(get_identity)):
     Used by the Credentials panel in the frontend to show which CLIs have
     credentials stored in the managed profile dir.
     """
-    from .login import RUNTIME_LOGIN_CONFIG
+    from .login_adapters import RUNTIME_LOGIN_CONFIG
     broker._reload()
     result = []
     for runtime, cfg in RUNTIME_LOGIN_CONFIG.items():

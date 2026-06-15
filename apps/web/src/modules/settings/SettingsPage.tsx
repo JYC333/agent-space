@@ -126,7 +126,7 @@ export default function SettingsPage() {
           <KeyRound className="size-3.5" /> Model Providers
         </CardTitle>
         <p className="text-sm text-muted-foreground mb-3">
-          Configure LLM backends (OpenAI, Anthropic, OpenRouter, Ollama) separately from runtime adapters.
+          Configure LLM backends (OpenAI, Anthropic, OpenRouter, Ollama) separately from runtime tools.
         </p>
         <Button asChild variant="outline" size="sm">
           <Link to="/providers">Open Model Providers</Link>

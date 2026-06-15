@@ -3,7 +3,7 @@
  *
  * No business route logic lives here. Logger hygiene comes from
  * `gateway/logging`, and all route registration — TS-owned modules first, the
- * temporary legacy Python proxy last — is owned by `gateway/routeRegistry`.
+ * temporary Python fallback proxy last — is owned by `gateway/routeRegistry`.
  */
 
 import Fastify, {
@@ -16,7 +16,7 @@ import { registerControlPlaneRoutes } from "./gateway/routeRegistry";
 import { buildLoggerOptions } from "./gateway/logging";
 import { REQUEST_ID_HEADER } from "./gateway/requestContext";
 
-const LEGACY_PROXY_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
+const PYTHON_FALLBACK_PROXY_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
 
 export interface BuildServerOptions {
   /** Override/disable the built-in logger options (tests pass `false`). */
@@ -39,7 +39,7 @@ export function buildServer(
     // The Python activity upload endpoint accepts 25 MiB files. The proxy keeps
     // a small transport margin for multipart framing while Python remains the
     // business authority for accepted file types and exact upload limits.
-    bodyLimit: LEGACY_PROXY_BODY_LIMIT_BYTES,
+    bodyLimit: PYTHON_FALLBACK_PROXY_BODY_LIMIT_BYTES,
     // The control plane sits behind the frontend proxy / browser; trust forwarded
     // info only for request-id continuity, not for auth decisions (Python owns
     // those).
@@ -56,8 +56,9 @@ export function buildServer(
 
   const app = Fastify(base);
 
-  // Treat every request body as an opaque buffer so the legacy proxy can forward
-  // it verbatim (any content-type). The TS-owned routes are GET and carry no body.
+  // Treat every request body as an opaque buffer so the fallback proxy can forward
+  // it verbatim (any content-type). TS-owned POST routes parse only the bodies
+  // they explicitly own.
   app.removeAllContentTypeParsers();
   app.addContentTypeParser("*", { parseAs: "buffer" }, (_req, body, done) => {
     done(null, body);

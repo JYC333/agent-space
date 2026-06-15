@@ -7,7 +7,7 @@ import {
 } from '../document'
 
 describe('rich text document helpers', () => {
-  it('wraps legacy plain text in editor JSON', () => {
+  it('wraps stored plain text in editor JSON', () => {
     expect(plainTextToRichTextDocument('First paragraph\n\nSecond paragraph')).toEqual({
       type: 'doc',
       content: [
@@ -17,9 +17,9 @@ describe('rich text document helpers', () => {
     })
   })
 
-  it('prefers valid structured content over legacy text', () => {
+  it('prefers valid structured content over fallback text', () => {
     const doc = { type: 'doc', content: [{ type: 'paragraph' }] }
-    expect(normalizeRichTextDocument(doc, 'legacy text')).toBe(doc)
+    expect(normalizeRichTextDocument(doc, 'fallback text')).toBe(doc)
   })
 
   it('falls back to an empty document for blank content', () => {

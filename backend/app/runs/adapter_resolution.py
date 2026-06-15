@@ -34,7 +34,7 @@ def resolve_runtime_adapter(
     policy validator.
     """
 
-    def _validate_policy(adapter_type: str, adapter_provider_id: str | None) -> None:
+    def _validate_policy(adapter_type: str) -> None:
         old_adapter = run.adapter_type
         try:
             run.adapter_type = adapter_type
@@ -42,7 +42,6 @@ def resolve_runtime_adapter(
                 run=run,
                 version=version,
                 policy=policy,
-                adapter_provider_id=adapter_provider_id,
             )
         except HTTPException as exc:
             detail = str(exc.detail)

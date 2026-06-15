@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import func
 
-from app.models import AgentVersion, Artifact, Proposal, Run, RunStep
+from app.models import Artifact, Proposal, Run, RunStep
 from tests.support import factories
 from tests.support.fake_runtime import ConfigurableFakeRuntimeAdapter, FakeRuntimeConfig
 
@@ -71,7 +71,7 @@ def test_fake_runtime_failure_is_audited_without_success_outputs(
     )
 
 
-def test_disabled_runtime_adapter_execute_returns_failed_run_without_success_rows(
+def test_planned_adapter_type_execute_returns_failed_run_without_success_rows(
     api_client, db, cross_space_pair, tmp_path, monkeypatch
 ):
     from app.config import settings
@@ -85,27 +85,18 @@ def test_disabled_runtime_adapter_execute_returns_failed_run_without_success_row
 
     a = cross_space_pair["space_a_id"]
     ua = cross_space_pair["user_a"]
-    disabled = factories.create_test_runtime_adapter(
-        db,
-        space_id=a,
-        name="disabled-wf",
-        adapter_type="echo",
-        enabled=False,
-        commit=True,
-    )
-    agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
-    ver = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).one()
-    ver.runtime_adapter_id = disabled.id
-    db.commit()
+    agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
 
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=True)
+    run.adapter_type = "opencode"
+    db.commit()
     rid = run.id
 
     r = cross_space_pair["client_a"].post(f"/api/v1/runs/{rid}/execute", params=_params(a, ua.id))
     assert r.status_code == 200
     out = r.json()
     assert out.get("status") == "failed"
-    assert (out.get("error_json") or {}).get("error_code") == "adapter_disabled"
+    assert (out.get("error_json") or {}).get("error_code") == "adapter_planned_not_executable"
 
     db.expire_all()
     assert (

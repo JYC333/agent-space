@@ -102,9 +102,11 @@ Two stable tiers plus per-scene context (`src/core/navigation.tsx`, `src/compone
 - **Scene Sidebar** (`SCENES`) — second-level navigation for the current scene, changes by
   scene (Inbox / Review / Agents / Workspaces). Collapsible; when collapsed the expand
   handle is shown in the main header next to the scene title (e.g. "☰ Agents"). Home needs no
-  scene sidebar. On mobile it becomes a horizontal tab strip. Filter scenes (Inbox / Review)
+  scene sidebar. On mobile it becomes a horizontal tab strip. Filter scenes (Inbox)
   drive a single real, API-backed query param the page reads — no fabricated views; route
-  scenes (Agents / Workspaces) link real sibling routes.
+  scenes (Review / Agents / Workspaces) link real sibling routes. Review links the real
+  `Proposals` and `Memory` surfaces; proposal-type filters (All / Memory / Knowledge / Code /
+  Tasks) live inside the Proposals page because they are filters, not routes.
 - **Knowledge has no scene.** It switches sub-areas via a lightweight in-header breadcrumb
   switcher (`Knowledge / Notes ▼`, `KnowledgeSectionHeader`) so each workspace owns its own
   layout — notably the backend-driven Notes collection tree, which would collide with a
@@ -113,7 +115,7 @@ Two stable tiers plus per-scene context (`src/core/navigation.tsx`, `src/compone
 - **Right Inspector** — scene/object-specific and owned by individual pages, never an
   app-level feature menu.
 
-The legacy single mixed sidebar, the "perspective" (personal-as-Space) model, the
+The old single mixed sidebar, the "perspective" (personal-as-Space) model, the
 PersonalView-as-Space switcher entry, the module-gallery Home, the imperative
 `setActiveSpace`/`activeOperationalSpace*` context API, and `location.state` navigation handoffs
 (now `?open=` / `?draft=` URL params) have been removed. All navigation is URL-based.
@@ -153,7 +155,7 @@ not be navigable.
 | **Home** (user-scoped) | Enabled | Cross-space command center at `/home`; **not** a Space, not in the switcher |
 | **Today** (Space) | Enabled | Space-scoped dashboard at `/spaces/:spaceId/today` for the active Space |
 | **Inbox** (Activity) | Enabled | Capture intake (rail label "Inbox"; route `/activity`) |
-| **Review** (Proposals) | Enabled | Proposal review (rail label "Review"; route `/proposals`) |
+| **Review** (Proposals + Memory) | Enabled | Governance area (rail label "Review"; routes `/proposals` and `/memory`). The scene sidebar links real surfaces; proposal-type filters live inside `/proposals`. |
 | **Knowledge** | Enabled | First-level unified module (rail label "Knowledge"; route `/knowledge`). `/knowledge` redirects to the last-used workspace (default `/knowledge/notes`); `/knowledge/home` is an optional overview hub, never the forced landing. Sub-areas switch via an in-header breadcrumb (no scene sidebar): **Notes** (working-knowledge workspace — configurable collection tree + open-note tabs), **Wiki** (canonical, KnowledgeItem-backed, `/knowledge/wiki`), **Sources**, **Cards** |
 | **Cards** | `enabled: false, visible: false` | Standalone module hidden; surfaced as the Knowledge › Cards placeholder until the spaced-repetition model exists |
 | Time | `planned: true` | Shows "soon" badge |

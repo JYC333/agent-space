@@ -240,7 +240,7 @@ export default function RunDetailPage() {
         {r.status === 'queued' && (
           <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2 mt-2">
             <p className="text-xs text-muted-foreground">
-              Dev: execute this queued run in-process (echo adapter). No real CLI / LLM.
+              Dev: execute this queued run through the configured runtime.
             </p>
             <Button
               type="button"

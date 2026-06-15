@@ -15,7 +15,8 @@ RuntimeKind = Literal["native", "local_cli", "remote_cli", "managed_api", "custo
 ImplementationStatus = Literal["implemented", "planned", "disabled"]
 ContextFileType = Literal["CLAUDE.md", "AGENTS.md", "prompt.md", "custom"]
 CredentialMode = Literal["none", "cli_profile", "model_provider_api_key"]
-SandboxLevel = Literal["none", "dry_run", "worktree", "one_shot_docker"]
+CredentialReleaseChannel = Literal["python_runtime", "control_plane_runtime_host"]
+SandboxLevel = Literal["none", "dry_run", "ephemeral", "worktree", "one_shot_docker"]
 ModelProviderMode = Literal["none", "optional", "required"]
 UsageAccuracy = Literal["precise", "estimated", "unknown"]
 
@@ -56,10 +57,9 @@ class ContextSpec(BaseModel):
 
 class CredentialsSpec(BaseModel):
     credential_mode: CredentialMode = "none"
+    credential_release_channel: CredentialReleaseChannel = "python_runtime"
     credential_runtime_name: str | None = None
     default_target_path: str | None = None
-    env_auth_var: str | None = None
-    supports_api_key_file: bool = False
     supports_oauth_login_state: bool = False
 
 
@@ -75,7 +75,9 @@ class ModelSpec(BaseModel):
     model_provider_mode: ModelProviderMode = "none"
     supports_model_override: bool = False
     model_arg_template: list[str] | None = None
-    model_config_behavior: Literal["uses_model", "not_applicable", "unsupported"] = "not_applicable"
+    model_config_behavior: Literal[
+        "uses_model", "not_applicable", "unsupported"
+    ] = "not_applicable"
 
     @model_validator(mode="after")
     def _override_requires_template(self) -> "ModelSpec":
@@ -199,16 +201,6 @@ def _build_builtin_specs() -> list[RuntimeAdapterSpec]:
     no_files = SandboxSpec(requires_file_access=False, minimum_sandbox_level="none")
     return [
         RuntimeAdapterSpec(
-            adapter_type="echo",
-            display_name="Echo",
-            runtime_kind="native",
-            implementation_status="implemented",
-            credentials=none_creds,
-            sandbox=no_files,
-            output=OutputSpec(output_parser_type="plain_text", patch_strategy="none"),
-            metadata=MetadataSpec(notes="Deterministic in-process test adapter."),
-        ),
-        RuntimeAdapterSpec(
             adapter_type="capability",
             display_name="Capability",
             runtime_kind="native",
@@ -241,6 +233,32 @@ def _build_builtin_specs() -> list[RuntimeAdapterSpec]:
             ),
         ),
         RuntimeAdapterSpec(
+            adapter_type="ts_agent_host",
+            display_name="TS Agent Host",
+            runtime_kind="managed_api",
+            implementation_status="implemented",
+            enabled_by_default=False,
+            credentials=CredentialsSpec(
+                credential_mode="model_provider_api_key",
+                credential_release_channel="control_plane_runtime_host",
+            ),
+            sandbox=no_files,
+            model=ModelSpec(
+                model_provider_mode="required",
+                supports_model_override=False,
+                model_config_behavior="uses_model",
+            ),
+            usage=UsageSpec(usage_accuracy="estimated", supports_usage_probe=False),
+            output=OutputSpec(output_parser_type="plain_text", patch_strategy="none"),
+            metadata=MetadataSpec(
+                notes=(
+                    "Control-plane TS runtime host invoked through the Python runs adapter seam. "
+                    "Run lifecycle stays Python-owned; provider keys are released inside "
+                    "control-plane over the internal credential channel."
+                ),
+            ),
+        ),
+        RuntimeAdapterSpec(
             adapter_type="claude_code",
             display_name="Claude Code",
             runtime_kind="local_cli",
@@ -265,8 +283,6 @@ def _build_builtin_specs() -> list[RuntimeAdapterSpec]:
                 credential_mode="cli_profile",
                 credential_runtime_name="claude_code",
                 default_target_path="/home/agent/.claude",
-                env_auth_var="ANTHROPIC_API_KEY",
-                supports_api_key_file=True,
                 supports_oauth_login_state=True,
             ),
             sandbox=SandboxSpec(
@@ -274,7 +290,7 @@ def _build_builtin_specs() -> list[RuntimeAdapterSpec]:
                 minimum_sandbox_level="worktree",
                 supports_worktree=True,
                 supports_one_shot_docker=False,
-                requires_workspace_for_execution=True,
+                requires_workspace_for_execution=False,
             ),
             model=ModelSpec(
                 model_provider_mode="none",
@@ -319,8 +335,6 @@ def _build_builtin_specs() -> list[RuntimeAdapterSpec]:
                 credential_mode="cli_profile",
                 credential_runtime_name="codex_cli",
                 default_target_path="/home/agent/.codex",
-                env_auth_var="OPENAI_API_KEY",
-                supports_api_key_file=True,
                 supports_oauth_login_state=True,
             ),
             sandbox=SandboxSpec(
@@ -328,7 +342,7 @@ def _build_builtin_specs() -> list[RuntimeAdapterSpec]:
                 minimum_sandbox_level="worktree",
                 supports_worktree=True,
                 supports_one_shot_docker=False,
-                requires_workspace_for_execution=True,
+                requires_workspace_for_execution=False,
             ),
             model=ModelSpec(model_provider_mode="none", supports_model_override=False),
             usage=UsageSpec(usage_accuracy="unknown", supports_usage_probe=False),

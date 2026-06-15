@@ -97,7 +97,7 @@ def test_successful_run_emits_coarse_step_sequence(db, cross_space_pair_db, tmp_
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
-    run.prompt = "hello-echo"
+    run.prompt = "hello-run"
     db.flush()
     db.commit()
 
@@ -130,7 +130,7 @@ def test_successful_run_steps_are_ordered_by_step_index(db, cross_space_pair_db,
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
-    run.prompt = "echo-test"
+    run.prompt = "run-step-test"
     db.flush()
     db.commit()
 
@@ -177,7 +177,7 @@ def test_run_with_output_emits_artifact_step(db, cross_space_pair_db, tmp_path, 
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
-    run.prompt = "hello-echo"
+    run.prompt = "hello-run"
     db.flush()
     db.commit()
 

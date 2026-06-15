@@ -36,7 +36,7 @@ def _setup_execution(
     *,
     space_id: str,
     user_id: str,
-    output_text: str = "echo-ok",
+    output_text: str = "snapshot-ok",
 ):
     from app.config import settings
 

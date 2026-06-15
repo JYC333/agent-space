@@ -25,9 +25,9 @@ describe("TS-owned health routes", () => {
   });
 
   it("does not serve the old /api/v1/gateway/health route (proxies it instead)", async () => {
-    // With the legacy proxy disabled, an unowned path returns 503 rather than 200,
+    // With the Python fallback proxy disabled, an unowned path returns 503 rather than 200,
     // proving /api/v1/gateway/health is NOT a TS-owned route anymore.
-    app = buildServer(loadConfig({ CONTROL_PLANE_ENABLE_LEGACY_PROXY: "false" }), {
+    app = buildServer(loadConfig({ CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false" }), {
       logger: false,
     });
     const res = await app.inject({ method: "GET", url: "/api/v1/gateway/health" });

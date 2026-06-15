@@ -85,9 +85,11 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 
 | Doc | What it covers |
 |---|---|
-| [architecture/TS_MIGRATION_STRATEGY.md](architecture/TS_MIGRATION_STRATEGY.md) | Binding migration rules (§8 invariants), seam layer, context order |
-| [architecture/TS_MIGRATION_ROADMAP.md](architecture/TS_MIGRATION_ROADMAP.md) | Staged Python→TS migration plan + PilotDeck/Hermes absorption maps |
-| [architecture/TS_CONTROL_PLANE_FOUNDATION.md](architecture/TS_CONTROL_PLANE_FOUNDATION.md) | The control-plane service: gateway, legacy proxy, compose wiring |
+| [architecture/TS_PROTOCOL_FOUNDATION.md](architecture/TS_PROTOCOL_FOUNDATION.md) | Contracts-only TS protocol package |
+| [architecture/TS_MIGRATION_STRATEGY.md](architecture/TS_MIGRATION_STRATEGY.md) | Binding migration rules and context move checklist |
+| [architecture/TS_MIGRATION_ROADMAP.md](architecture/TS_MIGRATION_ROADMAP.md) | Current TS migration status, remaining cleanup, future feature backlog |
+| [architecture/TS_CONTROL_PLANE_OWNERSHIP.md](architecture/TS_CONTROL_PLANE_OWNERSHIP.md) | Current TS vs Python context ownership |
+| [architecture/TS_CONTROL_PLANE_FOUNDATION.md](architecture/TS_CONTROL_PLANE_FOUNDATION.md) | The control-plane service: gateway, Python fallback proxy, compose wiring |
 | [architecture/CONTROL_PLANE_MODULE_CONVENTION.md](architecture/CONTROL_PLANE_MODULE_CONVENTION.md) | TS-owned module structure, route registry, error envelope |
 
 ### Memory / Activity / Proposal
@@ -146,7 +148,7 @@ Load only the module docs relevant to your task.
 | Context assembly and vendor files | [modules/context-compiler.md](modules/context-compiler.md) |
 | Sandbox execution | [modules/sandbox.md](modules/sandbox.md) |
 | Workspace browser / file UI | [modules/workspace-console.md](modules/workspace-console.md) |
-| Runtime adapters | [modules/runtime-adapters.md](modules/runtime-adapters.md) |
+| Runtime tools / adapter types | [modules/runtime-adapters.md](modules/runtime-adapters.md) |
 | Credentials | [modules/credentials.md](modules/credentials.md) |
 | Deployment | [modules/deployment.md](modules/deployment.md) |
 | Knowledge Base / knowledge items | [modules/knowledge-base.md](modules/knowledge-base.md) |
@@ -173,6 +175,8 @@ Load only the module docs relevant to your task.
 | [0006](decisions/0006-open-source-readiness.md) | Private-first, open-source-ready |
 | [0007](decisions/0007-plugin-module-architecture.md) | Plugin module structure for per-deployment feature control |
 | [0008](decisions/0008-multi-cli-mvp.md) | Multi-CLI MVP |
+| [0009](decisions/0009-anthropic-cli-only-policy.md) | Anthropic CLI-only policy (superseded by ADR 0010) |
+| [0010](decisions/0010-credential-channel-isolation.md) | Credential channel isolation |
 
 ---
 

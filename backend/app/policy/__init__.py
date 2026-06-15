@@ -29,12 +29,19 @@ from .proposal_apply import (
     ProposalRiskLevelError,
     check_proposal_apply_policy,
     effective_proposal_risk,
+    supported_proposal_apply_types,
     MEDIUM_DEFAULT_PROPOSAL_TYPES,
     SUPPORTED_PROPOSAL_TYPES,
 )
 from .hard_invariants import HardInvariantGuard
 from .gateway import PolicyGateway, PolicyCheckRequest
 from .ports import PolicyPort
+from .control_plane_client import (
+    ControlPlanePolicyError,
+    ControlPlanePolicyGateway,
+    get_policy_port,
+    policy_owned_by_control_plane,
+)
 from .exceptions import PolicyGateBlocked, PolicyAuditPersistError
 from .audit import (
     PolicyAuditEnvelope,
@@ -86,12 +93,17 @@ __all__ = [
     "ProposalRiskLevelError",
     "check_proposal_apply_policy",
     "effective_proposal_risk",
+    "supported_proposal_apply_types",
     "MEDIUM_DEFAULT_PROPOSAL_TYPES",
     "SUPPORTED_PROPOSAL_TYPES",
     "HardInvariantGuard",
     "PolicyGateway",
     "PolicyCheckRequest",
     "PolicyPort",
+    "ControlPlanePolicyError",
+    "ControlPlanePolicyGateway",
+    "get_policy_port",
+    "policy_owned_by_control_plane",
     "PolicyGateBlocked",
     "PolicyAuditPersistError",
     "PolicyAuditEnvelope",

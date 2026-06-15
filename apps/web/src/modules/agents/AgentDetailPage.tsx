@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { Loader2, MessageSquare } from 'lucide-react'
+import { Loader2, MessageSquare, Ban, Power } from 'lucide-react'
 import { toast } from 'sonner'
 import { agentsApi } from '../../api/client'
 import type { AgentOut, AgentVersionOut, Run, Proposal } from '../../types/api'
@@ -25,6 +25,7 @@ export default function AgentDetailPage() {
   const [runs, setRuns] = useState<Run[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [loading, setLoading] = useState(true)
+  const [statusBusy, setStatusBusy] = useState(false)
 
   const reload = useCallback(async () => {
     if (!agentId) return
@@ -49,6 +50,21 @@ export default function AgentDetailPage() {
   if (!agent) return <div className="p-6 text-muted-foreground">Agent not found.</div>
 
   const isAssistant = agent.agent_kind === 'system_assistant'
+  const isActive = agent.status === 'active'
+
+  const toggleStatus = async () => {
+    const next = isActive ? 'disabled' : 'active'
+    setStatusBusy(true)
+    try {
+      await agentsApi.update(agent.id, { status: next })
+      toast.success(next === 'disabled' ? 'Agent disabled — new runs are blocked by policy' : 'Agent enabled')
+      await reload()
+    } catch (err) {
+      toast.error(errMsg(err))
+    } finally {
+      setStatusBusy(false)
+    }
+  }
 
   return (
     <div className="p-6 max-w-3xl space-y-5">
@@ -61,8 +77,24 @@ export default function AgentDetailPage() {
           <p className="text-sm text-muted-foreground">{agent.description ?? 'No description'}</p>
         </div>
         <div className="flex gap-2 shrink-0">
-          {isAssistant && (
-            <Button asChild size="sm"><Link to={`/agents/${agent.id}/chat`}><MessageSquare className="size-3.5 mr-1" />Open chat</Link></Button>
+          {/* Chat works for any agent: the chat turn runs the agent's current
+              version through the same execution path (a disabled agent's turn
+              is correctly blocked by policy). */}
+          <Button asChild size="sm"><Link to={`/agents/${agent.id}/chat`}><MessageSquare className="size-3.5 mr-1" />Open chat</Link></Button>
+          {!isAssistant && (
+            <Button
+              size="sm"
+              variant={isActive ? 'destructive' : 'success'}
+              disabled={statusBusy}
+              onClick={toggleStatus}
+              title={isActive ? 'Disable this agent — blocks new run execution' : 'Enable this agent'}
+            >
+              {statusBusy
+                ? <Loader2 className="size-3.5 animate-spin" />
+                : isActive
+                  ? <><Ban className="size-3.5 mr-1" />Disable</>
+                  : <><Power className="size-3.5 mr-1" />Enable</>}
+            </Button>
           )}
           <Button asChild size="sm" variant="outline"><Link to="/agents">All agents</Link></Button>
         </div>

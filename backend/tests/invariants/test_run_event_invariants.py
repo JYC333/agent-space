@@ -332,7 +332,7 @@ class TestExecutionEmitsAdapterCompletedOnException:
         factories.create_test_user(db, space_id=_EXEC_SPACE, user_id=_EXEC_USER)
 
         class ThrowingAdapter(BaseRuntimeAdapter):
-            adapter_type = "echo"
+            adapter_type = "model_api"
 
             def execute(self, ctx: RuntimeExecutionContext):
                 raise RuntimeError("adapter blew up")
@@ -654,7 +654,7 @@ class TestMaterializerEmitsRunEvents:
         factories.create_test_user(db, space_id=_MAT_SPACE, user_id=_MAT_USER)
 
         class ArtifactOutputAdapter(BaseRuntimeAdapter):
-            adapter_type = "echo"
+            adapter_type = "model_api"
 
             def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
                 return RuntimeAdapterResult(
@@ -714,7 +714,7 @@ class TestMaterializerEmitsRunEvents:
         monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sbs_mat2"))
 
         class BadArtifactAdapter(BaseRuntimeAdapter):
-            adapter_type = "echo"
+            adapter_type = "model_api"
 
             def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
                 return RuntimeAdapterResult(
@@ -802,7 +802,7 @@ class TestMaterializerEmitsRunEvents:
         ws = factories.create_test_workspace(db, space_id=_space)
 
         class ProposalOutputAdapter(BaseRuntimeAdapter):
-            adapter_type = "echo"
+            adapter_type = "model_api"
 
             def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
                 return RuntimeAdapterResult(
@@ -877,7 +877,7 @@ class TestMaterializerEmitsRunEvents:
         monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sbs_mat4"))
 
         class BadProposalAdapter(BaseRuntimeAdapter):
-            adapter_type = "echo"
+            adapter_type = "model_api"
 
             def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
                 return RuntimeAdapterResult(
@@ -938,7 +938,7 @@ class TestActivityMaterializerFailureEmitsRunEvent:
         monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sbs_act"))
 
         class BadActivityAdapter(BaseRuntimeAdapter):
-            adapter_type = "echo"
+            adapter_type = "model_api"
 
             def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
                 return RuntimeAdapterResult(
@@ -1039,7 +1039,7 @@ class TestRuntimeOutputArtifactEvents:
         monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sbs_rt"))
 
         class OutputTextAdapter(BaseRuntimeAdapter):
-            adapter_type = "echo"
+            adapter_type = "model_api"
 
             def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
                 return RuntimeAdapterResult(
@@ -1122,7 +1122,7 @@ class TestRuntimeOutputArtifactEvents:
         monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sbs_rt2"))
 
         class OutputTextAdapter(BaseRuntimeAdapter):
-            adapter_type = "echo"
+            adapter_type = "model_api"
 
             def execute(self, ctx: RuntimeExecutionContext) -> RuntimeAdapterResult:
                 return RuntimeAdapterResult(

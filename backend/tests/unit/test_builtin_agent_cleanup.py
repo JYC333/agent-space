@@ -1,7 +1,7 @@
-"""Legacy built-in concrete agents are removed; only system templates remain.
+"""Old built-in concrete agents are removed; only system templates remain.
 
-Asserts the clean model after migrating `echo-agent` / `memory-curator-agent`
-off the old per-space seeding path onto AgentTemplate (factory) + internal service.
+Asserts the clean model after moving old per-space seeding onto AgentTemplate
+(factory) + internal service.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ SPACE = PERSONAL_SPACE_ID
 USER = DEFAULT_USER_ID
 
 
-def test_legacy_agent_seeder_module_removed():
+def test_old_agent_seeder_module_removed():
     """The old per-space concrete-agent seeder no longer exists."""
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("app.agents.seeder")
@@ -30,10 +30,9 @@ def test_on_space_created_seeds_no_concrete_agents(db):
     before = db.query(Agent).count()
     on_space_created(db, space_id=SPACE, seeded_by_user_id=USER)
     after = db.query(Agent).count()
-    assert after == before  # no echo-agent / memory-curator-agent created
+    assert after == before
 
-    # And specifically, no agent with a legacy hardcoded id exists.
-    assert db.query(Agent).filter(Agent.id == "system.echo-agent").count() == 0
+    # And specifically, no agent with the old memory-curator hardcoded id exists.
     assert db.query(Agent).filter(Agent.id == "system.memory-curator-agent").count() == 0
 
 
@@ -51,7 +50,7 @@ def test_bootstrap_seeds_templates_not_concrete_agents(db):
     assert db.query(Agent).count() == 0
 
 
-def test_intent_router_memory_reflect_has_no_legacy_agent():
+def test_intent_router_memory_reflect_has_no_old_agent():
     """/memory reflect routes to the internal service, not a concrete built-in agent."""
     from app.router import RouterService
 
@@ -62,19 +61,19 @@ def test_intent_router_memory_reflect_has_no_legacy_agent():
     )
     assert decision is not None
     assert decision.capability_id == "memory.reflect"
-    # No concrete agent is resolved, and certainly not the legacy key.
+    # No concrete agent is resolved, and certainly not the old key.
     assert decision.agent_id is None
     assert decision.agent_id != "system.memory-curator-agent"
 
 
-def test_no_source_references_legacy_agent_keys():
-    """No production code references the removed legacy concrete-agent ids."""
+def test_no_source_references_old_agent_keys():
+    """No production code references the removed concrete-agent ids."""
     import pathlib
 
     app_root = pathlib.Path(importlib.import_module("app.models").__file__).resolve().parent
     offenders = []
     for path in app_root.rglob("*.py"):
         text = path.read_text()
-        if "system.echo-agent" in text or "system.memory-curator-agent" in text:
+        if "system.memory-curator-agent" in text:
             offenders.append(str(path.relative_to(app_root)))
-    assert offenders == [], f"legacy agent ids still referenced in: {offenders}"
+    assert offenders == [], f"old agent ids still referenced in: {offenders}"

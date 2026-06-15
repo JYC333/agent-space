@@ -2,9 +2,9 @@
  * Command envelopes — **contracts only, not handlers.**
  *
  * A command is a request to change state. These schemas define the *shape* of
- * that request on the wire. They do **not** execute anything, route to Python,
- * or imply a TS handler exists. Python remains the sole authority that decides
- * and applies every command; this package only describes the message.
+ * that request on the wire. They do **not** execute anything, route to an
+ * implementation, or imply a handler exists. The owning service decides and
+ * applies the command; this package only describes the message.
  *
  * Each command is the generic {@link CommandEnvelopeSchema} narrowed to a literal
  * `type` and a concrete `payload`. Payload fields mirror the corresponding Python
@@ -14,7 +14,7 @@
  */
 
 import { z } from "zod";
-import { IdSchema, ISODateTimeSchema } from "./common";
+import { IdSchema, ISODateTimeSchema } from "./common.js";
 
 /**
  * Generic command envelope. `payload` is `unknown` here; the per-command schemas

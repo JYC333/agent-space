@@ -2,7 +2,7 @@
  * Per-request context helpers for the control-plane gateway entry layer.
  *
  * The "gateway" is the permanent entry/routing layer of the control plane (as
- * opposed to the temporary `legacy/` Python proxy). These helpers carry the
+ * opposed to the temporary Python fallback proxy). These helpers carry the
  * cross-cutting request metadata — request id continuity, safe header access,
  * and the control-plane marker header — that every control-plane path
  * (TS-owned or proxied) shares.
@@ -27,7 +27,7 @@ export const CONTROL_PLANE_MARKER_VALUE = "ts";
 
 /**
  * Headers that carry secrets. `readHeader` refuses to return them so that
- * context/log helpers can never accidentally surface a credential. The legacy
+ * context/log helpers can never accidentally surface a credential. The fallback
  * proxy forwards them verbatim via its own header-copy path, which is the only
  * sanctioned reader.
  */

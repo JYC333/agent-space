@@ -313,6 +313,29 @@ class Settings(BaseSettings):
     # Path to the credential profile config file
     cli_credentials_config: str = str(paths.cli_credentials_config)
 
+    # Provider commands and credential resolution authority.
+    # "python" keeps the existing local provider/credential implementation.
+    # "ts" makes Python runtime call sites use the control-plane internal ports.
+    control_plane_providers_credentials_authority: str = "python"
+    # Policy enforcement authority. "ts" routes PolicyPort decisions and durable
+    # audit writes through the control-plane internal policy ports.
+    control_plane_policy_authority: str = "python"
+    # Public proposal review/read authority. "ts" registers proposal routes in
+    # control-plane and dispatches Python-owned apply transactions through the
+    # internal proposal port.
+    control_plane_proposals_authority: str = "python"
+    # Public sessions command authority. "ts" makes the control plane serve
+    # list/get/create sessions and list/add messages; the matching Python HTTP
+    # routes fail closed (410). Session reflect remains Python-owned.
+    control_plane_sessions_authority: str = "python"
+    # Personal Assistant chat-turn authority. "ts" makes the control plane own
+    # /agents/{agent_id}/chat while Python exposes only explicit preparation
+    # ports for still-Python-owned context/run creation steps.
+    control_plane_chat_turn_authority: str = "python"
+    control_plane_internal_url: str = ""
+    control_plane_internal_token: str = ""
+    control_plane_internal_timeout_seconds: float = 60.0
+
     # Claude Code local data — override in Docker via CLAUDE_HOME env var
     claude_home: str = str(Path.home() / ".claude")
 
@@ -348,6 +371,35 @@ class Settings(BaseSettings):
         if v < 30:
             raise ValueError(
                 f"daily_report_scheduler_interval_seconds must be at least 30, got {v}"
+            )
+        return v
+
+    # ── Memory read-access log retention ─────────────────────────────────────
+    # `memory_access_logs` is a high-volume append-only audit table — `search_hit`
+    # writes one row per returned hit. The MemoryEvolver fitness reads the
+    # aggregate counters on `memory_entries`, not these rows, so old traces can be
+    # pruned to bound the table. The sweep only deletes trace rows older than
+    # retention_days; it never touches the counters. Set enabled=false to disable.
+    # Minimum sweep interval is 300 seconds; retention must be at least 1 day.
+    memory_access_log_retention_enabled: bool = True
+    memory_access_log_retention_days: int = 90
+    memory_access_log_prune_interval_seconds: int = 3600
+
+    @field_validator("memory_access_log_retention_days")
+    @classmethod
+    def validate_memory_access_log_retention_days(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(
+                f"memory_access_log_retention_days must be at least 1, got {v}"
+            )
+        return v
+
+    @field_validator("memory_access_log_prune_interval_seconds")
+    @classmethod
+    def validate_memory_access_log_prune_interval(cls, v: int) -> int:
+        if v < 300:
+            raise ValueError(
+                f"memory_access_log_prune_interval_seconds must be at least 300, got {v}"
             )
         return v
 

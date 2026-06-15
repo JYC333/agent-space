@@ -345,15 +345,13 @@ def test_policy_change_accept_is_controlled_by_enforce_proposal_apply(db, cross_
         metadata_json={"proposal_type": "policy_change"},
     )
 
-    with patch(
-        "app.proposals.service.PolicyGateway.enforce_proposal_apply",
-        side_effect=blocked,
-    ) as enforce:
+    with patch("app.proposals.service.get_policy_port") as policy_port:
+        policy_port.return_value.enforce_proposal_apply.side_effect = blocked
         with patch("app.proposals.apply_service.ProposalApplyService.apply") as apply:
             with pytest.raises(PolicyGateBlocked):
                 ProposalService(db).accept(prop.id, space_id=a, user_id=ua.id)
 
-    enforce.assert_called_once()
+    policy_port.return_value.enforce_proposal_apply.assert_called_once()
     apply.assert_not_called()
     after = db.query(func.count(Policy.id)).filter(Policy.space_id == a).scalar()
     assert after == before

@@ -91,8 +91,26 @@ validate_prod_env() {
   fi
 }
 
+ensure_control_plane_db_role() {
+  if ! local_compose_control_plane_ts_authority_enabled; then
+    return 0
+  fi
+
+  echo "Preparing control-plane database role before starting control-plane..."
+  local backend_up_args=(up -d)
+  if [[ -n "$build_flag" ]]; then
+    backend_up_args+=("$build_flag")
+  fi
+  backend_up_args+=(backend)
+
+  "${COMPOSE[@]}" "${backend_up_args[@]}"
+  local_compose_wait_service_healthy backend "control-plane database role provisioning" 180
+  local_compose_provision_control_plane_db_role "control-plane DB role provisioning"
+}
+
 init_data_dirs
 ensure_env
+local_compose_ensure_control_plane_ts_authority_env
 validate_prod_env
 
 export DOCKER_GID
@@ -102,6 +120,8 @@ if ! docker image inspect "$SANDBOX_IMAGE" &>/dev/null; then
   echo "Building sandbox image ($SANDBOX_IMAGE)..."
   docker build --network=host -t "$SANDBOX_IMAGE" "$REPO_ROOT/sandbox/"
 fi
+
+ensure_control_plane_db_role
 
 echo "Starting agent-space ($MODE) with Docker Compose..."
 echo "  compose file: $COMPOSE_FILE"

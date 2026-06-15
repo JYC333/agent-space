@@ -48,6 +48,26 @@ ProposalApproval:
    - Dispatches through `ProposalApplierRegistry` to the target module's registered applier
 4. `proposal.status = "accepted"`, `decided_at` set, commit — durable write completes. No separate approval-event row is created for normal accept/reject. `ProposalApproval` rows are a distinct gate for `egress_review` proposals only (written via `/proposals/{id}/approvals/egress-granting-user`).
 
+## TypeScript Migration Boundary
+
+Stage 5 moved the public proposal review surface to the control plane when
+`CONTROL_PLANE_PROPOSALS_AUTHORITY=ts`:
+
+- TS owns external `/api/v1/proposals` list/get routes and mirrors the Python
+  read model/visibility rule.
+- TS owns the external accept/reject/egress-approval HTTP routes, but dispatches
+  the durable mutation to `backend/app/proposals/internal_api.py` over the
+  service-token internal port.
+- Python remains the transaction owner for `ProposalService.accept()`,
+  `ProposalApplyService`, source monitoring, target-module appliers, code patch
+  rollback on DB failure, and best-effort participation writes.
+- Proposal creation entrypoints remain in their product modules
+  (`memory`, `knowledge`, `agents`, `runs`, etc.) until those contexts migrate.
+
+This is intentional: the Stage 5 TS migration removes the fallback proxy from
+the user-facing proposal review API without reimplementing per-`proposal_type`
+business writes in TS.
+
 ## `accept_context` Values
 
 | Value | Caller |

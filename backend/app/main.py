@@ -177,11 +177,43 @@ async def lifespan(app: FastAPI):
             )
         )
 
+    # ── Memory read-access log retention sweep ───────────────────────────────
+    if settings.memory_access_log_retention_enabled:
+        from .memory.access_log import prune_memory_access_logs
+
+        async def _prune_memory_access_logs() -> None:
+            db_scan = SessionLocal()
+            try:
+                deleted = await asyncio.to_thread(
+                    prune_memory_access_logs,
+                    db_scan,
+                    older_than_days=settings.memory_access_log_retention_days,
+                )
+                if deleted:
+                    _scheduler_log.info(
+                        "memory_access_log_retention: pruned %d trace row(s)", deleted
+                    )
+            finally:
+                db_scan.close()
+
+        scheduler_registry.register(
+            ScheduledTask(
+                name="memory_access_log_retention",
+                interval_seconds=settings.memory_access_log_prune_interval_seconds,
+                run=_prune_memory_access_logs,
+                run_on_start=False,
+            )
+        )
+
     # ── Backup scheduler ──────────────────────────────────────────────────────
     _backup_scheduler = None
     if settings.backup_enabled:
         from .backups.service import BackupService
-        from .backups.scheduler import BackupScheduler, set_scheduler
+        from .backups.scheduler import (
+            BackupScheduler,
+            make_backup_scheduled_task,
+            set_scheduler,
+        )
         _backup_svc = BackupService(
             data_root=Path(settings.agent_space_home),
             backup_root=Path(settings.backup_root),
@@ -194,12 +226,10 @@ async def lifespan(app: FastAPI):
         _backup_scheduler = BackupScheduler(service=_backup_svc)
         set_scheduler(_backup_scheduler)
         scheduler_registry.register(
-            ScheduledTask(
-                name="backup_scheduler",
-                interval_seconds=settings.backup_interval_hours * 3600,
-                run=_backup_scheduler.run_scheduled_backup,
+            make_backup_scheduled_task(
+                _backup_scheduler,
+                interval_hours=settings.backup_interval_hours,
                 run_on_start=settings.backup_on_startup,
-                await_run_on_start=settings.backup_on_startup,
             )
         )
 

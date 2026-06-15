@@ -159,4 +159,6 @@ def envelope_from_blocked_gate(exc: Any) -> PolicyAuditEnvelope:
 
 def write_blocked_gate_audit(exc: Any) -> str:
     """Durably record a blocked gate exactly once for HTTP or local handling."""
+    if getattr(exc, "audit_already_persisted", False):
+        return "already_persisted"
     return DurablePolicyAuditWriter().write(envelope_from_blocked_gate(exc))

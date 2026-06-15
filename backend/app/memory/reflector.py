@@ -169,6 +169,7 @@ If nothing is memory-worthy, return an empty array: []"""
             model=model,
             system=system_prompt,
             user=f"Conversation:\n\n{conversation}",
+            task="reflector",
         ).text
 
         try:

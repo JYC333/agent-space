@@ -101,10 +101,10 @@ def _make_fake_adapter(monkeypatch, config: FakeRuntimeConfig | None = None):
     monkeypatch.setattr(
         "app.runs.adapter_resolution.is_adapter_type_implemented",
         lambda adapter_type: adapter_type in {
-            "echo",
             "capability",
             "claude_code",
             "codex_cli",
+            "model_api",
             "model_provider_api",
         },
     )
@@ -318,7 +318,7 @@ class TestRuntimeExecuteDisallowedToolBlocking:
         adapter_called = []
 
         class TrackingAdapter(ConfigurableFakeRuntimeAdapter):
-            adapter_type = "echo"
+            adapter_type = "model_api"
 
             def execute(self, ctx):
                 adapter_called.append("called")
@@ -333,7 +333,7 @@ class TestRuntimeExecuteDisallowedToolBlocking:
         user_id = DEFAULT_USER_ID
 
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user_id, commit=False)
-        # Restrict tool permissions to only "claude_code" — echo adapter not allowed
+        # Restrict tool permissions to only "claude_code"; the default adapter is not allowed.
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
         version.tool_permissions_json = ["claude_code"]
@@ -357,7 +357,7 @@ class TestRuntimeExecuteDisallowedToolBlocking:
         adapter_executed = []
 
         class TrackingAdapter(ConfigurableFakeRuntimeAdapter):
-            adapter_type = "echo"
+            adapter_type = "model_api"
 
             def execute(self, ctx):
                 adapter_executed.append("called")
@@ -372,10 +372,10 @@ class TestRuntimeExecuteDisallowedToolBlocking:
         user_id = DEFAULT_USER_ID
 
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user_id, commit=False)
-        # Permit the echo adapter explicitly
+        # Permit the default adapter explicitly.
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.tool_permissions_json = ["echo"]
+        version.tool_permissions_json = ["model_api"]
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
         run_row = db.query(Run).filter(Run.id == run.id).one()
@@ -486,267 +486,6 @@ class TestUnknownRuntimeSpecBlocking:
 # ---------------------------------------------------------------------------
 
 
-class TestRuntimeUseCredentialCrossSpaceBlocking:
-    """Cross-space credential → DENY before any secret material is resolved.
-
-    Verifies the fix: resource_space_id comes from Credential.space_id, not RuntimeAdapter.space_id.
-    """
-
-    def test_cross_space_credential_denied_before_secret_resolution(
-        self, db: Session, tmp_path, monkeypatch
-    ):
-        """RuntimeAdapter in space_a referencing Credential in space_b → DENY before secret resolution."""
-        _setup_paths(monkeypatch, tmp_path)
-        _make_fake_adapter(monkeypatch)
-
-        secret_resolved = []
-
-        def _mock_resolve(*args, **kwargs):
-            secret_resolved.append("called")
-            return {}
-
-        monkeypatch.setattr(
-            "app.runs.execution.resolve_runtime_credentials",
-            _mock_resolve,
-        )
-
-        space_a = PERSONAL_SPACE_ID
-        user_id = DEFAULT_USER_ID
-
-        # Credential lives in a DIFFERENT space (simulated with a different space_id string)
-        space_b = "space_b_cross"
-        factories.create_test_space(db, space_id=space_b, name="Space B", space_type="team")
-
-        # Create credential in space_b
-        cred = factories.create_test_credential_stub(
-            db, space_id=space_b, name="cross-space-cred", commit=True
-        )
-
-        # Create runtime adapter in space_a referencing cross-space credential
-        adapter_row = factories.create_test_runtime_adapter(
-            db,
-            space_id=space_a,
-            name="cross-space-adapter",
-            adapter_type="model_provider_api",
-            credential_id=cred.id,
-            commit=True,
-        )
-
-        agent = factories.create_test_agent(db, space_id=space_a, owner_user_id=user_id, commit=False)
-        from app.models import AgentVersion
-        version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        _configure_model_provider_api_runtime(version)
-        version.runtime_adapter_id = adapter_row.id
-
-        run = factories.create_test_run(db, space_id=space_a, user_id=user_id, agent=agent, commit=True)
-
-        db.commit()
-        svc = RunExecutionService(db)
-        result = svc.execute_run(run.id, space_id=space_a)
-
-        assert not result.success
-        assert result.error_code == "policy_denied_runtime_use_credential", (
-            f"Expected policy_denied_runtime_use_credential, got {result.error_code}"
-        )
-        assert secret_resolved == [], (
-            "Secret resolution must not be called for cross-space credentials"
-        )
-
-    def test_missing_credential_row_fails_closed(
-        self, db: Session, tmp_path, monkeypatch
-    ):
-        """credential_id exists on adapter but Credential row is missing → credential_metadata_missing.
-
-        We create a real credential, link the adapter, then patch the Credential DB query to
-        return None — simulating a row that was deleted or corrupted after FK registration.
-        This tests the fail-closed logic without violating DB FK constraints.
-        """
-        _setup_paths(monkeypatch, tmp_path)
-        _make_fake_adapter(monkeypatch)
-
-        secret_resolved = []
-
-        def _mock_resolve(*args, **kwargs):
-            secret_resolved.append("called")
-            return {}
-
-        monkeypatch.setattr(
-            "app.runs.execution.resolve_runtime_credentials",
-            _mock_resolve,
-        )
-
-        space_id = PERSONAL_SPACE_ID
-        user_id = DEFAULT_USER_ID
-
-        cred = factories.create_test_credential_stub(
-            db, space_id=space_id, name="cred-to-go-missing", commit=True
-        )
-        adapter_row = factories.create_test_runtime_adapter(
-            db,
-            space_id=space_id,
-            name="missing-cred-adapter",
-            adapter_type="model_provider_api",
-            credential_id=cred.id,
-            commit=True,
-        )
-
-        agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user_id, commit=False)
-        from app.models import AgentVersion
-        version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        _configure_model_provider_api_runtime(version)
-        version.runtime_adapter_id = adapter_row.id
-
-        run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
-
-        db.commit()
-        # Patch the Credential query to return None — simulate a missing/deleted row
-        real_query = db.query
-
-        def _patched_query(model, *args, **kwargs):
-            q = real_query(model, *args, **kwargs)
-            from app.models import Credential as _Cred
-            if model is _Cred:
-                class _NoneResult:
-                    def filter(self, *a, **kw):
-                        return self
-                    def first(self):
-                        return None
-                return _NoneResult()
-            return q
-
-        monkeypatch.setattr(db, "query", _patched_query)
-
-        svc = RunExecutionService(db)
-        result = svc.execute_run(run.id, space_id=space_id)
-
-        assert not result.success
-        assert result.error_code == "credential_metadata_missing", (
-            f"Expected credential_metadata_missing when Credential row is missing, got {result.error_code}"
-        )
-        assert secret_resolved == [], "Secret resolution must not be called when Credential row is missing"
-
-    def test_same_space_credential_is_allowed(
-        self, db: Session, tmp_path, monkeypatch
-    ):
-        """RuntimeAdapter and Credential both in same space → allowed with audit."""
-        _setup_paths(monkeypatch, tmp_path)
-        _install_model_provider_api_test_runtime(monkeypatch)
-
-        adapter_executed = []
-
-        class TrackingAdapter(ConfigurableFakeRuntimeAdapter):
-            def execute(self, ctx):
-                adapter_executed.append("called")
-                return super().execute(ctx)
-
-        monkeypatch.setattr(
-            "app.runs.adapter_resolution.is_adapter_type_implemented",
-            lambda adapter_type: adapter_type in {"echo", "model_provider_api"},
-        )
-        monkeypatch.setattr(
-            "app.runs.execution.instantiate_runtime_adapter",
-            lambda _t: TrackingAdapter(FakeRuntimeConfig(output_text="")),
-        )
-
-        # Patch credential resolution to succeed without real secrets
-        monkeypatch.setattr(
-            "app.runs.execution.resolve_runtime_credentials",
-            lambda *a, **kw: {},
-        )
-
-        space_id = PERSONAL_SPACE_ID
-        user_id = DEFAULT_USER_ID
-
-        # Credential in same space as the run
-        cred = factories.create_test_credential_stub(
-            db, space_id=space_id, name="same-space-cred", commit=True
-        )
-        adapter_row = factories.create_test_runtime_adapter(
-            db,
-            space_id=space_id,
-            name="same-space-adapter",
-            adapter_type="model_provider_api",
-            credential_id=cred.id,
-            commit=True,
-        )
-
-        agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user_id, commit=False)
-        from app.models import AgentVersion
-        version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        _configure_model_provider_api_runtime(version)
-        version.runtime_adapter_id = adapter_row.id
-
-        run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
-        run_row = db.query(Run).filter(Run.id == run.id).one()
-        run_row.prompt = "same-space-cred-test"
-        db.commit()
-
-        svc = RunExecutionService(db)
-        result = svc.execute_run(run.id, space_id=space_id)
-
-        assert result.success, (
-            f"Same-space credential should be allowed, got error_code={result.error_code}"
-        )
-        assert "called" in adapter_executed
-
-        # Verify PolicyDecisionRecord for use_credential was created (audit_required=True)
-        records = _fresh_policy_records(run.id, "runtime.use_credential")
-        assert len(records) == 1, "runtime.use_credential ALLOW must have one durable audit record"
-        record = records[0]
-        assert record.decision == "allow"
-        # Metadata must not contain any secret material
-        meta = record.metadata_json or {}
-        for dangerous in ("api_key", "secret", "token", "password"):
-            assert dangerous not in meta, (
-                f"{dangerous!r} must not appear in PolicyDecisionRecord metadata"
-            )
-
-    def test_policy_decision_record_for_cross_space_credential_has_no_secret(
-        self, db: Session, tmp_path, monkeypatch
-    ):
-        """PolicyDecisionRecord for cross-space credential DENY must not contain secret material."""
-        _setup_paths(monkeypatch, tmp_path)
-        _make_fake_adapter(monkeypatch)
-        monkeypatch.setattr("app.runs.execution.resolve_runtime_credentials", lambda *a, **kw: {})
-
-        space_a = PERSONAL_SPACE_ID
-        user_id = DEFAULT_USER_ID
-        space_b = "space_b_secret_safety"
-        factories.create_test_space(db, space_id=space_b, name="Space B", space_type="team")
-
-        cred = factories.create_test_credential_stub(
-            db, space_id=space_b, name="cross-cred-safety", commit=True
-        )
-        adapter_row = factories.create_test_runtime_adapter(
-            db, space_id=space_a, adapter_type="model_provider_api", credential_id=cred.id, commit=True
-        )
-
-        agent = factories.create_test_agent(db, space_id=space_a, owner_user_id=user_id, commit=False)
-        from app.models import AgentVersion
-        version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        _configure_model_provider_api_runtime(version)
-        version.runtime_adapter_id = adapter_row.id
-        run = factories.create_test_run(db, space_id=space_a, user_id=user_id, agent=agent, commit=True)
-
-        db.commit()
-        svc = RunExecutionService(db)
-        result = svc.execute_run(run.id, space_id=space_a)
-
-        assert result.error_code == "policy_denied_runtime_use_credential"
-
-        records = _fresh_policy_records(run.id, "runtime.use_credential")
-        assert len(records) == 1, "runtime.use_credential DENY must have one durable audit record"
-        record = records[0]
-        assert record.decision == "deny"
-
-        meta = record.metadata_json or {}
-        for dangerous_key in ("api_key", "secret", "token", "password", "stdout", "stderr", "prompt"):
-            val = meta.get(dangerous_key)
-            assert val is None or val == "[REDACTED]", (
-                f"{dangerous_key!r} must not appear unredacted in PolicyDecisionRecord metadata"
-            )
-
-
 # ---------------------------------------------------------------------------
 # 4. runtime.use_credential: provider-level credential metadata resolved before secrets
 # ---------------------------------------------------------------------------
@@ -755,10 +494,9 @@ class TestRuntimeUseCredentialCrossSpaceBlocking:
 class TestRuntimeUseCredentialProviderLevelBlocking:
     """Provider-level credential paths (ModelProvider → Credential) are checked before secret resolution.
 
-    Covers resolution priority 1–3 from resolve_runtime_credentials():
-      1. run.model_provider_id → ModelProvider.credential_id → Credential.space_id
-      2. runtime_adapter.provider_id → ModelProvider.credential_id → Credential.space_id
-      3. version.model_provider_id → ModelProvider.credential_id → Credential.space_id
+    Covers provider resolution priority from resolve_runtime_credentials():
+      1. run.model_provider_id -> ModelProvider.credential_id -> Credential.space_id
+      2. agent_version.model_provider_id -> ModelProvider.credential_id -> Credential.space_id
     """
 
     def test_version_model_provider_id_same_space_allowed(
@@ -846,10 +584,10 @@ class TestRuntimeUseCredentialProviderLevelBlocking:
         )
         assert secret_resolved == [], "Secret resolution must not be called for cross-space ModelProvider"
 
-    def test_runtime_adapter_provider_id_cross_space_provider_fails_closed(
+    def test_version_provider_id_cross_space_provider_fails_closed(
         self, db: Session, tmp_path, monkeypatch
     ):
-        """RuntimeAdapter.provider_id → ModelProvider in a different space → credential_metadata_missing."""
+        """AgentVersion.model_provider_id in a different space -> credential_metadata_missing."""
         _setup_paths(monkeypatch, tmp_path)
         _make_fake_adapter(monkeypatch)
 
@@ -864,21 +602,17 @@ class TestRuntimeUseCredentialProviderLevelBlocking:
         space_b = "space_b_adapter_provider_cross"
         factories.create_test_space(db, space_id=space_b, name="Adapter Provider Space B", space_type="team")
 
-        # Provider in space_b; adapter in space_a — ModelProvider is cross-space
+        # Provider in space_b; AgentVersion in space_a points at it.
         cred = factories.create_test_credential_stub(db, space_id=space_b, name="adapter-provider-cross-cred", commit=True)
         provider = factories.create_test_model_provider(
             db, space_id=space_b, name="adapter-cross-provider", credential_id=cred.id, commit=True
-        )
-        adapter_row = factories.create_test_runtime_adapter(
-            db, space_id=space_a, name="adapter-with-cross-provider",
-            adapter_type="model_provider_api", provider_id=provider.id, commit=True,
         )
 
         agent = factories.create_test_agent(db, space_id=space_a, owner_user_id=user_id, commit=False)
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
         _configure_model_provider_api_runtime(version)
-        version.runtime_adapter_id = adapter_row.id
+        version.model_provider_id = provider.id
 
         run = factories.create_test_run(db, space_id=space_a, user_id=user_id, agent=agent, commit=True)
 
@@ -1035,10 +769,9 @@ class TestArtifactPersistRequireApprovalBlocking:
             http_status_code=403,
         )
 
-        with patch(
-            "app.runs.artifact_persistence.PolicyGateway.enforce",
-            side_effect=blocked_exc,
-        ) as mock_enforce:
+        with patch("app.runs.artifact_persistence.get_policy_port") as policy_port:
+            mock_enforce = policy_port.return_value.enforce
+            mock_enforce.side_effect = blocked_exc
             svc = ArtifactPersistenceService(db)
             with pytest.raises(PersonalMemoryEgressError) as exc_info:
                 svc.persist_text_file(
@@ -1106,10 +839,9 @@ class TestArtifactPersistRequireApprovalBlocking:
             http_status_code=403,
         )
 
-        with patch(
-            "app.runs.artifact_persistence.PolicyGateway.enforce",
-            side_effect=blocked_exc,
-        ) as mock_enforce:
+        with patch("app.runs.artifact_persistence.get_policy_port") as policy_port:
+            mock_enforce = policy_port.return_value.enforce
+            mock_enforce.side_effect = blocked_exc
             svc = ArtifactPersistenceService(db)
             with pytest.raises(PersonalMemoryEgressError) as exc_info:
                 svc.persist_copied_file(
@@ -1168,10 +900,8 @@ class TestArtifactPersistRequireApprovalBlocking:
             http_status_code=403,
         )
 
-        with patch(
-            "app.runs.artifact_persistence.PolicyGateway.enforce",
-            side_effect=blocked_exc,
-        ):
+        with patch("app.runs.artifact_persistence.get_policy_port") as policy_port:
+            policy_port.return_value.enforce.side_effect = blocked_exc
             svc = ArtifactPersistenceService(db)
             with pytest.raises(PersonalMemoryEgressError) as exc_info:
                 svc.persist_text_file(
@@ -1459,7 +1189,7 @@ class TestRunExecutionPdrFailure:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user_id, commit=True)
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
 
-        with patch("app.runs.execution.PolicyGateway") as MockGW:
+        with patch("app.runs.execution.get_policy_port") as MockGW:
             MockGW.return_value.enforce.side_effect = PolicyAuditPersistError(
                 action="runtime.execute"
             )
@@ -1502,15 +1232,11 @@ class TestRunExecutionPdrFailure:
         space_id = PERSONAL_SPACE_ID
         user_id = DEFAULT_USER_ID
 
-        cred = factories.create_test_credential_stub(
-            db, space_id=space_id, name="pdr-test-cred", commit=True
-        )
-        adapter_row = factories.create_test_runtime_adapter(
+        provider = factories.create_test_model_provider(
             db,
             space_id=space_id,
-            name="pdr-test-adapter",
-            adapter_type="model_provider_api",
-            credential_id=cred.id,
+            name="pdr-test-provider",
+            with_api_key=True,
             commit=True,
         )
 
@@ -1518,7 +1244,7 @@ class TestRunExecutionPdrFailure:
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
         _configure_model_provider_api_runtime(version)
-        version.runtime_adapter_id = adapter_row.id
+        version.model_provider_id = provider.id
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user_id, agent=agent, commit=True)
 
@@ -1532,7 +1258,7 @@ class TestRunExecutionPdrFailure:
                 )
             raise PolicyAuditPersistError(action=req.action)
 
-        with patch("app.runs.execution.PolicyGateway") as MockGW:
+        with patch("app.runs.execution.get_policy_port") as MockGW:
             MockGW.return_value.enforce.side_effect = _side_effect
             svc = RunExecutionService(db)
             result = svc.execute_run(run.id, space_id=space_id)
@@ -1563,14 +1289,11 @@ class TestRunExecutionPdrFailure:
             lambda *args, **kwargs: credential_resolved.append("called") or {},
         )
 
-        cred = factories.create_test_credential_stub(
-            db, space_id=PERSONAL_SPACE_ID, name="writer-fail-cred", commit=True
-        )
-        adapter_row = factories.create_test_runtime_adapter(
+        provider = factories.create_test_model_provider(
             db,
             space_id=PERSONAL_SPACE_ID,
-            adapter_type="model_provider_api",
-            credential_id=cred.id,
+            name="writer-fail-provider",
+            with_api_key=True,
             commit=True,
         )
         agent = factories.create_test_agent(
@@ -1579,7 +1302,7 @@ class TestRunExecutionPdrFailure:
         from app.models import AgentVersion
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
         _configure_model_provider_api_runtime(version)
-        version.runtime_adapter_id = adapter_row.id
+        version.model_provider_id = provider.id
         run = factories.create_test_run(
             db, space_id=PERSONAL_SPACE_ID, user_id=DEFAULT_USER_ID, agent=agent, commit=True
         )

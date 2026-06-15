@@ -53,6 +53,7 @@ describe('navigation model', () => {
     expect(sceneForPath('/spaces/x/activity')?.id).toBe('inbox')
     expect(sceneForPath('/spaces/x/proposals')?.id).toBe('review')
     expect(sceneForPath('/spaces/x/agents')?.id).toBe('agents')
+    expect(sceneForPath('/spaces/x/sessions')?.id).toBe('agents')
     expect(sceneForPath('/spaces/x/workspaces')?.id).toBe('workspaces')
     // Knowledge intentionally has no scene sidebar — it uses an in-header breadcrumb switcher.
     expect(sceneForPath('/spaces/x/knowledge')).toBeNull()

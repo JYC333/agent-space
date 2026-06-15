@@ -56,5 +56,24 @@ export function isSpaceType(value: string): value is SpaceTypeValue {
   return (SPACE_TYPE_VALUES as readonly string[]).includes(value);
 }
 
+/**
+ * Field names that carry raw secret material in request-only payloads. No
+ * response contract may contain them (ADR 0010 / ADR 0011 response boundary).
+ */
+export const SECRET_RESPONSE_FIELDS = [
+  "api_key",
+  "secret_ref",
+  "encrypted_key",
+  "credential_secret_ref",
+] as const;
+
+/** Spread into response object schemas to reject any secret-bearing payload. */
+export const SecretResponseGuards = {
+  api_key: z.never().optional(),
+  secret_ref: z.never().optional(),
+  encrypted_key: z.never().optional(),
+  credential_secret_ref: z.never().optional(),
+};
+
 /** Protocol semantic version. Bump when the contract changes incompatibly. */
 export const PROTOCOL_VERSION = "0.0.0" as const;

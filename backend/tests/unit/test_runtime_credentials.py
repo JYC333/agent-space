@@ -4,10 +4,10 @@ import uuid
 
 import pytest
 
-from app.models import AgentVersion, ModelProvider, RuntimeAdapter
+from app.config import settings
+from app.models import AgentVersion, ModelProvider
 from app.runtimes.credentials import (
     CredentialResolutionError,
-    assert_no_inline_secret_config,
     resolve_runtime_credentials,
     resolve_provider_api_key,
     sanitize_runtime_config,
@@ -89,67 +89,21 @@ class TestSanitizeRuntimeConfig:
 
 
 # ---------------------------------------------------------------------------
-# assert_no_inline_secret_config
+# resolve_runtime_credentials — no-credential adapter
 # ---------------------------------------------------------------------------
 
-class TestAssertNoInlineSecretConfig:
-    def test_raises_on_api_key_in_config(self, db, cross_space_pair_db):
-        a = cross_space_pair_db["space_a_id"]
-        ra = factories.create_test_runtime_adapter(db, space_id=a, commit=False)
-        ra.config_json = {"api_key": "sk-raw-secret", "model": "gpt-4"}
-        db.flush()
-
-        with pytest.raises(CredentialResolutionError) as exc_info:
-            assert_no_inline_secret_config(ra)
-        assert "inline secret" in str(exc_info.value).lower()
-        assert "api_key" in str(exc_info.value)
-
-    def test_raises_on_secret_key_in_config(self, db, cross_space_pair_db):
-        a = cross_space_pair_db["space_a_id"]
-        ra = factories.create_test_runtime_adapter(db, space_id=a, commit=False)
-        ra.config_json = {"secret_key": "raw-secret"}
-        db.flush()
-
-        with pytest.raises(CredentialResolutionError):
-            assert_no_inline_secret_config(ra)
-
-    def test_passes_for_clean_config(self, db, cross_space_pair_db):
-        a = cross_space_pair_db["space_a_id"]
-        ra = factories.create_test_runtime_adapter(db, space_id=a, commit=False)
-        ra.config_json = {"model": "claude-3", "max_tokens": 256}
-        db.flush()
-        # Must not raise
-        assert_no_inline_secret_config(ra)
-
-    def test_passes_for_empty_config(self, db, cross_space_pair_db):
-        a = cross_space_pair_db["space_a_id"]
-        ra = factories.create_test_runtime_adapter(db, space_id=a, commit=False)
-        ra.config_json = {}
-        db.flush()
-        assert_no_inline_secret_config(ra)
-
-
-# ---------------------------------------------------------------------------
-# resolve_runtime_credentials — echo adapter (no credentials)
-# ---------------------------------------------------------------------------
-
-class TestResolveCredentialsEchoAdapter:
-    def test_echo_adapter_without_provider_returns_empty(self, db, cross_space_pair_db):
-        a = cross_space_pair_db["space_a_id"]
-        ra = factories.create_test_runtime_adapter(
-            db, space_id=a, adapter_type="echo", commit=False
-        )
-        db.flush()
-        result = resolve_runtime_credentials(db, runtime_adapter_row=ra)
+class TestResolveCredentialsNoCredentialAdapter:
+    def test_capability_adapter_without_provider_returns_empty(self, db):
+        result = resolve_runtime_credentials(db, adapter_type="capability")
         assert result == {}
 
-    def test_no_adapter_row_returns_empty(self, db):
-        result = resolve_runtime_credentials(db, runtime_adapter_row=None)
+    def test_no_adapter_type_returns_empty(self, db):
+        result = resolve_runtime_credentials(db, adapter_type=None)
         assert result == {}
 
-    def test_no_adapter_no_version_returns_empty(self, db):
+    def test_no_adapter_type_no_version_returns_empty(self, db):
         result = resolve_runtime_credentials(
-            db, runtime_adapter_row=None, version=None
+            db, adapter_type=None, version=None
         )
         assert result == {}
 
@@ -159,18 +113,36 @@ class TestResolveCredentialsEchoAdapter:
 # ---------------------------------------------------------------------------
 
 class TestResolveCredentialsProviderPath:
-    def test_resolves_from_runtime_adapter_provider_id(self, db, cross_space_pair_db):
+    def test_control_plane_authority_resolves_provider_key(self, db, cross_space_pair_db, monkeypatch):
         a = cross_space_pair_db["space_a_id"]
-        plaintext = "sk-test-provider-key-xyz"
-        mp = _create_model_provider_with_key(db, space_id=a, plaintext_key=plaintext)
-        ra = factories.create_test_runtime_adapter(
-            db, space_id=a, adapter_type="echo",
-            provider_id=mp.id, commit=False,
+        mp = factories.create_test_model_provider(
+            db,
+            space_id=a,
+            provider_type="openai",
+            with_api_key=False,
+            enabled=True,
+            commit=False,
         )
-        db.flush()
+        calls = []
 
-        result = resolve_runtime_credentials(db, runtime_adapter_row=ra)
-        assert result.get("api_key") == plaintext
+        def _fake_resolve(*, space_id: str, provider_id: str) -> str:
+            calls.append((space_id, provider_id))
+            return "sk-from-ts"
+
+        monkeypatch.setattr(settings, "control_plane_providers_credentials_authority", "ts")
+        monkeypatch.setattr(
+            "app.providers.credentials.resolve_model_provider_api_key_via_control_plane",
+            _fake_resolve,
+        )
+
+        result = resolve_runtime_credentials(
+            db,
+            adapter_type="model_api",
+            run_model_provider_id=mp.id,
+        )
+
+        assert result == {"api_key": "sk-from-ts"}
+        assert calls == [(a, mp.id)]
 
     def test_resolves_from_agent_version_model_provider_id(
         self, db, cross_space_pair_db
@@ -188,48 +160,19 @@ class TestResolveCredentialsProviderPath:
         version.model_provider_id = mp.id
         db.flush()
 
-        # No RuntimeAdapter row; version provides the provider link
         result = resolve_runtime_credentials(
-            db, runtime_adapter_row=None, version=version
+            db, adapter_type="model_api", version=version
         )
         assert result.get("api_key") == plaintext
 
-    def test_runtime_adapter_provider_takes_priority_over_version_provider(
-        self, db, cross_space_pair_db
-    ):
-        a = cross_space_pair_db["space_a_id"]
-        ua = cross_space_pair_db["user_a"]
-        key_ra = "sk-adapter-provider-key"
-        key_ver = "sk-version-provider-key"
-        mp_ra = _create_model_provider_with_key(db, space_id=a, plaintext_key=key_ra)
-        mp_ver = _create_model_provider_with_key(db, space_id=a, plaintext_key=key_ver)
-        agent = factories.create_test_agent(
-            db, space_id=a, owner_user_id=ua.id, commit=False
-        )
-        version = db.query(AgentVersion).filter(
-            AgentVersion.id == agent.current_version_id
-        ).one()
-        version.model_provider_id = mp_ver.id
-        ra = factories.create_test_runtime_adapter(
-            db, space_id=a, adapter_type="echo",
-            provider_id=mp_ra.id, commit=False,
-        )
-        db.flush()
-
-        result = resolve_runtime_credentials(db, runtime_adapter_row=ra, version=version)
-        # RuntimeAdapter.provider_id takes priority
-        assert result.get("api_key") == key_ra
-
-    def test_run_model_provider_id_takes_priority_over_adapter_and_version(
+    def test_run_model_provider_id_takes_priority_over_version(
         self, db, cross_space_pair_db
     ):
         a = cross_space_pair_db["space_a_id"]
         ua = cross_space_pair_db["user_a"]
         key_run = "sk-run-provider-key"
-        key_ra = "sk-adapter-provider-key"
         key_ver = "sk-version-provider-key"
         mp_run = _create_model_provider_with_key(db, space_id=a, plaintext_key=key_run)
-        mp_ra = _create_model_provider_with_key(db, space_id=a, plaintext_key=key_ra)
         mp_ver = _create_model_provider_with_key(db, space_id=a, plaintext_key=key_ver)
         agent = factories.create_test_agent(
             db, space_id=a, owner_user_id=ua.id, commit=False
@@ -238,15 +181,11 @@ class TestResolveCredentialsProviderPath:
             AgentVersion.id == agent.current_version_id
         ).one()
         version.model_provider_id = mp_ver.id
-        ra = factories.create_test_runtime_adapter(
-            db, space_id=a, adapter_type="echo",
-            provider_id=mp_ra.id, commit=False,
-        )
         db.flush()
 
         result = resolve_runtime_credentials(
             db,
-            runtime_adapter_row=ra,
+            adapter_type="model_api",
             version=version,
             run_model_provider_id=mp_run.id,
         )
@@ -268,14 +207,9 @@ class TestResolveCredentialsProviderPath:
         mp = _create_model_provider_with_key(db, space_id=a, plaintext_key=plaintext)
         mp.enabled = False
         db.flush()
-        ra = factories.create_test_runtime_adapter(
-            db, space_id=a, adapter_type="echo",
-            provider_id=mp.id, commit=False,
-        )
-        db.flush()
 
         with pytest.raises(CredentialResolutionError) as exc_info:
-            resolve_runtime_credentials(db, runtime_adapter_row=ra)
+            resolve_runtime_credentials(db, adapter_type="model_api", run_model_provider_id=mp.id)
         assert "disabled" in str(exc_info.value).lower()
 
     def test_provider_with_no_credential_raises(self, db, cross_space_pair_db):
@@ -285,14 +219,9 @@ class TestResolveCredentialsProviderPath:
         mp.config_json = {}
         mp.enabled = True
         db.flush()
-        ra = factories.create_test_runtime_adapter(
-            db, space_id=a, adapter_type="echo",
-            provider_id=mp.id, commit=False,
-        )
-        db.flush()
 
         with pytest.raises(CredentialResolutionError) as exc_info:
-            resolve_runtime_credentials(db, runtime_adapter_row=ra)
+            resolve_runtime_credentials(db, adapter_type="model_api", run_model_provider_id=mp.id)
         assert "no credential configured" in str(exc_info.value).lower()
 
 
@@ -377,10 +306,10 @@ class TestProviderCredentialSecretRef:
 # ---------------------------------------------------------------------------
 
 class TestAdapterMetadataDeclarations:
-    def test_echo_does_not_require_credentials(self):
-        from app.runtimes.adapters.echo import EchoRuntimeAdapter
-        assert EchoRuntimeAdapter.requires_credentials is False
-        assert EchoRuntimeAdapter.uses_model_config is False
-        assert EchoRuntimeAdapter.model_config_behavior == "not_applicable"
-        assert EchoRuntimeAdapter.requires_file_access is False
-        assert EchoRuntimeAdapter.supports_sandboxed_execution is False
+    def test_capability_does_not_require_credentials(self):
+        from app.runtimes.adapters.capability import CapabilityRuntimeAdapter
+        assert CapabilityRuntimeAdapter.requires_credentials is False
+        assert CapabilityRuntimeAdapter.uses_model_config is False
+        assert CapabilityRuntimeAdapter.model_config_behavior == "not_applicable"
+        assert CapabilityRuntimeAdapter.requires_file_access is False
+        assert CapabilityRuntimeAdapter.supports_sandboxed_execution is False

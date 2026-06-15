@@ -41,7 +41,6 @@ _PATCHABLE_FIELDS = frozenset({
     "current_focus",
     "known_failures_json",
     "validation_recipe_id",
-    "preferred_runtime_adapter_id",
     "cloud_allowed",
     "max_data_exposure_level",
     "min_observability_level",
@@ -119,7 +118,7 @@ class WorkspaceProfileService:
     ) -> WorkspaceProfile | None:
         """Apply a partial update to the profile. Returns None if no profile exists.
 
-        FK fields (preferred_runtime_adapter_id, validation_recipe_id) are validated
+        FK fields are validated against space_id before being written.
         against space_id before being written. Unrecognised patch fields are rejected.
         """
         profile = self.get_workspace_profile(workspace_id, space_id)
@@ -129,19 +128,6 @@ class WorkspaceProfileService:
         unknown = set(patch) - _PATCHABLE_FIELDS
         if unknown:
             raise ValueError(f"Unknown patch fields: {sorted(unknown)}")
-
-        # Validate FK fields belong to the same space before applying.
-        if "preferred_runtime_adapter_id" in patch and patch["preferred_runtime_adapter_id"]:
-            from ..models import RuntimeAdapter
-            adapter = self.db.query(RuntimeAdapter).filter(
-                RuntimeAdapter.id == patch["preferred_runtime_adapter_id"],
-                RuntimeAdapter.space_id == space_id,
-            ).first()
-            if not adapter:
-                raise ValueError(
-                    f"RuntimeAdapter '{patch['preferred_runtime_adapter_id']}' "
-                    f"not found in space '{space_id}'"
-                )
 
         if "validation_recipe_id" in patch and patch["validation_recipe_id"]:
             recipe = self.db.query(ValidationRecipe).filter(

@@ -2,7 +2,7 @@ from __future__ import annotations
 """RuntimeToolBindingService — read path for explicitly authorized external tools.
 
 RuntimeToolBinding records which external tools (MCP servers, plugins, skills)
-are explicitly authorised for a given scope (space, workspace, agent, adapter).
+are explicitly authorised for a given scope (space, workspace, agent, adapter type).
 This service is read-only: bindings are created administratively, not by agents.
 
 The list path is used by routing and context generation to make allowed external
@@ -27,7 +27,7 @@ class RuntimeToolBindingService:
         *,
         workspace_id: str | None = None,
         agent_id: str | None = None,
-        runtime_adapter_id: str | None = None,
+        runtime_adapter_type: str | None = None,
         enabled_only: bool = True,
     ) -> list[RuntimeToolBinding]:
         """Return bindings visible for the given scope combination.
@@ -42,8 +42,8 @@ class RuntimeToolBindingService:
             q = q.filter(RuntimeToolBinding.workspace_id == workspace_id)
         if agent_id is not None:
             q = q.filter(RuntimeToolBinding.agent_id == agent_id)
-        if runtime_adapter_id is not None:
-            q = q.filter(RuntimeToolBinding.runtime_adapter_id == runtime_adapter_id)
+        if runtime_adapter_type is not None:
+            q = q.filter(RuntimeToolBinding.runtime_adapter_type == runtime_adapter_type)
         if enabled_only:
             q = q.filter(RuntimeToolBinding.enabled == True)  # noqa: E712
         return q.order_by(RuntimeToolBinding.created_at).all()

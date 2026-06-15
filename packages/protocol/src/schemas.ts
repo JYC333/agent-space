@@ -18,7 +18,7 @@
  */
 
 import { z } from "zod";
-import { IdSchema, ISODateTimeSchema } from "./common";
+import { IdSchema, ISODateTimeSchema } from "./common.js";
 
 // ---------------------------------------------------------------------------
 // Lightweight references (id + the minimum a UI needs to label the entity)

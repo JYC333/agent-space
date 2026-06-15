@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Optional
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -327,6 +328,75 @@ class ModelProvider(Base):
 
 
 
+class ModelProviderCredential(Base):
+    """Credential-pool membership for a ModelProvider (Hermes H1).
+
+    A provider may hold 1→N encrypted API-key Credentials. Pool membership,
+    rotation health, and cooldown state are server-side records here — never
+    client-side files. Rows are written by the providers/credentials authority;
+    Python/alembic owns the schema.
+    CLI login state is a separate credential class and is never pooled.
+    """
+
+    __tablename__ = "model_provider_credentials"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    provider_id: Mapped[str] = mapped_column(
+        UUID_COL,
+        ForeignKey("model_providers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    credential_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("credentials.id"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    healthy: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    cooldown_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_failure_class: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    request_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    failure_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        UniqueConstraint("provider_id", "credential_id", name="uq_model_provider_credentials_provider_credential"),
+        CheckConstraint(
+            "last_failure_class in ('rate_limit', 'payment_required', 'unauthorized', "
+            "'quota_exhausted', 'transient', 'permanent') or last_failure_class is null",
+            name="ck_model_provider_credentials_failure_class",
+        ),
+    )
+
+
+
+class ProviderTaskPolicy(Base):
+    """Per-auxiliary-task provider chain (Hermes H2).
+
+    Generalizes REFLECTOR_MODEL_PROVIDER_ID: each auxiliary task (reflector,
+    condenser, title generation, …) may carry an ordered provider/model chain;
+    invocation walks the chain and degrades gracefully to the space default
+    provider. One policy per (space, task).
+    """
+
+    __tablename__ = "provider_task_policies"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    task: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Ordered list of {"provider_id": str, "model": str | None}.
+    chain_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        UniqueConstraint("space_id", "task", name="uq_provider_task_policies_space_task"),
+    )
+
+
+
 class ExecutionPlane(Base):
     """Where a run executes: native, local CLI, remote vendor, or manual import.
 
@@ -389,89 +459,6 @@ class ExecutionPlane(Base):
         ),
         UniqueConstraint("space_id", "name", name="uq_execution_planes_space_name"),
     )
-
-
-class RuntimeAdapter(Base):
-    __tablename__ = "runtime_adapters"
-
-    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
-    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(256), nullable=False)
-    adapter_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    provider_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("model_providers.id"), nullable=True, index=True)
-    credential_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("credentials.id"), nullable=True, index=True)
-    credential_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
-    config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    health_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
-    quota_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown", server_default=text("'unknown'"))
-    execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
-    capability_support_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
-
-    provider: Mapped[Optional[ModelProvider]] = relationship("ModelProvider")
-    credential: Mapped[Optional[Credential]] = relationship("Credential")
-    execution_plane: Mapped[Optional[ExecutionPlane]] = relationship("ExecutionPlane")
-
-    __table_args__ = (
-        CheckConstraint(
-            "health_status in ('unknown', 'ok', 'warning', 'error', 'unimplemented', 'disabled')",
-            name="ck_runtime_adapters_health_status",
-        ),
-        CheckConstraint(
-            "quota_status in ('unknown', 'enough', 'medium', 'low', 'exhausted')",
-            name="ck_runtime_adapters_quota_status",
-        ),
-    )
-
-    @property
-    def executable_path(self) -> Optional[str]:
-        return (self.config_json or {}).get("executable_path")
-
-    @executable_path.setter
-    def executable_path(self, value: Optional[str]) -> None:
-        from sqlalchemy.orm.attributes import flag_modified
-
-        d = dict(self.config_json or {})
-        if value is None:
-            d.pop("executable_path", None)
-        else:
-            d["executable_path"] = value
-        self.config_json = d
-        flag_modified(self, "config_json")
-
-    @property
-    def default_mode(self) -> str:
-        return (self.config_json or {}).get("default_mode", "headless")
-
-    @default_mode.setter
-    def default_mode(self, value: Optional[str]) -> None:
-        from sqlalchemy.orm.attributes import flag_modified
-
-        d = dict(self.config_json or {})
-        if value is None:
-            d.pop("default_mode", None)
-        else:
-            d["default_mode"] = value
-        self.config_json = d
-        flag_modified(self, "config_json")
-
-    @property
-    def notes(self) -> Optional[str]:
-        return (self.config_json or {}).get("notes")
-
-    @notes.setter
-    def notes(self, value: Optional[str]) -> None:
-        from sqlalchemy.orm.attributes import flag_modified
-
-        d = dict(self.config_json or {})
-        if value is None:
-            d.pop("notes", None)
-        else:
-            d["notes"] = value
-        self.config_json = d
-        flag_modified(self, "config_json")
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +682,6 @@ class AgentVersion(Base):
     version_label: Mapped[str] = mapped_column(String(64), nullable=False)
     model_provider_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("model_providers.id"), nullable=True, index=True)
     model_name: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
     system_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     model_config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     runtime_config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
@@ -738,7 +724,6 @@ class AgentVersion(Base):
 
     agent: Mapped[Agent] = relationship("Agent", back_populates="versions", foreign_keys=[agent_id])
     model_provider: Mapped[Optional[ModelProvider]] = relationship("ModelProvider")
-    runtime_adapter: Mapped[Optional[RuntimeAdapter]] = relationship("RuntimeAdapter")
 
     __table_args__ = (UniqueConstraint("agent_id", "version_label", name="uq_agent_versions_agent_label"),)
 
@@ -1014,16 +999,6 @@ class ContextSnapshot(Base):
 
     # Runtime-facing context bundle fields. These represent the rendered context
     # sent to an external runtime (Codex, Claude Code, OpenCode, etc.).
-    target_runtime_adapter_id: Mapped[Optional[str]] = mapped_column(
-        UUID_COL,
-        ForeignKey(
-            "runtime_adapters.id",
-            name="fk_context_snapshots_target_runtime_adapter_id_runtime_adapters",
-            ondelete="SET NULL",
-            use_alter=True,
-        ),
-        nullable=True,
-    )
     execution_plane_id: Mapped[Optional[str]] = mapped_column(
         UUID_COL,
         ForeignKey(
@@ -1212,6 +1187,55 @@ class ContextDigest(Base):
 # ---------------------------------------------------------------------------
 
 
+class WorkingDir(Base):
+    """Persistent, system-managed runtime working directory (non-git).
+
+    Registry for the persistent working-directory scopes in the CLI sandbox
+    scope ladder: ``session`` (lives for a chat session) and ``project`` (lives
+    with a non-coding project). Run-scope (``ephemeral``) dirs have no row — they
+    are a per-run filesystem dir under ``$SANDBOX_ROOT/ephemeral`` captured by the
+    run row + events; repo-scope uses ``Workspace`` (git) + a per-run worktree.
+
+    Provisioned ahead of its implementing stage; see the "CLI sandbox scope
+    ladder" stage in ``.agent/architecture/TS_MIGRATION_ROADMAP.md``.
+    """
+
+    __tablename__ = "working_dirs"
+
+    id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
+    space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    session_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("sessions.id"), nullable=True, index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("projects.id"), nullable=True, index=True)
+    # Path relative to $SANDBOX_ROOT (portable across host/container roots).
+    rel_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", index=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cleaned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("scope in ('session', 'project')", name="ck_working_dirs_scope"),
+        CheckConstraint("status in ('active', 'cleaning', 'cleaned')", name="ck_working_dirs_status"),
+        CheckConstraint(
+            "(scope = 'session' AND session_id IS NOT NULL AND project_id IS NULL) "
+            "OR (scope = 'project' AND project_id IS NOT NULL AND session_id IS NULL)",
+            name="ck_working_dirs_owner",
+        ),
+        # One working dir per owner (partial unique — only the relevant FK is set).
+        Index(
+            "ix_working_dirs_session_uniq", "session_id",
+            unique=True, postgresql_where=text("session_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_working_dirs_project_uniq", "project_id",
+            unique=True, postgresql_where=text("project_id IS NOT NULL"),
+        ),
+    )
+
+
 class Run(Base):
     """A single agent execution. space_id is the execution boundary — the run reads memory only
     from this space. instructed_by_user_id flows into ContextBuilder as user_id, controlling
@@ -1230,6 +1254,9 @@ class Run(Base):
     context_snapshot_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("context_snapshots.id"), nullable=True, index=True)
     workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
     session_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("sessions.id"), nullable=True, index=True)
+    # Set for session/project working-dir scopes; NULL for run-scope ephemeral and
+    # repo-scope worktree. See the "CLI sandbox scope ladder" stage in the roadmap.
+    working_dir_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("working_dirs.id"), nullable=True, index=True)
     parent_run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=True, index=True)
     instructed_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     instructed_by_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
@@ -1245,7 +1272,6 @@ class Run(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
     model_provider_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("model_providers.id"), nullable=True, index=True)
-    runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     output_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
@@ -1336,7 +1362,7 @@ class Run(Base):
             name="ck_runs_trigger_origin",
         ),
         CheckConstraint(
-            "required_sandbox_level in ('none', 'dry_run', 'worktree', 'one_shot_docker')",
+            "required_sandbox_level in ('none', 'dry_run', 'ephemeral', 'worktree', 'one_shot_docker')",
             name="ck_runs_required_sandbox_level",
         ),
         CheckConstraint(
@@ -1481,8 +1507,7 @@ class Artifact(Base):
         String(32), nullable=False, default="space_shared", server_default=text("'space_shared'")
     )
     owner_user_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("users.id"), nullable=True, index=True)
-    # Source provenance: which runtime adapter and execution plane produced this artifact.
-    source_runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
+    # Source provenance: which execution plane produced this artifact.
     source_execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
     trust_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     project_id: Mapped[Optional[str]] = mapped_column(
@@ -2888,7 +2913,6 @@ class RunStep(Base):
     step_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     title: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
     workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
     session_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("sessions.id"), nullable=True, index=True)
     task_id: Mapped[Optional[str]] = mapped_column(
@@ -2958,7 +2982,6 @@ class RunEvent(Base):
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
     workspace_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("workspaces.id"), nullable=True, index=True)
     artifact_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("artifacts.id"), nullable=True, index=True)
     proposal_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("proposals.id"), nullable=True, index=True)
@@ -3219,7 +3242,6 @@ class WorkspaceProfile(Base):
     current_focus: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     known_failures_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     validation_recipe_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("validation_recipes.id"), nullable=True)
-    preferred_runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True)
     cloud_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     max_data_exposure_level: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     min_observability_level: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -3228,9 +3250,6 @@ class WorkspaceProfile(Base):
 
     workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="profile", foreign_keys=[workspace_id])
     validation_recipe: Mapped[Optional[ValidationRecipe]] = relationship("ValidationRecipe")
-    preferred_runtime_adapter: Mapped[Optional[RuntimeAdapter]] = relationship(
-        "RuntimeAdapter", foreign_keys=[preferred_runtime_adapter_id]
-    )
 
     __table_args__ = (
         UniqueConstraint("workspace_id", name="uq_workspace_profiles_workspace"),
@@ -3259,7 +3278,7 @@ class ExternalRunRecord(Base):
     run_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=False, index=True)
     vendor: Mapped[str] = mapped_column(String(64), nullable=False)
     vendor_run_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    runtime_adapter_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=True, index=True)
+    runtime_adapter_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
     external_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     observability_level: Mapped[str] = mapped_column(String(64), nullable=False, default="black_box")
@@ -3274,7 +3293,6 @@ class ExternalRunRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
     run: Mapped["Run"] = relationship("Run", back_populates="external_run_records", foreign_keys=[run_id])
-    runtime_adapter: Mapped[Optional[RuntimeAdapter]] = relationship("RuntimeAdapter", foreign_keys=[runtime_adapter_id])
     execution_plane: Mapped[Optional[ExecutionPlane]] = relationship("ExecutionPlane", foreign_keys=[execution_plane_id])
 
     __table_args__ = (
@@ -3452,7 +3470,7 @@ class RuntimeToolBinding(Base):
     agent_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("agents.id"), nullable=True, index=True)
     # capability_id is a soft reference to capabilities (string ID from capability.yaml).
     capability_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
-    runtime_adapter_id: Mapped[str] = mapped_column(UUID_COL, ForeignKey("runtime_adapters.id"), nullable=False, index=True)
+    runtime_adapter_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     execution_plane_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("execution_planes.id"), nullable=True, index=True)
     external_type: Mapped[str] = mapped_column(String(64), nullable=False)
     external_ref: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -3468,7 +3486,6 @@ class RuntimeToolBinding(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
-    runtime_adapter: Mapped[RuntimeAdapter] = relationship("RuntimeAdapter", foreign_keys=[runtime_adapter_id])
     execution_plane: Mapped[Optional[ExecutionPlane]] = relationship("ExecutionPlane", foreign_keys=[execution_plane_id])
 
     __table_args__ = (
@@ -3536,11 +3553,6 @@ class CliCredentialEvent(Base):
     id: Mapped[str] = mapped_column(UUID_COL, primary_key=True, default=_uuid)
     space_id: Mapped[str] = mapped_column(SPACE_COL, ForeignKey("spaces.id"), nullable=False, index=True)
     run_id: Mapped[Optional[str]] = mapped_column(UUID_COL, ForeignKey("runs.id"), nullable=True, index=True)
-    runtime_adapter_id: Mapped[Optional[str]] = mapped_column(
-        UUID_COL,
-        ForeignKey("runtime_adapters.id", name="fk_cli_credential_events_runtime_adapter_id_runtime_adapters", ondelete="SET NULL"),
-        nullable=True,
-    )
     runtime_adapter_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     credential_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     # Source of the credential: "profile" | "container_default" | "none".

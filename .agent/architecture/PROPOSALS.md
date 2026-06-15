@@ -7,6 +7,11 @@ Proposals are the product review and application boundary for durable mutations.
 ## Product API
 
 - `/api/v1/proposals` is the only product API for proposal review and application.
+- In the current control-plane stack, external proposal review routes are
+  TS-owned when `CONTROL_PLANE_PROPOSALS_AUTHORITY=ts`: list/get are served by
+  the control-plane DB read model, and accept/reject/egress approval dispatch to
+  the Python internal proposal transaction port. Proposal creation entrypoints
+  remain in their source product modules.
 - `GET /api/v1/proposals` defaults to pending proposals.
 - `status=all` is explicit and returns proposals across statuses.
 - Supported apply types are `memory_create`, `memory_update`,

@@ -14,7 +14,74 @@ from fastapi import HTTPException
 
 from ..models import AgentVersion, Run
 
-_VALID_SANDBOX_LEVELS = frozenset({"none", "dry_run", "worktree", "one_shot_docker"})
+_VALID_SANDBOX_LEVELS = frozenset(
+    {"none", "dry_run", "ephemeral", "worktree", "one_shot_docker"}
+)
+
+# Levels that do NOT isolate the filesystem. A file-access adapter (CLI) must
+# never run at one of these (B13: sandboxed adapters are always sandboxed).
+_NON_SANDBOX_LEVELS = frozenset({"none", "dry_run"})
+
+
+def _safe_spec(adapter_type: str | None):
+    """Look up a runtime adapter spec, returning None when unknown."""
+    if not adapter_type:
+        return None
+    try:
+        from ..runtimes.specs import get_runtime_adapter_spec
+
+        return get_runtime_adapter_spec(adapter_type)
+    except KeyError:
+        return None
+
+
+def resolve_sandbox_level(
+    *, risk_level: str, adapter_type: str | None, has_workspace: bool
+) -> str:
+    """Resolve ``required_sandbox_level`` from risk + adapter + workspace binding.
+
+    Working-directory scope (slice-1 of the scope ladder):
+    - non file-access adapters → risk-derived level (unchanged).
+    - file-access CLI adapter whose risk resolves to a non-isolating level
+      (none/dry_run) AND has no persistent workspace bound → ``ephemeral``
+      (run-scope: a system-provisioned throwaway working dir, no git).
+    - file-access CLI adapter with a workspace bound → left at the risk-derived
+      level so validation forces ``risk_level=high`` (worktree); operating on a
+      persistent workspace needs worktree isolation + diff review (B19).
+    - high/critical are never downgraded (B13): high→worktree, critical→
+      one_shot_docker (fail-closed, unimplemented).
+    """
+    level = required_sandbox_level_for_risk(risk_level)
+    if level not in _VALID_SANDBOX_LEVELS:
+        level = "none"
+    spec = _safe_spec(adapter_type)
+    requires_file_access = bool(spec and spec.sandbox.requires_file_access)
+    if requires_file_access and level in _NON_SANDBOX_LEVELS and not has_workspace:
+        level = "ephemeral"
+    return level
+
+
+def file_access_sandbox_error(
+    *, adapter_type: str | None, required_sandbox_level: str, risk_level: str
+) -> str | None:
+    """Return an error if a file-access adapter resolved to a non-sandbox level.
+
+    A workspace-bound CLI at low/medium risk lands on none/dry_run and must be
+    raised to ``risk_level=high`` (worktree). A no-workspace CLI is bumped to
+    ``ephemeral`` by :func:`resolve_sandbox_level` and passes here.
+    """
+    spec = _safe_spec(adapter_type)
+    if not (spec and spec.sandbox.requires_file_access):
+        return None
+    if required_sandbox_level in _NON_SANDBOX_LEVELS:
+        return (
+            f"Adapter '{adapter_type}' requires file-system access and must run in an "
+            f"isolated sandbox, but required_sandbox_level='{required_sandbox_level}' "
+            f"(derived from risk_level='{risk_level}'). Bind a workspace and set "
+            "risk_level=high for worktree isolation, or run without a workspace for an "
+            "ephemeral working directory."
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -49,9 +116,11 @@ def compute_runtime_policy_decision(*, run: Run, version: AgentVersion) -> Runti
     """Read ``runtime_policy_json`` and derive execution constraints for this Run."""
     policy: dict[str, Any] = dict(version.runtime_policy_json or {})
     risk = _norm_risk(policy.get("risk_level"))
-    level = required_sandbox_level_for_risk(risk)
-    if level not in _VALID_SANDBOX_LEVELS:
-        level = "none"
+    level = resolve_sandbox_level(
+        risk_level=risk,
+        adapter_type=getattr(run, "adapter_type", None),
+        has_workspace=bool(getattr(run, "workspace_id", None)),
+    )
 
     snapshot = {
         "risk_level": risk,
@@ -71,15 +140,8 @@ def validate_adapter_and_provider_or_raise(
     run: Run,
     version: AgentVersion,
     policy: dict[str, Any],
-    adapter_provider_id: str | None = None,
 ) -> None:
-    """If Run / version / adapter carry adapter or provider IDs, ensure they are allowed when lists exist.
-
-    ``adapter_provider_id`` is the provider pinned on the resolved RuntimeAdapter
-    row. It participates in credential resolution and effective-provider selection
-    (see :func:`app.runtimes.credentials.resolve_effective_model_provider_id`), so
-    it must be subject to the same ``allowed_model_providers`` allowlist — otherwise
-    a RuntimeAdapter row could pin a disallowed provider that run/version omit.
+    """If Run / version carry adapter or provider IDs, ensure they are allowed when lists exist.
     """
     allowed_adapters = policy.get("allowed_adapter_types")
     if (
@@ -100,7 +162,7 @@ def validate_adapter_and_provider_or_raise(
         and isinstance(allowed_providers, list)
         and len(allowed_providers) > 0
     ):
-        for mp_id in (run.model_provider_id, version.model_provider_id, adapter_provider_id):
+        for mp_id in (run.model_provider_id, version.model_provider_id):
             if mp_id and mp_id not in allowed_providers:
                 raise HTTPException(
                     status_code=403,
@@ -146,22 +208,13 @@ def validate_file_access_adapter_policy(
     This check fires before the adapter is started so the misconfiguration is
     caught early rather than failing mid-execution or silently mutating the
     workspace.
-    """
-    try:
-        from ..runtimes.specs import get_runtime_adapter_spec
-        spec = get_runtime_adapter_spec(adapter_type)
-        requires_file_access = spec.sandbox.requires_file_access
-        minimum_level = spec.sandbox.minimum_sandbox_level
-    except KeyError:
-        requires_file_access = False
-        minimum_level = "none"
 
-    if requires_file_access and decision.required_sandbox_level != minimum_level:
-        return (
-            f"Adapter '{adapter_type}' requires file-system access and must run in a "
-            f"{minimum_level} sandbox, but required_sandbox_level='{decision.required_sandbox_level}' "
-            f"(derived from risk_level='{decision.risk_level}'). "
-            "Set risk_level=high in runtime_policy_json to enable worktree isolation for "
-            "file-access adapters."
-        )
-    return None
+    A no-workspace CLI run is resolved to ``ephemeral`` (a real sandbox) by
+    :func:`resolve_sandbox_level`, so it passes; only a non-sandbox level
+    (none/dry_run) for a file-access adapter is rejected.
+    """
+    return file_access_sandbox_error(
+        adapter_type=adapter_type,
+        required_sandbox_level=decision.required_sandbox_level,
+        risk_level=decision.risk_level,
+    )

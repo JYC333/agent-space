@@ -72,6 +72,56 @@ def _tokens(text: Optional[str]) -> int:
     return len(text or "") // 4
 
 
+def apply_context_budget(
+    candidates: list[ContextBundleItem],
+    *,
+    allowed_sources: list[str],
+    max_tokens: int,
+    max_items: int,
+    context_policy_applied: bool,
+) -> ContextBundle:
+    """Cumulative budget/dedup selection over priority-ordered candidates.
+
+    Pure function (no DB): scan candidates in order, stop once ``max_tokens`` or
+    ``max_items`` is reached, dedup by ``(item_type, item_id)`` (null-id items
+    are never deduped against each other), and sum ``token_count``. This is the
+    selection the TS context engine replays over the candidate port output; it is
+    extracted as a module-level helper so a cross-language parity fixture can be
+    generated from the exact Python behavior. ``allowed_sources`` is expected
+    pre-sorted (it is echoed verbatim into ``retrieval_trace``).
+    """
+    items: list[ContextBundleItem] = []
+    seen: set[tuple[str, str]] = set()
+    total_tokens = 0
+
+    for item in candidates:
+        if total_tokens >= max_tokens or len(items) >= max_items:
+            break
+        key = (item.item_type, str(item.item_id or id(item)))
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(item)
+        total_tokens += item.token_count or 0
+
+    truncated = total_tokens >= max_tokens or len(items) >= max_items
+
+    return ContextBundle(
+        items=items,
+        token_count=total_tokens,
+        truncated=truncated,
+        retrieval_trace={
+            "allowed_sources": allowed_sources,
+            "context_policy_applied": context_policy_applied,
+            "item_count": len(items),
+            "total_tokens": total_tokens,
+            "truncated": truncated,
+            "max_tokens": max_tokens,
+            "max_items": max_items,
+        },
+    )
+
+
 class ChatContextBuilder:
     """
     Dynamic context selector for the Personal Assistant / chat path.
@@ -325,6 +375,52 @@ class ChatContextBuilder:
             )
         return items
 
+    # ── Candidate collection (TS context-assembly seam) ──────────────────────
+
+    def collect_candidates(
+        self, request: ContextRequest
+    ) -> tuple[list[ContextBundleItem], frozenset[str], int, int]:
+        """Return ordered candidate items for the chat context, *unbudgeted*.
+
+        This is the read half of :meth:`build`: it runs the same per-source
+        selectors in the same priority order, but does **not** apply the
+        cumulative ``max_items`` / ``max_tokens`` / dedup loop. Each source is
+        fetched at its natural per-source cap, so the caller receives a superset
+        that, taken as an ordered prefix under the same cumulative caps, yields
+        the identical selection ``build`` would produce.
+
+        Used by the Stage 6 chat context-assembly port so the TS context engine
+        can own the budget/dedup loop and snapshot persistence while the
+        underlying source reads stay Python-owned. Returns
+        ``(candidates, allowed_sources, max_tokens, max_items)``.
+        """
+        if not request.space_id:
+            raise ValueError("space_id is required")
+        if not request.user_id:
+            raise ValueError("user_id is required")
+
+        allowed, context_policy = self._load_policy(request.agent_version_id)
+        max_tokens: int = context_policy.get("max_tokens", request.max_tokens)
+        max_items: int = context_policy.get("max_items", request.max_items)
+
+        candidates: list[ContextBundleItem] = []
+        if "manual_context" in allowed:
+            candidates += self._select_manual(request)
+        if "workspace" in allowed:
+            candidates += self._select_workspace(request)
+        if "project" in allowed:
+            candidates += self._select_project(request)
+        if "memory" in allowed:
+            candidates += self._select_memory(request, limit=max_items)
+        if "knowledge_item" in allowed:
+            candidates += self._select_knowledge_items(request, allowed, limit=max_items)
+        if "source" in allowed:
+            candidates += self._select_sources(request, limit=max_items)
+        if "activity_record" in allowed:
+            candidates += self._select_activity_records(request, limit=max_items)
+
+        return candidates, allowed, max_tokens, max_items
+
     # ── Main entry points ────────────────────────────────────────────────────
 
     def build(self, request: ContextRequest) -> ContextBundle:
@@ -337,82 +433,13 @@ class ChatContextBuilder:
 
         Does not persist any rows — call persist_snapshot() after building.
         """
-        if not request.space_id:
-            raise ValueError("space_id is required")
-        if not request.user_id:
-            raise ValueError("user_id is required")
-
-        allowed, context_policy = self._load_policy(request.agent_version_id)
-        max_tokens: int = context_policy.get("max_tokens", request.max_tokens)
-        max_items: int = context_policy.get("max_items", request.max_items)
-
-        items: list[ContextBundleItem] = []
-        seen: set[tuple[str, str]] = set()
-        total_tokens = 0
-
-        def _add(candidates: list[ContextBundleItem]) -> None:
-            nonlocal total_tokens
-            for item in candidates:
-                if total_tokens >= max_tokens or len(items) >= max_items:
-                    return
-                key = (item.item_type, str(item.item_id or id(item)))
-                if key in seen:
-                    continue
-                seen.add(key)
-                items.append(item)
-                total_tokens += item.token_count or 0
-
-        # 1. Explicit / manual context (highest priority — always first).
-        if "manual_context" in allowed:
-            _add(self._select_manual(request))
-
-        # 2. Current workspace metadata.
-        if "workspace" in allowed:
-            _add(self._select_workspace(request))
-
-        # 3. Current project metadata.
-        if "project" in allowed:
-            _add(self._select_project(request))
-
-        # 4. Approved memory.
-        if "memory" in allowed:
-            remaining = max_items - len(items)
-            if remaining > 0:
-                _add(self._select_memory(request, limit=remaining))
-
-        # 5. Knowledge items.
-        if "knowledge_item" in allowed:
-            remaining = max_items - len(items)
-            if remaining > 0:
-                _add(self._select_knowledge_items(request, allowed, limit=remaining))
-
-        # 6. Sources.
-        if "source" in allowed:
-            remaining = max_items - len(items)
-            if remaining > 0:
-                _add(self._select_sources(request, limit=remaining))
-
-        # 7. Recent activity records.
-        if "activity_record" in allowed:
-            remaining = max_items - len(items)
-            if remaining > 0:
-                _add(self._select_activity_records(request, limit=remaining))
-
-        truncated = total_tokens >= max_tokens or len(items) >= max_items
-
-        return ContextBundle(
-            items=items,
-            token_count=total_tokens,
-            truncated=truncated,
-            retrieval_trace={
-                "allowed_sources": sorted(allowed),
-                "context_policy_applied": bool(request.agent_version_id),
-                "item_count": len(items),
-                "total_tokens": total_tokens,
-                "truncated": truncated,
-                "max_tokens": max_tokens,
-                "max_items": max_items,
-            },
+        candidates, allowed, max_tokens, max_items = self.collect_candidates(request)
+        return apply_context_budget(
+            candidates,
+            allowed_sources=sorted(allowed),
+            max_tokens=max_tokens,
+            max_items=max_items,
+            context_policy_applied=bool(request.agent_version_id),
         )
 
     def persist_snapshot(

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import subprocess
-from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.orm.attributes import flag_modified
@@ -13,22 +12,35 @@ def test_builtin_specs_are_unique_and_implemented_specs_validate():
     specs = list_runtime_adapter_specs()
     adapter_types = [s.adapter_type for s in specs]
     assert len(adapter_types) == len(set(adapter_types))
-    implemented = {s.adapter_type for s in specs if s.implementation_status == "implemented"}
-    assert {"echo", "capability", "model_api", "claude_code", "codex_cli"}.issubset(implemented)
+    implemented = {
+        s.adapter_type for s in specs if s.implementation_status == "implemented"
+    }
+    assert {
+        "capability",
+        "model_api",
+        "ts_agent_host",
+        "claude_code",
+        "codex_cli",
+    }.issubset(implemented)
     planned = {s.adapter_type for s in specs if s.implementation_status == "planned"}
     assert {"opencode", "gemini_cli", "custom"}.issubset(planned)
-    assert all(not s.enabled_by_default for s in specs if s.implementation_status != "implemented")
+    assert all(
+        not s.enabled_by_default for s in specs if s.implementation_status != "implemented"
+    )
 
 
 def test_runtime_requirements_derive_from_spec():
     from app.runtimes.requirements import get_runtime_requirements
 
-    assert get_runtime_requirements("echo").credential_mode == "none"
     assert get_runtime_requirements("capability").model_provider_mode == "none"
     model_api = get_runtime_requirements("model_api")
     assert model_api.credential_mode == "model_provider_api_key"
     assert model_api.model_provider_mode == "required"
     assert model_api.supports_model_override is False
+    ts_host = get_runtime_requirements("ts_agent_host")
+    assert ts_host.credential_mode == "model_provider_api_key"
+    assert ts_host.credential_release_channel == "control_plane_runtime_host"
+    assert ts_host.model_provider_mode == "required"
     claude = get_runtime_requirements("claude_code")
     assert claude.credential_mode == "cli_profile"
     assert claude.model_provider_mode == "none"
@@ -39,8 +51,12 @@ def test_runtime_requirements_derive_from_spec():
 
 def test_registry_uses_generic_cli_runtime():
     from app.runtimes.adapters.cli_runtime import GenericCliRuntimeAdapter
+    from app.runtimes.adapters.ts_agent_host import TsAgentHostRuntimeAdapter
     from app.runtimes.registry import instantiate_runtime_adapter
 
+    assert isinstance(
+        instantiate_runtime_adapter("ts_agent_host"), TsAgentHostRuntimeAdapter
+    )
     assert isinstance(instantiate_runtime_adapter("claude_code"), GenericCliRuntimeAdapter)
     assert isinstance(instantiate_runtime_adapter("codex_cli"), GenericCliRuntimeAdapter)
     with pytest.raises(KeyError):
@@ -69,7 +85,9 @@ def test_command_renderer_model_override_and_permission_bypass_rules():
     from app.runtimes.specs import get_runtime_adapter_spec
 
     prompt = "do not split; $(rm -rf /)"
-    rendered = render_command(spec=get_runtime_adapter_spec("claude_code"), prompt=prompt, model="sonnet")
+    rendered = render_command(
+        spec=get_runtime_adapter_spec("claude_code"), prompt=prompt, model="sonnet"
+    )
     assert prompt in rendered.argv
     assert rendered.argv.count(prompt) == 1
     assert "--model" in rendered.argv
@@ -151,94 +169,6 @@ def test_output_parser_registry_is_generic_and_stable():
         OutputSpec(output_parser_type="claude_code")
 
 
-def test_detection_does_not_mark_missing_cli_commands_installed(db, test_space, monkeypatch, tmp_path):
-    from app.runtime_adapters.service import RuntimeAdapterService
-
-    empty_path = tmp_path / "empty-path"
-    empty_path.mkdir()
-    monkeypatch.setenv("PATH", str(empty_path))
-
-    claude = RuntimeAdapterService(db).detect_one("claude_code", space_id=test_space.id)
-    assert claude.installed is False
-    assert claude.executable_path is None
-    assert claude.warnings == ["'claude' not found in PATH"]
-
-    codex = RuntimeAdapterService(db).detect_one("codex_cli", space_id=test_space.id)
-    assert codex.installed is False
-    assert codex.executable_path is None
-    assert codex.warnings == ["'codex' not found in PATH"]
-
-
-def test_executable_override_detection_policy(db, test_space, tmp_path):
-    from app.models import RuntimeAdapter
-    from app.runtime_adapters.service import RuntimeAdapterService
-    from app.schemas import RuntimeAdapterCreate
-
-    exe = tmp_path / "runtime-cli"
-    exe.write_text("#!/bin/sh\necho runtime-cli 1.0\n", encoding="utf-8")
-    exe.chmod(0o755)
-
-    svc = RuntimeAdapterService(db)
-    row = svc.create(
-        RuntimeAdapterCreate(
-            adapter_type="claude_code",
-            name="Claude override",
-            executable_path=str(exe),
-        ),
-        test_space.id,
-    )
-    status = svc.status(row)
-    assert status.installed is True
-    assert status.executable_path == str(exe.resolve())
-    assert status.version == "runtime-cli 1.0"
-
-    stale = RuntimeAdapter(
-        id="runtime-adapter-stale-override",
-        space_id=test_space.id,
-        name="Stale override",
-        adapter_type="claude_code",
-        enabled=True,
-        config_json={"executable_path": str(tmp_path / "missing-cli")},
-        health_status="unknown",
-        quota_status="unknown",
-    )
-    db.add(stale)
-    db.flush()
-    invalid = svc.status(stale)
-    assert invalid.installed is False
-    assert invalid.executable_path == str(tmp_path / "missing-cli")
-    assert any("executable_not_found: executable_path override does not exist" in w for w in invalid.warnings)
-
-
-def test_detection_version_probe_uses_shell_false(db, test_space, tmp_path, monkeypatch):
-    from app.runtime_adapters.service import RuntimeAdapterService
-    from app.schemas import RuntimeAdapterCreate
-
-    exe = tmp_path / "runtime-cli"
-    exe.write_text("#!/bin/sh\n", encoding="utf-8")
-    exe.chmod(0o755)
-    calls = []
-
-    class Result:
-        stdout = "version"
-        stderr = ""
-
-    def fake_run(cmd, **kwargs):
-        calls.append({"cmd": cmd, **kwargs})
-        return Result()
-
-    monkeypatch.setattr("app.runtime_adapters.service.subprocess.run", fake_run)
-    row = RuntimeAdapterService(db).create(
-        RuntimeAdapterCreate(adapter_type="claude_code", name="Claude", executable_path=str(exe)),
-        test_space.id,
-    )
-    status = RuntimeAdapterService(db).status(row)
-
-    assert status.installed is True
-    assert calls
-    assert calls[0]["shell"] is False
-
-
 def test_command_renderer_rejects_unsafe_overrides_and_uses_path_for_spec_command(tmp_path, monkeypatch):
     from app.runtimes.command_renderer import CommandRenderError, render_command
     from app.runtimes.specs import get_runtime_adapter_spec
@@ -310,7 +240,7 @@ def _mark_cli_profile_ready(monkeypatch) -> None:
     monkeypatch.setattr("app.credentials.broker.CredentialBroker", lambda: ReadyBroker())
 
 
-def test_preflight_defaults_to_echo(db, test_space, test_user):
+def test_preflight_defaults_to_model_api(db, test_space, test_user):
     from app.runs.preflight import PreflightRequest, PreflightService
     from tests.support import factories
 
@@ -323,87 +253,11 @@ def test_preflight_defaults_to_echo(db, test_space, test_user):
     db.flush()
 
     result = PreflightService(db).check(PreflightRequest(agent_id=agent.id), test_space.id)
-    assert result.adapter_type == "echo"
+    assert result.adapter_type == "model_api"
     assert result.executable is True
 
 
-def test_preflight_and_execution_agree_for_version_runtime_adapter_id(db, test_space, test_user):
-    from app.runs.adapter_resolution import resolve_runtime_adapter
-    from app.runs.preflight import PreflightRequest, PreflightService
-    from tests.support import factories
-
-    agent = factories.create_test_agent(db, space_id=test_space.id, owner_user_id=test_user.id)
-    version = _agent_version(db, agent)
-    adapter = factories.create_test_runtime_adapter(db, space_id=test_space.id, adapter_type="capability")
-    version.runtime_adapter_id = adapter.id
-    run = factories.create_test_run(db, space_id=test_space.id, user_id=test_user.id, agent=agent)
-    db.flush()
-
-    preflight = PreflightService(db).check(PreflightRequest(agent_id=agent.id, adapter_type="echo"), test_space.id)
-    resolved = resolve_runtime_adapter(db, run=run, version=version, policy=version.runtime_policy_json)
-    assert preflight.adapter_type == resolved.adapter_type == "capability"
-
-
-def test_preflight_runtime_adapter_executable_override_skips_default_path_warning(
-    db, test_space, test_user, tmp_path, monkeypatch
-):
-    from app.runs.preflight import PreflightRequest, PreflightService
-    from tests.support import factories
-
-    _mark_cli_profile_ready(monkeypatch)
-    workspace = _workspace_for_worktree_preflight(db, space_id=test_space.id, tmp_path=tmp_path)
-    exe = tmp_path / "custom-claude"
-    exe.write_text("#!/bin/sh\necho custom\n", encoding="utf-8")
-    exe.chmod(0o755)
-    _path_with_git_only(tmp_path, monkeypatch)
-
-    agent = factories.create_test_agent(db, space_id=test_space.id, owner_user_id=test_user.id)
-    version = _agent_version(db, agent)
-    adapter = factories.create_test_runtime_adapter(db, space_id=test_space.id, adapter_type="claude_code")
-    adapter.config_json = {"executable_path": str(exe)}
-    version.runtime_adapter_id = adapter.id
-    version.runtime_policy_json = {"risk_level": "high"}
-    flag_modified(version, "runtime_policy_json")
-    db.flush()
-
-    result = PreflightService(db).check(
-        PreflightRequest(agent_id=agent.id, workspace_id=workspace.id),
-        test_space.id,
-    )
-
-    assert result.adapter_type == "claude_code"
-    assert not any("not found in PATH" in warning for warning in result.warnings)
-    assert result.warnings == []
-
-
-def test_preflight_runtime_adapter_invalid_executable_override_warns(
-    db, test_space, test_user, tmp_path, monkeypatch
-):
-    from app.runs.preflight import PreflightRequest, PreflightService
-    from tests.support import factories
-
-    _mark_cli_profile_ready(monkeypatch)
-    workspace = _workspace_for_worktree_preflight(db, space_id=test_space.id, tmp_path=tmp_path)
-    _path_with_git_only(tmp_path, monkeypatch)
-
-    agent = factories.create_test_agent(db, space_id=test_space.id, owner_user_id=test_user.id)
-    version = _agent_version(db, agent)
-    adapter = factories.create_test_runtime_adapter(db, space_id=test_space.id, adapter_type="claude_code")
-    adapter.config_json = {"executable_path": str(tmp_path / "missing-claude")}
-    version.runtime_adapter_id = adapter.id
-    version.runtime_policy_json = {"risk_level": "high"}
-    flag_modified(version, "runtime_policy_json")
-    db.flush()
-
-    result = PreflightService(db).check(
-        PreflightRequest(agent_id=agent.id, workspace_id=workspace.id),
-        test_space.id,
-    )
-
-    assert any("executable_not_found: executable_path override does not exist" in w for w in result.warnings)
-
-
-def test_preflight_without_runtime_adapter_row_warns_for_missing_default_command(
+def test_preflight_does_not_probe_host_cli_path(
     db, test_space, test_user, tmp_path, monkeypatch
 ):
     from app.runs.preflight import PreflightRequest, PreflightService
@@ -424,30 +278,28 @@ def test_preflight_without_runtime_adapter_row_warns_for_missing_default_command
         test_space.id,
     )
 
-    assert any("executable_not_found: 'claude' not found in PATH" in w for w in result.warnings)
+    assert result.adapter_type == "claude_code"
+    assert result.executable is True
+    assert not any("executable_not_found" in w for w in result.warnings)
 
 
-def test_preflight_native_adapters_skip_cli_executable_detection(db, test_space, test_user, monkeypatch):
+def test_preflight_native_adapters_skip_cli_runtime_tool_checks(db, test_space, test_user):
     from app.runs.preflight import PreflightRequest, PreflightService
     from tests.support import factories
 
-    def fail_detection(*args, **kwargs):
-        raise AssertionError("native adapters must not check CLI executables")
-
-    monkeypatch.setattr("app.runs.preflight.resolve_executable_for_detection", fail_detection)
     agent = factories.create_test_agent(db, space_id=test_space.id, owner_user_id=test_user.id)
     version = _agent_version(db, agent)
     version.runtime_policy_json = {"risk_level": "low"}
     flag_modified(version, "runtime_policy_json")
     db.flush()
 
-    echo = PreflightService(db).check(PreflightRequest(agent_id=agent.id), test_space.id)
+    model_api = PreflightService(db).check(PreflightRequest(agent_id=agent.id), test_space.id)
     capability = PreflightService(db).check(
         PreflightRequest(agent_id=agent.id, adapter_type="capability"),
         test_space.id,
     )
 
-    assert echo.adapter_type == "echo"
+    assert model_api.adapter_type == "model_api"
     assert capability.adapter_type == "capability"
 
 
@@ -463,12 +315,12 @@ def test_preflight_and_execution_agree_for_request_adapter_type(db, test_space, 
     flag_modified(version, "runtime_config_json")
     flag_modified(version, "runtime_policy_json")
     run = factories.create_test_run(db, space_id=test_space.id, user_id=test_user.id, agent=agent)
-    run.adapter_type = "echo"
+    run.adapter_type = "model_api"
     db.flush()
 
-    preflight = PreflightService(db).check(PreflightRequest(agent_id=agent.id, adapter_type="echo"), test_space.id)
+    preflight = PreflightService(db).check(PreflightRequest(agent_id=agent.id, adapter_type="model_api"), test_space.id)
     resolved = resolve_runtime_adapter(db, run=run, version=version, policy=version.runtime_policy_json)
-    assert preflight.adapter_type == resolved.adapter_type == "echo"
+    assert preflight.adapter_type == resolved.adapter_type == "model_api"
 
 
 def test_preflight_uses_spec_for_file_access_and_credentials(db, test_space, test_user, monkeypatch):
@@ -490,11 +342,23 @@ def test_preflight_uses_spec_for_file_access_and_credentials(db, test_space, tes
     flag_modified(version, "runtime_policy_json")
     db.flush()
 
+    # A workspace-bound CLI at medium risk must be raised to high (worktree):
+    # operating on a persistent workspace needs worktree isolation + diff review.
+    result = PreflightService(db).check(
+        PreflightRequest(agent_id=agent.id, adapter_type="claude_code", workspace_id="bound"),
+        test_space.id,
+    )
+    assert any("file_access_adapter_requires_worktree_policy" in err for err in result.errors)
+
+    # A no-workspace CLI at medium risk resolves to a run-scope ephemeral working
+    # dir (a real sandbox), so it is NOT rejected for lacking worktree policy.
     result = PreflightService(db).check(
         PreflightRequest(agent_id=agent.id, adapter_type="claude_code"),
         test_space.id,
     )
-    assert any("file_access_adapter_requires_worktree_policy" in err for err in result.errors)
+    assert not any(
+        "file_access_adapter_requires_worktree_policy" in err for err in result.errors
+    )
 
     version.runtime_policy_json = {"risk_level": "high"}
     flag_modified(version, "runtime_policy_json")
@@ -571,164 +435,6 @@ def test_preflight_credential_readiness_requires_existing_source_path(db, test_s
         test_space.id,
     )
     assert not any("runtime_credential_profile_required" in err for err in result.errors)
-
-
-def test_runtime_status_credential_readiness_uses_profile_source_path(db, test_space, tmp_path, monkeypatch):
-    from app.credentials.broker import CredentialBroker, CredentialProfile
-    from app.runtime_adapters.service import RuntimeAdapterService
-
-    broker = CredentialBroker(instance_root=str(tmp_path / "instance"))
-    broker._profiles = {
-        "claude_code/default": CredentialProfile(
-            id="claude_code/default",
-            runtime="claude_code",
-            name="default",
-            source_path=str(tmp_path / "missing-profile"),
-            target_path="/home/agent/.claude",
-        )
-    }
-    monkeypatch.setattr("app.credentials.broker.CredentialBroker", lambda: broker)
-
-    missing = RuntimeAdapterService(db).detect_one("claude_code", space_id=test_space.id)
-    assert missing.credential_ready is False
-
-    profile_dir = tmp_path / "profile"
-    profile_dir.mkdir()
-    broker._profiles["claude_code/default"].source_path = str(profile_dir)
-    ready = RuntimeAdapterService(db).detect_one("claude_code", space_id=test_space.id)
-    assert ready.credential_ready is True
-
-
-def test_runtime_status_is_space_scoped_and_prefers_runtime_adapter_id(db, cross_space_pair_db):
-    from app.models import Run
-    from app.runtime_adapters.service import RuntimeAdapterService
-    from tests.support import factories
-
-    a = cross_space_pair_db["space_a_id"]
-    b = cross_space_pair_db["space_b_id"]
-    user_a = cross_space_pair_db["user_a"].id
-    user_b = cross_space_pair_db["user_b"].id
-    adapter_a = factories.create_test_runtime_adapter(db, space_id=a, adapter_type="echo")
-    adapter_a2 = factories.create_test_runtime_adapter(db, space_id=a, adapter_type="echo")
-    adapter_b = factories.create_test_runtime_adapter(db, space_id=b, adapter_type="echo")
-    agent_a = factories.create_test_agent(db, space_id=a, owner_user_id=user_a)
-    agent_b = factories.create_test_agent(db, space_id=b, owner_user_id=user_b)
-    run_a = factories.create_test_run(db, space_id=a, user_id=user_a, agent=agent_a)
-    run_a.runtime_adapter_id = adapter_a.id
-    run_a.adapter_type = "echo"
-    run_a.status = "succeeded"
-    run_b = factories.create_test_run(db, space_id=b, user_id=user_b, agent=agent_b)
-    run_b.runtime_adapter_id = adapter_b.id
-    run_b.adapter_type = "echo"
-    run_b.status = "failed"
-    db.flush()
-
-    status_a = RuntimeAdapterService(db).status(adapter_a)
-    assert status_a.last_run_status == "succeeded"
-    status_a2 = RuntimeAdapterService(db).status(adapter_a2)
-    assert status_a2.last_run_status is None
-    assert status_a.configured_count == 2
-    unconfigured = RuntimeAdapterService(db).detect_one("echo")
-    assert unconfigured.last_run_status is None
-    assert unconfigured.last_error_code is None
-
-    detected = RuntimeAdapterService(db).detect_all(a)
-    echo_detected = next(item for item in detected if item.adapter_type == "echo")
-    assert echo_detected.configured_count == 2
-    assert echo_detected.configured is False
-    assert echo_detected.runtime_adapter_id is None
-    assert echo_detected.last_run_status is None
-
-
-def test_runtime_adapter_quota_and_health_are_independent(db, test_space):
-    from app.runtime_adapters.service import RuntimeAdapterService
-    from app.schemas import RuntimeAdapterCreate, RuntimeAdapterUpdate
-    from pydantic import ValidationError
-
-    svc = RuntimeAdapterService(db)
-    row = svc.create(
-        RuntimeAdapterCreate(
-            adapter_type="echo",
-            name="Echo",
-            health_status="ok",
-            quota_status="low",
-        ),
-        test_space.id,
-    )
-    assert row.health_status == "ok"
-    assert row.quota_status == "low"
-    updated = svc.update(row.id, test_space.id, RuntimeAdapterUpdate(quota_status="exhausted"))
-    assert updated.health_status == "ok"
-    assert updated.quota_status == "exhausted"
-    updated = svc.update(row.id, test_space.id, RuntimeAdapterUpdate(health_status="warning"))
-    assert updated.health_status == "warning"
-    assert updated.quota_status == "exhausted"
-    updated = svc.update(row.id, test_space.id, RuntimeAdapterUpdate(enabled=False))
-    assert updated.enabled is False
-    assert updated.health_status == "warning"
-    updated = svc.update(row.id, test_space.id, RuntimeAdapterUpdate(health_status="disabled"))
-    assert updated.health_status == "disabled"
-
-    with pytest.raises(ValidationError):
-        RuntimeAdapterCreate(adapter_type="echo", name="Bad", health_status="bad")
-    with pytest.raises(ValidationError):
-        RuntimeAdapterUpdate(quota_status="bad")
-
-    planned = svc.create(
-        RuntimeAdapterCreate(
-            adapter_type="opencode",
-            name="OpenCode",
-            enabled=False,
-            health_status="ok",
-            quota_status="low",
-        ),
-        test_space.id,
-    )
-    assert planned.enabled is False
-    assert planned.health_status == "unimplemented"
-    assert planned.quota_status == "unknown"
-
-
-def test_usage_provider_is_fallback_cached_and_instance_scoped(db, test_space, test_user, tmp_path, monkeypatch):
-    from app.config import settings
-    from app.runtime_adapters.service import RuntimeAdapterService
-    from tests.support import factories
-
-    monkeypatch.setattr(settings, "instance_root", str(tmp_path))
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir(parents=True)
-    (cache_dir / "quota-cache.json").write_text('{"remaining": 3}', encoding="utf-8")
-
-    adapter_a = factories.create_test_runtime_adapter(db, space_id=test_space.id, adapter_type="echo")
-    adapter_b = factories.create_test_runtime_adapter(db, space_id=test_space.id, adapter_type="echo")
-    agent = factories.create_test_agent(db, space_id=test_space.id, owner_user_id=test_user.id)
-    run_a = factories.create_test_run(db, space_id=test_space.id, user_id=test_user.id, agent=agent)
-    run_a.adapter_type = "echo"
-    run_a.runtime_adapter_id = adapter_a.id
-    run_a.status = "succeeded"
-    run_a.started_at = datetime.now(UTC)
-    run_a.runtime_seconds = 2.5
-    run_b = factories.create_test_run(db, space_id=test_space.id, user_id=test_user.id, agent=agent)
-    run_b.adapter_type = "echo"
-    run_b.runtime_adapter_id = adapter_b.id
-    run_b.status = "succeeded"
-    run_b.runtime_seconds = 9.0
-    db.flush()
-
-    usage_a = RuntimeAdapterService(db).usage(adapter_a)
-    assert usage_a["runtime_adapter_id"] == adapter_a.id
-    assert usage_a["run_count"] == 1
-    assert usage_a["runtime_seconds"] == 2.5
-
-    refreshed = RuntimeAdapterService(db).usage(adapter_a, refresh=True)
-    assert refreshed["supports_usage_probe"] is False
-    assert "warning" in refreshed
-
-    claude = factories.create_test_runtime_adapter(db, space_id=test_space.id, adapter_type="claude_code")
-    claude_usage = RuntimeAdapterService(db).usage(claude)
-    assert claude_usage["cached_quota"] == {"remaining": 3}
-    claude_refresh = RuntimeAdapterService(db).usage(claude, refresh=True)
-    assert claude_refresh["warning"] == "live Claude quota probe is not available in this build"
 
 
 def test_credential_audit_does_not_store_paths_tokens_or_file_content(db, test_space, test_user, monkeypatch):

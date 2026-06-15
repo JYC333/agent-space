@@ -51,11 +51,6 @@ def test_model_provider(db, test_space):
 
 
 @pytest.fixture
-def test_runtime_adapter(db, test_space):
-    return factories.create_test_runtime_adapter(db, space_id=test_space.id)
-
-
-@pytest.fixture
 def test_workspace(db, test_user, test_space):
     return factories.create_test_workspace(
         db,

@@ -169,7 +169,7 @@ class TestRedactRuntimeOutput:
             "runtime": "real",
             "stdout": "hello world",
             "stderr": "",
-            "adapter_type": "echo",
+            "adapter_type": "model_api",
         }
         result = redact_runtime_output(out)
         assert result["stdout"] == "hello world"

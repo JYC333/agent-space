@@ -44,7 +44,7 @@ No automation, connector marketplace, crawler, or self-evolution controls appear
 - Explicit chat sessions for conversations with agents (`POST /api/v1/sessions`).
 - Memory proposal creation, review, acceptance, rejection, and archive.
 - Memory consolidation producing proposals from Activity.
-- Runs through canonical `app.runtimes` path (`echo`, `capability`, and spec-driven local CLI runtimes).
+- Runs through canonical `app.runtimes` path (`capability`, `model_api`, and spec-driven local CLI runtimes).
 - RunStep replay and failure diagnosis.
 - Artifacts produced by runs; safe export within owned space.
 - Task boards and task-linked runs/artifacts/proposals.

@@ -27,7 +27,6 @@ class WorkspaceProfileOut(BaseModel):
     current_focus: Optional[str] = None
     known_failures_json: Optional[list] = None
     validation_recipe_id: Optional[str] = None
-    preferred_runtime_adapter_id: Optional[str] = None
     cloud_allowed: bool
     max_data_exposure_level: Optional[str] = None
     min_observability_level: Optional[str] = None
@@ -46,7 +45,6 @@ class WorkspaceProfilePatch(BaseModel):
     current_focus: Optional[str] = None
     known_failures_json: Optional[list] = None
     validation_recipe_id: Optional[str] = None
-    preferred_runtime_adapter_id: Optional[str] = None
     cloud_allowed: Optional[bool] = None
     max_data_exposure_level: Optional[str] = None
     min_observability_level: Optional[str] = None

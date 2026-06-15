@@ -633,31 +633,31 @@ describe('Knowledge routing', () => {
 
   it('auto-saves edits through the rich text wrapper snapshot', async () => {
     vi.mocked(notesApi.get).mockResolvedValueOnce(makeNote({
-      id: 'note-legacy',
-      title: 'Legacy note',
+      id: 'note-markdown',
+      title: 'Markdown note',
       content_format: 'markdown',
       content_json: null,
-      plain_text: 'Legacy body',
+      plain_text: 'Markdown body',
       status: 'active',
     }))
     vi.mocked(notesApi.update).mockResolvedValueOnce(makeNote({
-      id: 'note-legacy',
-      title: 'Legacy note edited',
+      id: 'note-markdown',
+      title: 'Markdown note edited',
       status: 'active',
     }))
 
-    renderAt('/spaces/personal-1/knowledge/notes/note-legacy')
+    renderAt('/spaces/personal-1/knowledge/notes/note-markdown')
 
-    expect(await screen.findByDisplayValue('Legacy note')).toBeInTheDocument()
-    expect(screen.getByTestId('rich-text-editor')).toHaveTextContent('Legacy body')
+    expect(await screen.findByDisplayValue('Markdown note')).toBeInTheDocument()
+    expect(screen.getByTestId('rich-text-editor')).toHaveTextContent('Markdown body')
 
     // Editing the title triggers a debounced auto-save — no Save button.
-    fireEvent.change(screen.getByLabelText('Note title'), { target: { value: 'Legacy note edited' } })
+    fireEvent.change(screen.getByLabelText('Note title'), { target: { value: 'Markdown note edited' } })
 
     await waitFor(
       () =>
-        expect(notesApi.update).toHaveBeenCalledWith('note-legacy', expect.objectContaining({
-          title: 'Legacy note edited',
+        expect(notesApi.update).toHaveBeenCalledWith('note-markdown', expect.objectContaining({
+          title: 'Markdown note edited',
           content_format: 'prosemirror_json',
           content_schema_version: 1,
         })),

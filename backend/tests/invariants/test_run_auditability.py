@@ -42,7 +42,7 @@ def test_successful_execution_writes_run_steps_and_artifact(
 
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
     run = factories.create_test_run(db, space_id=a, user_id=ua.id, agent=agent, commit=False)
-    run.prompt = "hello-echo"
+    run.prompt = "hello-run"
     db.flush()
     db.commit()
 

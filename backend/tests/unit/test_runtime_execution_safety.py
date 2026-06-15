@@ -464,7 +464,7 @@ class TestExecutionLock:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
         db.commit()
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
@@ -507,7 +507,7 @@ class TestExecutionLock:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
         db.commit()
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
@@ -533,7 +533,7 @@ class TestExecutionLock:
 
         # critical risk → fails with one_shot_docker error
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "critical", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "critical", "default_adapter_type": "model_api"}
         db.commit()
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
@@ -556,7 +556,7 @@ class TestExecutionLock:
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
 
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
         db.commit()
 
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
@@ -703,7 +703,7 @@ class TestDurableLockRelease:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
         db.commit()
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
 
@@ -725,7 +725,7 @@ class TestDurableLockRelease:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "critical", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "critical", "default_adapter_type": "model_api"}
         db.commit()
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
 
@@ -748,7 +748,7 @@ class TestDurableLockRelease:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
         db.commit()
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
 
@@ -1352,7 +1352,7 @@ class TestDuplicateExecutionQueueSemantics:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
         db.commit()
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
 
@@ -1389,7 +1389,7 @@ class TestDuplicateExecutionQueueSemantics:
         user = factories.create_test_user(db, space_id=space_id, commit=True)
         agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user.id, commit=True)
         version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+        version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
         db.commit()
         run = factories.create_test_run(db, space_id=space_id, user_id=user.id, agent=agent, commit=True)
 

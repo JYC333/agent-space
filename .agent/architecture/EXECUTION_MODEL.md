@@ -73,12 +73,26 @@ Existing Run and Proposal rows use separate nullable `*_user_id` and `*_agent_id
 ## Canonical Runtime Path
 
 - **Canonical adapter catalog:** `RuntimeAdapterSpec` entries in `backend/app/runtimes/specs.py`
-- **Configured runtime instances:** `RuntimeAdapter` rows scoped to a space
-- **Generic local CLI execution:** `backend/app/runtimes/adapters/cli_runtime.py` renders commands, grants CLI credential profiles, invokes `LocalExecutor`, and parses output
+- **Controlled CLI tools:** TS `runtimeTools` installs active vendor CLI binaries under `$AGENT_SPACE_HOME/runtime-tools`
+- **Stage 4 command authority:** when `CONTROL_PLANE_RUNS_AUTHORITY=ts`,
+  control-plane `runs` owns `POST /runs/{id}/execute`,
+  `PATCH /runs/{id}/stop`, the internal `POST /internal/runs/execute` port,
+  TS execution locks, and `agent_run` job dispatch (the control-plane
+  entrypoint runs the worker loop; the Python worker excludes `agent_run`
+  from its claims). Policy gates resolve through `PolicyPort` (TS-owned when
+  `CONTROL_PLANE_POLICY_AUTHORITY=ts`); adapter-config resolution remains
+  Python-owned behind the runs context ports.
+- **Generic local CLI execution:** control-plane `runs/vendorCliAdapter.ts`
+  renders commands, grants CLI credential profiles through the TS broker,
+  invokes the local CLI process, parses output, and calls Python-owned
+  workspace/context ports for worktree and instruction-file preparation.
+  Python `backend/app/runtimes/adapters/cli_runtime.py` remains for Python-owned
+  execution paths that have not moved to the control plane.
 
 Do not add new adapters to `app.agents` — it contains Agent/AgentVersion CRUD only.
 
-`RunExecutionService` owns the runtime execution lifecycle. Required external-call pattern:
+The runtime execution lifecycle uses this external-call pattern in both TS and
+remaining Python paths:
 
 1. Open short transaction → write run setup state → commit.
 2. Call runtime adapter **outside** the transaction.

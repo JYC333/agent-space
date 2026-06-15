@@ -22,7 +22,7 @@ from tests.support import factories
         (TaskClassification(task_type="generic", requires_long_reasoning=True), True),
     ],
 )
-def test_task_classification_needs_cli_matches_legacy_behavior(classification, expected):
+def test_task_classification_needs_cli_matches_previous_behavior(classification, expected):
     assert classification.needs_cli is expected
 
 
@@ -98,24 +98,12 @@ def test_runtime_adapter_resolution_priority_matches_execution_order(db, test_sp
         **(version.runtime_policy_json or {}),
         "default_adapter_type": "codex_cli",
     }
-    run_row = factories.create_test_runtime_adapter(
-        db,
-        space_id=test_space.id,
-        adapter_type="echo",
-    )
-    version_row = factories.create_test_runtime_adapter(
-        db,
-        space_id=test_space.id,
-        adapter_type="capability",
-    )
-    version.runtime_adapter_id = version_row.id
     run = factories.create_test_run(
         db,
         space_id=test_space.id,
         user_id=test_user.id,
         agent=agent,
     )
-    run.runtime_adapter_id = run_row.id
     run.adapter_type = "claude_code"
     db.flush()
 
@@ -125,17 +113,15 @@ def test_runtime_adapter_resolution_priority_matches_execution_order(db, test_sp
         version=version,
         policy=version.runtime_policy_json,
     )
-    assert resolved.adapter_type == "echo"
-    assert resolved.runtime_adapter_row.id == run_row.id
+    assert resolved.adapter_type == "claude_code"
 
-    run.runtime_adapter_id = None
+    run.adapter_type = None
     resolved = service.resolve_runtime_adapter(
         run=run,
         version=version,
         policy=version.runtime_policy_json,
     )
-    assert resolved.adapter_type == "capability"
-    assert resolved.runtime_adapter_row.id == version_row.id
+    assert resolved.adapter_type == "model_api"
 
 
 def test_run_create_adapter_preview_uses_execution_priority(db, test_space, test_user):
@@ -150,38 +136,15 @@ def test_run_create_adapter_preview_uses_execution_priority(db, test_space, test
         **(version.runtime_policy_json or {}),
         "default_adapter_type": "codex_cli",
     }
-    run_row = factories.create_test_runtime_adapter(
-        db,
-        space_id=test_space.id,
-        adapter_type="echo",
-    )
-    version_row = factories.create_test_runtime_adapter(
-        db,
-        space_id=test_space.id,
-        adapter_type="capability",
-    )
-    version.runtime_adapter_id = version_row.id
     db.flush()
 
     service = RouterService(db)
     assert service.preview_run_adapter_type(
         space_id=test_space.id,
         version=version,
-        runtime_adapter_id=run_row.id,
-        requested_adapter_type="claude_code",
-    ) == "echo"
-    assert service.preview_run_adapter_type(
-        space_id=test_space.id,
-        version=version,
-        requested_adapter_type="claude_code",
-    ) == "capability"
-
-    version.runtime_adapter_id = None
-    assert service.preview_run_adapter_type(
-        space_id=test_space.id,
-        version=version,
         requested_adapter_type="claude_code",
     ) == "claude_code"
+
     assert service.preview_run_adapter_type(
         space_id=test_space.id,
         version=version,
@@ -200,10 +163,10 @@ def test_run_create_adapter_preview_uses_execution_priority(db, test_space, test
         space_id=test_space.id,
         version=version,
         requested_adapter_type=None,
-    ) == "echo"
+    ) == "model_api"
 
 
-def test_runtime_adapter_resolution_falls_back_through_run_config_policy_echo(
+def test_runtime_adapter_resolution_falls_back_through_run_config_policy_default(
     db,
     test_space,
     test_user,
@@ -227,13 +190,13 @@ def test_runtime_adapter_resolution_falls_back_through_run_config_policy_echo(
         **(version.runtime_policy_json or {}),
         "default_adapter_type": "codex_cli",
     }
-    run.adapter_type = "echo"
+    run.adapter_type = "model_api"
     resolved = service.resolve_runtime_adapter(
         run=run,
         version=version,
         policy=version.runtime_policy_json,
     )
-    assert resolved.adapter_type == "echo"
+    assert resolved.adapter_type == "model_api"
 
     run.adapter_type = None
     resolved = service.resolve_runtime_adapter(
@@ -257,53 +220,11 @@ def test_runtime_adapter_resolution_falls_back_through_run_config_policy_echo(
         version=version,
         policy=version.runtime_policy_json,
     )
-    assert resolved.adapter_type == "echo"
+    assert resolved.adapter_type == "model_api"
 
 
-def test_runtime_adapter_resolution_reports_missing_version_adapter_row(
-    db,
-    test_space,
-    test_user,
-):
-    agent = factories.create_test_agent(
-        db,
-        space_id=test_space.id,
-        owner_user_id=test_user.id,
-    )
-    version = _version(db, agent)
-    other_space = factories.create_test_space(
-        db,
-        space_id="router-service-other-space",
-        space_type="team",
-    )
-    other_adapter = factories.create_test_runtime_adapter(
-        db,
-        space_id=other_space.id,
-        adapter_type="echo",
-    )
-    version.runtime_adapter_id = other_adapter.id
-    run = factories.create_test_run(
-        db,
-        space_id=test_space.id,
-        user_id=test_user.id,
-        agent=agent,
-    )
-    db.flush()
-
-    with pytest.raises(AdapterResolutionError) as exc:
-        RouterService(db).resolve_runtime_adapter(
-            run=run,
-            version=version,
-            policy=version.runtime_policy_json,
-        )
-
-    assert exc.value.error_code == "adapter_not_configured"
-    assert "AgentVersion.runtime_adapter_id" in exc.value.message
-
-
-def test_runtime_adapter_provider_id_subject_to_allowlist(db, test_space, test_user):
-    """A provider pinned on the resolved RuntimeAdapter row is checked against
-    runtime_policy_json.allowed_model_providers (run/version carry no provider)."""
+def test_version_model_provider_id_subject_to_allowlist(db, test_space, test_user):
+    """A version model provider is checked against runtime_policy_json."""
     from app.runs.adapter_resolution import resolve_runtime_adapter
 
     agent = factories.create_test_agent(
@@ -311,20 +232,15 @@ def test_runtime_adapter_provider_id_subject_to_allowlist(db, test_space, test_u
     )
     version = _version(db, agent)
     provider = factories.create_test_model_provider(db, space_id=test_space.id)
+    version.model_provider_id = provider.id
+    version.runtime_config_json = {"adapter_type": "model_api"}
     version.runtime_policy_json = {
         **(version.runtime_policy_json or {}),
         "allowed_model_providers": ["some-other-allowed-mp"],
     }
-    adapter_row = factories.create_test_runtime_adapter(
-        db,
-        space_id=test_space.id,
-        adapter_type="model_api",
-        provider_id=provider.id,
-    )
     run = factories.create_test_run(
         db, space_id=test_space.id, user_id=test_user.id, agent=agent
     )
-    run.runtime_adapter_id = adapter_row.id
     db.flush()
 
     with pytest.raises(AdapterResolutionError) as exc:
@@ -355,5 +271,5 @@ def test_preflight_and_automation_resolution_keep_their_distinct_fallbacks(
     )
     automation = service.resolve_automation_adapter(version=version, policy={})
 
-    assert preflight.adapter_type == "echo"
+    assert preflight.adapter_type == "model_api"
     assert automation.adapter_type == ""

@@ -53,7 +53,7 @@ export default function ProposalDetailPage() {
   const canDecide =
     p &&
     p.status === 'pending' &&
-    (p.proposal_type === 'memory_update' || p.proposal_type === 'code_patch' || p.proposal_type === 'egress_review')
+    (p.proposal_type.startsWith('memory_') || p.proposal_type === 'code_patch' || p.proposal_type === 'egress_review')
 
   async function decide(action: 'accept' | 'reject') {
     if (!p) return
@@ -170,7 +170,7 @@ export default function ProposalDetailPage() {
           {p.status === 'accepted' && p.resulting_memory_id && (
             <div className="pt-2 border-t border-border">
               <Link
-                to="/memory"
+                to={`/memory/${p.resulting_memory_id}`}
                 className="text-xs text-accent-foreground hover:underline"
               >
                 View created memory →

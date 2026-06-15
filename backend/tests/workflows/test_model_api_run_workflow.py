@@ -15,7 +15,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from app.config import settings
-from app.models import Artifact, MemoryEntry, Proposal, Run, RunStep
+from app.models import AgentVersion, Artifact, MemoryEntry, Proposal, Run, RunStep
 from app.runs.execution import RunExecutionService
 from tests.support import factories
 
@@ -109,16 +109,10 @@ def test_model_api_run_executes_and_materializes_artifact(
     )
 
 
-def test_model_api_run_uses_runtime_adapter_provider_id(
+def test_model_api_run_uses_version_provider_id(
     db, test_user, test_space, tmp_path, monkeypatch
 ):
-    """A model_api run whose provider comes only from RuntimeAdapter.provider_id.
-
-    The Run and AgentVersion carry no model_provider_id; the provider is pinned on
-    the RuntimeAdapter row. Credential resolution already honors that row
-    (priority 2), so the adapter must receive the *same* provider id — otherwise
-    it fails with model_provider_required despite a resolved key.
-    """
+    """A model_api run can resolve its provider from AgentVersion metadata."""
     monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
     monkeypatch.setattr(settings, "workspace_root", str(tmp_path / "workspaces"))
     monkeypatch.setattr(settings, "sandbox_root", str(tmp_path / "sandboxes"))
@@ -134,21 +128,15 @@ def test_model_api_run_uses_runtime_adapter_provider_id(
         enabled=True,
         commit=False,
     )
-    adapter_row = factories.create_test_runtime_adapter(
-        db,
-        space_id=space_id,
-        adapter_type="model_api",
-        provider_id=provider.id,
-        commit=False,
-    )
     agent = factories.create_test_agent(
         db, space_id=space_id, owner_user_id=test_user.id, commit=False
     )
+    version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).one()
+    version.model_provider_id = provider.id
     run = factories.create_test_run(
         db, space_id=space_id, user_id=test_user.id, agent=agent, commit=False
     )
-    # Provider is intentionally NOT set on the run — only on the adapter row.
-    run.runtime_adapter_id = adapter_row.id
+    # Provider is intentionally NOT set on the run; AgentVersion owns the default.
     run.adapter_type = "model_api"
     run.model_override_json = {"model": "claude-3-5-sonnet-latest"}
     run.prompt = "Summarize: the quick brown fox."

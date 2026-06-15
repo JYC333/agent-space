@@ -31,7 +31,7 @@ instance/
         ├── claude_code/
         │   └── default/      ← Claude Code login state (~/.claude contents)
         ├── codex_cli/
-        │   └── default/      ← Codex login state (~/.codex or API key file)
+        │   └── default/      ← Codex login state (~/.codex contents)
         └── opencode/
             └── default/
 ```
@@ -82,12 +82,16 @@ require that sandbox level fail closed before runtime invocation.
 ## Initializing a Profile
 
 ```bash
-# Step 1: log in inside the backend container
-docker exec -it agent-space-backend bash
-claude login
+# Step 1: install the runtime tool through the control-plane installer
+curl -X POST localhost:8010/api/v1/runtime-tools/claude_code/install \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"version":"latest"}'
 
-# Step 2: copy the resulting ~/.claude into the managed profile dir
-cp -r ~/.claude /app/instance/secrets/cli-credentials/claude_code/default/
+# Step 2: run the managed login stream from the frontend or API.
+# The control plane launches the active runtime-tool binary and syncs the
+# resulting login state into:
+#   $AGENT_SPACE_HOME/secrets/cli-credentials/claude_code/default/
 
 # Step 3: verify the broker sees it through the default control-plane entrypoint
 curl localhost:8010/api/v1/credentials/cli/profiles?runtime=claude_code
@@ -134,9 +138,11 @@ POST /api/v1/credentials/cli/profiles/{id}/detect     — check if source_path e
 
 - `backend/app/credentials/broker.py` — CredentialBroker, CredentialProfile, CredentialGrant
 - `backend/app/credentials/api.py` — FastAPI routes
+- `control-plane/src/modules/runtimeTools/` — controlled CLI tool installer and active binary registry
+- `control-plane/src/modules/runs/vendorCliAdapter.ts` — TS CLI adapter profile grant behavior
 - `backend/app/runtimes/base.py` — CredentialSpec dataclass
-- `backend/app/runtimes/adapters/cli_runtime.py` — GenericCliRuntimeAdapter profile grant behavior
-- `backend/app/runtimes/local_executor.py` — local subprocess execution
+- `backend/app/runtimes/adapters/cli_runtime.py` — legacy Python GenericCliRuntimeAdapter profile grant behavior
+- `backend/app/runtimes/local_executor.py` — legacy Python local subprocess execution
 - `backend/app/runs/execution.py` — runtime execution integration
 - `backend/app/runs/sandbox_manager.py` — execution workspace credential mount
 - `backend/app/models.py` — CliCredentialEvent

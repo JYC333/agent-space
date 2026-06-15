@@ -29,7 +29,7 @@ def _new_id() -> str:
 
 
 class _CapturingRuntimeAdapter:
-    adapter_type = "echo"
+    adapter_type = "model_api"
     requires_credentials = False
     requires_file_access = False
     supports_sandboxed_execution = False

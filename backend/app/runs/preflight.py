@@ -8,7 +8,7 @@ Preflight does NOT:
   - create sandboxes
   - write workspace files
   - enforce sensitive actions or persist PolicyDecisionRecord
-  - call any external API or subprocess (except lightweight CLI availability checks)
+  - call any external API or subprocess
 
 Policy simulation contract: PreflightService may call PolicyEngine directly only to
 predict whether a prospective runtime.execute request would be allowed. It is a
@@ -17,8 +17,8 @@ through PolicyGateway and record decisions there when required.
 
 Resolution contract: preflight resolves adapter_type and required_sandbox_level using the
 exact same priority order as RunExecutionService + resolve_runtime_adapter + compute_runtime_policy_decision.
-Request-level overrides that execution would not honour (risk_level, runtime_adapter_id) are
-intentionally absent from PreflightRequest.
+Request-level overrides that execution would not honour (risk_level) are intentionally
+absent from PreflightRequest.
 """
 from __future__ import annotations
 
@@ -29,8 +29,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
-
-from ..runtimes.command_renderer import CommandRenderError, resolve_executable_for_detection
 
 log = logging.getLogger(__name__)
 
@@ -47,14 +45,12 @@ class PreflightRequest(BaseModel):
     and is passed separately to PreflightService.check(). Clients must not submit
     space_id in the body.
 
-    risk_level and runtime_adapter_id are NOT included here. Preflight cannot
-    simulate a prospective Run.runtime_adapter_id because that field is not
-    accepted by this request schema. It can simulate prospective Run.adapter_type
-    through adapter_type, and otherwise uses AgentVersion/runtime policy fields
-    in the same order as execution.
+    risk_level is NOT included here. Preflight can simulate prospective
+    Run.adapter_type through adapter_type, and otherwise uses AgentVersion/runtime
+    policy fields in the same order as execution.
 
-    extra="forbid" ensures obsolete fields (space_id, risk_level, runtime_adapter_id)
-    are rejected with 422 rather than silently ignored.
+    extra="forbid" ensures unsupported fields are rejected with 422 rather than
+    silently ignored.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -89,9 +85,6 @@ class _PreflightState:
     warnings: list[str] = field(default_factory=list)
     adapter_type: str | None = None
     required_sandbox_level: str | None = None
-    runtime_adapter_id: str | None = None
-    runtime_adapter_config_json: dict[str, Any] = field(default_factory=dict)
-    executable_path_override: str | None = None
 
 
 class PreflightService:
@@ -117,8 +110,6 @@ class PreflightService:
             self._check_risk_level(req, state)
         if not state.errors:
             self._check_workspace(req, state)
-        if not state.errors:
-            self._check_cli_availability(req, state)
         if not state.errors:
             self._check_credential_profile(req, state)
         if not state.errors:
@@ -175,13 +166,7 @@ class PreflightService:
             state.errors.append(f"AgentVersion '{agent.current_version_id}' not found")
 
     def _check_adapter(self, req: PreflightRequest, state: _PreflightState) -> None:
-        """Resolve the adapter using the same visible fields as execution.
-
-        Full execution can use Run.runtime_adapter_id first; PreflightRequest
-        intentionally has no runtime_adapter_id, so this check starts at
-        AgentVersion.runtime_adapter_id and then treats req.adapter_type as the
-        prospective Run.adapter_type.
-        """
+        """Resolve the adapter using the same visible fields as execution."""
         from ..models import Agent, AgentVersion
         from ..router import AdapterResolutionError, RouterService
 
@@ -211,13 +196,6 @@ class PreflightService:
             state.errors.append(f"{exc.error_code}: {exc.message}")
             return
 
-        row = resolved.runtime_adapter_row
-        if row is not None:
-            state.runtime_adapter_id = row.id
-            state.runtime_adapter_config_json = dict(row.config_json or {})
-            raw_override = state.runtime_adapter_config_json.get("executable_path")
-            state.executable_path_override = str(raw_override) if raw_override else None
-
         state.adapter_type = resolved.adapter_type
 
     def _check_risk_level(self, req: PreflightRequest, state: _PreflightState) -> None:
@@ -229,7 +207,8 @@ class PreflightService:
         from ..models import Agent, AgentVersion
         from .runtime_policy import (
             _norm_risk,
-            required_sandbox_level_for_risk,
+            file_access_sandbox_error,
+            resolve_sandbox_level,
         )
 
         agent = (
@@ -250,7 +229,12 @@ class PreflightService:
         policy = dict(version.runtime_policy_json or {})
         # Read risk_level from policy only — mirrors compute_runtime_policy_decision
         risk = _norm_risk(policy.get("risk_level"))
-        level = required_sandbox_level_for_risk(risk)
+        adapter_type = state.adapter_type or ""
+        level = resolve_sandbox_level(
+            risk_level=risk,
+            adapter_type=adapter_type,
+            has_workspace=bool(req.workspace_id),
+        )
         state.required_sandbox_level = level
 
         if level == "one_shot_docker":
@@ -261,21 +245,14 @@ class PreflightService:
             )
             return
 
-        adapter_type = state.adapter_type or ""
-        try:
-            from ..runtimes import get_runtime_adapter_spec
-            spec = get_runtime_adapter_spec(adapter_type)
-            requires_file_access = spec.sandbox.requires_file_access
-            minimum_level = spec.sandbox.minimum_sandbox_level
-        except KeyError:
-            requires_file_access = False
-            minimum_level = "none"
-        if requires_file_access and level != minimum_level:
+        file_access_error = file_access_sandbox_error(
+            adapter_type=adapter_type,
+            required_sandbox_level=level,
+            risk_level=risk,
+        )
+        if file_access_error:
             state.errors.append(
-                f"file_access_adapter_requires_worktree_policy: "
-                f"adapter_type='{adapter_type}' requires {minimum_level} sandbox but "
-                f"risk_level='{risk}' resolves to required_sandbox_level='{level}'. "
-                "Set risk_level=high in runtime_policy_json."
+                f"file_access_adapter_requires_worktree_policy: {file_access_error}"
             )
 
     def _check_workspace(self, req: PreflightRequest, state: _PreflightState) -> None:
@@ -322,23 +299,6 @@ class PreflightService:
         except WorkspaceRootValidationError as exc:
             state.errors.append(f"{exc.error_code}: {exc.message}")
 
-    def _check_cli_availability(self, req: PreflightRequest, state: _PreflightState) -> None:
-        adapter_type = state.adapter_type or ""
-        try:
-            from ..runtimes import get_runtime_adapter_spec
-            spec = get_runtime_adapter_spec(adapter_type)
-        except KeyError:
-            return
-        if spec.runtime_kind != "local_cli":
-            return
-        try:
-            resolve_executable_for_detection(spec, state.executable_path_override)
-        except CommandRenderError as exc:
-            state.warnings.append(
-                f"{exc.error_code}: {exc.message}. "
-                "The run will fail unless the executable is available before execution."
-            )
-
     def _check_credential_profile(self, req: PreflightRequest, state: _PreflightState) -> None:
         adapter_type = state.adapter_type or ""
         try:
@@ -351,32 +311,8 @@ class PreflightService:
 
         runtime = spec.credentials.credential_runtime_name or adapter_type
         try:
-            from ..models import Agent, AgentVersion, RuntimeAdapter
             from ..credentials.broker import CredentialBroker
-            broker = CredentialBroker()
-            profile_id = None
-            agent = (
-                self.db.query(Agent)
-                .filter(Agent.id == req.agent_id, Agent.space_id == state.space_id)
-                .first()
-            )
-            if agent and agent.current_version_id:
-                version = (
-                    self.db.query(AgentVersion)
-                    .filter(AgentVersion.id == agent.current_version_id)
-                    .first()
-                )
-                if version and version.runtime_adapter_id:
-                    row = (
-                        self.db.query(RuntimeAdapter)
-                        .filter(
-                            RuntimeAdapter.id == version.runtime_adapter_id,
-                            RuntimeAdapter.space_id == state.space_id,
-                        )
-                        .first()
-                    )
-                    profile_id = getattr(row, "credential_profile_id", None) if row else None
-            ready = broker.profile_ready(runtime, profile_id)
+            ready = CredentialBroker().profile_ready(runtime, None)
             if not ready:
                 state.errors.append(
                     f"runtime_credential_profile_required: "

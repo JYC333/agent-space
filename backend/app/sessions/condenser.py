@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session as DBSession
 
 from ..models import Message, SessionSummary
+from .ports import SessionSummaryForContext
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +102,23 @@ class SessionCondenser:
             )
             .order_by(SessionSummary.version.desc())
             .first()
+        )
+
+    def get_latest_for_context(
+        self,
+        session_id: str,
+        space_id: str,
+    ) -> SessionSummaryForContext | None:
+        """Return the active summary as a context-safe DTO."""
+        row = self.get_latest(session_id, space_id)
+        if row is None:
+            return None
+        return SessionSummaryForContext(
+            id=row.id,
+            session_id=row.session_id,
+            version=row.version,
+            summary_text=row.summary_text,
+            condenser_version=row.condenser_version,
         )
 
     def condense(self, session_id: str, space_id: str, user_id: str | None = None) -> SessionSummary:

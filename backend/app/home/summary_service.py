@@ -8,7 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.proposals import ProposalService
-from app.models import ActivityRecord, Artifact, ExtractedEvidence, ExtractionJob, IntakeItem, Job, ModelProvider, Run, RuntimeAdapter, SourceConnection, Task
+from app.models import ActivityRecord, Artifact, ExtractedEvidence, ExtractionJob, IntakeItem, Job, ModelProvider, Run, SourceConnection, Task
 from app.proposals import compute_proposal_expired
 
 from .schemas import (
@@ -83,24 +83,11 @@ def _model_provider_section(db: Session, space_id: str) -> HomeModelProviderStat
 
 
 def _runtime_section(db: Session, space_id: str) -> HomeRuntimeStatusSection:
-    rows = (
-        db.query(RuntimeAdapter)
-        .filter(
-            RuntimeAdapter.space_id == space_id,
-            RuntimeAdapter.enabled.is_(True),
-        )
-        .all()
-    )
-    types = sorted({r.adapter_type for r in rows})
-    n_real = len(rows)
-    if n_real == 0:
-        msg = "No enabled runtime adapters configured for this space."
-    else:
-        msg = f"{n_real} enabled runtime adapter(s) configured."
+    del db, space_id
     return HomeRuntimeStatusSection(
-        real_adapters_configured_count=n_real,
-        configured_adapter_types=types,
-        message=msg,
+        real_adapters_configured_count=0,
+        configured_adapter_types=[],
+        message="CLI runtime tools are managed by the Runtime page.",
     )
 
 
@@ -206,16 +193,7 @@ def _suggested_actions(
                 priority="low",
             )
         )
-    if real_adapters == 0:
-        actions.append(
-            HomeSuggestedActionItem(
-                id="configure-runtime-adapter",
-                label="Configure a runtime adapter",
-                reason="No enabled runtime adapters are configured for this space.",
-                target_path="/cli-tools",
-                priority="low",
-            )
-        )
+    del real_adapters
     prio_rank = {"high": 0, "normal": 1, "low": 2}
     actions.sort(key=lambda a: prio_rank[a.priority])
     return actions

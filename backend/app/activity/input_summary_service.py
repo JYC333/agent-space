@@ -381,6 +381,7 @@ class InputSummaryService:
                 model=model,
                 system=system_prompt,
                 user=user_prompt,
+                task="input_summary",
             ).text
         except Exception as exc:
             log.warning("input_summary: provider call failed run=%s: %s", run.id, exc)

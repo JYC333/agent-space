@@ -425,7 +425,6 @@ def test_agent_config_proposal_rejects_stale_base_on_accept(api_client, db, cros
         version_label="v-stale-test",
         model_provider_id=base.model_provider_id,
         model_name=base.model_name,
-        runtime_adapter_id=base.runtime_adapter_id,
         system_prompt="already changed",
         model_config_json=base.model_config_json,
         runtime_config_json=base.runtime_config_json,
@@ -537,7 +536,7 @@ def test_echo_run_create_does_not_attach_agent_default_model(
     create_run = cross_space_pair["client_a"].post(
         f"/api/v1/agents/{agent_id}/runs",
         params=_params(a),
-        json={"mode": "live", "adapter_type": "echo"},
+        json={"mode": "live", "adapter_type": "capability"},
     )
     assert create_run.status_code == 201
     run_body = create_run.json()
@@ -549,7 +548,7 @@ def test_echo_run_create_does_not_attach_agent_default_model(
     assert run_body["resolved_model"]["adapter_model_support"] == "not_applicable"
 
 
-def test_echo_run_create_ignores_request_model_override(
+def test_capability_run_create_ignores_request_model_override(
     api_client, db, cross_space_pair, tmp_path, monkeypatch
 ):
     from app.config import paths
@@ -592,7 +591,7 @@ def test_echo_run_create_ignores_request_model_override(
         params=_params(a),
         json={
             "mode": "live",
-            "adapter_type": "echo",
+            "adapter_type": "capability",
             "model_provider_id": prov_id,
             "model": "gpt-4o",
         },
@@ -662,3 +661,27 @@ def test_superseded_run_endpoint_rejects_parent_run_id(api_client, db, cross_spa
         json={"prompt": "test", "parent_run_id": run.id},
     )
     assert r.status_code == 422
+
+
+def test_list_agents_status_filter_supports_comma_separated(api_client, db, cross_space_pair):
+    """GET /agents?status= accepts a comma-separated set so a management view can
+    list disabled agents alongside active ones (default stays active-only)."""
+    a = cross_space_pair["space_a_id"]
+    ua = cross_space_pair["user_a"]
+    client = cross_space_pair["client_a"]
+    active = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
+    disabled = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=False)
+    disabled.status = "disabled"
+    db.commit()
+
+    # Default (status=active) hides the disabled agent — the original behavior.
+    r = client.get("/api/v1/agents", params=_params(a))
+    assert r.status_code == 200
+    ids = {x["id"] for x in r.json()}
+    assert active.id in ids and disabled.id not in ids
+
+    # Comma-separated set includes both.
+    r = client.get("/api/v1/agents", params={"space_id": a, "status": "active,disabled"})
+    assert r.status_code == 200
+    ids = {x["id"] for x in r.json()}
+    assert active.id in ids and disabled.id in ids

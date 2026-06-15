@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from ..models import Agent, AgentVersion, Artifact, ContextSnapshot, ModelProvider, Proposal, Run, RuntimeAdapter
+from ..models import Agent, AgentVersion, Artifact, ContextSnapshot, ModelProvider, Proposal, Run
 from ..proposals import proposal_to_summary_out
 from ..runtimes.adapter_metadata import get_adapter_model_config_metadata
 from ..schemas import (
@@ -23,7 +23,6 @@ from ..schemas import (
     RunTraceLineageOut,
     RunTraceModelProviderOut,
     RunTraceOut,
-    RunTraceRuntimeAdapterOut,
 )
 
 
@@ -145,7 +144,6 @@ def _agent_version_to_trace(version: AgentVersion | None) -> RunTraceAgentVersio
         version_label=version.version_label,
         model_provider_id=version.model_provider_id,
         model_name=version.model_name,
-        runtime_adapter_id=version.runtime_adapter_id,
         system_prompt_present=bool(prompt),
         system_prompt_sha256=_sha256_text(prompt),
         model_config_json=dict(version.model_config_json or {}),
@@ -160,22 +158,6 @@ def _agent_version_to_trace(version: AgentVersion | None) -> RunTraceAgentVersio
         created_at=version.created_at,
         published_at=version.published_at,
         archived_at=version.archived_at,
-    )
-
-
-def _runtime_adapter_to_trace(adapter: RuntimeAdapter | None) -> RunTraceRuntimeAdapterOut | None:
-    if adapter is None:
-        return None
-    return RunTraceRuntimeAdapterOut(
-        id=adapter.id,
-        space_id=adapter.space_id,
-        name=adapter.name,
-        adapter_type=adapter.adapter_type,
-        enabled=bool(adapter.enabled),
-        provider_id=adapter.provider_id,
-        credential_configured=bool(adapter.credential_id),
-        health_status=adapter.health_status,
-        execution_plane_id=adapter.execution_plane_id,
     )
 
 
@@ -211,7 +193,6 @@ def _context_snapshot_to_trace(snapshot: ContextSnapshot | None) -> RunTraceCont
         policy_bundle_version=snapshot.policy_bundle_version,
         memory_digest_version=snapshot.memory_digest_version,
         workspace_digest_version=snapshot.workspace_digest_version,
-        target_runtime_adapter_id=snapshot.target_runtime_adapter_id,
         execution_plane_id=snapshot.execution_plane_id,
         included_memory_refs_json=snapshot.included_memory_refs_json,
         included_evidence_refs_json=snapshot.included_evidence_refs_json,
@@ -238,15 +219,7 @@ def build_run_trace(db: Session, run: Run) -> RunTraceOut:
         .filter(AgentVersion.id == run.agent_version_id, AgentVersion.space_id == run.space_id)
         .first()
     )
-    adapter_id = run.runtime_adapter_id or (version.runtime_adapter_id if version else None)
     provider_id = run.model_provider_id or (version.model_provider_id if version else None)
-    adapter = (
-        db.query(RuntimeAdapter)
-        .filter(RuntimeAdapter.id == adapter_id, RuntimeAdapter.space_id == run.space_id)
-        .first()
-        if adapter_id
-        else None
-    )
     provider = (
         db.query(ModelProvider)
         .filter(ModelProvider.id == provider_id, ModelProvider.space_id == run.space_id)
@@ -278,7 +251,6 @@ def build_run_trace(db: Session, run: Run) -> RunTraceOut:
         run=run_to_out(db, run),
         agent=_agent_to_out(db, run.agent),
         agent_version=_agent_version_to_trace(version),
-        runtime_adapter=_runtime_adapter_to_trace(adapter),
         model_provider=_model_provider_to_trace(provider),
         context_snapshot=_context_snapshot_to_trace(run.context_snapshot),
         steps=[RunStepOut.model_validate(step) for step in run.steps],

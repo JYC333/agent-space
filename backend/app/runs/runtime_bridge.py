@@ -40,7 +40,6 @@ class RunEventRuntimeSink:
             summary=event.summary,
             error_code=event.error_code,
             error_message=event.error_message,
-            runtime_adapter_id=event.runtime_adapter_id,
             workspace_id=event.workspace_id,
             metadata_json=event.metadata,
             log_context=event.log_context or event.event_type,

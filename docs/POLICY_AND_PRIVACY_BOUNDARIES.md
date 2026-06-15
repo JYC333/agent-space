@@ -280,7 +280,7 @@ ModelProvider/Credential metadata and uses the same source priority as execution
 run model provider, runtime adapter provider, agent version provider, then
 runtime adapter credential.
 Runtime requirements decide whether ModelProvider metadata is relevant at all:
-`echo`, `capability`, `claude_code`, and `codex_cli` do not participate in
+`capability`, `claude_code`, and `codex_cli` do not participate in
 ModelProvider/API-key credential checks. For parity with real execution,
 automation policy preflight does not treat space default ModelProviders as a
 credential source; the credential policy chain is only explicit run provider,

@@ -142,8 +142,8 @@ BACKUP_ON_STARTUP=true
 are created and dogfood data is unprotected.
 
 `BACKUP_ON_STARTUP=true` is the default. It causes the SchedulerRegistry-registered
-backup task to run one backup immediately on startup, so you can verify the service is
-working before any writes occur.
+backup task to run one backup immediately after startup in the background, so service
+readiness and dependent containers are not blocked while the archive is created.
 Leave it at the default for dogfooding.
 
 `BACKUP_ROOT` defaults to `AGENT_SPACE_HOME/backups/`. Override only if you need a
@@ -202,9 +202,10 @@ Backups are stored at `AGENT_SPACE_HOME/backups/` by default. Archives contain `
 
 ### Allowed runtime adapters for RC
 
-- `echo` — zero-dependency test adapter; no credentials required.
-- `anthropic_messages` — Messages API adapter; credentials resolved through `ModelProvider`
+- `model_api` — managed API runtime; credentials resolved through `ModelProvider`
   encrypted key via `runtimes/credentials.py`.
+- `claude_code` / `codex_cli` — local CLI runtimes; credentials are profile-bound
+  through the CLI credential broker.
 
 No adapter may read `ANTHROPIC_API_KEY` from the environment directly. All credentials
 must be resolved through `runtimes/credentials.py`.
@@ -496,11 +497,11 @@ curl -s "http://localhost:8010/api/v1/memory?space_id=<user-a-personal-space-id>
 ### Step 9 — Run and RunStep replay
 
 ```bash
-# Create a run (echo adapter — no credentials required)
+# Create a run (model_api adapter — requires a configured ModelProvider)
 curl -s -X POST "http://localhost:8010/api/v1/runs" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
-  -d '{"space_id": "<user-a-personal-space-id>", "adapter_type": "echo", "input": "smoke test"}'
+  -d '{"space_id": "<user-a-personal-space-id>", "adapter_type": "model_api", "input": "smoke test"}'
 # Note run_id
 
 # Check RunSteps (may need to wait for run to complete)

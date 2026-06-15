@@ -34,14 +34,16 @@ division of responsibility. They must not duplicate the same payload:
 
 - **`RunEvent` is the append-only audit source of truth.** It carries the
   detailed phase payload — `summary`, `metadata_json`, exposure/trust levels,
-  error codes — and is written only through `RunEventService` /
-  `safe_append_run_event`. Rows are never updated or deleted.
+  error codes — and is written through Python `RunEventService` /
+  `safe_append_run_event` or the Stage 4 TS runs repository. Rows are never
+  updated or deleted.
 - **`RunStep` is the coarse lifecycle/status projection.** A step carries only
-  `step_type`, `status`, `title`, structured FKs (runtime_adapter_id,
-  artifact_id, proposal_id, …), timing, and `error_type`/`error_message`.
-  Step writers (`create_step`, `record_artifact_step`, `record_proposal_step`,
-  `fail_step`, `complete_step`, `start_step`) must **not** receive
-  `metadata_json` or `*_summary` detail that already lives on a `RunEvent`.
+  `step_type`, `status`, `title`, structured FKs (artifact_id,
+  proposal_id, …), timing, and `error_type`/`error_message`.
+  Python step writers (`create_step`, `record_artifact_step`,
+  `record_proposal_step`, `fail_step`, `complete_step`, `start_step`) and TS
+  runs evidence writers must **not** receive `metadata_json` or `*_summary`
+  detail that already lives on a `RunEvent`.
 
 Rule of thumb: rich, queryable phase detail goes on `RunEvent`; a `RunStep` is a
 human-/UI-facing lifecycle marker. New orchestration code must not write the same
@@ -86,12 +88,12 @@ Each Run may snapshot model provider + model name at creation. `RunOut.resolved_
 - `provider_id`, `provider_name`, `provider_type`, `model`, `source` (`request` | `agent_default` | `space_default` | `none`)
 - `used_by_adapter` — whether the selected runtime adapter consumes model config
 - `adapter_model_support` — `uses_model` | `not_applicable` | `unsupported` | `unknown`
-- `disclosure_note` — user-facing text when a model was recorded but not used (e.g. echo/capability adapters)
+- `disclosure_note` — user-facing text when a model was recorded but not used (e.g. capability adapters)
 
 Adapters that consume model config today depend on runtime requirements.
 `claude_code` and `codex_cli` may receive model hints only when the underlying
-CLI supports them. `echo` and `capability` record model config but do not call
-an LLM. Claude execution must go through the `claude_code`
+CLI supports them. `capability` records model config but does not call an LLM.
+Claude execution must go through the `claude_code`
 RuntimeAdapterSpec and `GenericCliRuntimeAdapter`.
 
 ## ModelProvider secrets

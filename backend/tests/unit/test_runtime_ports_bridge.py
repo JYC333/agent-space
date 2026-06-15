@@ -277,7 +277,6 @@ class TestCliAdapterEventSink:
         result = self._adapter().execute(
             _ctx(
                 event_sink=sink,
-                runtime_adapter_id="adapter-row-1",
                 workspace_id="workspace-1",
                 adapter_config={"context_snapshot_id": "snap-1"},
             )
@@ -287,7 +286,6 @@ class TestCliAdapterEventSink:
         event = sink.events[0]
         assert event.event_type == "runtime_context_rendered"
         assert event.status == "succeeded"
-        assert event.runtime_adapter_id == "adapter-row-1"
         assert event.workspace_id == "workspace-1"
         assert event.log_context == "runtime_context_rendered"
         assert event.metadata == {
@@ -373,8 +371,8 @@ class TestRunEventRuntimeSinkBridge:
         assert second.event_index == first.event_index + 1
         for column in (
             "space_id", "run_id", "step_id", "actor_id", "event_type", "status",
-            "summary", "error_code", "error_message", "runtime_adapter_id",
-            "workspace_id", "artifact_id", "proposal_id", "data_exposure_level",
+            "summary", "error_code", "error_message", "workspace_id",
+            "artifact_id", "proposal_id", "data_exposure_level",
             "trust_level", "metadata_json",
         ):
             assert getattr(second, column) == getattr(first, column), column
@@ -389,7 +387,6 @@ class TestRunEventRuntimeSinkBridge:
                 status="failed",
                 error_code="cli_adapter_failed",
                 error_message="boom",
-                runtime_adapter_id=None,
                 workspace_id=None,
             )
         )
@@ -402,11 +399,10 @@ class TestRunEventRuntimeSinkBridge:
         assert row.error_code == "cli_adapter_failed"
         assert row.error_message == "boom"
 
-    def test_bridge_maps_runtime_adapter_and_workspace_ids(self, db):
+    def test_bridge_maps_workspace_id(self, db):
         from app.runs.runtime_bridge import RunEventRuntimeSink
 
         run = _setup_run(db)
-        adapter = factories.create_test_runtime_adapter(db, space_id=SPACE)
         workspace = factories.create_test_workspace(
             db,
             space_id=SPACE,
@@ -417,7 +413,6 @@ class TestRunEventRuntimeSinkBridge:
             RuntimeEvent(
                 event_type="adapter_invoked",
                 status="running",
-                runtime_adapter_id=adapter.id,
                 workspace_id=workspace.id,
             )
         )
@@ -427,7 +422,6 @@ class TestRunEventRuntimeSinkBridge:
             .filter(RunEvent.run_id == run.id, RunEvent.event_type == "adapter_invoked")
             .one()
         )
-        assert row.runtime_adapter_id == adapter.id
         assert row.workspace_id == workspace.id
 
     def test_unregistered_runtime_context_rendered_type_is_still_dropped(self, db):

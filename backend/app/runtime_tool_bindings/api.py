@@ -18,7 +18,7 @@ class RuntimeToolBindingOut(BaseModel):
     space_id: str
     workspace_id: Optional[str] = None
     agent_id: Optional[str] = None
-    runtime_adapter_id: str
+    runtime_adapter_type: str
     execution_plane_id: Optional[str] = None
     external_type: str  # mcp_server|codex_plugin|claude_skill|claude_hook|app_integration|cli_tool
     external_ref: str
@@ -36,7 +36,7 @@ class RuntimeToolBindingOut(BaseModel):
 def list_runtime_tool_bindings(
     workspace_id: Optional[str] = Query(None),
     agent_id: Optional[str] = Query(None),
-    runtime_adapter_id: Optional[str] = Query(None),
+    runtime_adapter_type: Optional[str] = Query(None),
     include_disabled: bool = Query(False),
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
@@ -46,7 +46,7 @@ def list_runtime_tool_bindings(
         space_id,
         workspace_id=workspace_id,
         agent_id=agent_id,
-        runtime_adapter_id=runtime_adapter_id,
+        runtime_adapter_type=runtime_adapter_type,
         enabled_only=not include_disabled,
     )
 

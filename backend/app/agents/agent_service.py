@@ -87,6 +87,33 @@ class AgentService:
             model=version.model_name,
         )
 
+    def _runtime_for_agent(self, agent: Agent) -> tuple[str | None, bool]:
+        """Resolve (adapter_type, requires_model_provider) for the current version.
+
+        adapter_type comes from the version's runtime_policy_json default; the
+        provider requirement is the runtime spec's model_provider_mode. CLI
+        runtimes (claude_code/codex_cli) are 'none', so they need no provider.
+        Unknown/missing runtime falls back to requiring a provider (conservative).
+        """
+        adapter_type: str | None = None
+        if agent.current_version_id:
+            version = self.db.query(AgentVersion).filter(
+                AgentVersion.id == agent.current_version_id
+            ).first()
+            if version:
+                policy = version.runtime_policy_json or {}
+                adapter_type = policy.get("default_adapter_type")
+        if not adapter_type:
+            adapter_type = DEFAULT_RUNTIME_POLICY.get("default_adapter_type", "model_api")
+        try:
+            from ..runtimes.requirements import get_runtime_requirements
+            requires_provider = (
+                get_runtime_requirements(adapter_type).model_provider_mode == "required"
+            )
+        except Exception:
+            requires_provider = True
+        return adapter_type, requires_provider
+
     def _system_prompt_for_agent(self, agent: Agent) -> str | None:
         if not agent.current_version_id:
             return None
@@ -96,6 +123,7 @@ class AgentService:
         return version.system_prompt if version else None
 
     def to_agent_out(self, agent: Agent) -> AgentOut:
+        adapter_type, requires_model_provider = self._runtime_for_agent(agent)
         return AgentOut(
             id=agent.id,
             space_id=agent.space_id,
@@ -110,6 +138,8 @@ class AgentService:
             source_template_id=agent.source_template_id,
             source_template_version_id=agent.source_template_version_id,
             model=self._model_summary_for_agent(agent),
+            adapter_type=adapter_type,
+            requires_model_provider=requires_model_provider,
             system_prompt=self._system_prompt_for_agent(agent),
             created_at=agent.created_at,
             updated_at=agent.updated_at,
@@ -241,7 +271,14 @@ class AgentService:
         if visibility:
             q = q.filter(Agent.visibility == visibility)
         if status:
-            q = q.filter(Agent.status == status)
+            # Accept a single status or a comma-separated set (e.g.
+            # "active,disabled") so a management view can list disabled agents
+            # alongside active ones. Single value keeps exact-match behavior.
+            statuses = [s.strip() for s in status.split(",") if s.strip()]
+            if len(statuses) == 1:
+                q = q.filter(Agent.status == statuses[0])
+            elif statuses:
+                q = q.filter(Agent.status.in_(statuses))
         return q.order_by(Agent.created_at.desc()).offset(offset).limit(limit).all()
 
     # Agent-level metadata fields edited directly on the Agent row.
@@ -255,7 +292,6 @@ class AgentService:
         "model_provider_id": "model_provider_id",
         "default_model": "model_name",
         "model_name": "model_name",
-        "runtime_adapter_id": "runtime_adapter_id",
         "model_config_json": "model_config_json",
         "runtime_config_json": "runtime_config_json",
         "context_policy_json": "context_policy_json",
@@ -294,13 +330,11 @@ class AgentService:
         """Append a new AgentVersion with `changes` over the current one + record an Activity."""
         from .version_service import AgentVersionService
         from ..activity import ActivityService
-        from ..models import RuntimeAdapter
 
         base = AgentVersionService(self.db).get_or_404(agent.current_version_id)
         version_dict = {
             "model_provider_id": base.model_provider_id,
             "model_name": base.model_name,
-            "runtime_adapter_id": base.runtime_adapter_id,
             "system_prompt": base.system_prompt,
             "model_config_json": base.model_config_json or dict(DEFAULT_MODEL_CONFIG),
             "runtime_config_json": base.runtime_config_json or dict(DEFAULT_RUNTIME_POLICY),
@@ -317,12 +351,6 @@ class AgentService:
             raise HTTPException(status_code=400, detail="model_provider_id is required when model_name is set")
         if provider_id:
             self._validate_model_provider(provider_id, agent.space_id)
-        runtime_adapter_id = version_dict.get("runtime_adapter_id")
-        if runtime_adapter_id and not self.db.query(RuntimeAdapter).filter(
-            RuntimeAdapter.id == runtime_adapter_id, RuntimeAdapter.space_id == agent.space_id
-        ).first():
-            raise HTTPException(status_code=400, detail="runtime_adapter_id does not belong to this space")
-
         new_version = AgentVersionService(self.db).create(
             agent_id=agent.id, space_id=agent.space_id, data=AgentVersionCreate(**version_dict),
         )
@@ -364,7 +392,6 @@ class AgentService:
         "capabilities_json",
         "runtime_policy_json",
         "runtime_config_json",
-        "runtime_adapter_id",
     )
 
     def update_config(self, agent_id: str, data, *, user_id: str | None = None) -> Agent:
@@ -387,7 +414,6 @@ class AgentService:
         new = {
             "model_provider_id": base.model_provider_id,
             "model_name": base.model_name,
-            "runtime_adapter_id": base.runtime_adapter_id,
             "system_prompt": base.system_prompt,
             "model_config_json": dict(base.model_config_json or DEFAULT_MODEL_CONFIG),
             "runtime_config_json": dict(base.runtime_config_json or DEFAULT_RUNTIME_POLICY),
@@ -466,7 +492,6 @@ class AgentService:
         new = {
             "model_provider_id": source.model_provider_id,
             "model_name": source.model_name,
-            "runtime_adapter_id": source.runtime_adapter_id,
             "system_prompt": source.system_prompt,
             "model_config_json": dict(source.model_config_json or DEFAULT_MODEL_CONFIG),
             "runtime_config_json": dict(source.runtime_config_json or DEFAULT_RUNTIME_POLICY),
@@ -547,17 +572,6 @@ class AgentService:
         if provider_id:
             self._validate_model_provider(provider_id, agent.space_id)
 
-        runtime_adapter_id = changes.get("runtime_adapter_id")
-        if runtime_adapter_id:
-            from ..models import RuntimeAdapter
-
-            adapter = self.db.query(RuntimeAdapter).filter(
-                RuntimeAdapter.id == runtime_adapter_id,
-                RuntimeAdapter.space_id == agent.space_id,
-            ).first()
-            if adapter is None:
-                raise HTTPException(status_code=400, detail="runtime_adapter_id does not belong to this space")
-
         payload = {
             "agent_id": agent.id,
             "base_version_id": data.base_version_id,
@@ -587,7 +601,6 @@ class AgentService:
                 "base_version_id": data.base_version_id,
                 "changed_fields": changed_fields,
                 "model_provider_id": provider_id,
-                "runtime_adapter_id": changes.get("runtime_adapter_id"),
             },
         )
 

@@ -9,31 +9,16 @@ generic, older Debian ``postgresql-client`` package.
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
+import re
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOCKERFILE = REPO_ROOT / "backend" / "Dockerfile"
-ENV_EXAMPLES = [
-    REPO_ROOT / "ops" / "env" / ".env.dev.example",
-    REPO_ROOT / "ops" / "env" / ".env.test.example",
-    REPO_ROOT / "ops" / "env" / ".env.prod.example",
-]
 COMPOSE_FILES = [
     REPO_ROOT / "ops" / "compose" / "docker-compose.dev.yml",
     REPO_ROOT / "ops" / "compose" / "docker-compose.test.yml",
     REPO_ROOT / "ops" / "compose" / "docker-compose.prod.yml",
 ]
-
-
-def _env_postgres_major() -> int:
-    majors = set()
-    for env_example in ENV_EXAMPLES:
-        match = re.search(r"^POSTGRES_MAJOR=(\d+)$", env_example.read_text(), re.M)
-        assert match, f"{env_example.name} must declare POSTGRES_MAJOR=<major>"
-        majors.add(int(match.group(1)))
-    assert len(majors) == 1, f"env templates disagree on POSTGRES_MAJOR: {majors}"
-    return next(iter(majors))
 
 
 def _server_majors() -> set[int]:
@@ -44,17 +29,16 @@ def _server_majors() -> set[int]:
     return majors
 
 
-def test_compose_uses_central_postgres_major():
-    env_major = _env_postgres_major()
+def test_compose_uses_consistent_postgres_major():
     majors = _server_majors()
     assert majors, "no postgres:${POSTGRES_MAJOR:-<major>} image found in compose files"
     assert len(majors) == 1, f"compose files disagree on postgres major: {majors}"
-    assert next(iter(majors)) == env_major
+    major = next(iter(majors))
 
     for f in COMPOSE_FILES:
         text = f.read_text()
-        assert f"image: postgres:${{POSTGRES_MAJOR:-{env_major}}}" in text
-        assert f"PG_MAJOR: ${{POSTGRES_MAJOR:-{env_major}}}" in text
+        assert f"image: postgres:${{POSTGRES_MAJOR:-{major}}}" in text
+        assert f"PG_MAJOR: ${{POSTGRES_MAJOR:-{major}}}" in text
 
 
 def test_compose_uses_stable_postgres_container_names():

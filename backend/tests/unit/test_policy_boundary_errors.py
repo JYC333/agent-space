@@ -71,7 +71,7 @@ class TestProposalServiceAcceptPdrFailure:
         svc.get = MagicMock(return_value=proposal)
 
         # The preferred proposal gate fails before ProposalApplyService is imported.
-        with patch("app.proposals.service.PolicyGateway") as MockGW:
+        with patch("app.proposals.service.get_policy_port") as MockGW:
             MockGW.return_value.enforce_proposal_apply.side_effect = PolicyAuditPersistError(
                 action="proposal.apply", actor_id="u1"
             )
@@ -106,7 +106,7 @@ class TestProposalServiceAcceptPdrFailure:
         svc = ProposalService(db)
         svc.get = MagicMock(return_value=proposal)
 
-        with patch("app.proposals.service.PolicyGateway") as MockGW:
+        with patch("app.proposals.service.get_policy_port") as MockGW:
             MockGW.return_value.enforce_proposal_apply.side_effect = PolicyAuditPersistError(
                 action="proposal.apply"
             )
@@ -178,7 +178,7 @@ class TestCodePatchApplyPdrFailure:
         target_file = tmp_path / "test.txt"
         assert not target_file.exists()
 
-        with patch("app.memory.code_patch_apply.PolicyGateway") as MockGW:
+        with patch("app.memory.code_patch_apply.get_policy_port") as MockGW:
             MockGW.return_value.enforce.side_effect = PolicyAuditPersistError(
                 action="workspace.write_patch"
             )
@@ -218,7 +218,7 @@ class TestCodePatchApplyPdrFailure:
             ]
         }
 
-        with patch("app.memory.code_patch_apply.PolicyGateway") as MockGW:
+        with patch("app.memory.code_patch_apply.get_policy_port") as MockGW:
             MockGW.return_value.enforce.side_effect = PolicyAuditPersistError(
                 action="workspace.write_patch"
             )
@@ -263,7 +263,7 @@ class TestArtifactPersistencePdrFailure:
 
         svc = ArtifactPersistenceService(db)
 
-        with patch("app.runs.artifact_persistence.PolicyGateway") as MockGW:
+        with patch("app.runs.artifact_persistence.get_policy_port") as MockGW:
             MockGW.return_value.enforce.side_effect = PolicyAuditPersistError(
                 action="artifact.persist"
             )
@@ -299,7 +299,7 @@ class TestArtifactPersistencePdrFailure:
 
         svc = ArtifactPersistenceService(db)
 
-        with patch("app.runs.artifact_persistence.PolicyGateway") as MockGW:
+        with patch("app.runs.artifact_persistence.get_policy_port") as MockGW:
             MockGW.return_value.enforce.side_effect = PolicyAuditPersistError(
                 action="artifact.persist"
             )

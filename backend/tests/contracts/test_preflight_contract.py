@@ -1,8 +1,7 @@
 """HTTP contract: POST /api/v1/runs/preflight rejects obsolete request fields.
 
-PreflightRequest has extra="forbid" so any field not in the schema — including
-the removed space_id, risk_level, runtime_adapter_id — causes a 422 validation
-error before any handler logic executes.
+PreflightRequest has extra="forbid" so any field not in the schema causes a
+422 validation error before any handler logic executes.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ def test_preflight_valid_body_returns_preflight_result(db, cross_space_pair):
     ua = cross_space_pair["user_a"]
     agent = factories.create_test_agent(db, space_id=a, owner_user_id=ua.id, commit=True)
     version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).first()
-    version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "echo"}
+    version.runtime_policy_json = {"risk_level": "low", "default_adapter_type": "model_api"}
     db.commit()
 
     r = cross_space_pair["client_a"].post(
@@ -33,7 +32,7 @@ def test_preflight_valid_body_returns_preflight_result(db, cross_space_pair):
     assert r.status_code == 200
     body = r.json()
     assert "executable" in body
-    assert body.get("adapter_type") == "echo"
+    assert body.get("adapter_type") == "model_api"
 
 
 def test_preflight_rejects_space_id_in_body(db, cross_space_pair):
@@ -53,17 +52,6 @@ def test_preflight_rejects_risk_level_in_body(db, cross_space_pair):
     r = cross_space_pair["client_a"].post(
         "/api/v1/runs/preflight",
         json={"agent_id": "some-agent", "risk_level": "high"},
-        params=_params(a),
-    )
-    assert r.status_code == 422
-
-
-def test_preflight_rejects_runtime_adapter_id_in_body(db, cross_space_pair):
-    """Sending runtime_adapter_id in the preflight body returns 422 (obsolete field)."""
-    a = cross_space_pair["space_a_id"]
-    r = cross_space_pair["client_a"].post(
-        "/api/v1/runs/preflight",
-        json={"agent_id": "some-agent", "runtime_adapter_id": "r-123"},
         params=_params(a),
     )
     assert r.status_code == 422

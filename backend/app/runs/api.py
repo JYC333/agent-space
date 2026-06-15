@@ -43,6 +43,7 @@ from ..artifacts.service import artifact_to_out
 from ..proposals import proposal_to_out
 from ..proposals import ProposalService
 from .execution import RunExecutionService
+from .authority import reject_python_run_command_when_ts_authority
 from .finalization import NonTerminalRunError, PostRunFinalizationService, RunNotFoundError
 from .preflight import PreflightRequest, PreflightResult, PreflightService
 from .read_model import build_run_trace, run_to_out
@@ -239,6 +240,7 @@ def execute_run_route(
     db: Session = Depends(get_db),
 ):
     """Drive a **queued** Run through ``RunExecutionService`` (registered adapters only)."""
+    reject_python_run_command_when_ts_authority("execute")
     space_id, _ = ids
     RunService(db).get_run(run_id, space_id)
     if runtime is not None and is_obsolete_runtime_override_token(runtime):
@@ -246,7 +248,7 @@ def execute_run_route(
             status_code=410,
             detail=(
                 "Obsolete runtime override is no longer supported; omit the runtime "
-                "query parameter or use a configured adapter (echo, capability, …)."
+                "query parameter or use a configured adapter (model_api, capability, …)."
             ),
         )
     RunExecutionService(db).execute_run(run_id, space_id=space_id, runtime=runtime)
@@ -259,6 +261,7 @@ def stop_run(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
+    reject_python_run_command_when_ts_authority("stop")
     space_id, _ = ids
     svc = RunService(db)
     run, changed = svc.stop_run(run_id, space_id)

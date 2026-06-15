@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-"""PolicyGateway — production enforcement entry point for sensitive actions.
+"""PolicyGateway — local Python implementation of policy enforcement.
 
-Production services call ``PolicyGateway.enforce()`` for directly wired actions
-and ``PolicyGateway.enforce_proposal_apply()`` for proposal application. Both
-return ``PolicyDecision`` on ALLOW and raise ``PolicyGateBlocked`` for DENY or
+Production services call ``get_policy_port(db)`` so the active authority can be
+Python or the TS control-plane. This class remains the local/fallback
+implementation. Its ``enforce()`` and ``enforce_proposal_apply()`` methods return
+``PolicyDecision`` on ALLOW and raise ``PolicyGateBlocked`` for DENY or
 REQUIRE_APPROVAL. Blocking handlers write the durable audit record exactly once.
 
 ``PolicyAuditPersistError`` is raised when a fail-closed action requires a
@@ -239,9 +240,10 @@ def _build_audit_envelope(
 
 
 class PolicyGateway:
-    """Main entry point for sensitive policy decisions.
+    """Local Python policy decision implementation.
 
-    Production entry points: enforce() and enforce_proposal_apply().
+    Production callers should use get_policy_port(db), which resolves this
+    implementation or the TS-backed control-plane client.
 
     Actual sensitive-action enforcement must not call PolicyEngine directly.
     PreflightService's non-mutating PolicyEngine simulation is not enforcement.

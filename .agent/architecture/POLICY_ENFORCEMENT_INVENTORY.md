@@ -280,8 +280,8 @@ Automation supports manual and schedule-triggered fire. Policy preflight is not
 enforcement: it does not call `PolicyGateway.enforce()`, decrypt credentials, or
 mutate Run, Automation, MemoryEntry, Proposal, Policy, Credential, or Artifact
 rows.
-Runtime requirements decide whether provider defaults apply: `echo`,
-`capability`, `claude_code`, and `codex_cli` never inherit the space default
+Runtime requirements decide whether provider defaults apply: `capability`,
+`claude_code`, and `codex_cli` never inherit the space default
 ModelProvider. Runtime-scoped provider defaults decide which provider is used
 for `model_provider_mode=required`; only those runtimes fall back to the space
 default provider. Runtime requirements are mandatory for every wired runtime

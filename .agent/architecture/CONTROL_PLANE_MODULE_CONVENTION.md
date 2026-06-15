@@ -1,6 +1,6 @@
-# Control-Plane Module Convention (Phase C)
+# Control-Plane Module Convention
 
-> **Status:** established 2026-06-11 (Phase C). Source of truth is the code under
+> **Status:** established 2026-06-11. Source of truth is the code under
 > `control-plane/src/`. Companions:
 > [`TS_CONTROL_PLANE_FOUNDATION.md`](TS_CONTROL_PLANE_FOUNDATION.md) (the service),
 > [`TS_MIGRATION_STRATEGY.md`](TS_MIGRATION_STRATEGY.md) (the migration rules).
@@ -8,8 +8,8 @@
 `control-plane` is the **default client-facing API entrypoint**. This document
 defines the internal structure every TS-owned control-plane module follows, so
 future TS server features are added consistently — one explicit module at a
-time — while **`backend/` remains the Python authority for all existing business
-routes and writes. No business authority moved to TypeScript in Phase C.**
+time — while **`backend/` remains the Python authority for auth, schema
+migrations, and unowned business contexts. Providers/credentials are TS-owned.**
 
 ## Directory ownership
 
@@ -29,7 +29,7 @@ control-plane/src/
       service.ts           #     pure logic (no Fastify types)
       index.ts             #     exports the ControlPlaneModule object
     catalog/               #   read-only surface over top-level catalog/ definitions
-  legacy/                  # TEMPORARY migration bridge code
+  pythonFallback/                  # TEMPORARY Python fallback proxy implementation
     pythonProxy.ts         #   catch-all /api/v1/* → Python fallback proxy
 ```
 
@@ -39,7 +39,7 @@ control-plane/src/
 - **`modules/` contains TS-owned modules.** A new TS module lives under
   `control-plane/src/modules/<module_name>/` with `routes.ts` + `service.ts` +
   `index.ts`.
-- **`legacy/` is temporary.** It holds the Python fallback proxy only. Do not
+- **`pythonFallback/` is temporary.** It holds the Python fallback proxy only. Do not
   rename it into `gateway/` or `modules/`; it is deleted when its endpoints are
   owned by control-plane modules or retired.
 - **`server.ts` is composition root only.** It builds Fastify (logger, body
@@ -77,7 +77,7 @@ hash + load timestamp); future shared deps go there — it is dependency passing
 not a plugin system.
 
 **Registration order is binding:** the registry mounts all TS-owned modules
-first; the legacy Python proxy is registered **last**, as the catch-all
+first; the Python fallback proxy is registered **last**, as the catch-all
 fallback. Anything the control plane does not explicitly own falls through to
 Python. A route becomes TS-owned only by explicit registration, never by
 accident — and never by widening the proxy.
@@ -92,7 +92,7 @@ accident — and never by widening the proxy.
   handlers. Future identity placeholders (user/space/actor) belong here, but the
   control plane does **not** parse or validate auth tokens — Python owns auth.
 - `readHeader(request, name)` — safe header access; refuses to return
-  `Authorization`, `Cookie`, `Proxy-Authorization`. Only the legacy proxy's
+  `Authorization`, `Cookie`, `Proxy-Authorization`. Only the fallback proxy's
   forwarding path touches those, verbatim, to Python.
 - `x-agent-space-control-plane: ts` is trace metadata, never trust.
 
@@ -111,25 +111,22 @@ serializers).
 - 5xx responses use a fixed generic message (`internal_error`) — no stack
   traces, no internal detail, in any environment.
 - 4xx responses keep their intentional client-safe message.
-- **Legacy proxy exemption:** bodies proxied from Python pass through untouched;
+- **Python fallback proxy exemption:** bodies proxied from Python pass through untouched;
   the proxy's own sanitized transport failures keep their established shapes —
-  502 `python_backend_unavailable`, 503 `legacy_proxy_disabled` (no
+  502 `python_backend_unavailable`, 503 `python_fallback_proxy_disabled` (no
   `request_id` field; the id travels in the `x-request-id` header).
 
-## Phase C boundaries (what this convention does NOT change)
+## Boundaries (what this convention does NOT change)
 
-- `backend/` (Python) remains the authority for every existing business route,
-  write, policy decision, proposal apply, run execution, credential brokering,
-  job, and migration.
-- No business authority moved to TypeScript in Phase C; no command has dual
-  ownership (TS_MIGRATION_STRATEGY §8 invariants).
-- No database/schema change, no new migration.
+- `backend/` (Python) remains the authority for auth/membership, migrations,
+  and every product context not explicitly registered as TS-owned.
+- Current TS-owned contexts are listed in
+  [`TS_CONTROL_PLANE_OWNERSHIP.md`](TS_CONTROL_PLANE_OWNERSHIP.md); no command
+  has dual ownership.
+- Python/alembic remains the schema owner.
 - The control plane adds no auth authority, caching, or rate limiting.
-- The **catalog module** (`control-plane/src/modules/catalog/`) — named here as
-  the first candidate TS-owned read surface — shipped with migration-roadmap
-  Stage 1 (2026-06-11): read-only summaries of the top-level `catalog/`
-  definitions (`/api/v1/control-plane/catalog`, `/catalog/capabilities`,
-  `/catalog/agent-templates`), advertised as `catalog_read`. A missing catalog
-  directory degrades to `catalog_available: false`, never an error. Python
-  remains the business authority for the DB-backed capability registry and
-  Template Library APIs.
+- Routing rule: when a module claims a parametric route
+  (`/:id`) under a prefix the Python fallback proxy used to serve, it must claim every
+  static sibling path under that prefix too. Parametric routes beat the proxy
+  wildcard, so an unclaimed static sibling (e.g. `/providers/catalog`) would be
+  swallowed by the parametric handler and mis-validated.

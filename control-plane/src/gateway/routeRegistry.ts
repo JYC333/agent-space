@@ -5,20 +5,31 @@
  * TS-owned backend modules live under `../modules/<module_name>/` and each
  * exposes a {@link ControlPlaneModule}: a name plus a
  * `registerRoutes(app, context)` function. The registry mounts every TS-owned
- * module FIRST, then the temporary legacy Python proxy catch-all LAST. Anything
+ * module FIRST, then the temporary Python fallback proxy catch-all LAST. Anything
  * the control plane does not explicitly own falls through to Python — the
- * default stays "proxy to the legacy authority".
+ * default stays "proxy to Python".
  *
  * New TS features must be added as explicit modules in {@link TS_OWNED_MODULES},
- * never by widening the proxy. Python remains the business authority for all
- * existing routes and writes.
+ * never by widening the proxy.
  */
 
 import type { FastifyInstance } from "fastify";
 import { createConfigSnapshot, type ConfigSnapshot, type ControlPlaneConfig } from "../config";
 import { systemModule } from "../modules/system";
 import { catalogModule } from "../modules/catalog";
-import { registerLegacyPythonProxy } from "../legacy/pythonProxy";
+import { streamingModule } from "../modules/streaming";
+import { notificationsModule } from "../modules/notifications";
+import { frontendSupportModule } from "../modules/frontendSupport";
+import { providersModule } from "../modules/providers";
+import { runtimeToolsModule } from "../modules/runtimeTools";
+import { runtimeHostModule } from "../modules/runtimeHost";
+import { runsModule } from "../modules/runs";
+import { policyModule } from "../modules/policy";
+import { proposalsModule } from "../modules/proposals";
+import { sessionsModule } from "../modules/sessions";
+import { agentsModule } from "../modules/agents";
+import { memoryModule } from "../modules/memory";
+import { registerPythonFallbackProxy } from "../pythonFallback/proxy";
 import { registerErrorEnvelopeHandler } from "./errorEnvelope";
 import { REQUEST_ID_HEADER, resolveRequestId } from "./requestContext";
 
@@ -37,12 +48,24 @@ export interface ControlPlaneModule {
 }
 
 /**
- * All TS-owned modules, in registration order. The legacy Python proxy is NOT a
+ * All TS-owned modules, in registration order. The Python fallback proxy is NOT a
  * module — it is temporary bridge code registered separately, always last.
  */
 export const TS_OWNED_MODULES: readonly ControlPlaneModule[] = [
   systemModule,
   catalogModule,
+  streamingModule,
+  notificationsModule,
+  runtimeToolsModule,
+  providersModule,
+  runtimeHostModule,
+  runsModule,
+  policyModule,
+  proposalsModule,
+  sessionsModule,
+  agentsModule,
+  memoryModule,
+  frontendSupportModule,
 ];
 
 export function registerControlPlaneRoutes(
@@ -64,9 +87,9 @@ export function registerControlPlaneRoutes(
     module.registerRoutes(app, context);
   }
 
-  // 2. Temporary legacy Python proxy — catch-all fallback for everything else
+  // 2. Temporary Python fallback proxy — catch-all fallback for everything else
   //    under /api/v1/*. Must stay last. This module is conceptually temporary
   //    and may be removed once its endpoints are owned by control-plane modules
   //    or retired.
-  registerLegacyPythonProxy(app, config);
+  registerPythonFallbackProxy(app, config);
 }

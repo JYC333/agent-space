@@ -300,7 +300,7 @@ class MemoryRetriever:
         else:
             stage_traces.append({"stage": "graph_expansion", "hops_used": 0, "found": 0, "ids": []})
 
-        # ── Stage 3: Keyword Fallback ────────────────────────────────────
+        # ── Retrieval fallback: keyword search ───────────────────────────
         keyword_rows: list[MemoryEntry] = []
         keyword_new: list[str] = []
         if query:

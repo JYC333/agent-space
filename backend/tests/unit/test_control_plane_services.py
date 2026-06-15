@@ -16,7 +16,6 @@ from app.models import (
     ExecutionPlane,
     Proposal,
     RunReflection,
-    RuntimeAdapter,
     RuntimeToolBinding,
     Workspace,
     WorkspaceProfile,
@@ -57,21 +56,6 @@ def _make_execution_plane(db, *, space_id: str, name: str, plane_type: str = "lo
     return plane
 
 
-def _make_runtime_adapter(db, *, space_id: str, execution_plane_id: str | None = None) -> RuntimeAdapter:
-    adapter = RuntimeAdapter(
-        id=_new_id(),
-        space_id=space_id,
-        name="test-adapter",
-        adapter_type="claude_code",
-        enabled=True,
-        execution_plane_id=execution_plane_id,
-    )
-    db.add(adapter)
-    db.commit()
-    db.refresh(adapter)
-    return adapter
-
-
 # ===========================================================================
 # 1. ExecutionPlane service
 # ===========================================================================
@@ -98,57 +82,17 @@ class TestExecutionPlaneService:
         assert svc.get_default_execution_plane(test_space.id, "nonexistent_tool") is None
 
     def test_get_default_plane_native(self, db, test_space):
-        """echo and capability map to the native plane."""
+        """capability maps to the native plane."""
         from app.execution_planes.seeder import seed_default_execution_planes
         from app.execution_planes.service import ExecutionPlaneService
 
         seed_default_execution_planes(db, test_space.id)
         svc = ExecutionPlaneService(db)
 
-        for adapter_type in ("echo", "capability"):
-            plane = svc.get_default_execution_plane(test_space.id, adapter_type)
-            assert plane is not None, f"{adapter_type} must map to a plane"
-            assert plane.name == "agent_space_native_local"
-            assert plane.type == "native"
-
-    def test_resolve_plane_for_runtime_with_linked_plane(self, db, test_space):
-        """resolve_execution_plane_for_runtime returns the plane linked on the adapter."""
-        from app.execution_planes.service import ExecutionPlaneService
-
-        plane = _make_execution_plane(db, space_id=test_space.id, name="unique-test-plane")
-        adapter = _make_runtime_adapter(db, space_id=test_space.id, execution_plane_id=plane.id)
-
-        svc = ExecutionPlaneService(db)
-        result = svc.resolve_execution_plane_for_runtime(adapter.id, test_space.id)
-        assert result is not None
-        assert result.id == plane.id
-
-    def test_resolve_plane_for_runtime_without_plane(self, db, test_space):
-        """resolve_execution_plane_for_runtime returns None when adapter has no plane."""
-        from app.execution_planes.service import ExecutionPlaneService
-
-        adapter = _make_runtime_adapter(db, space_id=test_space.id, execution_plane_id=None)
-        svc = ExecutionPlaneService(db)
-        assert svc.resolve_execution_plane_for_runtime(adapter.id, test_space.id) is None
-
-    def test_resolve_plane_for_runtime_cross_space_returns_none(self, db, test_space):
-        """resolve_execution_plane_for_runtime must not return a plane from another space."""
-        from app.execution_planes.service import ExecutionPlaneService
-        from app.models import Space, SpaceMembership
-
-        other_space = Space(id=_new_id(), name="other-space", type="personal")
-        db.add(other_space)
-        db.commit()
-
-        plane = _make_execution_plane(db, space_id=other_space.id, name="foreign-plane")
-        adapter = _make_runtime_adapter(
-            db, space_id=other_space.id, execution_plane_id=plane.id
-        )
-
-        svc = ExecutionPlaneService(db)
-        # Providing a runtime_adapter_id that belongs to another space must return None.
-        result = svc.resolve_execution_plane_for_runtime(adapter.id, test_space.id)
-        assert result is None
+        plane = svc.get_default_execution_plane(test_space.id, "capability")
+        assert plane is not None
+        assert plane.name == "agent_space_native_local"
+        assert plane.type == "native"
 
     def test_get_default_plane_disabled_not_returned(self, db, test_space):
         """get_default_execution_plane must not return disabled planes."""
@@ -314,28 +258,6 @@ class TestWorkspaceProfileService:
         with pytest.raises(ValueError, match="not found in space"):
             svc.get_or_create_workspace_profile(foreign_ws.id, test_space.id)
 
-    def test_update_rejects_runtime_adapter_from_other_space(self, db, test_space):
-        """update_workspace_profile must reject preferred_runtime_adapter_id from another space."""
-        from app.models import Space
-        from app.workspace_profiles.service import WorkspaceProfileService
-
-        other_space = Space(id=_new_id(), name="adapter-space", type="personal")
-        db.add(other_space)
-        db.commit()
-        foreign_adapter = factories.create_test_runtime_adapter(
-            db, space_id=other_space.id, name="foreign-rt", commit=True
-        )
-
-        ws = factories.create_test_workspace(db, space_id=test_space.id, commit=True)
-        svc = WorkspaceProfileService(db)
-        svc.get_or_create_workspace_profile(ws.id, test_space.id)
-
-        with pytest.raises(ValueError, match="not found in space"):
-            svc.update_workspace_profile(
-                ws.id, test_space.id,
-                {"preferred_runtime_adapter_id": foreign_adapter.id},
-            )
-
     def test_update_rejects_validation_recipe_from_other_space(self, db, test_space):
         """update_workspace_profile must reject validation_recipe_id from another space."""
         from app.models import Space, ValidationRecipe
@@ -473,33 +395,13 @@ class TestRunCreationExecutionPlaneSnapshot:
         )
         assert run.source == "managed"
 
-    def test_run_create_rejects_runtime_adapter_from_other_space(self, db, test_space, test_user):
-        """create_run raises 400 when runtime_adapter_id belongs to a different space."""
-        from fastapi import HTTPException
-        from app.models import Space
-        from app.runs.run_service import RunService
+    def test_run_create_rejects_client_controlled_source_input(self):
+        """RunCreate does not accept source from client input."""
+        from pydantic import ValidationError
         from app.schemas import RunCreate
 
-        other_space = Space(id=_new_id(), name="other-space-2", type="personal")
-        db.add(other_space)
-        db.commit()
-        foreign_adapter = factories.create_test_runtime_adapter(
-            db, space_id=other_space.id, name="foreign-adapter", commit=True
-        )
-
-        agent = factories.create_test_agent(
-            db, space_id=test_space.id, owner_user_id=test_user.id, commit=True
-        )
-        svc = RunService(db)
-        with pytest.raises(HTTPException) as exc_info:
-            svc.create_run(
-                agent_id=agent.id,
-                data=RunCreate(runtime_adapter_id=foreign_adapter.id),
-                space_id=test_space.id,
-                user_id=test_user.id,
-            )
-        assert exc_info.value.status_code == 400
-        assert "RuntimeAdapter" in exc_info.value.detail
+        with pytest.raises(ValidationError):
+            RunCreate(source="remote_import")
 
     def test_run_with_explicit_execution_plane_id(self, db, test_space, test_user):
         """create_run accepts an explicit execution_plane_id and snapshots its metadata."""
@@ -652,30 +554,6 @@ class TestExternalRunImportService:
                 vendor="manual",
                 workspace_id=foreign_ws.id,
             ))
-
-    def test_import_rejects_runtime_adapter_from_other_space(self, db, test_space, test_user):
-        """import_external_run must reject runtime_adapter_id from a different space."""
-        from app.models import Space
-        from app.runs.external_import import ExternalRunImport, ExternalRunImportService
-
-        other_space = Space(id=_new_id(), name="import-adapter-space", type="personal")
-        db.add(other_space)
-        db.commit()
-        foreign_adapter = factories.create_test_runtime_adapter(
-            db, space_id=other_space.id, name="foreign-import-adapter", commit=True
-        )
-
-        agent = self._make_agent(db, test_space.id, test_user.id)
-        svc = ExternalRunImportService(db)
-        with pytest.raises(ValueError, match="not found in space"):
-            svc.import_external_run(ExternalRunImport(
-                space_id=test_space.id,
-                agent_id=agent.id,
-                agent_version_id=agent.current_version_id,
-                vendor="anthropic",
-                runtime_adapter_id=foreign_adapter.id,
-            ))
-
 
 # ===========================================================================
 # 5. ReflectionService
@@ -886,7 +764,7 @@ class TestRuntimeToolBindingService:
         db,
         *,
         space_id: str,
-        runtime_adapter_id: str,
+        runtime_adapter_type: str = "claude_code",
         workspace_id: str | None = None,
         agent_id: str | None = None,
         enabled: bool = True,
@@ -898,7 +776,7 @@ class TestRuntimeToolBindingService:
             space_id=space_id,
             workspace_id=workspace_id,
             agent_id=agent_id,
-            runtime_adapter_id=runtime_adapter_id,
+            runtime_adapter_type=runtime_adapter_type,
             external_type=external_type,
             external_ref=external_ref,
             display_name="Test MCP Server",
@@ -923,8 +801,7 @@ class TestRuntimeToolBindingService:
     def test_list_filters_by_space(self, db, test_space):
         from app.runtime_tool_bindings.service import RuntimeToolBindingService
 
-        adapter = factories.create_test_runtime_adapter(db, space_id=test_space.id, commit=True)
-        self._make_binding(db, space_id=test_space.id, runtime_adapter_id=adapter.id)
+        self._make_binding(db, space_id=test_space.id)
 
         svc = RuntimeToolBindingService(db)
         result = svc.list_runtime_tool_bindings(test_space.id)
@@ -934,14 +811,16 @@ class TestRuntimeToolBindingService:
     def test_list_excludes_disabled_by_default(self, db, test_space):
         from app.runtime_tool_bindings.service import RuntimeToolBindingService
 
-        adapter = factories.create_test_runtime_adapter(
-            db, space_id=test_space.id, name="adapter-for-disabled-test", commit=True
-        )
-        self._make_binding(db, space_id=test_space.id, runtime_adapter_id=adapter.id, enabled=True)
         self._make_binding(
             db,
             space_id=test_space.id,
-            runtime_adapter_id=adapter.id,
+            runtime_adapter_type="claude_code",
+            enabled=True,
+        )
+        self._make_binding(
+            db,
+            space_id=test_space.id,
+            runtime_adapter_type="claude_code",
             enabled=False,
             external_ref="github.com/owner/disabled-mcp",
         )
@@ -949,7 +828,7 @@ class TestRuntimeToolBindingService:
         svc = RuntimeToolBindingService(db)
         # Scope by adapter so we don't see bindings from other tests in the same session
         result = svc.list_runtime_tool_bindings(
-            test_space.id, runtime_adapter_id=adapter.id, enabled_only=True
+            test_space.id, runtime_adapter_type="claude_code", enabled_only=True
         )
         assert len(result) == 1
         assert result[0].enabled is True
@@ -957,44 +836,45 @@ class TestRuntimeToolBindingService:
     def test_list_include_disabled_flag(self, db, test_space):
         from app.runtime_tool_bindings.service import RuntimeToolBindingService
 
-        adapter = factories.create_test_runtime_adapter(
-            db, space_id=test_space.id, name="adapter-for-include-disabled-test", commit=True
-        )
-        self._make_binding(db, space_id=test_space.id, runtime_adapter_id=adapter.id, enabled=False)
-
-        svc = RuntimeToolBindingService(db)
-        result = svc.list_runtime_tool_bindings(
-            test_space.id, runtime_adapter_id=adapter.id, enabled_only=False
-        )
-        assert len(result) == 1
-
-    def test_list_filters_by_runtime_adapter(self, db, test_space):
-        from app.runtime_tool_bindings.service import RuntimeToolBindingService
-
-        a1 = factories.create_test_runtime_adapter(
-            db, space_id=test_space.id, name="adapter-1", commit=True
-        )
-        a2 = factories.create_test_runtime_adapter(
-            db, space_id=test_space.id, name="adapter-2", commit=True
-        )
-        self._make_binding(db, space_id=test_space.id, runtime_adapter_id=a1.id)
         self._make_binding(
             db,
             space_id=test_space.id,
-            runtime_adapter_id=a2.id,
+            runtime_adapter_type="codex_cli",
+            enabled=False,
+        )
+
+        svc = RuntimeToolBindingService(db)
+        result = svc.list_runtime_tool_bindings(
+            test_space.id, runtime_adapter_type="codex_cli", enabled_only=False
+        )
+        assert len(result) == 1
+
+    def test_list_filters_by_runtime_adapter_type(self, db, test_space):
+        from app.runtime_tool_bindings.service import RuntimeToolBindingService
+
+        self._make_binding(
+            db,
+            space_id=test_space.id,
+            runtime_adapter_type="claude_code",
+        )
+        self._make_binding(
+            db,
+            space_id=test_space.id,
+            runtime_adapter_type="codex_cli",
             external_ref="github.com/owner/other-mcp",
         )
 
         svc = RuntimeToolBindingService(db)
-        result = svc.list_runtime_tool_bindings(test_space.id, runtime_adapter_id=a1.id)
+        result = svc.list_runtime_tool_bindings(
+            test_space.id, runtime_adapter_type="claude_code"
+        )
         assert len(result) == 1
-        assert result[0].runtime_adapter_id == a1.id
+        assert result[0].runtime_adapter_type == "claude_code"
 
     def test_get_binding_by_id(self, db, test_space):
         from app.runtime_tool_bindings.service import RuntimeToolBindingService
 
-        adapter = factories.create_test_runtime_adapter(db, space_id=test_space.id, commit=True)
-        binding = self._make_binding(db, space_id=test_space.id, runtime_adapter_id=adapter.id)
+        binding = self._make_binding(db, space_id=test_space.id)
 
         svc = RuntimeToolBindingService(db)
         found = svc.get_runtime_tool_binding(binding.id, test_space.id)
@@ -1004,8 +884,7 @@ class TestRuntimeToolBindingService:
     def test_get_binding_returns_none_for_wrong_space(self, db, test_space):
         from app.runtime_tool_bindings.service import RuntimeToolBindingService
 
-        adapter = factories.create_test_runtime_adapter(db, space_id=test_space.id, commit=True)
-        binding = self._make_binding(db, space_id=test_space.id, runtime_adapter_id=adapter.id)
+        binding = self._make_binding(db, space_id=test_space.id)
 
         svc = RuntimeToolBindingService(db)
         result = svc.get_runtime_tool_binding(binding.id, "nonexistent-space")

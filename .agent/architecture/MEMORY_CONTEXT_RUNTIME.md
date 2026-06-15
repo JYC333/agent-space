@@ -100,7 +100,10 @@ Responsibilities:
 2. Records `memory_access_logs` (access_type=context_injection) for every injected memory
 3. Resolves context attachments (file, file_range, git_diff, staged_diff, folder_tree, recent_commits)
 4. Security-scans attachments via `scan_attachment()` / `scan_content()`
-5. Loads latest `SessionSummary` for the session when `session_id` is provided (via `SessionCondenser.get_latest()`)
+5. Loads latest `SessionSummary` for the session when `session_id` is provided
+   through the sessions-owned `SessionSummaryPort`
+   (`get_session_summary_port(...).get_latest_for_context(...)`; current
+   implementation delegates to `SessionCondenser`)
 6. Partitions memories into sections: user_memory, workspace_memory, capability_memory, agent_memory, system_policy, relevant_episodes
 7. Produces `ContextPackage` with stable_prefix_refs / dynamic_tail_refs split
 
@@ -233,6 +236,13 @@ referenced tables in the baseline migration.
 ---
 
 ## 5. SessionSummary and SessionCondenser (`sessions/condenser.py`)
+
+`memory.ContextBuilder` does not import `sessions.condenser` directly. It uses
+the sessions facade resolver `get_session_summary_port()` and consumes the
+context-safe `SessionSummaryForContext` DTO. This is a Stage 6 migration seam:
+Python `SessionCondenser` remains the current authority, but the boundary is
+explicit and can later route to a TS-backed sessions authority without teaching
+memory code about session internals.
 
 ### Design invariants
 

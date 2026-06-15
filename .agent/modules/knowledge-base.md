@@ -49,7 +49,7 @@ Backend and API naming uses `knowledge`; space-specific product labels (e.g. "Se
 Brain") are presentation concerns. Knowledge is distinct from Memory: Memory is agent
 context; Knowledge is durable content for people to inspect, revise, relate, and reuse.
 
-No legacy route or compatibility alias exists. The API path is `/api/v1/knowledge`;
+No removed route or compatibility alias exists. The API path is `/api/v1/knowledge`;
 canonical table names are `notes`, `note_collections`, `note_collection_items`,
 `knowledge_items`, `knowledge_item_relations`, `sources`, `knowledge_item_sources`,
 and the generic `entity_links`; wiki proposal types use `knowledge_*` (notes are not proposal-gated).
@@ -349,7 +349,7 @@ not replaced by Source.
 - Updates are versioned; active content is not overwritten in place.
 - Relation rows are database-backed and same-space only.
 - Backend/domain/API naming uses `knowledge`; frontend-specific labels are presentation-only.
-- No legacy route compatibility is provided.
+- No removed-route compatibility is provided.
 - No historical data migration compatibility is required.
 
 **Enforced by tests:**

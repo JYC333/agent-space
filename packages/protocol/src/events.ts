@@ -14,14 +14,14 @@
  */
 
 import { z } from "zod";
-import { IdSchema, ISODateTimeSchema } from "./common";
+import { IdSchema, ISODateTimeSchema } from "./common.js";
 import {
   ActivityDTOSchema,
   ProposalDTOSchema,
   RunEventDTOSchema,
   ArtifactDTOSchema,
   MemoryDTOSchema,
-} from "./schemas";
+} from "./schemas.js";
 
 /** Generic event envelope. The per-event schemas below narrow `type`+`payload`. */
 export const EventEnvelopeSchema = z.object({

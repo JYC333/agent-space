@@ -179,7 +179,7 @@ def test_workspace_read_policy_deny_blocks_file_content(api_client, db, cross_sp
     disk.mkdir(parents=True, exist_ok=True)
     (disk / "readme.txt").write_text("DO_NOT_LEAK", encoding="utf-8")
 
-    with patch("app.workspace_console.api.PolicyGateway") as gateway:
+    with patch("app.workspace_console.api.get_policy_port") as gateway:
         gateway.return_value.enforce.side_effect = _blocked_workspace_read(
             user_id=ua.id,
             space_id=a,

@@ -156,7 +156,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 ## API Entrypoint Boundaries
 
-**B50** — `control-plane` is the default client-facing API entrypoint for web, dev, test, and prod. Existing Python-owned `/api/v1/*` routes continue through the temporary legacy Python proxy; the permanent gateway module inside `control-plane` owns routing and request context. Backend remains the Python authority for existing routes, writes, commands, policy, proposals, memory, runs, jobs, artifacts, provider invocation, and migrations. No business authority moves to TypeScript without an explicit later ownership decision.
+**B50** — `control-plane` is the default client-facing API entrypoint for web, dev, test, and prod. Explicit TS-owned contexts are served by control-plane modules and recorded in `TS_CONTROL_PLANE_OWNERSHIP.md`. Python-owned `/api/v1/*` routes continue through the temporary Python fallback proxy; the permanent gateway module inside `control-plane` owns routing and request context. Backend remains the Python authority for auth/membership, schema migrations, and every route or context not explicitly owned by a TS module. No additional business authority moves to TypeScript without an explicit later ownership decision.
 
 ---
 

@@ -1,0 +1,73 @@
+/**
+ * TS runtime-host contracts.
+ *
+ * These schemas describe the internal boundary used when Python-owned `runs`
+ * invokes the control-plane managed API runtime host as a runtime adapter
+ * implementation. The host may execute provider-backed model turns; it does
+ * not own run lifecycle, persistence, orchestration, or a self-hosted agent loop.
+ */
+
+import { z } from "zod";
+import { IdSchema, ISODateTimeSchema, SecretResponseGuards } from "./common.js";
+import { CanonicalModelEventSchema, CanonicalUsageSchema } from "./model.js";
+
+export const RuntimeHostToolModeSchema = z.enum(["disabled", "authorized_bindings"]);
+export type RuntimeHostToolMode = z.infer<typeof RuntimeHostToolModeSchema>;
+
+export const RuntimeHostToolBindingSchema = z
+  .object({
+    id: IdSchema,
+    external_type: z.string().min(1),
+    external_ref: z.string().min(1),
+    display_name: z.string().min(1),
+    required_scopes: z.array(z.string()).optional(),
+    credential_ref: z.string().nullish(),
+    data_exposure_level: z.string().min(1),
+    observability_level: z.string().min(1),
+    side_effect_level: z.string().min(1),
+    approval_required: z.boolean(),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type RuntimeHostToolBinding = z.infer<typeof RuntimeHostToolBindingSchema>;
+
+export const RuntimeHostExecuteRequestSchema = z.object({
+  run_id: IdSchema,
+  space_id: IdSchema,
+  model_provider_id: IdSchema,
+  model: z.string().nullish(),
+  system_prompt: z.string().nullish(),
+  prompt: z.string(),
+  mode: z.string().min(1),
+  instruction: z.string().nullish(),
+  project_id: IdSchema.nullish(),
+  workspace_id: IdSchema.nullish(),
+  capability_id: z.string().nullish(),
+  context_snapshot_id: IdSchema.nullish(),
+  max_tokens: z.number().int().positive().optional(),
+  tool_mode: RuntimeHostToolModeSchema.default("disabled"),
+  tool_bindings: z.array(RuntimeHostToolBindingSchema).default([]),
+});
+export type RuntimeHostExecuteRequest = z.infer<typeof RuntimeHostExecuteRequestSchema>;
+
+export const RuntimeHostExecuteResponseSchema = z
+  .object({
+    success: z.boolean(),
+    stdout: z.string().default(""),
+    stderr: z.string().default(""),
+    output_text: z.string().default(""),
+    output_json: z.record(z.unknown()).nullish(),
+    exit_code: z.number().int().nullable(),
+    error_text: z.string().nullish(),
+    error_code: z.string().nullish(),
+    started_at: ISODateTimeSchema.nullish(),
+    completed_at: ISODateTimeSchema.nullish(),
+    model: z.string().nullish(),
+    usage: CanonicalUsageSchema.nullish(),
+    events: z.array(CanonicalModelEventSchema).default([]),
+    adapter_metadata: z.record(z.unknown()).nullish(),
+    adapter_log_json: z.record(z.unknown()).nullish(),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type RuntimeHostExecuteResponse = z.infer<typeof RuntimeHostExecuteResponseSchema>;

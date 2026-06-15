@@ -1,14 +1,12 @@
-"""Shared provider invocation — the single in-process LLM call primitive.
+"""Shared provider invocation — the single provider LLM call primitive.
 
 This is the one place that turns a configured ``ModelProvider`` + a (system, user)
-prompt pair into text via litellm. Both the memory reflector path and the
-``model_api`` runtime adapter call ``complete_text`` so there is exactly one litellm
-call site and one litellm model-name builder.
+prompt pair into text. Both the memory reflector path and the ``model_api``
+runtime adapter call ``complete_text`` so provider calls have one runtime entry
+point.
 
-Credential channel isolation (ADR 0010): the API key is decrypted from the provider's
-encrypted Credential and passed to litellm as a parameter. It is never written to
-``os.environ`` and therefore can never leak into a Claude Code CLI subprocess. This
-channel may serve any provider, Anthropic included.
+Credential channel isolation: the API key is resolved only by the configured
+provider credential owner and is never written to ``os.environ``.
 """
 from __future__ import annotations
 
@@ -18,6 +16,10 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from ..models import ModelProvider
+from .control_plane_client import (
+    complete_text_via_control_plane,
+    provider_credentials_owned_by_control_plane,
+)
 from .credentials import resolve_provider_api_key
 
 log = logging.getLogger(__name__)
@@ -111,23 +113,50 @@ def complete_text(
     user: str,
     max_tokens: int = 2048,
     api_key: str | None = None,
+    task: str | None = None,
 ) -> CompletionResult:
-    """Single synchronous (system, user) -> text completion via litellm.
+    """Single synchronous (system, user) -> text completion.
 
-    Resolves the provider, builds the litellm model name, and makes one
-    ``litellm.completion`` call. The key is passed as a parameter and never written
-    to ``os.environ`` (ADR 0010).
+    In the default Python-owned mode this resolves the provider locally, builds
+    the litellm model name, and makes one ``litellm.completion`` call. When
+    provider credentials are owned by control-plane, it forwards the same
+    request to the internal provider completion port.
 
     ``api_key`` may be supplied pre-resolved (e.g. a runtime adapter passing
     ``ctx.resolved_credentials["api_key"]`` that the execution service already
     resolved through the canonical boundary). When omitted, it is resolved here via
-    ``resolve_provider_api_key``.
+    ``resolve_provider_api_key``. Under control-plane authority the key is
+    always resolved by the credential owner (a pre-resolved ``api_key`` is not
+    forwarded), so credential release stays single-decider.
+
+    ``task`` names the auxiliary task (e.g. ``"reflector"``). Under
+    control-plane authority a matching ProviderTaskPolicy chain takes
+    precedence and ``provider_id`` becomes the safety net; the Python-owned
+    path has no chain support and ignores it.
 
     Raises:
         ProviderUnavailableError / UnsupportedProviderError: from resolve_usable_provider
         CredentialResolutionError: provider has no decryptable key
         Any litellm exception on network/API failure (caller decides how to handle)
     """
+    if provider_credentials_owned_by_control_plane():
+        space_id = _provider_space_id(db, provider_id)
+        response = complete_text_via_control_plane(
+            space_id=space_id,
+            provider_id=provider_id,
+            model=model,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            task=task,
+        )
+        usage = response.get("usage")
+        return CompletionResult(
+            text=str(response.get("text") or ""),
+            model=str(response.get("model") or model or ""),
+            usage=usage if isinstance(usage, dict) else None,
+        )
+
     row = resolve_usable_provider(db, provider_id)
     provider_type = row.provider_type
     if api_key is None:
@@ -156,6 +185,13 @@ def complete_text(
     usage = getattr(response, "usage", None)
     usage_dict = usage.model_dump() if hasattr(usage, "model_dump") else (dict(usage) if usage else None)
     return CompletionResult(text=text, model=resolved_model, usage=usage_dict)
+
+
+def _provider_space_id(db: Session, provider_id: str) -> str:
+    row = db.query(ModelProvider.space_id).filter(ModelProvider.id == provider_id).first()
+    if row is None:
+        raise ProviderUnavailableError(f"ModelProvider '{provider_id}' not found.")
+    return str(row[0])
 
 
 def _default_model_for_type(provider_type: str) -> str:

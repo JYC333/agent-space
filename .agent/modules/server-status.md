@@ -23,8 +23,8 @@ Surface the operational health of the agent-space runtime to the user. Users mus
 |---|---|---|---|---|
 | Database | PostgreSQL reachable, schema current | OK | schema lag | unreachable |
 | LLM Provider | Anthropic API key valid, model reachable | OK | rate-limited | no key / unreachable |
-| Claude adapter | `claude --print` binary found | OK | degraded | not found |
-| Codex adapter | `codex` binary found | OK | degraded | not found |
+| Claude adapter | active `claude_code` runtime tool found | OK | degraded | not installed |
+| Codex adapter | active `codex_cli` runtime tool found | OK | degraded | not installed |
 | Capabilities | All registered caps loaded without error | OK | some failed | all failed |
 | Sandbox runner | Docker socket reachable (if Docker executor) | OK | partial | unavailable |
 

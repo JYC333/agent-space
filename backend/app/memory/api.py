@@ -16,6 +16,10 @@ from ..schemas import (
     Page,
     ProposalOut,
 )
+from .authority import (
+    reject_python_memory_proposal_create_when_ts_authority,
+    reject_python_memory_read_when_ts_authority,
+)
 from .store import MemoryStore
 from .serialization import memory_entry_to_out
 from .proposal_payload import merge_distinct_provenance_entries, user_confirmation_entry
@@ -43,6 +47,7 @@ def list_memories(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
+    reject_python_memory_read_when_ts_authority()
     space_id, user_id = ids
     store = MemoryStore(db)
     try:
@@ -90,6 +95,7 @@ def get_memory(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
+    reject_python_memory_read_when_ts_authority()
     space_id, user_id = ids
     store = MemoryStore(db)
     mem = store.get_for_space(space_id, memory_id)
@@ -128,6 +134,7 @@ def search_memories(
     ids: tuple[str, str] = Depends(get_identity),
     db: Session = Depends(get_db),
 ):
+    reject_python_memory_read_when_ts_authority()
     space_id, user_id = ids
     store = MemoryStore(db)
     rows = store.search(
@@ -188,6 +195,7 @@ def create_memory(
     db: Session = Depends(get_db),
 ):
     """Create a memory_create proposal.  Returns 202; MemoryEntry is created on acceptance."""
+    reject_python_memory_proposal_create_when_ts_authority()
     space_id, user_id = ids
     effective_space_id = data.space_id or space_id
     if effective_space_id != space_id:
@@ -252,6 +260,7 @@ def update_memory(
     db: Session = Depends(get_db),
 ):
     """Create a memory_update proposal.  Returns 202; MemoryEntry is versioned on acceptance."""
+    reject_python_memory_proposal_create_when_ts_authority()
     space_id, user_id = ids
     store = MemoryStore(db)
     mem = store.get_for_space(space_id, memory_id)
@@ -334,6 +343,7 @@ def delete_memory(
     db: Session = Depends(get_db),
 ):
     """Create a memory_archive proposal.  Returns 202; MemoryEntry is archived on acceptance."""
+    reject_python_memory_proposal_create_when_ts_authority()
     space_id, user_id = ids
     store = MemoryStore(db)
     mem = store.get_for_space(space_id, memory_id)

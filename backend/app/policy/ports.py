@@ -1,19 +1,19 @@
-"""Interface-only seam over the concrete policy enforcement gateway.
+"""Interface-only seam over the active policy enforcement gateway.
 
 ``PolicyPort`` is a structural (``typing.Protocol``) contract describing the two
 enforcement entrypoints cross-module callers use for sensitive actions and the
-proposal-apply gate. The concrete
-:class:`app.policy.gateway.PolicyGateway` remains the authority and the sole
-production implementation — it already satisfies this protocol structurally, so
-no change to it is required.
+proposal-apply gate. During the TS migration the active implementation is
+resolved through ``get_policy_port(db)``: Python ``PolicyGateway`` remains the
+local implementation and a TS-backed gateway is used after the policy authority
+flip.
 
 The port exists so that callers can type-annotate against the seam and tests can
 substitute a fake (see ``tests/support/fake_policy.py``) that records or scripts
 decisions without a database. It is the model-/runtime-side analogue of the
 existing ``providers.ProviderAdapter`` and ``runtimes.BaseRuntimeAdapter`` ports.
 
-This is a migration seam only — enforcement semantics live entirely in
-``PolicyGateway`` (hard invariants → ``PolicyEngine`` → durable audit). See
+This is a migration seam only — enforcement semantics live in the active
+authority (hard invariants → ``PolicyEngine``/TS port → durable audit). See
 ``.agent/architecture/TS_MIGRATION_STRATEGY.md``.
 """
 

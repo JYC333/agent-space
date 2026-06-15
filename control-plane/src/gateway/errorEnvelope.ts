@@ -10,9 +10,9 @@
  * a fixed generic message; client errors (4xx) keep their intentional,
  * client-safe message.
  *
- * The legacy Python proxy is exempt in both directions: bodies proxied from
+ * The Python fallback proxy is exempt in both directions: bodies proxied from
  * Python pass through untouched, and the proxy's own sanitized transport
- * failures (502/503, in `../legacy/pythonProxy`) keep their established shape.
+ * failures (502/503, in `../pythonFallback/proxy`) keep their established shape.
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -51,7 +51,7 @@ const INTERNAL_ERROR: Pick<ErrorEnvelope, "error" | "message"> = {
 
 /**
  * Install the app-wide error handler that converts uncaught TS-owned route
- * errors into the envelope. The legacy proxy never reaches this handler for
+ * errors into the envelope. The fallback proxy never reaches this handler for
  * transport failures — it catches them itself and answers with its own
  * sanitized 502/503 bodies.
  */

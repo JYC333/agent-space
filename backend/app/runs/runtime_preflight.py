@@ -71,8 +71,8 @@ class RuntimePreflightService:
             True when the adapter authenticates via ``CredentialBroker`` CLI
             login-state grants (i.e. ``uses_cli_credentials=True`` on the
             adapter class).  When False, the credential-profile check is skipped
-            — non-CLI adapters (echo, capability) authenticate via API keys and
-            have no login state to verify here.
+            — non-CLI adapters use provider API credentials or no credentials
+            and have no CLI login state to verify here.
         risk_level:
             Policy risk level for the run (low / medium / high / critical).
         has_credential_profile:
@@ -112,8 +112,8 @@ class RuntimePreflightService:
 
         # 3. CLI adapters must have an explicit credential profile for automation.
         #    Container-default credentials are not an allowed fallback for CLI runs.
-        #    API-key-based adapters (echo, capability) are exempt — they authenticate
-        #    via resolved_credentials and have no CLI login state.
+        #    Non-CLI adapters are exempt — they authenticate via resolved_credentials
+        #    or do not require credentials and have no CLI login state.
         if requires_cli_credential_profile and not has_credential_profile:
             return PreflightResult(
                 ok=False,

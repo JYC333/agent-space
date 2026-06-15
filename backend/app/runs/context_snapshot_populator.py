@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 
 from ..models import AgentVersion, ContextDigest, ContextSnapshot, Run
 from ..schemas import ContextPackage
-from ..memory import ContextBuilder
+from ..memory import get_context_builder
 
 log = logging.getLogger(__name__)
 
@@ -235,8 +235,8 @@ class ContextSnapshotPopulator:
         # is retrieved and injected into the context package.
         # Does not log memory content; safe metadata only.
         # Decision inputs go in context; audit-only identifiers stay in metadata_json.
-        from ..policy import PolicyGateway, PolicyCheckRequest
-        PolicyGateway(self.db).enforce(
+        from ..policy import PolicyCheckRequest, get_policy_port
+        get_policy_port(self.db).enforce(
             PolicyCheckRequest(
                 action="context.inject_memory",
                 actor_type="run",
@@ -259,7 +259,7 @@ class ContextSnapshotPopulator:
             )
         )
 
-        builder = ContextBuilder(self.db)
+        builder = get_context_builder(self.db)
         pkg = builder.build(
             space_id=run.space_id,
             user_id=user_id,

@@ -8,7 +8,7 @@ provides read and resolution helpers; it does not own plane lifecycle.
 import logging
 from sqlalchemy.orm import Session
 
-from ..models import ExecutionPlane, RuntimeAdapter
+from ..models import ExecutionPlane
 
 log = logging.getLogger(__name__)
 
@@ -21,22 +21,24 @@ log = logging.getLogger(__name__)
 # to CLI subprocess environments. Do not add vendor-specific runtime types like
 # ``anthropic_api``; the adapter stays vendor-neutral and selects the provider
 # at runtime.
+# ``ts_agent_host`` uses the same managed provider plane, but credential release
+# happens inside control-plane over the internal channel rather than in Python.
 _ADAPTER_TO_PLANE: dict[str, str] = {
-    "echo":        "agent_space_native_local",
-    "capability":  "agent_space_native_local",
-    "model_api":   "managed_model_api",
+    "capability": "agent_space_native_local",
+    "model_api": "managed_model_api",
+    "ts_agent_host": "managed_model_api",
     "claude_code": "local_claude_code_cli",
-    "codex_cli":   "local_codex_cli",
-    "opencode":    "local_opencode",
+    "codex_cli": "local_codex_cli",
+    "opencode": "local_opencode",
 }
 
 # Maps execution plane type to the externality_level value stored on Run.
 _PLANE_TYPE_TO_EXTERNALITY: dict[str, str] = {
-    "native":        "native",
-    "local":         "local_external",
+    "native": "native",
+    "local": "local_external",
     "remote_vendor": "remote_external",
-    "hybrid":        "hybrid",
-    "manual":        "manual",
+    "hybrid": "hybrid",
+    "manual": "manual",
 }
 
 
@@ -52,7 +54,9 @@ class ExecutionPlaneService:
             .all()
         )
 
-    def get_execution_plane(self, execution_plane_id: str, space_id: str) -> ExecutionPlane | None:
+    def get_execution_plane(
+        self, execution_plane_id: str, space_id: str
+    ) -> ExecutionPlane | None:
         return (
             self.db.query(ExecutionPlane)
             .filter(
@@ -62,7 +66,9 @@ class ExecutionPlaneService:
             .first()
         )
 
-    def get_default_execution_plane(self, space_id: str, adapter_type: str) -> ExecutionPlane | None:
+    def get_default_execution_plane(
+        self, space_id: str, adapter_type: str
+    ) -> ExecutionPlane | None:
         """Return the seeded, enabled execution plane for adapter_type.
 
         Returns None when adapter_type has no registered mapping, the plane has
@@ -77,36 +83,6 @@ class ExecutionPlaneService:
                 ExecutionPlane.space_id == space_id,
                 ExecutionPlane.name == plane_name,
                 ExecutionPlane.enabled == True,  # noqa: E712
-            )
-            .first()
-        )
-
-    def resolve_execution_plane_for_runtime(
-        self,
-        runtime_adapter_id: str,
-        space_id: str,
-    ) -> ExecutionPlane | None:
-        """Return the ExecutionPlane linked to a RuntimeAdapter row.
-
-        Both the adapter and the resolved plane are scoped to space_id to prevent
-        cross-space metadata leakage. Returns None when the adapter does not exist
-        in this space or has no plane set.
-        """
-        adapter = (
-            self.db.query(RuntimeAdapter)
-            .filter(
-                RuntimeAdapter.id == runtime_adapter_id,
-                RuntimeAdapter.space_id == space_id,
-            )
-            .first()
-        )
-        if not adapter or not adapter.execution_plane_id:
-            return None
-        return (
-            self.db.query(ExecutionPlane)
-            .filter(
-                ExecutionPlane.id == adapter.execution_plane_id,
-                ExecutionPlane.space_id == space_id,
             )
             .first()
         )

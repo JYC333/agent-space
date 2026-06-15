@@ -152,7 +152,7 @@ def test_chat_adapter_policy_failure_happens_during_execution(
     version = db.query(AgentVersion).filter(AgentVersion.id == agent.current_version_id).one()
     version.runtime_policy_json = {
         **(version.runtime_policy_json or {}),
-        "allowed_adapter_types": ["echo"],
+        "allowed_adapter_types": ["capability"],
     }
     db.commit()
 
