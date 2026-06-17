@@ -1,10 +1,10 @@
 /**
- * TS runtime-host contracts.
+ * Runtime-host contracts.
  *
- * These schemas describe the internal boundary used when Python-owned `runs`
- * invokes the control-plane managed API runtime host as a runtime adapter
- * implementation. The host may execute provider-backed model turns; it does
- * not own run lifecycle, persistence, orchestration, or a self-hosted agent loop.
+ * These schemas describe the internal boundary used when run orchestration
+ * invokes the managed API runtime host as an adapter implementation. The host
+ * may execute provider-backed model turns; it does not own run lifecycle,
+ * persistence, orchestration, or a self-hosted agent loop.
  */
 
 import { z } from "zod";

@@ -13,7 +13,7 @@ The governance UI for long-term memory. Memory review is not just a list — it 
 - Memory provenance inspector (which run / session created this?)
 
 ## Does Not Own
-- Memory storage and CRUD (memory module / MemoryStore)
+- Memory storage and CRUD (memory module)
 - Proposal creation logic (agents / reflector)
 - Proposal approval execution (proposals module)
 
@@ -67,9 +67,9 @@ POST /api/v1/proposals/{id}/reject
 ```
 
 ## Related Files
-- `backend/app/memory/store.py` — MemoryStore CRUD
+- `server/src/modules/memory/` — Memory repositories and CRUD/read auth
 - proposal API/service modules — Proposal workflow
-- `backend/app/models.py` — MemoryEntry, Proposal, MemoryReadTrace
+- `server/migrations/` — MemoryEntry, Proposal, MemoryReadTrace tables
 - `apps/web/src/pages/` — TODO: memory review page
 
 ## Related Modules

@@ -1,0 +1,559 @@
+/**
+ * Memory proposal appliers.
+ *
+ * Durable apply logic for memory_create / memory_update / memory_archive
+ * proposals. These run the durable active-memory
+ * writes for accepted memory proposals: INSERT/UPDATE `memory_entries`, write
+ * `provenance_links`, and record `memory_relations` supersedes edges.
+ *
+ * Scope: the per-type write business logic. The cross-cutting accept
+ * orchestration, source-monitoring enforcement, personal-memory egress guard,
+ * digest invalidation, and proposal accept state machine live in the proposal
+ * apply service.
+ *
+ * Gap: private memory placement is enforced as a hard invariant
+ * (visibility=private requires a personal space). The active-policy overlay
+ * (custom `memory.private_placement` deny / allow-with-log + policy traces) is
+ * not implemented yet.
+ */
+
+import { randomUUID } from "node:crypto";
+import {
+  copyProvenanceToMemory,
+  dominantSourceTrust,
+  firstActivityId,
+  mergeDistinctProvenanceEntries,
+  proposalProvenanceEntry,
+  recordMemorySupersedesRelation,
+  writeProvenanceLinks,
+  TARGET_MEMORY,
+  type Queryable,
+} from "./memoryApplyProvenance";
+import {
+  evaluateMemoryProposal,
+  monitoringSnapshot,
+  provenanceEntriesFromPayload,
+  type ProvenanceEntry,
+} from "./sourceMonitoring";
+
+export class MemoryApplyError extends Error {
+  readonly statusCode = 422;
+}
+
+/** Raised when a memory proposal needs an apply capability the server authority
+ * does not yet serve (run/grant egress context or workspace/agent-scope digest
+ * invalidation). Fails closed so those proposals are never applied here. */
+export class MemoryApplyUnsupportedError extends Error {
+  readonly statusCode = 409;
+}
+
+const MEMORY_APPLY_TYPES = new Set(["memory_create", "memory_update", "memory_archive"]);
+
+// Payload markers that make a proposal grant-derived (mirror of the legacy
+// `is_grant_derived_proposal` rule); plus any run context, which requires the
+// not-yet-implemented egress-context apply path.
+const GRANT_DERIVED_MARKERS = [
+  "personal_context_derived",
+  "egress_guard_required",
+  "derived_from_personal_memory",
+  "raw_private_memory_included",
+  "personal_summary_persisted",
+  "grant_id",
+  "personal_memory_grant_ids",
+] as const;
+
+export interface ApplyProposal {
+  id: string;
+  space_id: string;
+  proposal_type: string;
+  title: string | null;
+  payload_json: Record<string, unknown> | null;
+  workspace_id: string | null;
+  created_by_user_id: string | null;
+  created_by_run_id?: string | null;
+}
+
+export interface MemoryAcceptResult {
+  memoryId: string;
+  supersededMemoryId: string | null;
+  payloadJson: Record<string, unknown>;
+}
+
+export interface AppliedMemoryRow {
+  id: string;
+  space_id: string;
+  scope_type: string;
+  namespace: string | null;
+  memory_type: string;
+  title: string | null;
+  content: string;
+  status: string;
+  visibility: string;
+  sensitivity_level: string;
+  owner_user_id: string | null;
+  subject_user_id: string | null;
+  selected_user_ids: unknown;
+  workspace_id: string | null;
+  source_trust: string | null;
+  source_activity_id: string | null;
+  root_memory_id: string | null;
+  supersedes_memory_id: string | null;
+  memory_layer: string | null;
+  memory_kind: string | null;
+  version: number;
+  agent_id: string | null;
+}
+
+export interface MemoryApplyResult {
+  memory: AppliedMemoryRow;
+  supersededMemoryId: string | null;
+}
+
+const INSERT_COLUMNS = `id, space_id, scope_type, scope_id, memory_type, content, status,
+  source_proposal_id, created_at, updated_at, subject_user_id, owner_user_id,
+  sensitivity_level, selected_user_ids, last_confirmed_at, workspace_id, namespace,
+  title, visibility, confidence, importance, source_id, source_activity_id,
+  created_by, approved_by, version, access_count, tags, memory_layer, memory_kind,
+  created_from_proposal_id, root_memory_id, supersedes_memory_id, source_trust`;
+
+const RETURNING_COLUMNS = `id, space_id, scope_type, namespace, memory_type, title,
+  content, status, visibility, sensitivity_level, owner_user_id, subject_user_id,
+  selected_user_ids, workspace_id, source_trust, source_activity_id, root_memory_id,
+  supersedes_memory_id, memory_layer, memory_kind, version, agent_id`;
+
+/** Columns + values needed for one new active memory version. */
+interface NewMemoryFields {
+  scope: string;
+  memoryType: string;
+  content: string;
+  visibility: string;
+  sensitivity: string;
+  namespace: string;
+  title: string;
+  ownerUserId: string | null;
+  subjectUserId: string | null;
+  selectedUserIds: unknown;
+  workspaceId: string | null;
+  memoryLayer: string | null;
+  memoryKind: string | null;
+  sourceTrust: string | null;
+  sourceActivityId: string | null;
+  rootMemoryId: string | null;
+  supersedesMemoryId: string | null;
+  createdBy: string;
+  approvedBy: string;
+}
+
+export class PgMemoryApplyRepository {
+  constructor(private readonly db: Queryable) {}
+
+  static supportsType(proposalType: string): boolean {
+    return MEMORY_APPLY_TYPES.has(proposalType);
+  }
+
+  /**
+   * Accept-and-apply a memory proposal in one transaction (the caller owns the
+   * BEGIN/COMMIT and must have already passed the proposal.apply policy gate and
+   * validated pending/not-preview/space). accept_context is fixed
+   * `explicit_user_accept`.
+   *
+   * Fails closed (`MemoryApplyUnsupportedError`) for proposal apply paths that
+ * still need server implementation: run/grant egress context (the personal-memory
+   * egress guard) and workspace/agent-scope memory digest invalidation.
+   */
+  async acceptAndApply(proposal: ApplyProposal, userId: string): Promise<MemoryAcceptResult> {
+    if (!MEMORY_APPLY_TYPES.has(proposal.proposal_type)) {
+      throw new MemoryApplyError(`unsupported proposal type: ${proposal.proposal_type}`);
+    }
+    this.assertNoEgressContext(proposal);
+
+    const acceptContext = "explicit_user_accept";
+    let payload: Record<string, unknown> = { ...(proposal.payload_json ?? {}) };
+
+    const outcome = evaluateMemoryProposal({
+      proposalType: proposal.proposal_type,
+      payload,
+      acceptContext,
+    });
+    if (outcome.action === "reject") throw new MemoryApplyError(outcome.message);
+    if (outcome.action === "require_review") {
+      // accept_context is always explicit_user_accept here, which satisfies a
+      // require_review outcome only after persisting the result on the payload.
+      payload = {
+        ...payload,
+        source_monitoring_result: {
+          ...monitoringSnapshot(outcome),
+          explicit_approval_context: acceptContext,
+        },
+      };
+    }
+
+    const result = await this.applyByType({ ...proposal, payload_json: payload }, userId);
+
+    // Digest invalidation for workspace/agent scope is not ported yet; fail
+    // closed so the transaction rolls back rather than leaving a stale digest.
+    if (result.memory.scope_type === "workspace" || result.memory.scope_type === "agent") {
+      throw new MemoryApplyUnsupportedError(
+        `${result.memory.scope_type}-scope memory apply is not served by the server authority yet (digest invalidation pending)`,
+      );
+    }
+
+    const finalPayload: Record<string, unknown> = { ...payload, resulting_memory_id: result.memory.id };
+    await this.markProposalAccepted(proposal.id, proposal.space_id, userId, finalPayload);
+
+    return {
+      memoryId: result.memory.id,
+      supersededMemoryId: result.supersededMemoryId,
+      payloadJson: finalPayload,
+    };
+  }
+
+  private async applyByType(proposal: ApplyProposal, userId: string): Promise<MemoryApplyResult> {
+    switch (proposal.proposal_type) {
+      case "memory_create":
+        return this.applyCreate(proposal, userId);
+      case "memory_update":
+        return this.applyUpdate(proposal, userId);
+      case "memory_archive":
+        return this.applyArchive(proposal, userId);
+      default:
+        throw new MemoryApplyError(`unsupported proposal type: ${proposal.proposal_type}`);
+    }
+  }
+
+  private assertNoEgressContext(proposal: ApplyProposal): void {
+    const payload = proposal.payload_json ?? {};
+    if (proposal.proposal_type === "egress_review") {
+      throw new MemoryApplyUnsupportedError("egress_review apply is not implemented in the server authority yet");
+    }
+    if (proposal.created_by_run_id || strOr(payload.source_run_id)) {
+      throw new MemoryApplyUnsupportedError(
+        "memory proposals with run egress context are not served by the server authority yet",
+      );
+    }
+    for (const marker of GRANT_DERIVED_MARKERS) {
+      if (payload[marker]) {
+        throw new MemoryApplyUnsupportedError(
+          "grant-derived memory proposals are not served by the server authority yet",
+        );
+      }
+    }
+  }
+
+  private async markProposalAccepted(
+    proposalId: string,
+    spaceId: string,
+    userId: string,
+    payloadJson: Record<string, unknown>,
+  ): Promise<void> {
+    await this.db.query(
+      `UPDATE proposals
+          SET status = 'accepted', reviewed_at = $3, reviewed_by = $4, payload_json = $5::jsonb
+        WHERE id = $1 AND space_id = $2`,
+      [proposalId, spaceId, new Date().toISOString(), userId, JSON.stringify(payloadJson)],
+    );
+  }
+
+  /** Apply a memory_create proposal: one new active memory + provenance. */
+  async applyCreate(proposal: ApplyProposal, userId: string): Promise<MemoryApplyResult> {
+    const payload = proposal.payload_json ?? {};
+    const vis = lower(strOr(payload.target_visibility) ?? strOr(payload.visibility) ?? "space_shared");
+    const sens = lower(strOr(payload.sensitivity_level) ?? "normal");
+    const content = strOr(payload.proposed_content) ?? strOr(payload.content) ?? "";
+    const memType = strOr(payload.memory_type) ?? "semantic";
+    const scope = strOr(payload.target_scope) ?? strOr(payload.scope_type) ?? "user";
+    const namespace = strOr(payload.target_namespace) ?? strOr(payload.namespace) ?? "user.default";
+
+    const entries = provenanceEntriesFromPayload(payload);
+    const ownerUserId = this.resolveOwner(strOr(payload.owner_user_id), vis, userId);
+
+    await this.assertPrivatePlacement(proposal.space_id, vis);
+
+    const memId = await this.insertMemory(proposal, {
+      scope,
+      memoryType: memType,
+      content,
+      visibility: vis,
+      sensitivity: sens,
+      namespace,
+      title: proposal.title ?? "",
+      ownerUserId,
+      subjectUserId: strOr(payload.subject_user_id),
+      selectedUserIds: payload.selected_user_ids ?? null,
+      workspaceId: proposal.workspace_id,
+      memoryLayer: memoryLayer(payload),
+      memoryKind: strOr(payload.memory_kind),
+      sourceTrust: dominantSourceTrust(entries),
+      sourceActivityId: firstActivityId(entries),
+      rootMemoryId: null,
+      supersedesMemoryId: null,
+      createdBy: String(proposal.created_by_user_id ?? userId),
+      approvedBy: String(userId),
+    });
+
+    const linkEntries = [
+      ...entries,
+      proposalProvenanceEntry(proposal.id, { proposal_type: proposal.proposal_type }),
+    ];
+    await writeProvenanceLinks(this.db, {
+      spaceId: proposal.space_id,
+      targetType: TARGET_MEMORY,
+      targetId: memId.id,
+      entries: linkEntries,
+    });
+    return { memory: memId, supersededMemoryId: null };
+  }
+
+  /** Apply a memory_update proposal: new version row, supersede the old. */
+  async applyUpdate(proposal: ApplyProposal, userId: string): Promise<MemoryApplyResult> {
+    const payload = proposal.payload_json ?? {};
+    const targetId = strOr(payload.target_memory_id);
+    if (!targetId) {
+      throw new MemoryApplyError("memory_update proposal is missing target_memory_id in payload");
+    }
+    const old = await this.getActive(targetId, proposal.space_id);
+    if (!old) {
+      throw new MemoryApplyError(
+        `target memory '${targetId}' not found or not active in space '${proposal.space_id}'`,
+      );
+    }
+
+    const vis = lower(
+      strOr(payload.target_visibility) ?? strOr(payload.visibility) ?? old.visibility,
+    );
+    const sens = lower(strOr(payload.sensitivity_level) ?? old.sensitivity_level ?? "normal");
+    const content = strOr(payload.proposed_content) ?? strOr(payload.content) ?? old.content;
+    const title = strOr(payload.proposed_title) ?? strOr(payload.title) ?? old.title ?? "";
+    const scope = strOr(payload.target_scope) ?? old.scope_type;
+    const namespace = strOr(payload.target_namespace) ?? old.namespace ?? "user.default";
+    const memType = strOr(payload.memory_type) ?? old.memory_type;
+    const rootId = old.root_memory_id ?? old.id;
+
+    const entries = provenanceEntriesFromPayload(payload);
+    const ownerUserId = this.resolveOwner(
+      strOr(payload.owner_user_id) ?? old.owner_user_id,
+      vis,
+      userId,
+    );
+
+    await this.assertPrivatePlacement(proposal.space_id, vis);
+
+    const newMem = await this.insertMemory(proposal, {
+      scope,
+      memoryType: memType,
+      content,
+      visibility: vis,
+      sensitivity: sens,
+      namespace,
+      title,
+      ownerUserId,
+      subjectUserId: strOr(payload.subject_user_id) ?? old.subject_user_id,
+      selectedUserIds: payload.selected_user_ids ?? old.selected_user_ids ?? null,
+      workspaceId: proposal.workspace_id ?? old.workspace_id,
+      memoryLayer: memoryLayer(payload) ?? old.memory_layer,
+      memoryKind: strOr(payload.memory_kind) ?? old.memory_kind,
+      sourceTrust: dominantSourceTrust(entries) ?? old.source_trust,
+      sourceActivityId: firstActivityId(entries) ?? old.source_activity_id,
+      rootMemoryId: rootId,
+      supersedesMemoryId: old.id,
+      createdBy: String(proposal.created_by_user_id ?? userId),
+      approvedBy: String(userId),
+    });
+
+    await this.markStatus(old.id, proposal.space_id, "superseded");
+    await copyProvenanceToMemory(this.db, {
+      spaceId: proposal.space_id,
+      fromMemoryId: old.id,
+      toMemoryId: newMem.id,
+    });
+
+    // Add payload provenance + the proposal entry, deduped against the copied set.
+    const existing = await this.provenanceKeys(proposal.space_id, newMem.id);
+    const toAdd: ProvenanceEntry[] = [];
+    for (const e of provenanceEntriesFromPayload(payload)) {
+      const k = provKey(e);
+      if (k && !existing.has(k)) {
+        toAdd.push(e);
+        existing.add(k);
+      }
+    }
+    const propEntry = proposalProvenanceEntry(proposal.id, { proposal_type: "memory_update" });
+    const pk = provKey(propEntry);
+    if (pk && !existing.has(pk)) toAdd.push(propEntry);
+    if (toAdd.length > 0) {
+      await writeProvenanceLinks(this.db, {
+        spaceId: proposal.space_id,
+        targetType: TARGET_MEMORY,
+        targetId: newMem.id,
+        entries: toAdd,
+      });
+    }
+
+    await recordMemorySupersedesRelation(this.db, {
+      spaceId: proposal.space_id,
+      newMemoryId: newMem.id,
+      oldMemoryId: old.id,
+      proposalId: proposal.id,
+    });
+    return { memory: newMem, supersededMemoryId: old.id };
+  }
+
+  /** Apply a memory_archive proposal: mark the target archived (soft delete). */
+  async applyArchive(proposal: ApplyProposal, _userId: string): Promise<MemoryApplyResult> {
+    const payload = proposal.payload_json ?? {};
+    const targetId = strOr(payload.target_memory_id);
+    if (!targetId) {
+      throw new MemoryApplyError("memory_archive proposal is missing target_memory_id in payload");
+    }
+    const mem = await this.getActive(targetId, proposal.space_id);
+    if (!mem) {
+      throw new MemoryApplyError(
+        `target memory '${targetId}' not found or not active in space '${proposal.space_id}'`,
+      );
+    }
+
+    const archived = await this.markStatus(mem.id, proposal.space_id, "archived");
+
+    const entries = mergeDistinctProvenanceEntries(provenanceEntriesFromPayload(payload), [
+      proposalProvenanceEntry(proposal.id, {
+        action: "memory_archive",
+        proposal_type: "memory_archive",
+      }),
+    ]);
+    if (entries.length > 0) {
+      await writeProvenanceLinks(this.db, {
+        spaceId: proposal.space_id,
+        targetType: TARGET_MEMORY,
+        targetId: mem.id,
+        entries,
+      });
+    }
+    return { memory: archived ?? mem, supersededMemoryId: null };
+  }
+
+  // ------------------------------------------------------------------
+
+  private resolveOwner(owner: string | null, visibility: string, actingUserId: string): string | null {
+    let ownerUserId = owner;
+    if (visibility === "private" && ownerUserId == null) ownerUserId = actingUserId;
+    if (visibility === "private" && ownerUserId == null) {
+      throw new MemoryApplyError("owner_user_id is required for private visibility");
+    }
+    return ownerUserId;
+  }
+
+  /** Hard invariant of `check_private_memory_placement`: private → personal space. */
+  private async assertPrivatePlacement(spaceId: string, visibility: string): Promise<void> {
+    if (visibility !== "private") return;
+    const res = await this.db.query<{ type: string }>(
+      `SELECT type FROM spaces WHERE id = $1`,
+      [spaceId],
+    );
+    const spaceType = res.rows[0]?.type ?? "unknown";
+    if (spaceType !== "personal") {
+      throw new MemoryApplyError(
+        `visibility='private' is only permitted in personal spaces; space '${spaceId}' has type '${spaceType}'`,
+      );
+    }
+  }
+
+  private async insertMemory(
+    proposal: ApplyProposal,
+    f: NewMemoryFields,
+  ): Promise<AppliedMemoryRow> {
+    const now = new Date().toISOString();
+    const result = await this.db.query<AppliedMemoryRow>(
+      `INSERT INTO memory_entries (${INSERT_COLUMNS}) VALUES (
+         $1, $2, $3, NULL, $4, $5, 'active',
+         $6, $7, $7, $8, $9,
+         $10, $11::jsonb, NULL, $12, $13,
+         $14, $15, 1.0, 0.5, NULL, $16,
+         $17, $18, 1, 0, NULL, $19, $20,
+         $6, $21, $22, $23
+       )
+       RETURNING ${RETURNING_COLUMNS}`,
+      [
+        randomUUID(), // $1 id
+        proposal.space_id, // $2
+        f.scope, // $3 scope_type
+        f.memoryType, // $4
+        f.content, // $5
+        proposal.id, // $6 source_proposal_id + created_from_proposal_id
+        now, // $7 created_at + updated_at
+        f.subjectUserId, // $8
+        f.ownerUserId, // $9
+        f.sensitivity, // $10
+        f.selectedUserIds === undefined ? null : f.selectedUserIds == null ? null : JSON.stringify(f.selectedUserIds), // $11
+        f.workspaceId, // $12
+        f.namespace, // $13
+        f.title, // $14
+        f.visibility, // $15
+        f.sourceActivityId, // $16
+        f.createdBy, // $17
+        f.approvedBy, // $18
+        f.memoryLayer, // $19
+        f.memoryKind, // $20
+        f.rootMemoryId, // $21
+        f.supersedesMemoryId, // $22
+        f.sourceTrust, // $23
+      ],
+    );
+    return result.rows[0]!;
+  }
+
+  private async getActive(memoryId: string, spaceId: string): Promise<AppliedMemoryRow | null> {
+    const res = await this.db.query<AppliedMemoryRow>(
+      `SELECT ${RETURNING_COLUMNS}
+         FROM memory_entries
+        WHERE id = $1 AND space_id = $2 AND deleted_at IS NULL`,
+      [memoryId, spaceId],
+    );
+    return res.rows[0] ?? null;
+  }
+
+  private async markStatus(
+    memoryId: string,
+    spaceId: string,
+    status: string,
+  ): Promise<AppliedMemoryRow | null> {
+    const res = await this.db.query<AppliedMemoryRow>(
+      `UPDATE memory_entries
+          SET status = $3, updated_at = $4
+        WHERE id = $1 AND space_id = $2 AND deleted_at IS NULL
+        RETURNING ${RETURNING_COLUMNS}`,
+      [memoryId, spaceId, status, new Date().toISOString()],
+    );
+    return res.rows[0] ?? null;
+  }
+
+  private async provenanceKeys(spaceId: string, memoryId: string): Promise<Set<string>> {
+    const res = await this.db.query<{ source_type: string; source_id: string; source_trust: string | null }>(
+      `SELECT source_type, source_id, source_trust
+         FROM provenance_links
+        WHERE space_id = $1 AND target_type = $2 AND target_id = $3`,
+      [spaceId, TARGET_MEMORY, memoryId],
+    );
+    const keys = new Set<string>();
+    for (const r of res.rows) keys.add(`${r.source_type} ${r.source_id} ${r.source_trust ?? ""}`);
+    return keys;
+  }
+}
+
+function strOr(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function lower(value: string): string {
+  return value.toLowerCase();
+}
+
+function memoryLayer(payload: Record<string, unknown>): string | null {
+  const raw = strOr(payload.target_layer) ?? strOr(payload.memory_layer);
+  return raw ? raw.toLowerCase() : null;
+}
+
+function provKey(e: ProvenanceEntry): string | null {
+  if (typeof e.source_type !== "string" || typeof e.source_id !== "string") return null;
+  const tr = typeof e.source_trust === "string" ? e.source_trust : "";
+  return `${e.source_type} ${e.source_id} ${tr}`;
+}

@@ -1,16 +1,15 @@
 # Modules
 
 > Current module map and ownership facts. Source of truth is still the code:
-> `control-plane/src/gateway/routeRegistry.ts`,
-> `backend/app/modules/registry.py`, package `__init__.py` facades, and
-> boundary tests.
+> `server/src/gateway/routeRegistry.ts`,
+> package facades, and boundary tests.
 
 ## Repository Roles
 
 | Path | Role |
 |---|---|
-| `backend/` | Python FastAPI/PostgreSQL service. Schema migrations, Python-owned product contexts, and routes not explicitly moved to TS live here. |
-| `control-plane/` | Default client-facing TypeScript API entrypoint/control plane. It owns explicitly registered TS routes listed in `TS_CONTROL_PLANE_OWNERSHIP.md`; unowned API paths proxy to Python. The gateway module is permanent; the Python fallback proxy is temporary. |
+| `server/` | TypeScript API backend and explicit schema migration owner. The gateway module is permanent; unknown API paths return the local 404 catch-all. |
+| `server/migrations/` | Frozen cutover baseline plus forward-only SQL migrations; do not edit the baseline by hand. |
 | `apps/web/` | Web client. It consumes APIs and shared protocol types; it is not a business-rule authority. |
 | `catalog/` | Built-in definitions, including agent templates and capabilities. |
 | `packages/protocol/` | Shared TypeScript protocol package only. No handlers, persistence, routing, or authority. |
@@ -18,10 +17,8 @@
 | `deployer/` | Host deployment subsystem behind the deployer boundary. |
 | `sandbox/` | First-level sandbox subsystem. Runtime code uses documented interfaces rather than importing internals. |
 
-Current TS/Python ownership is summarized in
-[`TS_CONTROL_PLANE_OWNERSHIP.md`](TS_CONTROL_PLANE_OWNERSHIP.md). Backend remains
-the Python authority for unowned routes and writes; Python-owned routes continue
-through the control-plane fallback proxy.
+Current server ownership is summarized in
+[`SERVER_OWNERSHIP.md`](SERVER_OWNERSHIP.md).
 
 ## Module Kinds
 
@@ -32,64 +29,59 @@ through the control-plane fallback proxy.
 | `capability` | Code-defined agent skills and self-evolution surfaces. |
 | `product` | User-facing domain feature surface. |
 | `frontend-support` | Backend read models and aggregation endpoints for UI views. |
-| `support-package` | Import-only package under `backend/app/` with no HTTP module registration. |
-
-`backend/app/modules/registry.py` lists registered HTTP modules. Support packages are real
-boundaries too, but they are not mounted as modules.
+| `support-package` | Import-only package with no HTTP module registration. |
 
 ## Registered HTTP Modules
 
 All current registered modules are `always_on=True`.
 
-| Package | Kind | Routes | Public facade | Main ownership / notes |
+| Module | Kind | Routes | Public facade | Main ownership / notes |
 |---|---|---|---|---|
-| `activity` | product | `/activity` | yes | Activity records and input summaries. |
-| `agent_templates` | product | `/agent-templates` | empty | Template API over agent template models/services. |
-| `agents` | product | `/agents` | empty | Agent profiles, versions, assistant chat/settings, template services; imports `runs` via facade. |
-| `artifacts` | product | `/artifacts` | empty | Client-facing artifact list/get/export is TS-owned in the control plane; the Python module remains reference/fallback for Python-owned run paths. |
-| `auth` | kernel | `/auth`, `/me` | yes | Users, auth accounts, sessions, API keys, Google auth. |
-| `automation` | product | `/spaces/{space_id}/automations` | empty | TS-owned in the control plane: automations, schedule firing, credential preflight. |
-| `backups` | infra | `/system/backups` | empty | TS-owned in the control plane: full-system backup service and backup tick used by the TS scheduler registry. |
-| `capabilities` | capability | `/capabilities` | yes | Capability manifests, versions, overlays, registry/reload. |
-| `credentials` | infra | `/credentials/cli` | yes | CLI credential broker/login and credential audit events. |
-| `daily_reports` | product | `/daily-capture-report` | empty | TS-owned in the control plane: daily capture report settings, scheduler scan, durable job handler. |
-| `deployment` | infra | `/deployments` | empty | Deployer client boundary. |
-| `evolution` | capability | `/evolution` | empty | Evolution targets/signals and prompt-update proposal applier. |
-| `execution_planes` | infra | `/execution-planes` | empty | Execution plane reads/resolution and default per-space seeding hook. |
-| `home` | frontend-support | `/home` | empty | Home summary aggregation; imports `memory` and `proposals` via facades. |
-| `intake` | product | `/intake` | empty | Source connections, intake items, extraction evidence, trust helpers. |
-| `jobs` | infra | `/jobs` | empty | TS-owned in the control plane: durable job queue, worker, registry-dispatched handlers. |
-| `knowledge` | product | `/knowledge`, `/notes` | empty | Knowledge items, notes, sources, read model, space seed hook, proposal appliers. |
-| `me` | frontend-support | `/me` | empty | Personal view API. |
-| `memory` | kernel | `/memory`, `/context` | yes, lazy | Memory entries, context build/compile, retrieval, reflection, source monitoring, proposal service placement exception. |
-| `personal_memory_grants` | kernel | `/personal-memory-grants` | empty | Personal memory grants, egress guard/review/resolution. |
-| `projects` | product | `/projects` | yes | Projects and project-workspace links. |
-| `proposals` | kernel | `/proposals` | yes | Proposal approval/apply orchestration, approvals, and applier registry. Client-facing proposal review/read/apply orchestration is TS-owned for registered appliers; unregistered proposal types fail closed. |
-| `providers` | infra | `/providers` | yes | Model providers, provider catalog/validation, litellm invocation facade. |
-| `runs` | kernel | `/runs` | yes, lazy | Run lifecycle, execution, events, finalization, runtime bridge, outputs/artifacts. |
-| `runtime_tool_bindings` | infra | `/runtime-tool-bindings` | empty | Runtime tool binding records/services. |
-| `sessions` | product | `/sessions` | empty | Conversation sessions, messages, condenser. |
-| `source_pointers` | product | `/source-pointers` | empty | Source pointer creation/validation. |
+| `system` | infra | `/health`, `/server/health`, `/server/features`, `/features` | empty | Server health and feature descriptors. |
+| `auth` | kernel | `/auth/*`, `/me`, `/me/spaces` | yes | Users, auth accounts, sessions, feature-gated API keys, Google auth. |
 | `spaces` | kernel | `/spaces`, `/invitations` | hook registry | Spaces, memberships, invitations, space-created hook dispatch. |
-| `tasks` | product | `/tasks`, `/boards` | empty | Boards, tasks, task-run links, task evaluation, run-finalized hook. |
-| `workspace_console` | frontend-support | `/workspace-console` | empty | Workspace console API. |
-| `workspace_profiles` | product | `/workspace-profiles` | empty | Workspace profile service. |
-| `workspaces` | product | `/workspaces` | empty | Workspace records and system-core workspace logic. |
+| `catalog` | capability | `/server/catalog*`, `/capabilities*` | yes | Read-only on-disk catalog. Owns catalog-backed capability/template surfaces; there is no separate capability route module. |
+| `streaming` | infra | `/runs/{runId}/events/stream` | empty | Run event SSE stream. |
+| `notifications` | infra | `/server/notifications/webhooks/*` | empty | Notification webhook egress policy and dispatch boundary. |
+| `runtimeTools` | infra | `/runtime-tools*` | empty | Controlled runtime CLI installer/status/catalog. |
+| `providers` | infra | `/providers*`, `/credentials/cli*`, `/internal/providers-credentials/*` | yes | Model providers, credential pools, provider invocation, and CLI credential broker/audit. There is no separate credentials route module. |
+| `execution_planes` | infra | `/execution-planes*` | empty | Execution plane reads/resolution and per-space defaults. |
+| `runtime_tool_bindings` | infra | `/runtime-tool-bindings*` | empty | Runtime tool binding reads. |
+| `runtimeHost` | infra | `/internal/runtime-host/execute` | empty | Internal runtime-host execution for server-owned model/runtime paths. |
+| `runs` | kernel | `/runs*`, `/internal/runs/execute` | yes, lazy | Run lifecycle, execution, events, finalization, runtime bridge, outputs/artifacts. |
+| `artifacts` | product | `/artifacts*` | empty | Client-facing artifact list/get/export and run materialization artifacts. |
+| `projects` | product | `/projects*` | yes | Projects and project-workspace links. |
+| `policy` | kernel | `/internal/policy/*` | yes | Service-authenticated policy enforcement and proposal-apply policy gate. |
+| `proposals` | kernel | `/proposals*` | yes | Proposal approval/apply orchestration and applier registry; unsupported proposal types fail closed. |
+| `sessions` | product | `/sessions*`, `/internal/sessions/session-summary/get-latest` | empty | Conversation sessions, messages, and latest summary read. |
+| `agentTemplates` | product | `/agent-templates*` | empty | Catalog-backed template list/read/create-agent surfaces. |
+| `agents` | product | `/agents*` | empty | Agent profiles, versions, assistant chat/settings, template services, agent-scoped run/proposal reads. |
+| `personalMemoryGrants` | kernel | `/personal-memory-grants*` | empty | Personal memory grant preview/create/list/revoke/audit. |
+| `memory` | kernel | `/memory*` | yes, lazy | Memory entries, read logging, search, and memory proposal creation. |
+| `context` | kernel | `/context/build` | empty | Frontend context preview/native context build route. |
+| `activity` | product | `/activity*` | yes | Activity records, upload, review/archive, consolidation, and summary runs. |
+| `source_pointers` | product | `/source-pointers*` | empty | Source pointer creation/list/delete. |
+| `intake` | product | `/intake*` | empty | Source connections, intake items, extraction evidence, trust helpers, summary runs. |
+| `knowledge` | product | `/knowledge*`, `/notes/collections*` | empty | Knowledge items, notes, sources, entity links, source links, read model, and proposal appliers. |
+| `evolution` | capability | `/evolution*` | empty | Evolution targets/signals, validation reads, and prompt-update proposal applier. |
+| `tasks` | product | `/tasks*`, `/boards*`, `/me/tasks` | empty | Boards, tasks, task-run links, task evaluation, run-finalized hook. |
+| `workspace_profiles` | product | `/workspace-profiles*` | empty | Workspace profile list/create/read/update. |
+| `workspaces` | product | `/workspaces*`, `/workspace-console*` | yes | Workspace records, system-core workspace logic, PathPolicy, sandbox/worktree helpers, and workspace-console read routes. There is no separate workspace-console route module. |
+| `jobs` | infra | `/jobs*` | yes | Durable job queue, worker, scheduler registry, and registry-dispatched handlers. |
+| `automations` | product | `/spaces/{spaceId}/automations*` | empty | Server-owned automations, schedule/manual fire, credential preflight. |
+| `dailyReports` | product | `/daily-capture-report*` | empty | Daily capture report settings, manual run, scheduler scan, durable job handler. |
+| `backups` | infra | `/system/backups*` | empty | Server-owned full-system backup service and scheduled backup ticks. |
+| `deployment` | infra | `/deployments/jobs*` | empty | Deployer client edge; create/detail currently fail closed with 501. |
+| `frontendSupport` | frontend-support | `/home/summary`, `/me/summary`, `/me/timeline`, `/me/pending` | empty | Backend aggregate read models for Home and personal cross-space views. There are no separate `home` or `me` modules. |
 
-## Support Packages
+## Code-Only Support Surfaces
 
 | Package | Kind | Public facade | Main ownership / notes |
 |---|---|---|---|
-| `actors` | support-package / kernel | empty | Actor identity helpers. |
-| `modules` | support-package | empty | Backend module registry and hook registration loader. |
-| `participation` | support-package / kernel | yes | Participation recording facade. |
-| `policy` | support-package / kernel | yes | Policy gateway, engine, audit, hard invariants, `PolicyPort`. |
-| `router` | support-package / kernel | yes | `RouterService`; single owner of intent, adapter, and `needs_cli` classification. |
-| `runtimes` | support-package / infra | yes | Runtime adapter contract, specs, credentials, local executor, injected run ports. |
-| `scheduler` | support-package / infra | yes | `SchedulerRegistry` and `ScheduledTask`. |
-| `secrets` | support-package / infra | namespace | Secret reference encoding. |
-| `visibility` | support-package / kernel | empty | Visibility-scoped auth helpers. |
-| `workspace` | support-package / infra | empty | Disk path policy and sandbox manager; distinct from registered `workspaces`. |
+| `runtimeAdapters` | support-package / infra | yes | Runtime adapter specs/types only. Consumed by `agents`, `automations`, `runtimeTools`, and `runs`; not route-registered. |
+| `routeUtils` | support-package / kernel | empty | Shared route helpers for DB pool access, identity resolution, pagination, parsing, and route error handling. |
+| `jobs/schedulerRegistry` | support-package / infra | yes via `jobs` | In-process periodic task registry used by server startup/background services. |
+| `workspaces/pathPolicy`, `workspaces/sandbox`, `workspaces/codePatch` | module-internal infra | yes via `workspaces` | Workspace path validation, worktree/sandbox preparation, and code-patch collection/apply ports. |
 
 `memory/consolidation/` is part of the registered `memory` module.
 
@@ -97,50 +89,47 @@ All current registered modules are `always_on=True`.
 
 | Concern | Owner | Registration model |
 |---|---|---|
-| HTTP routes | `app.modules.registry` | `Module(..., api_modules=[...])`; mounted under `/api/v1`. |
-| Periodic tasks | control-plane `modules/jobs/SchedulerRegistry` | Control-plane startup registers `ScheduledTask`; owning TS modules keep tick behavior. |
-| Durable job handlers | control-plane `modules/jobs/JobHandlerRegistry` | TS worker runtime registers allowlisted handlers (`agent_run`, `memory_consolidation`, `daily_capture_report`); unregistered types fail fast. |
-| Space-created initialization | `app.spaces.SpaceCreatedHookRegistry` | Module declares `space_created_hooks="<submodule>"`; hook runs in caller transaction and must not commit. |
-| Run-finalized side effects | `app.runs.lifecycle_hooks.RunFinalizedHookRegistry` | Module declares `run_finalized_hooks="<submodule>"`; used for task evaluation bridge. |
-| Proposal application | `app.proposals.applier_registry.ProposalApplierRegistry` | Module declares `proposal_appliers="<submodule>"`; target modules own mutation logic. |
-| Routing decisions | `app.router.RouterService` | Single owner for intent classification, adapter resolution, and `needs_cli`. |
-| Runtime execution | control-plane `runs` / `app.runtimes` | Run create, execute/stop, top-level read/status/trace, post-run finalization/evaluation, the internal execute port, `agent_run` dispatch (control-plane worker loop), and runtime context preparation are fixed TS-owned. Python `app.runtimes` remains for unowned Python paths during migration. |
-| Model invocation | control-plane `providers` / `runtimeHost` | TS-owned run orchestration calls the TS runtime-host/provider broker for `model_api` and `ts_agent_host` no-tool runs. Python provider facades remain for unowned Python routes. |
+| HTTP routes | server `gateway/routeRegistry.ts` | `ServerModule` entries mounted under `/api/v1`. |
+| Periodic tasks | server `modules/jobs/SchedulerRegistry` | Server startup registers `ScheduledTask`; owning server modules keep tick behavior. |
+| Durable job handlers | server `modules/jobs/JobHandlerRegistry` | server worker runtime registers allowlisted handlers (`agent_run`, `memory_consolidation`, `daily_capture_report`); unregistered types fail fast. |
+| Space-created initialization | server space hooks | server modules register space-created hooks; hook runs in caller transaction and must not commit. |
+| Run-finalized side effects | server `runs` finalization service | Post-run finalization and task-board side effects are server-owned. |
+| Proposal application | server proposal applier registry | Target modules own mutation logic; unsupported types fail closed. |
+| Routing decisions | server router service | Single owner for intent classification, adapter resolution, and `needs_cli`. |
+| Runtime execution | server `runs` | Run create, execute/stop, top-level read/status/trace, post-run finalization/evaluation, internal execute, `agent_run` dispatch, and runtime context preparation are server-owned. |
+| Model invocation | server `providers` / `runtimeHost` | Run orchestration calls the server runtime-host/provider broker for `model_api` and `ts_agent_host` no-tool runs. |
 
 ## Current Boundary Status
 
-- Deep cross-package Python import allowlist is empty.
-- Static guard detects no current import cycles.
-- Current facade-level cross-package edges detected by the guard:
-  `agents -> runs`, `home -> memory`, `home -> proposals`, `tasks -> auth`,
-  `tasks -> participation`, `tasks -> proposals`, `tasks -> runs`.
+- The route registry is the HTTP source of truth. No registered capability,
+  credentials, Home, personal-view, or workspace-console server modules currently
+  exist; those routes are owned by `catalog`, `providers`, `frontendSupport`, and
+  `workspaces` as listed above.
+- The server boundary guard restricts bare runtime package imports and forbids
+  web, sandbox, deployer, ops, migration-tooling, and ORM internals from
+  `server/src`.
 - Lazy facades: `memory`, `runs`.
 - Router compatibility wrappers are removed; do not recreate `IntentRouter` or `TaskRouter`.
-- `runtimes` does not import `runs`; runtime evidence/process registration flows through
+- `runtimeAdapters` is code-only; runtime evidence/process registration flows through
   injected ports implemented by `runs`.
-- TS-owned runs do not call Python hook registries directly; finalization and
-  task-board side effects use the explicit Python `finalization.finalize` port.
-- Python `runs` does not import `tasks`; task-board side effects use
-  run-finalized hooks.
+- Runs do not import task-board internals directly; task-board side effects use
+  run-finalized hooks/finalization services.
 - Proposal apply dispatch goes through `ProposalApplierRegistry`; no hardcoded proposal-type
   apply chain remains.
+- Workspace-console session execution writes remain feature-not-implemented; current
+  workspace-console routes are read/status surfaces under `workspaces`.
+- Frontend Home and personal views consume `frontendSupport`/`/me` aggregate read
+  models instead of independently re-implementing proposal/activity/runtime logic.
 
-The former known exception is resolved (2026-06-11): `ProposalService` and
-`ProposalApplyService` now live physically under `backend/app/proposals/`
-(`service.py`, `apply_service.py`), matching their logical ownership. The
-`proposals` facade is hybrid — eager for `applier_registry`/`approvals`/
-`read_model`, lazy (PEP 562) for `service`/`apply_service`, which reach into
-`memory` only through its lazy facade. Target modules keep owning mutations
-through `proposal_appliers.py` registration.
+Target modules keep owning proposal mutations through the server proposal applier
+registry; unsupported proposal types fail closed.
 
 ## Guardrails
 
 Run these after structural module changes:
 
 ```bash
-cd backend
-python3 -m pytest tests/invariants/test_module_import_boundaries.py tests/invariants/test_public_facades.py -q
+cd server
+npm run typecheck
+npx vitest run test/boundaries.test.ts
 ```
-
-For registry-specific changes, also run the focused registry tests under `backend/tests/unit/`
-for the affected registry.

@@ -8,7 +8,7 @@
 | `semantic` | Stable factual knowledge | "I am a software engineer", "My company is Acme" |
 | `episodic` | Record of what happened | "User completed onboarding on 2025-05-01" |
 | `procedural` | How to do something | "My deploy process: push to main → CI auto-deploys" |
-| `project` | Project-specific facts | "agent-space uses FastAPI + PostgreSQL" |
+| `project` | Project-specific facts | "agent-space uses a TypeScript server + PostgreSQL" |
 
 ## Memory Scopes
 

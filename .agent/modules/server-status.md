@@ -77,9 +77,9 @@ The existing `/health` returns `{"status": "ok", "version": "..."}` — the new 
 - RuntimeStatusBar is always visible; cannot be hidden by user (collapses to dot icon on mobile)
 
 ## Related Files
-- `backend/app/main.py` — existing `/health` endpoint
-- `backend/app/config.py` — settings (API keys, model, database URL)
-- `backend/app/api/` — TODO: add status router
+- `server/src/server.ts` — `/health` endpoint
+- `server/src/config.ts` — settings and diagnostics
+- `server/src/modules/system/` — status/feature routes
 - `apps/web/src/components/` — TODO: RuntimeStatusBar, StatusDetailModal
 
 ## Related Modules

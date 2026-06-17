@@ -1,28 +1,27 @@
 #!/usr/bin/env bash
-# Run Alembic migrations (upgrade head) against the PostgreSQL database.
+# Run server migrations against the PostgreSQL database.
 #
 # Two execution modes:
 #
-#   docker (default) — run Alembic INSIDE the backend service via Docker Compose,
-#     so it uses the in-network `postgres` host and the matching PostgreSQL client
-#     and Python deps shipped in the backend image. This is the reliable path for
-#     the default Docker Compose setup, where Postgres is NOT published to the host.
+#   docker (default) — ensure the target database exists, then run the compiled
+#     server migration runner inside a one-shot server container, using the
+#     in-network `postgres` host. This is the reliable path for the default
+#     Docker Compose setup, where Postgres is NOT published to the host.
 #
-#   host (--host)    — run Alembic on the host against an explicitly configured,
-#     reachable external PostgreSQL. Requires DATABASE_URL (or a complete set of
-#     POSTGRES_* with POSTGRES_HOST). A connectivity preflight runs first so the
-#     DB is never left half-migrated when the host cannot reach Postgres.
+#   host (--host)    — run the same server migration runner on the host against an
+#     explicitly configured, reachable external PostgreSQL. Requires DATABASE_URL
+#     (or a complete set of POSTGRES_* with POSTGRES_HOST).
 #
 # Pre-migration backup safety:
 #   For --mode prod a pre-migration pg_dump custom-format backup is REQUIRED and
-#   is taken before Alembic runs, written to:
+#   is taken before migrations run, written to:
 #       $ASPACE_ROOT/<mode>/db/dumps/pre-migrate-<timestamp>.dump
-#   If that dump fails, migration aborts before Alembic touches the schema.
+#   If that dump fails, migration aborts before the schema is touched.
 #   Non-prod modes skip it for convenience; opt in with PRE_MIGRATION_BACKUP=1
 #   or the --pre-migration-backup flag to get the identical safety net.
 #
-# PostgreSQL is the server database; Alembic owns all schema creation and
-# migration.
+# PostgreSQL is the server database; server migrations own the schema
+# creation and migration. Server startup does not auto-migrate.
 #
 # Credentials are never printed — the target is shown with credentials redacted.
 #
@@ -30,7 +29,7 @@
 #   ops/scripts/db/migrate.sh [--mode dev|test|prod]            # docker-native (default)
 #   ops/scripts/db/migrate.sh --host [--mode dev|test|prod]     # host mode, external Postgres
 #   ops/scripts/db/migrate.sh --mode dev --pre-migration-backup # opt into pre-migration dump
-#   DATABASE_URL=postgresql+psycopg://... ops/scripts/db/migrate.sh --host
+#   DATABASE_URL=postgresql://... ops/scripts/db/migrate.sh --host
 
 set -euo pipefail
 
@@ -56,19 +55,71 @@ done
 
 local_compose_init "$MODE"
 local_compose_ensure_mode_env_file
-local_compose_ensure_control_plane_ts_authority_env
-BACKEND_DIR="$REPO_ROOT/backend"
+local_compose_ensure_server_database_env
 trap 'local_compose_stop_postgres_if_started "migrate"' EXIT
 
 redacted_target() {
   # Show only host:port/db — never user:pass.
   local safe="${1#*://}"   # drop scheme://
   safe="${safe##*@}"       # drop user:pass@, keep host:port/db
-  echo "postgresql+psycopg://[credentials-redacted]@${safe}"
+  echo "postgresql://[credentials-redacted]@${safe}"
+}
+
+urlencode() {
+  python3 -c 'from urllib.parse import quote; import sys; print(quote(sys.argv[1], safe=""))' "$1"
+}
+
+postgres_password_or_default() {
+  local pgpass
+  pgpass="$(local_compose_setting POSTGRES_PASSWORD || true)"
+  if [[ -n "$pgpass" ]]; then
+    printf '%s\n' "$pgpass"
+    return 0
+  fi
+  if [[ "$MODE" == "prod" ]]; then
+    echo "ERROR: POSTGRES_PASSWORD is required for production migrations." >&2
+    exit 1
+  fi
+  printf '%s\n' "agent_space_dev_password"
+}
+
+compose_admin_database_url() {
+  local pguser pgpass pgdb
+  pguser="$(local_compose_setting_or_default POSTGRES_USER agent_space)"
+  pgpass="$(postgres_password_or_default)"
+  pgdb="$(local_compose_setting_or_default POSTGRES_DB agent_space)"
+  local_compose_validate_pg_identifier "POSTGRES_USER" "$pguser"
+  local_compose_validate_pg_identifier "POSTGRES_DB" "$pgdb"
+  printf 'postgresql://%s:%s@postgres:5432/%s\n' \
+    "$(urlencode "$pguser")" "$(urlencode "$pgpass")" "$pgdb"
+}
+
+ensure_docker_database_exists() {
+  local pguser pgdb exists
+  pguser="$(local_compose_setting_or_default POSTGRES_USER agent_space)"
+  pgdb="$(local_compose_setting_or_default POSTGRES_DB agent_space)"
+  local_compose_validate_pg_identifier "POSTGRES_USER" "$pguser"
+  local_compose_validate_pg_identifier "POSTGRES_DB" "$pgdb"
+
+  local_compose_ensure_postgres_ready "migration database bootstrap" "$pguser" "postgres" 60
+  exists="$(
+    "${COMPOSE[@]}" exec -T postgres psql -X -q -U "$pguser" -d postgres \
+      -v ON_ERROR_STOP=1 \
+      -tAc "SELECT 1 FROM pg_database WHERE datname = '$pgdb';" |
+      tr -d '[:space:]'
+  )"
+  if [[ "$exists" == "1" ]]; then
+    return 0
+  fi
+
+  echo "[migrate] database '$pgdb' does not exist; creating it before migrations..."
+  "${COMPOSE[@]}" exec -T postgres psql -X -q -U "$pguser" -d postgres \
+    -v ON_ERROR_STOP=1 \
+    -c "CREATE DATABASE \"$pgdb\";"
 }
 
 # Resolve a host-mode DATABASE_URL (env, mode .env, or POSTGRES_* parts). Sets the
-# global DATABASE_URL or exits with a clear error. Never prints credentials.
+# global MIGRATION_DATABASE_URL or exits with a clear error. Never prints credentials.
 resolve_host_database_url() {
   local database_url="${DATABASE_URL:-}"
   if [[ -z "$database_url" ]]; then
@@ -82,7 +133,8 @@ resolve_host_database_url() {
     if [[ -n "$pguser" && -n "$pgpass" && -n "$pgdb" ]]; then
       pghost="$(local_compose_setting_or_default POSTGRES_HOST localhost)"
       pgport="$(local_compose_setting_or_default POSTGRES_PORT 5432)"
-      database_url="postgresql+psycopg://${pguser}:${pgpass}@${pghost}:${pgport}/${pgdb}"
+      local_compose_validate_pg_identifier "POSTGRES_DB" "$pgdb"
+      database_url="postgresql://$(urlencode "$pguser"):$(urlencode "$pgpass")@${pghost}:${pgport}/${pgdb}"
     fi
   fi
   if [[ -z "$database_url" ]]; then
@@ -90,7 +142,16 @@ resolve_host_database_url() {
     echo "       Set DATABASE_URL, or provide $ENV_FILE with POSTGRES_USER/PASSWORD/DB (+ POSTGRES_HOST)." >&2
     exit 1
   fi
-  export DATABASE_URL="$database_url"
+  # Existing mode env files may still carry the old SQLAlchemy-style scheme.
+  database_url="${database_url/#postgresql+psycopg:/postgresql:}"
+  case "$database_url" in
+    postgresql://*|postgres://*) ;;
+    *)
+      echo "ERROR: host mode DATABASE_URL must be a PostgreSQL connection string." >&2
+      exit 1
+      ;;
+  esac
+  export MIGRATION_DATABASE_URL="$database_url"
 }
 
 # ── Pre-migration backup (custom-format pg_dump) ──────────────────────────────
@@ -113,9 +174,7 @@ pre_migration_backup_docker() {
 pre_migration_backup_host() {
   local out="$1"
   resolve_host_database_url
-  # pg_dump speaks the standard libpq URI scheme, not the SQLAlchemy +psycopg one.
-  local uri="${DATABASE_URL/postgresql+psycopg:/postgresql:}"
-  pg_dump -Fc --no-owner --no-acl "$uri" > "$out"
+  pg_dump -Fc --no-owner --no-acl "$MIGRATION_DATABASE_URL" > "$out"
 }
 
 ensure_pre_migration_backup() {
@@ -125,7 +184,7 @@ ensure_pre_migration_backup() {
   ts="$(date -u +%Y%m%d-%H%M%S)"
   dump_path="$dumps_dir/pre-migrate-$ts.dump"
 
-  echo "[migrate] taking required pre-migration backup before Alembic (mode: $MODE)..."
+  echo "[migrate] taking required pre-migration backup before server migrations (mode: $MODE)..."
   if [[ "$RUN_MODE" == "host" ]]; then
     pre_migration_backup_host "$dump_path" || true
   else
@@ -134,7 +193,7 @@ ensure_pre_migration_backup() {
 
   if [[ ! -s "$dump_path" ]]; then
     echo "ERROR: pre-migration backup failed or produced an empty dump." >&2
-    echo "       Aborting BEFORE Alembic runs so the database is never migrated unprotected." >&2
+    echo "       Aborting BEFORE migrations run so the database is never migrated unprotected." >&2
     rm -f "$dump_path"
     exit 1
   fi
@@ -144,24 +203,21 @@ ensure_pre_migration_backup() {
 
 # ── Docker-native path (default) ──────────────────────────────────────────────
 run_docker() {
-  echo "Running Alembic migrations in the backend container (mode: $MODE)..."
-  echo "  target: in-network postgres service (DATABASE_URL from compose env)"
+  echo "Checking/applying server migrations in a one-shot migration container (mode: $MODE)..."
+  echo "  target: in-network postgres service (generated from POSTGRES_*)"
 
-  local running=""
-  running="$("${COMPOSE[@]}" ps --services --filter status=running 2>/dev/null || true)"
+  local pguser pgdb database_url
+  pguser="$(local_compose_setting_or_default POSTGRES_USER agent_space)"
+  pgdb="$(local_compose_setting_or_default POSTGRES_DB agent_space)"
+  local_compose_validate_pg_identifier "POSTGRES_USER" "$pguser"
+  local_compose_validate_pg_identifier "POSTGRES_DB" "$pgdb"
+  local_compose_ensure_postgres_ready "migration" "$pguser" "$pgdb"
+  database_url="$(compose_admin_database_url)"
 
-  if [[ $'\n'"$running"$'\n' == *$'\n'backend$'\n'* ]]; then
-    # Backend already running — exec into it (cheapest, shares the live network).
-    "${COMPOSE[@]}" exec -T backend python -m alembic upgrade head
-  else
-    local pguser
-    pguser="$(local_compose_setting_or_default POSTGRES_USER agent_space)"
-    local_compose_validate_pg_identifier "POSTGRES_USER" "$pguser"
-    local_compose_ensure_postgres_ready "migration" "$pguser"
-    # Backend not running — one-shot container. Compose starts the postgres
-    # dependency (depends_on: service_healthy) before Alembic connects.
-    "${COMPOSE[@]}" run --rm -T backend python -m alembic upgrade head
-  fi
+  "${COMPOSE[@]}" run --rm -T --no-deps \
+    -e SERVER_DATABASE_URL="$database_url" \
+    -e SERVER_MIGRATIONS_DIR=/app/server/migrations \
+    server node dist/db/migrateCli.js up
   echo "Migrations complete."
 }
 
@@ -169,35 +225,22 @@ run_docker() {
 run_host() {
   resolve_host_database_url
 
-  echo "Running Alembic migrations on host (mode: $MODE)..."
-  echo "  target: $(redacted_target "$DATABASE_URL")"
+  echo "Checking/applying server migrations on host (mode: $MODE)..."
+  echo "  target: $(redacted_target "$MIGRATION_DATABASE_URL")"
 
-  # Connectivity preflight — fail fast (and clearly) before Alembic runs so a
-  # caller like reset-postgres.sh never leaves a dropped/created DB unmigrated.
-  if ! DATABASE_URL="$DATABASE_URL" python3 - <<'PY'
-import os, sys
-from sqlalchemy import create_engine, text
-try:
-    engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
-except Exception as exc:  # never echo the exception (may contain credentials)
-    sys.stderr.write(f"unreachable: {type(exc).__name__}\n")
-    sys.exit(1)
-PY
-  then
-    echo "ERROR: cannot reach the configured Postgres in host mode." >&2
-    echo "       Verify the database is running and DATABASE_URL points to a reachable host:port." >&2
-    echo "       For the default Docker Compose setup, drop --host to migrate inside the backend container." >&2
-    exit 1
-  fi
-
-  cd "$BACKEND_DIR"
-  DATABASE_URL="$DATABASE_URL" python3 -m alembic upgrade head
+  cd "$REPO_ROOT/server"
+  COREPACK_ENABLE_AUTO_PIN=0 \
+    SERVER_DATABASE_URL="$MIGRATION_DATABASE_URL" \
+    SERVER_MIGRATIONS_DIR="$REPO_ROOT/server/migrations" \
+    npm run migrate
   echo "Migrations complete."
 }
 
-# ── Pre-migration backup gate ─────────────────────────────────────────────────
+# ── Target database bootstrap + pre-migration backup gate ─────────────────────
+if [[ "$RUN_MODE" == "docker" ]]; then
+  ensure_docker_database_exists
+fi
+
 # prod always requires it; other modes only when explicitly opted in.
 if [[ "$MODE" == "prod" || "$PRE_MIGRATION_BACKUP" == "1" ]]; then
   ensure_pre_migration_backup
@@ -206,16 +249,8 @@ else
   echo "          Opt in with PRE_MIGRATION_BACKUP=1 or --pre-migration-backup."
 fi
 
-if [[ "$RUN_MODE" == "host" ]] && local_compose_control_plane_ts_authority_enabled; then
-  echo "ERROR: automatic control-plane DB role provisioning currently supports docker-native migrations only." >&2
-  echo "       Re-run without --host, or provision the external database role separately." >&2
-  exit 1
-fi
-
 if [[ "$RUN_MODE" == "host" ]]; then
   run_host
 else
   run_docker
 fi
-
-local_compose_provision_control_plane_db_role "control-plane DB role provisioning"

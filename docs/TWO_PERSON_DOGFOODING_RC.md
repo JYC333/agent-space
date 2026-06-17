@@ -56,7 +56,7 @@ The following surfaces are allowed after all release gates pass:
 - Memory consolidation producing proposals from Activity.
 
 **Runs and execution**
-- Runs through canonical `app.runtimes` path only.
+- Runs through the canonical server runtime adapter path only.
 - RunStep replay and failure diagnosis via `GET /api/v1/runs/{id}/steps`.
 - Artifacts produced by runs; safe export within owned space.
 
@@ -110,7 +110,7 @@ Do not rely on any of these for daily dogfood workflows.
 | Remote multi-tenant deployment | Not in scope |
 | API key persistence UI | Feature-gated if not yet implemented |
 | Workspace console persisted sessions | Feature-gated if not yet implemented |
-| Any runtime adapter bypassing the credential resolver | Blocked by `RunExecutionService` design |
+| Any runtime adapter bypassing the credential resolver | Blocked by `RunOrchestrationService` design |
 | Any runtime adapter bypassing sandbox/path policy | Blocked by `execution_workspace` contract |
 | File mutation not protected by approved proposal + PathPolicy | Blocked by code patch apply boundary |
 
@@ -161,7 +161,7 @@ system_core workspace.
 ### Auth config
 
 ```env
-DEBUG=false   # prevents dev API key auto-seed
+SERVER_DEBUG=false
 ```
 
 All authenticated calls require a real session cookie or API key. No dev-identity fallback exists.
@@ -203,12 +203,13 @@ Backups are stored at `AGENT_SPACE_HOME/backups/` by default. Archives contain `
 ### Allowed runtime adapters for RC
 
 - `model_api` — managed API runtime; credentials resolved through `ModelProvider`
-  encrypted key via `runtimes/credentials.py`.
+  encrypted keys via `server/src/modules/providers/`.
 - `claude_code` / `codex_cli` — local CLI runtimes; credentials are profile-bound
   through the CLI credential broker.
 
-No adapter may read `ANTHROPIC_API_KEY` from the environment directly. All credentials
-must be resolved through `runtimes/credentials.py`.
+No adapter may read `ANTHROPIC_API_KEY` from the environment directly. Managed API
+credentials must resolve through `server/src/modules/providers/`; CLI runtime
+credentials must resolve through the CLI CredentialBroker.
 
 ### Deployment posture
 
@@ -223,14 +224,16 @@ must be resolved through `runtimes/credentials.py`.
 
 Run all of these before declaring RC ready.
 
-### Full backend suite
+### Full server suite
 
 ```bash
-cd backend
-python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -q --tb=short
+cd server
+npm run typecheck
+npm test -- --hookTimeout=60000
 ```
 
-Expected: 640 passed, 0 failed.
+Expected: all server tests pass. Tests that need Docker/Postgres may skip
+when no container runtime is available.
 
 ### Frontend typecheck
 
@@ -267,74 +270,19 @@ shellcheck ops/scripts/system/backup.sh ops/scripts/system/restore.sh ops/script
 ### Focused test groups by boundary
 
 ```bash
-cd backend
+cd server
 
-# Space contracts, auth, two-user isolation
-python3 -m pytest \
-  tests/contracts/test_space_contract.py \
-  tests/invariants/test_space_isolation.py \
-  tests/contracts/test_memory_api.py \
-  tests/contracts/test_workspace_api.py \
-  tests/contracts/test_activity_api.py \
-  -v
+# API entrypoint and route registry
+npm test -- gateway.test.ts composeConfig.test.ts
 
-# Actor identity
-python3 -m pytest \
-  tests/unit/test_actor_ref.py \
-  tests/unit/test_actor_service.py \
-  tests/invariants/test_actor_identity.py \
-  -v
+# Auth, spaces, memory, proposals, artifacts, workspace routes
+npm test -- authRoutes.test.ts memoryRoutes.test.ts proposalsRoutes.test.ts artifactsRoutes.test.ts workspacesRoutes.test.ts
 
-# RunStep replay and failure diagnosis
-python3 -m pytest \
-  tests/unit/test_run_step_taxonomy.py \
-  tests/workflows/test_run_step_workflow.py \
-  tests/workflows/test_runtime_failure_workflow.py \
-  tests/contracts/test_run_steps_api.py \
-  tests/invariants/test_run_step_invariants.py \
-  tests/invariants/test_run_auditability.py \
-  -v
+# Runtime, policy, run orchestration, and path safety
+npm test -- policyDecisionCore.test.ts policyEnforceService.test.ts policyRoutes.test.ts runsRoutes.test.ts runtimeHost.test.ts workspacesPathPolicy.test.ts
 
-# Runtime credential, sandbox, redaction
-python3 -m pytest \
-  tests/unit/test_runtime_credentials.py \
-  tests/unit/test_redaction.py \
-  tests/unit/test_runtime_policy.py \
-  tests/unit/test_path_policy.py \
-  tests/invariants/test_runtime_credential_sandbox_boundary.py \
-  tests/invariants/test_runtime_provider_separation.py \
-  -v
-
-# Persisted policy enforcement
-python3 -m pytest \
-  tests/unit/test_policy_engine.py \
-  tests/invariants/test_memory_write_invariants.py \
-  tests/contracts/test_memory_write_governance.py \
-  -v
-
-# Activity-first capture and provenance
-python3 -m pytest \
-  tests/contracts/test_activity_capture_contract.py \
-  tests/invariants/test_activity_source_boundary.py \
-  tests/workflows/test_activity_to_memory_workflow.py \
-  tests/workflows/test_activity_to_memory_provenance.py \
-  -v
-
-# Lifecycle and deployment boundary
-python3 -m pytest \
-  tests/invariants/test_lifecycle_deployment_boundary.py \
-  tests/unit/test_deployer_protocol.py \
-  -v
-
-# Backup service
-python3 -m pytest tests/unit/test_backup_service.py -v
-
-# DB transaction boundary
-python3 -m pytest \
-  tests/unit/test_job_transaction_boundary.py \
-  tests/invariants/test_run_step_invariants.py \
-  tests/invariants/test_memory_proposal_boundary.py \
-  -v
+# Jobs, backup, schedulers, deployment boundary
+npm test -- jobsSchedulers.test.ts backups.test.ts deploymentClient.test.ts
 ```
 
 ---
@@ -343,14 +291,14 @@ python3 -m pytest \
 
 This is a manual test. Run it before first dogfood writes.
 
-**Prerequisites:** frontend, control-plane, and backend running with dogfood config. `BACKUP_ENABLED=true`.
+**Prerequisites:** frontend and server running with dogfood config. `BACKUP_ENABLED=true`.
 
 ### Step 1 — Startup and backup verification
 
 ```bash
 ./ops/scripts/start.sh
-# Wait for control-plane and backend to start, then:
-curl -s http://localhost:8010/health
+# Wait for server to start, then:
+curl -s http://localhost:3000/api/v1/server/health
 # Expected: {"status": "ok", ...}
 ```
 
@@ -361,11 +309,11 @@ INFO  scheduler registry started tasks=...backup_scheduler...
 
 Or trigger a manual backup and confirm:
 ```bash
-curl -s -X POST http://localhost:8010/api/v1/system/backups/manual \
+curl -s -X POST http://localhost:3000/api/v1/system/backups/manual \
   -H "X-API-Key: <dogfood-api-key>"
 # Expected: {"status": "ok", "backup": "manual-YYYYMMDD-HHMMSS.tar.gz"}
 
-curl -s http://localhost:8010/api/v1/system/backups \
+curl -s http://localhost:3000/api/v1/system/backups \
   -H "X-API-Key: <dogfood-api-key>"
 # Expected: list with at least one archive containing backup_manifest.json
 ```
@@ -385,17 +333,17 @@ Create or confirm two users with distinct credentials:
 
 ```bash
 # As User A: list spaces
-curl -s "http://localhost:8010/api/v1/spaces" \
+curl -s "http://localhost:3000/api/v1/spaces" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: personal space for User A
 
 # As User B: list spaces
-curl -s "http://localhost:8010/api/v1/spaces" \
+curl -s "http://localhost:3000/api/v1/spaces" \
   -H "X-API-Key: <user-b-api-key>"
 # Expected: personal space for User B
 
 # As either user: confirm household space membership
-curl -s "http://localhost:8010/api/v1/spaces?space_type=household" \
+curl -s "http://localhost:3000/api/v1/spaces?space_type=household" \
   -H "X-API-Key: <user-a-api-key>"
 ```
 
@@ -403,12 +351,12 @@ curl -s "http://localhost:8010/api/v1/spaces?space_type=household" \
 
 ```bash
 # User B attempts to access User A's personal space — must be 403
-curl -s "http://localhost:8010/api/v1/memory?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:3000/api/v1/memory?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-b-api-key>"
 # Expected: HTTP 403
 
 # User A attempts to access User B's personal space — must be 403
-curl -s "http://localhost:8010/api/v1/memory?space_id=<user-b-personal-space-id>" \
+curl -s "http://localhost:3000/api/v1/memory?space_id=<user-b-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: HTTP 403
 ```
@@ -417,11 +365,11 @@ curl -s "http://localhost:8010/api/v1/memory?space_id=<user-b-personal-space-id>
 
 ```bash
 # Both users can read household space memory
-curl -s "http://localhost:8010/api/v1/memory?space_id=<household-space-id>&status=active" \
+curl -s "http://localhost:3000/api/v1/memory?space_id=<household-space-id>&status=active" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: 200 (may be empty list)
 
-curl -s "http://localhost:8010/api/v1/memory?space_id=<household-space-id>&status=active" \
+curl -s "http://localhost:3000/api/v1/memory?space_id=<household-space-id>&status=active" \
   -H "X-API-Key: <user-b-api-key>"
 # Expected: 200 (same list)
 ```
@@ -430,14 +378,14 @@ curl -s "http://localhost:8010/api/v1/memory?space_id=<household-space-id>&statu
 
 ```bash
 # User A captures a thought — must create ActivityRecord, not Session
-curl -s -X POST "http://localhost:8010/api/v1/activity" \
+curl -s -X POST "http://localhost:3000/api/v1/activity" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"space_id": "<user-a-personal-space-id>", "content": "Test thought for RC smoke test", "source_type": "user_capture", "activity_type": "capture"}'
 # Expected: 201 with ActivityRecord id
 
 # Confirm it appears in Activity Inbox
-curl -s "http://localhost:8010/api/v1/activity?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:3000/api/v1/activity?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: list including the new ActivityRecord
 ```
@@ -447,13 +395,13 @@ curl -s "http://localhost:8010/api/v1/activity?space_id=<user-a-personal-space-i
 Trigger consolidation or create a proposal manually:
 ```bash
 # Consolidate activity into proposal
-curl -s -X POST "http://localhost:8010/api/v1/activity/consolidate" \
+curl -s -X POST "http://localhost:3000/api/v1/activity/consolidate" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"space_id": "<user-a-personal-space-id>"}'
 
 # Check proposals
-curl -s "http://localhost:8010/api/v1/proposals?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:3000/api/v1/proposals?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: at least one proposal with provenance_entries referencing the ActivityRecord
 ```
@@ -462,14 +410,14 @@ curl -s "http://localhost:8010/api/v1/proposals?space_id=<user-a-personal-space-
 
 ```bash
 # Accept the proposal
-curl -s -X POST "http://localhost:8010/api/v1/proposals/<proposal-id>/accept" \
+curl -s -X POST "http://localhost:3000/api/v1/proposals/<proposal-id>/accept" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"space_id": "<user-a-personal-space-id>"}'
 # Expected: 200 with resulting_memory_id
 
 # Confirm MemoryEntry has source_activity_id set
-curl -s "http://localhost:8010/api/v1/memory/<memory-id>?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:3000/api/v1/memory/<memory-id>?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: source_activity_id not null; source_trust present
 ```
@@ -478,18 +426,18 @@ curl -s "http://localhost:8010/api/v1/memory/<memory-id>?space_id=<user-a-person
 
 ```bash
 # Archive the memory (must return proposal, not direct delete)
-curl -s -X DELETE "http://localhost:8010/api/v1/memory/<memory-id>?space_id=<user-a-personal-space-id>" \
+curl -s -X DELETE "http://localhost:3000/api/v1/memory/<memory-id>?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: 202 with memory_archive proposal
 
 # Accept archive proposal
-curl -s -X POST "http://localhost:8010/api/v1/proposals/<archive-proposal-id>/accept" \
+curl -s -X POST "http://localhost:3000/api/v1/proposals/<archive-proposal-id>/accept" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"space_id": "<user-a-personal-space-id>"}'
 
 # Confirm archived memory is excluded from active reads
-curl -s "http://localhost:8010/api/v1/memory?space_id=<user-a-personal-space-id>&status=active" \
+curl -s "http://localhost:3000/api/v1/memory?space_id=<user-a-personal-space-id>&status=active" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: archived entry not in list
 ```
@@ -498,14 +446,14 @@ curl -s "http://localhost:8010/api/v1/memory?space_id=<user-a-personal-space-id>
 
 ```bash
 # Create a run (model_api adapter — requires a configured ModelProvider)
-curl -s -X POST "http://localhost:8010/api/v1/runs" \
+curl -s -X POST "http://localhost:3000/api/v1/runs" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"space_id": "<user-a-personal-space-id>", "adapter_type": "model_api", "input": "smoke test"}'
 # Note run_id
 
 # Check RunSteps (may need to wait for run to complete)
-curl -s "http://localhost:8010/api/v1/runs/<run-id>/steps?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:3000/api/v1/runs/<run-id>/steps?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: ordered list of RunStep records
 ```
@@ -514,16 +462,16 @@ curl -s "http://localhost:8010/api/v1/runs/<run-id>/steps?space_id=<user-a-perso
 
 ```bash
 # List artifacts for the run
-curl -s "http://localhost:8010/api/v1/artifacts?space_id=<user-a-personal-space-id>&run_id=<run-id>" \
+curl -s "http://localhost:3000/api/v1/artifacts?space_id=<user-a-personal-space-id>&run_id=<run-id>" \
   -H "X-API-Key: <user-a-api-key>"
 
 # Export artifact inline
-curl -s "http://localhost:8010/api/v1/artifacts/<artifact-id>/export?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:3000/api/v1/artifacts/<artifact-id>/export?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: artifact content
 
 # Cross-space export must fail
-curl -s "http://localhost:8010/api/v1/artifacts/<artifact-id>/export?space_id=<user-b-personal-space-id>" \
+curl -s "http://localhost:3000/api/v1/artifacts/<artifact-id>/export?space_id=<user-b-personal-space-id>" \
   -H "X-API-Key: <user-b-api-key>"
 # Expected: 404
 ```
@@ -531,7 +479,7 @@ curl -s "http://localhost:8010/api/v1/artifacts/<artifact-id>/export?space_id=<u
 ### Step 11 — Home summary
 
 ```bash
-curl -s "http://localhost:8010/api/v1/home/summary?space_id=<user-a-personal-space-id>" \
+curl -s "http://localhost:3000/api/v1/home/summary?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: 200 with read-only summary object
 ```
@@ -540,14 +488,14 @@ curl -s "http://localhost:8010/api/v1/home/summary?space_id=<user-a-personal-spa
 
 ```bash
 # Deployment jobs must be 501
-curl -s -X POST "http://localhost:8010/api/v1/deployments/jobs" \
+curl -s -X POST "http://localhost:3000/api/v1/deployments/jobs" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"job_type": "arbitrary", "target": "local"}'
 # Expected: 501
 
 # Deployment jobs list must be empty
-curl -s "http://localhost:8010/api/v1/deployments/jobs" \
+curl -s "http://localhost:3000/api/v1/deployments/jobs" \
   -H "X-API-Key: <user-a-api-key>"
 # Expected: []
 ```
@@ -569,21 +517,21 @@ Run this before first write session and periodically during dogfooding.
 grep BACKUP_ENABLED ~/.aspace/dev/.env
 # Expected: BACKUP_ENABLED=true
 
-# Check backend startup logs for scheduler confirmation
-grep "backup_scheduler" ~/.aspace/dev/logs/backend.log
+# Check server startup logs for scheduler confirmation
+docker compose -p agent-space-dev -f ops/compose/docker-compose.dev.yml logs server | grep "backup_scheduler"
 # Expected: scheduler registry started with backup_scheduler
 ```
 
 ### Trigger a manual backup (API, or offline CLI)
 
-**API (backend running):**
+**API (server running):**
 ```bash
-curl -s -X POST http://localhost:8010/api/v1/system/backups/manual \
+curl -s -X POST http://localhost:3000/api/v1/system/backups/manual \
   -H "X-API-Key: <dogfood-api-key>"
 # Expected: {"status": "ok", "backup": "manual-YYYYMMDD-HHMMSS.tar.gz"}
 ```
 
-**Offline full-system CLI (backend not running, postgres up):**
+**Offline full-system CLI (server not running, postgres up):**
 ```bash
 ops/scripts/system/backup.sh --mode dev
 # Archives to ~/.aspace/dev/backups/system-<timestamp>.tar.gz
@@ -593,7 +541,7 @@ ops/scripts/system/backup.sh --mode dev
 ### List backup archives
 
 ```bash
-curl -s http://localhost:8010/api/v1/system/backups \
+curl -s http://localhost:3000/api/v1/system/backups \
   -H "X-API-Key: <dogfood-api-key>"
 # Expected: JSON list of archives with name, size, created_at
 
@@ -624,7 +572,7 @@ Rehearse against the disposable `test` mode so the live `dev` data is untouched.
 
 **Stop the app, leave postgres running:**
 ```bash
-docker compose -p agent-space-test -f ops/compose/docker-compose.test.yml stop backend frontend deployer
+docker compose -p agent-space-test -f ops/compose/docker-compose.test.yml stop server frontend deployer
 docker compose -p agent-space-test -f ops/compose/docker-compose.test.yml up -d postgres
 ```
 
@@ -645,14 +593,14 @@ ops/scripts/system/restore.sh "$ARCHIVE" --mode test --force
 # (start.sh derives the mode root from ASPACE_ROOT, default ~/.aspace; it does not
 #  read AGENT_SPACE_HOME — that is the in-container instance root.)
 ./ops/scripts/start.sh --test
-curl -s http://localhost:8110/health
+curl -s http://localhost:3100/api/v1/server/health
 # Expected: {"status": "ok", ...}
 ```
 
 ### Verify key data survives restore
 
 ```bash
-BASE="http://localhost:8010/api/v1"
+BASE="http://localhost:3000/api/v1"
 KEY="X-API-Key: <dogfood-api-key>"
 SPACE="<space-id>"
 
@@ -692,7 +640,7 @@ Use this procedure when a stop condition triggers or a serious incident occurs.
 
 Prevent new writes from entering the database:
 ```bash
-docker compose -p agent-space-dev -f ops/compose/docker-compose.dev.yml stop backend frontend deployer
+docker compose -p agent-space-dev -f ops/compose/docker-compose.dev.yml stop server frontend deployer
 ```
 
 Keep postgres running so restore tooling can connect.
@@ -749,8 +697,8 @@ ENABLE_SYSTEM_EVOLUTION=false    # if self-evolution implicated
 BACKUP_ENABLED=false             # temporarily if backup itself is problematic
 ```
 
-Or comment out the module in `backend/app/modules/registry.py` if a specific
-module is implicated.
+Or remove the implicated module from `server/src/gateway/routeRegistry.ts`
+if a specific backend module must be disabled.
 
 ### Step 8 — Record incident note
 
@@ -759,8 +707,8 @@ File an incident note immediately (see §J template) before resuming or discussi
 ### Step 9 — Re-run the failed gate
 
 ```bash
-cd backend
-python3 -m pytest tests/<implicated-tests> -v
+cd server
+npm test -- <implicated-tests>
 ```
 
 Do not resume dogfooding until the failing gate passes.
@@ -793,7 +741,7 @@ Resume dogfooding only after the failed gate passes and the incident note is fil
    with the selected class does not change the enforcement decision it was meant to govern.
 
 5. **RunStep replay missing** — `GET /runs/{id}/steps` returns an empty list for a run
-   that completed through the canonical `app.runtimes` path.
+   that completed through the canonical server runtime adapter path.
 
 6. **Runtime secret in output** — A raw API key, secret, or credential appears in run
    output, RunStep metadata, artifact content, logs, or any UI surface.
@@ -884,7 +832,7 @@ Backup manifest inspected: <yes / no>
 | Risk | Status |
 |---|---|
 | `Credential.secret_ref` full decryption deferred | Only `ModelProvider` encrypted keys decryptable; full secret_ref deferred |
-| Obsolete `app.agents` runtime path | Runtime execution uses `app.runtimes`; new adapters must use `RuntimeAdapterSpec` |
+| Obsolete agents-module runtime path | Runtime execution uses `RuntimeAdapterSpec`; new adapters must start there |
 | Most PolicyEngine enforcement points not yet wired to persisted policy | Active classes: `memory.private_placement`, `run.user_private_scope`; structural write boundary via sentinel; rest documented in `PRODUCT_AND_BOUNDARIES.md` |
 | Artifact archive/delete API not yet implemented | Artifacts accumulate; deferred |
 | Activity archive/delete not yet implemented | Deferred |

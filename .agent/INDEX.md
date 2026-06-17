@@ -3,8 +3,8 @@
 ## 1. Repository Context
 
 agent-space is a space-based, multi-user, agent-first system for personal, family, and small-team
-use within a single deployment instance. It has a FastAPI backend (PostgreSQL), a React/Vite frontend
-(PWA), and a server-authoritative agent execution model: agents run server-side inside isolated
+use within a single deployment instance. It has a server backend (PostgreSQL),
+a React/Vite frontend (PWA), and a server-authoritative agent execution model: agents run server-side inside isolated
 sandboxes, memory is written only through a proposal → approval workflow, and policy and
 credentials are enforced centrally. The system is **not** local-first; it supports offline capture
 and draft queuing for personal convenience but agent execution, active memory, proposals,
@@ -15,12 +15,13 @@ durable position on this boundary.
 **Source of truth hierarchy:**
 
 1. **Code** — implementation truth; always wins over docs
-2. `backend/app/models.py` — canonical data model
-3. `backend/app/schemas.py` — API contracts
-4. `backend/app/modules/registry.py` — active backend modules and routes
-5. `apps/web/src/modules/registry.ts` — active frontend modules and nav items
-6. `.agent/BOUNDARIES.md` — architectural invariants; load for any structural change
-7. `.agent/decisions/` — accepted architectural decisions
+2. `server/migrations/` — canonical database schema migrations
+3. `packages/protocol/src/` — shared public DTOs and wire contracts
+4. `server/src/gateway/routeRegistry.ts` — active backend route registry
+5. `server/src/modules/` — active backend module implementations
+6. `apps/web/src/modules/registry.ts` — active frontend modules and nav items
+7. `.agent/BOUNDARIES.md` — architectural invariants; load for any structural change
+8. `.agent/decisions/` — accepted architectural decisions
 
 Docs in `.agent/architecture/` describe **current state**, not target-state speculation. Temporary
 reports in `.agent/reports/` are not source of truth and should be deleted after consolidation.
@@ -81,16 +82,14 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 | [architecture/EXECUTION_MODEL.md](architecture/EXECUTION_MODEL.md) | Run, RunStep, Job, Artifact, Proposal, actor identity, credential resolver |
 | [architecture/RUNS_AND_OUTPUTS.md](architecture/RUNS_AND_OUTPUTS.md) | Run outputs, materialization, boundaries |
 
-### Control Plane / TS Migration
+### Server / Backend
 
 | Doc | What it covers |
 |---|---|
-| [architecture/TS_PROTOCOL_FOUNDATION.md](architecture/TS_PROTOCOL_FOUNDATION.md) | Contracts-only TS protocol package |
-| [architecture/TS_MIGRATION_STRATEGY.md](architecture/TS_MIGRATION_STRATEGY.md) | Binding migration rules and context move checklist |
-| [architecture/TS_MIGRATION_ROADMAP.md](architecture/TS_MIGRATION_ROADMAP.md) | Current TS migration status, remaining cleanup, future feature backlog |
-| [architecture/TS_CONTROL_PLANE_OWNERSHIP.md](architecture/TS_CONTROL_PLANE_OWNERSHIP.md) | Current TS vs Python context ownership |
-| [architecture/TS_CONTROL_PLANE_FOUNDATION.md](architecture/TS_CONTROL_PLANE_FOUNDATION.md) | The control-plane service: gateway, Python fallback proxy, compose wiring |
-| [architecture/CONTROL_PLANE_MODULE_CONVENTION.md](architecture/CONTROL_PLANE_MODULE_CONVENTION.md) | TS-owned module structure, route registry, error envelope |
+| [architecture/PROTOCOL_FOUNDATION.md](architecture/PROTOCOL_FOUNDATION.md) | Contracts-only protocol package |
+| [architecture/SERVER_FOUNDATION.md](architecture/SERVER_FOUNDATION.md) | The server service: gateway, route registry, compose wiring |
+| [architecture/SERVER_OWNERSHIP.md](architecture/SERVER_OWNERSHIP.md) | Current server ownership and deferred surfaces |
+| [architecture/SERVER_MODULE_CONVENTION.md](architecture/SERVER_MODULE_CONVENTION.md) | Server-owned module structure, route registry, error envelope |
 
 ### Memory / Activity / Proposal
 
@@ -229,7 +228,8 @@ Additional agent rules:
 - Never write active memory directly — use proposals.
 - Never write vendor context files to the real workspace — write to sandbox only.
 - Read `BOUNDARIES.md` before making structural changes.
-- New module routes go in `app/<module>/api.py`, registered in `app/modules/registry.py`.
+- New backend routes go in `server/src/modules/<module>/routes.ts` and
+  the module is registered in `server/src/gateway/routeRegistry.ts`.
 - New frontend pages go in `apps/web/src/modules/<module>/`, registered in
   `apps/web/src/modules/registry.ts`.
 - Do not treat `.agent/reports/` content as durable source of truth.

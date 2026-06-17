@@ -41,7 +41,7 @@ keys, and `MemoryRetriever` cross-space hard-filter are all active. Space type c
 - Be inferred from `subject_user_id`; these fields have distinct semantics.
 
 **Current implementation status:** Partial. `owner_user_id` column exists on `MemoryEntry`.
-`MemoryStore.create()` assigns `owner_user_id` for private memories. `can_read_memory()` uses
+The server memory proposal/apply path assigns `owner_user_id` for private memories. `canReadMemory()` uses
 `owner_user_id` as the primary gate for private and highly-restricted visibility. Full
 ownership semantics for non-memory objects (runs, sessions, tasks) are not yet standardized.
 
@@ -65,10 +65,11 @@ ownership semantics for non-memory objects (runs, sessions, tasks) are not yet s
 **Values (current):** `private | space_shared | workspace_shared | selected_users | summary_only |
 restricted | public_template`
 
-**Current implementation status:** Existing and enforced at read time (`can_read_memory()` in
-`memory/read_auth.py`). Write-layer enforcement for `private` placement in personal spaces
-only is active in `MemoryStore.create()`. Selected-user list semantics are partially
-implemented (stored but not enforced beyond can_read_memory).
+**Current implementation status:** Existing and enforced at read time (`canReadMemory()` in
+`server/src/modules/memory/memoryReadAuth.ts`). Write-layer enforcement for
+`private` placement in personal spaces only is active in the memory
+proposal/apply path. Selected-user list semantics are partially implemented
+(stored but not enforced beyond `canReadMemory()`).
 
 ---
 
@@ -109,8 +110,8 @@ may access.
 - Include another user's private memories regardless of which space the run operates in.
 - Be widened without an explicit, documented authorization mechanism.
 
-**Current implementation status:** Partial. `ContextSnapshotPopulator` resolves
-`user_id = run.instructed_by_user_id or "system"` and passes it to `ContextBuilder`.
+**Current implementation status:** Partial. `ContextPrepareService` resolves
+`user_id = run.instructed_by_user_id or "system"` and passes it into context assembly.
 Private-memory gating via `user_id` is enforced in `MemoryRetriever`. A run in a shared
 space cannot reach personal-space private memories by default — `PersonalMemoryGrant` is
 the explicit authorization path when needed. See `docs/PERSONAL_MEMORY_GRANT.md`.

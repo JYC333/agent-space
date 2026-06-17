@@ -1,2 +1,0 @@
-"""Knowledge domain module."""
-

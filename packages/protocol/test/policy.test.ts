@@ -12,19 +12,16 @@ import {
 } from "../src/policy.js";
 
 /**
- * The canonical action registry fixture is generated from the Python
- * `app.policy.actions` registry (`list_action_definitions()`), and the Python
- * contract test (`backend/tests/contracts/test_policy_action_registry.py`)
- * asserts the same file. It is the shared source of truth: if either side
- * diverges, one of the two tests fails.
+ * Frozen canonical action registry fixture. It pins count, order, and public
+ * metadata so registry edits are deliberate.
  */
 const fixturePath = fileURLToPath(
   new URL("./fixtures/policy_action_registry.json", import.meta.url),
 );
-const pythonRegistry = JSON.parse(readFileSync(fixturePath, "utf8"));
+const registryFixture = JSON.parse(readFileSync(fixturePath, "utf8"));
 
 describe("policy action registry", () => {
-  it("every TS entry validates against the definition schema", () => {
+  it("every registry entry validates against the definition schema", () => {
     for (const def of POLICY_ACTION_REGISTRY) {
       expect(() => PolicyActionDefinitionSchema.parse(def)).not.toThrow();
     }
@@ -35,11 +32,11 @@ describe("policy action registry", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("matches the Python registry 1:1 (count, order, and every field)", () => {
-    expect(POLICY_ACTION_REGISTRY.length).toBe(pythonRegistry.length);
+  it("matches the frozen registry fixture 1:1 (count, order, and every field)", () => {
+    expect(POLICY_ACTION_REGISTRY.length).toBe(registryFixture.length);
     // Deep, order-sensitive equality — registries must be byte-identical data.
     expect(POLICY_ACTION_REGISTRY.map((d) => ({ ...d }))).toEqual(
-      pythonRegistry,
+      registryFixture,
     );
   });
 
@@ -67,7 +64,7 @@ describe("policy enforcement request/decision contracts", () => {
     ).toThrow();
   });
 
-  it("decision defaults match the Python dataclass", () => {
+  it("decision defaults match the public policy contract", () => {
     const dec = PolicyDecisionSchema.parse({
       decision: "allow",
       message: "ok",

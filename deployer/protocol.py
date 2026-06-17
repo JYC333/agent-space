@@ -1,7 +1,7 @@
 """
 Shared protocol definitions for the deployer Unix socket interface.
 
-The same file is importable by both the deployer process and the backend client.
+The same file is importable by both the deployer process and the server client.
 Wire format: one JSON object per line (newline-delimited JSON).
 """
 from __future__ import annotations
@@ -10,9 +10,9 @@ from typing import Literal
 # ── Core deployment jobs ──────────────────────────────────────────────────────
 
 CoreJobType = Literal[
-    "rebuild_agent_space",   # docker compose build + up -d backend frontend
-    "restart_agent_space",   # docker compose restart backend frontend
-    "health_check",          # curl /health on backend
+    "rebuild_agent_space",   # docker compose build + up -d server frontend
+    "restart_agent_space",   # docker compose restart server frontend
+    "health_check",          # server /health check
 ]
 
 # ── Self-evolution jobs ───────────────────────────────────────────────────────

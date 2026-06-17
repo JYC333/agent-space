@@ -14,7 +14,10 @@
   },
   "permissions": {
     "allow": [
-      "Bash(python3 -m pytest backend/tests/unit/test_memory_store_get_for_space.py -q)"
+      "Bash(cd server && npm run typecheck)",
+      "Bash(cd server && npx vitest run test/boundaries.test.ts)",
+      "Bash(cd packages/protocol && npm run typecheck)",
+      "Bash(cd apps/web && npm run typecheck)"
     ]
   }
 }

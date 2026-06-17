@@ -1,12 +1,11 @@
 /**
  * Canonical model contracts — provider-agnostic shapes for LLM invocation and
  * **streaming events**. Contracts only: this package provides no model client,
- * no transport, no agent loop, no authority. The Python provider facade
- * (litellm-backed) remains the sole invocation authority today; these shapes
- * exist so the future SSE/WS streaming edge and the TS runtime host speak one
- * event vocabulary across providers (migration roadmap absorption P1).
+ * no transport, no agent loop, no authority. Provider/runtime code maps to and
+ * from these shapes so streaming and runtime-host surfaces speak one event
+ * vocabulary across providers.
  *
- * Field names stay lockstep with what the Python facade already emits:
+ * Field names stay lockstep with what the provider API emits:
  * usage is `input_tokens`/`output_tokens`/`total_tokens`, streamed text is a
  * `delta`, and termination carries a `finish_reason`. Coded string fields
  * (roles, finish reasons) stay permissive per `common.ts` philosophy.
@@ -56,7 +55,7 @@ export const CanonicalToolDefinitionSchema = z.object({
 });
 export type CanonicalToolDefinition = z.infer<typeof CanonicalToolDefinitionSchema>;
 
-/** Token usage as serialised by the Python provider facade. */
+/** Token usage as serialised by the provider facade. */
 export const CanonicalUsageSchema = z.object({
   input_tokens: z.number().int().nonnegative().optional(),
   output_tokens: z.number().int().nonnegative().optional(),

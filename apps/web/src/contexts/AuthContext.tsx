@@ -37,6 +37,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { reloadUser() }, [reloadUser])
 
+  useEffect(() => {
+    function handleAuthRequired() {
+      setCurrentUser(null)
+      setIsLoading(false)
+    }
+
+    window.addEventListener('auth:required', handleAuthRequired)
+    return () => window.removeEventListener('auth:required', handleAuthRequired)
+  }, [])
+
   async function logout() {
     try { await authApi.logout() } catch { /* ignore */ }
     setCurrentUser(null)

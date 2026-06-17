@@ -19,7 +19,7 @@ for the file browser — the `:ro` Docker flag was redundant.
 If an explicit `path` is passed, the directory is assumed to already exist
 on the host. Stale paths silently return 404 from the file tree API.
 
-**Workspace path resolution (workspace_console api):**
+**Workspace path resolution (workspace-console routes under `workspaces`):**
 ```
 ws.path is absolute → use as-is
 ws.path is relative → workspace_root / ws.path
@@ -49,51 +49,40 @@ and an optional `dropUp` flag.
 
 Agents may not write these directly; they must go through a `code_patch`
 Proposal. Read access is allowed. The forbidden write suffixes are declared in
-`_FORBIDDEN_WRITE_SUFFIXES` in `backend/app/workspace/path_policy.py`.
+`FORBIDDEN_WRITE_SUFFIXES` in `server/src/modules/workspaces/pathPolicy.ts`.
 
 ---
 
 ## Workspace Console — Runtime Execution
 
-**Console sessions use local CLI runtimes only (async background tasks).**
+**Console session execution is not active.**
 
-| Runtime       | Path       | How it works |
-|---------------|------------|--------------|
-| `claude_code` | Async (BG) | Saves status="running", dispatches `BackgroundTask`, returns immediately |
-| `codex_cli`   | Async (BG) | Same as claude_code |
-
-Policy: Console sessions are local CLI runtimes (claude_code, codex_cli). Per ADR 0010 the
-invariant is **credential channel isolation** — an Anthropic API key must never enter a Claude
-Code CLI subprocess env (enforced by `local_executor.build_subprocess_env`'s allowlist). The
-in-process encrypted API channel (the reflector, `/providers/chat`) passes the key as a litellm
-parameter, never via env, and may serve any provider including Anthropic. The generic
-vendor-neutral API *runtime* adapter (`model_api`) uses that same in-process channel.
-
-Frontend polls `GET /workspace-console/sessions/{id}` every 2 s while
-`session.status === "running"`, then replays events with animation once done.
+Current workspace-console routes live inside the registered `workspaces` module.
+Tree, file, git status, git diff, runtime status, and session list reads exist;
+session create/detail/run/stop routes return the explicit feature-not-implemented
+response. Do not describe workspace-console sessions as a current local CLI
+execution path.
 
 **RuntimeAdapterSpec owns local CLI command semantics.**
 
 Model flags, permission bypass flags, invocation templates, and output parser
-selection are declared in `backend/app/runtimes/specs.py`. CLI binary install
-and status use the TS-controlled `/api/v1/runtime-tools` API; the retired
+selection are declared in `server/src/modules/runtimeAdapters/specs.ts`. CLI binary install
+and status use the server-controlled `/api/v1/runtime-tools` API; the retired
 `/api/v1/runtime-adapters` instance API must not be used.
 
-**Console sessions run in the workspace directory — no sandbox.**
-
-Local CLI runtimes are called with `sandbox_dir=None` and `workspace_path=<ws.path>`.
-This means they execute directly in the workspace (no git worktree, no Docker).
-For production use with untrusted prompts, wire through the sandbox
-infrastructure instead.
+Managed CLI execution belongs to the server `runs` path, which prepares
+ephemeral/worktree sandboxes and records evidence, artifacts, and proposals.
 
 ---
 
 ## Modules
 
-**Module route prefix comes from the `router = APIRouter(prefix=...)` in `api.py`.**
+**Module route ownership is explicit in `routeRegistry.ts`.**
 
-The `modules/registry.py` loader mounts each router at `/api/v1` and lets the
-`prefix` on the router define the rest of the path. Keep prefixes unique.
+Backend routes live in `server/src/modules/<module>/routes.ts`. A module
+is active only when its `ServerModule` is listed in
+`server/src/gateway/routeRegistry.ts`; unknown `/api/v1/*` routes return
+the local server 404 catch-all.
 
 **Frontend module components must be lazy-imported in `registry.ts`.**
 

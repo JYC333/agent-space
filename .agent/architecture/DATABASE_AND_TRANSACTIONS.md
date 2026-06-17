@@ -1,30 +1,32 @@
 # Database and Transactions
 
-## UnitOfWork Pattern
+## Transaction Helper Pattern
 
-`UnitOfWork` (`backend/app/db_uow.py`) owns transaction control: commit, rollback, flush, savepoint, and explicit failed-session detection.
+`withTransaction` (`server/src/db/tx.ts`) owns transaction control for
+server repositories: `BEGIN`, `COMMIT`, rollback on error, and client release.
 
-- Wraps an existing SQLAlchemy `Session`.
-- Exposes `flush()` without hiding SQLAlchemy.
-- Exposes `savepoint()` for nested best-effort writes.
-- Makes failed Session state explicit.
+- Wraps an existing `pg` pool/client boundary.
 - Does **not** provide generic query methods.
+- Keeps transaction ownership visible at service/repository call sites.
 
-Repositories and stores still own domain queries and row construction. `UnitOfWork` owns only transaction control.
+Repositories and stores still own domain queries and row construction. The
+transaction helper owns only transaction control.
 
 ## Transaction Ownership Rules
 
-- API routes may open or receive a Session, but must not scatter commits across unrelated operations.
+- API routes may open or receive a transaction helper, but must not scatter
+  commits across unrelated operations.
 - Workflow/service layer owns commit for multi-object workflows.
-- Repository/store helpers may add, query, and flush, but must not commit unless explicitly documented as a standalone operation.
+- Repository/store helpers may query and write, but must not commit unless
+  explicitly documented as a standalone operation.
 - Low-level helpers must not commit invisibly when used by proposal apply, run execution, job terminal state, or workspace lifecycle workflows.
 - `commit()` should appear only in approved transaction-owner modules or explicit standalone operations.
-- `rollback()` belongs at workflow boundaries and failed-session recovery paths, not inside unrelated low-level helpers.
-- `flush()` is allowed when IDs, FK checks, or constraints are needed before continuing, but it is not a durability boundary.
+- `rollback()` belongs at workflow boundaries and failed transaction recovery
+  paths, not inside unrelated low-level helpers.
 
 ## Savepoint and Best-Effort Rules
 
-**Best-effort evidence** (use `UnitOfWork.savepoint()` or a separate short transaction):
+**Best-effort evidence** (use a separate short transaction):
 - RunStep metadata and terminal detail
 - Auxiliary Activity records
 - Traces and read logs
@@ -39,7 +41,7 @@ Repositories and stores still own domain queries and row construction. `UnitOfWo
 - Workspace lifecycle state
 - Backup manifest/archive state
 
-If SQLAlchemy marks the whole Session failed, the helper must surface that state. Callers must not continue as though the Session were clean.
+If a transaction fails, callers must not continue as though the transaction were clean.
 
 ## External Call Boundary
 
@@ -59,14 +61,15 @@ Required pattern:
 5. Open short transaction.
 6. Persist result or failure.
 
-`RunExecutionService` applies this: setup state is committed before adapter execution; result/failure is persisted in a separate transaction afterward.
+`RunOrchestrationService` applies this: setup state is committed before adapter execution; result/failure is persisted in a separate transaction afterward.
 
 ## Backup and Restore Consistency
 
 - `BackupService` uses `pg_dump -Fc` (custom format) for a consistent PostgreSQL database snapshot, independent from the ORM Session. `db_snapshot_method` is `"pg_dump_custom"` in the manifest.
 - If `pg_dump` fails, the backup fails closed — no partial archive is produced.
 - Full-system backup also copies file data. The database dump and file copies are not one cross-resource transaction, so restore verification checks artifact rows against restored files.
-- Run `ops/scripts/system/verify-restore.sh` after restore to verify Alembic state, core table counts, and `artifacts.storage_path` file consistency.
+- Run `ops/scripts/system/verify-restore.sh` after restore to verify server
+  migration rows, core table counts, and `artifacts.storage_path` file consistency.
 - Long-running app transactions must be avoided so backups stay fresh.
 - Backup metadata and manifests must not contain raw secrets.
 - `backups/` is always excluded from backup archives (recursion prevention).
@@ -76,62 +79,66 @@ Required pattern:
   in its excluded paths.
 - **Manifest version metadata.** Every manifest (online `BackupService` and offline
   `ops/scripts/system/backup.sh`) records `backup_format`, `app_version`, `git_commit`,
-  `alembic_revision`, `postgres_server_version`, and `pg_dump_version`. Each value is
-  best-effort and may be `null`; gathering it never aborts a backup.
+  `schema_migration_version`, `schema_migration_checksum`, `postgres_server_version`, and
+  `pg_dump_version`. Each value is best-effort and may be `null`; gathering it never aborts a backup.
 - **Restore preflight validates version metadata.** `ops/scripts/system/restore.sh` reads the
   manifest, prints the recorded versions, and warns clearly on `backup_format` or PostgreSQL
   major-version mismatch. Manifest metadata is never silently ignored.
 
 ## Database: PostgreSQL
 
-- **PostgreSQL is the server database.** `DATABASE_URL` accepts
-  `postgresql+psycopg://...` and normalizes `postgresql://...` to the canonical
-  psycopg form. The app rejects non-PostgreSQL URLs at startup.
+- **PostgreSQL is the server database.** Server database URLs use
+  PostgreSQL connection strings. The app rejects non-PostgreSQL URLs at startup.
 - **Local compose/env resolution** is shared by `ops/scripts/start.sh`, `ops/scripts/db/*.sh`,
   and `ops/scripts/system/*.sh` through `ops/scripts/lib/local-compose.sh`: mode validation,
   `ASPACE_ROOT`, `$ASPACE_ROOT/<mode>`, `$MODE_ROOT/.env`, `AGENT_SPACE_MODE_ROOT`,
   compose project/file, and `docker compose --env-file "$ENV_FILE"` are one path.
 - Local PostgreSQL containers have stable mode-specific names:
   `agent-space-dev-postgres`, `agent-space-test-postgres`, and `agent-space-prod-postgres`.
-- Schema is owned by Alembic migrations (`backend/migrations/`); application startup runs
-  `alembic upgrade head` (`app.db.init_db`) and never creates schema via `create_all()`.
+- Schema is owned by explicit server migrations under `server/migrations/`.
+  Application startup does not auto-migrate and never creates schema implicitly.
+- In bundled compose modes, server uses the Postgres owner/app role from
+  `POSTGRES_USER`/`POSTGRES_PASSWORD`; ops scripts generate
+  `SERVER_DATABASE_URL` from those values and do not maintain a separate
+  per-table app role.
 - Boolean defaults are PostgreSQL-native (`true`/`false`).
 - **Migration command path** (`ops/scripts/db/migrate.sh`): defaults to Docker-native — it runs
-  Alembic *inside the backend service* via Compose, so it uses the in-network `postgres` host
-  (Postgres is not published to the host) and the matching client/deps from the backend image.
-  `--host` runs Alembic on the host only against an explicitly configured, reachable external
-  Postgres, with a connectivity preflight. `ops/scripts/db/reset-postgres.sh` reuses this path so a
-  freshly dropped/created DB is always migrated (never left empty/unmigrated).
+  `node dist/db/migrateCli.js up` inside a one-shot server container, so it uses the
+  in-network `postgres` host (Postgres is not published to the host). Before running migrations,
+  Docker-native mode creates `POSTGRES_DB` if the target database is missing, so deleting the
+  database and then running migrate is a valid empty-instance initialization path. `--host` runs
+  the same server migration runner from `server/` only against an explicitly configured,
+  reachable external Postgres. `ops/scripts/db/reset-postgres.sh` reuses this path after dropping
+  the target DB so it is recreated by migrate and never left empty/unmigrated.
+  `ops/scripts/start.sh` invokes this migration helper before starting app services; the
+  server service process itself still does not run migrations on startup.
+  Dev/test compose bind-mounts `server/migrations/` so local SQL edits are visible to the
+  one-shot migration container. Prod uses migrations bundled into the server image; build
+  the image for a new release before starting prod.
   If Docker-native migration starts the compose `postgres` service, it stops that service on
   exit; DB-only dump/restore/reset and offline system backup/restore/verify use the same
   start/stop ownership rule. They leave a pre-existing running database untouched.
 - **Pre-migration backup safety** (`ops/scripts/db/migrate.sh`): `--mode prod` requires a
-  pre-migration `pg_dump -Fc` backup before Alembic runs, written to
+  pre-migration `pg_dump -Fc` backup before server migrations run, written to
   `$ASPACE_ROOT/<mode>/db/dumps/pre-migrate-<timestamp>.dump`. If that dump fails, migration
-  aborts before Alembic touches the schema. Non-prod modes skip it for convenience; opt in with
+  aborts before migrations touch the schema. Non-prod modes skip it for convenience; opt in with
   `PRE_MIGRATION_BACKUP=1` or `--pre-migration-backup`.
-- **Fresh-instance bootstrap** (`app.bootstrap.bootstrap_instance`, called from lifespan): on an
-  empty migrated DB it idempotently ensures the default personal space, the default owner user +
-  active membership, and the default execution planes — the usable initial state.
+- **Fresh-instance bootstrap** is server-owned: on an empty migrated DB it
+  idempotently ensures the default personal space, default owner user + active
+  membership, and default execution planes — the usable initial state.
 - PostgreSQL data lives under `$ASPACE_ROOT/<mode>/db/postgres` (bind-mounted into the postgres container).
 - Database dumps live under `$ASPACE_ROOT/<mode>/db/dumps`.
-- Local test mode publishes the control-plane API at `localhost:8110`. The backend
-  container listens on internal port `8000` and is mapped to host `localhost:8100`
-  only for direct Python debugging; compose-internal web traffic uses
-  `http://control-plane:8010`.
+- Local test mode reaches the server API through the frontend proxy at `localhost:3100/api/v1`; compose-internal web traffic uses `http://server:8010`.
 - Job queue uses `SELECT ... FOR UPDATE SKIP LOCKED` for safe concurrent claim. `jobs.scheduled_at`
   is NOT NULL with a server default, and DB CHECK constraints enforce the allowed `status` set,
   `attempts >= 0`, and `max_attempts > 0`.
 - `RunStep` has DB-level `UniqueConstraint(run_id, step_index)`.
 - `BackupService` uses a local advisory lock file (`backups/.backup.lock`, fcntl-based) and fails closed when `pg_dump` fails.
-- Backup/restore uses `pg_dump -Fc --no-owner --no-acl` (custom format) and `pg_restore`. The
-  backend image pins `postgresql-client-${PG_MAJOR}` to the `postgres:<major>` server so the
-  online `pg_dump` client is never older than the server. Backups are disabled by default; prod
-  fails fast at startup unless `BACKUP_ENABLED=true` or `BACKUP_ACCEPT_NO_BACKUP=true`.
+- Backup/restore uses `pg_dump -Fc --no-owner --no-acl` (custom format) and `pg_restore`. Backups are disabled by default; prod fails fast at startup unless `BACKUP_ENABLED=true` or `BACKUP_ACCEPT_NO_BACKUP=true`.
 
 ## Deployment Topology Assumption
 
-Current local deployment assumes one backend process owns startup migration/bootstrap/schedulers. Multi-backend deployment is out of current scope and requires separate migration/bootstrap and scheduler leadership.
+Current local deployment assumes one server process owns bootstrap and schedulers. Migrations are explicit ops commands. Multi-server deployment is out of current scope and requires separate bootstrap/scheduler leadership.
 
 ## Rules
 
@@ -156,13 +163,13 @@ Current local deployment assumes one backend process owns startup migration/boot
 
 | Area | Transaction owner | External call risk |
 |---|---|---|
-| RunService / run creation | `RunService` | Low |
-| RunExecutionService / runtime execution | `RunExecutionService` — setup commit before adapter | High: adapter/sandbox |
+| Run creation | runs module | Low |
+| Runtime execution | `RunOrchestrationService` — setup commit before adapter | High: adapter/sandbox |
 | RunStep writes | Caller — savepoint-isolated best-effort | Low per step |
-| Artifact persistence | Caller (`RunExecutionService`) | File storage write |
-| Proposal creation / acceptance / rejection | `ProposalService` | Code patch file write |
-| Memory proposal apply | `ProposalService.accept` — one commit with rollback on failure | Source monitoring only (in-process) |
-| Policy proposal apply | `ProposalService.accept` — one commit | None |
+| Artifact persistence | Caller (`RunOrchestrationService`) | File storage write |
+| Proposal creation / acceptance / rejection | proposals module | Code patch file write |
+| Memory proposal apply | `PgProposalApplyService.accept` — one commit with rollback on failure | Source monitoring only (in-process) |
+| Policy proposal apply | `PgProposalApplyService.accept` — one commit | None |
 | Activity capture | `ActivityService` | None |
 | Activity consolidation | One short commit per activity outcome | Low (consolidation model call possible) |
 | Job queue / handlers | Short standalone commits; auxiliary events isolated | Handler execution |

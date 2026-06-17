@@ -1,6 +1,6 @@
 # Testing Strategy
 
-Date: 2026-05-14
+Date: 2026-06-17
 
 This document defines the current backend testing architecture. The suite is organized by product confidence layer, not by implementation package.
 
@@ -9,23 +9,19 @@ This document defines the current backend testing architecture. The suite is org
 Canonical backend tests live under:
 
 ```text
-backend/tests/
-  unit/
-  contracts/
-  invariants/
-  workflows/
-  support/
+server/test/
+packages/protocol/test/
 ```
 
-`tests/unit` contains deterministic rule and boundary tests. Use it for policy decisions, path decisions, state transitions, parser behavior, serialization contracts, and small pure functions. Unit tests must not require the database, network, real runtime execution, or real provider calls.
+Server unit-style tests contain deterministic rule and boundary checks. Use them for policy decisions, path decisions, state transitions, parser behavior, serialization contracts, and small pure functions. Unit tests must not require the database, network, real runtime execution, or real provider calls.
 
-`tests/contracts` contains public boundary tests. Use it for API response shapes, status codes, request validation, adapter/provider protocol contracts, schema checks, storage/path contracts, and observable side effects across a public boundary. API contract tests use `TestClient` and real database state.
+Route and integration tests contain public boundary checks. Use them for API response shapes, status codes, request validation, adapter/provider protocol contracts, schema checks, storage/path contracts, and observable side effects across a public boundary.
 
-`tests/invariants` contains cross-cutting product rules that must hold even when internals change. Use it for space isolation, approval gates, run auditability, artifact path boundaries, terminal run state, workspace path enforcement, memory mutation boundaries, proposal application boundaries, and runtime/provider separation.
+Invariant-style tests contain cross-cutting product rules that must hold even when internals change. Use them for space isolation, approval gates, run auditability, artifact path boundaries, terminal run state, workspace path enforcement, memory mutation boundaries, proposal application boundaries, and runtime/provider separation.
 
-`tests/workflows` contains multi-step product flows from request to durable result. Use it for activity-to-memory, run execution, run output materialization, produced artifact paths, proposal approval, home summary behavior, workspace code proposal flows, and runtime failure handling. Workflow tests assert final observable state and audit trail.
+Workflow-style tests contain multi-step product flows from request to durable result. Use them for activity-to-memory, run execution, run output materialization, produced artifact paths, proposal approval, home summary behavior, workspace code proposal flows, and runtime failure handling. Workflow tests assert final observable state and audit trail.
 
-`tests/support` contains shared factories, fixtures, fake runtimes, fake providers, and assertion helpers. Support code should make valid product states easy to create and invalid states explicit at the call site.
+Test support files contain shared factories, fixtures, fake runtimes, fake providers, and assertion helpers. Support code should make valid product states easy to create and invalid states explicit at the call site.
 
 ## What To Test
 
@@ -132,10 +128,17 @@ Tests should protect these durable behaviors:
 
 ## Canonical Command
 
-Pytest configures an isolated `AGENT_SPACE_HOME` in `tests/conftest.py` before importing the app. Use the canonical layered suite command:
+Use the server and protocol suites from their package roots:
 
 ```bash
-cd backend && python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
+cd server
+COREPACK_ENABLE_AUTO_PIN=0 pnpm exec tsc --noEmit
+COREPACK_ENABLE_AUTO_PIN=0 pnpm exec vitest run
+
+cd ../packages/protocol
+COREPACK_ENABLE_AUTO_PIN=0 pnpm exec vitest run
 ```
 
-Do not point tests at a real mode data tree. Use `AGENT_SPACE_PYTEST_USE_REAL_HOME=1` only for explicit manual debugging.
+Do not point tests at a real mode data tree. Integration tests that need
+Postgres must use explicit test fixtures or the Docker-native ops helpers,
+never a live dev/prod instance directory.

@@ -12,8 +12,9 @@
 # ops/scripts/system/restore.sh.
 #
 # Use this when app services are stopped; the script starts PostgreSQL if needed
-# and stops it afterward only when it started it. When the backend is running,
-# the scheduled BackupService (or POST /api/v1/system/backups/manual) is canonical.
+# and stops it afterward only when it started it. When the server is
+# running, the scheduled BackupService (or POST /api/v1/system/backups/manual)
+# is canonical.
 #
 # Usage:
 #   ops/scripts/system/backup.sh [--mode dev|test|prod] [--output DIR] [--include-logs] [--force-running]
@@ -93,11 +94,11 @@ require_app_services_stopped() {
 
   echo "ERROR: app service(s) still running for mode '$MODE': ${running[*]}" >&2
   echo "       Stop app services first; backup will manage postgres as needed." >&2
-  echo "       $COMPOSE_HINT stop frontend control-plane backend deployer" >&2
+  echo "       $COMPOSE_HINT stop frontend server deployer" >&2
   exit 1
 }
 
-require_app_services_stopped frontend control-plane backend deployer
+require_app_services_stopped frontend server deployer
 
 STAGING=""
 trap 'local_compose_stop_postgres_if_started "backup"; [[ -z "$STAGING" ]] || rm -rf "$STAGING"' EXIT
@@ -154,12 +155,14 @@ EXCLUDED+=(
 
 # ── Version metadata (best-effort; recorded for restore compatibility checks) ──
 # Each value is best-effort and may be empty; gathering it never aborts a backup.
-MANIFEST_APP_VERSION="$(grep -oE 'app_version: str = "[^"]+"' "$REPO_ROOT/backend/app/config.py" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"' || true)"
+MANIFEST_APP_VERSION="$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$REPO_ROOT/server/package.json" 2>/dev/null | head -1 | grep -oE '"[^"]+"$' | tr -d '"' || true)"
 MANIFEST_GIT_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
 MANIFEST_PG_SERVER_VERSION="$("${COMPOSE[@]}" exec -T postgres \
   psql -U "$PGUSER" -d "$PGDB" -tAc 'SHOW server_version' 2>/dev/null | tr -d '[:space:]' || true)"
-MANIFEST_ALEMBIC_REVISION="$("${COMPOSE[@]}" exec -T postgres \
-  psql -U "$PGUSER" -d "$PGDB" -tAc 'SELECT version_num FROM alembic_version' 2>/dev/null | tr -d '[:space:]' || true)"
+MANIFEST_SCHEMA_MIGRATION_VERSION="$("${COMPOSE[@]}" exec -T postgres \
+  psql -U "$PGUSER" -d "$PGDB" -tAc 'SELECT version FROM server_schema_migrations ORDER BY version DESC LIMIT 1' 2>/dev/null | tr -d '[:space:]' || true)"
+MANIFEST_SCHEMA_MIGRATION_CHECKSUM="$("${COMPOSE[@]}" exec -T postgres \
+  psql -U "$PGUSER" -d "$PGDB" -tAc 'SELECT checksum FROM server_schema_migrations ORDER BY version DESC LIMIT 1' 2>/dev/null | tr -d '[:space:]' || true)"
 MANIFEST_PG_DUMP_VERSION="$("${COMPOSE[@]}" exec -T postgres \
   pg_dump --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)*' | head -1 || true)"
 
@@ -167,7 +170,8 @@ MANIFEST_PG_DUMP_VERSION="$("${COMPOSE[@]}" exec -T postgres \
 MANIFEST_APP_VERSION="$MANIFEST_APP_VERSION" \
 MANIFEST_GIT_COMMIT="$MANIFEST_GIT_COMMIT" \
 MANIFEST_PG_SERVER_VERSION="$MANIFEST_PG_SERVER_VERSION" \
-MANIFEST_ALEMBIC_REVISION="$MANIFEST_ALEMBIC_REVISION" \
+MANIFEST_SCHEMA_MIGRATION_VERSION="$MANIFEST_SCHEMA_MIGRATION_VERSION" \
+MANIFEST_SCHEMA_MIGRATION_CHECKSUM="$MANIFEST_SCHEMA_MIGRATION_CHECKSUM" \
 MANIFEST_PG_DUMP_VERSION="$MANIFEST_PG_DUMP_VERSION" \
 python3 - "$STAGING/backup_manifest.json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MODE_ROOT" \
   "$BACKUP_INTERVAL_HOURS" "$BACKUP_RETENTION_COUNT" \
@@ -206,7 +210,8 @@ manifest = {
     "warnings": [],
     "app_version": _opt("MANIFEST_APP_VERSION"),
     "git_commit": _opt("MANIFEST_GIT_COMMIT"),
-    "alembic_revision": _opt("MANIFEST_ALEMBIC_REVISION"),
+    "schema_migration_version": _opt("MANIFEST_SCHEMA_MIGRATION_VERSION"),
+    "schema_migration_checksum": _opt("MANIFEST_SCHEMA_MIGRATION_CHECKSUM"),
     "postgres_server_version": _opt("MANIFEST_PG_SERVER_VERSION"),
     "pg_dump_version": _opt("MANIFEST_PG_DUMP_VERSION"),
 }

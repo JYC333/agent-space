@@ -20,7 +20,7 @@ ActivityRecord (raw capture)
   ↓ ActivityConsolidationService → MemoryCandidateClassifier → MemoryProposalProducer
 Proposal (pending; payload_json.provenance_entries contains activity entry)
   ↓ SourceMonitoringService gate
-  ↓ ProposalService.accept → ProposalApplyService.apply
+  ↓ PgProposalApplyService.accept
   ↓ MemoryProposalApplier.apply_create / apply_update
 MemoryEntry (active)
   + ProvenanceLink rows (source_type=activity, source_type=proposal)
@@ -44,7 +44,7 @@ Memory writes are **proposal-first**. The public memory write API returns `Propo
 ### ContextSource
 
 The `context_sources` table was removed from the schema. It is not present in the current
-migration and `test_canonical_schema.py` asserts it does not exist. Provenance uses
+migration and `server/test/baselineSchema.test.ts` asserts it does not exist. Provenance uses
 `ActivityRecord` + `ProvenanceLink` instead. A future first-class Source model would be
 a new table, not a revival of this removed table.
 
@@ -99,7 +99,10 @@ Canonical values for `source_trust` across ActivityRecord, ProvenanceLink, and p
 | `untrusted_external` | External source, not explicitly trusted | Only under `explicit_user_accept` |
 | `agent_inferred` | Agent-inferred, no human confirmation | No |
 
-Trust is resolved from `ActivityRecord.activity_type` by `_resolved_trust_from_activity` in `consolidation/classifier.py` if `source_trust` is not explicitly set. Unrecognized `activity_type` values default to `untrusted_external`.
+Trust is resolved from `ActivityRecord.activity_type` by the activity repository
+and consolidation repository (`server/src/modules/activity/`) if
+`source_trust` is not explicitly set. Unrecognized `activity_type` values
+default to `untrusted_external`.
 
 Intake/Evidence provenance trust is a separate, smaller vocabulary:
 `trusted`, `normal`, and `untrusted`. Source connection trust maps explicitly to
@@ -110,7 +113,7 @@ when useful; they are not silently reused as evidence trust.
 
 ## SourceMonitoring Trust Gate
 
-`SourceMonitoringService` (`backend/app/memory/source_monitoring.py`) is the deterministic trust gate before any durable memory or policy apply.
+`SourceMonitoringService` (`server/src/modules/memory/sourceMonitoring.ts`) is the deterministic trust gate before any durable memory or policy apply.
 
 Hard rules:
 - `agent_inferred` alone → **reject** (cannot back active semantic memory or policy).
@@ -118,7 +121,7 @@ Hard rules:
 - No provenance entries → **reject**.
 - `user_confirmed`, `internal_system`, or `trusted_external` → **allow**.
 
-The gate runs inside `ProposalApplyService._enforce_source_monitoring` before any durable write. `accept_context="explicit_user_accept"` is set by `ProposalService.accept` (the human approval API). No HTTP input can override `accept_context`.
+The gate runs inside proposal apply before any durable write. `accept_context="explicit_user_accept"` is set by `PgProposalApplyService.accept` (the human approval API). No HTTP input can override `accept_context`.
 
 Activity-first capture with `source_type=user_capture` resolves to `user_confirmed`, which satisfies the gate for semantic memory proposals.
 

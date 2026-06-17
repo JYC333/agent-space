@@ -2,9 +2,9 @@
  * Shared protocol primitives.
  *
  * These are the lowest-level building blocks reused by DTOs, commands and
- * events. They intentionally mirror how the Python API serialises values today:
+ * events. They intentionally mirror how the public API serialises values:
  *
- * - **Field naming is snake_case**, matching the JSON the FastAPI backend emits
+ * - **Field naming is snake_case**, matching the JSON the backend emits
  *   (e.g. `space_id`, `created_at`). The protocol package is the wire contract
  *   for the *existing* API, not a re-modelled product surface, so it must parse
  *   real server payloads without a translation layer.
@@ -24,7 +24,7 @@ export const IdSchema = z.string().min(1);
 export type Id = z.infer<typeof IdSchema>;
 
 /**
- * ISO-8601 datetime string as emitted by the Python API
+ * ISO-8601 datetime string as emitted by the API
  * (e.g. `"2026-06-09T12:00:00.123456+00:00"`). Kept as a permissive string so a
  * valid server timestamp is never rejected; treat it as an instant, not a
  * structurally-validated value.

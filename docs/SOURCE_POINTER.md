@@ -120,6 +120,5 @@ See `docs/PERSONAL_MEMORY_GRANT.md` for the PersonalMemoryGrant model.
 - `docs/PERSONAL_MEMORY_GRANT.md` — explicit grant mechanism
 - `docs/FEDERATED_ACCESS_MODEL.md` — federation (deferred)
 - `docs/POLICY_AND_PRIVACY_BOUNDARIES.md` — `memory.cross_space_read` policy status
-- `backend/app/source_pointers/` — implementation
-- `backend/tests/contracts/test_source_pointer_api.py`
-- `backend/tests/invariants/test_source_pointer_access_boundary.py`
+- `server/src/modules/sourcePointers/` — implementation
+- `server/test/gateway.test.ts` — route registration coverage

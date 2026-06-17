@@ -3,7 +3,7 @@
 agent-space host deployer — Unix domain socket server.
 
 Runs on the HOST (outside the main app container) and handles deployment
-requests from the backend. The backend cannot restart itself; this process can.
+requests from the server. The server cannot restart itself; this process can.
 
 Supports both core deployment jobs and self-evolution jobs.
 

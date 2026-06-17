@@ -4,30 +4,38 @@ The system is ready for first personal dogfooding. The next work should validate
 product loop: capture → activity → proposal/review → memory/task → continue working. Fix
 only concrete friction discovered during use.
 
-## TypeScript Re-platform (active)
+## Dogfooding Focus
 
-The backend is being re-platformed from Python to the TypeScript control plane,
-which becomes the full backend authority over time. Binding migration rules live
-in [../architecture/TS_MIGRATION_STRATEGY.md](../architecture/TS_MIGRATION_STRATEGY.md);
-current ownership lives in
-[../architecture/TS_CONTROL_PLANE_OWNERSHIP.md](../architecture/TS_CONTROL_PLANE_OWNERSHIP.md).
+The server is now the only app backend. Current ownership and deferred surfaces
+live in [../architecture/SERVER_OWNERSHIP.md](../architecture/SERVER_OWNERSHIP.md).
 
-**Freeze:** no new Python feature work — new product work targets the TS control
-plane. Python gets bug/security fixes only and stays as reference until each
-domain is TS-native. No-prod posture: rollback is fix-forward / `git revert`;
-authority switches + the fallback proxy are transitional bridges removed
-per-domain, not standing rollback levers.
+New product work targets the server. No-prod posture: rollback is
+fix-forward / `git revert`.
 
-**Current focus:** close remaining TS re-platform seams: run-context
-preparation, fallback-proxy retirement decisions, and explicit disposition of
-remaining Python-owned product contexts. Python/Alembic remains the runtime
-schema owner until an explicit schema-ownership cutover is recorded.
+**Current focus:** dogfood the backend and run a post-cutover audit against
+current code facts. Keep route/module docs, frontend contracts, and deferred
+fail-closed surfaces aligned with the TypeScript server. Migrations are explicit
+ops commands, not automatic service startup behavior.
+
+Do not reopen a broad migration refactor or create competing temporary reports
+for inventory/gap analysis. Durable facts belong in `.agent/architecture/` and
+module docs; one-off findings under `.agent/reports/` should be deleted after
+consolidation.
 
 ## Priorities
 
 - Use the system with real captures, activities, proposals, runs, and memory/task outputs.
 - Collect real friction from the product loop and fix concrete blockers as discovered.
+- Keep `server/src/gateway/routeRegistry.ts`, `server/src/modules/`, and
+  `.agent/architecture/MODULES.md` synchronized.
 - Frontend/backend type contract alignment (memory proposals, workspace fields, space type).
+- Home command center improvements should consume server aggregate read models
+  (`/api/v1/me/*`, `/api/v1/home/summary`) instead of fanning out across every
+  domain API.
+- Keep explicit deferred/fail-closed surfaces visible in source docs so they are
+  not misread as cutover failures.
+- Source cleanup: remove or update stale Python/control-plane/backend-migration
+  references when found, without big-bang rewrites.
 - Artifact archive/delete API.
 - Activity archive/delete.
 - Workspace stale recovery UI.

@@ -1,7 +1,9 @@
 # Module: Git Diff Review
 
 ## Status
-**PLANNED** — No backend or frontend implementation yet. Workspace model and git integration not built.
+**PLANNED REVIEW WORKFLOW** — Basic workspace git status/diff reads exist under
+the `workspaces` module's `/workspace-console*` routes, but the dedicated diff
+review record/comment/approval workflow is not implemented yet.
 
 ## Purpose
 Allow users to review, annotate, and approve agent-generated or human-authored code changes before they are committed or pushed. Git diff review is the checkpoint surface for agentic code changes — the place where AI output meets human approval before entering version control.
@@ -14,7 +16,7 @@ Allow users to review, annotate, and approve agent-generated or human-authored c
 - Agent-change attribution (which run produced this diff?)
 
 ## Does Not Own
-- Git operations execution (workspace runner / future workspace-console module)
+- Git operations execution (`workspaces` module / future workspace execution surface)
 - File editing (workspace console)
 - Agent run orchestration (agents module)
 
@@ -88,8 +90,8 @@ DiffAnnotation:
 - Agent-sourced diffs always display run attribution — never shown as "human change"
 
 ## Related Files
-- `backend/app/models.py` — TODO: add DiffReview, DiffAnnotation models
-- `backend/app/api/` — TODO: add diff-review router
+- `server/migrations/` — TODO: add DiffReview/DiffAnnotation tables
+- `server/src/modules/` — TODO: add diff-review routes
 - `apps/web/src/components/DiffViewer.tsx` — TODO: DiffViewer primitive
 - `apps/web/src/pages/` — TODO: diff review page
 

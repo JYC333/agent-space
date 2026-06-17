@@ -5,7 +5,7 @@
 #   ops/scripts/system/verify-restore.sh [--mode dev|test|prod]
 #
 # This verifies restore integrity through database/schema and artifact-file
-# checks. It does not check backend HTTP liveness.
+# checks. It does not check HTTP liveness.
 
 set -euo pipefail
 
@@ -51,6 +51,7 @@ fatal() {
 DB_URI=""
 DATABASE_URL_VALUE="$(local_compose_setting DATABASE_URL || true)"
 if [[ -n "$DATABASE_URL_VALUE" ]]; then
+  # Existing mode env files may still carry the old SQLAlchemy-style scheme.
   DB_URI="${DATABASE_URL_VALUE/#postgresql+psycopg:\/\//postgresql:\/\/}"
   if [[ "$DB_URI" != postgresql://* ]]; then
     fatal "DATABASE_URL must be a PostgreSQL connection string"
@@ -94,19 +95,19 @@ if ! local_compose_ensure_postgres_ready "verify" "$PGUSER"; then
 fi
 echo "[verify] postgres service: ready"
 
-if ! alembic_exists="$(psql_query "SELECT to_regclass('public.alembic_version') IS NOT NULL;")"; then
-  fatal "failed to query alembic_version"
+if ! migration_table_exists="$(psql_query "SELECT to_regclass('public.server_schema_migrations') IS NOT NULL;")"; then
+  fatal "failed to query server_schema_migrations"
 fi
-if [[ "$alembic_exists" != "t" ]]; then
-  fatal "alembic_version table is missing"
+if [[ "$migration_table_exists" != "t" ]]; then
+  fatal "server_schema_migrations table is missing"
 fi
-if ! alembic_versions="$(psql_query "SELECT version_num FROM alembic_version ORDER BY version_num;")"; then
-  fatal "failed to read alembic_version.version_num"
+if ! migration_versions="$(psql_query "SELECT version FROM server_schema_migrations ORDER BY version;")"; then
+  fatal "failed to read server_schema_migrations.version"
 fi
-if [[ -z "$alembic_versions" ]]; then
-  fatal "alembic_version has no version_num"
+if [[ -z "$migration_versions" ]]; then
+  fatal "server_schema_migrations has no version rows"
 fi
-echo "[verify] alembic_version: $(echo "$alembic_versions" | paste -sd ',' -)"
+echo "[verify] schema migrations: $(echo "$migration_versions" | paste -sd ',' -)"
 
 for table in spaces users runs proposals artifacts activity_records; do
   if ! exists="$(psql_query "SELECT to_regclass('public.$table') IS NOT NULL;")"; then

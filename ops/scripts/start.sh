@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# Start agent-space via Docker Compose (frontend + control-plane + backend + deployer).
+# Start agent-space via Docker Compose (frontend + server + deployer).
 #
 # Usage:
 #   ./ops/scripts/start.sh              — dev (default)
-#   ./ops/scripts/start.sh --dev        — dev (web 3000, control-plane API 8010; backend 8000 debug-only)
-#   ./ops/scripts/start.sh --test       — test (web 3100, control-plane API 8110; backend 8100 debug-only)
-#   ./ops/scripts/start.sh --prod       — prod (web/nginx 80 proxies /api to internal control-plane)
+#   ./ops/scripts/start.sh --dev        — dev (web 3000, API via /api/v1)
+#   ./ops/scripts/start.sh --test       — test (web 3100, API via /api/v1)
+#   ./ops/scripts/start.sh --prod       — prod (web/nginx 80 proxies /api to internal server)
 #   ./ops/scripts/start.sh --build      — same as above with image rebuild
 #
 # Data layout: $ASPACE_ROOT/<mode>/ (e.g. ~/.aspace/dev). Override the host-side
 # parent directory with ASPACE_ROOT when you need a non-default location.
 # AGENT_SPACE_HOME is NOT this parent: inside containers it is the mounted mode
-# root (/aspace); for direct local backend runs it is a concrete mode root such
-# as $HOME/.aspace/dev.
+# root (/aspace).
 
 set -euo pipefail
 
@@ -91,27 +90,24 @@ validate_prod_env() {
   fi
 }
 
-ensure_control_plane_db_role() {
-  if ! local_compose_control_plane_ts_authority_enabled; then
-    return 0
-  fi
+ensure_server_image_for_migrations() {
+  local image="$COMPOSE_PROJECT-server"
 
-  echo "Preparing control-plane database role before starting control-plane..."
-  local backend_up_args=(up -d)
-  if [[ -n "$build_flag" ]]; then
-    backend_up_args+=("$build_flag")
+  if [[ -n "$build_flag" ]] || ! docker image inspect "$image" &>/dev/null; then
+    echo "Building server image for database migrations..."
+    "${COMPOSE[@]}" build server
   fi
-  backend_up_args+=(backend)
+}
 
-  "${COMPOSE[@]}" "${backend_up_args[@]}"
-  local_compose_wait_service_healthy backend "control-plane database role provisioning" 180
-  local_compose_provision_control_plane_db_role "control-plane DB role provisioning"
+run_database_migrations() {
+  echo "Preparing PostgreSQL database schema..."
+  "$REPO_ROOT/ops/scripts/db/migrate.sh" --mode "$MODE"
 }
 
 init_data_dirs
 ensure_env
-local_compose_ensure_control_plane_ts_authority_env
 validate_prod_env
+local_compose_ensure_server_database_env
 
 export DOCKER_GID
 DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 989)
@@ -121,7 +117,8 @@ if ! docker image inspect "$SANDBOX_IMAGE" &>/dev/null; then
   docker build --network=host -t "$SANDBOX_IMAGE" "$REPO_ROOT/sandbox/"
 fi
 
-ensure_control_plane_db_role
+ensure_server_image_for_migrations
+run_database_migrations
 
 echo "Starting agent-space ($MODE) with Docker Compose..."
 echo "  compose file: $COMPOSE_FILE"

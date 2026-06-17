@@ -104,7 +104,7 @@ server-side from the authenticated session. They are not client-writable
 
 ## Runtime Behavior
 
-When `ContextSnapshotPopulator` detects a valid grant for the current run:
+When `ContextPrepareService` detects a valid grant for the current run:
 
 1. Atomically claims the grant (`active → consuming`).
 2. Reads allowed personal memories from `personal_space_id` using the grant's filter.
@@ -162,8 +162,8 @@ semantic review status, a stable `egress_review_dedupe_key` (IDs + operation onl
 `personal_context_block`, memory IDs, source memory titles, artifact payload, public URL.
 
 Dedupe prevents duplicate proposals for the same run + target + type + operation + grant.
-The `egress_review_dedupe_key` is matched in Python after a bounded ORM-column query
-(uses only ORM column filters + Python dict matching, no JSON path operators).
+The `egress_review_dedupe_key` is matched after a bounded column query and
+application-level payload comparison; no JSON path operators are required.
 
 **SourcePointer** remains hard-blocked without an egress_review proposal when grant-derived
 indicator keys are present in metadata for non-personal owner spaces.
@@ -267,10 +267,8 @@ See `docs/FUTURE_ROADMAP.md` for deferred items including:
 - `docs/SOURCE_POINTER.md` — SourcePointer metadata model
 - `docs/POLICY_AND_PRIVACY_BOUNDARIES.md` — policy enforcement inventory
 - `docs/FUTURE_ROADMAP.md` — future work
-- `backend/app/personal_memory_grants/` — implementation
-- `backend/app/proposals/approvals.py` — approval gate
-- `backend/app/personal_memory_grants/egress_guard.py` — egress guard
-- `backend/app/personal_memory_grants/egress_review.py` — egress review proposal creation
-- `backend/tests/invariants/test_personal_memory_egress_guard_invariants.py`
-- `backend/tests/invariants/test_personal_memory_egress_approval_invariants.py`
-- `backend/tests/invariants/test_personal_memory_grant_security_boundary.py`
+- `server/src/modules/personalMemoryGrants/` — API implementation
+- `server/src/modules/proposals/` — approval/apply gate
+- `server/src/modules/context/` — grant-aware context assembly
+- `server/test/agentsChatRoutes.test.ts`
+- `server/test/contextPrepareService.test.ts`

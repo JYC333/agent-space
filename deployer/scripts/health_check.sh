@@ -1,13 +1,32 @@
 #!/usr/bin/env bash
-# Health check — returns 0 if backend is up, 1 otherwise
+# Health check — returns 0 if the server service is up, 1 otherwise
 set -euo pipefail
 
-BACKEND_URL="${BACKEND_URL:-http://localhost:8000}"
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+MODE="${AGENT_SPACE_ENV:-dev}"
+INSTANCE_ROOT="${AGENT_SPACE_HOME:-/aspace}"
+COMPOSE_FILE="$REPO_ROOT/ops/compose/docker-compose.$MODE.yml"
+COMPOSE_PROJECT="agent-space-$MODE"
+API_SERVICE="${API_SERVICE:-server}"
 
-if curl -sf "$BACKEND_URL/health" > /dev/null 2>&1; then
-    echo "backend: ok ($BACKEND_URL/health)"
+case "$MODE" in
+    dev|test|prod) ;;
+    *) echo "ERROR: AGENT_SPACE_ENV must be dev, test, or prod (got '$MODE')" >&2; exit 1 ;;
+esac
+
+if [[ ! -f "$COMPOSE_FILE" ]]; then
+    echo "ERROR: compose file not found: $COMPOSE_FILE" >&2
+    exit 1
+fi
+
+COMPOSE=(docker compose --env-file "$INSTANCE_ROOT/.env" -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE")
+
+if AGENT_SPACE_MODE_ROOT="$INSTANCE_ROOT" "${COMPOSE[@]}" exec -T "$API_SERVICE" \
+    node -e "fetch('http://localhost:8010/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" \
+    > /dev/null 2>&1; then
+    echo "$API_SERVICE: ok"
     exit 0
 else
-    echo "backend: DOWN ($BACKEND_URL/health)" >&2
+    echo "$API_SERVICE: DOWN" >&2
     exit 1
 fi

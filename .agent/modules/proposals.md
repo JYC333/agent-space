@@ -48,28 +48,26 @@ ProposalApproval:
    - Dispatches through `ProposalApplierRegistry` to the target module's registered applier
 4. `proposal.status = "accepted"`, `decided_at` set, commit — durable write completes. No separate approval-event row is created for normal accept/reject. `ProposalApproval` rows are a distinct gate for `egress_review` proposals only (written via `/proposals/{id}/approvals/egress-granting-user`).
 
-## TypeScript Migration Boundary
+## Server Apply Boundary
 
-The public proposal review/apply surface is fixed TS-owned in the control plane:
+The public proposal review/apply surface is owned by the server:
 
-- TS owns external `/api/v1/proposals` list/get routes and mirrors the Python
+- The server owns external `/api/v1/proposals` list/get routes and the product
   read model/visibility rule.
-- TS owns the external accept/reject/egress-approval HTTP routes and the
+- The server owns the external accept/reject/egress-approval HTTP routes and the
   proposal-apply transaction boundary for registered appliers.
-- TS runs the `proposal.apply` policy gate before dispatching through its
+- The server runs the `proposal.apply` policy gate before dispatching through its
   `ProposalApplierRegistry`.
-- The currently registered TS appliers are `memory_create`, `memory_update`, and
-  `memory_archive`. Unregistered proposal types fail closed until their owning
-  domain migrates and registers a TS applier.
-- Python remains the reference owner for non-memory target-module appliers until
-  their domains migrate; the control-plane public route does not fall back to
-  Python proposal ports.
+- The currently registered appliers include memory, knowledge, task
+  follow-up, and code-patch proposal types. Unregistered proposal types fail
+  closed until their owning domain registers an applier.
+- Non-registered target-module appliers remain explicit fail-closed work; the
+  server public route does not fall back to any external proposal port.
 - Proposal creation entrypoints remain in their product modules
-  (`memory`, `knowledge`, `agents`, `runs`, etc.) until those contexts migrate.
+  (`memory`, `knowledge`, `agents`, `runs`, etc.).
 
-This is intentional: the TS migration removes the fallback proxy from the
-user-facing proposal review API while keeping non-migrated proposal mutations
-fail-closed instead of silently no-oping or crossing back into Python.
+This is intentional: the user-facing proposal review API keeps non-registered
+proposal mutations fail-closed instead of silently no-oping.
 
 ## `accept_context` Values
 
@@ -96,14 +94,13 @@ fail-closed instead of silently no-oping or crossing back into Python.
 - Agents generate Proposals; humans approve
 
 ## Related Files
-- `backend/app/models.py`
-- `backend/app/proposals/`
-- `backend/app/proposals/apply_service.py`
-- `backend/app/*/proposal_appliers.py`
-- `backend/app/memory/source_monitoring.py`
-- `backend/app/memory/internal_writer.py`
-- `backend/app/artifacts/`
-- `backend/app/memory/reflector.py`
+- `server/migrations/`
+- `server/src/modules/proposals/`
+- `server/src/modules/proposals/applyService.ts`
+- `server/src/modules/*/` proposal appliers
+- `server/src/modules/memory/sourceMonitoring.ts`
+- `server/src/modules/artifacts/`
+- `server/src/modules/runs/materializationService.ts`
 
 ## Related Decisions
 - [0003-memory-proposal-flow.md](../decisions/0003-memory-proposal-flow.md)

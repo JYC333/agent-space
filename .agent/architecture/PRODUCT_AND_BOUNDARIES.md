@@ -2,7 +2,7 @@
 
 ## What Agent-Space Is
 
-Agent-Space is a **local-first personal/household agent operating system** and **human-agent collaboration control plane**. It captures inputs, runs agents, produces reviewable artifacts and proposals, and governs what becomes durable memory or action.
+Agent-Space is a **server-authoritative personal/household agent operating system** and **human-agent collaboration server**. It captures inputs, runs agents, produces reviewable artifacts and proposals, and governs what becomes durable memory or action.
 
 It is not:
 - a chat app
@@ -48,11 +48,11 @@ capture / trigger
 - Configured per space via `GET/POST/PATCH /api/v1/providers`. API keys are encrypted server-side; responses expose `has_api_key` only.
 - `RuntimeAdapter` = execution loop/tool environment (capability, model_api, claude_code, codex_cli, etc.).
 - Agents select a default provider/model on `AgentVersion` (`model_provider_id`, `model_name`); runs resolve provider at creation time.
-- **Canonical path for new adapters:** add a validated `RuntimeAdapterSpec`; use `backend/app/runtimes/` only when new native behavior is required.
+- **Canonical path for new adapters:** add a validated `RuntimeAdapterSpec` in `server/src/modules/runtimeAdapters/` and implement server adapter behavior when generic CLI execution is insufficient.
 
 ### Credential resolution boundary
 
-- Runtime adapters obtain credentials through the runtime credential resolver (`runtimes/credentials.py`).
+- Runtime adapters obtain credentials through the server provider/credential broker in `server/src/modules/providers/`.
 - Raw secret values must never appear in adapter config outputs, run steps, artifacts, or logs.
 - Direct env-variable credential reads in adapters are not allowed for new work.
 
@@ -83,7 +83,7 @@ capture / trigger
 ### PolicyEngine evaluates built-in runtime rules; persisted policy enforcement is domain-specific
 
 - `PolicyEngine` evaluates stateless built-in rules. It does not load persisted Policy rows.
-- Domain-specific persisted-policy enforcement (e.g. `memory.private_placement`, `run.user_private_scope`) lives in `policy/enforcement.py`.
+- Domain-specific persisted-policy enforcement (e.g. `memory.private_placement`, `run.user_private_scope`) lives in `server/src/modules/policy/`.
 - Accepted policy proposals create active `Policy` rows that affect real enforcement decisions.
 
 ### App runtime must not self-deploy with arbitrary host authority
@@ -102,10 +102,10 @@ capture / trigger
 | Enforcement point | Current mechanism | Status |
 |---|---|---|
 | HTTP auth/session identity | Session/API-key identity; no dev-identity fallback | Active |
-| Space membership / selected space access | `auth/policy.py` membership + role helpers | Active |
+| Space membership / selected space access | server auth middleware + policy role helpers | Active |
 | Memory write (public API) | Returns Proposal (HTTP 202), not direct write | Active |
 | Memory proposal apply | Proposal gate + SourceMonitoring gate | Active |
-| Memory write boundary | `_INTERNAL_WRITE_AUTHORITY` sentinel in `MemoryStore.create()`; structural, not policy-based | Active |
+| Memory write boundary | server proposal apply service; no public direct active-memory mutation | Active |
 | Knowledge write boundary | `knowledge.*` actions wired via `proposal.apply`; `knowledge_*` handlers in ProposalApplyService | Active |
 | Policy proposal apply | Proposal gate creates active Policy row | Active |
 | Runtime execution | Runtime policy JSON, adapter resolver, credential resolver | Active |

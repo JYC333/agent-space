@@ -14,65 +14,49 @@
 ./ops/scripts/start.sh --build
 ```
 
-## Backend
+## Server
 
 ```bash
-cd backend
+cd server
 
-# Install runtime dependencies
-pip install -r requirements.txt
-# Install test/dev dependencies
-pip install -r requirements-test.txt
-# or inside venv:
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-test.txt
+# Install dependencies
+npm ci
 
-# Run (development, with hot reload)
-uvicorn app.main:app --reload --port 8000
+# Build/typecheck/test
+npm run build
+npm run typecheck
+npm test
 
-# Lint  [TODO: add ruff/flake8 config]
-# ruff check app/
-
-# Database migrations (Alembic — run from backend/, against a reachable DB)
-alembic revision --autogenerate -m "description"
-alembic upgrade head
+# Explicit schema migrations
+SERVER_DATABASE_URL=postgresql://... npm run migrate:status
+SERVER_DATABASE_URL=postgresql://... npm run migrate
 ```
 
 For the default Docker Compose setup, Postgres is **not** published to the host, so prefer the
-helper which runs Alembic inside the backend container (see below) over bare `alembic`.
+ops helper below over direct host migrations.
 
-Default client-facing API (control-plane): http://localhost:8010
-FastAPI docs (backend debug-only): http://localhost:8000/docs
+Default client-facing API (server): http://localhost:3000/api/v1
 
-In dev/test Docker Compose, control-plane hot reload is enabled: the service
-uses the Dockerfile `dev-runtime` target, bind-mounts `control-plane/src` and
+In dev/test Docker Compose, server hot reload is enabled: the service
+uses the Dockerfile `dev-runtime` target, bind-mounts `server/src` and
 `packages/protocol/src`, runs both TypeScript compilers in watch mode, and
 restarts with `node --watch dist/index.js`. Prod still runs compiled JS only.
-
-Canonical backend test command (from repo root):
-
-```bash
-cd backend
-pip install -r requirements.txt -r requirements-test.txt
-python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
-```
 
 ## Database scripts (run from repo root)
 
 ```bash
-# Run migrations (Docker-native by default: Alembic runs INSIDE the backend
-# container, using the in-network postgres service — reliable even though
-# Postgres is not published to the host). When any control-plane TS authority is
-# enabled, this also creates/updates the least-privilege control-plane DB role
-# after Alembic succeeds. The normal start script also provisions that role
-# before starting control-plane.
+# Run migrations (Docker-native by default: the server migration runner runs inside
+# a one-shot server container, using the in-network postgres service).
+# Docker-native mode creates POSTGRES_DB first when the database is missing.
+# The normal start script invokes this helper before starting app services.
 ./ops/scripts/db/migrate.sh [--mode dev|test|prod]
 
 # Host mode: only when DATABASE_URL points to a reachable external Postgres
-# (runs a connectivity preflight first, then bare alembic on the host).
-DATABASE_URL=postgresql+psycopg://... ./ops/scripts/db/migrate.sh --host [--mode dev|test|prod]
+# (runs the server migration runner from server/).
+DATABASE_URL=postgresql://... ./ops/scripts/db/migrate.sh --host [--mode dev|test|prod]
 
 # Pre-migration backup: --mode prod ALWAYS takes a pg_dump custom-format dump to
-# $ASPACE_ROOT/<mode>/db/dumps/pre-migrate-<ts>.dump before Alembic runs, and
+# $ASPACE_ROOT/<mode>/db/dumps/pre-migrate-<ts>.dump before migrations run, and
 # aborts if it fails. Opt into the same safety for non-prod modes:
 PRE_MIGRATION_BACKUP=1 ./ops/scripts/db/migrate.sh --mode dev
 ./ops/scripts/db/migrate.sh --mode dev --pre-migration-backup
@@ -83,41 +67,28 @@ PRE_MIGRATION_BACKUP=1 ./ops/scripts/db/migrate.sh --mode dev
 # Restore database from a pg_dump custom-format archive
 ./ops/scripts/db/restore.sh <path/to/dump.dump> [--mode dev|test|prod]
 
-# Drop + recreate + migrate (destructive; reuses the Docker-native migrate path,
-# including automatic control-plane DB role provisioning when TS authority is enabled)
+# Drop + migrate (destructive; migrate recreates POSTGRES_DB when missing)
 ./ops/scripts/db/reset-postgres.sh [--mode dev|test|prod]
 
 # Open a psql shell
 ./ops/scripts/db/shell.sh [--mode dev|test|prod]
 ```
 
-The TypeScript control plane also has a migration runner for parity/future
-cutover work. It is not the runtime schema owner and is not wired into service
-startup; use the Alembic path above for normal dev/test/prod schema migration.
-
-```bash
-cd control-plane
-CONTROL_PLANE_DATABASE_URL=postgresql://... npm run migrate:status
-CONTROL_PLANE_DATABASE_URL=postgresql://... npm run migrate
-```
-
 ## Backup and restore (run from repo root)
 
 ```bash
 # Full-system backup with app services stopped (PostgreSQL snapshot + files + manifest).
-# Stop frontend/control-plane/backend/deployer first; postgres must remain running.
-# When the backend is running, the BackupService API is canonical:
+# Stop frontend, server, and deployer first; postgres must remain running.
+# When the server is running, the BackupService API is canonical:
 #   POST /api/v1/system/backups/manual
 ./ops/scripts/system/backup.sh [--mode dev|test|prod] [--include-logs] [--force-running]
 
 # Full-system restore (database + files) from one archive.
-# Stop frontend/control-plane/backend/deployer first; postgres must remain running.
+# Stop frontend, server, and deployer first; postgres must remain running.
 ./ops/scripts/system/restore.sh <archive.tar.gz> [--mode dev|test|prod] [--force] [--force-running]
 ```
 
 See [docs/BACKUP_AND_RESTORE.md](../docs/BACKUP_AND_RESTORE.md) for the full model.
-
-`tests/conftest.py` sets an isolated `AGENT_SPACE_HOME` before importing the app, so the suite cannot touch a real mode DB. Use `AGENT_SPACE_PYTEST_USE_REAL_HOME=1` only for explicit manual debugging.
 
 ## Frontend
 
@@ -144,20 +115,20 @@ npm run preview
 ## Runtime CLI tools
 
 Vendor CLIs are installed as instance runtime tools, not into Docker images.
-Use the control-plane API after the stack is running:
+Use the server API after the stack is running:
 
 ```bash
-curl -X POST http://localhost:8010/api/v1/runtime-tools/claude_code/install \
+curl -X POST http://localhost:3000/api/v1/runtime-tools/claude_code/install \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"version":"latest"}'
 
-curl -X POST http://localhost:8010/api/v1/runtime-tools/codex_cli/install \
+curl -X POST http://localhost:3000/api/v1/runtime-tools/codex_cli/install \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"version":"latest"}'
 
-curl http://localhost:8010/api/v1/runtime-tools \
+curl http://localhost:3000/api/v1/runtime-tools \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -173,11 +144,11 @@ docker compose -f ops/compose/docker-compose.dev.yml up
 # Rebuild and restart
 docker compose -f ops/compose/docker-compose.dev.yml up --build
 
-# Recreate a single service
-docker compose -f ops/compose/docker-compose.dev.yml up backend --force-recreate
+# Recreate the server service
+docker compose -f ops/compose/docker-compose.dev.yml up server --force-recreate
 
 # View logs
-docker compose -f ops/compose/docker-compose.dev.yml logs -f backend
+docker compose -f ops/compose/docker-compose.dev.yml logs -f server
 
 # Check PostgreSQL health
 docker compose -f ops/compose/docker-compose.dev.yml exec postgres \
@@ -192,22 +163,22 @@ development `POSTGRES_PASSWORD` values. Key vars:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `DATABASE_URL` | postgresql+psycopg://... | Set by docker-compose; PostgreSQL is required |
+| `DATABASE_URL` | postgresql://... | Optional external DB URL for host-side DB scripts |
 | `DEFAULT_USER_ID` | `default_user` | Bootstrap owner; the default space is this owner's personal space (a generated UUID, no fixed space id) |
 | `REFLECTOR_MODE` | `pattern` | Set to `llm` to enable AI reflection |
 | `MAX_CONCURRENT_DOCKER_RUNS` | `3` | Sandbox concurrency cap |
-| `ARTIFACT_STORAGE_ROOT` | `$AGENT_SPACE_HOME/storage/artifacts` | Managed artifact file storage root used by TS artifact export |
-| `CONTROL_PLANE_DATABASE_URL` | generated by ops scripts | Least-privilege control-plane DB role URL |
-| `CONTROL_PLANE_INTERNAL_TOKEN` | generated by ops scripts | Service token for internal TS/Python ports |
-| `CONTROL_PLANE_CLI_TOOLS_ROOT` | `$AGENT_SPACE_HOME/runtime-tools` | Instance runtime CLI install root |
+| `ARTIFACT_STORAGE_ROOT` | `$AGENT_SPACE_HOME/storage/artifacts` | Managed artifact file storage root used by server artifact export |
+| `SERVER_DATABASE_URL` | generated by ops scripts | Server PostgreSQL owner/app URL for bundled compose |
+| `SERVER_INTERNAL_TOKEN` | generated by ops scripts | Service token for internal server routes |
+| `SERVER_DEBUG` | `false` | Server debug flag for local-only cookie defaults; legacy `DEBUG` is accepted only for old env files |
+| `RUNTIME_TOOLS_ROOT` | `$AGENT_SPACE_HOME/runtime-tools` | Instance runtime CLI install root |
 
 Providers/credentials, policy enforcement, public sessions, native auth/spaces,
 runs, chat turns, context assembly, memory read/proposal-create/apply,
 proposal review/apply orchestration, artifact read/export, and the runtime
-adapter catalog are fixed TypeScript control-plane authorities; they no longer
-have `CONTROL_PLANE_*_AUTHORITY` switches.
+adapter catalog are fixed server authorities.
 
-## Stage 4 TS runs verification
+## Focused Runs Verification
 
 Focused verification commands from repo root:
 
@@ -215,7 +186,7 @@ Focused verification commands from repo root:
 cd packages/protocol
 npm run typecheck && npm test && npm run build
 
-cd ../control-plane
+cd ../server
 npm run typecheck
 npx vitest run \
   test/runOrchestrationService.test.ts \
@@ -224,7 +195,6 @@ npx vitest run \
   test/runVendorCliAdapter.test.ts \
   test/runJobRepository.test.ts \
   test/runRepository.test.ts \
-  test/runPythonContextPorts.test.ts \
   test/runsRoutes.test.ts \
   test/runtimeHost.test.ts \
   test/config.test.ts \
@@ -232,13 +202,6 @@ npx vitest run \
   test/boundaries.test.ts
 npm run build
 
-cd ../backend
-./.venv/bin/python -m pytest \
-  tests/contracts/test_runs_context_port_api.py \
-  tests/unit/test_control_plane_db_role_grants.py \
-  tests/unit/test_control_plane_entrypoint.py \
-  tests/unit/test_runs_ts_authority_guard.py \
-  -v --tb=short
 ```
 
 Manual stack smoke after a reset/rebuild:
@@ -248,19 +211,19 @@ Manual stack smoke after a reset/rebuild:
 ./ops/scripts/start.sh --dev --build
 
 # Use a real auth cookie/header from the web session.
-curl -X POST http://localhost:8010/api/v1/runs/<run_id>/execute \
+curl -X POST http://localhost:3000/api/v1/runs/<run_id>/execute \
   -H "Authorization: Bearer <token>"
-curl -X PATCH http://localhost:8010/api/v1/runs/<run_id>/stop \
+curl -X PATCH http://localhost:3000/api/v1/runs/<run_id>/stop \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"reason":"manual smoke"}'
-curl http://localhost:8010/api/v1/runs/<run_id>/trace \
+curl http://localhost:3000/api/v1/runs/<run_id>/trace \
   -H "Authorization: Bearer <token>"
-curl http://localhost:8010/api/v1/runs/<run_id>/events/stream \
+curl http://localhost:3000/api/v1/runs/<run_id>/events/stream \
   -H "Authorization: Bearer <token>"
 ```
 
-## Stage 5 policy/proposals verification
+## Focused Policy/Proposals Verification
 
 Focused verification commands from repo root:
 
@@ -268,11 +231,11 @@ Focused verification commands from repo root:
 cd packages/protocol
 npm run typecheck && npm test && npm run build
 
-cd ../control-plane
+cd ../server
 npm run typecheck
 npx vitest run \
   test/policyDecisionCore.test.ts \
-  test/policyDecisionParity.test.ts \
+  test/policyDecisionContract.test.ts \
   test/policyEnforceService.test.ts \
   test/policyRoutes.test.ts \
   test/proposalsRoutes.test.ts \
@@ -281,16 +244,4 @@ npx vitest run \
   test/gateway.test.ts \
   test/boundaries.test.ts
 npm run build
-
-cd ../backend
-./.venv/bin/python -m pytest \
-  tests/contracts/test_policy_action_registry.py \
-  tests/contracts/test_policy_port.py \
-  tests/contracts/test_policy_durable_audit.py \
-  tests/unit/test_control_plane_policy_client.py \
-  tests/unit/test_proposal_internal_ports.py \
-  tests/unit/test_control_plane_db_role_grants.py \
-  tests/unit/test_control_plane_entrypoint.py \
-  tests/invariants/test_policy_gateway_boundary.py \
-  -v --tb=short
 ```

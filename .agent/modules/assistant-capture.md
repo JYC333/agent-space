@@ -51,9 +51,9 @@ Proposals activate into memory / knowledge / cards
 - Captured chat transcripts are treated as ActivityRecord(type=chat_capture), not as memories
 
 ## Related Files
-- `backend/app/models.py` — ActivityRecord (TODO)
-- `backend/app/agents/template_seeder.py` — `memory_reflector` system template (factory)
-- `backend/app/memory/reflector.py` — `MemoryReflector` internal reflection service
+- `server/migrations/` — ActivityRecord tables
+- `server/src/modules/agents/` — assistant agent/template behavior
+- `server/src/modules/memory/` — memory proposal/reflection behavior
 - `apps/web/src/pages/` — TODO: capture UI
 
 ## TODO

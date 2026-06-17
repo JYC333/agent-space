@@ -9,7 +9,7 @@
  *
  * The package depends only on `zod`. Importing it must never pull in frontend,
  * backend, database, or runtime code. See
- * `.agent/architecture/TS_PROTOCOL_FOUNDATION.md`.
+ * `.agent/architecture/PROTOCOL_FOUNDATION.md`.
  */
 
 // Primitives + value sets
@@ -45,14 +45,11 @@ export * from "./providersDb.js";
 // Provider and credential runtime boundary contracts
 export * from "./providerCredentialsRuntime.js";
 
-// TS runtime-host boundary contracts
+// Runtime-host boundary contracts
 export * from "./runtimeHost.js";
 
-// Stage 4 run orchestration contracts
+// Run orchestration contracts
 export * from "./runOrchestration.js";
-
-// Stage 4 Python-owned context port contracts
-export * from "./runContextPorts.js";
 
 // Policy enforcement contracts
 export * from "./policy.js";
@@ -60,5 +57,5 @@ export * from "./policy.js";
 // Proposal review contracts
 export * from "./proposals.js";
 
-// Stage 6 memory + sessions migration contracts
+// Memory + sessions contracts
 export * from "./memorySessions.js";

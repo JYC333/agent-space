@@ -45,7 +45,7 @@ agent-space supports a protected self-evolution deployment structure where syste
 
 ## Container Responsibilities
 
-### Backend Container
+### Server Container
 
 Owns:
 - Agent runtime adapters
@@ -55,12 +55,12 @@ Owns:
 - UI / API
 - File editing inside approved sandbox worktrees only
 
-Backend mounts:
+Server mounts:
 - `${ASPACE_ROOT}/<env>:/aspace` (mode root for that environment)
 - `${ASPACE_ROOT}/<env>/sandboxes:/aspace/sandboxes`
 - `${ASPACE_ROOT}/<env>/run/deployer.sock:/aspace/run/deployer.sock`
 
-Backend must NOT mount:
+Server must NOT mount:
 - `/var/run/docker.sock`
 - Writable `<AGENT_SPACE_HOME>/workspaces` (except via worktree sandbox)
 - Other mode roots (`dev` from `test`, etc.)
@@ -109,26 +109,26 @@ Communicate through Unix socket only. Accepts structured allowlisted jobs only.
 
 ## Self-Evolution Flow
 
-1. **Backend creates a system evolution run**
-2. **Backend asks deployer to create a worktree**
+1. **Server creates a system evolution run**
+2. **Server asks deployer to create a worktree**
    ```
    deployer: create_system_worktree(RUN_ID=<run_id>)
    ```
-3. **Backend Agent edits only** the worktree at `~/.aspace/dev/sandboxes/system-evolution/<run_id>`
-4. **Backend asks deployer to collect diff**
+3. **Server agent edits only** the worktree at `~/.aspace/dev/sandboxes/system-evolution/<run_id>`
+4. **Server asks deployer to collect diff**
    ```
    deployer: collect_system_diff(WORKTREE_DIR=<path>)
    ```
-5. **Backend asks deployer to run tests**
+5. **Server asks deployer to run tests**
    ```
    deployer: run_system_tests(WORKTREE_DIR=<path>, TEST_PROFILE=<profile>)
    ```
-6. **Backend creates a `code_patch` proposal** containing: changed files, diff, test logs, build logs, risk level, migration warning, test deployment status
+6. **Server creates a `code_patch` proposal** containing: changed files, diff, test logs, build logs, risk level, migration warning, test deployment status
 7. **Optional test deploy**
    ```
    deployer: run_test_deploy(WORKTREE_DIR=<path>)
    ```
-8. **After explicit approval**, backend asks deployer to merge
+8. **After explicit approval**, server asks deployer to merge
    ```
    deployer: merge_approved_system_patch(WORKTREE_DIR=<path>, PROPOSAL_ID=<id>, BRANCH_NAME=<branch>)
    ```

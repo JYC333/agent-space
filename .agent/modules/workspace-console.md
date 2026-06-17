@@ -57,11 +57,10 @@ GET  /api/v1/workspace-console/workspaces/{id}/git/diff?path=...
   not caller-supplied input.
 
 ## Related Files
-- `backend/app/models.py` — Workspace, WorkspaceMembership
-- `backend/app/schemas.py` — WorkspaceCreate, WorkspaceOut
-- `backend/app/workspace_console/api.py` — workspace console read API
-- `backend/app/workspace/` — WorkspaceManager, PathPolicy, SandboxManager
-- `backend/app/workspace/path_policy.py` — PathPolicy enforcement
+- `server/migrations/` — Workspace, WorkspaceMembership
+- `packages/protocol/src/` — WorkspaceCreate, WorkspaceOut when shared
+- `server/src/modules/workspaces/` — workspace console read API, WorkspaceManager, PathPolicy, SandboxManager
+- `server/src/modules/workspaces/pathPolicy.ts` — PathPolicy enforcement
 - `apps/web/src/pages/` — TODO: workspace console pages
 - `apps/web/src/api/` — TODO: workspace API client
 

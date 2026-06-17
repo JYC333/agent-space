@@ -4,18 +4,18 @@
 Scoped, long-term context for agents and users. Not raw data — curated, approved, versioned knowledge.
 
 ## Owns
-- `MemoryEntry` model, `MemoryStore` CRUD
+- `MemoryEntry` schema and server memory read/proposal/apply repositories
 - `MemoryReadTrace` (every read recorded)
 - Memory write governance: public writes create Proposals, `ProposalApplyService` is the only durable write path
-- `MemoryProvider` ABC + `LocalMemoryProvider`
-- `ContextBuilder` — assembles ContextPackage; hard-filters before ranking; resolves ContextAttachments; logs injected memory
+- Context memory providers and repositories
+- `ContextBuilder` / context repository — assembles ContextPackage; hard-filters before ranking; resolves ContextAttachments; logs injected memory
 - `ContextCompiler` — security-scans, budget-trims, writes vendor files to sandbox
 - `MemoryEvolver` — fitness-based memory lifecycle; produces archive Proposals, not direct writes
 - `ContextSnapshot` — frozen audit record of run input; populated before adapter execution
 - `MemoryCandidateValidator` — gates activity-sourced candidates before Proposal creation
 - `MemoryProposalProducer` — creates Proposals from validated candidates
 - `SourceMonitoringService` — gates semantic/policy proposal acceptance by source trust
-- `security.py` — secret/injection scanning, path policy
+- `server/src/modules/context/compiler.ts` and workspace `PathPolicy` — secret/injection scanning and path policy
 
 ## Key Models
 
@@ -106,20 +106,12 @@ MemoryReadTrace:
 - `policy_change` → marks `policy_bundle` digest dirty; also workspace/agent digests if policy `applies_to_json` specifies those scopes.
 
 ## Related Files
-- `backend/app/memory/store.py`
-- `backend/app/memory/provider.py`
-- `backend/app/memory/internal_writer.py`
-- `backend/app/proposals/apply_service.py` (proposal-owned orchestration; memory owns registered appliers)
-- `backend/app/memory/source_monitoring.py`
-- `backend/app/memory/retriever.py`
-- `backend/app/memory/context_builder.py`
-- `backend/app/memory/context_compiler.py`
-- `backend/app/memory/digest_service.py` — `ContextDigestService`
-- `backend/app/memory/consolidation/service.py`
-- `backend/app/memory/evolver.py`
-- `backend/app/memory/access_log.py`
-- `backend/app/runs/context_snapshot_populator.py`
-- `backend/app/schemas.py`
+- `server/src/modules/memory/`
+- `server/src/modules/proposals/applyService.ts` (proposal-owned orchestration; memory owns registered appliers)
+- `server/src/modules/context/`
+- `server/src/modules/runs/`
+- `server/migrations/`
+- `packages/protocol/src/`
 
 ## Related Decisions
 - [0003-memory-proposal-flow.md](../decisions/0003-memory-proposal-flow.md)

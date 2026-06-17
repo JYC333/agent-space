@@ -3,7 +3,8 @@
 A space-based, multi-user, agent-first system for personal, family, and small team use.
 The runtime target is **Linux / WSL / server + a browser UI**. By default agent runs are
 isolated with **git worktrees** (plus `PathPolicy`) so file access is confined to the run's
-workspace; stronger one-shot Docker isolation is an opt-in path for high-risk execution.
+workspace. Stronger one-shot Docker isolation is not wired into the current product path;
+high/critical-risk execution that requires it fails closed instead of silently downgrading.
 PostgreSQL is the only supported server database.
 
 ## Concept
@@ -30,8 +31,7 @@ agent-space/
 │   └── scripts/      # start.sh, db/, system/
 ├── docs/             # Architecture and design documentation
 │
-├── control-plane/    # Default client-facing TypeScript API entrypoint/control plane
-├── backend/          # Current Python backend, migration-period authority
+├── server/    # TypeScript API backend and migration owner
 ├── catalog/          # Built-in system definitions
 │   ├── agent_templates/
 │   └── capabilities/
@@ -61,13 +61,11 @@ The local PostgreSQL containers use stable names: `agent-space-dev-postgres`,
 #    ~/.aspace/dev/.env holds infra-only settings (e.g. POSTGRES_PASSWORD for --prod).
 ```
 
-`start.sh` builds the sandbox image on first run, then starts frontend + control-plane + backend + deployer via Docker Compose. Data lives under **`~/.aspace/<mode>/`** (default mode `dev`). Browser API traffic goes through the control-plane service; Python remains the authority behind the fallback proxy for unowned routes.
+`start.sh` builds the sandbox image on first run, then starts frontend + server + deployer via Docker Compose. Data lives under **`~/.aspace/<mode>/`** (default mode `dev`). Browser API traffic reaches the TypeScript server through the frontend proxy.
 
 ```
 Web UI:           http://localhost:3000   # Docker maps container 5173 → host 3000 (dev compose)
-API:              http://localhost:8010   # control-plane entrypoint
-Backend debug:    http://localhost:8000   # direct Python access; not the normal web path
-FastAPI docs:     http://localhost:8000/docs
+API:              http://localhost:3000/api/v1   # server entrypoint
 ```
 
 ### Options
@@ -79,9 +77,7 @@ FastAPI docs:     http://localhost:8000/docs
 ./ops/scripts/start.sh --build   # force image rebuild
 ```
 
-Test mode exposes the control-plane API at `http://localhost:8110`; the backend container
-still listens on internal port `8000` and is mapped to host `8100` only for direct debugging.
-The test frontend talks to the control-plane service.
+Test mode exposes the same API through `http://localhost:3100/api/v1`. The test frontend talks to the server service inside the compose network.
 Docker-native `ops/scripts/db/migrate.sh`, DB-only `ops/scripts/db/{dump,restore,reset-postgres}.sh`,
 and offline `ops/scripts/system/{backup,restore,verify-restore}.sh` start PostgreSQL
 when needed and stop it after completion only when that script had to start it;
@@ -89,22 +85,20 @@ they leave already-running app stacks alone.
 
 ## Development
 
-For backend-only work, run against a reachable PostgreSQL database via `DATABASE_URL`:
+For server work:
 
 ```bash
-cd backend
-pip install -r requirements.txt
-export AGENT_SPACE_HOME="$HOME/.aspace/dev"
-uvicorn app.main:app --reload --port 8000
+cd server
+npm ci
+npm run typecheck
+npm test
 ```
 
-Run backend tests from `backend`:
+Run explicit TS migrations through the ops wrapper:
 
 ```bash
-python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short
+./ops/scripts/db/migrate.sh --mode dev
 ```
-
-`tests/conftest.py` sets an isolated `AGENT_SPACE_HOME` before importing the app, so the suite does not open a real mode database.
 
 ### Runtime target
 
@@ -119,13 +113,13 @@ LLM agents can execute arbitrary shell commands. To protect the host:
 
 - **Default — filesystem isolation**: git worktrees + `PathPolicy` confine file access to the
   run's workspace. This is the default execution isolation (`default_sandbox_level=worktree`).
-- **High-risk — one-shot Docker**: runs that require `one_shot_docker` isolation execute in a
-  dedicated, throwaway container (`agent-space-sandbox`). This is an opt-in path used only when
-  configured; critical-risk runs that demand it are refused until it is wired up.
+- **High-risk — one-shot Docker**: runs that require `one_shot_docker` isolation are refused
+  until that product path is implemented. The sandbox image assets exist, but the app must not
+  present Docker isolation as active protection for high/critical-risk runs.
 
-The **backend does not mount the Docker socket** and does not spawn containers directly. Sandbox
-containers are launched by the host-side **deployer** service, which is the only component with
-`/var/run/docker.sock` mounted. The backend talks to the deployer over a Unix socket
+The **server does not mount the Docker socket** and does not spawn host containers directly.
+Sandbox containers are launched by the host-side **deployer** service, which is the only component
+with `/var/run/docker.sock` mounted. The server talks to the deployer over a Unix socket
 (`/aspace/run/deployer.sock`).
 
 See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for the full threat analysis.
@@ -133,7 +127,7 @@ See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for the full threat analysis.
 ## Authentication
 
 Local development runs without authentication. Optional Google OAuth sign-in is supported when
-`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` are configured (see `backend/app/config.py`).
+`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` are configured in the mode `.env`.
 Persisted API keys are feature-gated and not enabled in the current build.
 
 ## Key Concepts
@@ -145,8 +139,8 @@ Persisted API keys are feature-gated and not enabled in the current build.
 | Workspace | A project, repo, or knowledge area within a space |
 | Memory | Scoped long-term information; written only via proposal → approval workflow |
 | Capability | Code-defined skill registered via `capability.yaml` manifest |
-| Sandbox | Per-run isolation; git worktree by default, one-shot Docker for high-risk runs |
-| Adapter | Execution backend: `echo`, `claude_cli`, `codex_cli` |
+| Sandbox | Per-run isolation; git worktree by default; one-shot Docker-required paths fail closed until implemented |
+| Adapter | Execution backend: `echo`, `model_api`, `claude_code`, `codex_cli`, `opencode` |
 
 ## Built-in Templates
 

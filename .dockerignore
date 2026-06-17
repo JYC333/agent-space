@@ -1,5 +1,5 @@
 # Root .dockerignore — applies only to builds that use the repo root as their
-# build context. Today that covers backend and control-plane. The web frontend
+# build context. Today that covers the TypeScript server image. The web frontend
 # and deployer images build from their own subdirectory contexts, each with its
 # own .dockerignore, and are unaffected by this file.
 #

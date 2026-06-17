@@ -1,36 +1,39 @@
 # Memory / Context Runtime
 
-> Source of truth for: MemoryEntry lifecycle, retrieval pipeline, ContextBuilder,
-> ContextSnapshot population, ContextDigest cache, ProposalApplyService write boundary,
-> SessionCondenser, budget enforcement, and read_auth / policy enforcement points.
+> Source of truth for: MemoryEntry lifecycle, retrieval pipeline, context
+> assembly, ContextSnapshot population, ContextDigest cache, proposal apply write
+> boundary, session summaries, budget enforcement, and read/policy enforcement
+> points.
 
 ---
 
 ## 1. Core data model
 
-### MemoryEntry (`models.py:MemoryEntry`)
+### MemoryEntry
 
 Persistent, approved, scoped knowledge. Key invariants:
 
 | Invariant | Enforcement |
 |-----------|-------------|
-| `status="active"` only through approved write paths | `_INTERNAL_WRITE_AUTHORITY` sentinel in `MemoryStore.create()`; no public update/delete methods |
-| Scoped to one space | `space_id` FK; `MemoryRetriever._hard_filter_row()` enforces hard boundary |
-| Private memory only in personal space | `check_private_memory_placement()` in `MemoryStore.create()` |
+| `status="active"` only through approved write paths | server proposal apply service; no public direct active-memory mutation |
+| Scoped to one space | `space_id` FK; server memory/context repositories enforce hard boundary |
+| Private memory only in personal space | Policy hard invariant + memory proposal/apply validation |
 | Deleted rows invisible | `deleted_at IS NULL` filter in every retrieval query |
 
 Key columns: `scope_type` (user / workspace / agent / system / capability), `memory_layer` (semantic / episodic / procedural), `visibility`, `status` (proposed / active / archived / superseded), `version`, `fitness_score`, `source_proposal_id`.
 
 ### Active memory write boundary
 
-`MemoryStore.create()` raises `PermissionError` if called without the `_INTERNAL_WRITE_AUTHORITY` sentinel. The only caller that holds the sentinel is `MemoryInternalWriter._persist()`. There is no `MemoryStore.update()` or `MemoryStore.delete()`; all mutation operations after creation go through `MemoryInternalWriter` directly (ORM setattr + flush/commit).
+Public API calls never write active memory directly. Active memory mutation goes
+through proposal review and the server proposal apply service. There is no public
+direct update/delete path for `memory_entries`.
 
 **Allowed active-memory write paths:**
 
 | Path | Entry point | source_proposal_id | source_trust | Notes |
 |------|------------|-------------------|--------------|-------|
-| Proposal apply | `ProposalApplyService.apply()` → `MemoryInternalWriter.create_from_approved_proposal()` | set | from proposal payload | Normal product write boundary |
-| System seed / bootstrap | `MemoryInternalWriter.create_system_seed_memory()` | not set | `"internal_system"` | Bootstrap only; must not be called from product or agent paths |
+| Proposal apply | `server/src/modules/proposals/applyService.ts` + memory applier | set | from proposal payload | Normal product write boundary |
+| System seed / bootstrap | server seed/migration code | not set | `"internal_system"` | Bootstrap only; must not be called from product or agent paths |
 
 There is no product direct-write memory path. The memory write boundary is structural and is not configurable through persisted Policy rows.
 
@@ -38,7 +41,7 @@ No route, run, condenser, retriever, context builder, activity processor, or age
 
 ---
 
-## 2. Read authorization (`memory/read_auth.py`)
+## 2. Read authorization (`server/src/modules/memory/memoryReadAuth.ts`)
 
 ```
 can_read_memory(entry, user_id, space_id, workspace_id, include_system_scope) -> bool
@@ -55,11 +58,10 @@ Hard filter applied before any ranking:
 
 ---
 
-## 3. MemoryRetriever (`memory/retriever.py`)
+## 3. Memory retrieval (`server/src/modules/context/repository.ts`)
 
-Policy-aware retrieval pipeline. The TS runtime path implements this in
-`control-plane/src/modules/context/repository.ts`; the Python classes named below
-remain the parity/reference model for non-TS jobs and historical behavior.
+Policy-aware retrieval pipeline. The server runtime path implements this in
+`server/src/modules/context/repository.ts`.
 
 ```
 MemoryRetriever(db).retrieve(
@@ -78,13 +80,16 @@ Stages (in order, each filters the already-hard-filtered universe):
 
 Returns `RetrievalResult(memories, active_policies, source_refs, retrieval_trace, token_budget)`.
 
-### MemoryProvider / LocalMemoryProvider (`memory/provider.py`)
+### Memory read providers
 
-`MemoryProvider` is a **read-only** abstract interface (`get`, `list`, `search`). `LocalMemoryProvider` implements it against `MemoryStore`. There are no write methods (`create`, `update`, `delete`) on either class. All active-memory mutations go through `MemoryInternalWriter` via the proposal-approval boundary.
+Memory read providers are **read-only** (`get`, `list`, `search`). There are no
+write methods (`create`, `update`, `delete`) on the read surface. All
+active-memory mutations go through proposal approval and the server proposal apply
+boundary.
 
 ---
 
-## 4. ContextBuilder (`memory/context_builder.py`)
+## 4. Context assembly (`server/src/modules/context/prepareService.ts` and `repository.ts`)
 
 Security boundary: `space_id` and `user_id` are required. No cross-space reads.
 
@@ -139,7 +144,7 @@ When a `SessionSummary` is loaded, `ContextBuilder` records:
 
 ---
 
-## 4a. ChatContextBuilder — Personal Assistant / chat context path (`memory/chat_context.py`)
+## 4a. Chat context — Personal Assistant path (`server/src/modules/agents/chatContextBuilder.ts`)
 
 The existing `ContextBuilder` (§4 above) handles the CLI agent path: it produces a `ContextPackage`
 rendered by `ContextCompiler` into an instruction file.  The chat context path is different:
@@ -190,7 +195,7 @@ Supported `item_type` values in a `ContextBundle` / `ContextSnapshotItem`:
 1. manual_context       (score=1.0, always first)
 2. workspace metadata   (score=0.9, current workspace only)
 3. project metadata     (score=0.9, current project only)
-4. approved memory      (score=0.8, via MemoryRetriever)
+4. approved memory      (score=0.8, via server memory/context repositories)
 5. knowledge_item/idea  (score=0.7, recent-first + keyword filter)
 6. source               (score=0.6, processed, recent-first)
 7. activity_record      (score=0.5, recent-first)
@@ -201,20 +206,22 @@ max_items caps stop collection once either limit is reached (`truncated=True`).
 
 ### API
 
-```python
-builder = ChatContextBuilder(db)
+```ts
+const collector = new ChatContextCandidateCollector(repo);
+const candidates = await collector.fetchCandidates(request);
+const bundle = buildChatContext(candidates);
 
-# Build a context bundle (does not persist anything).
-bundle: ContextBundle = builder.build(request: ContextRequest)
-
-# Persist ContextSnapshot + ContextSnapshotItem rows for audit.
-snap: ContextSnapshot = builder.persist_snapshot(bundle, request, context_snapshot_id?)
-
-# List audit items for a snapshot (for debug / run detail).
-items: list[ContextSnapshotItem] = builder.list_snapshot_items(context_snapshot_id)
+await contextSnapshotRepository.persistChatSnapshot({
+  contextSnapshotId,
+  spaceId,
+  tokenEstimate: bundle.token_count,
+  requestJson,
+  items: bundle.items,
+});
 ```
 
-`persist_snapshot()` flushes but does not commit — the caller owns the transaction boundary.
+Snapshot persistence owns its SQL statement boundaries; callers own larger
+workflow orchestration.
 
 ### ContextSnapshot additions
 
@@ -237,14 +244,12 @@ referenced tables in the baseline migration.
 
 ---
 
-## 5. SessionSummary and SessionCondenser (`sessions/condenser.py`)
+## 5. SessionSummary and Session Condensing
 
-`memory.ContextBuilder` does not import `sessions.condenser` directly. It uses
-the sessions facade resolver `get_session_summary_port()` and consumes the
-context-safe `SessionSummaryForContext` DTO. This is a Stage 6 migration seam:
-Python `SessionCondenser` remains the current authority, but the boundary is
-explicit and can later route to a TS-backed sessions authority without teaching
-memory code about session internals.
+Context assembly consumes the context-safe `SessionSummaryForContext` DTO from
+the sessions module. Summary condense/create writes are deferred; context code
+must continue to consume the DTO boundary instead of reaching into session
+internals.
 
 ### Design invariants
 
@@ -254,7 +259,7 @@ memory code about session internals.
 - `version` is unique per session (`uq_session_summaries_session_version` constraint).
 - **At most one active summary per session** — enforced by partial unique index `ix_session_summaries_one_active_per_session` on `(session_id) WHERE status = 'active'`.
 
-### SessionSummary (`models.py:SessionSummary`)
+### SessionSummary (`session_summaries`)
 
 | Column | Purpose |
 |--------|---------|
@@ -289,7 +294,7 @@ SessionCondenser(db).get_latest(session_id, space_id) -> SessionSummary | None
 
 ---
 
-## 6. ContextCompiler (`memory/context_compiler.py`)
+## 6. ContextCompiler (`server/src/modules/context/compiler.ts`)
 
 Translates `ContextPackage` → CLI instruction file (CLAUDE.md / AGENTS.md / etc.) in the sandbox directory.
 
@@ -321,20 +326,20 @@ Sections ordered by priority (lower = more important = last to drop):
 
 **`budget_trace`** (returned in `CompiledContext`): records mandatory sections, capped sections (with original/capped sizes), and dropped sections.
 
-### ContextCompiler.budget_trace vs ContextSnapshotPopulator.token_budget_json
+### ContextCompiler.budget_trace vs ContextSnapshot token_budget_json
 
 These are **distinct** — do not conflate them:
 
 | Field | Source | Contents |
 |-------|--------|---------|
 | `CompiledContext.budget_trace` | `ContextCompiler.compile()` | Compiler-level section budget: mandatory / capped / dropped section names and sizes |
-| `ContextSnapshot.token_budget_json` | `ContextSnapshotPopulator` | Run-level stable_prefix / dynamic_tail character counts and percentage metrics |
+| `ContextSnapshot.token_budget_json` | `ContextPrepareService` | Run-level stable_prefix / dynamic_tail character counts and percentage metrics |
 
 `ContextSnapshot.token_budget_json` is **not** the compiler `budget_trace`. It is the populator's own measurement of stable_prefix vs dynamic_tail allocation. Future work may persist `budget_trace` into `ContextSnapshot` under a nested key (e.g., `compiler_budget_trace`); this is not yet implemented.
 
 ---
 
-## 7. ContextDigest and ContextDigestService (`memory/digest_service.py`)
+## 7. ContextDigest and context digest service (`server/src/modules/context/`)
 
 Versioned derived cache of approved Memory + Policy content. **Not a source of truth.**
 
@@ -346,7 +351,7 @@ Lifecycle:
 3. `mark_digest_dirty(...)` — no-op if no active digest. Called by `ProposalApplyService`.
 4. Dirty digests remain available for read (stale but useful). Regeneration is explicit.
 
-### ContextDigestRefreshService (`memory/digest_refresh.py`)
+### Context digest refresh
 
 Explicit refresh gate. Regenerates a dirty (or stale) digest by calling the appropriate `generate_*()` method.
 
@@ -372,11 +377,10 @@ Never writes `MemoryEntry`, `Proposal`, or `Policy`.
 
 ## 8. Context Snapshot Population
 
-Called immediately before adapter execution. TS `ContextPrepareService` /
-`PgRunContextRepository` builds and persists the run's `ContextSnapshot` row;
-Python `runs/context_snapshot_populator.py` is the reference implementation.
+Called immediately before adapter execution. server `ContextPrepareService` /
+`PgRunContextRepository` builds and persists the run's `ContextSnapshot` row.
 
-**Policy gate:** `context.inject_memory` is checked at the start of TS context
+**Policy gate:** `context.inject_memory` is checked at the start of server context
 prepare, before memory retrieval. Cross-space memory injection without a
 `PersonalMemoryGrant` fires the hard invariant → DENY. A DENY stops context
 population and propagates as a run failure. No memory is retrieved or injected
@@ -395,7 +399,7 @@ Stores in `ContextSnapshot`:
 
 ---
 
-## 9. ProposalApplyService (`proposals/apply_service.py`)
+## 9. ProposalApplyService (`server/src/modules/proposals/applyService.ts`)
 
 **Primary durable write boundary** for accepted proposals. Supports two additional write paths with explicit provenance controls (see write boundary table in section 1).
 
@@ -420,20 +424,20 @@ After applying `memory_create` / `memory_update` / `memory_archive`:
 
 | Gate | Location | When |
 |------|---------|------|
-| Hard memory filter | `MemoryRetriever._hard_filter_row()` | Every retrieval query |
-| Read authorization | `memory/read_auth.py:can_read_memory()` | ContextBuilder, direct reads |
-| Policy-aware read gate | `policy/enforcement.py:can_read_memory_in_run_context()` | Run context reads |
-| Private memory placement | `memory/store.py:check_private_memory_placement()` | MemoryStore.create() |
-| Write authority sentinel | `memory/store.py:_INTERNAL_WRITE_AUTHORITY` | `MemoryStore.create()` only |
-| Agent memory scope | `agent_memory_policy.readable_scopes` | MemoryRetriever + ContextBuilder |
-| Egress approval | `proposals/approvals.py:validate_egress_granting_user_approval()` | PersonalMemoryGrant egress |
-| Workspace root validation | `runs/preflight.py:validate_workspace_root_for_execution()` | Before run executes |
-| Per-run execution lock | `runs/execution_lock.py:RunExecutionLockService` | RunExecutionService |
-| **context.inject_memory** | `PolicyGateway` in `runs/context_snapshot_populator.py` | Before ContextBuilder.build() |
-| **context.render_for_runtime** | `PolicyGateway` in `runs/execution.py` | Before adapter.execute() |
-| **proposal.create** | `PolicyGateway.enforce()` in `proposals/service.py`, `runs/code_patch_collector.py` | Before Proposal row insert |
-| **proposal.apply** | `PolicyGateway.enforce_proposal_apply()` in `proposals/service.py` | Before ProposalApplyService.apply() |
-| ProposalApplyService accept_context | `proposals/apply_service.py` | Defense-in-depth at apply() entry |
+| Hard memory filter | `server/src/modules/context/repository.ts` and memory repositories | Every retrieval query |
+| Read authorization | `server/src/modules/memory/memoryReadAuth.ts` | Context assembly, direct reads |
+| Policy-aware read gate | `server/src/modules/policy/decisionCore.ts` | Run context reads |
+| Private memory placement | Policy hard invariant + memory applier | Memory proposal apply |
+| Write authority boundary | `server/src/modules/proposals/applyService.ts` | Accepted proposals only |
+| Agent memory scope | `agent_memory_policy.readable_scopes` | Context repository |
+| Egress approval | `server/src/modules/proposals/applyService.ts` | PersonalMemoryGrant egress |
+| Workspace root validation | `server/src/modules/workspaces/pathPolicy.ts` | Before workspace file access |
+| Per-run execution lock | run worker/orchestration locking in `server/src/modules/runs/` | Run execution service |
+| **context.inject_memory** | `PolicyGateway` in `server/src/modules/context/prepareService.ts` | Before context assembly |
+| **context.render_for_runtime** | `PolicyGateway` in `server/src/modules/runs/orchestrationService.ts` | Before adapter execution |
+| **proposal.create** | `PolicyGateway.enforce()` in proposals/workspace target modules | Before Proposal row insert |
+| **proposal.apply** | `PolicyGateway.enforceProposalApply()` in `server/src/modules/proposals/applyService.ts` | Before accepted proposal side effects |
+| ProposalApplyService accept_context | `server/src/modules/proposals/applyService.ts` | Defense-in-depth at apply() entry |
 
 ---
 

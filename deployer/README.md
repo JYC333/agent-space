@@ -1,13 +1,13 @@
 # agent-space Deployer
 
 Host-level deployment supervisor. Runs **outside** the main app container and handles
-rebuild/restart requests from the backend via a Unix domain socket.
+rebuild/restart requests from the server via a Unix domain socket.
 
 ## Why
 
-The backend cannot restart itself from inside a Docker container. The deployer runs on the
+The server cannot restart itself from inside a Docker container. The deployer runs on the
 host (or in a separate sidecar container with Docker access) and acts on approved deployment
-jobs submitted by the backend.
+jobs submitted by the server.
 
 ## Start (as part of Docker Compose — recommended)
 
@@ -21,7 +21,7 @@ ops/scripts/start.sh
 ```
 
 The deployer container has Docker socket access and shares `/var/run/agent-space` with the
-backend container. The backend submits jobs to the socket; the deployer runs the scripts.
+server container. The server submits jobs to the socket; the deployer runs the scripts.
 
 ## Allowed Job Types
 
@@ -71,5 +71,5 @@ The process must have Docker CLI access (`docker` on PATH, user in `docker` grou
 
 - Socket is owner read/write, group read/write (`0660`). Restrict the group.
 - Only allowlisted job types are executed — no arbitrary shell commands.
-- Every job must come from an approved proposal (enforced by the backend before calling).
+- Every job must come from an approved proposal (enforced by the server before calling).
 - The deployer never reads or writes the database directly.

@@ -1,13 +1,9 @@
 /**
  * DB column allowlist for the provider reader.
  *
- * This is the cross-language schema-drift ratchet: the TS reader SELECTs
- * exactly these columns, and a Python contract test asserts this list matches
- * the `ModelProvider` ORM table. Adding, renaming, or dropping a column on
- * either side fails tests instead of breaking requests.
- *
- * Python/alembic remains the exclusive schema owner; this file grants no write
- * capability and is not a wire contract.
+ * This is the schema-drift ratchet: server readers SELECT exactly these columns.
+ * Adding, renaming, or dropping a column should update this list and the
+ * corresponding repository/tests in the same change.
  */
 
 export const MODEL_PROVIDERS_TABLE = "model_providers" as const;

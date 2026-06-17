@@ -1,0 +1,192 @@
+import { describe, it, expect, afterEach } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { buildServer } from "../src/server";
+import { loadConfig } from "../src/config";
+import { SERVER_MODULES } from "../src/gateway/routeRegistry";
+import {
+  streamingModule,
+  RUN_EVENT_APPENDED_TYPE,
+  __setStreamingRepositoryFactoryForTests,
+} from "../src/modules/streaming";
+import { __setAuthIdentityForTests } from "../src/modules/auth";
+
+let app: FastifyInstance;
+
+afterEach(async () => {
+  __setAuthIdentityForTests(null);
+  __setStreamingRepositoryFactoryForTests(null);
+  await app?.close();
+});
+
+function runEvent(index: number) {
+  return {
+    id: `event-${index}`,
+    space_id: "personal",
+    run_id: "run-1",
+    event_index: index,
+    event_type: "adapter_completed",
+    status: "succeeded",
+    step_id: null,
+    actor_id: null,
+    summary: `event ${index}`,
+    error_code: null,
+    error_message: null,
+    workspace_id: null,
+    artifact_id: null,
+    proposal_id: null,
+    data_exposure_level: null,
+    trust_level: null,
+    metadata_json: null,
+    created_at: `2026-06-11T12:00:0${index}Z`,
+  };
+}
+
+function runRecord() {
+  return {
+    id: "run-1",
+    space_id: "personal",
+    agent_id: "agent-1",
+    agent_version_id: "version-1",
+    status: "running",
+    mode: "live",
+    prompt: null,
+    instruction: null,
+    workspace_id: null,
+    session_id: null,
+    project_id: null,
+    adapter_type: "mock",
+    model_provider_id: null,
+    required_sandbox_level: "none",
+    trigger_origin: "manual",
+    instructed_by_user_id: "user-1",
+    started_at: null,
+    ended_at: null,
+    visibility: "space_shared",
+  };
+}
+
+function parseSseEvents(payload: string): Array<{ id?: string; event?: string; data: unknown }> {
+  return payload
+    .split("\n\n")
+    .map((block) => block.trim())
+    .filter((block) => block.includes("data: "))
+    .map((block) => {
+      const lines = block.split("\n");
+      const idLine = lines.find((line) => line.startsWith("id: "));
+      const eventLine = lines.find((line) => line.startsWith("event: "));
+      const dataLine = lines.find((line) => line.startsWith("data: "));
+      return {
+        id: idLine?.slice(4),
+        event: eventLine?.slice(7),
+        data: JSON.parse(dataLine?.slice(6) ?? "null") as unknown,
+      };
+    });
+}
+
+describe("run-event SSE streaming edge", () => {
+  it("registers as a server-owned module", () => {
+    expect(streamingModule.name).toBe("streaming");
+    expect(SERVER_MODULES).toContain(streamingModule);
+  });
+
+  it("replays server run events as canonical SSE envelopes", async () => {
+    __setAuthIdentityForTests({ spaceId: "personal", userId: "user-1" });
+    const events = [runEvent(0), runEvent(1)];
+    const calls: unknown[] = [];
+    __setStreamingRepositoryFactoryForTests(() => ({
+      async getRun() {
+        return runRecord();
+      },
+      async listRunEventsPage(_spaceId, _runId, filters) {
+        calls.push(filters);
+        return { items: events, total: 2, limit: 100, offset: 0 };
+      },
+    }));
+    app = buildServer(loadConfig({}), { logger: false });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/runs/run-1/events/stream?space_id=personal&tail=false",
+      headers: { "x-request-id": "req-stream" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/event-stream");
+    expect(res.headers["x-request-id"]).toBe("req-stream");
+    const blocks = parseSseEvents(res.payload);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toMatchObject({ id: "0", event: RUN_EVENT_APPENDED_TYPE });
+    expect(blocks[0].data).toEqual({
+      event_id: "event-0",
+      type: RUN_EVENT_APPENDED_TYPE,
+      occurred_at: "2026-06-11T12:00:00Z",
+      space_id: "personal",
+      payload: { event: events[0] },
+    });
+    expect(calls).toEqual([
+      {
+        from_event_index: 0,
+        limit: 100,
+        event_type: null,
+        status: null,
+      },
+    ]);
+  });
+
+  it("uses Last-Event-ID to resume at the next run event index", async () => {
+    __setAuthIdentityForTests({ spaceId: "personal", userId: "user-1" });
+    const calls: unknown[] = [];
+    __setStreamingRepositoryFactoryForTests(() => ({
+      async getRun() {
+        return runRecord();
+      },
+      async listRunEventsPage(_spaceId, _runId, filters) {
+        calls.push(filters);
+        return { items: [], total: 3, limit: 100, offset: filters.from_event_index };
+      },
+    }));
+    app = buildServer(loadConfig({}), { logger: false });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/runs/run-1/events/stream?tail=false",
+      headers: { "last-event-id": "2" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(parseSseEvents(res.payload)).toEqual([]);
+    expect(calls).toEqual([
+      {
+        from_event_index: 3,
+        limit: 100,
+        event_type: null,
+        status: null,
+      },
+    ]);
+  });
+
+  it("denies missing or invisible runs before opening SSE", async () => {
+    __setAuthIdentityForTests({ spaceId: "personal", userId: "user-1" });
+    __setStreamingRepositoryFactoryForTests(() => ({
+      async getRun() {
+        return null;
+      },
+      async listRunEventsPage() {
+        throw new Error("should not be called");
+      },
+    }));
+    app = buildServer(loadConfig({}), { logger: false });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/runs/missing/events/stream?tail=false",
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({
+      error: "run_not_found",
+      message: "Run not found",
+      request_id: expect.any(String),
+    });
+  });
+});

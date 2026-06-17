@@ -3,7 +3,7 @@
  *
  * Each type is inferred from its Zod schema in `schemas.ts` (`z.infer`), so there
  * is exactly one source of truth: change a schema and the type follows. These
- * are plain data-transfer shapes that mirror the Python API JSON; they contain
+ * are plain data-transfer shapes that mirror the public API JSON; they contain
  * no behavior and no authority.
  */
 

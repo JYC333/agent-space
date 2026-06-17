@@ -22,7 +22,7 @@
 | Public SaaS / multi-tenant | Not in scope |
 | API key persistence UI | Feature-gated (501 in production) |
 | Workspace console persisted sessions | Feature-gated (501 in production) |
-| Runtime adapter bypassing credential resolver | Blocked by `RunExecutionService` design |
+| Runtime adapter bypassing credential resolver | Blocked by `RunOrchestrationService` design |
 | Runtime adapter bypassing sandbox/path policy | Blocked by `execution_workspace` contract |
 | File mutation without approved proposal + PathPolicy | Blocked by code patch apply |
 | Automatic memory promotion from intake/evidence content | Blocked by proposal/apply boundary |
@@ -44,7 +44,7 @@ No automation, connector marketplace, crawler, or self-evolution controls appear
 - Explicit chat sessions for conversations with agents (`POST /api/v1/sessions`).
 - Memory proposal creation, review, acceptance, rejection, and archive.
 - Memory consolidation producing proposals from Activity.
-- Runs through canonical `app.runtimes` path (`capability`, `model_api`, and spec-driven local CLI runtimes).
+- Runs through the canonical server runtime adapter path (`capability`, `model_api`, and spec-driven local CLI runtimes).
 - RunStep replay and failure diagnosis.
 - Artifacts produced by runs; safe export within owned space.
 - Task boards and task-linked runs/artifacts/proposals.

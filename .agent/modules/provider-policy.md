@@ -2,15 +2,15 @@
 
 ## Current Approach (Personal/Family Use)
 
-Provider configuration is simple: environment variables per deployment instance.
+Provider configuration is database-backed and space-scoped through
+`ModelProvider` rows. API keys are encrypted server-side into `Credential`
+rows, linked by `model_providers.credential_id`, and exposed through APIs only as
+`has_api_key`.
 
-```env
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
-DEFAULT_MODEL=claude-sonnet-4-6
-```
-
-The backend forwards only the relevant key(s) to the sandbox container. Keys are never logged or stored in the database.
+Runtime adapters never read provider keys from ambient environment variables.
+Managed API runtimes resolve credentials through `server/src/modules/providers/`
+after the `runtime.use_credential` policy gate passes. CLI runtimes use the CLI
+CredentialBroker profile channel instead.
 
 ## Per-Space Model Config (Lightweight Future-Proofing)
 
@@ -34,7 +34,9 @@ This is the only per-agent provider customization implemented now. It covers the
 - Model endpoint proxy / gateway
 - On-premise LLM endpoint configuration UI
 
-These are deferred until commercial need. The env-var approach is sufficient for personal use.
+These are deferred until commercial need. The current provider store is enough
+for personal/family use because keys are encrypted, space-owned, policy-gated,
+and not injected as broad process environment.
 
 ## Provider Risks to Document
 
@@ -47,15 +49,19 @@ These are deferred until commercial need. The env-var approach is sufficient for
 
 ## When Adding a New Provider
 
-1. Add the API key env var to `config.py` (forwarded to sandbox containers in `sandbox_manager.py`)
-2. Create or configure the runtime adapter to use the provider's SDK/CLI
-3. Document the provider in this file's risk table
-4. Note any license or terms-of-service constraint in `runtime-adapters.md`
+1. Add provider metadata and validation in `server/src/modules/providers/`.
+2. Store API keys through the encrypted `Credential` + `ModelProvider`
+   command store path; do not add ambient provider-key env vars.
+3. Create or configure the runtime adapter to use the provider's SDK/CLI through
+   the provider resolver or CLI CredentialBroker, depending on adapter type.
+4. Document the provider in this file's risk table.
+5. Note any license or terms-of-service constraint in `runtime-adapters.md`.
 
-No other changes needed for the current personal-use deployment model.
+New managed API providers must be covered by provider-command-store tests and
+runtime credential policy tests before they are considered wired.
 
 ## Related Files
-- `backend/app/config.py` — `anthropic_api_key`, `default_model`
-- `backend/app/workspace/sandbox_manager.py` — env forwarding to Docker containers
-- `backend/app/agents/` — runtime adapter implementations
+- `server/src/config.ts` — provider/runtime config inputs
+- `server/src/modules/workspaces/` — sandbox/workspace boundaries
+- `server/src/modules/runs/` and `runtimeAdapters/` — runtime adapter implementations
 - `.agent/modules/runtime-adapters.md` — adapter registry and license notes

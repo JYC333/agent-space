@@ -1,8 +1,8 @@
 /**
  * CLI credential-channel contracts.
  *
- * These schemas mirror the current public Python `/api/v1/credentials/cli/*`
- * API. CLI login state is the second credential channel under ADR 0010: it is
+ * These schemas mirror the public `/api/v1/credentials/cli/*` API. CLI login
+ * state is the second credential channel under ADR 0010: it is
  * a distinct class from ModelProvider API-key credentials and is never pooled
  * or rotated. Profile paths are storage locations, not secret material; the
  * login files themselves never appear in any response. Contracts only: no
@@ -18,7 +18,7 @@ export function isCliLoginMethod(value: string): value is CliLoginMethodValue {
   return (CLI_LOGIN_METHOD_VALUES as readonly string[]).includes(value);
 }
 
-/** Mirror of Python `CredentialProfileOut`; response-only and secret-free. */
+/** Credential profile response DTO; response-only and secret-free. */
 export const CliCredentialProfileDTOSchema = z
   .object({
     id: IdSchema,

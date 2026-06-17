@@ -33,10 +33,9 @@ describe("identity introspection contract", () => {
 });
 
 describe("provider DB read allowlist", () => {
-  it("pins the table and the exact column set the TS reader may SELECT", () => {
+  it("pins the table and the exact column set the server reader may SELECT", () => {
     expect(MODEL_PROVIDERS_TABLE).toBe("model_providers");
-    // Mirrors the Python ModelProvider ORM columns; the Python contract test
-    // asserts the same set from the ORM side.
+    // Pins the model_providers columns exposed through the server read model.
     expect([...MODEL_PROVIDERS_READ_COLUMNS].sort()).toEqual(
       [
         "id",
@@ -57,7 +56,7 @@ describe("provider DB read allowlist", () => {
 });
 
 describe("provider catalog constant", () => {
-  it("is a valid catalog payload with the exact Python CATALOG_INFO values", () => {
+  it("is a valid catalog payload with the documented catalog values", () => {
     expect(ProviderCatalogInfoSchema.parse(PROVIDER_CATALOG_INFO)).toEqual({
       id: "litellm",
       name: "LiteLLM (Open Format)",

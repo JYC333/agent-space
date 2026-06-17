@@ -15,7 +15,7 @@ for each.
 **Mitigations**:
 - `ContextBuilder` raises `ValueError` if called without `space_id`; never queries across spaces.
 - `PolicyEngine.rule_space_boundary` denies any action where requesting `space_id` differs from resource `space_id`.
-- Every `MemoryStore` query includes `space_id` in its WHERE clause — no global query path exists.
+- Every server memory repository query includes `space_id` in its WHERE clause — no global query path exists.
 - `MemoryReadTrace` records every read for after-the-fact auditability.
 
 ---
@@ -112,7 +112,7 @@ for each.
 **Impact**: Policy bypass; privilege escalation.
 
 **Mitigations**:
-- `AgentService.update()` requires a human user API call — no agent tool reaches it.
+- Agent config update requires a human user API call — no agent tool reaches it.
 - Agents have no `agent.update` tool in `tool_permissions_json` by default.
 - System agents (`owner_type="system"`) can only be modified by admins.
 
@@ -178,7 +178,7 @@ for each.
 | Space isolation | `ContextBuilder` + `PolicyEngine.rule_space_boundary` |
 | User isolation | `Memory.visibility` + `owner_user_id` filtering |
 | Agent permissions | `tool_permissions_json` + `memory_policy_json` + `PolicyEngine` |
-| Write gating | `ProposalService` + `Proposal` + `ApprovalEvent` |
+| Write gating | Proposals module + Proposal + approval/apply gate |
 | File access | `PathPolicy.validate()` |
 | Credential access | `Credential.encrypted_secret_ref` + `CredentialAccessLog` |
 | Capability evolution | `draft → proposed → testing → enabled` lifecycle |

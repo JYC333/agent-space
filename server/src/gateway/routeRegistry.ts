@@ -1,0 +1,141 @@
+/**
+ * Route registry — the composition pattern for server routes (the
+ * permanent "gateway" entry layer).
+ *
+ * Server-owned backend modules live under `../modules/<module_name>/` and each
+ * exposes a {@link ServerModule}: a name plus a
+ * `registerRoutes(app, context)` function. The registry mounts every server-owned
+ * module FIRST, then the explicit `/api/v1/*` 404 catch-all LAST. Anything the
+ * server does not explicitly own is not a public API route.
+ *
+ * New server features must be added as explicit modules in {@link SERVER_MODULES},
+ * never by widening the proxy.
+ */
+
+import type { FastifyInstance } from "fastify";
+import { createConfigSnapshot, type ConfigSnapshot, type ServerConfig } from "../config";
+import { systemModule } from "../modules/system";
+import { authModule } from "../modules/auth";
+import { spacesModule } from "../modules/spaces";
+import { catalogModule } from "../modules/catalog";
+import { streamingModule } from "../modules/streaming";
+import { notificationsModule } from "../modules/notifications";
+import { jobsModule } from "../modules/jobs";
+import { automationsModule } from "../modules/automations";
+import { dailyReportsModule } from "../modules/dailyReports";
+import { backupsModule } from "../modules/backups";
+import { providersModule } from "../modules/providers";
+import { executionPlanesModule } from "../modules/executionPlanes";
+import { runtimeToolsModule } from "../modules/runtimeTools";
+import { runtimeToolBindingsModule } from "../modules/runtimeToolBindings";
+import { runtimeHostModule } from "../modules/runtimeHost";
+import { runsModule } from "../modules/runs";
+import { artifactsModule } from "../modules/artifacts";
+import { projectsModule } from "../modules/projects";
+import { policyModule } from "../modules/policy";
+import { proposalsModule } from "../modules/proposals";
+import { sessionsModule } from "../modules/sessions";
+import { agentTemplatesModule } from "../modules/agentTemplates";
+import { agentsModule } from "../modules/agents";
+import { personalMemoryGrantsModule } from "../modules/personalMemoryGrants";
+import { memoryModule } from "../modules/memory";
+import { contextModule } from "../modules/context";
+import { activityModule } from "../modules/activity";
+import { sourcePointersModule } from "../modules/sourcePointers";
+import { intakeModule } from "../modules/intake";
+import { knowledgeModule } from "../modules/knowledge";
+import { evolutionModule } from "../modules/evolution";
+import { tasksModule } from "../modules/tasks";
+import { workspaceProfilesModule } from "../modules/workspaceProfiles";
+import { workspacesModule } from "../modules/workspaces";
+import { deploymentModule } from "../modules/deployment";
+import { frontendSupportModule } from "../modules/frontendSupport";
+import { registerErrorEnvelopeHandler } from "./errorEnvelope";
+import {
+  REQUEST_ID_HEADER,
+  SERVER_MARKER_HEADER,
+  SERVER_MARKER_VALUE,
+  resolveRequestId,
+} from "./requestContext";
+
+/** Dependencies handed to every server-owned module at registration time. */
+export interface ModuleContext {
+  config: ServerConfig;
+  /** Immutable, hash-identified view of the same validated config. */
+  snapshot: ConfigSnapshot;
+}
+
+/** Contract every server-owned backend module implements. */
+export interface ServerModule {
+  /** Stable module id (matches its `src/modules/<name>/` directory). */
+  name: string;
+  registerRoutes(app: FastifyInstance, context: ModuleContext): void;
+}
+
+/**
+ * All server-owned modules, in registration order. The unknown-API catch-all is not
+ * a module and is registered separately, always last.
+ */
+export const SERVER_MODULES: readonly ServerModule[] = [
+  systemModule,
+  authModule,
+  spacesModule,
+  catalogModule,
+  streamingModule,
+  notificationsModule,
+  runtimeToolsModule,
+  providersModule,
+  executionPlanesModule,
+  runtimeToolBindingsModule,
+  runtimeHostModule,
+  runsModule,
+  artifactsModule,
+  projectsModule,
+  policyModule,
+  proposalsModule,
+  sessionsModule,
+  agentTemplatesModule,
+  agentsModule,
+  personalMemoryGrantsModule,
+  memoryModule,
+  contextModule,
+  activityModule,
+  sourcePointersModule,
+  intakeModule,
+  knowledgeModule,
+  evolutionModule,
+  tasksModule,
+  workspaceProfilesModule,
+  workspacesModule,
+  jobsModule,
+  automationsModule,
+  dailyReportsModule,
+  backupsModule,
+  deploymentModule,
+  frontendSupportModule,
+];
+
+export function registerServerRoutes(
+  app: FastifyInstance,
+  config: ServerConfig,
+): void {
+  const context: ModuleContext = { config, snapshot: createConfigSnapshot(config) };
+
+  // Cross-cutting gateway conventions: the error envelope for server-owned route
+  // errors, and request-id continuity on every response.
+  registerErrorEnvelopeHandler(app);
+  app.addHook("onRequest", async (request, reply) => {
+    reply.header(REQUEST_ID_HEADER, resolveRequestId(request));
+    reply.header(SERVER_MARKER_HEADER, SERVER_MARKER_VALUE);
+  });
+
+  // 1. Server-owned modules (permanent).
+  for (const module of SERVER_MODULES) {
+    module.registerRoutes(app, context);
+  }
+
+  // 2. Unknown API catch-all. Must stay last so explicitly owned server routes win.
+  app.all("/api/v1/*", async (_request, reply) =>
+    reply.code(404).send({ detail: "Route not found" }),
+  );
+}

@@ -42,7 +42,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 ## Execution Boundaries
 
-**B13** — `_SANDBOXED_ADAPTERS` (claude_code, codex_cli, and future coding runtimes) are always sandboxed. Current implemented sandbox routing is git worktree + local executor for file-access CLI runs. one-shot Docker is not implemented in the backend product path yet; high/critical paths must fail closed rather than silently downgrading. An agent can escalate `risk_level` but cannot remove an adapter from `_SANDBOXED_ADAPTERS`.
+**B13** — `_SANDBOXED_ADAPTERS` (claude_code, codex_cli, and future coding runtimes) are always sandboxed. Current implemented sandbox routing is git worktree + local executor for file-access CLI runs. one-shot Docker is not implemented in the product path yet; high/critical paths must fail closed rather than silently downgrading. An agent can escalate `risk_level` but cannot remove an adapter from `_SANDBOXED_ADAPTERS`.
 
 **B14** — Vendor context files (CLAUDE.md, AGENTS.md, Cursor rules) are generated artefacts written by ContextCompiler to the sandbox directory. They are not the source of truth and are never written directly to the real workspace by default.
 
@@ -120,11 +120,11 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 ## Module / Plugin Boundaries
 
-**B33** — Modules must not import from each other. A module may only import from the kernel (`app.db`, `app.config`, `app.models`, `app.schemas`, `app.auth`). Exceptions are documented in [ADR 0007](decisions/0007-plugin-module-architecture.md) and must not grow without updating that ADR.
+**B33** — Server modules should prefer shared gateway/db/protocol helpers over direct cross-module coupling. Cross-domain imports are allowed only when they express an explicit product boundary recorded in the relevant architecture doc or ADR, and they must not bypass the owning module's public route/service boundary.
 
-**B34** — Every module's HTTP routes must live in `<module>/api.py` (plus optional `<module>/*_api.py` for large route groups). Routes must not be defined in `main.py` or in any shared `api/` directory.
+**B34** — Every server module's HTTP routes must live in `server/src/modules/<module>/routes.ts` and be mounted through `server/src/gateway/routeRegistry.ts`. Routes must not be registered directly in `server.ts`, `index.ts`, or ad hoc shared API files.
 
-**B35** — The backend module registry (`app/modules/registry.py`) and frontend module registry (`apps/web/src/modules/registry.ts`) are the single sources of truth for which features are active. Do not hardcode route lists or nav items elsewhere.
+**B35** — The server route registry (`server/src/gateway/routeRegistry.ts`) and frontend module registry (`apps/web/src/modules/registry.ts`) are the single sources of truth for which features are active. Do not hardcode route lists or nav items elsewhere.
 
 **B36** — Frontend module pages must use `React.lazy()` entry points. A module must not be eagerly imported in `apps/web/src/App.tsx` or `apps/web/src/core/Shell.tsx`. This preserves Vite's ability to produce separate chunks per module for build-time exclusion.
 
@@ -144,7 +144,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 ## CLI Credential Boundaries
 
-**B45** — CLI credential profiles are owned by agent-space. Sandboxes never receive the full backend container HOME or the full `instance/secrets/` directory.
+**B45** — CLI credential profiles are owned by agent-space. Sandboxes never receive the full server container HOME or the full `instance/secrets/` directory.
 
 **B46** — Every CLI credential grant or denial is audited in `cli_credential_events`. Manual and automation CLI runs require an explicit CredentialBroker profile. Runs with no profile configured fail before adapter invocation and record `credential_source="none"` with `fallback_reason="no_profile_configured"`.
 
@@ -156,7 +156,14 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 ## API Entrypoint Boundaries
 
-**B50** — `control-plane` is the default client-facing API entrypoint for web, dev, test, and prod. Explicit TS-owned contexts are served by control-plane modules and recorded in `TS_CONTROL_PLANE_OWNERSHIP.md`. Python-owned `/api/v1/*` routes continue through the temporary Python fallback proxy; the permanent gateway module inside `control-plane` owns routing and request context. Backend remains the Python authority for schema migrations and every route or context not explicitly owned by a TS module. DB-persisted API-key storage remains disabled/deferred until the canonical schema adds that table; the current auth/space surfaces owned by TS are listed in the ownership document. No additional business authority moves to TypeScript without an explicit later ownership decision.
+**B50** — `server/` is the TypeScript backend source root. The Compose/API
+entrypoint service name remains `server` for web, dev, test, and prod.
+The permanent gateway module owns routing and request context; unknown
+`/api/v1/*` routes fail closed with the local 404 catch-all. Schema changes are
+applied only through the explicit server migration runner under
+`server/migrations/`; the server service process does not auto-migrate
+on startup. DB-persisted API-key storage remains disabled/deferred until the
+canonical schema adds that table.
 
 ---
 
@@ -168,7 +175,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 **B43** — The deployer accepts only allowlisted job types (`rebuild_agent_space`, `restart_agent_space`, `health_check`). It never executes arbitrary shell commands. Agent-generated code cannot trigger deployment without a human-approved proposal.
 
-**B44** — The Docker socket (`/var/run/docker.sock`), if present, is not used for deployment control. Deployment goes through the deployer Unix socket. High-risk one-shot Docker sandboxing is not currently implemented in the backend product path and must not be represented as active isolation.
+**B44** — The Docker socket (`/var/run/docker.sock`), if present, is not used for deployment control. Deployment goes through the deployer Unix socket. High-risk one-shot Docker sandboxing is not currently implemented in the product path and must not be represented as active isolation.
 
 ---
 

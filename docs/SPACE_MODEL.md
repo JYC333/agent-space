@@ -65,17 +65,18 @@ CREATE TABLE workspace_memberships (
 
 If any condition is absent, the memory is not correctly private:
 - `visibility=private` in a shared space is an anti-pattern (see below).
-- Missing `owner_user_id` is rejected by `MemoryStore.create()`.
+- Missing `owner_user_id` is rejected by the memory proposal/apply path.
 
 ## Anti-pattern: private memory in shared spaces
 
 Storing `visibility=private` memory in a household, team, or other multi-member space is an
 anti-pattern.
 
-- **Write-layer enforcement (active):** `MemoryStore.create()` raises `ValueError` when
-  `visibility=private` and the target space is not of type `personal`. All write routes are
-  covered because they share this path.
-- **Read-time safety net (active):** `can_read_memory()` in `memory/read_auth.py` blocks
+- **Write-layer enforcement (active):** the memory proposal/apply path rejects
+  `visibility=private` when the target space is not of type `personal`. All write
+  routes are covered because they share this path.
+- **Read-time safety net (active):** `canReadMemory()` in
+  `server/src/modules/memory/memoryReadAuth.ts` blocks
   non-owner reads for private visibility regardless of space type. This catches any
   private memories that were written before enforcement was added.
 
@@ -133,5 +134,5 @@ a user's personal-space private memory as reasoning-only context. Federation and
 - `docs/POLICY_AND_PRIVACY_BOUNDARIES.md` — policy enforcement inventory
 - `docs/FEDERATED_ACCESS_MODEL.md` — federated access (deferred)
 - `docs/PUBLISH_PROJECTION.md` — public publish pipeline (deferred)
-- `backend/app/memory/read_auth.py` — `can_read_memory()` implementation
-- `backend/app/memory/store.py` — `MemoryStore.create()` write-layer enforcement
+- `server/src/modules/memory/memoryReadAuth.ts` — memory read authorization
+- `server/src/modules/memory/memoryApplyRepository.ts` — accepted memory proposal apply path

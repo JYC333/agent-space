@@ -1,17 +1,13 @@
 /**
  * Policy enforcement wire contracts.
  *
- * Faithful port of the Python policy decision surface
- * (`backend/app/policy/`): the canonical action registry, decision/request
- * shapes, durable-audit envelope, and the `PolicyGateBlocked` error taxonomy.
+ * Shared policy decision surface: the canonical action registry,
+ * decision/request shapes, durable-audit envelope, and the `PolicyGateBlocked`
+ * error taxonomy.
  *
  * Schemas only — no enforcement authority lives here. The authority is the
- * control-plane `policy` module; Python `PolicyGateway` remains a local
- * implementation behind retired/unowned paths and tests.
- * Field names mirror the Python API JSON (snake_case).
- *
- * Source of truth while both sides exist: `backend/app/policy/decisions.py`,
- * `actions.py`, `gateway.py`. Keep this file in lockstep with them.
+ * server `policy` module.
+ * Field names mirror the API JSON (snake_case).
  */
 
 import { z } from "zod";
@@ -60,11 +56,10 @@ export const PolicyRecordFailureModeEnum = z.enum(
 );
 
 // ---------------------------------------------------------------------------
-// Canonical action registry (actions.py)
+// Canonical action registry
 //
-// This is the durable shared contract: TS and Python must register the same
-// actions with the same enforcement metadata. The registry is data, so it
-// ports 1:1 and is validated identically by both sides' tests.
+// This is the durable shared contract: every enforcement point must use the
+// same action metadata. The registry is data and is validated by tests.
 // ---------------------------------------------------------------------------
 
 export const PolicyActionDefinitionSchema = z
@@ -87,10 +82,9 @@ export type PolicyActionDefinition = z.infer<
 >;
 
 /**
- * The canonical registry, in insertion order, mirroring `_reg(...)` in
- * `backend/app/policy/actions.py`. `description` is intentionally omitted from
- * the enforcement contract surface (it is human documentation, not a decision
- * input) but carried so the two registries compare 1:1.
+ * The canonical registry, in insertion order. `description` is intentionally
+ * omitted from the enforcement contract surface (it is human documentation, not
+ * a decision input), but carried so audits and docs share the same labels.
  */
 export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
   // ---- WIRED_DIRECT ----
@@ -103,7 +97,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: null,
     default_required_approver_role: null,
     current_enforcement_point:
-      "app.runs.execution.RunExecutionService.execute",
+      "server/src/modules/runs/orchestrationService.ts",
     description: "Execute a runtime adapter for an agent run.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "best_effort",
@@ -117,7 +111,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_credential_use",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.runs.execution.RunExecutionService.execute",
+      "server/src/modules/runs/orchestrationService.ts",
     description: "Allow a runtime adapter to use a space credential.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "fail_closed",
@@ -131,7 +125,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: null,
     default_required_approver_role: null,
     current_enforcement_point:
-      "app.runs.context_snapshot_populator.ContextSnapshotPopulator.populate",
+      "server/src/modules/context/prepareService.ts",
     description: "Inject memory entries into a runtime context package.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "best_effort",
@@ -145,7 +139,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: null,
     default_required_approver_role: null,
     current_enforcement_point:
-      "app.runs.execution.RunExecutionService.execute",
+      "server/src/modules/context/prepareService.ts",
     description:
       "Render a context package for delivery to a runtime adapter.",
     lifecycle_status: "wired_direct",
@@ -160,7 +154,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_code_patch",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.memory.code_patch_apply.apply_code_patch_payload",
+      "server/src/modules/workspaces/codePatch.ts",
     description: "Apply a code patch to workspace files.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "fail_closed",
@@ -174,7 +168,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: null,
     default_required_approver_role: null,
     current_enforcement_point:
-      "app.runs.artifact_persistence.ArtifactPersistenceService",
+      "server/src/modules/runs/materializationService.ts",
     description: "Persist an artifact produced by a run.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "fail_closed",
@@ -188,7 +182,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: null,
     default_required_approver_role: null,
     current_enforcement_point:
-      "app.proposals.ProposalService.create_proposal, app.proposals.ProposalService.create_user_proposal, app.runs.code_patch_collector.collect_and_create_code_patch_proposal",
+      "server/src/modules/memory/proposalRepository.ts, server/src/modules/runs/materializationService.ts, server/src/modules/workspaces/codePatch.ts",
     description:
       "Create a proposal for a pending durable change. Covers user-created memory proposals (memory_create, memory_update, etc.) and system-created code_patch proposals from CLI runs.",
     lifecycle_status: "wired_direct",
@@ -202,7 +196,8 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     audit_required: true,
     approval_capability: "approve_proposal",
     default_required_approver_role: "owner",
-    current_enforcement_point: "app.proposals.ProposalService.accept",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts",
     description:
       "Accept and apply a pending proposal through ProposalApplyService. The actor must have approval authority for the proposal type and risk level.",
     lifecycle_status: "wired_direct",
@@ -217,7 +212,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_agent_config_change",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.agents.agent_service.AgentService.create_config_update_proposal",
+      "server/src/modules/agents/routes.ts",
     description:
       "Create an agent_config_update proposal for post-create execution configuration changes. The durable mutation is still protected by proposal.apply.",
     lifecycle_status: "wired_direct",
@@ -233,7 +228,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_memory_change",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.proposals.ProposalService.accept via proposal.apply",
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
       "Create a new memory entry. Protected via proposal.apply gate and ProposalApplyService. Must not be called directly through PolicyGateway.",
     lifecycle_status: "wired_via_proposal",
@@ -248,7 +243,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_memory_change",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.proposals.ProposalService.accept via proposal.apply",
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
       "Update a memory entry. Protected via proposal.apply gate and ProposalApplyService. Must not be called directly through PolicyGateway.",
     lifecycle_status: "wired_via_proposal",
@@ -263,7 +258,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_memory_change",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.proposals.ProposalService.accept via proposal.apply",
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
       "Archive a memory entry. Protected via proposal.apply gate and ProposalApplyService. Must not be called directly through PolicyGateway.",
     lifecycle_status: "wired_via_proposal",
@@ -278,7 +273,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_policy_change",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.proposals.ProposalService.accept via proposal.apply",
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
       "Create or supersede a policy version. Protected via proposal.apply gate and ProposalApplyService. Must not be called directly through PolicyGateway.",
     lifecycle_status: "wired_via_proposal",
@@ -293,7 +288,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_knowledge_change",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.proposals.ProposalService.accept via proposal.apply",
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
       "Create an active KnowledgeItem after an accepted knowledge_create proposal. Protected via proposal.apply gate and ProposalApplyService.",
     lifecycle_status: "wired_via_proposal",
@@ -308,7 +303,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_knowledge_change",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.proposals.ProposalService.accept via proposal.apply",
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
       "Create a new version of an existing KnowledgeItem after an accepted knowledge_update proposal. Protected via proposal.apply gate and ProposalApplyService.",
     lifecycle_status: "wired_via_proposal",
@@ -323,7 +318,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_knowledge_change",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.proposals.ProposalService.accept via proposal.apply",
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
       "Archive a KnowledgeItem after an accepted knowledge_archive proposal. Protected via proposal.apply gate and ProposalApplyService.",
     lifecycle_status: "wired_via_proposal",
@@ -338,7 +333,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_knowledge_change",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.proposals.ProposalService.accept via proposal.apply",
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
       "Create a same-space KnowledgeItemRelation after an accepted knowledge_relation_create proposal. Protected via proposal.apply gate and ProposalApplyService.",
     lifecycle_status: "wired_via_proposal",
@@ -353,7 +348,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_knowledge_change",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.proposals.ProposalService.accept via proposal.apply",
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
       "Remove or archive a KnowledgeItemRelation after an accepted knowledge_relation_delete proposal. Protected via proposal.apply gate and ProposalApplyService.",
     lifecycle_status: "wired_via_proposal",
@@ -382,7 +377,8 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     audit_required: false,
     approval_capability: null,
     default_required_approver_role: null,
-    current_enforcement_point: "app.workspace_console.api",
+    current_enforcement_point:
+      "server/src/modules/workspaces/routes.ts",
     description: "Read files or metadata from a workspace.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "best_effort",
@@ -520,7 +516,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_automation_change",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.automation.service.AutomationService.create",
+      "server/src/modules/automations/service.ts",
     description:
       "Create an automation rule that can trigger agent runs on a schedule or event.",
     lifecycle_status: "wired_direct",
@@ -534,7 +530,8 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     audit_required: true,
     approval_capability: null,
     default_required_approver_role: "owner",
-    current_enforcement_point: "app.automation.service.AutomationService.fire",
+    current_enforcement_point:
+      "server/src/modules/automations/service.ts",
     description: "Manually trigger an automation rule to queue an agent run.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "fail_closed",
@@ -548,7 +545,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: "approve_automation_change",
     default_required_approver_role: "owner",
     current_enforcement_point:
-      "app.automation.service.AutomationService.update",
+      "server/src/modules/automations/service.ts",
     description:
       "Update an existing automation rule's trigger condition or configuration.",
     lifecycle_status: "wired_direct",
@@ -562,7 +559,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     audit_required: true,
     approval_capability: null,
     default_required_approver_role: null,
-    current_enforcement_point: "app.intake.api",
+    current_enforcement_point: "server/src/modules/intake/routes.ts",
     description: "Create or update source connections.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "best_effort",
@@ -575,7 +572,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     audit_required: true,
     approval_capability: null,
     default_required_approver_role: null,
-    current_enforcement_point: "app.intake.api",
+    current_enforcement_point: "server/src/modules/intake/routes.ts",
     description:
       "Create raw intake items or extraction jobs without mutating durable memory or knowledge.",
     lifecycle_status: "wired_direct",
@@ -589,7 +586,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     audit_required: true,
     approval_capability: null,
     default_required_approver_role: null,
-    current_enforcement_point: "app.intake.api",
+    current_enforcement_point: "server/src/modules/intake/routes.ts",
     description:
       "Update intake item triage or read status without changing durable memory or knowledge.",
     lifecycle_status: "wired_direct",
@@ -603,7 +600,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     audit_required: true,
     approval_capability: null,
     default_required_approver_role: null,
-    current_enforcement_point: "app.intake.api",
+    current_enforcement_point: "server/src/modules/intake/routes.ts",
     description:
       "Create extracted evidence derived from intake, activity, artifacts, or run records.",
     lifecycle_status: "wired_direct",
@@ -617,7 +614,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     audit_required: true,
     approval_capability: null,
     default_required_approver_role: null,
-    current_enforcement_point: "app.intake.api",
+    current_enforcement_point: "server/src/modules/intake/routes.ts",
     description:
       "Update extracted evidence review status, confidence, or metadata.",
     lifecycle_status: "wired_direct",
@@ -631,7 +628,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     audit_required: true,
     approval_capability: null,
     default_required_approver_role: null,
-    current_enforcement_point: "app.intake.api",
+    current_enforcement_point: "server/src/modules/intake/routes.ts",
     description:
       "Link evidence to space, workspace, project, user, agent, run, proposal, artifact, memory, knowledge, or task targets.",
     lifecycle_status: "wired_direct",
@@ -645,7 +642,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     audit_required: true,
     approval_capability: null,
     default_required_approver_role: null,
-    current_enforcement_point: "app.intake.api",
+    current_enforcement_point: "server/src/modules/intake/routes.ts",
     description:
       "Configure workspace intake profiles and workspace source bindings.",
     lifecycle_status: "wired_direct",
@@ -660,7 +657,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: null,
     default_required_approver_role: null,
     current_enforcement_point:
-      "app.memory.context_builder.ContextBuilder.build",
+      "server/src/modules/context/prepareService.ts",
     description:
       "Authorize selecting explicitly linked active evidence for inclusion in a run context snapshot.",
     lifecycle_status: "wired_direct",

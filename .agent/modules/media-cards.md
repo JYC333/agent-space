@@ -86,8 +86,8 @@ Appears in review queue
 - Audio/video review always offers a text transcript fallback
 
 ## Related Files
-- `backend/app/models.py` — TODO: add MediaCard model
-- `backend/app/api/cards.py` — TODO: extend with media endpoints
+- `server/migrations/` — TODO: add MediaCard table
+- `server/src/modules/` — TODO: extend with media endpoints
 - `apps/web/src/pages/` — TODO: media card creator and review renderer
 
 ## Related Modules

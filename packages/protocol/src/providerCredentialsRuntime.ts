@@ -9,7 +9,7 @@
 import { z } from "zod";
 import { IdSchema, SecretResponseGuards } from "./common.js";
 
-export const ProviderCredentialsAuthoritySchema = z.enum(["python", "ts"]);
+export const ProviderCredentialsAuthoritySchema = z.enum(["server"]);
 export type ProviderCredentialsAuthority = z.infer<
   typeof ProviderCredentialsAuthoritySchema
 >;
@@ -172,7 +172,7 @@ export type ProviderResilienceDecision = z.infer<
 >;
 
 // ---------------------------------------------------------------------------
-// Credential pools (Hermes H1) and per-task provider chains (Hermes H2)
+// Credential pools and per-task provider chains.
 // ---------------------------------------------------------------------------
 
 export const ProviderRotationStrategySchema = z.enum([

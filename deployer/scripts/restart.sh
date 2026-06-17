@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restart backend + frontend containers without rebuilding
+# Restart server + frontend containers without rebuilding
 set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -7,6 +7,8 @@ MODE="${AGENT_SPACE_ENV:-dev}"
 INSTANCE_ROOT="${AGENT_SPACE_HOME:-/aspace}"
 COMPOSE_FILE="$REPO_ROOT/ops/compose/docker-compose.$MODE.yml"
 COMPOSE_PROJECT="agent-space-$MODE"
+API_SERVICE="${API_SERVICE:-server}"
+FRONTEND_SERVICE="${FRONTEND_SERVICE:-frontend}"
 
 case "$MODE" in
     dev|test|prod) ;;
@@ -20,16 +22,18 @@ fi
 
 COMPOSE=(docker compose --env-file "$INSTANCE_ROOT/.env" -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE")
 
-echo "[restart] restarting backend and frontend..."
-AGENT_SPACE_MODE_ROOT="$INSTANCE_ROOT" "${COMPOSE[@]}" restart backend frontend
+echo "[restart] restarting $API_SERVICE and $FRONTEND_SERVICE..."
+AGENT_SPACE_MODE_ROOT="$INSTANCE_ROOT" "${COMPOSE[@]}" restart "$API_SERVICE" "$FRONTEND_SERVICE"
 
-echo "[restart] waiting for backend health..."
+echo "[restart] waiting for $API_SERVICE health..."
 for i in $(seq 1 20); do
-    if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
-        echo "[restart] backend healthy after ${i}s"
+    if AGENT_SPACE_MODE_ROOT="$INSTANCE_ROOT" "${COMPOSE[@]}" exec -T "$API_SERVICE" \
+        node -e "fetch('http://localhost:8010/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" \
+        > /dev/null 2>&1; then
+        echo "[restart] $API_SERVICE healthy after ${i}s"
         exit 0
     fi
     sleep 1
 done
-echo "[restart] WARNING: backend did not become healthy within 20s" >&2
+echo "[restart] WARNING: $API_SERVICE did not become healthy within 20s" >&2
 exit 1

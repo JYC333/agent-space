@@ -26,6 +26,6 @@ This means:
 - `instance/` holds all deployment-specific state and is gitignored
 - Tests use seeded example data (`SPACE=personal`, `USER=default_user`)
 - Capability manifests in `catalog/capabilities/` are templates — no private capability logic
-- The ANTHROPIC_API_KEY and other secrets are loaded from `.env` (gitignored) only
+- Provider API keys and CLI login state live in the server credential stores under the instance root; real secrets must not be committed to source
 - If open-sourcing later: scrub git history, add LICENSE, write CONTRIBUTING.md
 - The `core/` directory is the open-source candidate; `instance/` and `ops/env/.env` remain private

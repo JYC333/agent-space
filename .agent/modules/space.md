@@ -35,11 +35,11 @@ WorkspaceMembership: id, workspace_id, user_id, role
 - One deployment instance hosts many spaces — never create one instance per space
 
 ## Related Files
-- `backend/app/models.py` — Space, SpaceMembership, Workspace, WorkspaceMembership
-- `backend/app/schemas.py` — WorkspaceCreate, WorkspaceOut
-- `backend/app/config.py` — DEFAULT_USER_ID (bootstrap owner)
-- `backend/app/spaces/defaults.py` — resolves the default space (owner's personal space) from the DB
-- `backend/app/memory/context_builder.py` — enforces space boundary
+- `server/migrations/` — Space, SpaceMembership, Workspace, WorkspaceMembership
+- `packages/protocol/src/` — shared workspace/space DTOs when exported
+- `server/src/config.ts` — bootstrap/default config
+- `server/src/modules/spaces/` — default space and membership routes
+- `server/src/modules/context/` — context assembly with space boundary enforcement
 
 ## Related Decisions
 - [0001-space-model.md](../decisions/0001-space-model.md)

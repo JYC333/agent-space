@@ -51,7 +51,7 @@ synced_at      — last sync confirmation timestamp
 sync_status    — local | synced | conflict | pending_push
 ```
 
-These fields are not yet in models.py but every new model should be designed so they can be added without breaking existing queries.
+These fields are not yet in the canonical schema, but every new model should be designed so they can be added without breaking existing queries.
 
 ## Sync Status UI
 
@@ -81,8 +81,8 @@ The sync layer must be pluggable — the choice of transport must not leak into 
 - Sync is disabled by default; opt-in per deployment via config
 
 ## Related Files
-- `backend/app/models.py` — all models must have UUID PKs and immutable `created_at`
-- `backend/app/config.py` — TODO: add `sync_enabled` flag
+- `server/migrations/` — all durable tables must have UUID PKs and immutable `created_at`
+- `server/src/config.ts` — TODO: add `sync_enabled` flag
 - `apps/web/src/components/` — TODO: SyncStatusIndicator in RuntimeStatusBar
 
 ## Related Modules

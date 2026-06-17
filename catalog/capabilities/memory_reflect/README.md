@@ -12,11 +12,8 @@ A built-in capability that analyzes session messages and generates memory propos
 
 ## Capability Runtime
 
-The executable capability entrypoint is currently a backend skeleton. It records
-reflection metadata as a run artifact/activity and does not emit memory proposals
-directly.
-
-The existing session reflection API still owns the pattern/LLM proposal flow.
+This catalog entry is metadata only; it ships no executable entrypoint. The TS
+session reflection API owns the pattern/LLM proposal flow.
 
 ## Memory Access
 

@@ -10,7 +10,9 @@ entry that redirects to the last-used workspace (default `/knowledge/notes`);
 (`Knowledge / Notes ▼`) — there is **no** Knowledge scene sidebar or tab strip, so each
 workspace owns its own layout. Notes is a working-knowledge workspace (configurable
 collection tree + open-note tabs, create / edit + links/backlinks); Wiki is the KnowledgeItem browser under
-`/knowledge/wiki`; Sources lists evidence; Cards is a clean placeholder. Automatic
+`/knowledge/wiki`; Sources lists evidence; Cards is a clean placeholder. The backend
+already supports source list/create/get/update/archive and item-source link CRUD;
+the current web client exposes Sources as list-only evidence browsing. Automatic
 generation, assessments, card generation, and richer search remain future work.
 
 ### Frontend information architecture
@@ -81,7 +83,7 @@ is item↔source evidence; the two must not be conflated.
 Notes: it connects a note to another note, a wiki KnowledgeItem, a Source, a Project, a
 Workspace, an ActivityRecord, a Run, or a Proposal without a join table per pair.
 `source_id` / `target_id` are polymorphic (keyed by `source_type` / `target_type`) and
-are intentionally not foreign keys (allowlisted in `test_postgres_ddl_semantics.py`).
+are intentionally not foreign keys (covered by `server/test/baselineSchema.test.ts`).
 Endpoints are validated to exist in the same space. Link types: `references`,
 `related_to`, `belongs_to`, `captured_from`, `source_for`, `derived_from`; status:
 `suggested | accepted | rejected`. It **complements** — does not replace —
@@ -113,10 +115,18 @@ separate per-project note system.
 - `/api/v1/knowledge` read and proposal API for wiki items; `/api/v1/knowledge/notes`
   + `/api/v1/knowledge/notes/{id}/links|backlinks` direct CRUD for notes;
   `/api/v1/notes/collections` direct CRUD for the Notes collection tree;
-  `/api/v1/knowledge/sources` direct CRUD; `/api/v1/knowledge/summary`
+  `/api/v1/knowledge/sources` direct CRUD; `/api/v1/knowledge/items/{id}/sources`
+  item-source link CRUD; `/api/v1/knowledge/summary`
 - Knowledge proposal apply handlers (wiki only)
 - Frontend Knowledge module (breadcrumb switcher, Notes workspace, Wiki/Sources/Cards, overview hub) under `apps/web/src/modules/knowledge/`
 - Relation and evidence-link records backed by database rows, not only Markdown links
+
+### Current Sources frontend
+
+Backend source capability is ahead of the visible frontend: `knowledge` routes
+support source CRUD and item-source link CRUD, but `apps/web/src/api/client.ts`
+currently exposes `sourcesApi.list` only and `SourcesPage` is a list view. Treat
+this as current product scope, not as missing backend support.
 
 ## Does Not Own
 - Raw capture (activity module)
@@ -337,7 +347,7 @@ not replaced by Source.
 - **Card content** (`cards`) is space-scoped; any member of the space can see cards
   in that space. **Card review state** (`card_review_states`) and **review history**
   (`card_reviews`) are user-specific. `cards.source_id` is polymorphic (no FK;
-  allowlisted in `test_postgres_ddl_semantics.py`). The FSRS scheduling fields on
+  covered by `server/test/baselineSchema.test.ts`). The FSRS scheduling fields on
   `card_review_states` are nullable — a state row can be created before first review.
 - Durable Knowledge writes go through proposals.
 - Agent-generated Knowledge never directly becomes active.
@@ -353,23 +363,19 @@ not replaced by Source.
 - No historical data migration compatibility is required.
 
 **Enforced by tests:**
-- `test_knowledge_ingestion_boundary.py` — raw/article/file captures create no KnowledgeItem; agent-generated proposals stay pending; rejecting a proposal creates no KnowledgeItem or KnowledgeItemRelation; accepted KnowledgeItem creates no MemoryEntry; KnowledgeItemRelation creation requires proposal accept.
-- `test_knowledge_api.py` — accepting a proposal creates active KnowledgeItem; KnowledgeItem does not auto-inject as Memory; KnowledgeItemRelation requires proposal accept; cross-space relation rejected; ownership and visibility enforcement.
+- `server/test/leafDomainInvariants.test.ts` — knowledge proposals do not auto-promote into memory and server proposal appliers own accepted knowledge mutations.
+- `server/test/leafDomainRepositoryBehavior.test.ts` — repository behavior around leaf-domain proposal boundaries.
 - Payload validation is enforced at apply time in `KnowledgeProposalApplier`: `item_type`, `content_format`, `visibility`, `verification_status`, `reflection_status`, and `confidence` for items; `relation_type`, `status`, and `confidence` for relations.
 
 ## Related Files
-- `backend/app/knowledge/` - API, service (Knowledge/Note/EntityLink/SourceService), schemas, read models
-- `backend/app/models.py` - `Note`, `EntityLink`, `Card`, `CardReviewState`, `CardReview`, `KnowledgeItem`, `KnowledgeItemRelation`, `Source`, `KnowledgeItemSource`
-- `backend/migrations/versions/0001_canonical_initial_schema.py` - canonical schema tables (incl. `notes`, `entity_links`, `cards`, `card_review_states`, `card_reviews`)
-- `backend/tests/unit/test_cards_schema.py` - ORM metadata + live schema tests for Cards layer
-- `backend/app/policy/actions.py` - Knowledge policy actions wired via proposal
-- `backend/app/policy/proposal_apply.py` - supported Knowledge proposal type names
-- `backend/app/modules/registry.py` - active backend module registry entry
+- `server/src/modules/knowledge/` - API, service, schemas, read models, and proposal appliers
+- `server/migrations/` - canonical schema tables (incl. `notes`, `entity_links`, `cards`, `card_review_states`, `card_reviews`)
+- `server/test/` - live schema and API tests for Knowledge/Cards surfaces
+- `server/src/modules/policy/` - Knowledge policy actions wired via proposal
+- `server/src/gateway/routeRegistry.ts` - active backend module registry entry
 - `apps/web/src/modules/knowledge/` - `KnowledgeModule` (index redirect + routes), `KnowledgeSectionHeader` (breadcrumb switcher), `utils.ts` (last-used section storage + canonical vocabularies), `KnowledgeOverviewPage` (`/knowledge/home`), `NotesPage` workspace + `NoteEditor`, `KnowledgePage`/`KnowledgeDetailPage` (Wiki), `SourcesPage`, `KnowledgeCardsPanel`
 - `apps/web/src/core/navigation.tsx` - first-level "Knowledge" rail item only (Knowledge has **no** scene; sections switch via the in-header breadcrumb)
-- `backend/tests/invariants/test_knowledge_ingestion_boundary.py` - ingestion/review boundary invariant tests
-- `backend/tests/contracts/test_knowledge_api.py` - wiki API contract tests (accept, versioning, visibility, relations)
-- `backend/tests/contracts/test_notes_api.py` - notes/links/backlinks/summary contract tests
+- `server/test/` - ingestion/review boundary and API contract tests
 
 ## Related Modules
 - [../architecture/INTAKE_EVIDENCE_FOUNDATION.md](../architecture/INTAKE_EVIDENCE_FOUNDATION.md) - the two evidence stacks (intake candidate vs curated wiki `Source`/`KnowledgeItemSource`), their hard separation, and the intake→wiki promotion rule spec

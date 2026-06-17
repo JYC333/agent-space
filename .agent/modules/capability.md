@@ -1,13 +1,15 @@
 # Module: Capability
 
 ## Purpose
-Capabilities are installed, file-defined units of backend behavior that can be executed through the normal Run system. A capability has a manifest, local code, declared permissions, and declared output types.
+Capabilities are installed, file-defined units of backend behavior. Today they
+are catalog metadata exposed by the server; direct capability
+execution is a planned runtime adapter path and is disabled by default.
 
 ## Owns
 - YAML manifest discovery from builtin capabilities and explicitly configured local workspace roots.
 - In-memory capability registry records.
 - Enable/disable state: manifest `enabled` for builtins; persisted instance config for external capabilities.
-- Local capability execution through `adapter_type="capability"`.
+- Catalog-backed capability metadata exposed through `/api/v1/capabilities*`.
 
 ## Does Not Own
 - Automation, schedules, or cron triggers.
@@ -28,9 +30,7 @@ description: Parse an intake payload into structured research output
 enabled: false
 
 entrypoint:
-  type: python_module
-  module: capabilities.research_intake.main
-  function: execute
+  type: none
 
 permissions:
   network:
@@ -46,7 +46,11 @@ outputs:
     - research_intake.result.v1
 ```
 
-Only `entrypoint.type: python_module` is executable in the current backend. Shell commands, remote code loading, package installation, network permissions, filesystem permissions, and subprocess execution are not supported by the capability runtime.
+`entrypoint.type: none` is the active manifest convention for catalog-only
+capabilities. A future server-native capability executor must be added through the
+runtime adapter layer; shell commands, remote code loading, package
+installation, broad filesystem access, and subprocess execution are not
+supported.
 
 ## Discovery
 
@@ -83,36 +87,10 @@ Manifests are source definitions only — they are not the local trust/enable st
 
 ## Execution Model
 
-Capability execution is represented as a `Run`:
-
-- `adapter_type="capability"` selects the capability runtime adapter.
-- `capability_id` selects the installed manifest.
-- `project_id` and `workspace_id` remain optional Run scope fields.
-- The adapter loads the manifest from registry metadata, verifies the capability is enabled, validates the allowlisted entrypoint and minimal permissions, imports the local module from the installed capability directory/root, and calls `execute(context)`.
-
-The capability function receives:
-
-```python
-{
-    "run_id": "...",
-    "space_id": "...",
-    "project_id": "...",
-    "workspace_id": "...",
-    "capability_id": "...",
-    "input": {...},
-}
-```
-
-The function returns:
-
-```python
-{
-    "status": "succeeded",
-    "output": {...},
-    "artifacts": [...],
-    "activities": [...],
-}
-```
+Capability execution is not active today. `adapter_type="capability"` remains a
+planned runtime adapter type in `server/src/modules/runtimeAdapters` and
+is disabled by default. Until a server-native capability executor exists,
+capability manifests are used for catalog/UI metadata only.
 
 Returned artifacts are materialized as `Artifact` rows linked to the Run and project. Returned activities are materialized as `ActivityRecord` rows with `source_kind="run_event"` unless the capability supplies a valid source kind.
 
@@ -127,9 +105,7 @@ Returned artifacts are materialized as `Artifact` rows linked to the Run and pro
 
 ## Related Files
 
-- `backend/app/capabilities/registry.py`
-- `backend/app/capabilities/enabled_store.py`
-- `backend/app/capabilities/loader.py`
-- `backend/app/runtimes/adapters/capability.py`
-- `backend/app/runs/run_output_materialization.py`
+- `server/src/modules/catalog/`
+- `server/src/modules/runtimeAdapters/`
+- `server/src/modules/runs/materializationService.ts`
 - `catalog/capabilities/memory_reflect/`

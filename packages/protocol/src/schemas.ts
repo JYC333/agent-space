@@ -3,16 +3,9 @@
  *
  * Every DTO type in `dto.ts` is derived from a schema here via `z.infer`, so the
  * runtime validator and the compile-time type can never drift apart. Fields are
- * a **conservative subset** of the corresponding Python API `*Out` model — the
- * stable identity / scoping / status / timestamp fields a TS consumer needs —
- * not a re-modelled product surface. Names mirror the Python JSON (snake_case).
- *
- * Source references (Python):
- * - `backend/app/schemas.py` (`WorkspaceOut`, `AgentOut`, `MemoryOut`,
- *   `ProposalOut`, `ActivityRecordOut`, `ArtifactOut`, `RunOut`, `RunEventOut`,
- *   `ProjectOut`)
- * - `backend/app/knowledge/schemas.py` (`KnowledgeItemOut`)
- * - `backend/app/models.py` (`Space`, `User`)
+ * a conservative subset of the public API DTOs: the stable identity, scoping,
+ * status, and timestamp fields a TypeScript consumer needs. Names mirror the API JSON
+ * shape (snake_case).
  *
  * Depends only on `./common` and `zod`.
  */
@@ -52,10 +45,10 @@ export const ProjectRefSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Domain DTOs (conservative subsets of the Python *Out models)
+// Domain DTOs (conservative subsets of the public API models)
 // ---------------------------------------------------------------------------
 
-/** Mirror of `ActivityRecordOut` — the raw-input front door (B9/B12). */
+/** Public activity record DTO — the raw-input front door (B9/B12). */
 export const ActivityDTOSchema = z.object({
   id: IdSchema,
   space_id: IdSchema,
@@ -75,7 +68,7 @@ export const ActivityDTOSchema = z.object({
   created_at: ISODateTimeSchema,
 });
 
-/** Mirror of `ProposalOut` — governance review object (B10/B20). */
+/** Public proposal DTO — governance review object (B10/B20). */
 export const ProposalDTOSchema = z.object({
   id: IdSchema,
   space_id: IdSchema,
@@ -96,7 +89,7 @@ export const ProposalDTOSchema = z.object({
   decided_at: ISODateTimeSchema.nullish(),
 });
 
-/** Mirror of `RunOut` — the execution spine record. */
+/** Public run DTO — the execution spine record. */
 export const RunDTOSchema = z.object({
   id: IdSchema,
   space_id: IdSchema,
@@ -121,7 +114,7 @@ export const RunDTOSchema = z.object({
   ended_at: ISODateTimeSchema.nullish(),
 });
 
-/** Mirror of `RunEventOut` — append-only run evidence record. */
+/** Public run event DTO — append-only run evidence record. */
 export const RunEventDTOSchema = z.object({
   id: IdSchema,
   space_id: IdSchema,
@@ -139,7 +132,7 @@ export const RunEventDTOSchema = z.object({
   created_at: ISODateTimeSchema,
 });
 
-/** Mirror of `ArtifactOut` — persisted run/proposal output. */
+/** Public artifact DTO — persisted run/proposal output. */
 export const ArtifactDTOSchema = z.object({
   id: IdSchema,
   space_id: IdSchema,
@@ -156,7 +149,7 @@ export const ArtifactDTOSchema = z.object({
   updated_at: ISODateTimeSchema,
 });
 
-/** Mirror of `MemoryOut` — scoped long-term memory entry. */
+/** Public memory DTO — scoped long-term memory entry. */
 export const MemoryDTOSchema = z.object({
   id: IdSchema,
   space_id: IdSchema,
@@ -178,7 +171,7 @@ export const MemoryDTOSchema = z.object({
   updated_at: ISODateTimeSchema,
 });
 
-/** Mirror of `KnowledgeItemOut` — curated knowledge item. */
+/** Public knowledge item DTO — curated knowledge item. */
 export const KnowledgeItemDTOSchema = z.object({
   id: IdSchema,
   space_id: IdSchema,

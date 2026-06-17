@@ -107,8 +107,8 @@ when they cross a boundary; they are not interchangeable strings.
 
 ## API
 
-The canonical API surface is `/api/v1/intake/*`. Intake is registered only
-through `app.intake`.
+The canonical API surface is `/api/v1/intake/*`. Intake is registered through
+`server/src/modules/intake/`.
 
 ## Two evidence stacks — boundary and promotion
 

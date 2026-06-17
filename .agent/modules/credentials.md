@@ -16,7 +16,7 @@ state at runtime. Without credential management:
 
 ## Solution: CredentialBroker
 
-The `CredentialBroker` (`app/credentials/broker.py`) manages:
+The `CredentialBroker` (`server/src/modules/providers/cliCredentialBroker.ts`) manages:
 - **Profile discovery** — reads `instance/config/cli-credentials.yaml` + auto-discovers `instance/secrets/cli-credentials/<runtime>/<name>/` directories.
 - **Grants** — before each run, the broker issues a `CredentialGrant` scoped to one profile.
 - **Cleanup** — removes per-run temp HOME dirs after the run completes.
@@ -82,19 +82,19 @@ require that sandbox level fail closed before runtime invocation.
 ## Initializing a Profile
 
 ```bash
-# Step 1: install the runtime tool through the control-plane installer
-curl -X POST localhost:8010/api/v1/runtime-tools/claude_code/install \
+# Step 1: install the runtime tool through the server installer
+curl -X POST localhost:3000/api/v1/runtime-tools/claude_code/install \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"version":"latest"}'
 
 # Step 2: run the managed login stream from the frontend or API.
-# The control plane launches the active runtime-tool binary and syncs the
+# The server launches the active runtime-tool binary and syncs the
 # resulting login state into:
 #   $AGENT_SPACE_HOME/secrets/cli-credentials/claude_code/default/
 
-# Step 3: verify the broker sees it through the default control-plane entrypoint
-curl localhost:8010/api/v1/credentials/cli/profiles?runtime=claude_code
+# Step 3: verify the broker sees it through the default server entrypoint
+curl localhost:3000/api/v1/credentials/cli/profiles?runtime=claude_code
 ```
 
 ## Runtime Adapter Credential Spec
@@ -136,15 +136,12 @@ POST /api/v1/credentials/cli/profiles/{id}/detect     — check if source_path e
 
 ## Related Files
 
-- `backend/app/credentials/broker.py` — CredentialBroker, CredentialProfile, CredentialGrant
-- `backend/app/credentials/api.py` — FastAPI routes
-- `control-plane/src/modules/runtimeTools/` — controlled CLI tool installer and active binary registry
-- `control-plane/src/modules/runs/vendorCliAdapter.ts` — TS CLI adapter profile grant behavior
-- `backend/app/runtimes/base.py` — CredentialSpec dataclass
-- `backend/app/runtimes/adapters/cli_runtime.py` — legacy Python GenericCliRuntimeAdapter profile grant behavior
-- `backend/app/runtimes/local_executor.py` — legacy Python local subprocess execution
-- `backend/app/runs/execution.py` — runtime execution integration
-- `backend/app/runs/sandbox_manager.py` — execution workspace credential mount
-- `backend/app/models.py` — CliCredentialEvent
+- `server/src/modules/providers/` — credential broker/store and provider routes
+- `server/src/modules/runtimeTools/` — controlled CLI tool installer and active binary registry
+- `server/src/modules/runs/vendorCliAdapter.ts` — server CLI adapter profile grant behavior
+- `server/src/modules/runtimeAdapters/` — CredentialSpec/runtime spec semantics
+- `server/src/modules/runs/vendorCliAdapter.ts` — GenericCliRuntimeAdapter profile grant behavior
+- `server/src/modules/runs/` — runtime execution integration and credential mount
+- `server/migrations/` — CliCredentialEvent tables
 - `instance/config/cli-credentials.yaml` — profile config (private)
 - `instance/secrets/cli-credentials/` — credential directories (gitignored)

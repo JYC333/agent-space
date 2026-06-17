@@ -13,7 +13,7 @@ import {
 import { VisibilitySchema, isVisibility, isSpaceType } from "../src/common";
 
 describe("DTO schema validation", () => {
-  it("parses a representative ActivityDTO (snake_case, like the Python API)", () => {
+  it("parses a representative ActivityDTO (snake_case public API)", () => {
     const parsed = ActivityDTOSchema.parse({
       id: "a1",
       space_id: "s1",

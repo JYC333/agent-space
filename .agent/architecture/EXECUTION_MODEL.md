@@ -6,7 +6,7 @@
 
 **RunStep** — coarse execution steps within a run. Provides the replay spine for failure diagnosis without reading raw adapter logs.
 
-**RunEvent** — structured append-only harness evidence records within a run. Finer-grained than RunStep but coarser than raw adapter logs. Each RunEvent captures one significant phase (context compilation, runtime selection, sandbox creation, adapter invocation/completion, artifact ingestion, patch collection, validation, proposal creation, evaluation, finalization). Used by RunEvaluationService as the primary structured evidence source.
+**RunEvent** — structured append-only harness evidence records within a run. Finer-grained than RunStep but coarser than raw adapter logs. Each RunEvent captures one significant phase (context compilation, runtime selection, sandbox creation, adapter invocation/completion, artifact ingestion, patch collection, validation, proposal creation, evaluation, finalization). Used by run finalization as the primary structured evidence source.
 
 **RunFinalization** — canonical post-run record created by `PostRunFinalizationService` after a Run reaches a terminal state. Idempotent per `(run_id, finalizer_version)`. Records run evaluation outcome, task evaluation bridge result, and skipped reasons. Append-only.
 
@@ -38,7 +38,7 @@ RunEvent records the structured phase-level evidence spine of a run:
 
 | event_type | Meaning |
 |---|---|
-| `context_compiled` | ContextSnapshotPopulator completed successfully |
+| `context_compiled` | `ContextPrepareService` completed successfully |
 | `runtime_selected` | Runtime adapter resolved; sandbox level decided |
 | `credential_granted` | Credentials resolved for adapter |
 | `sandbox_created` | Worktree sandbox created |
@@ -62,7 +62,7 @@ RunEvent statuses: `pending`, `running`, `succeeded`, `failed`, `skipped`, `warn
 
 **Never stored in RunEvent metadata:** raw credentials, stdout/stderr content, full rendered context text, full patch body, raw private memory text, complete file contents.
 
-RunStep error/metadata is filtered by `app/runs/redaction.py` before persisting. Raw credential values are never stored in RunStep rows.
+RunStep error/metadata is filtered by `server/src/modules/runs/evidenceRedaction.ts` before persisting. Raw credential values are never stored in RunStep rows.
 
 ## Actor Identity on Execution Evidence
 
@@ -73,31 +73,25 @@ Existing Run and Proposal rows use separate nullable `*_user_id` and `*_agent_id
 ## Canonical Runtime Path
 
 - **Canonical adapter catalog:** `RuntimeAdapterSpec` entries in
-  `control-plane/src/modules/runtimeAdapters/specs.ts` for TS-owned execution;
-  `backend/app/runtimes/specs.py` remains for Python-owned execution paths
-  during migration
-- **Controlled CLI tools:** TS `runtimeTools` installs active vendor CLI binaries under `$AGENT_SPACE_HOME/runtime-tools`
-- **Run authority:** control-plane `runs` owns run execution, stop,
+  `server/src/modules/runtimeAdapters/specs.ts`
+- **Controlled CLI tools:** `runtimeTools` installs active vendor CLI binaries under `$AGENT_SPACE_HOME/runtime-tools`
+- **Run authority:** server `runs` owns run execution, stop,
   top-level run read/status/trace, post-run evaluation/finalization, the
-  internal `POST /internal/runs/execute` port, TS execution locks, and
-  `agent_run` job dispatch (the control-plane entrypoint runs the worker loop;
-  the Python worker excludes `agent_run` from its claims). The TS agents module
-  owns run creation subresources (`POST /agents/{id}/runs` and the singular
-  legacy alias). Runtime context preparation is native TS; workspace/artifact/
-  proposal/finalization ports remain explicit Python boundaries until their
-  owning slices move.
-- **Generic local CLI execution:** control-plane `runs/vendorCliAdapter.ts`
-  renders commands, grants CLI credential profiles through the TS broker,
-  invokes the local CLI process, parses output, and calls Python-owned
-  workspace ports for worktree preparation. Runtime instruction files are
-  rendered by TS context preparation into the sandbox only.
-  Python `backend/app/runtimes/adapters/cli_runtime.py` remains for Python-owned
-  execution paths that have not moved to the control plane.
+  internal `POST /internal/runs/execute` port, server execution locks, and
+  `agent_run` job dispatch (the server entrypoint runs the worker loop;
+  The agents module owns run creation subresources (`POST /agents/{id}/runs`
+  and the singular legacy alias). Runtime context preparation, workspace
+  sandbox preparation, artifact/proposal materialization, and finalization are
+  native server.
+- **Generic local CLI execution:** server `runs/vendorCliAdapter.ts`
+  renders commands, grants CLI credential profiles through the server broker,
+  prepares the server sandbox/worktree, invokes the local CLI process, parses
+  output, and materializes produced artifacts/proposals. Runtime instruction
+  files are rendered by server context preparation into the sandbox only.
 
-Do not add new adapters to `app.agents` — it contains Agent/AgentVersion CRUD only.
+Do not add new adapters to the agents module — it contains Agent/AgentVersion CRUD only.
 
-The runtime execution lifecycle uses this external-call pattern in both TS and
-remaining Python paths:
+The runtime execution lifecycle uses this external-call pattern:
 
 1. Open short transaction → write run setup state → commit.
 2. Call runtime adapter **outside** the transaction.
@@ -111,28 +105,30 @@ call it directly to authorize or perform a sensitive action. `PreflightService`
 may call it only for non-mutating dry-run simulation, which does not persist a
 `PolicyDecisionRecord`. Actual runtime execution still uses `PolicyGateway`.
 
-Policy gates run in this order inside TS run orchestration:
+Policy gates run in this order inside server run orchestration:
 
 1. **`runtime.execute`** — `PolicyGateway.enforce()` is called **before** credential resolution, context snapshot population, and `adapter.execute()`. Rule-relevant fields (`agent_status`, `agent_tool_permissions`, `tool_name`, `adapter_type`, `trigger_origin`, etc.) are passed in `PolicyCheckRequest.context`; safe audit copies remain in `metadata_json`. Blocking decisions raise `PolicyGateBlocked`, are written once through `write_blocked_gate_audit()`, and fail the run.
 
 2. **`runtime.use_credential`** — called after adapter type resolution but **before** any secret fetch. `resource_space_id` is resolved from the actual `Credential` row by ID — never inferred from `RuntimeAdapter.space_id`. If `credential_id` exists but the `Credential` row is missing, execution fails closed with `error_code=credential_metadata_missing`. Cross-space credential → hard DENY (CRITICAL). Automation origin → REQUIRE_APPROVAL. Same-space manual/api → ALLOW. DENY → `error_code=policy_denied_runtime_use_credential`.
 
-3. **`context.inject_memory`** — called by TS `ContextPrepareService` **before** memory context retrieval. Cross-space without grant → hard DENY. DENY → run context preparation fails closed.
+3. **`context.inject_memory`** — called by server `ContextPrepareService` **before** memory context retrieval. Cross-space without grant → hard DENY. DENY → run context preparation fails closed.
 
 4. **`context.render_for_runtime`** — called after context snapshot is assembled, **before** `adapter.execute()`. Cross-space without grant → hard DENY. DENY → `error_code=policy_denied_context_render_for_runtime`.
 
 None of these gates may be bypassed. No secret material is resolved before `runtime.use_credential` passes. No context is injected before `context.inject_memory` passes. No adapter is invoked before both `runtime.execute` and `context.render_for_runtime` pass.
 
-**artifact.persist** — `ArtifactPersistenceService` calls `PolicyGateway.enforce()` before the egress guard, filesystem write, or Artifact row creation. DENY and REQUIRE_APPROVAL call `write_blocked_gate_audit()` once and then raise `PersonalMemoryEgressError`. `PolicyAuditPersistError` and blocked-decision audit write failures block artifact persistence.
+**artifact.persist** — `RunMaterializationService` calls `PolicyGateway.enforce()` before the egress guard, filesystem write, or Artifact row creation. DENY and REQUIRE_APPROVAL call `write_blocked_gate_audit()` once and then raise `PersonalMemoryEgressError`. `PolicyAuditPersistError` and blocked-decision audit write failures block artifact persistence.
 
 ## Runtime Credential Resolver
 
-`runtimes/credentials.py` is the canonical resolver.
+`server/src/modules/providers` and the server credential broker are the
+canonical runtime credential resolver.
 
 - Resolves credentials from `ModelProvider` encrypted config, not env variables directly.
 - Runtime adapters must not read `ANTHROPIC_API_KEY` from the environment.
 - Raw credential values are never stored in RunStep fields, artifact content, or logs.
-- `app/runs/redaction.py` redacts sensitive content before persisting.
+- `server/src/modules/runs/evidenceRedaction.ts` redacts sensitive
+  content before persisting runtime evidence.
 
 ## RunStep Replay and Failure Diagnosis
 
@@ -189,8 +185,8 @@ The finalize endpoint is the single write surface.
 
 ### What finalization does
 
-1. Calls `RunEvaluationService.evaluate()` to create one `RunEvaluation`.
-2. Dispatches the run-finalized hooks (`app.runs.lifecycle_hooks.RunFinalizedHookRegistry`). The tasks-owned `task_evaluation_bridge` hook creates one `TaskEvaluation` bridge row via `TaskEvaluationService.create_from_run_evaluation()` when a `TaskRun` link exists (`runs` never imports `tasks`; `tasks` registers the hook through the module registry).
+1. Creates one `RunEvaluation`.
+2. Dispatches the run-finalized hooks through the server finalization service. The tasks-owned `task_evaluation_bridge` hook creates one `TaskEvaluation` bridge row when a `TaskRun` link exists (`runs` never imports `tasks`; `tasks` registers the hook through the module registry).
 3. Creates one `RunFinalization` row with `status=completed`.
 4. Appends one `run_finalized` `RunEvent`.
 
@@ -217,16 +213,16 @@ Calling `POST /finalize` on a non-terminal run (queued, running, waiting_for_rev
 
 ### Design principles
 
-- **Append-only.** Each `RunEvaluationService.evaluate()` call creates a new row. Existing evaluations are never deleted or overwritten. `GET /runs/{id}/evaluation` returns the most recent row.
+- **Append-only.** Each run finalization evaluation creates a new row. Existing evaluations are never deleted or overwritten. `GET /runs/{id}/evaluation` returns the most recent row.
 - **Classifier-version auditable.** `evaluator_version` (e.g. `harness_eval.v1`) is stored per row, so classification history is preserved across version upgrades.
 - **Harness-boundary evidence only.** Uses Run.status/error_json/output_json/exit_code, ordered RunSteps, RunEvents, ContextSnapshot metadata, Artifacts, Proposals, ValidationRecipe, and linked Task/TaskRun. No LLM-as-judge. No parsing of vendor CLI internal tool calls.
 - **RunEvent as primary classification source.** RunEvent structured `error_code` fields are the canonical classification input for patch, artifact, adapter, and materialization event evidence. `output_json.materialization_errors` is never parsed as classifier evidence — it is a debug/summary field only.
-- **Materialization outcomes are RunEvent-covered.** `RunOutputMaterializer` returns a `MaterializationResult` (artifact_items, proposal_items, failed_items). `RunExecutionService` emits `artifact_ingested` / `proposal_created` RunEvents for each output JSON artifact and proposal success and failure. Runtime output text persistence emits `artifact_ingested` on success and failure. All materialization error codes map to the `tool` failure_layer via `_EXACT_ERROR_CODE_MAP`. Activity materialization failures are represented as artifact_ingested warning events with metadata_json.kind="activity" to avoid expanding the RunEvent enum.
+- **Materialization outcomes are RunEvent-covered.** `RunMaterializationService` returns materialization items and failures. `RunOrchestrationService` emits `artifact_ingested` / `proposal_created` RunEvents for each output JSON artifact and proposal success and failure. Runtime output text persistence emits `artifact_ingested` on success and failure. All materialization error codes map to the `tool` failure_layer via `_EXACT_ERROR_CODE_MAP`. Activity materialization failures are represented as artifact_ingested warning events with metadata_json.kind="activity" to avoid expanding the RunEvent enum.
 - **Evidence-only for CLI runtimes.** Local CLI runtimes are black-box at the harness. No internal tool-call trajectory is reconstructed from stdout/stderr.
 
 ### RunStep adapter_started semantics
 
-`RunExecutionService` creates an `adapter_started` step and later marks it succeeded/failed via `complete_step`/`fail_step`. There is no required separate `adapter_completed` step.
+`RunOrchestrationService` creates an `adapter_started` step and later marks it succeeded/failed via `complete_step`/`fail_step`. There is no required separate `adapter_completed` step.
 
 **Evaluation treats `adapter_started` with status in {`succeeded`, `failed`, `cancelled`} as adapter completion from the harness perspective.**
 
@@ -248,7 +244,7 @@ Calling `POST /finalize` on a non-terminal run (queued, running, waiting_for_rev
 
 **B. failure_layer** (ordered rules, exact error-code mapping first):
 1. outcome passed/unknown → null
-2. Exact error-code mapping (canonical list in `evaluation.py:_EXACT_ERROR_CODE_MAP`) — overrides all heuristics
+2. Exact error-code mapping (canonical list in `server/src/modules/runs/finalizationService.ts::EXACT_ERROR_CODE_MAP`) — overrides all heuristics
 3. Missing context snapshot (for runs that require one) → `context`
 4. Validation failure signals → `validation`
 5. `sandbox` keyword in failed step error_type → `sandbox`
@@ -280,13 +276,13 @@ Materialization error codes → `tool` failure_layer (all via exact map):
 ### What evaluation does NOT do
 
 - Does not write MemoryEntry, Policy, Proposal, Capability, WorkspaceProfile, or ValidationRecipe.
-- `RunEvaluationService` does not create TaskEvaluation or RunReflection; task-level evaluation is created through `TaskEvaluationService`.
+- Run finalization does not create RunReflection; task-level evaluation is created through the task evaluation bridge.
 - Does not mutate Run, Artifact, or Proposal rows.
 - Does not auto-apply any Proposal.
 
 ## TaskEvaluation — Task-Level Evaluation Bridge
 
-`TaskEvaluation` records task-level evaluation results. It is downstream of `RunEvaluation` and populated via `TaskEvaluationService`.
+`TaskEvaluation` records task-level evaluation results. It is downstream of `RunEvaluation` and populated via the task evaluation bridge.
 
 ### Evaluation layers
 
@@ -297,9 +293,9 @@ Materialization error codes → `tool` failure_layer (all via exact map):
 
 ### Design principles
 
-- **Append-only.** Each `TaskEvaluationService` call creates a new row. Old rows are never overwritten or deleted.
+- **Append-only.** Each task evaluation bridge call creates a new row. Old rows are never overwritten or deleted.
 - **Task ↔ Run source of truth is `TaskRun`.** `Run.task_id` is a denormalized shortcut only. All task-run linkage checks use `TaskRun` rows.
-- **RunEvaluation bridge.** `TaskEvaluationService.create_from_run_evaluation()` maps an existing `RunEvaluation` to a new `TaskEvaluation` row. It is invoked by the tasks-owned `task_evaluation_bridge` run-finalized hook (`app.tasks.run_lifecycle`) during finalization when `TaskRun` linkage exists — do not call it directly from API routes.
+- **RunEvaluation bridge.** The task evaluation bridge maps an existing `RunEvaluation` to a new `TaskEvaluation` row during finalization when `TaskRun` linkage exists — do not call it directly from API routes.
 - **Does not mutate Task.status.**
 - **Does not write MemoryEntry, Policy, Proposal, RunReflection, or any learning object.**
 - **Invoked by finalization.** `POST /runs/{id}/finalize` orchestrates both RunEvaluation and TaskEvaluation bridge through `PostRunFinalizationService`. There is no separate public API for creating TaskEvaluation bridge rows from a Run.
@@ -327,7 +323,7 @@ Bridge rows do not create `TaskArtifact` rows as a side effect.
 
 ### RunReflection
 
-`RunReflection` is not automatically created by `RunEvaluationService` or `TaskEvaluationService`. It is populated externally (import, manual entry, or future evaluator output) and acts as the source for `ReflectionProposalBuilder`.
+`RunReflection` is not automatically created by run or task finalization. It is populated externally (import, manual entry, or future evaluator output) and acts as the source for `ReflectionProposalBuilder`.
 
 ### Learning Loop Apply Path
 

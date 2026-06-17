@@ -1,4 +1,4 @@
-// API response shapes — mirroring the backend Pydantic schemas
+// API response shapes shared with the server HTTP contracts.
 
 export type SpaceType      = 'personal' | 'household' | 'team'
 export type MemberRole     = 'owner' | 'admin' | 'member' | 'viewer'

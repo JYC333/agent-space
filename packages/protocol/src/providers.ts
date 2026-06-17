@@ -1,8 +1,8 @@
 /**
  * Provider and model-provider credential-channel contracts.
  *
- * These schemas mirror the current public Python provider API where possible and
- * make the credential boundary explicit. They are contracts only: no provider
+ * These schemas mirror the public provider API and make the credential boundary
+ * explicit. They are contracts only: no provider
  * client, no secret storage, no credential release, no transport, no authority.
  */
 
@@ -31,7 +31,7 @@ export function isCredentialChannel(value: string): value is CredentialChannelVa
   return (CREDENTIAL_CHANNEL_VALUES as readonly string[]).includes(value);
 }
 
-/** Mirror of Python `ModelProviderOut`; response-only and secret-free. */
+/** Model provider response DTO; response-only and secret-free. */
 export const ModelProviderDTOSchema = z
   .object({
     id: IdSchema,
@@ -86,7 +86,7 @@ export const ModelProviderModelsResponseSchema = z.object({
 });
 export type ModelProviderModelsResponse = z.infer<typeof ModelProviderModelsResponseSchema>;
 
-/** Mirror of Python `GET /providers/catalog` (`CATALOG_INFO`); static, secret-free. */
+/** `GET /providers/catalog` response; static, secret-free. */
 export const ProviderCatalogInfoSchema = z
   .object({
     id: z.string(),
@@ -99,13 +99,13 @@ export const ProviderCatalogInfoSchema = z
   .passthrough();
 export type ProviderCatalogInfo = z.infer<typeof ProviderCatalogInfoSchema>;
 
-/** Mirror of Python `GET /providers/litellm-providers`: litellm chat provider ids. */
+/** `GET /providers/litellm-providers`: litellm chat provider ids. */
 export const LitellmProvidersResponseSchema = z.array(z.string());
 export type LitellmProvidersResponse = z.infer<typeof LitellmProvidersResponseSchema>;
 
 /**
- * The catalog payload itself (Python `CATALOG_INFO`). Pinned by exact value on
- * both sides. The TS provider authority serves this constant for the public
+ * The catalog payload itself. Pinned by exact value on
+ * both sides. The provider authority serves this constant for the public
  * catalog route.
  */
 export const PROVIDER_CATALOG_INFO: ProviderCatalogInfo = {

@@ -146,13 +146,14 @@ The evolver runs asynchronously — never in the request hot path.
 
 ## Current state
 
-`app/memory/evolver.py` — `MemoryEvolver` stub:
+Memory evolution is planned but not currently wired as an active server service.
+The current durable design lives in `.agent/architecture/MEMORY_EVOLUTION_PLAN.md`.
 
 | Method | Status |
 |---|---|
-| `compute_fitness_scores(space_id)` | ✅ writes `fitness_score` to Memory rows |
-| `decay_and_archive(space_id, dry_run=True)` | ✅ identifies candidates; applies if `dry_run=False` |
-| `evolve_space(space_id)` | Stub — returns dry-run report, EvoMap call pending |
+| Fitness scoring | Planned server work |
+| Decay/archive candidate selection | Planned server work |
+| Space evolution run | Planned server work |
 
 EvoMap library is not yet pinned in `requirements.txt`.
 Integration begins when the library export format is confirmed against the evolver API.

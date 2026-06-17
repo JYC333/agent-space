@@ -8,9 +8,7 @@ description: >
 enabled: true
 
 entrypoint:
-  type: python_module
-  module: capabilities.memory_reflect.main
-  function: execute
+  type: none
 
 memory_access:
   read:

@@ -6,7 +6,7 @@ Artifacts are durable outputs produced by runs. They let users inspect generated
 
 ## Product API
 
-- The TypeScript control plane owns the client-facing artifact read/export
+- The server owns the client-facing artifact read/export
   routes:
   - `GET /api/v1/artifacts`
   - `GET /api/v1/artifacts/{artifact_id}`
@@ -26,7 +26,7 @@ Artifacts are durable outputs produced by runs. They let users inspect generated
 - The database stores a durable relative storage reference, not a sandbox absolute path.
 - Sandbox paths are temporary execution details.
 - Artifact records must remain scoped to the owning run and space.
-- The TS control plane resolves file-backed exports under
+- The server resolves file-backed exports under
   `ARTIFACT_STORAGE_ROOT` (default:
   `$AGENT_SPACE_HOME/storage/artifacts`).
 

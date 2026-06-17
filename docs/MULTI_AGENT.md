@@ -2,7 +2,7 @@
 
 ## Core principle: kernel is source of truth
 
-The agent kernel — `AgentService` + `RunExecutionService` — owns all agent state:
+The agent kernel — server agents + `RunOrchestrationService` — owns all agent state:
 identity, memory policy, delegation rules, run logs, and context assembly.
 Adapters are thin execution wrappers. They receive a pre-built prompt + context
 snapshot and return a result. They own nothing.
@@ -11,12 +11,12 @@ snapshot and return a result. They own nothing.
 User / Agent
     │
     ▼
-AgentService.run() / .delegate()
+Agent run creation / delegation
     ├── validates status, adapter whitelist, delegation policy
     ├── ContextBuilder.build()  ← memory policy scoping
     │
     ▼
-RunExecutionService.run()
+RunOrchestrationService execution
     ├── writes Run record (status=running)
     ├── gets adapter from _ADAPTER_REGISTRY
     │
@@ -50,32 +50,21 @@ The same agent record can use different adapters on different runs, subject to
 External frameworks (OpenAI Agents SDK, LangGraph, CrewAI, Letta, etc.) can be
 added as adapters without touching the kernel:
 
-```python
-# backend/app/agents/my_framework_adapter.py
-from .base import AgentAdapter, RuntimeExecutionResult
-
-class MyFrameworkAdapter(AgentAdapter):
-    adapter_type = "my_framework"
-
-    def is_available(self) -> bool:
-        try:
-            import my_framework
-            return True
-        except ImportError:
-            return False
-
-    def run(self, prompt, context, workspace_path=None, timeout=300) -> RuntimeExecutionResult:
-        # call my_framework here
-        ...
+```ts
+// server/src/modules/runtimeAdapters/specs.ts
+my_framework: {
+  adapter_type: "custom",
+  display_name: "My Framework",
+  runtime_kind: "custom",
+  implementation_status: "planned",
+  enabled_by_default: false,
+  // Add invocation, credential, sandbox, model, usage, and output policy
+  // before this becomes executable.
+}
 ```
 
-Then register it in `runner.py`:
-
-```python
-_ADAPTER_REGISTRY["my_framework"] = MyFrameworkAdapter
-```
-
-No other files change.
+Then add the corresponding server runtime execution implementation and tests before
+marking the adapter `implemented`.
 
 ## Multi-agent delegation
 
@@ -98,9 +87,9 @@ Delegation chain is queryable via `GET /api/v1/agents/runs/{run_id}/chain`.
 ## Built-in system templates (no built-in concrete agents)
 
 There are **no** seeded built-in concrete agents. The old seeded concrete agents
-and `agents/seeder.py` were removed. Built-in product
+and the old concrete agent seeder were removed. Built-in product
 behavior comes from system **AgentTemplates** — reusable factories, never runtime
-objects — seeded once globally by `agents/template_seeder.py`. A concrete `Agent`
+objects — seeded once globally by the server agents module. A concrete `Agent`
 is created on demand via `AgentTemplateService.create_agent_from_template`
 (copy-on-create); runtime always loads config from the resulting `AgentVersion`,
 never from a template.
@@ -129,7 +118,7 @@ is the per-space **system-managed default Assistant Agent** instead.
 - Outputs: `chat_message` plus proposal-only `task_create` / `idea_create` / `memory_update` /
   `knowledge_item` proposals; no shell / file write / workspace write / credential access / direct
   memory write.
-- Resolved/created per space via `agents/personal_assistant.py`
+- Resolved/created per space via the server agents module
   (`get_default_assistant` / `get_or_create_default_assistant`;
   `GET`/`POST /api/v1/agents/default-assistant`) — an ordinary copy-on-create Agent at runtime.
 - Soft preferences (response style, verbosity, default context toggles, default project, proposal
@@ -170,7 +159,7 @@ is the per-space **system-managed default Assistant Agent** instead.
 - This is review only; a code-writing `coding_task_agent` is future scope
 
 Memory reflection itself is exposed as an **internal service**
-(`memory/reflector.py::MemoryReflector` via the `memory.reflect` capability,
+(the memory consolidation/reflection path via the `memory.reflect` capability,
 `POST /sessions/{id}/reflect`) — it does not run through a built-in agent. The
 `memory_reflector` template is the factory for a standalone reflection Agent instance.
 
@@ -197,7 +186,7 @@ proposal review: propose → user reviews → accept/reject.
 
 ## Design constraints
 
-1. Never import `AgentService` or DB models inside an adapter — adapters are stateless.
-2. Never call adapters outside of `RunExecutionService` — the run record must exist before execution.
+1. Never import agents module internals or DB models inside an adapter — adapters are stateless.
+2. Never call adapters outside of `RunOrchestrationService` — the run record must exist before execution.
 3. `delegation_depth` is set by the kernel, not the adapter.
 4. An agent's `space_id` never changes after creation. Cross-space delegation is not supported.

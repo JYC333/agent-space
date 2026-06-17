@@ -8,18 +8,18 @@ the main app container direct control over the host Docker daemon.
 
 ```
 Browser UI
-  → backend API  POST /api/v1/deployments/jobs
+  → server API  POST /api/v1/deployments/jobs
   → DeployerClient  (Unix socket client)
   → /var/run/agent-space/deployer.sock
   → host deployer process  (deployer/deployer.py)
   → whitelisted deploy script  (deployer/scripts/)
-  → docker compose build/restart backend frontend
+  → docker compose build/restart server frontend
   → health check
   → result written back to DeploymentJob record
   → frontend displays status
 ```
 
-The backend cannot restart itself from inside a Docker container.
+The server cannot restart itself from inside a Docker container.
 The deployer runs **on the host** and is the only process that can trigger compose operations.
 
 ## Allowed Job Types
@@ -50,15 +50,15 @@ clear error with instructions.
 
 1. Agent proposes code changes → code proposal created
 2. User reviews diff and approves proposal
-3. Backend applies patch to real repo
+3. Server applies patch to real repo
 4. User triggers deployment via frontend → `POST /api/v1/deployments/jobs`
-5. Backend creates `DeploymentJob` record (status=queued)
+5. Server creates `DeploymentJob` record (status=queued)
 6. `DeployerClient` sends job to Unix socket
 7. Deployer validates job_type, runs script
-8. Script runs `docker compose build + up -d backend frontend`
-9. Script polls `/health` until backend is up
-10. Deployer returns result to backend
-11. Backend updates `DeploymentJob` (status=succeeded/failed)
+8. Script runs `docker compose build + up -d server frontend`
+9. Script polls `/health` until server is up
+10. Deployer returns result to server
+11. Server updates `DeploymentJob` (status=succeeded/failed)
 12. Frontend displays result
 
 ## What Is Still Manual
@@ -78,11 +78,10 @@ clear error with instructions.
 - `deployer/deployer.py` — host deployer process
 - `deployer/protocol.py` — wire protocol constants
 - `deployer/scripts/` — whitelisted deploy scripts
-- `backend/app/deployment/client.py` — DeployerClient
-- `backend/app/deployment/api.py` — HTTP routes
-- `backend/app/models.py` — DeploymentJob model
-- `backend/app/config.py` — `deployer_socket_path`
-- `ops/compose/docker-compose.<mode>.yml` — mounts /var/run/agent-space into backend
+- `server/src/modules/deployment/` — deployer socket client and HTTP routes
+- `server/migrations/` — DeploymentJob table
+- `server/src/config.ts` — `deployer_socket_path`
+- `ops/compose/docker-compose.<mode>.yml` — mounts the deployer socket into server
 
 ## Related Boundaries
 - B41, B42, B43 in BOUNDARIES.md

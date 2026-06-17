@@ -1,0 +1,242 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Pool } from "pg";
+import {
+  PostgreSqlContainer,
+  type StartedPostgreSqlContainer,
+} from "@testcontainers/postgresql";
+import { loadConfig } from "../src/config";
+import {
+  MemoryProposalNotFoundError,
+  PgMemoryProposalRepository,
+} from "../src/modules/memory/proposalRepository";
+
+const SCHEMA = readFileSync(
+  join(process.cwd(), "test/fixtures/memorySchema.sql"),
+  "utf8",
+);
+
+let container: StartedPostgreSqlContainer | undefined;
+let pool: Pool | undefined;
+let repo: PgMemoryProposalRepository | undefined;
+let available = false;
+
+const SPACE = "space-1";
+const USER = "user-1";
+
+beforeAll(async () => {
+  try {
+    container = await new PostgreSqlContainer("postgres:18").start();
+    pool = new Pool({ connectionString: container.getConnectionUri() });
+    await pool.query(SCHEMA);
+    repo = new PgMemoryProposalRepository(
+      pool,
+      loadConfig({
+        SERVER_DATABASE_URL: container.getConnectionUri(),
+      }),
+    );
+    available = true;
+  } catch (err) {
+    console.warn(
+      `[memory-proposal-integration] skipped — Docker/Postgres unavailable: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}, 120_000);
+
+afterAll(async () => {
+  await pool?.end();
+  await container?.stop();
+});
+
+beforeEach(async () => {
+  if (!available || !pool) return;
+  await pool.query("TRUNCATE proposals, memory_entries, projects");
+});
+
+async function insertMemory(over: Record<string, unknown>): Promise<void> {
+  const cols: Record<string, unknown> = {
+    id: over.id,
+    space_id: SPACE,
+    scope_type: "user",
+    memory_type: "fact",
+    status: "active",
+    visibility: "space_shared",
+    sensitivity_level: "normal",
+    confidence: 1,
+    importance: 0.5,
+    version: 1,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    ...over,
+  };
+  const names = Object.keys(cols);
+  const placeholders = names.map((n, i) =>
+    n === "selected_user_ids" || n === "tags" ? `$${i + 1}::jsonb` : `$${i + 1}`,
+  );
+  const values = names.map((n) =>
+    n === "selected_user_ids" || n === "tags"
+      ? cols[n] === undefined
+        ? null
+        : JSON.stringify(cols[n])
+      : cols[n],
+  );
+  await pool!.query(
+    `INSERT INTO memory_entries (${names.join(", ")}) VALUES (${placeholders.join(", ")})`,
+    values,
+  );
+}
+
+describe("PgMemoryProposalRepository against real Postgres", () => {
+  it("creates a pending memory_create proposal without inserting active memory", async () => {
+    if (!available || !repo || !pool) return;
+    const before = await pool.query("SELECT count(*)::int AS count FROM memory_entries");
+
+    const out = await repo.createMemoryProposal(SPACE, USER, {
+      operation: "create",
+      title: "Remember this",
+      content: "A proposal-only memory",
+      type: "fact",
+      scope: "user",
+      namespace: "user.default",
+      visibility: "space_shared",
+      sensitivity_level: "normal",
+      confidence: 1,
+      importance: 0.5,
+      tags: null,
+      source_id: null,
+      space_id: null,
+      subject_user_id: null,
+      owner_user_id: null,
+      selected_user_ids: null,
+      last_confirmed_at: null,
+      source_proposal_id: null,
+      workspace_id: null,
+      memory_layer: null,
+      memory_kind: null,
+      actor_user_id: null,
+      provenance_entries: [
+        {
+          source_type: "system",
+          source_id: "spoofed",
+          source_trust: "system_verified",
+          evidence_json: {},
+        },
+      ],
+    });
+
+    expect(out).toMatchObject({ proposal_type: "memory_create", status: "pending" });
+    const after = await pool.query("SELECT count(*)::int AS count FROM memory_entries");
+    expect(after.rows[0]?.count).toBe(before.rows[0]?.count);
+    const proposal = await pool.query(
+      "SELECT proposal_type, status, payload_json FROM proposals WHERE id = $1",
+      [out.id],
+    );
+    expect(proposal.rows[0]).toMatchObject({
+      proposal_type: "memory_create",
+      status: "pending",
+    });
+    expect(proposal.rows[0]?.payload_json).toMatchObject({
+      operation: "create",
+      proposed_content: "A proposal-only memory",
+      target_scope: "user",
+    });
+    expect(proposal.rows[0]?.payload_json.provenance_entries).toHaveLength(1);
+    expect(proposal.rows[0]?.payload_json.provenance_entries[0]).toMatchObject({
+      source_type: "user_confirmation",
+      source_id: USER,
+    });
+  });
+
+  it("creates update/archive proposals without mutating the target memory", async () => {
+    if (!available || !repo || !pool) return;
+    await insertMemory({
+      id: "memory-1",
+      owner_user_id: USER,
+      content: "unchanged",
+      title: "Original",
+    });
+
+    const update = await repo.updateMemoryProposal(SPACE, USER, "memory-1", null, {
+      operation: "update",
+      target_memory_id: "memory-1",
+      content: "proposed",
+      title: null,
+      type: null,
+      scope: null,
+      namespace: null,
+      visibility: null,
+      sensitivity_level: null,
+      confidence: null,
+      importance: null,
+      tags: null,
+      subject_user_id: null,
+      owner_user_id: null,
+      selected_user_ids: null,
+      workspace_id: null,
+      memory_layer: null,
+      memory_kind: null,
+      actor_user_id: null,
+      provenance_entries: [],
+    });
+    const archive = await repo.archiveMemoryProposal(SPACE, USER, "memory-1", null, {
+      operation: "archive",
+      target_memory_id: "memory-1",
+      workspace_id: null,
+      actor_user_id: null,
+      provenance_entries: [],
+    });
+
+    expect(update.proposal_type).toBe("memory_update");
+    expect(archive.proposal_type).toBe("memory_archive");
+    const memory = await pool.query(
+      "SELECT content, status, deleted_at FROM memory_entries WHERE id = 'memory-1'",
+    );
+    expect(memory.rows[0]).toMatchObject({ content: "unchanged", status: "active" });
+    expect(memory.rows[0]?.deleted_at).toBeNull();
+    const proposals = await pool.query(
+      "SELECT proposal_type FROM proposals ORDER BY created_at ASC",
+    );
+    expect(proposals.rows.map((row) => row.proposal_type).sort()).toEqual([
+      "memory_archive",
+      "memory_update",
+    ]);
+  });
+
+  it("hides non-readable target memories on update", async () => {
+    if (!available || !repo) return;
+    await insertMemory({
+      id: "private-other",
+      owner_user_id: "other",
+      visibility: "private",
+      content: "secret",
+    });
+
+    await expect(
+      repo.updateMemoryProposal(SPACE, USER, "private-other", null, {
+        operation: "update",
+        target_memory_id: "private-other",
+        content: "nope",
+        title: null,
+        type: null,
+        scope: null,
+        namespace: null,
+        visibility: null,
+        sensitivity_level: null,
+        confidence: null,
+        importance: null,
+        tags: null,
+        subject_user_id: null,
+        owner_user_id: null,
+        selected_user_ids: null,
+        workspace_id: null,
+        memory_layer: null,
+        memory_kind: null,
+        actor_user_id: null,
+        provenance_entries: [],
+      }),
+    ).rejects.toBeInstanceOf(MemoryProposalNotFoundError);
+  });
+});

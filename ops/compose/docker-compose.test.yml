@@ -16,62 +16,18 @@ services:
       retries: 10
     restart: unless-stopped
 
-  backend:
+  # Official server (test stack). The frontend reaches it through the compose network.
+  server:
     build:
       context: ../../
-      dockerfile: backend/Dockerfile
-      network: host
-      args:
-        PG_MAJOR: ${POSTGRES_MAJOR:-18}
-    ports:
-      - "8100:8000"
-    volumes:
-      - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/test}:/aspace
-    group_add:
-      - "${DOCKER_GID:-989}"
-    env_file:
-      - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/test}/.env
-    environment:
-      - AGENT_SPACE_HOME=/aspace
-      - INSTANCE_ROOT=/aspace
-      - STORAGE_ROOT=/aspace/storage
-      - LOG_ROOT=/aspace/logs
-      - CAPABILITIES_DIR=/app/capabilities
-      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-agent_space}:${POSTGRES_PASSWORD:-agent_space_dev_password}@postgres:5432/${POSTGRES_DB:-agent_space}}
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - DEPLOYER_SOCKET_PATH=/aspace/run/deployer.sock
-      - CONTROL_PLANE_INTERNAL_URL=${CONTROL_PLANE_INTERNAL_URL:-http://control-plane:8010}
-      - CONTROL_PLANE_INTERNAL_TOKEN=${CONTROL_PLANE_INTERNAL_TOKEN:-}
-      - AGENT_SPACE_ENV=test
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
-      start_period: 180s
-      start_interval: 2s
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    working_dir: /app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-  # Official TS control plane (test stack). Available/callable on host port 8110;
-  # proxies /api/v1/* to the isolated `backend`. The Python pytest suite is
-  # independent of this compose stack and is unaffected by this service.
-  control-plane:
-    build:
-      context: ../../
-      dockerfile: control-plane/Dockerfile
+      dockerfile: server/Dockerfile
       target: dev-runtime
       network: host
-    container_name: agent-space-test-control-plane
-    ports:
-      - "8110:8010"
+    container_name: agent-space-test-server
     volumes:
-      - ../../control-plane/src:/app/control-plane/src:ro
-      - ../../control-plane/tsconfig.json:/app/control-plane/tsconfig.json:ro
+      - ../../server/src:/app/server/src:ro
+      - ../../server/migrations:/app/server/migrations:ro
+      - ../../server/tsconfig.json:/app/server/tsconfig.json:ro
       - ../../packages/protocol/src:/app/packages/protocol/src:ro
       - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/test}:/aspace
     environment:
@@ -81,29 +37,25 @@ services:
       - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:3100/api/v1/auth/google/callback}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3100}
       - SESSION_EXPIRE_DAYS=${SESSION_EXPIRE_DAYS:-30}
-      - DEBUG=${DEBUG:-false}
+      - SERVER_DEBUG=${SERVER_DEBUG:-false}
       - AGENT_SPACE_ENV=test
-      - CONTROL_PLANE_HOST=${CONTROL_PLANE_HOST:-0.0.0.0}
-      - CONTROL_PLANE_PORT=${CONTROL_PLANE_PORT:-8010}
-      - CONTROL_PLANE_PYTHON_API_BASE_URL=${CONTROL_PLANE_PYTHON_API_BASE_URL:-http://backend:8000}
-      - CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY=${CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY:-true}
-      - CONTROL_PLANE_LOG_LEVEL=${CONTROL_PLANE_LOG_LEVEL:-info}
-      - CONTROL_PLANE_REQUEST_TIMEOUT_MS=${CONTROL_PLANE_REQUEST_TIMEOUT_MS:-300000}
-      - CONTROL_PLANE_DATABASE_URL=${CONTROL_PLANE_DATABASE_URL:-}
-      - CONTROL_PLANE_INTERNAL_TOKEN=${CONTROL_PLANE_INTERNAL_TOKEN:-}
-      - CONTROL_PLANE_CLI_TOOLS_ROOT=${CONTROL_PLANE_CLI_TOOLS_ROOT:-/aspace/runtime-tools}
+      - SERVER_LOG_LEVEL=${SERVER_LOG_LEVEL:-info}
+      - SERVER_REQUEST_TIMEOUT_MS=${SERVER_REQUEST_TIMEOUT_MS:-300000}
+      - SERVER_DATABASE_URL=${SERVER_DATABASE_URL:-}
+      - SERVER_INTERNAL_TOKEN=${SERVER_INTERNAL_TOKEN:-}
+      - RUNTIME_TOOLS_ROOT=${RUNTIME_TOOLS_ROOT:-/aspace/runtime-tools}
       - WORKSPACE_ROOT=${WORKSPACE_ROOT:-/aspace/workspaces}
       - SANDBOX_ROOT=${SANDBOX_ROOT:-/aspace/sandboxes}
       - DEPLOYER_SOCKET_PATH=${DEPLOYER_SOCKET_PATH:-/aspace/run/deployer.sock}
-      - CONTROL_PLANE_DAILY_REPORT_SCHEDULER_ENABLED=${CONTROL_PLANE_DAILY_REPORT_SCHEDULER_ENABLED:-false}
-      - CONTROL_PLANE_DAILY_REPORT_SCHEDULER_INTERVAL_SECONDS=${CONTROL_PLANE_DAILY_REPORT_SCHEDULER_INTERVAL_SECONDS:-60}
-      - CONTROL_PLANE_AUTOMATION_SCHEDULER_ENABLED=${CONTROL_PLANE_AUTOMATION_SCHEDULER_ENABLED:-false}
-      - CONTROL_PLANE_AUTOMATION_SCHEDULER_INTERVAL_SECONDS=${CONTROL_PLANE_AUTOMATION_SCHEDULER_INTERVAL_SECONDS:-60}
-      - CONTROL_PLANE_MEMORY_ACCESS_LOG_RETENTION_ENABLED=${CONTROL_PLANE_MEMORY_ACCESS_LOG_RETENTION_ENABLED:-false}
-      - CONTROL_PLANE_MEMORY_ACCESS_LOG_RETENTION_DAYS=${CONTROL_PLANE_MEMORY_ACCESS_LOG_RETENTION_DAYS:-90}
-      - CONTROL_PLANE_MEMORY_ACCESS_LOG_PRUNE_INTERVAL_SECONDS=${CONTROL_PLANE_MEMORY_ACCESS_LOG_PRUNE_INTERVAL_SECONDS:-3600}
-      - CONTROL_PLANE_INTAKE_EXTRACTION_SCHEDULER_ENABLED=${CONTROL_PLANE_INTAKE_EXTRACTION_SCHEDULER_ENABLED:-false}
-      - CONTROL_PLANE_INTAKE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS=${CONTROL_PLANE_INTAKE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS:-30}
+      - SERVER_DAILY_REPORT_SCHEDULER_ENABLED=${SERVER_DAILY_REPORT_SCHEDULER_ENABLED:-false}
+      - SERVER_DAILY_REPORT_SCHEDULER_INTERVAL_SECONDS=${SERVER_DAILY_REPORT_SCHEDULER_INTERVAL_SECONDS:-60}
+      - SERVER_AUTOMATION_SCHEDULER_ENABLED=${SERVER_AUTOMATION_SCHEDULER_ENABLED:-false}
+      - SERVER_AUTOMATION_SCHEDULER_INTERVAL_SECONDS=${SERVER_AUTOMATION_SCHEDULER_INTERVAL_SECONDS:-60}
+      - SERVER_MEMORY_ACCESS_LOG_RETENTION_ENABLED=${SERVER_MEMORY_ACCESS_LOG_RETENTION_ENABLED:-false}
+      - SERVER_MEMORY_ACCESS_LOG_RETENTION_DAYS=${SERVER_MEMORY_ACCESS_LOG_RETENTION_DAYS:-90}
+      - SERVER_MEMORY_ACCESS_LOG_PRUNE_INTERVAL_SECONDS=${SERVER_MEMORY_ACCESS_LOG_PRUNE_INTERVAL_SECONDS:-3600}
+      - SERVER_INTAKE_EXTRACTION_SCHEDULER_ENABLED=${SERVER_INTAKE_EXTRACTION_SCHEDULER_ENABLED:-false}
+      - SERVER_INTAKE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS=${SERVER_INTAKE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS:-30}
       - BACKUP_ENABLED=${BACKUP_ENABLED:-false}
       - BACKUP_ACCEPT_NO_BACKUP=${BACKUP_ACCEPT_NO_BACKUP:-false}
       - BACKUP_INTERVAL_HOURS=${BACKUP_INTERVAL_HOURS:-24}
@@ -111,11 +63,11 @@ services:
       - BACKUP_INCLUDE_LOGS=${BACKUP_INCLUDE_LOGS:-false}
       - BACKUP_ON_STARTUP=${BACKUP_ON_STARTUP:-false}
       - BACKUP_ROOT=${BACKUP_ROOT:-}
-      - BACKUP_DATABASE_URL=${BACKUP_DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-agent_space}:${POSTGRES_PASSWORD:-agent_space_dev_password}@postgres:5432/${POSTGRES_DB:-agent_space}}
+      - BACKUP_DATABASE_URL=${BACKUP_DATABASE_URL:-postgresql://${POSTGRES_USER:-agent_space}:${POSTGRES_PASSWORD:-agent_space_dev_password}@postgres:5432/${POSTGRES_DB:-agent_space}}
       - ARTIFACT_STORAGE_ROOT=${ARTIFACT_STORAGE_ROOT:-}
       - TSC_WATCHFILE=${TSC_WATCHFILE:-PriorityPollingInterval}
     depends_on:
-      backend:
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:8010/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
@@ -142,10 +94,9 @@ services:
       - ../../apps/web:/app
       - /app/node_modules
     environment:
-      - CONTROL_PLANE_API_URL=${CONTROL_PLANE_API_URL:-http://control-plane:8010}
       - CHOKIDAR_USEPOLLING=true
     depends_on:
-      control-plane:
+      server:
         condition: service_healthy
 
   deployer:

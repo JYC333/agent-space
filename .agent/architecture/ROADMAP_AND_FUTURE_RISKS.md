@@ -1,437 +1,200 @@
 # Roadmap and Future Risks
 
-This document describes current capability lines and known future risks. It is organized by development domain, not by historical phase.
+This document is a roadmap and risk watch only. It should not duplicate current
+implementation inventory. For current state, use the linked source-of-truth docs;
+code and migrations still win over documentation.
 
 ---
 
-## Capability Lines
+## Source Pointers
+
+| Area | Current-state source |
+|---|---|
+| Product boundaries | [PRODUCT_AND_BOUNDARIES.md](PRODUCT_AND_BOUNDARIES.md), [NON_GOALS_AND_DISABLED_SURFACES.md](NON_GOALS_AND_DISABLED_SURFACES.md) |
+| Server ownership | [SERVER_FOUNDATION.md](SERVER_FOUNDATION.md), [SERVER_OWNERSHIP.md](SERVER_OWNERSHIP.md), [MODULES.md](MODULES.md) |
+| Runtime, runs, artifacts | [EXECUTION_MODEL.md](EXECUTION_MODEL.md), [RUNS_AND_OUTPUTS.md](RUNS_AND_OUTPUTS.md), [ARTIFACTS.md](ARTIFACTS.md), [../modules/runtime-adapters.md](../modules/runtime-adapters.md) |
+| Policy and security | [POLICY_ENFORCEMENT_INVENTORY.md](POLICY_ENFORCEMENT_INVENTORY.md), [SECURITY_AND_ACCESS_BOUNDARIES.md](SECURITY_AND_ACCESS_BOUNDARIES.md), [../modules/policy.md](../modules/policy.md) |
+| Credentials | [CREDENTIAL_STORAGE.md](CREDENTIAL_STORAGE.md), [../modules/credentials.md](../modules/credentials.md), [../modules/provider-policy.md](../modules/provider-policy.md), [../decisions/0010-credential-channel-isolation.md](../decisions/0010-credential-channel-isolation.md) |
+| Memory, context, provenance | [MEMORY_MODEL.md](MEMORY_MODEL.md), [MEMORY_CONTEXT_RUNTIME.md](MEMORY_CONTEXT_RUNTIME.md), [MEMORY_ACTIVITY_PROVENANCE.md](MEMORY_ACTIVITY_PROVENANCE.md), [MEMORY_EVOLUTION_PLAN.md](MEMORY_EVOLUTION_PLAN.md) |
+| Intake and evidence | [INTAKE_EVIDENCE_FOUNDATION.md](INTAKE_EVIDENCE_FOUNDATION.md), [../modules/activity.md](../modules/activity.md), [../modules/activity-inbox.md](../modules/activity-inbox.md) |
+| Proposals and tasks | [PROPOSALS.md](PROPOSALS.md), [TASK_BOARD_MODEL.md](TASK_BOARD_MODEL.md), [../modules/proposals.md](../modules/proposals.md) |
+| Operations | [OPERATIONS_AND_SAFETY.md](OPERATIONS_AND_SAFETY.md), [DATABASE_AND_TRANSACTIONS.md](DATABASE_AND_TRANSACTIONS.md) |
+| Frontend | [FRONTEND_INFORMATION_ARCHITECTURE.md](FRONTEND_INFORMATION_ARCHITECTURE.md), [../modules/product-shell.md](../modules/product-shell.md), [../modules/frontend-layout.md](../modules/frontend-layout.md) |
+| Local/offline compatibility | [LOCAL_FIRST_COMPATIBILITY.md](LOCAL_FIRST_COMPATIBILITY.md), [../modules/sync-and-conflicts.md](../modules/sync-and-conflicts.md), [../modules/mobile-client.md](../modules/mobile-client.md) |
+
+---
+
+## Capability Roadmap
 
 ### 1. Dogfooding Stabilization
 
-**Current state:** Two-person local instance is operational. Space isolation, actor identity, RunStep replay, runtime/credential boundaries, policy enforcement, activity provenance, backup/restore, and deployment control are all active and tested.
+**Next work**
+- Collect incidents from real personal/household use.
+- Expand contract tests only where dogfooding exposes real gaps.
+- Rehearse backup and restore on a schedule.
 
-**Why it matters:** Dogfooding is the primary feedback loop for finding product gaps and operational risks before any broader use.
+**Prerequisites**
+- Current auth, backup, run, proposal, and memory boundaries remain green.
 
-**Likely next steps:** Incident collection from real use, gap analysis from observed behavior, contract test expansion, periodic backup/restore rehearsal.
+**Risk watch**
+- Fixes made during dogfooding can bypass source-of-truth docs or policy gates.
+- Backup confidence can drift if restore is not rehearsed.
 
-**What must be true first:** n/a — this is the current baseline.
-
-**Not now:** Expanding to more users, remote hosting, public launch.
-
----
-
-### 2. Database / PostgreSQL
-
-**Current state:** PostgreSQL is the server database. `UnitOfWork`, savepoint isolation, and explicit transaction boundaries are all in place. `RunStep.step_index` uses `MAX()+1` — a documented distributed-writer risk under concurrent writers.
-
-**Why it matters:** All new schema and query work must stay PostgreSQL-idiomatic.
-
-**Likely next steps:** Stronger `RunStep` ordering under distributed writers (DB sequence or distributed counter). Distributed multi-host locking (advisory lock is currently single-host).
-
-**Not now:** Distributed multi-host locking, distributed sequence for RunStep ordering.
+**Not now**
+- More users, remote hosting, public launch.
 
 ---
 
-### 3. Backup / Restore / Offsite Safety
+### 2. Runtime and Adapter Safety
 
-**Current state:** `BackupService` is the canonical full-system backup (pg_dump custom-format snapshot + files + manifest, local lock; live `db/postgres` never archived). `ops/scripts/system/backup.sh` and `ops/scripts/system/restore.sh` are the offline full-system equivalents (same archive format; restore rebuilds database and files in one command). `ops/scripts/db/dump.sh` / `ops/scripts/db/restore.sh` are DB-only pg_dump/pg_restore operator tools. Single-host advisory lock. 7-archive retention.
+**Next work**
+- Design the `one_shot_docker` path before allowing critical-risk file execution.
+- Add external webhook/cron trigger integration only behind preflight and policy gates.
+- Decide whether cross-process subprocess termination is needed after more real CLI runs.
 
-**Why it matters:** Dogfood data has no recovery path without reliable backups and a tested restore procedure.
+**Prerequisites**
+- Existing `model_api`, `claude_code`, and `codex_cli` paths remain stable.
+- Credential resolver, worktree sandboxing, RunStep/RunEvent evidence, and preflight stay tested.
 
-**Likely next steps:** Offsite backup strategy (manual GPG + external storage as a start). Scheduled restore rehearsal.
+**Risk watch**
+- New adapters can duplicate or bypass credential, sandbox, and policy behavior.
+- Critical-risk execution must fail closed until Docker isolation is actually implemented.
 
-**Risks:** No cloud/offsite replication. Single-host advisory lock does not extend to multi-process.
-
-**Not now:** Automatic cloud sync, multi-device conflict resolution, automatic restore.
-
----
-
-### 4. Runtime / Adapter Expansion
-
-**Current state:** the TS `runtimeAdapters` catalog is canonical for TS-owned execution. Registered adapters: `capability`, `model_api`, `ts_agent_host`, `claude_code`, `codex_cli`; `opencode`, `gemini_cli`, and `custom` remain planned/disabled. Claude execution goes through the `claude_code` RuntimeAdapterSpec. `app.agents` contains Agent/AgentVersion CRUD and built-in seeder; new local CLI runtimes should start as RuntimeAdapterSpec entries.
-
-`RunEvent` evidence spine is fully implemented. `RunExecutionService` emits structured event types covering the full execution lifecycle: context_compiled, runtime_selected, sandbox_created, adapter_invoked, adapter_completed, artifact_ingested (produced paths, output_json artifacts, runtime_output text), patch_collected, validation_started/completed, proposal_created (worktree code_patch and output_json proposals), evaluation_created. `RunEvaluationService` consumes RunEvent as the sole structured evidence source — `output_json.materialization_errors` is a debug field and is never parsed as classifier evidence. `GET /api/v1/runs/{id}/events` returns paginated RunEvent records with DB-level event_type/status filtering.
-
-**Supported mutating CLI path:** `risk_level=high` → `required_sandbox_level=worktree`. This is the only supported path for file-writing local CLI runtimes (`claude_code`, `codex_cli`). All changes are collected as a `code_patch` Proposal and require human review before being applied to the real workspace.
-
-**Not supported yet (intentionally):** `risk_level=critical` → `one_shot_docker`. The Docker sandbox execution path is not implemented. Runs with `critical` risk fail early with error code `critical_runtime_requires_unimplemented_one_shot_docker`. Do not attempt to use critical risk level until Docker sandbox infrastructure is designed.
-
-**CLI credential requirement:** Manual and automation CLI runs must use an explicit
-CredentialBroker profile. Container-default fallback is not allowed because it can
-silently pick up stale or shared auth state. Failure code:
-`runtime_credential_profile_required`.
-
-**Preflight:** `POST /api/v1/runs/preflight` validates all execution preconditions (agent, adapter, risk level, workspace, git repo, credential profile) without creating or starting a run. Use this before creating Automation entries.
-
-**Incomplete patch visibility:** When a CLI run produces file changes that cannot be collected (deleted, renamed, binary, oversized, not-UTF-8 files), the resulting code_patch Proposal is marked `incomplete_patch=true` in `payload_json`. Reviewers must be aware the proposal does not represent the full set of agent changes.
-
-**Process cancellation:** `PATCH /runs/{id}/stop` sends SIGTERM to any registered CLI subprocess (same OS process only). Cross-process termination is not supported. Stale runs in `running` status are recovered at worker startup via `RunService.recover_stale_runs()`.
-
-**Why it matters:** Supporting more runtimes expands useful agent work without compromising the control plane.
-
-**Likely next steps:** Docker sandbox infrastructure design for critical/one_shot_docker. External webhook/cron trigger integration with preflight gate.
-
-**What must be true first:** Credential resolver, sandbox policy, RunStep, and preflight are stable and tested for existing adapters.
-
-**Risks if built too early:** New adapters may duplicate policy, sandbox, and credential behavior, or bypass the credential resolver.
-
-**Not now:** Docker sandbox pool, production container infrastructure, cross-process subprocess termination.
+**Not now**
+- Docker sandbox pool, production container infrastructure, broad runtime marketplace.
 
 ---
 
-### 5. Policy Enforcement Expansion
+### 3. Policy and Governance Expansion
 
-**Current state:**
+**Next work**
+- Wire reserved actions only when their product surfaces exist: capability enable/update, tool binding, artifact/evidence export, deployment proposal/execute.
+- Add per-run or per-tool credential scoping only after the current credential boundary remains stable.
+- Keep policy tests focused on fail-closed behavior and audit durability.
 
-- **`PolicyEngine.check()`** is fail-closed: unknown actions return `decision=deny` with
-  `audit_code="unknown_policy_action"`. Only registered actions can fall through to allow.
-  `BUILTIN_RULES` evaluated in order: space_boundary, agent_status, memory_scope,
-  use_credential, tool_permission, workspace_write_patch, policy_change, automation,
-  runtime_execute_risk_level.
-- `agent.delegate` is **not** a current action — agent-to-agent delegation is deferred.
-- Domain-specific persisted-policy enforcement in `policy/enforcement.py`
-  (`memory.private_placement`, `run.user_private_scope`).
-- **PolicyEffectCatalog** (`policy/effects.py`) is a lightweight effect contract,
-  not a full DSL. `policy_change` proposals may create active `Policy` rows only
-  for supported domains with real enforcement points. Reserved domains
-  (`runtime.execute`, `automation.fire`, `capability.enable`,
-  `tool_binding.enable`, `deployment.execute`) are vocabulary only and fail
-  closed until wired.
-- **Canonical action registry** (`policy/actions.py`): **21 WIRED_DIRECT + 9 WIRED_VIA_PROPOSAL
-  sensitive actions** are code-defined. `require_action_definition()` raises
-  `UnknownPolicyActionError` for unregistered actions. **Reserved actions** (12,
-  `lifecycle_status=RESERVED`, including capability.enable, tool_binding.enable, artifact.export,
-  context.use_personal_grant, deployment.propose, deployment.execute) are registered
-  with `current_enforcement_point="not_implemented"`. `PolicyGateway` always denies reserved actions.
-  `workspace.read`, `agent.config_update`, `automation.create`, `automation.update`,
-  `automation.fire`, Intake/Evidence actions, and `context.select_evidence` are WIRED_DIRECT.
-- **Approval resolver** (`policy/approval.py`): `can_approve_policy_action()` calls
-  `require_action_definition(action)` first, then checks SpaceMembership role against effective risk.
-  - owner → can approve all supported actions including critical
-  - admin → can approve low/medium/high; not critical
-  - reviewer → can approve low/medium; not high/critical
-  - member/guest → cannot approve by default
-- **`proposal.apply` gate** — consolidated in `PolicyGateway.enforce_proposal_apply()`. Called from
-  `ProposalService.accept()`. Runs HardInvariantGuard first (payload flag check), then
-  role/risk matrix, then persists PolicyDecisionRecord. Always recorded (audit_required=True).
-  Effective risk = `max(type_default, proposal.risk_level)`.
-  Denial → raises `PolicyGateBlocked` → global exception handler writes durable audit record → HTTP 403.
-- **Preferred audit model** — `PolicyGateway.enforce()` and `enforce_proposal_apply()` write
-  ALLOW records through `DurablePolicyAuditWriter`, which writes only
-  `PolicyDecisionRecord` in an independent transaction. The HTTP
-  `PolicyGateBlocked` handler rolls back the request transaction and writes a
-  blocking record independently; runtime-local blocked paths call
-  `write_blocked_gate_audit()` once and fail the run. No business object is
-  committed merely to persist audit evidence.
-- **`runtime.execute` gate** — uses `enforce()` before credential resolution. DENY/REQUIRE_APPROVAL
-  blocks adapter with `error_code=policy_denied_runtime_execute`.
-- **`runtime.use_credential` gate** — uses `enforce()` before secret fetch. Same-space manual/api → ALLOW.
-  Cross-space → hard DENY (CRITICAL). Automation → REQUIRE_APPROVAL.
-- **Runtime/automation policy input parity** — `RunExecutionService` and
-  `AutomationPolicyPreflightService` share `app.runs.policy_inputs` for
-  `runtime.execute` request construction and credential policy metadata
-  construction. Preflight remains simulation-only: no `PolicyGateway`, no
-  `PolicyDecisionRecord`, no business-row mutation.
-- **`context.inject_memory` gate** — uses `enforce()` in ContextSnapshotPopulator before ContextBuilder.build().
-  Cross-space without grant → hard DENY. DENY raises RuntimeError blocking context population.
-- **`context.render_for_runtime` gate** — in execution.py before adapter.execute(). Cross-space
-  without grant → hard DENY. DENY → `error_code=policy_denied_context_render_for_runtime`.
-- **`artifact.persist` gate** — uses `enforce()` in ArtifactPersistenceService before egress
-  guard or persistence. Blocked decisions write one durable audit record; audit
-  failure writes no artifact. Always recorded and fail closed.
-- **`proposal.create` gate** — uses `enforce()` in ProposalService and CodePatchCollector
-  before Proposal insert. CodePatchCollector passes `force_record=True`.
-- **PolicyDecisionRecord** — all sensitive decisions persisted. Metadata sanitized before storage:
-  no credentials, prompts, patch bodies, stdout/stderr, raw memory, personal_context_block.
-- **ProposalApplyService defense-in-depth** — `apply()` requires `accept_context` in
-  `{"explicit_user_accept", "internal_seed"}`. Unrecognized context rejects without
-  `bypass_source_monitoring=True`.
-- **Reviewable proposal inbox** is role-aware.
-- Memory write boundary is structural (`_INTERNAL_WRITE_AUTHORITY` sentinel).
+**Prerequisites**
+- `proposal.apply`, runtime gates, workspace read/write gates, artifact persistence gates, and credential gates stay centralized through the policy module.
 
-**Design invariants:**
-- Policy is a risk-routing layer, not enterprise RBAC/ABAC.
-- PolicyPort is the only production enforcement entry point. Never call PolicyEngine or
-  HardInvariantGuard directly to authorize or perform a sensitive action.
-  `PreflightService` may call PolicyEngine only for non-mutating dry-run simulation;
-  it must not persist `PolicyDecisionRecord`, and real execution still uses the
-  active PolicyPort.
-- No secret material is resolved before `runtime.use_credential` passes.
-- No context is injected before `context.inject_memory` passes.
-- No adapter is invoked before `runtime.execute` and `context.render_for_runtime` pass.
-- "Forbidden" is `decision=deny`, not a risk level. Risk levels: low, medium, high, critical.
-- Unknown sensitive actions must not silently fall through as allow.
-- Proposal acceptance is the human approval event; the proposal.apply gate enforces this.
-- `agent.delegate` is not a current canonical action. Future multi-agent child-run creation
-  should be designed as `run.spawn_child` / `run.create_child` with explicit control-plane
-  policy and evaluation gates.
+**Risk watch**
+- Policy can become scattered if new surfaces authorize directly.
+- Overbuilding RBAC/ABAC too early can obscure the simpler product approval model.
 
-**Why it matters:** Scattered policy means bypasses are hard to detect as capabilities grow. PolicyGateway provides a single auditable boundary for all sensitive actions.
-
-**Remaining gaps:**
-1. `memory.create/update/archive` enforcement points at MemoryStore level (currently only
-   at proposal.apply gate).
-2. `capability.enable`, `tool_binding.enable` — when capability management API is built.
-3. Schedule automation credential pre-authorization exists through
-   `AutomationCredentialGrant`; broader per-run/per-tool credential scoping and
-   user-facing allowance management remain deferred.
-
-**Not now:** Full enterprise RBAC/ABAC, user-facing policy editor, global route rewrite, policy DSL, lab/scientific identity roles, agent-to-agent delegation (deferred).
+**Not now**
+- Full enterprise RBAC/ABAC, policy editor UI, policy DSL, agent-to-agent delegation.
 
 ---
 
-### 6. Memory / Provenance / Source-Evidence Maturation
+### 4. Memory, Context, Intake, and Evidence Quality
 
-**Current state:** `ActivityRecord`, `ProvenanceLink`, `Proposal.payload_json` provenance entries, and `MemoryEntry.source_*` fields form the durable accepted-object provenance chain. `context_sources` is not in the canonical schema. Intake/Evidence now has first-class candidate tables (`IntakeItem`, `SourceSnapshot`, `ExtractedEvidence`, and `EvidenceLink`), but these are not accepted Memory/Knowledge.
+**Next work**
+- Implement planned memory-quality phases from [MEMORY_EVOLUTION_PLAN.md](MEMORY_EVOLUTION_PLAN.md) only through proposal-safe flows.
+- Extend connector-specific ingestion behind Intake/Evidence lifecycle.
+- Add synthesis and gap-analysis loops only when citations and proposal review stay explicit.
 
-**Why it matters:** Trustworthy memory depends on a complete provenance chain. Future external ingestion depends on knowing where data came from and whether it was reviewed.
+**Prerequisites**
+- Activity-first capture, provenance links, source trust, context assembly, and proposal apply boundaries stay intact.
 
-**Current state:** Canonical Intake/Evidence tables exist for source connectors, source connections, intake items, source snapshots, extraction jobs, extracted evidence, workspace intake profiles, and workspace source bindings. Workspace source bindings are workspace-scoped; projects consume evidence through links rather than owning raw intake.
+**Risk watch**
+- External evidence can pollute trusted Memory if candidate and proposal boundaries are skipped.
+- Context quality work can become untestable if it mixes retrieval, synthesis, and durable writes.
 
-**Likely next steps:** Extend connector-specific ingestion behind the same Intake/Evidence lifecycle. Add trust vocabulary tests for new capture paths.
-
-**What must be true first:** ActivityRecord-based provenance is tested for all current capture paths. Trust resolution for all current `activity_type` values is correct.
-
-**Risks if extended too broadly:** Connector-specific behavior can bypass candidate lifecycle, retention bounds, or proposal review.
-
-**Not now:** Broad ontology, web crawling, vector retrieval over external corpus.
-
----
-
-### 7. Intake and Evidence
-
-**Current state:** Intake/Evidence is implemented as a candidate-only substrate. Evidence can be selected into context snapshots through active relevance/context `EvidenceLink` rows (`context_candidate`, `supports`, `mentions`, `provenance`), and selected evidence receives an auditable `used_in_context` link to the run. `used_in_context` is audit-only, not a selector input. Internal ActivityRecord/Artifact/RunEvent normalization is item/evidence-idempotent; repeated manual normalization may add skipped audit jobs for traceability but does not duplicate active/candidate evidence. Evidence cannot become active Memory without proposal review.
-
-**Why it matters:** External and internal source material needs provenance, trust, retention, and explicit promotion boundaries. Done wrong, it pollutes trusted memory.
-
-**Likely next steps:** Add connector-specific adapters and extraction workers behind `SourceConnection`, `IntakeItem`, `ExtractionJob`, and `ExtractedEvidence`. Keep the current connector family narrow unless a concrete product workflow requires expansion.
-
-**What must be true first:** Intake/Evidence trust vocabulary, context selection, retention, and proposal-gated memory remain stable and tested.
-
-**Risks if extended too early:** External source ingestion without trust gates will pollute trusted Memory with unreviewed content. Attention overload without bounded queues and filters. Intake artifact writes now clean up the written file if the immediate Artifact DB row creation fails after the file write; a future transaction-aware storage pass should still handle process failure or full transaction rollback after a file is promoted.
-
-**Not now:** Area, web crawler, broad metadata indexing, embeddings, auto-promotion of intake/evidence content.
+**Not now**
+- Broad web crawling, vector index over external corpora, auto-promotion of external content to Memory.
 
 ---
 
-### 8. Automation / Triggers
+### 5. Automation and Triggers
 
-**Current state:** `Automation` and `AutomationRun` models and CRUD API are implemented
-(`app.automation`). `automation.create`, `automation.update`, and `automation.fire` are
-`WIRED_DIRECT` actions enforced via `PolicyGateway`. Key properties:
+**Next work**
+- Design external trigger registry after manual and scheduled automation behavior is stable.
+- Add run caps, cost guardrails, and user-facing credential allowance UX before broad background execution.
+- Keep automation-origin runs on the same preflight and policy path as manual runs.
 
-- `Automation` carries `owner_user_id`, `agent_id`, `workspace_id`, `trigger_type` (manual only),
-  `status` (active/paused/archived), `preflight_snapshot_json`.
-- Automation creation requires `PreflightService` to pass with `trigger_origin="automation"`.
-  Preflight snapshot is persisted on the row.
-- Manual fire (`POST /spaces/{id}/automations/{id}/fire`) reruns preflight and creates a
-  **queued** `Run(trigger_origin="automation")` plus an `AutomationRun` link row.
-  The run is not executed automatically — the existing run worker picks it up.
-- `automation.create/update/fire` require `admin` or `owner` role (enforced by `rule_automation`
-  in `policy/rules.py`).
-- `automation.create` and `automation.fire` use `record_failure_mode=FAIL_CLOSED` so audit
-  records are mandatory.
-- `AutomationService` must not directly write `MemoryEntry`, `Policy`, `Workspace` files,
-  `Capability`, or `Credentials` — these invariants are tested.
+**Prerequisites**
+- Automation create/update/fire gates, preflight snapshots, and credential behavior remain auditable.
 
-**Invariants:**
-  - Automation-origin credential use requires explicit approval (`rule_use_credential`).
-  - Automation-origin CLI runs must use an explicit credential profile (no container fallback).
-  - `incomplete_patch` is surfaced on proposals so partial changes are never silently accepted.
+**Risk watch**
+- Background work can silently mutate data if ownership, policy, or proposal gates are weakened.
+- Credential fallback in automation paths must stay blocked.
 
-**Not implemented:**
-  - External event trigger registry.
-  - External event triggers.
-  - Credential allowances for automation-origin runs.
-  - Docker sandbox for critical-risk automation runs.
-
-Automation schema is intentionally folded into canonical 0001 during foundation
-hardening. No 0002 migration is expected for this branch.
-
-**Why it matters:** Background work needs explicit ownership, policy, and audit. Hidden background mutations are dangerous.
-
-**Risks:**
-  - Credential fallback for automation-origin runs is blocked at preflight and at the
-    `runtime.use_credential` gate (REQUIRE_APPROVAL for automation origin).
-  - Runaway cost: no `max_runs_per_day` cap yet — deferred.
-  - Cron and event triggers must not bypass the preflight + policy gate path.
+**Not now**
+- Arbitrary background jobs, external event trigger marketplace, critical-risk automation without Docker isolation.
 
 ---
 
-### 9. Connectors / Integrations
+### 6. Operations, Backup, Retention, and Export
 
-**Current state:** No Connector/Integration model. Provider and CLI credentials are special-case modules.
+**Next work**
+- Define offsite backup procedure, starting with manual encrypted archive transfer.
+- Schedule restore rehearsal and record operator checklist gaps.
+- Define bulk Memory export and retention/delete semantics.
 
-**Why it matters:** External chat, calendar, docs, publishing, and import/export will become separate incompatible subsystems without a common boundary.
+**Prerequisites**
+- Full-system backup/restore remains consistent across database and file storage.
+- Artifact and memory lifecycle states remain stable enough to export.
 
-**Likely next steps:** Draft connector/integration schema only after Source/Evidence design is stable.
+**Risk watch**
+- Local-only backups are a single-site data-loss risk.
+- Hard-delete semantics can conflict with audit/provenance if not designed explicitly.
 
-**What must be true first:** Source/Evidence design is stable. Activity-first ingestion path is tested.
-
-**Risks if built too early:** External data may bypass provenance and enter trusted Memory directly. Privacy and trust lifecycle are undefined for connector-sourced data.
-
-**Not now:** One-off integration tables for each external source. External chat capture before trust gate exists.
-
----
-
-### 10. Self-Evolution
-
-**Current state:** System-core workspace registration and host deployer exist. Self-evolution is disabled by default. Deployment job persistence is absent (501-gated). No capability lifecycle persistence.
-
-**Why it matters:** Self-evolution is high-risk. It must not bypass human governance or gain host authority.
-
-**Likely next steps:** Keep disabled. Document allowed evolution surfaces (prompts, playbooks, context policies, capability manifests) with required evaluation gate definitions.
-
-**What must be true first:** Proposal review, evaluation signals, deployment job persistence, capability lifecycle persistence, and rollback path are all implemented and tested.
-
-**Risks if built too early:** Agents may expand their own scope, modify production code without approval, or gain deployment authority.
-
-**Not now:** Direct self-modifying agents, app-container deployment control, automatic scope expansion.
+**Not now**
+- Automatic cloud sync, automatic restore, global hard-delete automation.
 
 ---
 
-### 11. Frontend Command Center
+### 7. Frontend Command Center
 
-**Current state:** `HomeGalleryPage` consumes `/home/summary`. Space switcher, proposals, settings active. Planned modules show "soon" badge. Some frontend/backend type drift exists for memory proposals, workspace fields, and space type.
+**Next work**
+- Build review inbox aggregate and continue-working surfaces from runs, tasks, proposals, and artifacts.
+- Resolve frontend/backend type contract drift before adding new UI workflows.
+- Keep planned modules visibly disabled until backend surfaces are real.
 
-**Why it matters:** Users need a daily operating surface that shows attention items, review queue, runtime status, and recent work without exposing internal domain logic.
+**Prerequisites**
+- Backend aggregate APIs are stable and documented.
+- Shell/module registry remains the source of truth for active frontend surfaces.
 
-**Likely next steps:** Review inbox aggregate API and UI. Continue-working surfaces from runs/tasks/proposals/artifacts. Frontend/backend type contract alignment.
+**Risk watch**
+- Frontend can imply capabilities that are not active if planned modules become interactive too early.
+- Frontend-only business rules can drift from server policy.
 
-**What must be true first:** Stable backend aggregate APIs and resolved API type contracts.
-
-**Not now:** Native mobile app, advanced offline queue, frontend-only business rule inference.
-
----
-
-### 12. Privacy / Retention / Export
-
-**Current state:** Memory visibility/sensitivity exists. Artifact export exists. No bulk memory export, no retention policy, and no hard-delete semantics defined.
-
-**Why it matters:** Personal OS data needs trust, portability, and correct deletion semantics.
-
-**Likely next steps:** Define bulk memory export format. Add deletion audit semantics for memory and artifacts. Document export format (Markdown/JSON).
-
-**What must be true first:** Activity, memory, and artifact lifecycle states are stable. Provenance links survive export.
-
-**Not now:** Full cross-device sync, automated retention enforcement, global hard-delete automation without operator review.
+**Not now**
+- Native mobile app, advanced offline queue, frontend-only permission inference.
 
 ---
 
-### 13. Control Plane and Learning Loop
+### 8. Learning Loop and Self-Evolution
 
-**Current state:** The data model supports the current control-plane loop. Core model supports:
+**Next work**
+- Run managed dogfood flows against real workspaces before automating more of the loop.
+- Validate RunReflection and proposal payload quality through human review.
+- Define allowed self-evolution surfaces and evaluation gates before enabling capability lifecycle persistence.
 
-- `ExecutionPlane` — registered execution environments and their capability envelope
-- `ModelProvider` — provider credential and config binding
-- `RuntimeAdapter` — adapter registration per plane
-- Run execution metadata snapshots — per-run plane/adapter/model resolution record
-- `WorkspaceProfile` — per-workspace runtime preferences and context hints
-- `ValidationRecipe` — evaluation criteria and success signals for a workspace/task type
-- `ExternalRunRecord` — ingested output from externally-managed runs
-- `RunReflection` — structured analysis of a run's outcome against validation criteria
-- `RuntimeToolBinding` — declared tool bindings per adapter/plane
-- `ContextSnapshot` runtime-facing metadata — rendered context state at run time
-- Artifact runtime/execution-plane provenance — artifacts carry producing plane and adapter
+**Prerequisites**
+- Run finalization, task evaluation bridge, artifacts, proposals, and source monitoring remain auditable.
+- Deployment remains host-deployer-only and proposal-gated.
 
-**Design principle:** External runtime output is evidence, not truth. Long-term changes (memory, WorkspaceProfile, Capability, Policy) must go through proposals and require human approval. `ReflectionProposalBuilder` creates learning proposal candidates from `RunReflection` results.
+**Risk watch**
+- Self-evolution can expand scope or deployment authority if proposal and evaluation gates are bypassed.
+- Learning proposals can become noisy if RunReflection quality is not validated against real tasks.
 
-**Current target loop:**
-```
-User request
-→ WorkspaceProfile + ValidationRecipe
-→ ContextSnapshot / rendered context
-→ ExecutionPlane + RuntimeAdapter
-→ Run
-→ RunEvent (structured append-only harness evidence spine)
-→ Artifact / ExternalRunRecord
-→ RunEvaluation (deterministic harness layer, RunEvent as primary evidence)
-→ TaskEvaluation (append-only task bridge)
-→ RunReflection  (learning candidate source)
-→ Proposal (pending, requires human review)
-→ approved Task / Memory / WorkspaceProfile / Capability / Policy update
-```
-
-**Learning apply status:**
-- `follow_up_task` — **implemented**. Accepted proposals create a `Task` row through `ProposalApplyService`. This is the first closed apply path in the learning loop.
-- `memory_update` (from reflection) — proposals created; apply uses the standard `memory_update` handler (target_memory_id required).
-- `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update` — proposals created by `ReflectionProposalBuilder`; accepting them raises `UnsupportedProposalTypeError`. Apply handlers are deferred.
-
-`RunReflection` is not automatically created by `RunEvaluationService` or
-`TaskEvaluationService`. Automation supports manual and schedule-triggered fire;
-external triggers are not implemented.
-
-**PostRunFinalizationService — canonical post-run boundary (implemented):**
-
-`PostRunFinalizationService` is the single write surface for post-run evaluation. Automation should call `POST /runs/{id}/finalize` after a run reaches a terminal state.
-
-- Creates exactly one `RunEvaluation` per finalization (internal: `RunEvaluationService`).
-- If a `TaskRun` link exists, creates one `TaskEvaluation` bridge row (internal: `TaskEvaluationService`).
-- Creates one `RunFinalization` record; idempotent per `(run_id, finalizer_version)`.
-- Appends one `run_finalized` RunEvent.
-- Never writes Memory, Policy, Proposal, WorkspaceProfile, ValidationRecipe, Capability, or RunReflection.
-- Never auto-applies anything.
-
-**RunEvaluation — deterministic internal evaluation primitive (implemented):**
-
-`RunEvaluation` is the append-only harness-level evaluation record created by `RunEvaluationService`. It is an internal primitive called by `PostRunFinalizationService`. Key properties:
-- Each `evaluate()` call appends a new row. Existing rows are never deleted.
-- Uses harness-visible evidence only: Run metadata, RunSteps, ContextSnapshot, Artifacts, Proposals.
-- `evaluator_version` is stored per row for classifier-version auditability.
-- CLI runtimes are black-box; no internal tool-call trajectory is reconstructed.
-- `adapter_started` terminal status counts as adapter completion from the harness perspective.
-- Evaluation never writes Memory, Policy, Proposal, WorkspaceProfile, ValidationRecipe, or Capability.
-
-**Downstream bridge layers:**
-- `TaskEvaluation` — append-only task-level evaluation derived from `RunEvaluation` through `TaskEvaluationService`. Invoked by `PostRunFinalizationService` when `TaskRun` linkage exists.
-- `RunReflection` — learning candidate source; populated externally (import, manual entry, or evaluator output). Not automatically created from evaluation or finalization.
-- Run Viewer UI — surface for browsing finalization and evaluation history per run.
-
-**Next work:**
-1. Run a manual-managed dogfood flow using a real workspace.
-2. Generate a runtime task spec from WorkspaceProfile + ContextSnapshot.
-3. Execute through local Codex / Claude Code / OpenCode manually or semi-manually.
-4. Import diff/log/summary as ExternalRunRecord and Artifacts.
-5. Generate RunReflection and proposal candidates.
-6. Evaluate whether proposal payloads are reviewable and useful.
-7. Only after 2–3 successful dogfood runs, automate the most stable parts.
-
-**Deferred intentionally:**
-- `RunStep` / `SubRun` until deeper trace or delegation is needed.
-- `RunRoutingPolicy` until routing rules outgrow service-level logic.
-- Separate `ContextBundle` table until one snapshot needs multiple rendered runtime bundles.
-- `ExternalCapability` / `CapabilityExport` until vendor plugin/skill export becomes real.
-- Scheduled and external Automation triggers until managed run flow is stable.
-- Apply handlers for `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update` — deferred until dogfood validates payload shape.
-- Full native coding agent loop is not a current priority.
-- Cloud Codex / Claude managed integrations are not current priority.
-- Plugin marketplace is not current priority.
-
-**Risk watch:**
-- `workspace_profile_update`, `validation_recipe_update`, `capability_update`, `policy_update` apply handlers are not wired; those paths in the learning loop remain open.
-- Runtime-facing context quality is unvalidated in real tasks.
-- RunReflection quality is unvalidated in real tasks.
-- WorkspaceProfile and ValidationRecipe usefulness must be validated through dogfooding.
-- API writes that affect `cloud_allowed`, preferred runtime, policy, or capability must remain proposal-gated or tightly permissioned.
+**Not now**
+- Direct self-modifying agents, app-container deployment control, plugin marketplace, full native coding-agent loop.
 
 ---
 
 ## Known Future Risks
 
-| Risk | Why it matters | Current status |
+| Risk | Why it matters | Watch / next action |
 |---|---|---|
-| Distributed multi-host DB locking | Current advisory lock is single-host; multi-host requires a real distributed lock service | Documented risk; single-process only for now |
-| Distributed multi-process locking | Current advisory lock is single-host only | Documented risk; single-process for now |
-| Cloud/offsite backup | No automated offsite replication | Manual GPG + offsite transfer documented; not automated |
-| TestClient lifespan fixture | Some policy/proposal tests that request `cross_space_pair` can block while constructing the test client in this environment | Test environment limitation only; not a product architecture boundary |
-| Full retention policy | Personal data retention and legal obligations | Lifecycle states defined; retention policy engine deferred |
-| Broader policy enforcement | Some enforcement points are intentionally proposal-mediated or deferred | Memory create/update/archive are proposal-mediated; workspace.read is wired direct; capability/deployment/export actions remain deferred |
-| Credential access grants | No per-run/per-tool credential scope; credential resolver is a single boundary | Resolver boundary set; grants deferred |
-| Broad Intake/Evidence ingestion | External data can pollute trusted Memory without trust gates | Candidate-only lifecycle implemented; broad crawling/indexing deferred |
-| Automation scope creep | Background work without ownership/policy can silently mutate data | `Automation`/`AutomationRun` models and CRUD API implemented; `automation.create/update/fire` WIRED_DIRECT via PolicyGateway.enforce() with durable audit; admin/owner role required; manual and schedule-triggered fire supported; broader credential scoping deferred |
-| Self-evolution scope creep | Agents expanding their own permissions or target domain | Disabled by default; deployer-only gate |
-| Code patch operational risk | Partial apply with rollback failure leaves filesystem inconsistent | Explicit compensation logic; partial-apply errors surfaced |
-| Frontend exposing disabled surfaces | Planned-but-not-built modules appearing interactive | Registry `planned: true` pattern; "soon" badges enforced |
-| External connector privacy risk | External data ingested without lifecycle/trust bounds | SourceConnection/IntakeItem/Evidence lifecycle exists; connector marketplace deferred |
-| Actor identity migration cost | Many historical nullable user/agent fields across core tables | New surfaces use `actor_ref`; fields not migrated in bulk; actor_ref used for new records |
-| Workspace console sessions / API keys | Feature-gated; operators cannot manage them through UI | 501-gated; manual operator action required |
+| Distributed DB locking | Single-host advisory locks do not cover multi-host deployments | Revisit only before multi-host operation |
+| RunStep ordering under concurrency | `MAX()+1` style ordering can race with distributed writers | Consider DB sequence or distributed counter before multi-writer runs |
+| Cloud/offsite backup | Local backups do not protect against host loss | Define manual encrypted offsite flow first |
+| Retention and hard delete | Personal data deletion must preserve clear audit semantics | Design retention/export/delete together |
+| Credential scoping | Current resolver is a single release boundary | Add per-run/per-tool grants only with audit and UX |
+| Broad ingestion privacy | Connectors can import sensitive data at scale | Keep Intake/Evidence candidate-only and proposal-gated |
+| Automation scope creep | Background runs can become hidden mutation paths | Require ownership, preflight, policy, and proposal boundaries |
+| Self-evolution scope creep | Agents can gain deployment or permission authority | Keep disabled until lifecycle/evaluation/rollback are real |
+| Code patch partial apply | File rollback failures can leave workspaces inconsistent | Keep partial-apply errors explicit and reviewable |
+| Disabled surfaces exposed in UI | Users can rely on features that are not active | Keep `planned: true` modules non-interactive |
+| Actor identity backfill | Historical nullable user/agent fields remain across tables | Use `actor_ref` on new surfaces; avoid bulk migration until needed |
+| Workspace sessions / API keys | Operator-only surfaces can become accidental product APIs | Keep feature-gated until ownership and UX are designed |

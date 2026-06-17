@@ -1,7 +1,7 @@
 # ADR 0007: Plugin Module Architecture
 
 ## Status
-**Accepted** — 2026-05-06
+**Accepted** — 2026-05-06; current implementation refreshed after the 2026-06 server cutover.
 
 ## Context
 
@@ -13,34 +13,54 @@ As the system grows it will target multiple deployment profiles:
 Before the codebase grew too large, we needed a structure that makes adding and excluding features mechanical — not a surgical restructuring.
 
 The pre-0007 layout had:
-- Backend: all HTTP routes in a flat `app/api/` directory; routers hardcoded in `main.py`
-- Frontend: all pages in a flat `src/pages/`; routes hardcoded in `App.tsx`
+- Backend routes registered from a central composition point rather than a module registry.
+- Frontend pages in a flat `src/pages/`; routes hardcoded in `App.tsx`.
 
 This made it impossible to exclude a module at build time without deleting files.
 
 ## Decision
 
-**Each feature is a self-contained module.** Modules live in named directories at the same level. Core kernel files (`config.py`, `db.py`, `models.py`, `schemas.py`) stay at `app/` root and are never optional.
+**Each feature is a self-contained module.** Modules live in named directories at the same level. The server gateway, config, DB helpers, and protocol contracts are shared infrastructure and are never optional.
 
 ### Backend layout
 
 ```
-app/
-  config.py, db.py, models.py, schemas.py   ← kernel (always-on)
-  auth/      ← auth module: api.py + api_key.py
-  memory/    ← memory module: api.py + context_api.py + store.py + ...
-  agents/    ← agents module: api.py + runner.py + adapters + ...
-  sessions/  ← sessions module: api.py + service.py
-  tasks/     ← tasks module: api.py + service.py
-  capabilities/ ← capabilities module: api.py + registry.py + loader.py
-  workspace/ ← workspace module (no HTTP routes yet)
+server/src/
+  config.ts
+  db/
+  gateway/
+    routeRegistry.ts       ← active backend module registry
   modules/
-    registry.py  ← module loader; `main.py` calls register(app) once
+    auth/
+      index.ts
+      routes.ts
+    memory/
+      index.ts
+      routes.ts
+      repository.ts
+    agents/
+      index.ts
+      routes.ts
+      repository.ts
+    sessions/
+      index.ts
+      routes.ts
+    tasks/
+      index.ts
+      routes.ts
+    catalog/
+      index.ts
+      routes.ts
+      service.ts
 ```
 
-Each module's HTTP routes live in `<module>/api.py` (and optionally additional `*_api.py` files). Modules are registered via `app/modules/registry.py` — `main.py` no longer imports individual routers.
+Each module exposes a `ServerModule` from `index.ts`; HTTP routes live in
+`routes.ts`. Modules are registered through
+`server/src/gateway/routeRegistry.ts`. `server.ts` remains the
+composition root and does not register module routes directly.
 
-Optional modules (planned: `cards`) are listed but commented out in the registry until their backends are implemented. Knowledge has a backend module and remains a hidden frontend stub until the browser UI is built.
+Optional or planned modules may exist as frontend stubs, but backend routes are
+only active when the server module is explicitly registered.
 
 ### Frontend layout
 
@@ -70,22 +90,27 @@ The `planned: true` flag renders nav items as greyed-out with a "soon" badge; th
 - Adding a new module = create the directory, add one entry to each registry. No other files change.
 - Excluding a module at deploy time = comment out the registry entry + (future) strip the directory in CI.
 - Frontend modules are separate Vite chunks; disabled routes are never downloaded.
-- `main.py` is now a loader, not a hardcoded list — same pattern across all deployments.
-- Tests are unaffected; they import from `app.<module>.*`, not `app.api.*`.
+- `server.ts` stays a composition root, not a hardcoded feature list.
+- Tests import module services/repositories directly or exercise the public route boundary.
 
 **Accepted constraints:**
-- Python doesn't tree-shake; disabled backend modules are still loaded into memory at startup. This is ~1–5 MB RSS per module — acceptable for self-hosted deployments.
-- True per-module Python packaging (separate `pyproject.toml` per module) is deferred. When distribution requires it, the directory boundary makes the split mechanical: add a `pyproject.toml`, adjust relative imports to absolute, publish as separate wheel.
-- Modules must not import from each other — only from the kernel (`app.db`, `app.config`, `app.models`, `app.schemas`, `app.auth`). This is enforced by convention; a lint rule can formalize it later.
+- Disabled backend modules must not be added to `SERVER_MODULES`.
+- If a domain needs cross-module behavior, it should use an explicit service,
+  repository, internal route, or protocol boundary rather than importing an
+  unrelated route module.
+- Future packaging can split modules mechanically because each module has a
+  directory boundary and explicit registry entry.
 
 ## Cross-module imports (allowed exceptions)
 
-The following cross-module references existed before this ADR and are allowed as explicit exceptions documented here:
+The following cross-module references express real domain relationships and are
+allowed as explicit exceptions documented here:
 
-- `tasks/api.py` imports `app.runs.run_service.RunService` — **task board** `POST /tasks/{id}/runs` creates a queued `Run` and `TaskRun` link; **Task is not modeled as Job** and this path does not enqueue product tasks as `agent_run` jobs.
-- `sessions/api.py` imports `app.memory.reflector.MemoryReflector` — session reflect triggers memory proposals
+- `tasks` uses the runs domain to create queued Runs and `TaskRun` links. **Task is not modeled as Job** and this path does not enqueue product tasks as `agent_run` jobs.
+- `sessions` reflection creates proposals through the memory/proposal boundary.
+- `agents` chat and run creation use the context, runs, sessions, and provider/runtime boundaries.
 
-**Removed:** the singular `POST /tasks/{id}/run` Job enqueue path and `job_type="product_task"` are gone. Tasks enqueue through `POST /api/v1/tasks/{id}/runs`, `RunService`, and `TaskRun` links instead.
+**Removed:** the singular `POST /tasks/{id}/run` Job enqueue path and `job_type="product_task"` are gone. Tasks enqueue through `POST /api/v1/tasks/{id}/runs`, queued Run creation, and `TaskRun` links instead.
 
 These dependencies express real domain relationships. They must be documented here and may not grow without an ADR update.
 

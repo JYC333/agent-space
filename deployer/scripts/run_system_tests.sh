@@ -4,7 +4,7 @@
 set -euo pipefail
 
 WORKSPACE_DIR="${WORKSPACE_DIR:-}"
-TEST_PROFILE="${TEST_PROFILE:-backend}"
+TEST_PROFILE="${TEST_PROFILE:-server}"
 
 if [[ -z "$WORKSPACE_DIR" ]]; then
     echo "ERROR: WORKSPACE_DIR is required" >&2
@@ -21,17 +21,16 @@ cd "$WORKSPACE_DIR"
 echo "[run_system_tests] profile=$TEST_PROFILE worktree=$WORKSPACE_DIR"
 
 case "$TEST_PROFILE" in
-    backend)
-        echo "=== Running backend tests ==="
-        if [[ -d "$WORKSPACE_DIR/backend" ]]; then
-            cd "$WORKSPACE_DIR/backend"
-            if [[ -f requirements.txt ]]; then
-                pip install -q -r requirements.txt 2>&1 | tail -5
+    server|server)
+        echo "=== Running server tests ==="
+        if [[ -d "$WORKSPACE_DIR/server" ]]; then
+            cd "$WORKSPACE_DIR/server"
+            if [[ -f package-lock.json ]]; then
+                npm ci --silent 2>&1 | tail -5
             fi
-            # tests/conftest.py isolates AGENT_SPACE_HOME unless AGENT_SPACE_PYTEST_USE_REAL_HOME=1
-            python3 -m pytest tests/unit tests/contracts tests/invariants tests/workflows -v --tb=short 2>&1
+            npm test 2>&1
         else
-            echo "ERROR: backend directory not found" >&2
+            echo "ERROR: server directory not found" >&2
             exit 1
         fi
         ;;
@@ -72,22 +71,23 @@ case "$TEST_PROFILE" in
         ;;
     build)
         echo "=== Running build ==="
-        if [[ -d "$WORKSPACE_DIR/apps/web" ]]; then
+        if [[ -d "$WORKSPACE_DIR/server" ]]; then
+            cd "$WORKSPACE_DIR/server"
+            if [[ -f package-lock.json ]]; then
+                npm ci --silent 2>&1 | tail -3
+            fi
+            npm run build 2>&1
+        elif [[ -d "$WORKSPACE_DIR/apps/web" ]]; then
             cd "$WORKSPACE_DIR/apps/web"
             if [[ -f package.json ]]; then
                 npm ci --silent 2>&1 | tail -3
                 npm run build 2>&1
             fi
-        elif [[ -d "$WORKSPACE_DIR/backend" ]]; then
-            cd "$WORKSPACE_DIR/backend"
-            if [[ -f requirements.txt ]]; then
-                pip install -q -r requirements.txt 2>&1 | tail -3
-            fi
         fi
         ;;
     *)
         echo "ERROR: Unknown test profile '$TEST_PROFILE'" >&2
-        echo "Allowed profiles: backend, frontend, typecheck, lint, build" >&2
+        echo "Allowed profiles: server, server, frontend, typecheck, lint, build" >&2
         exit 1
         ;;
 esac

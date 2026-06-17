@@ -7,8 +7,8 @@
  * applies the command; this package only describes the message.
  *
  * Each command is the generic {@link CommandEnvelopeSchema} narrowed to a literal
- * `type` and a concrete `payload`. Payload fields mirror the corresponding Python
- * API request bodies (snake_case), conservatively.
+ * `type` and a concrete `payload`. Payload fields mirror the corresponding API
+ * request bodies (snake_case), conservatively.
  *
  * Depends only on `./common` and `zod`.
  */

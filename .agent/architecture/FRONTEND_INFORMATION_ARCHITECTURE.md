@@ -84,6 +84,12 @@ Prioritizes, all cross-space with source-Space badges:
 
 There is **no module gallery** on Home.
 
+Home should remain a thin UI over backend aggregate read models. Cross-space
+Home data comes from `/api/v1/me/*`; space Today data comes from
+`/api/v1/home/summary`. When Home needs another count, queue, or rollup, add or
+extend a backend read model instead of reconstructing proposal/activity/runtime
+logic by calling every domain API separately from the browser.
+
 ### Space Today (`/spaces/:spaceId/today`) — space-scoped dashboard
 
 Mirrors Home's structure but limited to the active Space (`homeApi.summary`): today stats, the
@@ -156,7 +162,7 @@ not be navigable.
 | **Today** (Space) | Enabled | Space-scoped dashboard at `/spaces/:spaceId/today` for the active Space |
 | **Inbox** (Activity) | Enabled | Capture intake (rail label "Inbox"; route `/activity`) |
 | **Review** (Proposals + Memory) | Enabled | Governance area (rail label "Review"; routes `/proposals` and `/memory`). The scene sidebar links real surfaces; proposal-type filters live inside `/proposals`. |
-| **Knowledge** | Enabled | First-level unified module (rail label "Knowledge"; route `/knowledge`). `/knowledge` redirects to the last-used workspace (default `/knowledge/notes`); `/knowledge/home` is an optional overview hub, never the forced landing. Sub-areas switch via an in-header breadcrumb (no scene sidebar): **Notes** (working-knowledge workspace — configurable collection tree + open-note tabs), **Wiki** (canonical, KnowledgeItem-backed, `/knowledge/wiki`), **Sources**, **Cards** |
+| **Knowledge** | Enabled | First-level unified module (rail label "Knowledge"; route `/knowledge`). `/knowledge` redirects to the last-used workspace (default `/knowledge/notes`); `/knowledge/home` is an optional overview hub, never the forced landing. Sub-areas switch via an in-header breadcrumb (no scene sidebar): **Notes** (working-knowledge workspace — configurable collection tree + open-note tabs), **Wiki** (canonical, KnowledgeItem-backed, `/knowledge/wiki`), **Sources** (backend source CRUD exists; current frontend is list-only evidence browsing), **Cards** |
 | **Cards** | `enabled: false, visible: false` | Standalone module hidden; surfaced as the Knowledge › Cards placeholder until the spaced-repetition model exists |
 | Time | `planned: true` | Shows "soon" badge |
 
@@ -217,7 +223,8 @@ The frontend is ready for personal dogfooding. The core product loop is usable:
   its members; non-members get the standard authz error, not silent space-switching.)
 - Cross-space Home aggregates are limited to what `/me/*` exposes (proposals, tasks, runs,
   participation, timeline). "Captures waiting" / "review packets ready" / "cards due" per Space
-  need cross-space aggregate endpoints before they can appear on Home.
+  need backend aggregate endpoints before they can appear on Home; the frontend should not fan
+  out across raw domain APIs to reconstruct those counts.
 - Quick Capture supports text and links; file/image drag-drop and voice are shown as
   coming-soon (no upload endpoint yet).
 - Assistant chat execution is not wired; the Home Assistant is an entry point only.

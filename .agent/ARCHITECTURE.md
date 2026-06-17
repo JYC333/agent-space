@@ -8,7 +8,7 @@
 │     PWA, offline queue, swipe review                │
 │     apps/web/src/ (mobile layout variants)          │
 ├─────────────────────────────────────────────────────┤
-│  12. Product UI / Shell Layer  [PLANNED]             │
+│  12. Product UI / Shell Layer                        │
 │     Shell, NavRail, CommandPalette, PanelLayout     │
 │     Activity Inbox, Memory Review, Knowledge, Cards │
 │     apps/web/src/                                   │
@@ -20,57 +20,57 @@
 │  10. Runtime Adapter / Sandbox Layer                 │
 │     RuntimeAdapterSpec, GenericCliRuntimeAdapter     │
 │     ContextCompiler, worktree/sandbox governance     │
-│     backend/app/runtimes/ + runs/               │
+│     server/src/modules/runtimeAdapters + runs │
 ├─────────────────────────────────────────────────────┤
 │  10b. Deployment Layer                               │
 │     DeployerClient → Unix socket → host deployer    │
 │     DeploymentJob records, whitelisted scripts       │
-│     backend/app/deployment/ + deployer/        │
+│     server/src/modules/deployment + deployer  │
 ├─────────────────────────────────────────────────────┤
 │   9. Proposal / Approval Layer                       │
 │     Generalized Proposal, ApprovalEvent, Artifact   │
 │     memory_update, code_patch, artifact review      │
-│     backend/app/proposals/ + app/artifacts/    │
+│     server/src/modules/proposals + artifacts  │
 ├─────────────────────────────────────────────────────┤
 │   8. Governance / Policy Layer                       │
 │     PolicyEngine: allow / deny / require_approval   │
-│     backend/app/policy/                        │
+│     server/src/modules/policy                 │
 ├─────────────────────────────────────────────────────┤
 │   7. Capability Layer                                │
 │     YAML manifests, code, prompts, tests            │
 │     Lifecycle: draft → testing → enabled            │
-│     catalog/capabilities/ + app/capabilities/          │
+│     catalog/capabilities/ + server catalog    │
 ├─────────────────────────────────────────────────────┤
-│   6. Learning Layer  [PLANNED]                       │
+│   6. Learning Layer  [PARTIAL / PLANNED]             │
 │     FlashCards, CardReview, FSRS scheduling         │
 │     Media cards (image occlusion, audio cloze)      │
-│     backend/app/cards/                         │
+│     server/migrations + future module         │
 ├─────────────────────────────────────────────────────┤
-│   5. Knowledge Layer  [PLANNED]                      │
+│   5. Knowledge Layer  [MVP IMPLEMENTED]              │
 │     KnowledgeItem, KnowledgeItemRelation,           │
 │     Source, KnowledgeItemSource                     │
 │     Structured, agent-generated, proposal-gated     │
-│     backend/app/knowledge/                     │
+│     server/src/modules/knowledge              │
 ├─────────────────────────────────────────────────────┤
 │   4. Memory Layer                                    │
 │     Scoped long-term context (not raw data)         │
 │     ContextBuilder, MemoryStore, MemoryEvolver      │
-│     backend/app/memory/                        │
+│     server/src/modules/memory + context       │
 ├─────────────────────────────────────────────────────┤
 │   3. Activity Layer                                  │
 │     Raw inputs: user_input, web_capture, file_import │
 │     ActivityRecord -> proposals -> memory/knowledge │
-│     backend/app/activity/                      │
+│     server/src/modules/activity               │
 ├─────────────────────────────────────────────────────┤
 │   2. User / Agent Layer                              │
 │     User (identity, membership)                     │
 │     Agent (profile, policy, adapters, runs)         │
-│     backend/app/agents/ + models.py            │
+│     server/src/modules/auth + agents          │
 ├─────────────────────────────────────────────────────┤
 │   1. Space Layer                                     │
 │     Space, SpaceMembership, WorkspaceMembership     │
 │     All data scoped by space_id                     │
-│     backend/app/models.py                      │
+│     server/migrations + modules/spaces        │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -80,34 +80,36 @@
 - **Run is the central execution object** — every agent invocation creates a Run; Run produces Activities, Artifacts, and Proposals; Session is conversation-level, Run is execution-level
 - **Proposal gate** — memory and code changes require explicit proposal approval before durable mutation
 - **Runtime-agnostic core** — Agent is a product-level actor; Runtime Adapter (capability, model_api, claude_code, codex_cli, opencode, ...) is a replaceable execution backend; Model Provider (Anthropic, OpenAI, litellm) is the underlying LLM. These three are distinct. Tool-using / filesystem Claude work goes through the `claude_code` CLI RuntimeAdapterSpec. Per ADR 0010 the governing invariant is **credential channel isolation** — an Anthropic API key must never enter a Claude Code CLI subprocess env; the in-process encrypted API channel (reflector, `/providers/chat`, `model_api`) passes the key as a litellm parameter (never via env) and may serve any provider including Anthropic.
-- **Sandbox enforcement** — file-access local CLI runtimes (`claude_code`, `codex_cli`) always run sandboxed (never `none`/`dry_run`). The working-directory scope is resolved from workspace binding + risk: no workspace bound → `ephemeral` (a system-provisioned throwaway run-scope dir, TS-owned); workspace bound → `risk_level=high` → `worktree` (detached git worktree, diff → `code_patch` proposal). The agent never works directly in the real workspace. See `modules/sandbox.md`.
+- **Sandbox enforcement** — file-access local CLI runtimes (`claude_code`, `codex_cli`) always run sandboxed (never `none`/`dry_run`). The working-directory scope is resolved from workspace binding + risk: no workspace bound → `ephemeral` (a system-provisioned throwaway run-scope dir, server-owned); workspace bound → `risk_level=high` → `worktree` (detached git worktree, diff → `code_patch` proposal). The agent never works directly in the real workspace. See `modules/sandbox.md`.
 - **ContextCompiler** — vendor files (CLAUDE.md, AGENTS.md, SOUL.md) are compiled artefacts written to the sandbox, never source of truth; security scanning, token budgets, and `.agent/` progressive loading enforced at compile time
 - **ContextSnapshot** — frozen ContextPackage saved at run-start; immutable; stored in `context_snapshots` for audit
 - **ContextAttachment** — structured context references (file, git_diff, memory_entry, etc.) resolved and scanned by ContextBuilder
 - **MemoryProvider** — abstract interface for memory backends; `LocalMemoryProvider` is the only enabled provider in MVP
-- **Module registry** — `app/modules/registry.py` (backend) and `apps/web/src/modules/registry.ts` (frontend) are the single sources of truth for which features are active; see [ADR 0007](decisions/0007-plugin-module-architecture.md)
+- **Module registry** — `server/src/gateway/routeRegistry.ts` (backend) and `apps/web/src/modules/registry.ts` (frontend) are the single sources of truth for which features are active; see [ADR 0007](decisions/0007-plugin-module-architecture.md)
 - **Client-server protocol** — REST (current) + WebSocket events + SSE streaming (planned)
 - **Partial offline support** — mobile captures and card reviews can queue offline and sync on reconnect; agent execution, memory writes, and proposal apply remain server-authoritative; see [architecture/LOCAL_FIRST_COMPATIBILITY.md](architecture/LOCAL_FIRST_COMPATIBILITY.md)
 - **Run resilience fields** — status includes `degraded`; mode includes `live|dry_run`; temporal fields are explicit; artifacts are exportable; proposals have urgency/deadline
-- **Home summary API** — Home UI consumes lightweight summaries only; no full ContextPackage
+- **Home aggregate APIs** — Home UI consumes lightweight backend read models
+  (`/api/v1/me/*`, `/api/v1/home/summary`) only; no full ContextPackage and no
+  frontend reconstruction of proposal/activity/runtime logic
 
 ## Where Does a New Feature Belong?
 
 | Feature type | Layer | Module path |
 |---|---|---|
-| New data entity tied to a space | Layer 1–2 | `app/models.py` |
+| New data entity tied to a space | Layer 1–2 | `server/migrations/` + owning server module |
 | New agent capability or tool | Layer 7 | `catalog/capabilities/<id>/` |
 | New AI-driven analysis or transformation | Layers 7–9 | capability + proposal modules |
-| New permission rule | Layer 8 | `app/policy/` |
-| New memory scope or type | Layer 4 | `app/memory/` |
-| New raw capture source | Layer 3 | `app/activity/` (planned) |
-| New structured knowledge type | Layer 5 | `app/knowledge/` |
-| New review card type | Layer 6 | `app/cards/` (planned) |
+| New permission rule | Layer 8 | `server/src/modules/policy/` |
+| New memory scope or type | Layer 4 | `server/src/modules/memory/` |
+| New raw capture source | Layer 3 | `server/src/modules/activity/` |
+| New structured knowledge type | Layer 5 | `server/src/modules/knowledge/` |
+| New review card type | Layer 6 | future server module + migrations |
 | New UI view (web) | Layer 12 | `apps/web/src/modules/<name>/` |
 | New UI view (mobile-primary) | Layer 13 | `apps/web/src/modules/<name>/` mobile variants |
-| New runtime adapter (CLI or SDK) | Layer 10 | `app/runtimes/` — see `modules/runtime-adapters.md` |
-| Workspace file operation | Layer 11 | `app/workspace/` |
-| New optional feature module | All | add to `app/modules/registry.py` + `apps/web/src/modules/registry.ts` |
+| New runtime adapter (CLI or SDK) | Layer 10 | `server/src/modules/runtimeAdapters/` — see `modules/runtime-adapters.md` |
+| Workspace file operation | Layer 11 | `server/src/modules/workspaces/` |
+| New optional feature module | All | add to `server/src/gateway/routeRegistry.ts` + `apps/web/src/modules/registry.ts` |
 
 ## Runtime Targets (MVP)
 

@@ -7,10 +7,10 @@ Proposals are the product review and application boundary for durable mutations.
 ## Product API
 
 - `/api/v1/proposals` is the only product API for proposal review and application.
-- In the current control-plane stack, external proposal review routes are
-  fixed TS-owned. List/get are served by the control-plane DB read model.
-  Accept/reject/egress approval run in the TS proposal apply service and share
-  the TS transaction boundary with the applier registry. Proposal creation
+- In the current server stack, external proposal review routes are
+  owned by the server. List/get are served by the server DB read model.
+  Accept/reject/egress approval run in the server proposal apply service and share
+  the server transaction boundary with the applier registry. Proposal creation
   entrypoints remain in their source product modules.
 - `GET /api/v1/proposals` defaults to pending proposals.
 - `status=all` is explicit and returns proposals across statuses.
@@ -19,20 +19,20 @@ Proposals are the product review and application boundary for durable mutations.
   `follow_up_task`, `agent_config_update`, `knowledge_create`,
   `knowledge_update`, `knowledge_archive`, `knowledge_relation_create`, and
   `knowledge_relation_delete`.
-- The currently registered TS apply types are `memory_create`,
+- The currently registered server apply types are `memory_create`,
   `memory_update`, and `memory_archive`. Unregistered proposal types fail closed
-  on accept until their owning domain migrates and registers a TS applier.
+  on accept until their owning domain migrates and registers a server applier.
 - Accept returns the general `ProposalAcceptOut` response shape.
 - A proposal is never auto-applied.
 
 ## Application Rules
 
-- The TS apply service must run the `proposal.apply` policy gate before
+- The server apply service must run the `proposal.apply` policy gate before
   dispatching any registered applier.
 - `memory_create`, `memory_update`, and `memory_archive` mutate durable memory
   only when accepted.
 - Knowledge proposal records are still reviewable through the proposal API, but
-  Knowledge apply is not registered in the TS applier registry yet. It must fail
+  Knowledge apply is not registered in the server applier registry yet. It must fail
   closed until the Knowledge domain migrates and registers its appliers:
   `knowledge_create`, `knowledge_update`, `knowledge_archive`,
   `knowledge_relation_create`, and `knowledge_relation_delete`.
@@ -45,8 +45,8 @@ Proposals are the product review and application boundary for durable mutations.
   or internally seeded proposals must not mutate another user's private or
   restricted Knowledge or relations that include private or restricted endpoints.
 - `policy_change`, `follow_up_task`, `agent_config_update`, and other
-  non-memory target mutations are not currently registered TS appliers. They
-  fail closed until their owning domain registers a TS applier.
+  non-memory target mutations are not currently registered server appliers. They
+  fail closed until their owning domain registers a server applier.
 - `code_patch` remains fail-closed until workspace patch governance migrates.
 - Public post-create execution config changes for Agents must use
   `POST /api/v1/agents/{agent_id}/config-proposals`; direct

@@ -53,13 +53,13 @@ Rules (clean model — no old paths):
   `system_prompt`. Hard policy snapshots (tool/memory/context/runtime/output policy,
   output schema) are copied verbatim and are **not** overridable.
 - Allowed create-from-template overrides apply to the copied `AgentVersion` only and are
-  **safety-clamped** server-side (`agents/policy_safety.py`): a memory override can never grant
+  **safety-clamped** server-side in the agents module: a memory override can never grant
   `writable_scopes` or drop `requires_proposal`; an output override can never expand
   `allowed_output_types` beyond the template ceiling, drop `proposal_only`, or drop a
   `required_run_outputs` entry; a context override can never expand `allowed_input_contexts`
   (and `default_input_contexts` is clamped to that ceiling). The same clamps apply to the owner
-  config edit (`AgentService.update_config`).
-- Seeded system templates (`agents/template_seeder.py`, idempotent, global, no space/owner) —
+  config edit path.
+- Seeded system templates (idempotent, global, no space/owner) —
   five **public** reusable specialized factories, plus the `personal_assistant` **internal** seed
   spec (`visibility=system_internal`, hidden from the library; see below). **There is no
   `general_chat` template** and no product-level DirectChat.
@@ -84,7 +84,7 @@ Rules (clean model — no old paths):
 - **Context policy uses product-level `allowed_input_contexts` (ceiling) + `default_input_contexts`**
   (enabled start set); the assistant narrows/selects within the ceiling at run time.
 - **Chat is backed by the space's system-managed default Assistant, not a naked DirectChat.**
-  Per-space resolution lives in `agents/personal_assistant.py`
+  Per-space resolution lives in the server agents module
   (`get_default_assistant` / idempotent `get_or_create_default_assistant`; the older
   `resolve_default_personal_assistant` / `ensure_default_personal_assistant` names remain as
   aliases) and is exposed at `GET`/`POST /api/v1/agents/default-assistant`. The Assistant is an
@@ -96,7 +96,7 @@ Rules (clean model — no old paths):
   `personal_assistant` seed spec via copy-on-create; there is no global default-agent or hardcoded
   built-in-agent semantics, and users cannot create duplicate Assistants from a template.
 - **Assistant preferences are a soft layer, never policy.** `space_assistant_settings`
-  (`agents/assistant_settings.py`, `GET`/`PATCH /api/v1/agents/default-assistant/settings`) holds
+  (`GET`/`PATCH /api/v1/agents/default-assistant/settings`) holds
   response style, verbosity, default context toggles, default project, proposal style, and soft
   model preferences. These shape default UI/context behavior only — they are never merged into the
   immutable `AgentVersion` and can never loosen the hard tool/runtime/output/memory/safety policy
@@ -115,10 +115,10 @@ Rules (clean model — no old paths):
 
 - Memory content (memory module)
 - Policy decisions (policy module)
-- Sandbox container lifecycle (`workspace/sandbox_manager.py`)
+- Workspace/sandbox lifecycle (`server/src/modules/workspaces/` and runtime adapter execution workspaces)
 - Capability definitions (capability module)
-- Provider credentials (`ModelProvider` encrypted config + `runtimes/credentials.py`; not env vars for runtime execution)
-- Run execution orchestration (`app/runs/execution.py` + job worker)
+- Provider credentials (`ModelProvider` encrypted config + `server/src/modules/providers/`; CLI profiles through the CredentialBroker)
+- Run execution orchestration (`server/src/modules/runs/` + job worker)
 
 ## Key Models
 
@@ -162,8 +162,8 @@ Run:
 **Queued run creation**
 
 1. HTTP (`POST /agents/{id}/runs`, task board endpoints, or agent helpers) → `RunService.create_run`
-2. Worker picks up `agent_run` jobs → `RunExecutionService` selects adapters from policy
-3. Adapters execute with sandbox routing managed outside `AgentService`
+2. Worker picks up `agent_run` jobs → `RunOrchestrationService` selects adapters from policy
+3. Adapters execute with sandbox routing managed outside the agents module
 
 **Run lineage (parent_run_id)**
 
@@ -173,7 +173,7 @@ is a structural link, not a trigger type. Valid trigger origins: `manual`, `auto
 
 Agent-to-agent delegation is not a current canonical capability and is deferred.
 Future multi-agent child-run creation must be designed as `run.spawn_child` / `run.create_child`
-with explicit control-plane policy and evaluation gates. `runtime.execute` controls adapter
+with explicit server policy and evaluation gates. `runtime.execute` controls adapter
 execution only; it is not a delegation replacement.
 
 **Agent execution config changes**
@@ -272,11 +272,11 @@ for use rather than authoring new ones).
 ## Built-in Templates (no built-in concrete agents)
 
 There are **no** seeded per-space concrete agents. The old built-in concrete
-agent seeder (`agents/seeder.py`) was
+agent seeder was
 **removed** — built-in product behavior comes from system **templates** (factories),
 and a concrete Agent is created only on demand via copy-on-create.
 
-Built-in **templates** (global factories, idempotent — `agents/template_seeder.py`,
+Built-in **templates** (global factories, idempotent, seeded by the server agents module,
 seeded once in `bootstrap`). Five are **public** reusable specialized factories; the sixth,
 `personal_assistant`, is an **internal seed spec** (`visibility=system_internal`) for the
 system-managed default Assistant — hidden from the public library and not user-instantiable.
@@ -305,13 +305,13 @@ not seeded initially (future scope): `coding_task_agent`, `research_scout`, `sou
 There is **no** single global "default agent" that runs implicitly. Every `Run` targets an
 explicit `Agent`, and runtime config always loads from `Agent.current_version_id` → `AgentVersion`.
 The per-space default Assistant Agent (`agent_kind="system_assistant"`, system-owned, one active
-per space) is resolved/created on demand (`agents/personal_assistant.py`;
-`GET`/`POST /api/v1/agents/default-assistant`) from the internal `personal_assistant` seed spec —
+per space) is resolved/created on demand by the server agents module
+(`GET`/`POST /api/v1/agents/default-assistant`) from the internal `personal_assistant` seed spec —
 it is an ordinary copy-on-create Agent at runtime, not a special runtime path. Users configure soft
 Assistant **preferences** (`space_assistant_settings`), never the core prompt or hard policy.
 
 Memory reflection (`POST /sessions/{id}/reflect`) is an explicit **internal service**
-(`memory/reflector.py::MemoryReflector` via the `memory.reflect` capability) — it does not run
+(the memory consolidation/reflection path via the `memory.reflect` capability) — it does not run
 through a concrete built-in agent. The `memory_reflector` template is the factory for users who
 want a standalone reflection Agent instance.
 
@@ -347,21 +347,16 @@ need a native, no-credential execution path.
 
 ## Related Files
 
-- `backend/app/agents/agent_service.py` — AgentService CRUD and run creation helpers
-- `backend/app/runs/run_service.py` — Run creation and listing
-- `backend/app/runs/execution.py` — `RunExecutionService` (canonical orchestrator)
-- `backend/app/runs/runtime_policy.py` — risk→sandbox mapping, file-access adapter validation
-- `control-plane/src/modules/runtimeAdapters/specs.ts` — TS RuntimeAdapterSpec catalog
-- `backend/app/runtimes/registry.py` — Python-owned adapter registration
-- `backend/app/runtimes/specs.py` — Python migration-period RuntimeAdapterSpec catalog
-- `backend/app/runtimes/adapters/cli_runtime.py` — GenericCliRuntimeAdapter local CLI execution
-- `backend/app/runtimes/local_executor.py` — local subprocess execution
-- `backend/app/agents/template_seeder.py` — system AgentTemplate seeding (factories)
-- `backend/app/agents/template_service.py` — `AgentTemplateService` (copy-on-create)
-- `backend/app/agents/version_service.py` — `AgentVersionService` (append-only versions)
-- `backend/app/agents/api.py` — agent HTTP API incl. `/config`, `/current-version`,
+- `server/src/modules/agents/` — Agent CRUD and run creation helpers
+- `server/src/modules/runs/` — Run creation, listing, and orchestration
+- `server/src/modules/runs/orchestrationService.ts` — canonical orchestrator
+- `server/src/modules/runs/` and `policy/` — risk/sandbox mapping and file-access adapter validation
+- `server/src/modules/runtimeAdapters/specs.ts` — RuntimeAdapterSpec catalog
+- `server/src/modules/runs/vendorCliAdapter.ts` — GenericCliRuntimeAdapter local CLI execution
+- `server/src/modules/agents/` — system AgentTemplate/AgentVersion behavior
+- `server/src/modules/agents/routes.ts` — agent HTTP API incl. `/config`, `/current-version`,
   `/versions/{id}/restore`, `/proposals`
-- `backend/app/agent_templates/api.py` — template HTTP API incl. version detail
+- `server/src/modules/agents/` — template HTTP API when enabled
 - `apps/web/src/modules/agents/policyMap.ts` + `ConfigCards.tsx` — policy/config JSON → product cards
 - `apps/web/src/modules/agents/{TemplateLibraryPage,TemplateDetailPage,CreateFromTemplatePage,AgentDetailPage}.tsx`
 

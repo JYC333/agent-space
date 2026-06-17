@@ -77,13 +77,13 @@ require_app_services_stopped() {
 
   echo "ERROR: app service(s) still running for mode '$MODE': ${running[*]}" >&2
   echo "       Stop app services first; restore will manage postgres as needed." >&2
-  echo "       $COMPOSE_HINT stop frontend control-plane backend deployer" >&2
+  echo "       $COMPOSE_HINT stop frontend server deployer" >&2
   exit 1
 }
 
 trap 'local_compose_stop_postgres_if_started "restore"' EXIT
 
-require_app_services_stopped frontend control-plane backend deployer
+require_app_services_stopped frontend server deployer
 
 if ! local_compose_ensure_postgres_ready "restore" "$PGUSER"; then
   exit 1

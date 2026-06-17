@@ -101,7 +101,7 @@ require_app_services_stopped() {
 
   echo "ERROR: app service(s) still running for mode '$MODE': ${running[*]}" >&2
   echo "       Stop app services first; restore will manage postgres as needed." >&2
-  echo "       $COMPOSE_HINT stop frontend control-plane backend deployer" >&2
+  echo "       $COMPOSE_HINT stop frontend server deployer" >&2
   exit 1
 }
 
@@ -153,7 +153,7 @@ for d in config secrets storage artifacts workspaces logs; do
   fi
 done
 
-require_app_services_stopped frontend control-plane backend deployer
+require_app_services_stopped frontend server deployer
 
 # ── PostgreSQL must be ready for pg_restore ────────────────────────────────────
 if ! local_compose_ensure_postgres_ready "restore" "$PGUSER"; then
@@ -179,14 +179,16 @@ print("" if v is None else v)' "$STAGING/backup_manifest.json" "$1" 2>/dev/null 
 BK_FORMAT="$(read_manifest_field backup_format)"
 BK_APP_VERSION="$(read_manifest_field app_version)"
 BK_GIT_COMMIT="$(read_manifest_field git_commit)"
-BK_ALEMBIC="$(read_manifest_field alembic_revision)"
+BK_SCHEMA_MIGRATION_VERSION="$(read_manifest_field schema_migration_version)"
+BK_SCHEMA_MIGRATION_CHECKSUM="$(read_manifest_field schema_migration_checksum)"
 BK_PG_SERVER="$(read_manifest_field postgres_server_version)"
 BK_PG_DUMP="$(read_manifest_field pg_dump_version)"
 
 echo "[restore] manifest backup_format: ${BK_FORMAT:-<none>}"
 echo "[restore] manifest app_version:   ${BK_APP_VERSION:-<unknown>}"
 echo "[restore] manifest git_commit:    ${BK_GIT_COMMIT:-<unknown>}"
-echo "[restore] manifest alembic_rev:   ${BK_ALEMBIC:-<unknown>}"
+echo "[restore] manifest schema_ver:    ${BK_SCHEMA_MIGRATION_VERSION:-<unknown>}"
+echo "[restore] manifest schema_sum:    ${BK_SCHEMA_MIGRATION_CHECKSUM:-<unknown>}"
 echo "[restore] manifest pg_server:     ${BK_PG_SERVER:-<unknown>}"
 echo "[restore] manifest pg_dump:       ${BK_PG_DUMP:-<unknown>}"
 
@@ -261,11 +263,11 @@ echo "          ops/scripts/start.sh --$MODE"
 case "$MODE" in
   dev)
     echo "          ops/scripts/system/verify-restore.sh --mode dev"
-    echo "          # control-plane health URL: http://localhost:8010/health"
+    echo "          # API health URL: http://localhost:3000/api/v1/server/health"
     ;;
   test)
     echo "          ops/scripts/system/verify-restore.sh --mode test"
-    echo "          # control-plane health URL: http://localhost:8110/health"
+    echo "          # API health URL: http://localhost:3100/api/v1/server/health"
     ;;
   prod)
     echo "          ops/scripts/system/verify-restore.sh --mode prod --api-base-url <production-api-url>"

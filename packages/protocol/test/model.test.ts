@@ -62,7 +62,7 @@ describe("canonical model request", () => {
 });
 
 describe("canonical usage", () => {
-  it("mirrors the Python facade field names and allows partial reporting", () => {
+  it("keeps public snake_case field names and allows partial reporting", () => {
     expect(
       CanonicalUsageSchema.parse({ input_tokens: 10, output_tokens: 5, total_tokens: 15 }),
     ).toEqual({ input_tokens: 10, output_tokens: 5, total_tokens: 15 });

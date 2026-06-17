@@ -5,7 +5,6 @@ import {
   ProposalEgressApprovalDispatchRequestSchema,
   ProposalOutSchema,
   ProposalPageSchema,
-  ProposalPythonPortManifestResponseSchema,
   ProposalRejectDispatchRequestSchema,
 } from "../src/index";
 
@@ -73,23 +72,6 @@ describe("proposal review contracts", () => {
       result: { updated_paths: ["README.md"] },
     });
     expect(parsed.result_type).toBe("code_patch_apply");
-  });
-
-  it("describes Python proposal context ports", () => {
-    const manifest = ProposalPythonPortManifestResponseSchema.parse({
-      service: "python_proposals_context_ports",
-      generated_at: "2026-06-14T10:00:00.000Z",
-      ports: [
-        {
-          operation: "proposal.accept",
-          owner: "proposals",
-          implemented: true,
-          auth: "internal_service_token",
-          writes: ["proposals"],
-        },
-      ],
-    });
-    expect(manifest.ports[0].operation).toBe("proposal.accept");
   });
 
   it("parses proposal dispatch requests", () => {

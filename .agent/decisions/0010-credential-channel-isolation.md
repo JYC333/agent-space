@@ -16,13 +16,14 @@ login state) and causes environment-conflict bugs.
 Two credential channels exist and are already architecturally separate:
 
 - **CLI channel** — `claude_code` / `codex_cli` run as subprocesses. Their environment
-  is rebuilt from an allowlist by `runtimes/local_executor.py::build_subprocess_env`
+  is rebuilt from an allowlist by `server/src/modules/runs/vendorCliAdapter.ts::buildSubprocessEnv`
   (only `PATH`, `TERM`, `SHELL`, `LANG`, `LC_*`, plus keys the `CredentialBroker`
   explicitly injects for a configured credential profile). Ambient `os.environ` is NOT
   inherited wholesale.
-- **In-process API channel** — the reflector (`memory/provider_client.py`),
+- **In-process API channel** — the provider command/runtime path
+  (`server/src/modules/providers/` and managed API runtime adapters),
   `/api/v1/providers/chat`, and the `model_api` runtime adapter resolve the key
-  from the encrypted `ModelProvider` Credential (`resolve_provider_api_key`) and pass it
+  from the encrypted `ModelProvider` Credential (`resolveProviderApiKey`) and pass it
   to litellm as a parameter. This channel never writes `os.environ`, so it is
   unreachable from any subprocess.
 
@@ -41,7 +42,7 @@ Consequences of this reframing:
 - A generic, vendor-neutral `model_api` runtime adapter (native, no-tools, no-file
   sandbox, `credential_mode=model_provider_api_key`) is sanctioned and may select any
   configured `ModelProvider` + model, Anthropic included. It must obey the invariant:
-  resolve via `resolve_provider_api_key`, pass as a litellm parameter, never via env.
+  resolve via `resolveProviderApiKey`, pass as a litellm parameter, never via env.
 
 ## Retained invariants (unchanged from 0009)
 
@@ -51,7 +52,8 @@ Consequences of this reframing:
 - No ambient `ANTHROPIC_API_KEY` fallback for CLI runtime execution.
 - `build_subprocess_env` allowlist is the enforcement point keeping CLI subprocess
   environments clean. Canonical runtime adapters must not read `ANTHROPIC_API_KEY` from
-  ambient env/settings (guarded by `tests/unit/test_anthropic_policy.py`).
+  ambient env/settings (guarded by provider/runtime adapter tests such as
+  `server/test/runVendorCliAdapter.test.ts` and `server/test/providersCredentialsAuthority.test.ts`).
 - The runtime adapter standard stays vendor-neutral; vendor CLI support is
   RuntimeAdapterSpec data, not Agent/provider foundation code.
 

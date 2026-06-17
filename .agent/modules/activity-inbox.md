@@ -1,7 +1,7 @@
 # Module: Activity Inbox
 
 ## Status
-**IMPLEMENTED** — model, service, and API routes live in `app/activity/`.
+**IMPLEMENTED** — model, service, and API routes live in `server/src/modules/activity/`.
 
 ## Purpose
 Raw-input intake layer (L0). Everything entering the system lands as an `ActivityRecord` first — never directly as memory. External input must enter Activity before it can become memory.
@@ -70,10 +70,9 @@ raw input → ActivityRecord (status=raw, source_trust assigned)
 - Consolidation is idempotent: duplicate proposals are blocked by `proposal_dedupe_key`
 
 ## Related Files
-- `backend/app/models.py`
-- `backend/app/activity/service.py`
-- `backend/app/activity/api.py`
-- `backend/app/memory/consolidation/service.py`
+- `server/migrations/`
+- `server/src/modules/activity/`
+- `server/src/modules/memory/`
 - `apps/web/src/modules/activity/ActivityInboxPage.tsx`
 
 ## Related Decisions

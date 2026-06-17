@@ -30,7 +30,7 @@ FROM base AS dev
 
 EXPOSE 5173
 
-# CONTROL_PLANE_API_URL is injected by docker-compose (http://control-plane:8010)
+# The Vite proxy defaults to http://server:8010 inside the compose network.
 CMD ["node_modules/.bin/vite"]
 
 # ---- build: produce the static production bundle --------------------------

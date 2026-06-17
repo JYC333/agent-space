@@ -30,11 +30,12 @@ security-access:
     - .agent/BOUNDARIES.md
     - .agent/modules/policy.md
   code_roots:
-    - backend/app/policy
-    - backend/app/auth
-    - backend/app/memory/context_builder.py
-    - backend/tests/invariants
-    - backend/tests/contracts
+    - server/src/modules/policy
+    - server/src/modules/auth
+    - server/src/modules/memory
+    - server/src/modules/context
+    - server/test
+    - packages/protocol/src
 
 backend-domain:
   docs:
@@ -47,9 +48,10 @@ backend-domain:
     - .agent/architecture/POLICY_ENFORCEMENT_INVENTORY.md
     - .agent/architecture/SECURITY_AND_ACCESS_BOUNDARIES.md
   code_roots:
-    - backend/app/models.py
-    - backend/app/schemas.py
-    - backend/app/modules/registry.py
+    - server/migrations
+    - server/src/modules
+    - server/src/gateway/routeRegistry.ts
+    - packages/protocol/src
 
 frontend-product:
   docs:
@@ -79,10 +81,13 @@ runtime-agent:
     - .agent/decisions/0004-context-wrapper.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - backend/app/agents
-    - backend/app/workspace/sandbox_manager.py
-    - backend/tests/invariants/test_agent_version_immutability.py
-    - backend/tests/workflows/test_run_execution_workflow.py
+    - server/src/modules/agents
+    - server/src/modules/runs
+    - server/src/modules/runtimeAdapters
+    - server/src/modules/runtimeHost
+    - server/src/modules/workspaces
+    - server/test/runOrchestrationService.test.ts
+    - server/test/runsWorkerRuntime.test.ts
 
 memory-activity-proposal:
   docs:
@@ -96,13 +101,12 @@ memory-activity-proposal:
     - .agent/decisions/0003-memory-proposal-flow.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - backend/app/memory
-    - backend/app/activity
-    - backend/app/proposals
-    - backend/tests/contracts/test_memory_api.py
-    - backend/tests/invariants/test_memory_proposal_boundary.py
-    - backend/tests/unit/test_memory_store_get_for_space.py
-    - backend/tests/workflows/test_activity_to_memory_workflow.py
+    - server/src/modules/memory
+    - server/src/modules/activity
+    - server/src/modules/proposals
+    - server/src/modules/context
+    - server/test/frontendSupport.test.ts
+    - server/test/runMaterializationService.test.ts
 
 workspace-artifact:
   docs:
@@ -114,9 +118,10 @@ workspace-artifact:
     - .agent/decisions/0004-context-wrapper.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - backend/app/workspace
-    - backend/app/artifacts
-    - backend/app/runtimes/adapters/cli_runtime.py
+    - server/src/modules/workspaces
+    - server/src/modules/artifacts
+    - server/src/modules/runs
+    - server/src/modules/runtimeAdapters
     - sandbox
 
 local-first-compatibility:
@@ -127,7 +132,8 @@ local-first-compatibility:
     - .agent/modules/client-server-protocol.md
     - .agent/architecture/PRODUCT_AND_BOUNDARIES.md
   code_roots:
-    - backend/app/models.py   # UUID PKs and sync-relevant columns
+    - server/migrations   # UUID PKs and sync-relevant columns
+    - packages/protocol/src
 
 # ---------------------------------------------------------------------------
 # Detailed domain-specific bundles (use when the primary bundle is too broad)
@@ -141,12 +147,10 @@ memory:
     - .agent/decisions/0003-memory-proposal-flow.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - backend/app/memory
-    - backend/app/activity
-    - backend/tests/contracts/test_memory_api.py
-    - backend/tests/invariants/test_memory_proposal_boundary.py
-    - backend/tests/unit/test_memory_store_get_for_space.py
-    - backend/tests/workflows/test_activity_to_memory_workflow.py
+    - server/src/modules/memory
+    - server/src/modules/activity
+    - server/src/modules/context
+    - server/test/frontendSupport.test.ts
 
 agents:
   docs:
@@ -157,18 +161,18 @@ agents:
     - .agent/decisions/0007-plugin-module-architecture.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - backend/app/agents
-    - backend/app/modules/registry.py
-    - backend/app/workspace/sandbox_manager.py
-    - backend/tests/invariants/test_agent_version_immutability.py
-    - backend/tests/workflows/test_run_execution_workflow.py
+    - server/src/modules/agents
+    - server/src/modules/runs
+    - server/src/modules/workspaces
+    - server/src/gateway/routeRegistry.ts
+    - server/test/runOrchestrationService.test.ts
 
 policy:
   docs:
     - .agent/modules/policy.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - backend/app/policy
+    - server/src/modules/policy
 
 capability:
   docs:
@@ -177,19 +181,19 @@ capability:
     - .agent/BOUNDARIES.md
   code_roots:
     - catalog/capabilities
-    - backend/app/capabilities
-    - backend/tests/invariants/test_runtime_provider_separation.py
+    - server/src/modules/catalog
+    - server/src/modules/runtimeAdapters
+    - server/test/runtimeHost.test.ts
 
 proposals:
   docs:
     - .agent/modules/proposals.md
     - .agent/decisions/0003-memory-proposal-flow.md
   code_roots:
-    - backend/app/proposals
-    - backend/app/memory
-    - backend/app/memory/reflector.py
-    - backend/tests/contracts/test_general_proposal_api.py
-    - backend/tests/invariants/test_proposal_approval_boundary.py
+    - server/src/modules/proposals
+    - server/src/modules/memory
+    - server/src/modules/tasks
+    - server/test/runMaterializationService.test.ts
 
 sandbox:
   docs:
@@ -197,18 +201,19 @@ sandbox:
     - .agent/modules/context-compiler.md
     - .agent/decisions/0004-context-wrapper.md
   code_roots:
-    - backend/app/workspace
-    - backend/app/runtimes/adapters/cli_runtime.py
+    - server/src/modules/workspaces
+    - server/src/modules/runtimeAdapters
+    - server/src/modules/runs
     - sandbox
 
-workspace_console:
+workspace-console:
   docs:
     - .agent/modules/workspace-console.md
     - .agent/modules/git-diff-review.md
     - .agent/modules/sandbox.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - backend/app/workspace
+    - server/src/modules/workspaces
     - apps/web/src/modules/workspace    # TODO: not yet created
 
 activity:
@@ -218,8 +223,8 @@ activity:
     - .agent/modules/assistant-capture.md
     - .agent/decisions/0003-memory-proposal-flow.md
   code_roots:
-    - backend/app/activity
-    - backend/app/models.py
+    - server/src/modules/activity
+    - server/migrations
 
 knowledge:
   docs:
@@ -228,7 +233,7 @@ knowledge:
     - .agent/modules/proposals.md
     - .agent/decisions/0007-plugin-module-architecture.md
   code_roots:
-    - backend/app/knowledge
+    - server/src/modules/knowledge
     - apps/web/src/modules/knowledge/KnowledgePage.tsx   # stub exists
 
 cards:
@@ -239,7 +244,7 @@ cards:
     - .agent/modules/proposals.md
     - .agent/decisions/0007-plugin-module-architecture.md
   code_roots:
-    - backend/app/cards            # TODO: not yet created
+    - server/migrations     # card tables when this surface is implemented
     - apps/web/src/modules/cards/CardReviewPage.tsx   # stub exists
 
 assistant:
@@ -248,8 +253,9 @@ assistant:
     - .agent/modules/activity-inbox.md
     - .agent/modules/memory.md
   code_roots:
-    - backend/app/agents
-    - backend/app/memory/context_builder.py
+    - server/src/modules/agents
+    - server/src/modules/context
+    - server/src/modules/memory
 
 run:
   docs:
@@ -259,10 +265,10 @@ run:
     - .agent/modules/agents.md
     - .agent/modules/proposals.md
   code_roots:
-    - backend/app/agents/runner.py
-    - backend/app/models.py
-    - backend/app/schemas.py
-    - backend/app/memory/context_builder.py
+    - server/src/modules/runs
+    - server/src/modules/agents
+    - server/src/modules/context
+    - packages/protocol/src
 
 runtime_status:
   docs:
@@ -270,8 +276,10 @@ runtime_status:
     - .agent/modules/product-shell.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - backend/app/main.py
-    - backend/app/agents/runner.py
+    - server/src/index.ts
+    - server/src/server.ts
+    - server/src/modules/system
+    - server/src/modules/runs
 
 sync:
   docs:
@@ -279,7 +287,8 @@ sync:
     - .agent/modules/client-server-protocol.md
     - .agent/modules/mobile-client.md
   code_roots:
-    - backend/app/models.py
+    - server/migrations
+    - packages/protocol/src
 
 mobile:
   docs:
@@ -299,8 +308,9 @@ module_registry:
     - .agent/decisions/0007-plugin-module-architecture.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - backend/app/modules/registry.py
-    - backend/app/main.py
+    - server/src/gateway/routeRegistry.ts
+    - server/src/server.ts
+    - server/src/modules
     - apps/web/src/modules/registry.ts
     - apps/web/src/core/Shell.tsx
     - apps/web/src/App.tsx
@@ -310,10 +320,10 @@ credentials:
     - .agent/modules/credentials.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - backend/app/credentials/
-    - backend/app/runtimes/
-    - backend/app/runs/execution.py
-    - backend/app/workspace/sandbox_manager.py
+    - server/src/modules/providers
+    - server/src/modules/runtimeHost
+    - server/src/modules/runs
+    - server/src/modules/workspaces
 
 runtime_tools:
   docs:
@@ -321,9 +331,9 @@ runtime_tools:
     - .agent/decisions/0008-multi-cli-mvp.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - backend/app/runtimes/
-    - backend/app/runs/
-    - control-plane/src/modules/runtimeTools/
+    - server/src/modules/runtimeAdapters/
+    - server/src/modules/runs/
+    - server/src/modules/runtimeTools/
     - apps/web/src/modules/runtime_tools/
 
 deployment:
@@ -333,8 +343,8 @@ deployment:
     - .agent/BOUNDARIES.md
   code_roots:
     - deployer/
-    - backend/app/deployment/
-    - backend/app/models.py
+    - server/src/modules/deployment/
+    - server/migrations
 
 space:
   docs:
@@ -342,6 +352,7 @@ space:
     - .agent/decisions/0001-space-model.md
     - .agent/BOUNDARIES.md
   code_roots:
-    - backend/app/models.py
-    - backend/app/config.py
-    - backend/app/memory/context_builder.py
+    - server/migrations
+    - server/src/config.ts
+    - server/src/modules/spaces
+    - server/src/modules/context

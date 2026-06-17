@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drop and recreate the PostgreSQL database, then run Alembic migrations.
+# Drop the PostgreSQL database, then run server migrations.
 # WARNING: This destroys ALL data in the target database.
 #
 # Usage (Docker Compose dev environment):
@@ -28,7 +28,7 @@ done
 
 local_compose_init "$MODE"
 local_compose_ensure_mode_env_file
-local_compose_ensure_control_plane_ts_authority_env
+local_compose_ensure_server_database_env
 
 PGDB="$(local_compose_setting_or_default POSTGRES_DB agent_space)"
 PGUSER="$(local_compose_setting_or_default POSTGRES_USER agent_space)"
@@ -64,13 +64,13 @@ require_app_services_stopped() {
 
   echo "ERROR: app service(s) still running for mode '$MODE': ${running[*]}" >&2
   echo "       Stop app services first; reset will manage postgres as needed." >&2
-  echo "       $COMPOSE_HINT stop frontend control-plane backend deployer" >&2
+  echo "       $COMPOSE_HINT stop frontend server deployer" >&2
   exit 1
 }
 
 trap 'local_compose_stop_postgres_if_started "reset"' EXIT
 
-require_app_services_stopped frontend control-plane backend deployer
+require_app_services_stopped frontend server deployer
 
 echo "WARNING: This will destroy ALL data in '$PGDB' (mode: $MODE)."
 read -r -p "Type 'yes' to continue: " confirm
@@ -92,18 +92,14 @@ echo "Dropping database '$PGDB'..."
 "${COMPOSE[@]}" exec -T postgres \
   psql -U "$PGUSER" -d postgres -c "DROP DATABASE IF EXISTS \"$PGDB\";"
 
-echo "Creating database '$PGDB'..."
-"${COMPOSE[@]}" exec -T postgres \
-  psql -U "$PGUSER" -d postgres -c "CREATE DATABASE \"$PGDB\";"
-
-echo "Running Alembic migrations (Docker-native, inside the backend container)..."
+echo "Running server migrations (Docker-native, inside a one-shot server container)..."
 # Use the docker-native migration path: it connects to the in-network `postgres`
-# service, so the freshly created DB is always migrated even though Postgres is
-# not published to the host. If migration fails, surface it loudly — the DB must
-# never be left dropped/created but unmigrated.
+# service and creates the target database if it is missing, so the DB is always
+# migrated even though Postgres is not published to the host. If migration fails,
+# surface it loudly — the DB must never be left dropped/created but unmigrated.
 if ! "$REPO_ROOT/ops/scripts/db/migrate.sh" --mode "$MODE"; then
-  echo "ERROR: database was dropped and recreated but Alembic migration FAILED." >&2
-  echo "       The database is now EMPTY and unmigrated. Re-run:" >&2
+  echo "ERROR: database was dropped but server migration FAILED." >&2
+  echo "       The database may now be missing or EMPTY and unmigrated. Re-run:" >&2
   echo "       ops/scripts/db/migrate.sh --mode $MODE" >&2
   exit 1
 fi

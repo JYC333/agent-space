@@ -52,11 +52,9 @@ describe("index smoke import", () => {
     expect(protocol.RuntimeHostExecuteResponseSchema).toBeDefined();
     expect(protocol.ProposalOutSchema).toBeDefined();
     expect(protocol.ProposalAcceptOutSchema).toBeDefined();
-    expect(protocol.ProposalPythonPortManifestResponseSchema).toBeDefined();
     expect(protocol.SessionOutSchema).toBeDefined();
     expect(protocol.MessageOutSchema).toBeDefined();
     expect(protocol.MemoryOutSchema).toBeDefined();
-    expect(protocol.Stage6PythonPortManifestResponseSchema).toBeDefined();
   });
 
   it("exposes stable value sets", () => {

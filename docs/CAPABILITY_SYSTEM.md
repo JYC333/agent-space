@@ -9,7 +9,7 @@ It is not just a prompt — it is a folder containing:
 capabilities/<capability-id>/
 ├── capability.yaml     Manifest (required)
 ├── README.md           Human docs (optional)
-├── main.py             Entry module (when using python_module entrypoint)
+├── prompts/            Prompt assets (optional)
 └── tests/              Capability tests (optional)
 ```
 
@@ -23,9 +23,7 @@ description: Parse an intake payload into structured research output
 enabled: false
 
 entrypoint:
-  type: python_module
-  module: capabilities.research_intake.main
-  function: execute
+  type: none
 
 permissions:
   network:
@@ -41,16 +39,22 @@ outputs:
     - research_intake.result.v1
 ```
 
-Only `entrypoint.type: python_module` is executable in the current backend. Shell commands, remote code loading, network/filesystem permissions beyond empty allowlists, and subprocess execution are rejected by the capability runtime.
+Capability manifests are catalog metadata today. `entrypoint.type: none` means
+the capability is discoverable but not directly executable by a capability
+runtime. A future server-native capability executor must be added through
+`server/src/modules/runtimeAdapters` and guarded like any other runtime
+adapter; shell commands, remote code loading, broad filesystem access, and
+subprocess execution remain unsupported.
 
 ## Capability Registry
 
 The `CapabilityRegistry` loads capabilities from two sources:
 
-1. **Builtin** — manifests under `catalog/capabilities/` (bundled with the backend).
+1. **Builtin** — manifests under `catalog/capabilities/` (bundled with the server image).
 2. **External workspace** — manifests under local roots registered on a `capability_library` workspace.
 
-Reload happens on backend startup and on `POST /api/v1/capabilities/reload`.
+Reload happens through the server catalog routes, including
+`POST /api/v1/capabilities/reload`.
 
 ### External workspace discovery
 
@@ -100,11 +104,11 @@ This is not a marketplace or remote install system.
 
 ## Execution
 
-Capability runs use `adapter_type="capability"` on a `Run`. The runtime adapter loads the manifest from the registry, verifies the capability is discovered and enabled, validates entrypoint/permissions, imports the local module, and calls `execute(context)`.
+Capability execution is not active today. `adapter_type="capability"` remains a
+planned runtime adapter type and is disabled by default. Current server routes expose
+capability manifest metadata for catalog and UI use.
 
 ## Related code
 
-- `backend/app/capabilities/registry.py`
-- `backend/app/capabilities/enabled_store.py`
-- `backend/app/capabilities/loader.py`
-- `backend/app/runtimes/adapters/capability.py`
+- `server/src/modules/catalog/`
+- `server/src/modules/runtimeAdapters/specs.ts`

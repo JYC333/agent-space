@@ -6,9 +6,9 @@
 User input
 → Session
 → Context Builder     (retrieves memories, scoped by agent memory policy)
-→ AgentService        (validates policy, prepares agent identity)
-→ RunService          (creates queued Run rows + snapshots)
-→ RunExecutionService (selects adapter, executes, persists outputs)
+→ Agents module       (validates agent identity and config)
+→ Runs module         (creates queued Run rows + snapshots)
+→ RunOrchestrationService (selects adapter, executes, persists outputs)
 → AgentAdapter        (pure execution backend — capability / model_api / claude_code / codex_cli / …)
 → Run record          (output, status, delegation_depth logged)
 → Memory Reflection   (proposals from the MemoryReflector service / memory.reflect capability)
@@ -21,21 +21,21 @@ User input
 
 | Service | Responsibility |
 |---|---|
-| `MemoryStore` | CRUD and query for long-term memories |
-| `ProposalService` | Proposal lifecycle (create, accept, reject) |
-| `MemoryReflector` | Analyze sessions, generate proposals |
-| `ContextBuilder` | Assemble scoped context packages — hard `space_id` + `user_id` boundary |
+| Memory repositories | Read/query long-term memories and serve proposal-backed writes |
+| Proposal service | Proposal lifecycle (create, accept, reject) |
+| Memory reflection | Analyze sessions, generate proposals |
+| Context assembly | Assemble scoped context packages — hard `space_id` + `user_id` boundary |
 | `CapabilityRegistry` | Load, validate, and register capabilities |
 | `SessionService` | Manage sessions and messages |
 | `TaskService` | Track units of agent work |
-| `AgentService` | Agent CRUD + delegation policy enforcement |
-| `RunService` | Create and list queued Runs, link tasks, manage snapshots |
-| `RunExecutionService` | Adapter dispatch, sandbox routing, terminal status updates |
+| Agents module | Agent CRUD + delegation policy enforcement |
+| Runs module | Create and list queued Runs, link tasks, manage snapshots |
+| `RunOrchestrationService` | Adapter dispatch, sandbox routing, terminal status updates |
 | `EvolutionRunService` | Create proposal-first evolution runs, artifacts, and reviewable proposals without direct mutation |
 
 ## Agent kernel vs adapter boundary
 
-`AgentService`, `RunService`, and `RunExecutionService` form the execution stack. Together they own agent identity, memory policy, delegation rules, context assembly, and durable run records.
+The agents module, runs module, and `RunOrchestrationService` form the execution stack. Together they own agent identity, memory policy, delegation rules, context assembly, and durable run records.
 
 `AgentAdapter` subclasses are pure execution backends. They receive a pre-built
 prompt + context snapshot and return a result. They have no DB access, no memory

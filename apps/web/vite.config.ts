@@ -4,10 +4,9 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 // Browser code calls same-origin /api/v1/*; in dev the Vite proxy forwards
-// those requests to the client-facing control-plane entrypoint. API_URL is a
-// deprecated explicit override kept for old local shells, never the default.
-const controlPlaneProxyTarget =
-  process.env.CONTROL_PLANE_API_URL || process.env.API_URL || 'http://localhost:8010'
+// those requests to the server service inside the compose network. API_URL is
+// only a local-shell override; compose does not inject a backend URL.
+const apiProxyTarget = process.env.API_URL || 'http://server:8010'
 
 export default defineConfig({
   plugins: [
@@ -57,7 +56,7 @@ export default defineConfig({
     host: true,  // bind 0.0.0.0 so Docker port mapping works
     proxy: {
       '/api': {
-        target: controlPlaneProxyTarget,
+        target: apiProxyTarget,
         changeOrigin: true,
       },
     },

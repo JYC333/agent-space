@@ -1,10 +1,9 @@
 /**
  * Proposal review contracts.
  *
- * These schemas describe the wire DTOs for the proposal review API and the
- * legacy internal Python proposal port contracts retained until Python backend
- * deletion. Schemas only: route ownership and persistence authority live in the
- * services that register the routes.
+ * These schemas describe the wire DTOs for the proposal review API. Schemas
+ * only: route ownership and persistence authority live in the services that
+ * register the routes.
  */
 
 import { z } from "zod";
@@ -112,43 +111,6 @@ export const ProposalApprovalOutSchema = z
   })
   .passthrough();
 export type ProposalApprovalOut = z.infer<typeof ProposalApprovalOutSchema>;
-
-export const ProposalPythonPortOperationSchema = z.enum([
-  "proposal.accept",
-  "proposal.reject",
-  "proposal.egress_approval",
-  "memory.apply_gate",
-]);
-export type ProposalPythonPortOperation = z.infer<
-  typeof ProposalPythonPortOperationSchema
->;
-
-export const ProposalPythonPortDescriptorSchema = z
-  .object({
-    operation: ProposalPythonPortOperationSchema,
-    owner: z.literal("proposals"),
-    implemented: z.boolean(),
-    auth: z.literal("internal_service_token"),
-    writes: z.array(z.string()).default([]),
-    notes: z.string().nullish(),
-    ...SecretResponseGuards,
-  })
-  .passthrough();
-export type ProposalPythonPortDescriptor = z.infer<
-  typeof ProposalPythonPortDescriptorSchema
->;
-
-export const ProposalPythonPortManifestResponseSchema = z
-  .object({
-    service: z.literal("python_proposals_context_ports"),
-    ports: z.array(ProposalPythonPortDescriptorSchema),
-    generated_at: ISODateTimeSchema,
-    ...SecretResponseGuards,
-  })
-  .passthrough();
-export type ProposalPythonPortManifestResponse = z.infer<
-  typeof ProposalPythonPortManifestResponseSchema
->;
 
 export const ProposalAcceptDispatchRequestSchema = z.object({
   proposal_id: IdSchema,

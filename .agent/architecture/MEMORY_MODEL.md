@@ -39,9 +39,9 @@ Long-lived writes should continue to go through the **proposal → approval** fl
 
 ## Implementation map
 
-- Central rule: `app/memory/read_auth.py` — `can_read_memory`, `user_in_selected_ids`, `summary_only_redact_content`.
-- Serialization / redaction: `app/memory/serialization.py` — `memory_entry_to_out`.
-- Persistence of reads: `app/memory/access_log.py` — `record_memory_access`; ORM `MemoryReadTrace`.
+- Central rule: `server/src/modules/memory/memoryReadAuth.ts` — `canReadMemory`, `userInSelectedIds`, `summaryOnlyRedactContent`.
+- Serialization / redaction: `server/src/modules/memory/repository.ts` — memory row to API output helpers.
+- Persistence of reads: `server/src/modules/memory/repository.ts`; table `memory_access_logs` / protocol type `MemoryReadTrace`.
 
 ## Future work (TODO)
 

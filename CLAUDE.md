@@ -24,9 +24,9 @@ Do not load every `.agent/` document by default. Load only what the task needs.
 Follow this order when docs and code disagree:
 
 1. Code
-2. `backend/app/models.py`
-3. `backend/app/schemas.py`
-4. `backend/app/modules/registry.py`
+2. `server/migrations/`
+3. `server/src/`
+4. `packages/protocol/src/`
 5. `apps/web/src/modules/registry.ts`
 6. [`.agent/BOUNDARIES.md`](.agent/BOUNDARIES.md)
 7. [`.agent/decisions/`](.agent/decisions/)
@@ -41,8 +41,8 @@ change.
   must never be stored in the source repo.
 - `ASPACE_ROOT` is the host-side parent for mode roots (`dev/`, `test/`,
   `prod/`). `AGENT_SPACE_HOME` is the running app instance root.
-- Python remains the migration-period authority for existing business routes
-  unless a documented TS migration stage/ADR explicitly moves ownership.
+- `server/` is the TypeScript backend source root and explicit schema migration
+  owner. The Compose service name remains `server`.
 - Memory writes go through proposal -> approval; agents do not directly write
   active memory.
 - Credentials follow ADR 0010 channel isolation. Do not pass provider API keys

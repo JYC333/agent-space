@@ -5,7 +5,7 @@ Translate a ContextPackage into a CLI-specific instruction file written to the s
 
 ## Owns
 - `ContextCompiler` class, `TargetFormat` enum, `CompiledContext` dataclass
-- Security scanning of all content before inclusion (via `security.py`)
+- Security scanning of all content before inclusion (via `server/src/modules/context/compiler.ts`)
 - Token/character budget enforcement (128k chars default, priority-ordered truncation)
 - Trust label annotation per section (`[system]`, `[user]`, `[workspace]`, etc.)
 - Progressive `.agent/` doc loading (root docs always; module docs when `touched_files` matches)
@@ -55,7 +55,7 @@ ContextCompiler.compile(context, target, task_goal, sandbox_dir,
 
 ## ContextDigest cache layer
 
-`ContextSnapshotPopulator` tries to load active `ContextDigest` rows before rendering the stable prefix.
+`ContextPrepareService` tries to load active `ContextDigest` rows before rendering the stable prefix.
 
 - When active digests exist (policy_bundle / workspace / agent), their rendered content is injected as `[digest:<type>:v<N>]` blocks in `stable_prefix`, replacing direct policy/memory rendering for those sections.
 - If no active digest exists for a scope, the populator falls back to direct `MemoryRetriever` behaviour (MF5 path).
@@ -72,18 +72,17 @@ ContextCompiler.compile(context, target, task_goal, sandbox_dir,
 
 ## Invariants
 - Vendor files are never written to the real workspace
-- Changes agents make to generated files do not propagate to MemoryStore
+- Changes agents make to generated files do not propagate to active memory
 - Compiled content (prefix + tail) is stored in `ContextSnapshot` columns for audit
 - Snapshot population failure blocks adapter execution
 - Missing digest never blocks execution; populator falls back gracefully
 
 ## Related Files
-- `backend/app/memory/context_compiler.py`
-- `backend/app/memory/context_builder.py`
-- `backend/app/memory/digest_service.py` — `ContextDigestService`
-- `backend/app/memory/security.py`
-- `backend/app/models.py` — `ContextSnapshot`, `ContextDigest`
-- `backend/app/runs/context_snapshot_populator.py`
+- `server/src/modules/context/compiler.ts`
+- `server/src/modules/context/prepareService.ts`
+- `server/src/modules/memory/` — memory read auth and context logs
+- `server/migrations/` — `ContextSnapshot`, `ContextDigest`
+- `server/src/modules/runs/` — run context preparation integration
 - `.agent/context-bundles.yaml`
 
 ## Related Decisions

@@ -54,7 +54,7 @@ Rules:
 ## 3. Object Visibility
 
 The visibility values `private`, `restricted`, and `space_shared` are enforced by
-`can_read_scoped_object()` (`visibility/auth.py`). Unknown visibility values fail closed
+server module read-authority helpers. Unknown visibility values fail closed
 (return False). Enforcement must be applied at:
 
 - list endpoints
@@ -136,8 +136,8 @@ Additional invariants:
 - Unsupported proposal types (`task_create`, `plan_create`, and any unknown
   type) raise `UnsupportedProposalTypeError` and leave the proposal in `pending` status.
   The fail-closed behavior is tested.
-- Memory writes require policy/proposal gating: `MemoryStore` has no bypass path (no
-  `direct_write()` equivalent accessible without policy enforcement).
+- Memory writes require policy/proposal gating: there is no public direct-write
+  active-memory path accessible without policy enforcement.
 - `MemoryProposalApplier.apply_create()` and `apply_update()` block grant-derived proposals
   from applying to non-personal target spaces without prior egress approval.
 
@@ -214,8 +214,8 @@ throughout.
 
 ## 10. Workspace and Artifact Path Safety
 
-**Workspace file access** (`workspace_console/api.py`):
-- `PathPolicy` (`workspace/path_policy.py`) is enforced before any disk access.
+**Workspace file access** (`server/src/modules/workspaces/routes.ts`):
+- `PathPolicy` (`server/src/modules/workspaces/pathPolicy.ts`) is enforced before any disk access.
 - `workspace.read` policy is enforced before tree/file/status/diff reads.
 - system_core, external-root, protected/restricted, full-diff, and secret-like
   path reads force a durable `PolicyDecisionRecord`.
@@ -228,11 +228,10 @@ throughout.
 - Forbidden write suffixes: `.py`, `.sh`, `.bash`, `.zsh`, `.fish`.
 - Paths resolved to absolute before validation; no symlink race conditions.
 
-**Artifact export** (`artifacts/service.py — resolve_stored_file()`):
-- `candidate.relative_to(artifact_storage_root)` — paths escaping the root return None.
-- Paths resolving into `sandbox_root` are also rejected.
-- `ArtifactReadService.get()` with `user_id` is called to verify space and visibility
-  before the path is resolved.
+**Artifact export** (`server/src/modules/artifacts/` and run artifact materialization):
+- paths escaping the artifact storage root return no file.
+- Paths resolving into sandbox roots are rejected.
+- Artifact read checks verify space and visibility before a stored file is resolved.
 
 ---
 

@@ -1,7 +1,7 @@
 # Module: Activity
 
 ## Status
-**IMPLEMENTED** — see `app/activity/` and `modules/activity-inbox.md` for full detail.
+**IMPLEMENTED** — see `server/src/modules/activity/` and `modules/activity-inbox.md` for full detail.
 
 ## Purpose
 Intake boundary for raw inputs. Nothing bypasses this layer into active memory.
@@ -30,9 +30,8 @@ ActivityRecord:
 - `source_activity_id` set on all derived `memory_update` proposals
 
 ## Related Files
-- `backend/app/activity/service.py`
-- `backend/app/activity/api.py`
-- `backend/app/models.py`
+- `server/src/modules/activity/`
+- `server/migrations/`
 
 ## Related Decisions
 - [0003-memory-proposal-flow.md](../decisions/0003-memory-proposal-flow.md)

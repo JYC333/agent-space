@@ -1,14 +1,13 @@
 /**
- * Stage 6 memory + sessions migration contracts.
+ * Memory + sessions contracts.
  *
- * Schemas only. These contracts describe the current Python-owned wire shapes
- * and the temporary service-authenticated ports TS can call during migration.
- * They do not create route handlers or move authority.
+ * Schemas only. These contracts describe public wire shapes. They do not create
+ * route handlers or move authority.
  */
 
 import { z } from "zod";
 import { IdSchema, ISODateTimeSchema, SecretResponseGuards } from "./common.js";
-import { SecretFreeJsonSchema, TraceSafeJsonSchema } from "./runOrchestration.js";
+import { TraceSafeJsonSchema } from "./runOrchestration.js";
 
 const JsonObjectSchema = z.record(z.unknown());
 const TraceSafeObjectSchema = TraceSafeJsonSchema.refine(
@@ -159,13 +158,9 @@ export type ChatTurnPrepareRunResult = z.infer<
 >;
 
 /**
- * Stage 6 slice 4 (context assembly, chat path). When
- * `CONTROL_PLANE_CONTEXT_AUTHORITY=ts`, the TS chat turn owns the
- * `ChatContextBuilder` selection/budget loop and `context_snapshots` /
- * `context_snapshot_items` persistence. Reads of the candidate source tables
- * (memory/knowledge/source/activity/workspace/project) still belong to
- * not-yet-flipped contexts, so TS sources per-source candidates through the
- * Python `context-candidates` read port and only applies the cumulative budget.
+ * Context assembly for the chat path. The server chat turn owns the
+ * `ChatContextBuilder` selection/budget loop, candidate reads, and
+ * `context_snapshots` / `context_snapshot_items` persistence.
  */
 export const ChatContextCandidateItemSchema = z
   .object({
@@ -372,7 +367,7 @@ export type MemoryProposalCreateResult = z.infer<
 >;
 
 /**
- * Stage 6 slice 5 (memory read). Public `POST /memory/search` body. `space_id`/
+ * Public `POST /memory/search` body. `space_id`/
  * `user_id` override the caller's identity; `type` is the wire name for
  * `memory_type`. `include_system` is an opt-in: by default the user-facing
  * search hides `scope=system` seed memories (system policy rows) so they do not
@@ -617,87 +612,3 @@ export const ContextEngineEventSchema = z
   })
   .passthrough();
 export type ContextEngineEvent = z.infer<typeof ContextEngineEventSchema>;
-
-export const Stage6PythonPortOperationSchema = z.enum([
-  "session_summary.get_latest",
-  "context.build",
-  "memory.read",
-  "memory.proposal_create",
-]);
-export type Stage6PythonPortOperation = z.infer<
-  typeof Stage6PythonPortOperationSchema
->;
-
-export const Stage6PythonPortOwnerSchema = z.enum([
-  "sessions",
-  "memory_context",
-  "memory",
-]);
-export type Stage6PythonPortOwner = z.infer<typeof Stage6PythonPortOwnerSchema>;
-
-export const Stage6PythonPortErrorCodeSchema = z.enum([
-  "unauthorized_internal_port",
-  "stage6_port_not_implemented",
-  "stage6_port_invalid_request",
-  "stage6_port_invalid_response",
-  "session_summary_not_found",
-  "context_build_failed",
-  "memory_read_failed",
-  "memory_proposal_create_failed",
-]);
-export type Stage6PythonPortErrorCode = z.infer<
-  typeof Stage6PythonPortErrorCodeSchema
->;
-
-export const Stage6PythonPortDescriptorSchema = z
-  .object({
-    operation: Stage6PythonPortOperationSchema,
-    owner: Stage6PythonPortOwnerSchema,
-    implemented: z.boolean(),
-    auth: z.literal("internal_service_token"),
-    error_codes: z.array(Stage6PythonPortErrorCodeSchema),
-    writes: z.array(z.string()).default([]),
-    notes: z.string().nullish(),
-    ...SecretResponseGuards,
-  })
-  .passthrough();
-export type Stage6PythonPortDescriptor = z.infer<
-  typeof Stage6PythonPortDescriptorSchema
->;
-
-export const Stage6PythonPortManifestResponseSchema = z
-  .object({
-    service: z.literal("python_stage6_context_ports"),
-    ports: z.array(Stage6PythonPortDescriptorSchema),
-    generated_at: ISODateTimeSchema,
-    ...SecretResponseGuards,
-  })
-  .passthrough();
-export type Stage6PythonPortManifestResponse = z.infer<
-  typeof Stage6PythonPortManifestResponseSchema
->;
-
-export const Stage6PythonPortRequestSchema = z.object({
-  operation: Stage6PythonPortOperationSchema,
-  space_id: IdSchema,
-  user_id: IdSchema.nullish(),
-  payload_json: SecretFreeJsonSchema.default({}),
-});
-export type Stage6PythonPortRequest = z.infer<
-  typeof Stage6PythonPortRequestSchema
->;
-
-export const Stage6PythonPortResponseSchema = z
-  .object({
-    operation: Stage6PythonPortOperationSchema,
-    owner: Stage6PythonPortOwnerSchema,
-    status: z.enum(["succeeded", "failed", "not_implemented"]),
-    error_code: Stage6PythonPortErrorCodeSchema.nullish(),
-    message: z.string().nullish(),
-    result_json: TraceSafeJsonSchema.default({}),
-    ...SecretResponseGuards,
-  })
-  .passthrough();
-export type Stage6PythonPortResponse = z.infer<
-  typeof Stage6PythonPortResponseSchema
->;

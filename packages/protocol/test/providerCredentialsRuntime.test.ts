@@ -91,7 +91,8 @@ describe("provider and credential runtime contracts", () => {
         actions: ["retry_same_key_once", "rotate_key"],
       }),
     ).toBeDefined();
-    expect(ProviderCredentialsAuthoritySchema.parse("ts")).toBe("ts");
+    expect(ProviderCredentialsAuthoritySchema.parse("server")).toBe("server");
+    expect(() => ProviderCredentialsAuthoritySchema.parse("python")).toThrow();
   });
 
   it("accepts the auxiliary-task name on the completion port", () => {

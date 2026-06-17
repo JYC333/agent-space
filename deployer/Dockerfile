@@ -2,7 +2,7 @@
 #
 # Runs as a sidecar container in the Compose stack.
 # This is the ONLY container with Docker socket access for deployment purposes.
-# The backend uses Docker socket separately for sandbox runs.
+# The server does not receive Docker socket access.
 #
 # Responsibilities: receive approved deploy jobs via Unix socket, run whitelisted
 # scripts (rebuild/restart/health_check), return result.
@@ -30,11 +30,11 @@ COPY scripts/ ./scripts/
 RUN chmod +x scripts/*.sh
 
 # /repo — repo root mounted by docker-compose.yml (needed by deploy scripts)
-# /aspace/run — shared with backend for Unix socket
+# /aspace/run — shared with server for Unix socket
 ENV DEPLOYER_SOCKET=/aspace/run/deployer.sock
 ENV REPO_ROOT=/repo
 
-# Non-root user matching backend (uid 1000) so socket files are accessible to both
+# Non-root user matching server (uid 1000) so socket files are accessible to both
 RUN useradd -m -u 1000 deployer && chown -R deployer /deployer
 RUN mkdir -p /aspace/run && chown deployer:deployer /aspace
 USER deployer

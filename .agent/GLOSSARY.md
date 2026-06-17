@@ -32,7 +32,7 @@ Produced by a Run: Activities (via source_run_id), Artifacts (via run_id), Propo
 **Activity**
 Raw input or event. Source types: `user_input`, `imported_chat`, `web_capture`, `file_import`,
 `agent_run`, `task_log`, `manual`. Never becomes active memory directly — flows through
-proposals first. `app/activity/`.
+proposals first. `server/src/modules/activity/`.
 
 **Artifact**
 Persistent output of an agent run: file, diff, log, report. Survives sandbox cleanup

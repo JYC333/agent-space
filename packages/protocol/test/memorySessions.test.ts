@@ -32,12 +32,9 @@ import {
   SessionSummaryForContextSchema,
   SessionSummaryGetLatestRequestSchema,
   SessionSummaryGetLatestResultSchema,
-  Stage6PythonPortManifestResponseSchema,
-  Stage6PythonPortRequestSchema,
-  Stage6PythonPortResponseSchema,
 } from "../src/index";
 
-describe("Stage 6 memory + sessions contracts", () => {
+describe("memory + sessions contracts", () => {
   const memory = {
     id: "memory-1",
     space_id: "space-1",
@@ -447,58 +444,6 @@ describe("Stage 6 memory + sessions contracts", () => {
         created_at: "2026-06-14T10:00:00.000Z",
       }),
     ).toThrow();
-  });
-
-  it("describes temporary Python Stage 6 ports", () => {
-    const manifest = Stage6PythonPortManifestResponseSchema.parse({
-      service: "python_stage6_context_ports",
-      generated_at: "2026-06-14T10:00:00.000Z",
-      ports: [
-        {
-          operation: "session_summary.get_latest",
-          owner: "sessions",
-          implemented: true,
-          auth: "internal_service_token",
-          error_codes: ["session_summary_not_found"],
-          writes: [],
-        },
-        {
-          operation: "context.build",
-          owner: "memory_context",
-          implemented: false,
-          auth: "internal_service_token",
-          error_codes: ["stage6_port_not_implemented"],
-          writes: ["context_snapshots", "memory_access_logs"],
-        },
-      ],
-    });
-    expect(manifest.ports[0].operation).toBe("session_summary.get_latest");
-  });
-
-  it("parses Stage 6 port request and response envelopes", () => {
-    expect(
-      Stage6PythonPortRequestSchema.parse({
-        operation: "session_summary.get_latest",
-        space_id: "space-1",
-        payload_json: { session_id: "session-1" },
-      }).payload_json,
-    ).toEqual({ session_id: "session-1" });
-
-    const response = Stage6PythonPortResponseSchema.parse({
-      operation: "session_summary.get_latest",
-      owner: "sessions",
-      status: "succeeded",
-      result_json: {
-        summary: {
-          id: "summary-1",
-          session_id: "session-1",
-          version: 1,
-          summary_text: "Session summary.",
-          condenser_version: "pattern.v1",
-        },
-      },
-    });
-    expect(response.status).toBe("succeeded");
   });
 
   it("parses chat context-candidate port request and result", () => {

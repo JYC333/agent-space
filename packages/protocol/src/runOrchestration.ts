@@ -1,8 +1,8 @@
 /**
  * Run orchestration contracts.
  *
- * These schemas describe the Stage 4 boundary for TypeScript-owned run
- * orchestration. They are contracts only: no route registration, queue worker,
+ * These schemas describe server-owned run orchestration. They are contracts
+ * only: no route registration, queue worker,
  * database repository, policy decision, credential release, or adapter execution
  * authority lives in this package.
  */

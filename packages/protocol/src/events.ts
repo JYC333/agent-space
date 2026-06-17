@@ -4,8 +4,8 @@
  * An event describes something that already happened, server-side. These schemas
  * define the *shape* of such a notification on the wire. This package provides
  * **no** publisher, subscriber, transport, or dispatch — only the message
- * contract. Events originate from the Python authority; a future TS gateway or
- * client may carry them, but none is implemented here.
+ * contract. Event transport is owned by the backend/client surface that adopts
+ * these schemas.
  *
  * Each event is the generic {@link EventEnvelopeSchema} narrowed to a literal
  * `type` and a concrete `payload`. Payloads embed the DTOs from `schemas.ts`.
