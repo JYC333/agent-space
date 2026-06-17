@@ -1,8 +1,9 @@
 """Contract: session summary context seam.
 
-Stage 6 migrates memory + sessions together. Until the authority moves, memory
-context assembly should depend on a narrow sessions-owned port rather than the
-concrete ``sessions.condenser`` internals.
+Memory/context code depends on a narrow sessions-owned port rather than the
+concrete ``sessions.condenser`` internals. The facade now resolves to the
+TypeScript control-plane session-summary port; the Python condenser remains a
+local implementation class for summary generation.
 """
 
 from __future__ import annotations
@@ -58,8 +59,7 @@ def test_session_summary_port_is_reexported_from_facade():
     assert FromFacade is FromModule
 
 
-def test_session_summary_port_returns_context_safe_dto(db, cross_space_pair_db, monkeypatch):
-    monkeypatch.delenv("CONTROL_PLANE_SESSIONS_AUTHORITY", raising=False)
+def test_python_condenser_returns_context_safe_dto(db, cross_space_pair_db):
     space_id = cross_space_pair_db["space_a_id"]
     user_id = cross_space_pair_db["user_a"].id
     other_space_id = cross_space_pair_db["space_b_id"]
@@ -73,7 +73,7 @@ def test_session_summary_port_returns_context_safe_dto(db, cross_space_pair_db, 
     )
     SessionCondenser(db).condense(session.id, space_id, user_id=user_id)
 
-    port = get_session_summary_port(db)
+    port = SessionCondenser(db)
     summary = port.get_latest_for_context(session.id, space_id)
 
     assert isinstance(summary, SessionSummaryForContext)
@@ -84,9 +84,7 @@ def test_session_summary_port_returns_context_safe_dto(db, cross_space_pair_db, 
     assert port.get_latest_for_context(session.id, other_space_id) is None
 
 
-def test_session_summary_port_resolves_to_control_plane_when_flipped(db, monkeypatch):
-    monkeypatch.setenv("CONTROL_PLANE_SESSIONS_AUTHORITY", "ts")
-
+def test_session_summary_port_resolves_to_control_plane(db):
     assert isinstance(get_session_summary_port(db), ControlPlaneSessionSummaryPort)
 
 

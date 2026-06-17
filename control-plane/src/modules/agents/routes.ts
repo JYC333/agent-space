@@ -3,24 +3,33 @@ import type { RunJobResult } from "@agent-space/protocol" with { "resolution-mod
 import type { ModuleContext } from "../../gateway/routeRegistry";
 import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
-import { introspectIdentity } from "../providers/identity";
+import { introspectIdentity } from "../auth/identity";
 import { loadProtocol } from "../providers/protocolRuntime";
 import { PgSessionRepository } from "../sessions/repository";
-import { PgRunRepository, type RunChatResultRecord } from "../runs/repository";
+import {
+  PgRunRepository,
+  RunCreateValidationError,
+  type RunChatResultRecord,
+} from "../runs/repository";
 import { RunOrchestrationService } from "../runs/orchestrationService";
 import { RunPythonContextPortClient } from "../runs/pythonContextPorts";
 import { RunMaterializationService } from "../runs/materializationService";
 import { sharedCliProcessRegistry } from "../runs/processRegistry";
+import { runToOut } from "../runs/runReadModel";
+import { PgCodePatchCollector, PgWorkspaceManager } from "../workspaces";
 import { PgContextSnapshotRepository } from "../memory/contextSnapshotRepository";
-import { PgAgentChatRepository } from "./repository";
 import {
-  ChatTurnPreparationClient,
-  ChatTurnPreparationError,
-} from "./pythonChatTurnPrep";
+  HttpError,
+  parsePage,
+  query as routeQuery,
+  sendRouteError,
+} from "../routeUtils/common";
+import { PgAgentChatRepository, PgAgentRepository } from "./repository";
 import {
-  ChatContextPortClient,
-  ChatContextPortError,
-} from "./pythonChatContextPorts";
+  ChatContextCandidateCollector,
+  ChatContextError,
+  ContextPrepareService,
+} from "../context";
 import {
   buildChatContext,
   composeChatPrompt,
@@ -32,17 +41,29 @@ const MAX_MESSAGE_CHARS = 8000;
 interface AgentChatServices {
   agents: Pick<PgAgentChatRepository, "getAgentForChat">;
   sessions: Pick<PgSessionRepository, "getSession" | "createSession" | "addMessage">;
-  runs: Pick<PgRunRepository, "getChatRunResult">;
+  runs: Pick<PgRunRepository, "getChatRunResult" | "createQueuedRun">;
   orchestration: Pick<RunOrchestrationService, "executeRun">;
-  preparation: Pick<ChatTurnPreparationClient, "prepareRun">;
-  /** Stage 6 slice 4: present when `contextAuthority === "ts"`. */
-  context?: Pick<ChatContextPortClient, "fetchCandidates" | "createRun">;
-  /** Stage 6 slice 4: present when `contextAuthority === "ts"`. */
-  snapshots?: Pick<PgContextSnapshotRepository, "persistChatSnapshot">;
+  context: Pick<ChatContextCandidateCollector, "fetchCandidates">;
+  snapshots: Pick<PgContextSnapshotRepository, "persistChatSnapshot">;
 }
 
 interface PreparedChatRun {
   run_id: string;
+}
+
+interface AgentConfigPatch {
+  userId: string;
+  name?: string | null;
+  description?: string | null;
+  systemPrompt?: string | null;
+  modelProviderId?: string | null;
+  modelName?: string | null;
+  modelConfigJson?: Record<string, unknown> | null;
+  contextPolicyJson?: Record<string, unknown> | null;
+  memoryPolicyJson?: Record<string, unknown> | null;
+  outputPolicyJson?: Record<string, unknown> | null;
+  scheduleConfigJson?: Record<string, unknown> | null;
+  outputSchemaJson?: Record<string, unknown> | null;
 }
 
 type AgentChatServicesFactory = (context: ModuleContext) => AgentChatServices;
@@ -67,7 +88,294 @@ export function __setAgentChatIdentityForTests(
 }
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
-  if (context.config.chatTurnAuthority !== "ts") return;
+  const agentRepository = () => PgAgentRepository.fromConfig(context.config);
+
+  app.get("/api/v1/agents/runs", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = routeQuery(request);
+      const page = parsePage(q);
+      const repository = PgRunRepository.fromConfig(context.config);
+      const runs = await repository.listRuns({
+        space_id: identity.spaceId,
+        user_id: identity.userId,
+        status: q.status ?? null,
+        mode: q.mode ?? null,
+        agent_id: q.agent_id ?? null,
+        workspace_id: q.workspace_id ?? null,
+        project_id: q.project_id ?? null,
+        limit: page.limit,
+        offset: page.offset,
+      });
+      return reply.send(runs.map((run) => runToOut(run)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/agents/:agentId/runs", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = routeQuery(request);
+      const page = parsePage(q);
+      const repository = PgRunRepository.fromConfig(context.config);
+      const runs = await repository.listRuns({
+        space_id: identity.spaceId,
+        user_id: identity.userId,
+        status: q.status ?? null,
+        mode: q.mode ?? null,
+        agent_id: params(request).agentId ?? "",
+        workspace_id: q.workspace_id ?? null,
+        project_id: q.project_id ?? null,
+        limit: page.limit,
+        offset: page.offset,
+      });
+      return reply.send(runs.map((run) => runToOut(run)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/agents", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = routeQuery(request);
+      const page = parsePage(q);
+      const agents = await agentRepository().list(identity.spaceId, {
+        createdByUserId: q.created_by_user_id ?? null,
+        visibility: q.visibility ?? null,
+        status: q.status ?? "active",
+        limit: page.limit,
+        offset: page.offset,
+      });
+      return reply.send(agents);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/agents", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const body = jsonBody(request);
+      const agent = await agentRepository().create({
+        spaceId: identity.spaceId,
+        userId: identity.userId,
+        name: requiredBodyString(body, "name"),
+        description: nullableBodyString(body, "description") ?? null,
+        visibility: nullableBodyString(body, "visibility") ?? "private",
+        roleInstruction: nullableBodyString(body, "role_instruction") ?? null,
+        systemPrompt: nullableBodyString(body, "system_prompt") ?? null,
+        defaultModelProviderId: nullableBodyString(body, "default_model_provider_id") ?? null,
+        defaultModel: nullableBodyString(body, "default_model") ?? null,
+        adapterType: nullableBodyString(body, "adapter_type") ?? null,
+        modelConfigJson: optionalRecordBody(body, "model_config_json"),
+        runtimeConfigJson: optionalRecordBody(body, "runtime_config_json"),
+        contextPolicyJson: optionalRecordBody(body, "context_policy_json"),
+        memoryPolicyJson: optionalRecordBody(body, "memory_policy_json"),
+        capabilitiesJson: optionalArrayBody(body, "capabilities_json"),
+        toolPermissionsJson: optionalRecordBody(body, "tool_permissions_json"),
+        runtimePolicyJson: optionalRecordBody(body, "runtime_policy_json"),
+      });
+      return reply.code(201).send(agent);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/agents/default-assistant", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const agent = await agentRepository().getDefaultAssistant(identity.spaceId);
+      if (!agent) return reply.code(404).send({ detail: "No default Assistant in this space" });
+      return reply.send(agent);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/agents/default-assistant", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.send(await agentRepository().ensureDefaultAssistant(identity.spaceId));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/agents/default-assistant/settings", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.send(await agentRepository().getAssistantSettings(identity.spaceId));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.patch("/api/v1/agents/default-assistant/settings", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.send(
+        await agentRepository().updateAssistantSettings(identity.spaceId, jsonBody(request)),
+      );
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/agents/:agentId", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const agent = await agentRepository().get(identity.spaceId, params(request).agentId ?? "");
+      if (!agent) return reply.code(404).send({ detail: "Agent not found" });
+      return reply.send(agent);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.patch("/api/v1/agents/:agentId", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const body = jsonBody(request);
+      const repo = agentRepository();
+      const agentId = params(request).agentId ?? "";
+      let agent = await applyAgentIdentityPatch(repo, identity.spaceId, agentId, body);
+      if (hasConfigPatch(body)) {
+        agent = await repo.updateConfig(identity.spaceId, agentId, configPatch(body, identity.userId));
+      }
+      if (!agent) {
+        agent = await repo.get(identity.spaceId, agentId);
+        if (!agent) return reply.code(404).send({ detail: "Agent not found" });
+      }
+      return reply.send(agent);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/agents/:agentId/config", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const agent = await agentRepository().updateConfig(
+        identity.spaceId,
+        params(request).agentId ?? "",
+        configPatch(jsonBody(request), identity.userId),
+      );
+      return reply.send(agent);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/agents/:agentId/current-version", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const version = await agentRepository().getCurrentVersion(
+        identity.spaceId,
+        params(request).agentId ?? "",
+      );
+      if (!version) return reply.code(404).send({ detail: "Agent has no current version" });
+      return reply.send(version);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/agents/:agentId/versions", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const versions = await agentRepository().listVersions(
+        identity.spaceId,
+        params(request).agentId ?? "",
+      );
+      return reply.send(versions);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/agents/:agentId/versions/:versionId", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const version = await agentRepository().getVersion(
+        identity.spaceId,
+        p.agentId ?? "",
+        p.versionId ?? "",
+      );
+      return reply.send(version);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/agents/:agentId/versions/:versionId/restore", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const agent = await agentRepository().restoreVersion(
+        identity.spaceId,
+        p.agentId ?? "",
+        p.versionId ?? "",
+      );
+      return reply.send(agent);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  const createRun = async (request: FastifyRequest, reply: FastifyReply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    const agentId = params(request).agentId ?? "";
+    const body = jsonBody(request);
+    const repository = PgRunRepository.fromConfig(context.config);
+    try {
+      const run = await repository.createQueuedRun({
+        agent_id: agentId,
+        space_id: identity.spaceId,
+        user_id: identity.userId,
+        mode: stringValue(body.mode) ?? "live",
+        run_type: stringValue(body.run_type) ?? "agent",
+        trigger_origin: stringValue(body.trigger_origin) ?? "manual",
+        session_id: stringValue(body.session_id),
+        workspace_id: stringValue(body.workspace_id),
+        project_id: stringValue(body.project_id),
+        prompt: stringValue(body.prompt),
+        instruction: stringValue(body.instruction),
+        scheduled_at: stringValue(body.scheduled_at),
+        parent_run_id: stringValue(body.parent_run_id),
+        adapter_type: stringValue(body.adapter_type),
+        capability_id: stringValue(body.capability_id),
+        model_provider_id: stringValue(body.model_provider_id),
+        model: stringValue(body.model),
+      });
+      return reply.code(201).send(runToOut(run));
+    } catch (error) {
+      if (error instanceof RunCreateValidationError) {
+        return reply.code(error.statusCode).send({ detail: error.message });
+      }
+      throw error;
+    }
+  };
+  app.post("/api/v1/agents/:agentId/runs", createRun);
+  app.post("/api/v1/agents/:agentId/run", createRun);
 
   app.post("/api/v1/agents/:agentId/chat", async (request, reply) => {
     const identity = await resolveIdentity(context, request, reply);
@@ -116,7 +424,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       );
       if (!userMessage) return reply.code(404).send({ detail: "session not found in this space" });
 
-      const prepared = await prepareChatRun(context, services, {
+      const prepared = await prepareChatRun(services, {
         agentId: agent.id,
         agentVersionId: agent.current_version_id,
         spaceId: identity.spaceId,
@@ -168,11 +476,11 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         }),
       );
     } catch (error) {
-      if (
-        error instanceof ChatTurnPreparationError ||
-        error instanceof ChatContextPortError
-      ) {
+      if (error instanceof ChatContextError) {
         return reply.code(error.statusCode).send(error.body);
+      }
+      if (error instanceof RunCreateValidationError) {
+        return reply.code(error.statusCode).send({ detail: error.message });
       }
       return sendDomainError(reply, error);
     }
@@ -182,14 +490,11 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
 /**
  * Resolve the queued run for a chat turn.
  *
- * `python` context authority delegates context build + run creation to the
- * combined Python `prepare-run` port. `ts` authority (Stage 6 slice 4) makes the
- * control plane own the build: fetch per-source candidates (Python read port) →
- * TS budget/dedup loop → compose prompt → Python `create-run` → TS-owned
- * snapshot persistence. Either way the caller gets just `{ run_id }`.
+ * The control plane owns chat context build natively: collect per-source
+ * candidates (native TS DB reads) → TS budget/dedup loop → compose prompt →
+ * TS run creation + snapshot persistence.
  */
 async function prepareChatRun(
-  context: ModuleContext,
   services: AgentChatServices,
   input: {
     agentId: string;
@@ -200,24 +505,6 @@ async function prepareChatRun(
     message: string;
   },
 ): Promise<PreparedChatRun> {
-  if (context.config.contextAuthority !== "ts") {
-    const prepared = await services.preparation.prepareRun({
-      agent_id: input.agentId,
-      space_id: input.spaceId,
-      user_id: input.userId,
-      session_id: input.sessionId,
-      message: input.message,
-    });
-    return { run_id: prepared.run_id };
-  }
-
-  if (!services.context || !services.snapshots) {
-    throw new ChatContextPortError(
-      "TS context assembly requires the chat-context port and snapshot repository",
-      500,
-    );
-  }
-
   const candidates = await services.context.fetchCandidates({
     agent_id: input.agentId,
     space_id: input.spaceId,
@@ -231,10 +518,13 @@ async function prepareChatRun(
     input.message,
   );
 
-  const created = await services.context.createRun({
+  const created = await services.runs.createQueuedRun({
     agent_id: input.agentId,
     space_id: input.spaceId,
     user_id: input.userId,
+    mode: "live",
+    run_type: "agent",
+    trigger_origin: "manual",
     session_id: input.sessionId,
     prompt: composedPrompt,
   });
@@ -244,8 +534,8 @@ async function prepareChatRun(
       contextSnapshotId: created.context_snapshot_id,
       spaceId: input.spaceId,
       tokenEstimate: bundle.token_count,
-      // Mirrors the ContextRequest the Python prepare-run path serialized into
-      // context_snapshots.request_json (request defaults, not policy-resolved).
+      // Mirrors the ContextRequest persisted by the legacy prepare-run path
+      // (request defaults, not policy-resolved).
       requestJson: {
         space_id: input.spaceId,
         user_id: input.userId,
@@ -253,7 +543,7 @@ async function prepareChatRun(
         session_id: input.sessionId,
         workspace_id: null,
         project_id: null,
-        run_id: created.run_id,
+        run_id: created.id,
         user_message: input.message,
         manual_context: [],
         max_tokens: 4000,
@@ -263,7 +553,7 @@ async function prepareChatRun(
     });
   }
 
-  return { run_id: created.run_id };
+  return { run_id: created.id };
 }
 
 function agentChatServices(context: ModuleContext): AgentChatServices {
@@ -271,21 +561,22 @@ function agentChatServices(context: ModuleContext): AgentChatServices {
   const runRepository = PgRunRepository.fromConfig(context.config);
   const contextPorts = new RunPythonContextPortClient(context.config);
   const materializer = new RunMaterializationService(contextPorts);
+  const contextPreparer = new ContextPrepareService(context.config);
   const services: AgentChatServices = {
     agents: PgAgentChatRepository.fromConfig(context.config),
     sessions: PgSessionRepository.fromConfig(context.config),
     runs: runRepository,
-    preparation: new ChatTurnPreparationClient(context.config),
+    context: ChatContextCandidateCollector.fromConfig(context.config),
+    snapshots: PgContextSnapshotRepository.fromConfig(context.config),
     orchestration: new RunOrchestrationService(context.config, runRepository, {
       materializer,
       contextPorts,
+      contextPreparer,
+      workspaceManager: PgWorkspaceManager.fromConfig(context.config),
+      codePatchCollector: PgCodePatchCollector.fromConfig(context.config),
       processRegistry: sharedCliProcessRegistry,
     }),
   };
-  if (context.config.contextAuthority === "ts") {
-    services.context = new ChatContextPortClient(context.config);
-    services.snapshots = PgContextSnapshotRepository.fromConfig(context.config);
-  }
   return services;
 }
 
@@ -357,10 +648,155 @@ function params(request: FastifyRequest): Record<string, string | undefined> {
 function jsonBody(request: FastifyRequest): Record<string, unknown> {
   const text = request.body instanceof Buffer ? request.body.toString("utf8") : "";
   if (!text) return {};
-  const parsed = JSON.parse(text) as unknown;
-  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    throw new HttpError(422, "Invalid JSON body");
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new HttpError(422, "JSON object body is required");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+async function applyAgentIdentityPatch(
+  repository: PgAgentRepository,
+  spaceId: string,
+  agentId: string,
+  body: Record<string, unknown>,
+) {
+  const patch: {
+    name?: string;
+    description?: string | null;
+    visibility?: string;
+    roleInstruction?: string | null;
+    status?: string;
+  } = {};
+  if (Object.hasOwn(body, "name")) patch.name = requiredBodyString(body, "name");
+  if (Object.hasOwn(body, "description")) {
+    patch.description = nullableBodyString(body, "description");
+  }
+  if (Object.hasOwn(body, "visibility")) {
+    patch.visibility = requiredBodyString(body, "visibility");
+  }
+  if (Object.hasOwn(body, "role_instruction")) {
+    patch.roleInstruction = nullableBodyString(body, "role_instruction");
+  }
+  if (Object.hasOwn(body, "status")) patch.status = requiredBodyString(body, "status");
+  return Object.keys(patch).length > 0
+    ? repository.update(spaceId, agentId, patch)
+    : null;
+}
+
+function configPatch(body: Record<string, unknown>, userId: string): AgentConfigPatch {
+  const patch: AgentConfigPatch = { userId };
+  if (Object.hasOwn(body, "name")) patch.name = requiredBodyString(body, "name");
+  if (Object.hasOwn(body, "description")) {
+    patch.description = nullableBodyString(body, "description");
+  }
+  if (Object.hasOwn(body, "system_prompt")) {
+    patch.systemPrompt = nullableBodyString(body, "system_prompt");
+  }
+  if (Object.hasOwn(body, "model_provider_id") || Object.hasOwn(body, "default_model_provider_id")) {
+    patch.modelProviderId = nullableBodyString(
+      body,
+      Object.hasOwn(body, "model_provider_id") ? "model_provider_id" : "default_model_provider_id",
+    );
+  }
+  if (Object.hasOwn(body, "model_name") || Object.hasOwn(body, "default_model")) {
+    patch.modelName = nullableBodyString(
+      body,
+      Object.hasOwn(body, "model_name") ? "model_name" : "default_model",
+    );
+  }
+  assignRecordPatch(patch, body, "model_config_json", "modelConfigJson");
+  assignRecordPatch(patch, body, "context_policy_json", "contextPolicyJson");
+  assignRecordPatch(patch, body, "memory_policy_json", "memoryPolicyJson");
+  assignRecordPatch(patch, body, "output_policy_json", "outputPolicyJson");
+  assignRecordPatch(patch, body, "schedule_config_json", "scheduleConfigJson");
+  assignRecordPatch(patch, body, "output_schema_json", "outputSchemaJson");
+  return patch;
+}
+
+function hasConfigPatch(body: Record<string, unknown>): boolean {
+  return [
+    "system_prompt",
+    "default_model_provider_id",
+    "default_model",
+    "model_provider_id",
+    "model_name",
+    "model_config_json",
+    "context_policy_json",
+    "memory_policy_json",
+    "output_policy_json",
+    "schedule_config_json",
+    "output_schema_json",
+  ].some((key) => Object.hasOwn(body, key));
+}
+
+function assignRecordPatch(
+  target: AgentConfigPatch,
+  body: Record<string, unknown>,
+  sourceKey: string,
+  targetKey:
+    | "modelConfigJson"
+    | "contextPolicyJson"
+    | "memoryPolicyJson"
+    | "outputPolicyJson"
+    | "scheduleConfigJson"
+    | "outputSchemaJson",
+): void {
+  if (Object.hasOwn(body, sourceKey)) {
+    target[targetKey] = nullableRecordBody(body, sourceKey);
+  }
+}
+
+function requiredBodyString(body: Record<string, unknown>, key: string): string {
+  const value = nullableBodyString(body, key);
+  if (!value) throw new HttpError(422, `${key} is required`);
+  return value;
+}
+
+function nullableBodyString(body: Record<string, unknown>, key: string): string | null {
+  const value = body[key];
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") {
+    throw new HttpError(422, `${key} must be a string or null`);
+  }
+  const normalized = value.trim();
+  return normalized ? normalized : null;
+}
+
+function optionalRecordBody(
+  body: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | null | undefined {
+  if (!Object.hasOwn(body, key)) return undefined;
+  return nullableRecordBody(body, key);
+}
+
+function nullableRecordBody(
+  body: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | null {
+  const value = body[key];
+  if (value === null || value === undefined) return null;
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  throw new HttpError(422, `${key} must be an object or null`);
+}
+
+function optionalArrayBody(
+  body: Record<string, unknown>,
+  key: string,
+): unknown[] | null | undefined {
+  if (!Object.hasOwn(body, key)) return undefined;
+  const value = body[key];
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) return value;
+  throw new HttpError(422, `${key} must be an array or null`);
 }
 
 function recordValue(value: unknown): Record<string, unknown> | null {
@@ -374,6 +810,18 @@ function stringValue(value: unknown): string | null {
 }
 
 function sendDomainError(reply: FastifyReply, error: unknown): FastifyReply {
+  if (error instanceof HttpError) {
+    return reply.code(error.statusCode).send({ detail: error.message });
+  }
+  if (
+    error instanceof Error &&
+    "statusCode" in error &&
+    typeof (error as { statusCode?: unknown }).statusCode === "number"
+  ) {
+    return reply
+      .code((error as { statusCode: number }).statusCode)
+      .send({ detail: error.message });
+  }
   const message = error instanceof Error ? error.message : "Request failed";
   return reply.code(400).send({ detail: message });
 }

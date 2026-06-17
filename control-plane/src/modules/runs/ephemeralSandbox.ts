@@ -1,9 +1,9 @@
 /**
  * Run-scope ephemeral sandbox: a system-provisioned throwaway working directory
  * for a file-access CLI adapter that has no persistent workspace bound. This is
- * the first rung of the working-directory scope ladder (none → ephemeral →
- * session → project → worktree); only `ephemeral` and the existing `worktree`
- * (delegated to the Python workspace.prepare port) are wired today.
+ * the first rung of the working-directory scope ladder (none -> ephemeral ->
+ * session -> project -> worktree); `worktree` is now owned by the workspace
+ * manager in `modules/workspaces/sandbox.ts`.
  *
  * The directory lives under the shared sandbox root (same root as worktrees),
  * is isolated per run, and is removed on every terminal path (success, failure,

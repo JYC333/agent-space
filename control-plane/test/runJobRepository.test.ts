@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PgRunJobRepository,
   type RunJobRecord,
+  type RunJobStatus,
 } from "../src/modules/runs/jobRepository";
 import { RunJobWorker, type RunJobQueuePort } from "../src/modules/runs/jobWorker";
 import type { QueryResult, Queryable } from "../src/modules/runs/repository";
@@ -61,6 +62,13 @@ class FakeQueue implements RunJobQueuePort {
   events: string[] = [];
   job: RunJobRecord | null = makeJob({ attempts: 1 });
 
+  async claimNext(
+    workerId: string,
+    _jobTypes: readonly string[] | null,
+  ): Promise<RunJobRecord | null> {
+    return this.claimNextAgentRun(workerId);
+  }
+
   async claimNextAgentRun(workerId: string): Promise<RunJobRecord | null> {
     this.events.push(`claim:${workerId}`);
     return this.job;
@@ -85,7 +93,7 @@ class FakeQueue implements RunJobQueuePort {
     jobId: string,
     error: string,
     workerId: string | null,
-  ): Promise<string | null> {
+  ): Promise<RunJobStatus | null> {
     this.events.push(`fail:${jobId}:${error}:${workerId}`);
     return "pending";
   }
@@ -128,7 +136,7 @@ describe("PgRunJobRepository", () => {
 
     expect(job?.claimed_by).toBe("worker-1");
     expect(db.calls[0].sql).toContain("FOR UPDATE SKIP LOCKED");
-    expect(db.calls[0].sql).toContain("job_type = 'agent_run'");
+    expect(db.calls[0].sql).toContain("job_type IN ($3)");
     expect(db.calls[0].sql).toContain("attempts = attempts + 1");
     // Tripwire for the real-PG "column reference id is ambiguous" defect: the
     // candidate CTE column must stay aliased so the UPDATE...FROM join is
@@ -139,6 +147,7 @@ describe("PgRunJobRepository", () => {
     expect(db.calls[0].params).toEqual([
       "worker-1",
       "2026-06-12T10:00:00.000Z",
+      "agent_run",
     ]);
   });
 
@@ -236,13 +245,15 @@ describe("RunJobWorker", () => {
     await expect(worker.processOne()).resolves.toEqual({
       status: "failed",
       job_id: "job-1",
-      error: "agent_run payload requires run_id, task_id, or agent_id",
+      error: "handler should not run",
     });
 
     expect(queue.events).toEqual([
       "claim:worker-1",
-      "fail:job-1:agent_run payload requires run_id, task_id, or agent_id:worker-1",
-      "event:job-1:error:Job failed: agent_run payload requires run_id, task_id, or agent_id",
+      "start:job-1:worker-1",
+      "event:job-1:status_change:Job started by TS worker",
+      "fail:job-1:handler should not run:worker-1",
+      "event:job-1:error:Job failed: handler should not run",
     ]);
   });
 

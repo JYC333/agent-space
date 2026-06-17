@@ -50,23 +50,26 @@ ProposalApproval:
 
 ## TypeScript Migration Boundary
 
-Stage 5 moved the public proposal review surface to the control plane when
-`CONTROL_PLANE_PROPOSALS_AUTHORITY=ts`:
+The public proposal review/apply surface is fixed TS-owned in the control plane:
 
 - TS owns external `/api/v1/proposals` list/get routes and mirrors the Python
   read model/visibility rule.
-- TS owns the external accept/reject/egress-approval HTTP routes, but dispatches
-  the durable mutation to `backend/app/proposals/internal_api.py` over the
-  service-token internal port.
-- Python remains the transaction owner for `ProposalService.accept()`,
-  `ProposalApplyService`, source monitoring, target-module appliers, code patch
-  rollback on DB failure, and best-effort participation writes.
+- TS owns the external accept/reject/egress-approval HTTP routes and the
+  proposal-apply transaction boundary for registered appliers.
+- TS runs the `proposal.apply` policy gate before dispatching through its
+  `ProposalApplierRegistry`.
+- The currently registered TS appliers are `memory_create`, `memory_update`, and
+  `memory_archive`. Unregistered proposal types fail closed until their owning
+  domain migrates and registers a TS applier.
+- Python remains the reference owner for non-memory target-module appliers until
+  their domains migrate; the control-plane public route does not fall back to
+  Python proposal ports.
 - Proposal creation entrypoints remain in their product modules
   (`memory`, `knowledge`, `agents`, `runs`, etc.) until those contexts migrate.
 
-This is intentional: the Stage 5 TS migration removes the fallback proxy from
-the user-facing proposal review API without reimplementing per-`proposal_type`
-business writes in TS.
+This is intentional: the TS migration removes the fallback proxy from the
+user-facing proposal review API while keeping non-migrated proposal mutations
+fail-closed instead of silently no-oping or crossing back into Python.
 
 ## `accept_context` Values
 

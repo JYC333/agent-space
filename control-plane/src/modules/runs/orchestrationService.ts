@@ -36,7 +36,13 @@ import {
   removeEphemeralDir,
   workingDirScopeForLevel,
 } from "./ephemeralSandbox";
+import type { RunWorkspaceManagerPort } from "../workspaces";
+import {
+  isVendorCliAdapter,
+  targetFormatForAdapter,
+} from "../runtimeAdapters";
 import type { RunMaterializationService } from "./materializationService";
+import type { ContextPrepareInput, ContextPrepareResult } from "../context";
 
 export interface RunExecutionRepositoryPort {
   getRun(spaceId: string, runId: string): Promise<RunRecord | null>;
@@ -81,6 +87,9 @@ export interface RunExecutionAdapterDeps {
   vendorCli?: VendorCliAdapterDeps;
   materializer?: RunMaterializationService;
   contextPorts?: RunPreparationPortClient;
+  contextPreparer?: RunContextPrepareClient;
+  workspaceManager?: RunWorkspaceManagerPort;
+  codePatchCollector?: RunCodePatchCollectorPort;
   /**
    * Shared CLI process registry. Execute registers spawned CLI processes here;
    * cancelRun terminates them through it. Must be the same instance across the
@@ -92,6 +101,18 @@ export interface RunExecutionAdapterDeps {
 
 export interface RunPreparationPortClient {
   call(request: RunPythonContextPortRequest): Promise<RunPythonContextPortResponse>;
+}
+
+export interface RunContextPrepareClient {
+  prepare(input: ContextPrepareInput): Promise<ContextPrepareResult>;
+}
+
+export interface RunCodePatchCollectorPort {
+  collect(input: {
+    run: RunRecord;
+    worktreePath: string | null;
+    baseCommitSha: string | null;
+  }): Promise<{ item: RunMaterializationItemSummary; errors: string[] } | null>;
 }
 
 export interface RunExecutionInput extends RunExecuteRequest {
@@ -117,6 +138,8 @@ interface PreparedRuntimeContext {
     sandbox_cwd: string | null;
     workspace_root: string | null;
   } | null;
+  sandbox_kind: string | null;
+  base_commit_sha: string | null;
 }
 
 interface ResolvedRuntimePolicy {
@@ -287,6 +310,13 @@ export class RunOrchestrationService {
             sandbox_cwd: preparedRuntime?.sandbox_cwd ?? null,
           })
         : { items: [], errors: [] };
+      const codePatch = adapterResult.success
+        ? await this.collectCodePatch(effectiveRun, preparedRuntime)
+        : null;
+      if (codePatch) {
+        materialization.items.push(codePatch.item);
+        materialization.errors.push(...codePatch.errors);
+      }
 
       const terminalRun = await this.repository.markRunTerminal({
         run_id: running.id,
@@ -568,9 +598,9 @@ export class RunOrchestrationService {
       adapter_config: { ...(input.adapter_config ?? {}) },
       risk_level: input.risk_level ?? null,
       cleanup: null,
+      sandbox_kind: null,
+      base_commit_sha: null,
     };
-    const ports = this.adapters.contextPorts;
-    if (!ports) return prepared;
 
     try {
       if (isVendorCliAdapter(run.adapter_type) && !prepared.sandbox_cwd) {
@@ -588,6 +618,7 @@ export class RunOrchestrationService {
             sandbox_cwd: prepared.sandbox_cwd,
             workspace_root: null,
           };
+          prepared.sandbox_kind = "ephemeral";
           await this.repository.appendRunEvent({
             run_id: run.id,
             space_id: run.space_id,
@@ -599,28 +630,23 @@ export class RunOrchestrationService {
               sandbox_kind: "ephemeral",
             },
           });
-        } else {
-          const workspace = await this.callPreparationPort(
-            ports,
-            {
-              operation: "workspace.prepare",
-              run_id: run.id,
-              space_id: run.space_id,
-              payload_json: {
-                adapter_type: run.adapter_type,
-                required_sandbox_level: run.required_sandbox_level,
-                workspace_id: run.workspace_id,
-              },
-            },
-            "workspace_prepare_failed",
-          );
-          const workspaceResult = recordValue(workspace.result_json);
-          prepared.sandbox_cwd = stringValue(workspaceResult.sandbox_cwd);
+        } else if (scope === "worktree") {
+          const manager = this.adapters.workspaceManager;
+          if (!manager) {
+            throw new RunPreparationError(
+              "workspace_prepare_failed",
+              "TS run execution requires a native workspace manager for worktree sandbox.",
+            );
+          }
+          const workspaceResult = await manager.prepareRunWorkspace(run);
+          prepared.sandbox_cwd = workspaceResult.sandbox_cwd;
           prepared.cleanup = {
-            cleanup_kind: stringValue(workspaceResult.cleanup_kind) ?? "none",
+            cleanup_kind: workspaceResult.cleanup_kind,
             sandbox_cwd: prepared.sandbox_cwd,
-            workspace_root: stringValue(workspaceResult.workspace_root),
+            workspace_root: workspaceResult.workspace_root,
           };
+          prepared.sandbox_kind = workspaceResult.sandbox_kind;
+          prepared.base_commit_sha = workspaceResult.base_commit_sha;
           if (prepared.sandbox_cwd) {
             await this.repository.appendRunEvent({
               run_id: run.id,
@@ -630,38 +656,32 @@ export class RunOrchestrationService {
               workspace_id: run.workspace_id,
               metadata_json: {
                 required_sandbox_level: run.required_sandbox_level,
-                sandbox_kind: stringValue(workspaceResult.sandbox_kind) ?? "worktree",
-                base_commit_sha: stringValue(workspaceResult.base_commit_sha),
-                workspace_is_dirty: booleanValue(workspaceResult.workspace_is_dirty),
+                sandbox_kind: workspaceResult.sandbox_kind,
+                base_commit_sha: workspaceResult.base_commit_sha,
+                workspace_is_dirty: workspaceResult.workspace_is_dirty,
               },
             });
           }
         }
       }
 
-      const context = await this.callPreparationPort(
-        ports,
-        {
-          operation: "context.prepare",
-          run_id: run.id,
-          space_id: run.space_id,
-          payload_json: {
-            adapter_type: run.adapter_type,
-            sandbox_cwd: prepared.sandbox_cwd,
-            target_format: targetFormatForAdapter(run.adapter_type),
-            workspace_path: prepared.cleanup?.workspace_root ?? null,
-          },
-        },
-        "context_prepare_failed",
-      );
-      const contextResult = recordValue(context.result_json);
-      prepared.prompt = stringValue(contextResult.runtime_prompt) ?? prepared.prompt;
-      if (booleanValue(contextResult.context_rendered)) {
+      const contextPreparer = this.adapters.contextPreparer;
+      if (!contextPreparer) {
+        return prepared;
+      }
+      const contextResult = await contextPreparer.prepare({
+        runId: run.id,
+        spaceId: run.space_id,
+        adapterType: run.adapter_type,
+        sandboxCwd: prepared.sandbox_cwd,
+        targetFormat: targetFormatForAdapter(run.adapter_type),
+        workspacePath: prepared.cleanup?.workspace_root ?? null,
+      });
+      prepared.prompt = contextResult.runtime_prompt ?? prepared.prompt;
+      if (contextResult.context_rendered) {
         prepared.context_text = null;
         prepared.adapter_config.context_file_already_rendered = true;
-        prepared.adapter_config.context_target_format = stringValue(
-          contextResult.target_format,
-        );
+        prepared.adapter_config.context_target_format = contextResult.target_format ?? null;
       }
       return prepared;
     } catch (error) {
@@ -704,22 +724,37 @@ export class RunOrchestrationService {
       prepared.cleanup = null;
       return;
     }
-    if (!this.adapters.contextPorts) return;
+    if (!this.adapters.workspaceManager) return;
     try {
-      await this.adapters.contextPorts.call({
-        operation: "workspace.cleanup",
-        run_id: run.id,
-        space_id: run.space_id,
-        payload_json: {
-          cleanup_kind: prepared.cleanup.cleanup_kind,
-          sandbox_cwd: prepared.cleanup.sandbox_cwd,
-          workspace_root: prepared.cleanup.workspace_root,
-        },
+      await this.adapters.workspaceManager.cleanupRunWorkspace({
+        runId: run.id,
+        spaceId: run.space_id,
+        cleanupKind: prepared.cleanup.cleanup_kind,
+        sandboxCwd: prepared.cleanup.sandbox_cwd,
+        workspaceRoot: prepared.cleanup.workspace_root,
       });
     } catch {
       return;
     }
     prepared.cleanup = null;
+  }
+
+  private async collectCodePatch(
+    run: RunRecord,
+    prepared: PreparedRuntimeContext | null,
+  ): Promise<{ item: RunMaterializationItemSummary; errors: string[] } | null> {
+    if (
+      prepared?.sandbox_kind !== "worktree" ||
+      !prepared.sandbox_cwd ||
+      !this.adapters.codePatchCollector
+    ) {
+      return null;
+    }
+    return this.adapters.codePatchCollector.collect({
+      run,
+      worktreePath: prepared.sandbox_cwd,
+      baseCommitSha: prepared.base_commit_sha,
+    });
   }
 
   private async invokeAdapter(
@@ -746,7 +781,7 @@ export class RunOrchestrationService {
           run,
           model_provider_id: run.model_provider_id,
           model: input.model ?? null,
-          system_prompt: input.system_prompt ?? null,
+          system_prompt: input.system_prompt ?? run.system_prompt ?? null,
           prompt: input.prompt ?? null,
           max_tokens: input.max_tokens ?? null,
         },
@@ -796,7 +831,39 @@ export class RunOrchestrationService {
             ...recordValue(item.metadata_json),
           },
         });
-      } else if (item.kind === "proposal" || item.kind === "code_patch") {
+      } else if (item.kind === "code_patch") {
+        await this.repository.appendRunEvent({
+          run_id: run.id,
+          space_id: run.space_id,
+          event_type: "patch_collected",
+          status: materializationEventStatus(item),
+          proposal_id: item.proposal_id ?? null,
+          workspace_id: run.workspace_id,
+          error_code: item.error_code ?? null,
+          error_message: item.error_message ?? null,
+          metadata_json: {
+            source: "worktree",
+            ...recordValue(item.metadata_json),
+          },
+        });
+        if (item.proposal_id) {
+          await this.repository.appendRunEvent({
+            run_id: run.id,
+            space_id: run.space_id,
+            event_type: "proposal_created",
+            status: materializationEventStatus(item),
+            proposal_id: item.proposal_id,
+            workspace_id: run.workspace_id,
+            error_code: item.error_code ?? null,
+            error_message: item.error_message ?? null,
+            metadata_json: {
+              source: "worktree",
+              kind: item.kind,
+              ...recordValue(item.metadata_json),
+            },
+          });
+        }
+      } else if (item.kind === "proposal") {
         await this.repository.appendRunEvent({
           run_id: run.id,
           space_id: run.space_id,
@@ -970,16 +1037,6 @@ function inputWithPreparedRuntime(
   };
 }
 
-function isVendorCliAdapter(adapterType: string | null | undefined): boolean {
-  return adapterType === "claude_code" || adapterType === "codex_cli";
-}
-
-function targetFormatForAdapter(adapterType: string | null | undefined): string | null {
-  if (adapterType === "claude_code") return "claude";
-  if (adapterType === "codex_cli") return "codex_cli";
-  return null;
-}
-
 function toRunPreparationError(error: unknown, fallbackCode: string): RunPreparationError {
   if (error instanceof RunPreparationError) return error;
   const code = errorCodeValue(error) ?? fallbackCode;
@@ -1044,8 +1101,4 @@ function recordValue(value: unknown): Record<string, unknown> {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value ? value : null;
-}
-
-function booleanValue(value: unknown): boolean | null {
-  return typeof value === "boolean" ? value : null;
 }

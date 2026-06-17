@@ -1,19 +1,15 @@
 """Real-lifespan startup smoke test against a fresh PostgreSQL database.
 
 Most HTTP tests patch the FastAPI lifespan out (see ``app_db_override`` in the
-root conftest). This test does the opposite: it runs the *real* application
-lifespan against a brand-new, empty PostgreSQL database created inside the
-session test container, and verifies the full cold-start path:
+root conftest). This test runs the *real* application lifespan against a
+brand-new, empty PostgreSQL database and verifies the cold-start path:
 
   * Alembic ``upgrade head`` runs on an empty database,
   * the app starts (``/health`` responds),
-  * the durable job queue is initialised,
-  * the background worker task starts and shuts down cleanly.
+  * bootstrap seeds the default owner space and execution planes.
 
-Unrelated background schedulers (daily capture report, backup) are disabled via
-test-only settings overrides — not by changing production defaults — so this
-test exercises only queue + worker startup. ``AGENT_SPACE_HOME`` is already an
-ephemeral directory (root conftest), so this never touches a real mode root.
+Job queue, schedulers, and backup ticks are owned by the TypeScript control
+plane and are not started from the Python lifespan.
 """
 from __future__ import annotations
 
@@ -35,7 +31,6 @@ def _make_empty_database(pg_container, db_name: str) -> str:
             conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     finally:
         admin.dispose()
-    # admin_url ends with /<default_db>; swap in the fresh database name.
     base, _, _old = admin_url.rpartition("/")
     return f"{base}/{db_name}"
 
@@ -46,26 +41,15 @@ def test_real_lifespan_cold_start_on_empty_postgres(pg_container, monkeypatch):
     import app.config as app_config
     import app.db as app_db
     from app.main import app, lifespan
-    from app.jobs.queue import PostgresQueueService, get_queue
 
-    # Point the app at the fresh empty database for both the module-level engine
-    # and the Alembic upgrade that init_db() runs from settings.database_url.
     fresh_engine = create_engine(fresh_url, pool_pre_ping=True)
     fresh_sessionmaker = sessionmaker(autocommit=False, autoflush=False, bind=fresh_engine)
     monkeypatch.setattr(app_config.settings, "database_url", fresh_url, raising=False)
     monkeypatch.setattr(app_db, "engine", fresh_engine, raising=False)
     monkeypatch.setattr(app_db, "SessionLocal", fresh_sessionmaker, raising=False)
 
-    # Disable unrelated schedulers for this smoke test (test-only overrides).
-    monkeypatch.setattr(app_config.settings, "daily_report_scheduler_enabled", False, raising=False)
-    monkeypatch.setattr(app_config.settings, "automation_scheduler_enabled", False, raising=False)
-    monkeypatch.setattr(app_config.settings, "backup_enabled", False, raising=False)
-
     async def _run() -> None:
-        # Entering the real lifespan runs init_db() (Alembic upgrade on the empty
-        # DB), capability/seed bootstrap, queue init, and worker startup.
         async with lifespan(app):
-            # Schema was actually created by the migration on the empty DB.
             with fresh_engine.connect() as conn:
                 tables = conn.execute(text(
                     "SELECT count(*) FROM information_schema.tables "
@@ -77,9 +61,6 @@ def test_real_lifespan_cold_start_on_empty_postgres(pg_container, monkeypatch):
                     "WHERE table_schema = 'public' AND table_name = 'jobs'"
                 )).scalar() == 1
 
-            # Fresh-instance bootstrap reached a usable initial state on the
-            # empty database: the owner's personal space (a generated UUID),
-            # owner user + membership, and default execution planes.
             with fresh_engine.connect() as conn:
                 user_id = app_config.settings.default_user_id
                 space_id = conn.execute(
@@ -107,33 +88,16 @@ def test_real_lifespan_cold_start_on_empty_postgres(pg_container, monkeypatch):
                     {"s": space_id},
                 ).scalar() > 0, "default execution planes not seeded"
 
-            # Queue initialised.
-            queue = get_queue()
-            assert isinstance(queue, PostgresQueueService)
-
-            # Background worker task is running.
-            worker_tasks = [
-                t for t in asyncio.all_tasks() if t.get_name() == "job-worker"
-            ]
-            assert len(worker_tasks) == 1, "expected exactly one running job-worker task"
-            assert not worker_tasks[0].done()
-
-            # /health responds via the real ASGI app (lifespan already active).
             transport = httpx.ASGITransport(app=app, raise_app_exceptions=True)
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                 resp = await client.get("/health")
             assert resp.status_code == 200
             assert resp.json().get("status") in ("ok", "healthy")
 
-        # After the lifespan exits, the worker task must be cleanly stopped.
-        leftover = [t for t in asyncio.all_tasks() if t.get_name() == "job-worker" and not t.done()]
-        assert not leftover, "job-worker task did not shut down cleanly"
-
     try:
         asyncio.run(_run())
     finally:
         fresh_engine.dispose()
-        # Drop the smoke database so the container stays clean for other tests.
         admin = create_engine(pg_container.get_connection_url(driver="psycopg"))
         try:
             with admin.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:

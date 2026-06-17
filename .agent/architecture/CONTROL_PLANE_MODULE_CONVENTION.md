@@ -8,8 +8,10 @@
 `control-plane` is the **default client-facing API entrypoint**. This document
 defines the internal structure every TS-owned control-plane module follows, so
 future TS server features are added consistently — one explicit module at a
-time — while **`backend/` remains the Python authority for auth, schema
-migrations, and unowned business contexts. Providers/credentials are TS-owned.**
+time — while **`backend/` remains the Python authority for schema migrations and
+unowned business contexts. Native auth/spaces, session-cookie identity,
+Google OAuth, and providers/credentials are TS-owned; DB-persisted API-key
+storage remains disabled until the canonical schema adds that table.**
 
 ## Directory ownership
 
@@ -89,11 +91,14 @@ accident — and never by widening the proxy.
 - `resolveRequestId(request)` — preserve an incoming `x-request-id` or generate
   one. The gateway stamps it on every response; the proxy forwards it upstream.
 - `buildRequestContext(request)` — `{ requestId, method, path }` for TS-owned
-  handlers. Future identity placeholders (user/space/actor) belong here, but the
-  control plane does **not** parse or validate auth tokens — Python owns auth.
+  handlers. `modules/auth` owns session-cookie validation and may attach
+  `{ userId, spaceId }` identity for downstream TS-owned modules. OAuth callback
+  semantics live in `modules/auth`; API-key persistence is feature-gated off
+  while the canonical schema has no `api_keys` table.
 - `readHeader(request, name)` — safe header access; refuses to return
-  `Authorization`, `Cookie`, `Proxy-Authorization`. Only the fallback proxy's
-  forwarding path touches those, verbatim, to Python.
+  `Authorization`, `Cookie`, `Proxy-Authorization`. Auth resolution reads cookie
+  material in `modules/auth`; the fallback proxy also forwards sensitive headers
+  verbatim to Python-owned routes.
 - `x-agent-space-control-plane: ts` is trace metadata, never trust.
 
 Authorization, Cookie, request bodies, and response bodies are never logged
@@ -118,13 +123,14 @@ serializers).
 
 ## Boundaries (what this convention does NOT change)
 
-- `backend/` (Python) remains the authority for auth/membership, migrations,
-  and every product context not explicitly registered as TS-owned.
+- `backend/` (Python) remains the authority for schema migrations and every
+  product context not explicitly registered as TS-owned.
 - Current TS-owned contexts are listed in
   [`TS_CONTROL_PLANE_OWNERSHIP.md`](TS_CONTROL_PLANE_OWNERSHIP.md); no command
   has dual ownership.
 - Python/alembic remains the schema owner.
-- The control plane adds no auth authority, caching, or rate limiting.
+- The control plane owns the native Phase 2 auth/space routes; it adds no
+  gateway caching or rate limiting.
 - Routing rule: when a module claims a parametric route
   (`/:id`) under a prefix the Python fallback proxy used to serve, it must claim every
   static sibling path under that prefix too. Parametric routes beat the proxy

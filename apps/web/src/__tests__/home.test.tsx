@@ -12,7 +12,7 @@ vi.mock('../api/client', () => ({
       ],
     }),
     timeline: vi.fn().mockResolvedValue([]),
-    tasks: vi.fn().mockResolvedValue([]),
+    tasks: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 }),
     pending: vi.fn().mockResolvedValue([
       { id: 'p1', space_id: 'team-1', proposal_type: 'memory_update', status: 'pending', urgency: 'normal', title: 'A team proposal', visibility: 'space_shared', created_by_user_id: null, created_at: '', updated_at: '' },
     ]),

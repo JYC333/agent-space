@@ -29,7 +29,6 @@ log = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
-    from app.jobs import JobHandlerRegistry
     from app.proposals import ProposalApplierRegistry
     from app.runs import RunFinalizedHookRegistry
     from app.spaces import SpaceCreatedHookRegistry
@@ -42,10 +41,6 @@ class Module:
     pkg: str
     api_modules: list[str] = field(default_factory=lambda: ["api"])
     always_on: bool = True
-    # Submodule (relative to ``pkg``) exposing ``register_job_handlers(registry)``
-    # for modules that own durable job handlers. None means the module owns no
-    # job handlers.
-    job_handlers: str | None = None
     # Submodule (relative to ``pkg``) exposing
     # ``register_space_created_hooks(registry)`` for modules that initialize
     # per-space state when a new Space is created. None means no space-created
@@ -76,7 +71,6 @@ _REGISTRY: list[Module] = [
     Module("runs",          "Runs",            "app.runs",          api_modules=["api", "internal_api"], always_on=True),
     Module("proposals",     "Proposals",       "app.proposals",     api_modules=["api", "internal_api"], always_on=True),
     Module("artifacts",     "Artifacts",       "app.artifacts",     always_on=True),
-    Module("jobs",           "Job Queue",         "app.jobs",          always_on=True, job_handlers="handlers"),
     Module("credentials",   "CLI Credentials",   "app.credentials",   always_on=True),
     Module("capabilities",  "Capabilities",      "app.capabilities",  always_on=True),
     Module("deployment",    "Deployment",     "app.deployment",    always_on=True),
@@ -86,7 +80,6 @@ _REGISTRY: list[Module] = [
     Module("home",              "Home",             "app.home",             always_on=True),
     Module("me",                "PersonalView",     "app.me",               always_on=True),
     Module("source_pointers",   "Source Pointers",  "app.source_pointers",  always_on=True),
-    Module("backups",           "Backups",          "app.backups",          always_on=True),
     Module("personal_memory_grants", "Personal Memory Grants", "app.personal_memory_grants", always_on=True),
     Module("execution_planes",      "Execution Planes",      "app.execution_planes",      always_on=True, space_created_hooks="space_hooks"),
     Module("workspace_profiles",    "Workspace Profiles",    "app.workspace_profiles",    always_on=True),
@@ -96,7 +89,7 @@ _REGISTRY: list[Module] = [
     Module("knowledge",             "Knowledge",             "app.knowledge",             always_on=True, space_created_hooks="space_hooks", proposal_appliers="proposal_appliers"),
     Module("intake",                "Intake",                "app.intake",                api_modules=["api"], always_on=True),
     Module("evolution",             "Evolution",             "app.evolution",             always_on=True, proposal_appliers="proposal_appliers"),
-    Module("daily_reports",        "Daily Capture Report",  "app.daily_reports",         always_on=True, job_handlers="handlers"),
+    Module("daily_reports",        "Daily Capture Report",  "app.daily_reports",         always_on=True),
     # Optional modules — not yet implemented; uncomment when ready.
     # Module("cards",    "Cards",           "app.cards",      always_on=False),
 ]
@@ -131,53 +124,6 @@ def register(app: "FastAPI", enabled: set[str] | None = None) -> list[str]:
                 log.debug("module %s: registered extra router from %s", module.id, api_name)
 
         loaded.append(module.id)
-
-    return loaded
-
-
-def register_job_handlers(
-    registry: "JobHandlerRegistry",
-    enabled: set[str] | None = None,
-    *,
-    modules: "list[Module] | None" = None,
-) -> list[str]:
-    """Populate ``registry`` from each selected module's job-handler hook.
-
-    Modules that own durable job handlers declare a ``job_handlers`` submodule
-    exposing ``register_job_handlers(registry)``. This wires them through the
-    same module registry that loads routers, so adding a new job type means
-    adding a module hook — never editing the central worker dispatch loop.
-
-    Fails fast: a *selected* module (``always_on``, or named in ``enabled``)
-    that declares ``job_handlers`` must import cleanly and expose the hook. A
-    broken import (``ImportError``) propagates and a missing hook raises
-    ``RuntimeError`` — both surface at startup rather than silently degrading
-    into later "unknown job type" dispatch failures. Modules that are
-    intentionally disabled are skipped without importing.
-
-    ``modules`` overrides the module list (for tests); it defaults to the
-    backend module registry. Returns the module ids whose handlers registered.
-    """
-    loaded: list[str] = []
-    for module in (_REGISTRY if modules is None else modules):
-        if not module.job_handlers:
-            continue
-        if not module.always_on and (enabled is None or module.id not in enabled):
-            continue  # intentionally disabled — skip its handlers without importing
-
-        # A selected module that declares job_handlers MUST register cleanly:
-        # let ImportError propagate (fail fast) and raise on a missing hook.
-        mod = importlib.import_module(f".{module.job_handlers}", package=module.pkg)
-        hook = getattr(mod, "register_job_handlers", None)
-        if not callable(hook):
-            raise RuntimeError(
-                f"module {module.id}: {module.pkg}.{module.job_handlers} declares "
-                f"job_handlers but exposes no register_job_handlers(registry)"
-            )
-
-        hook(registry)
-        loaded.append(module.id)
-        log.debug("module %s: registered job handlers from %s", module.id, module.job_handlers)
 
     return loaded
 

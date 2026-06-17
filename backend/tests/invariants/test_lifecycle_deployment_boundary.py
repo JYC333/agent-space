@@ -604,11 +604,27 @@ def test_system_backup_manifest_schema_matches_backup_service():
     in-process BackupService write identical keys, including
     backup_interval_hours and backup_retention_count.
     """
-    from app.backups.manifest import BackupManifest
+    manifest_fields = [
+        "backup_format",
+        "kind",
+        "created_at",
+        "source_root",
+        "included_paths",
+        "excluded_paths",
+        "db_snapshot_method",
+        "backup_interval_hours",
+        "backup_retention_count",
+        "warnings",
+        "app_version",
+        "git_commit",
+        "alembic_revision",
+        "postgres_server_version",
+        "pg_dump_version",
+    ]
 
     repo_root = Path(__file__).resolve().parents[3]
     script = (repo_root / "ops" / "scripts" / "system" / "backup.sh").read_text()
-    for field in BackupManifest.__dataclass_fields__:
+    for field in manifest_fields:
         assert f'"{field}":' in script, (
             f"ops/scripts/system/backup.sh manifest is missing field '{field}' "
             "present in BackupService manifest"

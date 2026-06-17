@@ -22,7 +22,7 @@ describe("frontend-support read model facades", () => {
     expect(TS_OWNED_MODULES).toContain(frontendSupportModule);
   });
 
-  it("forwards home, me, and workspace-console read models through the explicit Python port", async () => {
+  it("forwards home and me read models through the explicit Python port", async () => {
     upstream = await startMockUpstream();
     app = buildServer(loadConfig({ CONTROL_PLANE_PYTHON_API_BASE_URL: upstream.baseUrl }), {
       logger: false,
@@ -31,7 +31,6 @@ describe("frontend-support read model facades", () => {
     const requests = [
       "/api/v1/home/summary?space_id=personal&user_id=default_user",
       "/api/v1/me/summary",
-      "/api/v1/workspace-console/workspaces?space_id=personal",
     ];
     for (const url of requests) {
       const res = await app.inject({

@@ -10,7 +10,7 @@
 
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Readable } from "node:stream";
-import { request as undiciRequest } from "undici";
+import { request as undiciRequest, type Dispatcher } from "undici";
 import type { ControlPlaneConfig } from "../config";
 import { errorEnvelope, sendErrorEnvelope } from "../gateway/errorEnvelope";
 import {
@@ -82,11 +82,15 @@ export async function requestPythonAuthority(
   config: ControlPlaneConfig,
   request: FastifyRequest,
   upstreamPath: string,
+  method?: string,
+  body?: Buffer,
 ): Promise<PythonAuthorityResponse> {
   const requestId = resolveRequestId(request);
+  const resolvedMethod = (method ?? request.method).toUpperCase();
   return undiciRequest(`${config.pythonApiBaseUrl}${upstreamPath}`, {
-    method: "GET",
+    method: resolvedMethod as Dispatcher.HttpMethod,
     headers: buildPythonAuthorityHeaders(request, requestId),
+    body,
     maxRedirections: 0,
     signal: AbortSignal.timeout(config.requestTimeoutMs),
   });
@@ -97,11 +101,25 @@ export async function forwardPythonAuthorityResponse(
   request: FastifyRequest,
   reply: FastifyReply,
   upstreamPath = request.url,
+  method = request.method,
 ): Promise<FastifyReply> {
   const requestId = resolveRequestId(request);
   reply.header(REQUEST_ID_HEADER, requestId);
   try {
-    const upstream = await requestPythonAuthority(config, request, upstreamPath);
+    const methodUpper = method.toUpperCase();
+    const forwardBody =
+      methodUpper !== "GET" && methodUpper !== "HEAD" &&
+      request.body instanceof Buffer &&
+      request.body.length > 0
+        ? request.body
+        : undefined;
+    const upstream = await requestPythonAuthority(
+      config,
+      request,
+      upstreamPath,
+      methodUpper,
+      forwardBody,
+    );
     reply.code(upstream.statusCode);
     copyPythonAuthorityResponseHeaders(upstream.headers, reply);
     return reply.send(upstream.body);

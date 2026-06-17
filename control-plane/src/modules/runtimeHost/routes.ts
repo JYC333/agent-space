@@ -29,8 +29,6 @@ async function parseWith<T>(schemaName: string, value: unknown): Promise<T> {
 }
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
-  if (context.config.providersCredentialsAuthority !== "ts") return;
-
   app.post("/internal/runtime-host/execute", async (request, reply) => {
     if (!checkInternalToken(context.config, request)) {
       return reply.code(401).send({ detail: "Unauthorized" });

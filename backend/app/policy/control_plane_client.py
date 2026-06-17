@@ -21,7 +21,7 @@ class ControlPlanePolicyError(Exception):
 
 
 def policy_owned_by_control_plane() -> bool:
-    return (settings.control_plane_policy_authority or "").strip().lower() == "ts"
+    return True
 
 
 def _internal_base_url() -> str:

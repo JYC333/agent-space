@@ -15,7 +15,6 @@ from app.automation.schedule import (
     parse_schedule,
 )
 from app.automation.schemas import AutomationCreate, AutomationUpdate
-from app.automation.scheduler import AutomationScheduler
 from app.automation.service import AutomationService
 from app.models import (
     AgentVersion,
@@ -140,59 +139,6 @@ class TestScheduleAutomationService:
 
 
 # ===========================================================================
-# 3. Scheduler scan_and_fire
-# ===========================================================================
-
-class TestAutomationScheduler:
-    def _due_schedule(self, db, test_agent):
-        auto = AutomationService(db).create(
-            space_id=test_agent.space_id,
-            owner_user_id=test_agent.owner_user_id,
-            data=AutomationCreate(
-                name="due", agent_id=test_agent.id,
-                trigger_type="schedule", config_json=_schedule_cfg(),
-            ),
-        )
-        auto.next_run_at = datetime.now(UTC) - timedelta(minutes=1)  # make it due
-        db.commit()
-        return auto
-
-    def test_due_automation_is_fired_and_advanced(self, db, test_agent):
-        auto = self._due_schedule(db, test_agent)
-        fired = AutomationScheduler(db).scan_and_fire()
-        assert fired == 1
-        db.expire_all()
-        # An AutomationRun + queued Run were created.
-        link = db.query(AutomationRun).filter(AutomationRun.automation_id == auto.id).one()
-        assert link.trigger_type == "schedule"
-        run = db.query(Run).filter(Run.id == link.run_id).one()
-        assert run.trigger_origin == "automation"
-        assert run.status == "queued"
-        # next_run_at advanced into the future; last_fired_at recorded.
-        auto2 = db.query(Automation).filter(Automation.id == auto.id).one()
-        assert auto2.next_run_at > datetime.now(UTC)
-        assert auto2.last_fired_at is not None
-
-    def test_not_due_automation_skipped(self, db, test_agent):
-        AutomationService(db).create(
-            space_id=test_agent.space_id,
-            owner_user_id=test_agent.owner_user_id,
-            data=AutomationCreate(
-                name="future", agent_id=test_agent.id,
-                trigger_type="schedule", config_json=_schedule_cfg(),
-            ),
-        )
-        db.commit()
-        assert AutomationScheduler(db).scan_and_fire() == 0
-
-    def test_second_scan_is_idempotent(self, db, test_agent):
-        self._due_schedule(db, test_agent)
-        assert AutomationScheduler(db).scan_and_fire() == 1
-        # next_run_at advanced past now → a second immediate scan fires nothing.
-        assert AutomationScheduler(db).scan_and_fire() == 0
-
-
-# ===========================================================================
 # 4. Option-A pre-authorization gate
 # ===========================================================================
 
@@ -295,19 +241,25 @@ def test_scheduled_model_api_run_executes_end_to_end(db, test_agent, tmp_path, m
     )
     _point_agent_at_model_api(db, test_agent, provider.id)
 
-    auto = AutomationService(db).create(
+    svc = AutomationService(db)
+    auto = svc.create(
         space_id=test_agent.space_id, owner_user_id=test_agent.owner_user_id,
         data=AutomationCreate(
             name="daily-summary", agent_id=test_agent.id,
             trigger_type="schedule", config_json=_schedule_cfg(),
         ),
     )
-    auto.next_run_at = datetime.now(UTC) - timedelta(minutes=1)
-    db.commit()
 
-    # Scheduler fires the due automation → queued model_api run.
-    assert AutomationScheduler(db).scan_and_fire() == 1
+    # Fire the automation directly; scheduler scans are TS-owned.
+    result = svc.fire(
+        automation_id=auto.id,
+        space_id=test_agent.space_id,
+        actor_user_id=test_agent.owner_user_id,
+        trigger_type="schedule",
+    )
+    db.commit()
     link = db.query(AutomationRun).filter(AutomationRun.automation_id == auto.id).one()
+    assert link.run_id == result.run_id
 
     # Execute the fired run — the standing grant must let it pass runtime.use_credential.
     with patch("litellm.completion", return_value=_fake_litellm_response("scheduled output")):

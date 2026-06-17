@@ -132,8 +132,8 @@ def _ports() -> tuple[Stage6PortDescriptor, ...]:
                 error_codes=["stage6_port_not_implemented", "stage6_port_invalid_request"],
                 writes=[],
                 notes=(
-                    "Retired under CONTROL_PLANE_SESSIONS_AUTHORITY=ts; "
-                    "session_summary.get_latest is served by the TypeScript control plane."
+                    "Retired from Python; session_summary.get_latest is served by "
+                    "the TypeScript control plane."
                 ),
             )
         )

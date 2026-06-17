@@ -7,8 +7,8 @@
  * and the control-plane marker header — that every control-plane path
  * (TS-owned or proxied) shares.
  *
- * This is metadata only. No auth tokens are parsed or validated here; Python
- * remains the authority for authentication and authorization.
+ * This file is metadata only. Native auth resolution lives in modules/auth and
+ * only publishes the resulting user/space identifiers into request context.
  */
 
 import type { FastifyRequest } from "fastify";
@@ -19,8 +19,7 @@ export const REQUEST_ID_HEADER = "x-request-id";
 
 /**
  * Marker stamped on requests/responses that passed through the control plane. It
- * is trace metadata only — never a grant of trust. Python still authenticates and
- * authorizes every request.
+ * is trace metadata only — never a grant of trust.
  */
 export const CONTROL_PLANE_MARKER_HEADER = "x-agent-space-control-plane";
 export const CONTROL_PLANE_MARKER_VALUE = "ts";
@@ -53,9 +52,9 @@ export function readHeader(request: FastifyRequest, name: string): string | unde
 }
 
 /**
- * Client-facing request metadata shared by TS-owned routes. Future identity
- * fields (user/space/actor) belong here as *placeholders* once auth context is
- * introduced — the control plane will still not validate tokens itself.
+ * Client-facing request metadata shared by TS-owned routes. Auth modules may
+ * attach TS-native identity after validating a session cookie; raw credentials
+ * never belong in this object.
  */
 export interface RequestContext {
   /** Preserved or generated correlation id for this request. */
@@ -63,6 +62,13 @@ export interface RequestContext {
   method: string;
   /** Raw path + query string as received. */
   path: string;
+  /** TS-native authenticated identity, populated only after auth resolution. */
+  identity?: AuthenticatedIdentity;
+}
+
+export interface AuthenticatedIdentity {
+  spaceId: string;
+  userId: string;
 }
 
 /** Build the standard request context for a TS-owned route handler. */

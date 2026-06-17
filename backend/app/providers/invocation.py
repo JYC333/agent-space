@@ -10,19 +10,12 @@ provider credential owner and is never written to ``os.environ``.
 """
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
 from ..models import ModelProvider
-from .control_plane_client import (
-    complete_text_via_control_plane,
-    provider_credentials_owned_by_control_plane,
-)
-from .credentials import resolve_provider_api_key
-
-log = logging.getLogger(__name__)
+from .control_plane_client import complete_text_via_control_plane
 
 # Provider types callable through this in-process litellm channel. Mirrors the
 # ProviderType literal in providers/models.py.
@@ -117,74 +110,39 @@ def complete_text(
 ) -> CompletionResult:
     """Single synchronous (system, user) -> text completion.
 
-    In the default Python-owned mode this resolves the provider locally, builds
-    the litellm model name, and makes one ``litellm.completion`` call. When
-    provider credentials are owned by control-plane, it forwards the same
-    request to the internal provider completion port.
+    Provider completion is owned by the TypeScript control plane. Python keeps
+    this facade for migration-period callers and forwards the request to the
+    internal provider completion port.
 
-    ``api_key`` may be supplied pre-resolved (e.g. a runtime adapter passing
-    ``ctx.resolved_credentials["api_key"]`` that the execution service already
-    resolved through the canonical boundary). When omitted, it is resolved here via
-    ``resolve_provider_api_key``. Under control-plane authority the key is
-    always resolved by the credential owner (a pre-resolved ``api_key`` is not
-    forwarded), so credential release stays single-decider.
+    ``api_key`` is accepted for migration-period call signature compatibility
+    but is not forwarded. The control plane resolves credentials so credential
+    release stays single-decider.
 
-    ``task`` names the auxiliary task (e.g. ``"reflector"``). Under
-    control-plane authority a matching ProviderTaskPolicy chain takes
-    precedence and ``provider_id`` becomes the safety net; the Python-owned
-    path has no chain support and ignores it.
+    ``task`` names the auxiliary task (e.g. ``"reflector"``). A matching
+    ProviderTaskPolicy chain takes precedence in the control plane and
+    ``provider_id`` becomes the safety net.
 
     Raises:
-        ProviderUnavailableError / UnsupportedProviderError: from resolve_usable_provider
-        CredentialResolutionError: provider has no decryptable key
-        Any litellm exception on network/API failure (caller decides how to handle)
+        ProviderUnavailableError: provider row is missing locally
+        ControlPlaneProviderError: internal control-plane call failed
     """
-    if provider_credentials_owned_by_control_plane():
-        space_id = _provider_space_id(db, provider_id)
-        response = complete_text_via_control_plane(
-            space_id=space_id,
-            provider_id=provider_id,
-            model=model,
-            system=system,
-            user=user,
-            max_tokens=max_tokens,
-            task=task,
-        )
-        usage = response.get("usage")
-        return CompletionResult(
-            text=str(response.get("text") or ""),
-            model=str(response.get("model") or model or ""),
-            usage=usage if isinstance(usage, dict) else None,
-        )
-
-    row = resolve_usable_provider(db, provider_id)
-    provider_type = row.provider_type
-    if api_key is None:
-        api_key = resolve_provider_api_key(db, provider_id)
-
-    resolved_model = model or row.default_model or _default_model_for_type(provider_type)
-    litellm_model = build_litellm_model_name(provider_type, resolved_model)
-
-    import litellm  # already a project dependency (litellm>=1.0.0)
-
-    params: dict = {
-        "model": litellm_model,
-        "api_key": api_key,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "max_tokens": max_tokens,
-    }
-    if row.base_url:
-        params["api_base"] = row.base_url
-
-    log.debug("complete_text: provider=%s model=%s", provider_type, litellm_model)
-    response = litellm.completion(**params)
-    text = response.choices[0].message.content or ""
-    usage = getattr(response, "usage", None)
-    usage_dict = usage.model_dump() if hasattr(usage, "model_dump") else (dict(usage) if usage else None)
-    return CompletionResult(text=text, model=resolved_model, usage=usage_dict)
+    _ = api_key
+    space_id = _provider_space_id(db, provider_id)
+    response = complete_text_via_control_plane(
+        space_id=space_id,
+        provider_id=provider_id,
+        model=model,
+        system=system,
+        user=user,
+        max_tokens=max_tokens,
+        task=task,
+    )
+    usage = response.get("usage")
+    return CompletionResult(
+        text=str(response.get("text") or ""),
+        model=str(response.get("model") or model or ""),
+        usage=usage if isinstance(usage, dict) else None,
+    )
 
 
 def _provider_space_id(db: Session, provider_id: str) -> str:
@@ -193,13 +151,3 @@ def _provider_space_id(db: Session, provider_id: str) -> str:
         raise ProviderUnavailableError(f"ModelProvider '{provider_id}' not found.")
     return str(row[0])
 
-
-def _default_model_for_type(provider_type: str) -> str:
-    """Minimal fallback model name when no default_model is configured."""
-    _DEFAULTS = {
-        "openai": "gpt-4o-mini",
-        "anthropic": "claude-3-5-sonnet-latest",
-        "openrouter": "openai/gpt-4o-mini",
-        "ollama": "llama3",
-    }
-    return _DEFAULTS.get(provider_type, "gpt-4o-mini")

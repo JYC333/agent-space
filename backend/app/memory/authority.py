@@ -1,25 +1,19 @@
-"""Authority guard for Stage 6 memory slices.
+"""Authority guards for memory routes.
 
-When ``CONTROL_PLANE_MEMORY_AUTHORITY=ts`` the TypeScript control plane owns the
-public memory read routes (slice 5) and public memory proposal-create routes
-(slice 6). Python's moved handlers fail closed so there is exactly one command
-authority. When ``CONTROL_PLANE_MEMORY_APPLY_AUTHORITY=ts`` the TypeScript
-control plane also owns accepted ``memory_create``/``memory_update``/
-``memory_archive`` proposal apply. Quality/evolution routes remain Python-owned
+The TypeScript control plane owns public memory reads, public memory
+proposal-create routes, and accepted ``memory_create``/``memory_update``/
+``memory_archive`` proposal apply. Python's moved handlers fail closed so there
+is exactly one command authority. Quality/evolution routes remain Python-owned
 until their later slices move.
 """
 
 from __future__ import annotations
 
-import os
-
 from fastapi import HTTPException
 
 
 def memory_read_owned_by_ts() -> bool:
-    return (
-        os.getenv("CONTROL_PLANE_MEMORY_AUTHORITY", "python").strip().lower() == "ts"
-    )
+    return True
 
 
 def memory_proposal_create_owned_by_ts() -> bool:
@@ -27,11 +21,8 @@ def memory_proposal_create_owned_by_ts() -> bool:
 
 
 def memory_apply_owned_by_ts() -> bool:
-    """Stage 6 slice 7b: TS applies accepted memory_create/update/archive proposals."""
-    return (
-        os.getenv("CONTROL_PLANE_MEMORY_APPLY_AUTHORITY", "python").strip().lower()
-        == "ts"
-    )
+    """TS applies accepted memory_create/update/archive proposals."""
+    return True
 
 
 _TS_APPLIED_MEMORY_TYPES = frozenset(

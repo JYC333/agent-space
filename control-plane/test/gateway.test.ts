@@ -29,6 +29,9 @@ describe("route registry", () => {
     const fakeApp = {
       get: (url: string) => registered.push({ method: "GET", url }),
       post: (url: string) => registered.push({ method: "POST", url }),
+      put: (url: string) => registered.push({ method: "PUT", url }),
+      patch: (url: string) => registered.push({ method: "PATCH", url }),
+      delete: (url: string) => registered.push({ method: "DELETE", url }),
       all: (url: string) => registered.push({ method: "ALL", url }),
       setErrorHandler: () => undefined,
       addHook: () => undefined,
@@ -40,15 +43,36 @@ describe("route registry", () => {
     expect(urls).toContain("/health");
     expect(urls).toContain("/api/v1/control-plane/health");
     expect(urls).toContain("/api/v1/control-plane/features");
+    expect(urls).toContain("/api/v1/auth/google-configured");
+    expect(urls).toContain("/api/v1/auth/google");
+    expect(urls).toContain("/api/v1/auth/google/callback");
+    expect(urls).toContain("/api/v1/auth/keys");
+    expect(urls).toContain("/api/v1/auth/introspect");
+    expect(urls).toContain("/api/v1/me");
+    expect(urls).toContain("/api/v1/me/spaces");
+    expect(urls).toContain("/api/v1/spaces");
+    expect(urls).toContain("/api/v1/spaces/:spaceId");
+    expect(urls).toContain("/api/v1/spaces/:spaceId/members");
+    expect(urls).toContain("/api/v1/spaces/:spaceId/invitations");
+    expect(urls).toContain("/api/v1/invitations/:token/accept");
     expect(urls).toContain("/api/v1/runs/:runId/events/stream");
     expect(urls).toContain("/api/v1/control-plane/notifications/webhooks/dispatch");
     expect(urls).toContain("/api/v1/providers");
     expect(urls).toContain("/api/v1/providers/catalog");
     expect(urls).toContain("/api/v1/providers/litellm-providers");
     expect(urls).toContain("/api/v1/providers/:configId");
+    expect(urls).toContain("/api/v1/artifacts");
+    expect(urls).toContain("/api/v1/activity");
+    expect(urls).toContain("/api/v1/intake");
+    expect(urls).toContain("/api/v1/knowledge");
+    expect(urls).toContain("/api/v1/tasks");
+    expect(urls).toContain("/api/v1/boards");
+    expect(urls).toContain("/api/v1/me/tasks");
+    expect(urls).toContain("/api/v1/workspaces");
     expect(urls).toContain("/api/v1/home/summary");
     expect(urls).toContain("/api/v1/me/summary");
     expect(urls).toContain("/api/v1/workspace-console/workspaces");
+    expect(urls).toContain("/api/v1/deployments/jobs");
     // The Python fallback proxy catch-all must be the very last registration.
     expect(registered[registered.length - 1]).toEqual({ method: "ALL", url: "/api/v1/*" });
     expect(urls.filter((u) => u === "/api/v1/*")).toHaveLength(1);
@@ -60,6 +84,8 @@ describe("route registry", () => {
     expect(TS_OWNED_MODULES).toContain(systemModule);
     expect(TS_OWNED_MODULES.map((m) => m.name)).toEqual([
       "system",
+      "auth",
+      "spaces",
       "catalog",
       "streaming",
       "notifications",
@@ -67,11 +93,22 @@ describe("route registry", () => {
       "providers",
       "runtime_host",
       "runs",
+      "artifacts",
       "policy",
       "proposals",
       "sessions",
       "agents",
       "memory",
+      "activity",
+      "intake",
+      "knowledge",
+      "tasks",
+      "workspaces",
+      "jobs",
+      "automations",
+      "dailyReports",
+      "backups",
+      "deployment",
       "frontend_support",
     ]);
     // The Python fallback proxy is bridge code, not a TS-owned module.
@@ -160,7 +197,7 @@ describe("error envelope for TS-owned routes", () => {
     app = buildServer(loadConfig({ CONTROL_PLANE_PYTHON_API_BASE_URL: "http://127.0.0.1:9" }), {
       logger: false,
     });
-    const res = await app.inject({ method: "GET", url: "/api/v1/me" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/python-only-smoke" });
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({
       error: "python_backend_unavailable",

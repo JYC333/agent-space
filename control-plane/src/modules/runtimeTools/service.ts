@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import type { ControlPlaneConfig } from "../../config";
+import { getLocalCliRuntimeAdapterSpec } from "../runtimeAdapters";
 
 export interface RuntimeToolDefinition {
   runtime: string;
@@ -127,11 +128,24 @@ export class RuntimeToolError extends Error {
 
 function definitionFor(runtime: string): RuntimeToolDefinition {
   const definition = RUNTIME_TOOL_DEFINITIONS[runtime];
-  if (!definition) {
+  const spec = getLocalCliRuntimeAdapterSpec(runtime);
+  if (
+    !definition ||
+    !spec ||
+    spec.implementation_status !== "implemented" ||
+    spec.credentials.credential_runtime_name !== runtime
+  ) {
     throw new RuntimeToolError(
       "runtime_tool_not_allowlisted",
       `Runtime tool '${runtime}' is not allowlisted.`,
       404,
+    );
+  }
+  if (spec.executable.command !== definition.bin_name) {
+    throw new RuntimeToolError(
+      "runtime_tool_spec_mismatch",
+      `Runtime tool '${runtime}' does not match its adapter spec.`,
+      500,
     );
   }
   return definition;

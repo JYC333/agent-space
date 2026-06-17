@@ -13,15 +13,6 @@ class ControlPlaneProviderError(Exception):
     """Raised when an internal provider/credential call to control-plane fails."""
 
 
-def provider_credentials_owned_by_control_plane() -> bool:
-    return (
-        (settings.control_plane_providers_credentials_authority or "")
-        .strip()
-        .lower()
-        == "ts"
-    )
-
-
 def _internal_base_url() -> str:
     base_url = (settings.control_plane_internal_url or "").strip().rstrip("/")
     if not base_url:

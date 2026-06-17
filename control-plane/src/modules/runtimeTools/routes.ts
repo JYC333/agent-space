@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ModuleContext } from "../../gateway/routeRegistry";
 import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
-import { introspectIdentity } from "../providers/identity";
+import { introspectIdentity } from "../auth/identity";
 import { RuntimeToolError, RuntimeToolRegistry } from "./service";
 
 function params(request: FastifyRequest): Record<string, string | undefined> {

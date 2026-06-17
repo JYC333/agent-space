@@ -1,6 +1,5 @@
 import asyncio
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -17,11 +16,6 @@ async def lifespan(app: FastAPI):
     paths.init_dirs()
     paths.validate()
 
-    # Backup safety policy: fail fast in prod when backups are disabled and not
-    # explicitly acknowledged (warn elsewhere). Runs before any data is written.
-    from .backups.guard import enforce_backup_policy
-    enforce_backup_policy(settings)
-
     # Alembic upgrade is synchronous and can take noticeable time on cold DBs.
     await asyncio.to_thread(init_db)
 
@@ -30,11 +24,6 @@ async def lifespan(app: FastAPI):
     from .auth import ApiKeyService
     from .feature_gates import API_KEYS_DB_PERSISTED
     from .models import Space, SpaceMembership
-    from .jobs import JobHandlerRegistry
-    from .jobs.registry import init_registry
-    from .jobs.queue import PostgresQueueService, init_queue
-    from .jobs.worker import start_worker
-    from .modules.registry import register_job_handlers
 
     # Build and publish the space-created hook registry before any code path can
     # create a Space (bootstrap_instance / register_system_core_workspace below).
@@ -109,146 +98,7 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
-    # Initialise the durable job queue and start the background worker.
-    # Build one JobHandlerRegistry per startup, populate it from the
-    # module-owned registration hooks, publish it for the jobs API, and inject
-    # it into the worker (which dispatches every job through it).
-    queue = PostgresQueueService(SessionLocal)
-    init_queue(queue)
-
-    job_registry = JobHandlerRegistry()
-    register_job_handlers(job_registry)
-    init_registry(job_registry)
-
-    worker_task = await start_worker(queue, job_registry)
-
-    import logging as _logging
-    _scheduler_log = _logging.getLogger(__name__)
-
-    from .scheduler import ScheduledTask, SchedulerRegistry
-    scheduler_registry = SchedulerRegistry()
-
-    # ── Daily Capture Report scheduler ───────────────────────────────────────
-    if settings.daily_report_scheduler_enabled:
-        from .daily_reports.scheduler import DailyCaptureReportScheduler
-
-        async def _scan_daily_reports() -> None:
-            db_scan = SessionLocal()
-            try:
-                scheduler = DailyCaptureReportScheduler(db_scan)
-                enqueued = await scheduler.scan_and_enqueue(queue)
-                if enqueued:
-                    _scheduler_log.info(
-                        "daily_report_scheduler: scan enqueued %d job(s)", enqueued
-                    )
-            finally:
-                db_scan.close()
-
-        scheduler_registry.register(
-            ScheduledTask(
-                name="daily_report_scheduler",
-                interval_seconds=settings.daily_report_scheduler_interval_seconds,
-                run=_scan_daily_reports,
-                run_on_start=True,
-            )
-        )
-
-    # ── Automation scheduler ─────────────────────────────────────────────────
-    if settings.automation_scheduler_enabled:
-        from .automation.scheduler import AutomationScheduler
-
-        async def _scan_automations() -> None:
-            db_scan = SessionLocal()
-            try:
-                fired = await asyncio.to_thread(
-                    AutomationScheduler(db_scan).scan_and_fire
-                )
-                if fired:
-                    _scheduler_log.info("automation_scheduler: scan fired %d automation(s)", fired)
-            finally:
-                db_scan.close()
-
-        scheduler_registry.register(
-            ScheduledTask(
-                name="automation_scheduler",
-                interval_seconds=settings.automation_scheduler_interval_seconds,
-                run=_scan_automations,
-                run_on_start=True,
-            )
-        )
-
-    # ── Memory read-access log retention sweep ───────────────────────────────
-    if settings.memory_access_log_retention_enabled:
-        from .memory.access_log import prune_memory_access_logs
-
-        async def _prune_memory_access_logs() -> None:
-            db_scan = SessionLocal()
-            try:
-                deleted = await asyncio.to_thread(
-                    prune_memory_access_logs,
-                    db_scan,
-                    older_than_days=settings.memory_access_log_retention_days,
-                )
-                if deleted:
-                    _scheduler_log.info(
-                        "memory_access_log_retention: pruned %d trace row(s)", deleted
-                    )
-            finally:
-                db_scan.close()
-
-        scheduler_registry.register(
-            ScheduledTask(
-                name="memory_access_log_retention",
-                interval_seconds=settings.memory_access_log_prune_interval_seconds,
-                run=_prune_memory_access_logs,
-                run_on_start=False,
-            )
-        )
-
-    # ── Backup scheduler ──────────────────────────────────────────────────────
-    _backup_scheduler = None
-    if settings.backup_enabled:
-        from .backups.service import BackupService
-        from .backups.scheduler import (
-            BackupScheduler,
-            make_backup_scheduled_task,
-            set_scheduler,
-        )
-        _backup_svc = BackupService(
-            data_root=Path(settings.agent_space_home),
-            backup_root=Path(settings.backup_root),
-            interval_hours=settings.backup_interval_hours,
-            retention_count=settings.backup_retention_count,
-            include_logs=settings.backup_include_logs,
-            database_url=settings.database_url,
-            app_version=settings.app_version,
-        )
-        _backup_scheduler = BackupScheduler(service=_backup_svc)
-        set_scheduler(_backup_scheduler)
-        scheduler_registry.register(
-            make_backup_scheduled_task(
-                _backup_scheduler,
-                interval_hours=settings.backup_interval_hours,
-                run_on_start=settings.backup_on_startup,
-            )
-        )
-
-    await scheduler_registry.start()
-
     yield
-
-    # ── Graceful shutdown ─────────────────────────────────────────────────────
-    worker_task.cancel()
-    try:
-        await worker_task
-    except asyncio.CancelledError:
-        pass
-
-    await scheduler_registry.stop()
-
-    if _backup_scheduler is not None:
-        from .backups.scheduler import set_scheduler
-        set_scheduler(None)
 
 
 app = FastAPI(

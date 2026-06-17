@@ -1,7 +1,6 @@
-"""Internal client for TS-owned run execution (Stage 4 authority).
+"""Internal client for the fixed TS-owned run execution authority.
 
-When ``CONTROL_PLANE_RUNS_AUTHORITY=ts``, Python code that needs a run executed
-synchronously (currently the agents chat turn) must not call the retired
+Python code that still creates queued runs must not call the retired
 ``RunExecutionService`` path. It asks the TypeScript control plane to execute
 the queued run through the service-authenticated internal port instead, so
 exactly one implementation owns ``runs.execute``.

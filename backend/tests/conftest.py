@@ -257,22 +257,6 @@ def db_engine_isolated(db_engine):
 
 
 @pytest.fixture(scope="function")
-def queue_service(db_engine_isolated):
-    """Dedicated queue fixture.
-
-    Returns a ``PostgresQueueService`` bound to the committed test engine, with
-    TRUNCATE + reseed before and after each test (inherited from
-    ``db_engine_isolated``).  Queue code opens its own independent sessions and
-    commits across them, so it needs committed cross-session state rather than
-    the rollback-only ``db`` fixture.  Using this fixture keeps every queue test
-    isolated from committed rows left by any other test.
-    """
-    from app.jobs.queue import PostgresQueueService
-    Session = sessionmaker(bind=db_engine_isolated)
-    return PostgresQueueService(Session)
-
-
-@pytest.fixture(scope="function")
 def db(db_engine):
     """Function-scoped database session.
 
@@ -384,10 +368,6 @@ def app_db_override(request, db, db_engine):
         finally:
             session.close()
 
-    from app.jobs.queue import PostgresQueueService, init_queue
-    from app.jobs import JobHandlerRegistry
-    from app.jobs.registry import init_registry
-    from app.modules.registry import register_job_handlers
     import app.db as app_db
 
     @asynccontextmanager
@@ -401,13 +381,6 @@ def app_db_override(request, db, db_engine):
     app.dependency_overrides[get_db] = override_get_db
     app.router.lifespan_context = test_lifespan
     app_db.SessionLocal = EngineSession if durable_audit else Session
-    init_queue(PostgresQueueService(Session))
-    # Mirror the app lifespan: build, populate, and publish a JobHandlerRegistry
-    # so the jobs API (/jobs/handlers) can introspect registered handlers. A
-    # fresh registry per setup avoids cross-test duplicate registration.
-    _job_registry = JobHandlerRegistry()
-    register_job_handlers(_job_registry)
-    init_registry(_job_registry)
     try:
         yield
     finally:

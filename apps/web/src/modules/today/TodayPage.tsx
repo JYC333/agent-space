@@ -13,6 +13,7 @@ import type {
 import { PreviewBadge, UrgencyBadge } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
 import { EmptyState } from '../../components/ui/empty-state'
+import { codePatchAcceptOptions } from '../memory/codePatchConfirm'
 
 /**
  * Space Today — the space-scoped dashboard for ONE concrete Space (the active Space).
@@ -121,7 +122,7 @@ function ProductLoopStrip({ runs, tasks, proposals }: { runs: HomeRunSummaryItem
   )
 }
 
-function ProposalStatusCard({ proposals, onDecide }: { proposals: HomePendingProposalItem[]; onDecide: (id: string, action: 'accept' | 'reject') => void }) {
+function ProposalStatusCard({ proposals, onDecide }: { proposals: HomePendingProposalItem[]; onDecide: (proposal: HomePendingProposalItem, action: 'accept' | 'reject') => void }) {
   const canQuick = (p: HomePendingProposalItem) => (p.proposal_type === 'memory_update' || p.proposal_type === 'code_patch') && p.status === 'pending'
   return (
     <div className="bg-card border border-border rounded-lg p-4 flex flex-col gap-3">
@@ -139,10 +140,10 @@ function ProposalStatusCard({ proposals, onDecide }: { proposals: HomePendingPro
               <Link to={`/proposals/${p.id}`} className="flex-1 min-w-0 text-[12px] text-foreground truncate hover:underline">{p.title}</Link>
               {canQuick(p) && (
                 <div className="flex gap-1 shrink-0">
-                  <button type="button" onClick={() => onDecide(p.id, 'accept')} title="Accept" className="w-[22px] h-[22px] rounded flex items-center justify-center" style={{ background: 'color-mix(in oklch, var(--success) 15%, transparent)', border: '1px solid color-mix(in oklch, var(--success) 30%, transparent)', color: 'var(--success)' }}>
+                  <button type="button" onClick={() => onDecide(p, 'accept')} title="Accept" className="w-[22px] h-[22px] rounded flex items-center justify-center" style={{ background: 'color-mix(in oklch, var(--success) 15%, transparent)', border: '1px solid color-mix(in oklch, var(--success) 30%, transparent)', color: 'var(--success)' }}>
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12" /></svg>
                   </button>
-                  <button type="button" onClick={() => onDecide(p.id, 'reject')} title="Reject" className="w-[22px] h-[22px] rounded flex items-center justify-center" style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--muted-foreground)' }}>
+                  <button type="button" onClick={() => onDecide(p, 'reject')} title="Reject" className="w-[22px] h-[22px] rounded flex items-center justify-center" style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--muted-foreground)' }}>
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
                   </button>
                 </div>
@@ -312,10 +313,18 @@ export default function TodayPage() {
     }
   }, [loadSummary, activeSpaceId])
 
-  async function decide(id: string, action: 'accept' | 'reject') {
+  async function decide(proposal: HomePendingProposalItem, action: 'accept' | 'reject') {
     try {
-      if (action === 'accept') await proposalsApi.accept(id)
-      else await proposalsApi.reject(id)
+      if (action === 'accept') {
+        const detail = proposal.proposal_type === 'code_patch'
+          ? await proposalsApi.get(proposal.id)
+          : null
+        const options = detail ? codePatchAcceptOptions(detail) : {}
+        if (options === null) return
+        await proposalsApi.accept(proposal.id, options)
+      } else {
+        await proposalsApi.reject(proposal.id)
+      }
       toast.success(`Proposal ${action}ed`)
       await loadSummary()
     } catch (e) {

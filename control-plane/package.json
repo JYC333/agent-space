@@ -14,7 +14,9 @@
     "pretest": "npm run build:protocol",
     "test": "vitest run",
     "pretest:watch": "npm run build:protocol",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "migrate": "npm run build && node dist/db/migrateCli.js up",
+    "migrate:status": "npm run build && node dist/db/migrateCli.js status"
   },
   "dependencies": {
     "@agent-space/protocol": "file:../packages/protocol",

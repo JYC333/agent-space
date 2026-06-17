@@ -10,7 +10,7 @@ import { Pool } from "pg";
 
 const pools = new Map<string, Pool>();
 
-export type { Pool } from "pg";
+export type { Pool, PoolClient } from "pg";
 
 export function getDbPool(databaseUrl: string): Pool {
   let pool = pools.get(databaseUrl);

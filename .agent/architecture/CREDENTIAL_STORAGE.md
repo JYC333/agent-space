@@ -57,11 +57,11 @@ leak into a Claude Code CLI subprocess environment. The shared call site is
 `app/providers/invocation.py::complete_text` (it may also accept a pre-resolved key from the execution
 service's `ctx.resolved_credentials`).
 
-Under `CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY=ts`, Python facades keep
-their signatures but resolve through the control plane's internal
-service-authenticated ports; the TS store draws keys from the credential pool
-with rotation/cooldown state and the same master-key file. Exactly one side
-decides credential release at any moment.
+Python facades keep their signatures but resolve provider/credential material
+through the control plane's internal service-authenticated ports. The TS store
+draws keys from the credential pool with rotation/cooldown state and the same
+master-key file. Exactly one side decides credential release: the TypeScript
+control plane.
 
 ## Invariants
 

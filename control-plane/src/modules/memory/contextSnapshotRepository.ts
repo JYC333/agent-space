@@ -27,8 +27,8 @@ export interface ChatSnapshotPersistInput {
  * TS persistence for chat-path context snapshots (Stage 6 slice 4).
  *
  * Mirrors `ChatContextBuilder.persist_snapshot` for the case the chat turn hits:
- * the run already owns an empty `ContextSnapshot` (created by the Python
- * create-run port), so this UPDATEs `token_estimate` + `request_json` on that row
+ * the run already owns an empty `ContextSnapshot` (created by run creation), so
+ * this UPDATEs `token_estimate` + `request_json` on that row
  * and INSERTs the selected `context_snapshot_items`. It never creates snapshots
  * (run creation owns that) and writes no other context tables — matching the
  * least-privilege grant set for this slice.
@@ -65,8 +65,8 @@ export class PgContextSnapshotRepository {
 
     if (input.items.length === 0) return;
 
-    // Append per-item audit rows. id/created_at/metadata_json are Python-side
-    // model defaults, so TS supplies them explicitly (as the sessions repo does).
+    // Append per-item audit rows. id/created_at/metadata_json have DB/model
+    // defaults in Python, so TS supplies them explicitly (as the sessions repo does).
     const now = new Date().toISOString();
     const columns =
       "id, context_snapshot_id, item_type, item_id, title, excerpt, score, reason, token_count, metadata_json, created_at";

@@ -35,11 +35,19 @@ export default function ChatPanel({
   const [loadingHistory, setLoadingHistory] = useState(Boolean(initialSessionId))
   const scrollRef = useRef<HTMLDivElement>(null)
   const autoSentRef = useRef(false)
+  // Capture the session that was provided at mount time (via URL). Sessions
+  // created during chat are already reflected in local state; re-fetching them
+  // from the DB would wipe error messages that were never persisted.
+  const externalSessionRef = useRef(initialSessionId)
 
   useEffect(() => {
     const id = initialSessionId?.trim()
     if (!id) {
       setLoadingHistory(false)
+      return
+    }
+    if (id !== externalSessionRef.current) {
+      // Session was created during this conversation — history is in local state.
       return
     }
     let cancelled = false
@@ -68,8 +76,8 @@ export default function ChatPanel({
     try {
       const res = await agentsApi.chat(agent.id, { message, session_id: sessionId }, { spaceId: agent.space_id })
       setSessionId(res.session_id)
-      onSessionChange?.(res.session_id)
       if (res.ok) {
+        onSessionChange?.(res.session_id)
         setMessages(m => [...m, { role: 'assistant', content: res.reply ?? '' }])
       } else {
         const note = res.error_code === 'model_provider_required'

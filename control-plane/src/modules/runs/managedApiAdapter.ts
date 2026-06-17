@@ -85,12 +85,14 @@ function runtimeHostRequest(
   adapterType: ManagedApiAdapterType,
   modelProviderId: string,
 ): RuntimeHostExecuteRequest {
+  const systemPrompt =
+    input.system_prompt ?? input.run.system_prompt ?? input.run.instruction ?? null;
   return {
     run_id: input.run.id,
     space_id: input.run.space_id,
     model_provider_id: modelProviderId,
     model: input.model ?? null,
-    system_prompt: input.system_prompt ?? input.run.instruction ?? null,
+    system_prompt: systemPrompt,
     prompt: input.prompt ?? input.run.prompt ?? "",
     mode: input.run.mode,
     instruction: input.run.instruction,

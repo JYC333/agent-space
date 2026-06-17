@@ -1,12 +1,8 @@
 /**
  * Provider module.
  *
- * The control plane owns the route edge for provider reads. With the default
- * `python` authority it forwards to Python and validates against the shared
- * protocol schemas (optionally shadow-comparing); with `ts` authority it
- * serves list/detail/catalog from the DB read port behind the Python
- * identity-introspection port. Provider commands and credential-channel
- * handlers are registered when their authority is `ts`.
+ * The control plane owns provider reads, commands, invocation, credential pools,
+ * CLI credential login/brokering/audit, and internal credential-release ports.
  */
 
 import type { ControlPlaneModule } from "../../gateway/routeRegistry";

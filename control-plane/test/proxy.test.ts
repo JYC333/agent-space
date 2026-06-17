@@ -105,7 +105,7 @@ describe("python fallback proxy", () => {
     const payload = JSON.stringify({ title: "hi", n: 2 });
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/activity",
+      url: "/api/v1/workspaces",
       headers: { "content-type": "application/json" },
       payload,
     });
@@ -122,7 +122,7 @@ describe("python fallback proxy", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/me",
+      url: "/api/v1/workspaces",
       headers: {
         authorization: "Bearer secret-token-123",
         cookie: "session=abc123",
@@ -146,7 +146,7 @@ describe("python fallback proxy", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/me",
+      url: "/api/v1/workspaces",
       headers: {
         host: "attacker.example",
         connection: "upgrade",
@@ -196,7 +196,7 @@ describe("python fallback proxy", () => {
     });
     app = buildServer(configFor(upstream.baseUrl), { logger: false });
 
-    const res = await app.inject({ method: "GET", url: "/api/v1/auth/google" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/workspaces/oauth-redirect" });
 
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toBe("https://auth.example/login");
@@ -215,7 +215,7 @@ describe("python fallback proxy", () => {
   it("generates an x-request-id when the client did not send one", async () => {
     upstream = await startMockUpstream();
     app = buildServer(configFor(upstream.baseUrl), { logger: false });
-    await app.inject({ method: "GET", url: "/api/v1/me" });
+    await app.inject({ method: "GET", url: "/api/v1/workspaces" });
     expect(upstream!.requests[0].headers["x-request-id"]).toBeTruthy();
   });
 
@@ -249,7 +249,7 @@ describe("python fallback proxy", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/activity/upload",
+      url: "/api/v1/workspaces/upload",
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
       payload,
     });
@@ -273,7 +273,7 @@ describe("python fallback proxy", () => {
     });
     app = buildServer(configFor(upstream.baseUrl), { logger: false });
 
-    const res = await app.inject({ method: "GET", url: "/api/v1/artifacts/a1/export" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/workspaces/a1/artifact" });
 
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toBe("application/octet-stream");
@@ -297,7 +297,7 @@ describe("python fallback proxy", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/credentials/cli/login/stream?runtime=claude_code",
+      url: "/api/v1/workspaces/events/stream?runtime=claude_code",
     });
 
     expect(res.statusCode).toBe(200);
@@ -312,7 +312,7 @@ describe("python fallback proxy", () => {
     app = buildServer(configFor("http://127.0.0.1:9"), { logger: false });
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/me",
+      url: "/api/v1/workspaces",
       headers: { authorization: "Bearer secret-token-123" },
     });
     expect(res.statusCode).toBe(502);
@@ -336,7 +336,7 @@ describe("python fallback proxy", () => {
 
     await app.inject({
       method: "GET",
-      url: "/api/v1/me",
+      url: "/api/v1/workspaces",
       headers: {
         authorization: "Bearer secret-token-123",
         cookie: "session=topsecret",
@@ -349,7 +349,7 @@ describe("python fallback proxy", () => {
     });
     await down.inject({
       method: "GET",
-      url: "/api/v1/me",
+      url: "/api/v1/workspaces",
       headers: { authorization: "Bearer secret-token-123" },
     });
     await down.close();
@@ -365,7 +365,7 @@ describe("python fallback proxy", () => {
       configFor("http://127.0.0.1:9", { CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false" }),
       { logger: false },
     );
-    const res = await app.inject({ method: "GET", url: "/api/v1/me" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/workspaces" });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ error: "python_fallback_proxy_disabled" });
   });

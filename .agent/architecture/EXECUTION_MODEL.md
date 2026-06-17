@@ -72,20 +72,25 @@ Existing Run and Proposal rows use separate nullable `*_user_id` and `*_agent_id
 
 ## Canonical Runtime Path
 
-- **Canonical adapter catalog:** `RuntimeAdapterSpec` entries in `backend/app/runtimes/specs.py`
+- **Canonical adapter catalog:** `RuntimeAdapterSpec` entries in
+  `control-plane/src/modules/runtimeAdapters/specs.ts` for TS-owned execution;
+  `backend/app/runtimes/specs.py` remains for Python-owned execution paths
+  during migration
 - **Controlled CLI tools:** TS `runtimeTools` installs active vendor CLI binaries under `$AGENT_SPACE_HOME/runtime-tools`
-- **Stage 4 command authority:** when `CONTROL_PLANE_RUNS_AUTHORITY=ts`,
-  control-plane `runs` owns `POST /runs/{id}/execute`,
-  `PATCH /runs/{id}/stop`, the internal `POST /internal/runs/execute` port,
-  TS execution locks, and `agent_run` job dispatch (the control-plane
-  entrypoint runs the worker loop; the Python worker excludes `agent_run`
-  from its claims). Policy gates resolve through `PolicyPort` (TS-owned when
-  `CONTROL_PLANE_POLICY_AUTHORITY=ts`); adapter-config resolution remains
-  Python-owned behind the runs context ports.
+- **Run authority:** control-plane `runs` owns run execution, stop,
+  top-level run read/status/trace, post-run evaluation/finalization, the
+  internal `POST /internal/runs/execute` port, TS execution locks, and
+  `agent_run` job dispatch (the control-plane entrypoint runs the worker loop;
+  the Python worker excludes `agent_run` from its claims). The TS agents module
+  owns run creation subresources (`POST /agents/{id}/runs` and the singular
+  legacy alias). Runtime context preparation is native TS; workspace/artifact/
+  proposal/finalization ports remain explicit Python boundaries until their
+  owning slices move.
 - **Generic local CLI execution:** control-plane `runs/vendorCliAdapter.ts`
   renders commands, grants CLI credential profiles through the TS broker,
   invokes the local CLI process, parses output, and calls Python-owned
-  workspace/context ports for worktree and instruction-file preparation.
+  workspace ports for worktree preparation. Runtime instruction files are
+  rendered by TS context preparation into the sandbox only.
   Python `backend/app/runtimes/adapters/cli_runtime.py` remains for Python-owned
   execution paths that have not moved to the control plane.
 
@@ -106,13 +111,13 @@ call it directly to authorize or perform a sensitive action. `PreflightService`
 may call it only for non-mutating dry-run simulation, which does not persist a
 `PolicyDecisionRecord`. Actual runtime execution still uses `PolicyGateway`.
 
-Policy gates run in this order inside `RunExecutionService._execute_real_adapter_path()`:
+Policy gates run in this order inside TS run orchestration:
 
 1. **`runtime.execute`** — `PolicyGateway.enforce()` is called **before** credential resolution, context snapshot population, and `adapter.execute()`. Rule-relevant fields (`agent_status`, `agent_tool_permissions`, `tool_name`, `adapter_type`, `trigger_origin`, etc.) are passed in `PolicyCheckRequest.context`; safe audit copies remain in `metadata_json`. Blocking decisions raise `PolicyGateBlocked`, are written once through `write_blocked_gate_audit()`, and fail the run.
 
 2. **`runtime.use_credential`** — called after adapter type resolution but **before** any secret fetch. `resource_space_id` is resolved from the actual `Credential` row by ID — never inferred from `RuntimeAdapter.space_id`. If `credential_id` exists but the `Credential` row is missing, execution fails closed with `error_code=credential_metadata_missing`. Cross-space credential → hard DENY (CRITICAL). Automation origin → REQUIRE_APPROVAL. Same-space manual/api → ALLOW. DENY → `error_code=policy_denied_runtime_use_credential`.
 
-3. **`context.inject_memory`** — called in `ContextSnapshotPopulator.populate()` **before** `ContextBuilder.build()`. Cross-space without grant → hard DENY. DENY → RuntimeError with `[error_code=policy_denied_context_inject_memory]`.
+3. **`context.inject_memory`** — called by TS `ContextPrepareService` **before** memory context retrieval. Cross-space without grant → hard DENY. DENY → run context preparation fails closed.
 
 4. **`context.render_for_runtime`** — called after context snapshot is assembled, **before** `adapter.execute()`. Cross-space without grant → hard DENY. DENY → `error_code=policy_denied_context_render_for_runtime`.
 

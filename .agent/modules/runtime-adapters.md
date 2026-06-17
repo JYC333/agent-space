@@ -8,7 +8,9 @@ runtime tools.
 ## Canonical Standard
 
 `RuntimeAdapterSpec` is the source of truth for adapter behavior. Built-in specs
-live in `backend/app/runtimes/specs.py` and define:
+live in `control-plane/src/modules/runtimeAdapters/specs.ts` for TS-owned
+execution and tooling. Python `backend/app/runtimes/specs.py` remains a
+migration-period reference for Python-owned execution paths. Specs define:
 
 - runtime kind and implementation status
 - runtime tool requirement, command argv template, and parser behavior
@@ -63,20 +65,20 @@ authority under `/api/v1/credentials/cli/*`. The frontend runtime page is
 
 ## Generic CLI Lifecycle
 
-1. With `CONTROL_PLANE_RUNS_AUTHORITY=ts`, control-plane `runs` resolves the
-   final adapter type from `Run.adapter_type`, then
+1. control-plane `runs` resolves the final adapter type from `Run.adapter_type`, then
    `AgentVersion.runtime_config_json.adapter_type`, then
    `AgentVersion.runtime_policy_json.default_adapter_type`, then `model_api`.
-2. `RuntimeAdapterSpecCatalog` validates that the adapter exists and is
-   implemented.
+2. `control-plane/src/modules/runtimeAdapters` validates that the adapter exists
+   and is implemented.
 3. Native adapters instantiate their native class (`capability`).
 4. TS local CLI runtime specs use `control-plane/src/modules/runs/vendorCliAdapter.ts`.
 5. `RuntimeToolRegistry` resolves the allowlisted active CLI binary from
    `$AGENT_SPACE_HOME/runtime-tools/<runtime>/active`. If no active tool is
    installed, execution fails closed with `cli_tool_not_installed`.
 6. Credential profiles are granted through the TS CLI credential broker.
-7. Python-owned `workspace.prepare` and `context.prepare` ports validate and
-   prepare the worktree/context files only inside the sandbox/worktree.
+7. Python-owned `workspace.prepare` validates/prepares the worktree. TS
+   `ContextPrepareService` renders runtime context files only inside the
+   sandbox/worktree.
 8. TS command rendering produces `string[]` argv and never uses `shell=True`.
 9. The TS CLI executor starts the subprocess and registers it in the shared
    `CliProcessRegistry`; `PATCH /runs/{id}/stop` SIGTERMs the registered

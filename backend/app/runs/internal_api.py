@@ -1,9 +1,10 @@
-"""Internal Python-owned context ports for TS run orchestration.
+"""Internal Python-owned ports for TS run orchestration.
 
 These routes are service-to-service boundaries only. They let the TypeScript
-control-plane runs module call Python-owned contexts during Stage 4 without
-making TS a backdoor writer for policy, memory/context, proposals, artifacts,
-workspace/sandbox, or finalization hooks.
+control-plane runs module call still-Python-owned contexts without making TS a
+backdoor writer for proposals, artifacts, workspace/sandbox, or finalization
+hooks. The former context.prepare operation is retired; runtime context
+preparation is TS-owned.
 """
 
 from __future__ import annotations
@@ -167,15 +168,14 @@ _PORTS: tuple[RunContextPortDescriptor, ...] = (
     RunContextPortDescriptor(
         operation="context.prepare",
         owner="memory_context",
-        implemented=True,
-        error_codes=[
-            "context_prepare_failed",
-            "policy_denied",
-            "policy_requires_approval",
-            "policy_audit_persist_failed",
-        ],
-        writes=["context_snapshots", "memory_access_logs", "policy_decision_records"],
-        notes="ContextSnapshotPopulator/ContextBuilder remain Python-owned; TS runs call this port before adapter invocation.",
+        implemented=False,
+        error_codes=["run_context_port_not_implemented"],
+        writes=[],
+        notes=(
+            "Retired: TS ContextPrepareService owns runtime context "
+            "preparation, memory context-injection logging, and sandbox-only "
+            "vendor file rendering."
+        ),
     ),
     RunContextPortDescriptor(
         operation="artifact.persist",
@@ -271,7 +271,18 @@ def run_context_port_operation(
     if body.operation == "policy.enforce":
         return _policy_enforce(body, db, port)
     if body.operation == "context.prepare":
-        return _context_prepare(body, db, port)
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "error": "run_context_port_not_implemented",
+                "operation": body.operation,
+                "owner": port.owner,
+                "message": (
+                    "Python context.prepare is retired; runtime context "
+                    "preparation is served by the TypeScript control plane."
+                ),
+            },
+        )
     if body.operation == "artifact.persist":
         return _artifact_persist(body, db, port)
     if body.operation == "proposal.create":

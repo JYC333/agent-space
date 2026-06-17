@@ -351,8 +351,9 @@ need a native, no-credential execution path.
 - `backend/app/runs/run_service.py` — Run creation and listing
 - `backend/app/runs/execution.py` — `RunExecutionService` (canonical orchestrator)
 - `backend/app/runs/runtime_policy.py` — risk→sandbox mapping, file-access adapter validation
-- `backend/app/runtimes/registry.py` — adapter registration
-- `backend/app/runtimes/specs.py` — RuntimeAdapterSpec catalog
+- `control-plane/src/modules/runtimeAdapters/specs.ts` — TS RuntimeAdapterSpec catalog
+- `backend/app/runtimes/registry.py` — Python-owned adapter registration
+- `backend/app/runtimes/specs.py` — Python migration-period RuntimeAdapterSpec catalog
 - `backend/app/runtimes/adapters/cli_runtime.py` — GenericCliRuntimeAdapter local CLI execution
 - `backend/app/runtimes/local_executor.py` — local subprocess execution
 - `backend/app/agents/template_seeder.py` — system AgentTemplate seeding (factories)

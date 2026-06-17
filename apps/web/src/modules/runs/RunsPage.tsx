@@ -82,9 +82,11 @@ function StopRunButton({ runId, onDone }: { runId: string; onDone: () => void })
 }
 
 export default function RunsPage() {
-  const { activeSpaceId, activeSpaceName } = useSpace()
+  const { activeSpaceId, activeSpaceName, preferredSpaceId, spaces } = useSpace()
   const [searchParams, setSearchParams] = useSearchParams()
   const projectFilter = searchParams.get('project_id') ?? ''
+  const browsingSpaceId = activeSpaceId ?? preferredSpaceId
+  const browsingSpaceName = activeSpaceName ?? spaces.find(s => s.id === browsingSpaceId)?.name ?? null
 
   const [runs, setRuns] = useState<Run[]>([])
   const [loading, setLoading] = useState(true)
@@ -94,7 +96,7 @@ export default function RunsPage() {
   const [fWs, setFWs] = useState('')
 
   const load = useCallback(async () => {
-    if (!activeSpaceId) {
+    if (!browsingSpaceId) {
       setRuns([])
       setLoading(false)
       return
@@ -116,7 +118,7 @@ export default function RunsPage() {
     } finally {
       setLoading(false)
     }
-  }, [fStatus, fMode, fAgent, fWs, projectFilter, activeSpaceId])
+  }, [fStatus, fMode, fAgent, fWs, projectFilter, browsingSpaceId])
 
   useEffect(() => { load() }, [load])
 
@@ -141,7 +143,7 @@ export default function RunsPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Runs</h1>
           <p className="text-sm text-muted-foreground">Canonical runs: queue, status, and links to activity and artifacts.</p>
-          <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
+          <p className="text-xs text-muted-foreground">Viewing: {browsingSpaceName ?? browsingSpaceId ?? 'No operational space selected'}</p>
           {projectFilter && (
             <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-accent/40 text-xs text-accent-foreground">
               <FolderKanban className="size-3" />
@@ -211,7 +213,7 @@ export default function RunsPage() {
         </Card>
       ) : runs.length === 0 ? (
         <Card className="p-10 text-center text-sm text-muted-foreground">
-          {activeSpaceId ? 'No runs in this operational space.' : 'Select an operational space to browse runs.'}
+          {browsingSpaceId ? 'No runs in this operational space.' : 'Select an operational space to browse runs.'}
         </Card>
       ) : (
         <div className="space-y-3">

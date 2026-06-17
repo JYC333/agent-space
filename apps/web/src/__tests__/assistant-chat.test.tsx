@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 
 // vi.mock factories are hoisted above the module body, so anything they reference
@@ -28,6 +28,7 @@ vi.mock('../contexts/SpaceContext', () => ({
 }))
 
 import AssistantChatPage from '../modules/agents/AssistantChatPage'
+import { agentsApi } from '../api/client'
 
 const routerFuture = { v7_relativeSplatPath: true, v7_startTransition: true } as const
 
@@ -83,6 +84,28 @@ describe('AssistantChatPage — default model provider gating', () => {
     renderPage()
     expect(await screen.findByPlaceholderText(/ask your assistant/i)).toBeInTheDocument()
     expect(screen.queryByText(/no model provider configured/i)).toBeNull()
+  })
+
+  it('shows an error bubble on ok:false and does not reload history', async () => {
+    listMock.mockResolvedValue([{ id: 'p1', is_default: true, enabled: true }])
+    vi.mocked(agentsApi.chat).mockResolvedValue({
+      ok: false,
+      error: 'The run failed.',
+      error_code: 'run_failed',
+      session_id: 'session-new',
+      run_id: 'run-1',
+    } as never)
+
+    renderPage()
+    const input = await screen.findByPlaceholderText(/ask your assistant/i)
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: false })
+
+    // Error bubble must appear.
+    expect(await screen.findByText(/could not complete/i)).toBeInTheDocument()
+    expect(await screen.findByText('The run failed.')).toBeInTheDocument()
+    // History must NOT be reloaded for a session created during this chat.
+    expect(messagesMock).not.toHaveBeenCalledWith('session-new')
   })
 
   it('loads persisted messages when opened with a session query param', async () => {

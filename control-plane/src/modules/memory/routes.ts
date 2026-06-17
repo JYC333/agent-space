@@ -2,7 +2,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ModuleContext } from "../../gateway/routeRegistry";
 import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
-import { introspectIdentity } from "../providers/identity";
+import { getDbPool } from "../../db/pool";
+import { introspectIdentity } from "../auth/identity";
+import { PgActivityConsolidationRepository } from "../activity/consolidationRepository";
 import { loadProtocol } from "../providers/protocolRuntime";
 import { PgMemoryReadRepository, MemoryReadValidationError } from "./repository";
 import {
@@ -14,15 +16,13 @@ import {
 } from "./proposalRepository";
 
 /**
- * TS memory model (Stage 6 slices 5-6).
+ * TS memory model.
  *
- * Behind `CONTROL_PLANE_MEMORY_AUTHORITY=ts` the control plane serves the read
- * routes (`GET /memory`, `GET /memory/{id}`, `POST /memory/search`) from the DB
- * with the `can_read_memory` visibility rules + summary-only redaction (see
- * `memoryReadAuth.ts`). It also owns public memory proposal creation
- * (`POST`/`PATCH`/`DELETE /memory`): those routes INSERT pending `proposals`
- * rows only and never mutate active `memory_entries`. Read-access audit still
- * returns with the memory apply slice that owns `memory_access_logs`.
+ * The control plane serves read routes (`GET /memory`, `GET /memory/{id}`,
+ * `POST /memory/search`) from the DB with the `can_read_memory` visibility rules
+ * + summary-only redaction (see `memoryReadAuth.ts`). It also owns public memory
+ * proposal creation (`POST`/`PATCH`/`DELETE /memory`): those routes INSERT
+ * pending `proposals` rows only and never mutate active `memory_entries`.
  */
 interface MemoryServices {
   repository: Pick<PgMemoryReadRepository, "list" | "get" | "search"> &
@@ -68,8 +68,6 @@ function memoryServices(context: ModuleContext): MemoryServices {
 }
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
-  if (context.config.memoryAuthority !== "ts") return;
-
   app.get("/api/v1/memory", async (request, reply) => {
     const identity = await resolveIdentity(context, request, reply);
     if (!identity) return reply;
@@ -215,6 +213,31 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       return sendDomainError(reply, error);
     }
   });
+
+  app.post("/api/v1/memory/consolidation/run", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    if (!context.config.databaseUrl) {
+      return reply.code(502).send({ detail: "CONTROL_PLANE_DATABASE_URL is required" });
+    }
+    try {
+      const body = jsonBody(request);
+      const batchLimit = boundedInt(body.batch_limit, 50, 1, 500);
+      const rawIds = body.activity_ids;
+      const activityIds =
+        Array.isArray(rawIds) && rawIds.length > 0 ? rawIds.map((value) => String(value)) : null;
+      const repo = new PgActivityConsolidationRepository(getDbPool(context.config.databaseUrl));
+      const result = await repo.runPending({
+        spaceId: identity.spaceId,
+        actingUserId: identity.userId,
+        batchLimit,
+        activityIds,
+      });
+      return reply.send(result);
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
 }
 
 async function resolveIdentity(
@@ -295,4 +318,15 @@ function intQuery(value: string | undefined, fallback: number): number | null {
   if (value === undefined || value === "") return fallback;
   const parsed = Number(value);
   return Number.isInteger(parsed) ? parsed : null;
+}
+
+function boundedInt(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return Math.min(Math.max(value, min), max);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isInteger(parsed)) return Math.min(Math.max(parsed, min), max);
+  }
+  return fallback;
 }

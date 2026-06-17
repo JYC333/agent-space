@@ -1,13 +1,7 @@
-"""Provider-owned API-key credential resolution.
-
-Providers own model API credentials. Runtime adapters may receive already
-resolved credentials from run execution, but provider invocation and provider
-services must not import the runtime credential module to decrypt provider keys.
-"""
+"""Provider-owned API-key credential resolution through the TS control plane."""
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -15,12 +9,9 @@ from sqlalchemy.orm import Session
 from ..models import Credential, ModelProvider
 from .control_plane_client import (
     ControlPlaneProviderError,
-    provider_credentials_owned_by_control_plane,
     resolve_credential_api_key_via_control_plane,
     resolve_model_provider_api_key_via_control_plane,
 )
-
-log = logging.getLogger(__name__)
 
 
 class CredentialResolutionError(Exception):
@@ -42,50 +33,23 @@ def resolve_provider_credentials(
     adapter_type: str | None = None,
     context: str = "direct",
 ) -> dict[str, Any]:
-    """Fetch and decrypt API-key material for a ``ModelProvider`` row."""
+    """Resolve API-key material for a ``ModelProvider`` through control-plane."""
 
-    if provider_credentials_owned_by_control_plane():
-        provider = db.query(ModelProvider.space_id).filter(ModelProvider.id == provider_id).first()
-        if provider is None:
-            raise CredentialResolutionError(
-                f"ModelProvider '{provider_id}' not found (referenced via {context})",
-                adapter_type=adapter_type,
-            )
-        try:
-            return {
-                "api_key": resolve_model_provider_api_key_via_control_plane(
-                    space_id=str(provider[0]),
-                    provider_id=provider_id,
-                )
-            }
-        except ControlPlaneProviderError as exc:
-            raise CredentialResolutionError(str(exc), adapter_type=adapter_type) from exc
-
-    provider = db.query(ModelProvider).filter(ModelProvider.id == provider_id).first()
+    provider = db.query(ModelProvider.space_id).filter(ModelProvider.id == provider_id).first()
     if provider is None:
         raise CredentialResolutionError(
             f"ModelProvider '{provider_id}' not found (referenced via {context})",
             adapter_type=adapter_type,
         )
-    if not provider.enabled:
-        raise CredentialResolutionError(
-            f"ModelProvider '{provider_id}' is disabled (via {context})",
-            adapter_type=adapter_type,
-        )
-    if not provider.credential_id:
-        raise CredentialResolutionError(
-            f"ModelProvider '{provider_id}' has no credential configured (via {context}). "
-            "Configure the provider API key through the provider management interface.",
-            adapter_type=adapter_type,
-        )
-
-    api_key = resolve_credential_api_key(
-        db,
-        credential_id=provider.credential_id,
-        adapter_type=adapter_type,
-        context=f"{context} -> model_provider.credential_id",
-    )
-    return {"api_key": api_key}
+    try:
+        return {
+            "api_key": resolve_model_provider_api_key_via_control_plane(
+                space_id=str(provider[0]),
+                provider_id=provider_id,
+            )
+        }
+    except ControlPlaneProviderError as exc:
+        raise CredentialResolutionError(str(exc), adapter_type=adapter_type) from exc
 
 
 def resolve_provider_api_key(
@@ -95,7 +59,7 @@ def resolve_provider_api_key(
     adapter_type: str | None = None,
     context: str = "direct",
 ) -> str:
-    """Decrypt and return the API key for a ``ModelProvider`` row."""
+    """Resolve and return the API key for a ``ModelProvider`` row."""
 
     result = resolve_provider_credentials(
         db,
@@ -119,56 +83,21 @@ def resolve_credential_api_key(
     adapter_type: str | None = None,
     context: str = "unknown",
 ) -> str:
-    """Resolve API-key material from ``Credential.secret_ref``."""
+    """Resolve API-key material from the control-plane credential store."""
 
-    if provider_credentials_owned_by_control_plane():
-        cred_ref = db.query(Credential.space_id).filter(Credential.id == credential_id).first()
-        if cred_ref is None:
-            raise CredentialResolutionError(
-                f"Credential '{credential_id}' not found (referenced via {context})",
-                adapter_type=adapter_type,
-            )
-        try:
-            return resolve_credential_api_key_via_control_plane(
-                space_id=str(cred_ref[0]),
-                credential_id=credential_id,
-            )
-        except ControlPlaneProviderError as exc:
-            raise CredentialResolutionError(str(exc), adapter_type=adapter_type) from exc
-
-    cred = db.query(Credential).filter(Credential.id == credential_id).first()
-    if cred is None:
+    cred_ref = db.query(Credential.space_id).filter(Credential.id == credential_id).first()
+    if cred_ref is None:
         raise CredentialResolutionError(
             f"Credential '{credential_id}' not found (referenced via {context})",
             adapter_type=adapter_type,
         )
-
-    from ..secrets.secret_ref import (
-        SecretRefResolutionError,
-        resolve_api_key_from_secret_ref,
-    )
-
     try:
-        api_key = resolve_api_key_from_secret_ref(cred.secret_ref)
-    except SecretRefResolutionError as exc:
-        raise CredentialResolutionError(
-            f"Credential '{credential_id}' could not be resolved (via {context}): {exc}",
-            adapter_type=adapter_type,
-        ) from exc
-
-    if not api_key:
-        raise CredentialResolutionError(
-            f"Credential '{credential_id}' resolved to an empty API key (via {context})",
-            adapter_type=adapter_type,
+        return resolve_credential_api_key_via_control_plane(
+            space_id=str(cred_ref[0]),
+            credential_id=credential_id,
         )
-
-    log.debug(
-        "resolved api_key from Credential %s via %s (adapter_type=%s)",
-        credential_id,
-        context,
-        adapter_type,
-    )
-    return api_key
+    except ControlPlaneProviderError as exc:
+        raise CredentialResolutionError(str(exc), adapter_type=adapter_type) from exc
 
 
 __all__ = [

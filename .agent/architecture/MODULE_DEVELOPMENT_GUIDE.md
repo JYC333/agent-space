@@ -90,8 +90,9 @@ Lazy facades currently exist for `memory` and `runs` to keep import-time side ef
 - `providers` own model invocation and provider credentials.
 - `tasks` own task-board behavior, task-run product linkage, and task evaluation.
 - `proposals` own approval/apply orchestration and the applier registry; target modules
-  own proposal business mutations. The external proposal review API/read model is TS-owned
-  when `CONTROL_PLANE_PROPOSALS_AUTHORITY=ts`.
+  own proposal business mutations. Client-facing proposal review/read/apply
+  orchestration is TS-owned in the control plane for registered appliers, and
+  unregistered proposal types fail closed until their owning module migrates.
 
 `ProposalService` and `ProposalApplyService` live under `backend/app/proposals/`
 (`service.py`, `apply_service.py`), matching their logical ownership (moved from

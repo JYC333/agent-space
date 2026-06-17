@@ -1057,6 +1057,9 @@ export interface Proposal {
   requires_approval_type?: string | null
   egress_approval_status?: string | null
   egress_approval_id?: string | null
+  incomplete_patch?: boolean
+  skipped_changes?: Array<Record<string, unknown>>
+  skipped_count?: number
 }
 
 /** `POST /proposals/{id}/accept` — result depends on `proposal_type`. */

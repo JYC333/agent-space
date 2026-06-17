@@ -6,9 +6,9 @@
  * - GET /api/v1/providers/litellm-providers
  * - GET /api/v1/providers/:configId
  *
- * Read authority follows `CONTROL_PLANE_PROVIDERS_AUTHORITY`: with `python`
- * every read forwards to the Python authority (optionally shadow-compared);
- * with `ts`, list/detail/catalog are served by the TS provider reader.
+ * Provider reads and commands are TS-owned. List/detail read from the provider
+ * DB port behind native TS identity; catalog routes come from the protocol
+ * package or built-in TS constants.
  *
  * The two static sub-routes must be claimed explicitly: once this module owns
  * `GET /api/v1/providers/:configId`, the parametric route would otherwise
@@ -16,7 +16,7 @@
  * proxy wildcard) and mis-validate their non-DTO payloads as provider configs.
  *
  * Provider commands and credential-channel routes are registered by
- * `providerCommandRoutes` when the provider/credential authority is `ts`.
+ * `providerCommandRoutes`.
  */
 
 import type { FastifyInstance } from "fastify";

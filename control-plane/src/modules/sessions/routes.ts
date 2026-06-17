@@ -3,7 +3,7 @@ import type { ModuleContext } from "../../gateway/routeRegistry";
 import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { checkInternalToken } from "../../gateway/internalAuth";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
-import { introspectIdentity } from "../providers/identity";
+import { introspectIdentity } from "../auth/identity";
 import { loadProtocol } from "../providers/protocolRuntime";
 import { PgSessionRepository } from "./repository";
 
@@ -46,8 +46,6 @@ function sessionServices(context: ModuleContext): SessionServices {
 }
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
-  if (context.config.sessionsAuthority !== "ts") return;
-
   app.post("/internal/sessions/session-summary/get-latest", async (request, reply) => {
     if (!checkInternalToken(context.config, request)) {
       return reply.code(401).send({ detail: "Unauthorized" });

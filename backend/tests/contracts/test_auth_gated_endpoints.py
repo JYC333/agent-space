@@ -4,7 +4,6 @@ Covers:
 - GET  /capabilities               401 without auth, 200 with auth
 - GET  /capabilities/{id}          401 without auth, 200 with auth
 - POST /capabilities/reload        401 without auth, 200 with auth
-- GET  /jobs/handlers              401 without auth, 200 with auth
 - GET  /workspace-console/runtimes 401 without auth, 200 with auth
 - GET  /providers/litellm-providers 401 without auth, 200 with auth
 - GET  /providers/catalog           401 without auth, 200 with auth
@@ -59,24 +58,6 @@ class TestCapabilitiesAuth:
             params=_params(cross_space_pair),
         )
         assert r.status_code == 200
-
-
-# ===========================================================================
-# Jobs handlers
-# ===========================================================================
-
-class TestJobsHandlersAuth:
-    def test_list_handlers_unauthenticated_returns_401(self, api_client):
-        r = api_client.get("/api/v1/jobs/handlers")
-        assert r.status_code == 401
-
-    def test_list_handlers_authenticated_succeeds(self, api_client, db, cross_space_pair):
-        r = cross_space_pair["client_a"].get(
-            "/api/v1/jobs/handlers",
-            params=_params(cross_space_pair),
-        )
-        assert r.status_code == 200
-        assert isinstance(r.json(), list)
 
 
 # ===========================================================================

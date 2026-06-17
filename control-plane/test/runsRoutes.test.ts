@@ -45,9 +45,6 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
 
 function tsRunsConfig() {
   return loadConfig({
-    CONTROL_PLANE_PROVIDERS_AUTHORITY: "ts",
-    CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY: "ts",
-    CONTROL_PLANE_RUNS_AUTHORITY: "ts",
     CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false",
     CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
     CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
@@ -55,12 +52,9 @@ function tsRunsConfig() {
 }
 
 describe("runs command routes", () => {
-  it("routes execute to TS and returns the Python-owned run read model", async () => {
+  it("routes execute to TS and returns the TS-owned run read model", async () => {
     const calls: string[] = [];
     __setRunsIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    __setRunsReadResponseForTests((_runId, _request, reply) =>
-      reply.header("x-python-read", "1").send({ id: "run-1", status: "succeeded", mode: "live" }),
-    );
     const executeInputs: Array<Record<string, unknown>> = [];
     __setRunsCommandServicesFactoryForTests(() => ({
       repository: {
@@ -92,8 +86,19 @@ describe("runs command routes", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.headers["x-python-read"]).toBe("1");
-    expect(res.json()).toMatchObject({ id: "run-1", status: "succeeded" });
+    expect(res.headers["x-python-read"]).toBeUndefined();
+    expect(res.json()).toMatchObject({
+      id: "run-1",
+      space_id: "space-1",
+      agent_id: "agent-1",
+      status: "succeeded",
+      mode: "live",
+      resolved_model: {
+        provider_id: "provider-1",
+        provider_name: null,
+        adapter_model_support: "uses_model",
+      },
+    });
     expect(calls).toEqual(["execute:run-1:space-1:http"]);
     // The Run row + policy-owned resolution are authoritative; request-body
     // execution parameters are never forwarded into orchestration.
@@ -187,7 +192,23 @@ describe("runs command routes", () => {
     expect(calls).toEqual(["cancel:run-1:space-1:user-1"]);
   });
 
-  it("leaves execute unowned by TS when runs authority is python", async () => {
+  it("serves execute as a fixed TS-owned route", async () => {
+    __setRunsIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setRunsCommandServicesFactoryForTests(() => ({
+      repository: {
+        async getRun() {
+          return run({ status: "succeeded", ended_at: "2026-06-12T10:00:01.000Z" });
+        },
+      },
+      orchestration: {
+        async executeRun(input) {
+          return { run_id: input.run_id, status: "succeeded" };
+        },
+        async cancelRun() {
+          throw new Error("cancel should not run");
+        },
+      },
+    }));
     app = buildServer(
       loadConfig({ CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false" }),
       { logger: false },
@@ -198,7 +219,7 @@ describe("runs command routes", () => {
       url: "/api/v1/runs/run-1/execute?space_id=space-1",
     });
 
-    expect(res.statusCode).toBe(503);
-    expect(res.payload).toContain("python_fallback_proxy_disabled");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ id: "run-1", status: "succeeded" });
   });
 });

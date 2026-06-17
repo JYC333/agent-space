@@ -3,7 +3,7 @@ import type { ControlPlaneConfig } from "../../config";
 import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { checkInternalToken } from "../../gateway/internalAuth";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
-import { introspectIdentity } from "./identity";
+import { introspectIdentity } from "../auth/identity";
 import { loadProtocol } from "./protocolRuntime";
 import { resolveProviderCommandStore } from "./providerCommandStore";
 import type {
@@ -92,8 +92,6 @@ export function registerProviderCommandRoutes(
   app: FastifyInstance,
   config: ControlPlaneConfig,
 ): void {
-  if (config.providersCredentialsAuthority !== "ts") return;
-
   const broker = new CliCredentialBroker(config, app.log);
   const usageScheduler = startCliUsageRefreshScheduler(broker, {
     isEnabled: () => broker.isCliUsageAutoRefreshEnabled(),

@@ -7,8 +7,8 @@ already exist — no new execution path:
 
   1. persist the raw user turn to a ``Session`` (this is what the chat UI shows),
   2. assemble space-aware context with :class:`ChatContextBuilder`,
-  3. create a queued ``Run`` through ``RunService`` and execute it in-process via
-     ``RunExecutionService`` (exactly like ``POST /runs/{id}/execute``), and
+  3. create a queued ``Run`` through ``RunService`` and execute it through the
+     TypeScript control plane's fixed runs authority, and
   4. return the reply, persisting it as the assistant turn.
 
 The dynamic chat context rides inside ``Run.prompt`` because the execution service
@@ -28,9 +28,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from ..memory import get_chat_context_builder
 from ..models import Agent, Run
-from ..runs import RunExecutionService
 from ..runs import RunService
-from ..runs.authority import runs_commands_owned_by_ts
 from ..runs.ts_execution_client import TsRunExecutionError, execute_run_via_control_plane
 from ..schemas import ContextBundleItem, ContextRequest, MessageCreate, RunCreate, SessionCreate
 from ..sessions import get_session_write_port
@@ -194,36 +192,19 @@ def run_chat_turn(
     builder.persist_snapshot(bundle, request, context_snapshot_id=run.context_snapshot_id)
     db.commit()
 
-    # 7. Execute synchronously through the single runs.execute authority. With
-    #    CONTROL_PLANE_RUNS_AUTHORITY=ts the TS control plane executes the run
-    #    (the Python engine is retired for this command); otherwise the legacy
-    #    in-process path runs as before.
-    if runs_commands_owned_by_ts():
-        ok, reply_text, error_text, error_code = _execute_chat_run_via_ts(
-            db, run_id=run.id, space_id=space_id
+    # 7. Execute synchronously through the fixed TS runs.execute authority.
+    ok, reply_text, error_text, error_code = _execute_chat_run_via_ts(
+        db, run_id=run.id, space_id=space_id
+    )
+    if not ok:
+        return ChatTurnOut(
+            session_id=session.id,
+            run_id=run.id,
+            ok=False,
+            error=error_text or "The assistant run did not complete.",
+            error_code=error_code,
         )
-        if not ok:
-            return ChatTurnOut(
-                session_id=session.id,
-                run_id=run.id,
-                ok=False,
-                error=error_text or "The assistant run did not complete.",
-                error_code=error_code,
-            )
-        reply = (reply_text or "").strip()
-    else:
-        result = RunExecutionService(db).execute_run(run.id, space_id=space_id)
-
-        if not result.success:
-            return ChatTurnOut(
-                session_id=session.id,
-                run_id=run.id,
-                ok=False,
-                error=result.error or "The assistant run did not complete.",
-                error_code=result.error_code,
-            )
-
-        reply = (result.output or "").strip()
+    reply = (reply_text or "").strip()
 
     # 8. Persist the assistant turn (links the run for traceability).
     sessions.add_message(

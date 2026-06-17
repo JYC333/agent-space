@@ -4,10 +4,36 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config import settings
+from app.policy import Decision, PolicyDecision, RiskLevel
+from app.runs import artifact_persistence as artifact_persistence_module
+from app.runs import internal_api as runs_internal_api
 from tests.support import factories
 
 
 HEADER = {"x-agent-space-internal-token": "internal-token"}
+
+
+class _FakePolicyPort:
+    def enforce(self, req):
+        context = getattr(req, "context", None) or {}
+        if req.action == "runtime.execute" and context.get("agent_status") == "disabled":
+            return PolicyDecision(
+                decision=Decision.DENY,
+                message="Agent is disabled",
+                risk_level=RiskLevel.HIGH,
+                reason_code="agent_disabled",
+            )
+        return PolicyDecision(
+            decision=Decision.ALLOW,
+            message="Allowed by test fake",
+            risk_level=RiskLevel.LOW,
+        )
+
+
+def _install_policy_fake(monkeypatch) -> None:
+    fake = _FakePolicyPort()
+    monkeypatch.setattr(runs_internal_api, "get_policy_port", lambda _db: fake)
+    monkeypatch.setattr(artifact_persistence_module, "get_policy_port", lambda _db: fake)
 
 
 def test_internal_runs_context_ports_require_service_token(api_client, monkeypatch):
@@ -47,8 +73,8 @@ def test_internal_runs_context_ports_manifest_declares_owner_auth_and_errors(
     assert ports["policy.enforce"]["auth"] == "internal_service_token"
     assert "policy_denied" in ports["policy.enforce"]["error_codes"]
     assert ports["policy.enforce"]["implemented"] is True
-    assert ports["context.prepare"]["implemented"] is True
-    assert "context_snapshots" in ports["context.prepare"]["writes"]
+    assert ports["context.prepare"]["implemented"] is False
+    assert ports["context.prepare"]["writes"] == []
     assert ports["artifact.persist"]["implemented"] is True
     assert "artifacts" in ports["artifact.persist"]["writes"]
     assert ports["proposal.create"]["implemented"] is True
@@ -83,6 +109,7 @@ def test_internal_runs_policy_enforce_allows_and_returns_resolved_config(
     cross_space_pair,
 ):
     monkeypatch.setattr(settings, "control_plane_internal_token", "internal-token")
+    _install_policy_fake(monkeypatch)
     space_id = cross_space_pair["space_a_id"]
     user = cross_space_pair["user_a"]
     agent = factories.create_test_agent(
@@ -130,6 +157,7 @@ def test_internal_runs_policy_enforce_denies_disabled_agent(
     cross_space_pair,
 ):
     monkeypatch.setattr(settings, "control_plane_internal_token", "internal-token")
+    _install_policy_fake(monkeypatch)
     space_id = cross_space_pair["space_a_id"]
     user = cross_space_pair["user_a"]
     agent = factories.create_test_agent(
@@ -168,6 +196,7 @@ def test_internal_runs_artifact_persist_runtime_output_creates_artifact(
     cross_space_pair,
 ):
     monkeypatch.setattr(settings, "control_plane_internal_token", "internal-token")
+    _install_policy_fake(monkeypatch)
     monkeypatch.setattr(settings, "artifact_storage_root", str(tmp_path / "artifacts"))
     space_id = cross_space_pair["space_a_id"]
     user = cross_space_pair["user_a"]
@@ -305,7 +334,7 @@ def test_internal_runs_proposal_create_rejects_invalid_spec(
     assert "unsupported" in (body["message"] or "")
 
 
-def test_internal_runs_context_prepare_populates_snapshot(
+def test_internal_runs_context_prepare_is_retired(
     api_client,
     db,
     monkeypatch,
@@ -342,13 +371,10 @@ def test_internal_runs_context_prepare_populates_snapshot(
         },
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["operation"] == "context.prepare"
-    assert body["owner"] == "memory_context"
-    assert body["status"] == "succeeded"
-    assert body["result_json"]["runtime_prompt"] == "Summarize the current task"
-    assert body["result_json"]["context_snapshot_id"] == run.context_snapshot_id
+    assert response.status_code == 410
+    assert "context.prepare" in response.text
+    assert "run_context_port_not_implemented" in response.text
+    assert "TypeScript control plane" in response.text
 
 
 def test_internal_runs_workspace_prepare_and_cleanup_plain_workdir(

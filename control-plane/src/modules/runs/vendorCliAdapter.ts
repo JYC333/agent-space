@@ -13,6 +13,10 @@ import {
   type ResolvedRuntimeTool,
   type RuntimeToolResolverPort,
 } from "../runtimeTools";
+import {
+  getLocalCliRuntimeAdapterSpec,
+  type LocalCliRuntimeAdapterSpec,
+} from "../runtimeAdapters";
 import type { RunRecord } from "./repository";
 import {
   redactEvidenceText,
@@ -21,28 +25,6 @@ import {
 
 export type VendorCliAdapterType = "claude_code" | "codex_cli";
 export type ExecutorMode = "worktree" | "docker";
-
-interface CliAdapterSpec {
-  adapter_type: VendorCliAdapterType | "opencode" | "gemini_cli";
-  runtime_kind: "local_cli";
-  implementation_status: "implemented" | "planned";
-  command: string;
-  headless_command_template: string[];
-  interactive_command_template?: string[];
-  argument_rendering_strategy: "argv_template" | "stdin";
-  context_file_type: "CLAUDE.md" | "AGENTS.md";
-  context_target_format: string;
-  writes_vendor_context_file: boolean;
-  credential_runtime_name: VendorCliAdapterType | "opencode" | "gemini_cli";
-  default_timeout_seconds: number;
-  max_timeout_seconds: number;
-  supports_model_override: boolean;
-  model_arg_template?: string[];
-  supports_permission_bypass: boolean;
-  permission_bypass_arg_template?: string[];
-  permission_bypass_policy_key?: string;
-  supports_one_shot_docker: boolean;
-}
 
 export interface RenderedCliCommand {
   argv: string[];
@@ -107,81 +89,6 @@ export interface VendorCliAdapterDeps {
   toolRegistry?: RuntimeToolResolverPort;
 }
 
-const SPECS: Record<string, CliAdapterSpec> = {
-  claude_code: {
-    adapter_type: "claude_code",
-    runtime_kind: "local_cli",
-    implementation_status: "implemented",
-    command: "claude",
-    headless_command_template: ["{executable}", "--print", "{prompt}"],
-    interactive_command_template: ["{executable}"],
-    argument_rendering_strategy: "argv_template",
-    context_file_type: "CLAUDE.md",
-    context_target_format: "claude",
-    writes_vendor_context_file: true,
-    credential_runtime_name: "claude_code",
-    default_timeout_seconds: 300,
-    max_timeout_seconds: 3600,
-    supports_model_override: true,
-    model_arg_template: ["--model", "{model}"],
-    supports_permission_bypass: true,
-    permission_bypass_arg_template: ["--dangerously-skip-permissions"],
-    permission_bypass_policy_key: "allow_permission_bypass",
-    supports_one_shot_docker: false,
-  },
-  codex_cli: {
-    adapter_type: "codex_cli",
-    runtime_kind: "local_cli",
-    implementation_status: "implemented",
-    command: "codex",
-    headless_command_template: ["{executable}", "{prompt}"],
-    argument_rendering_strategy: "argv_template",
-    context_file_type: "AGENTS.md",
-    context_target_format: "codex_cli",
-    writes_vendor_context_file: true,
-    credential_runtime_name: "codex_cli",
-    default_timeout_seconds: 300,
-    max_timeout_seconds: 3600,
-    supports_model_override: false,
-    supports_permission_bypass: false,
-    supports_one_shot_docker: false,
-  },
-  opencode: {
-    adapter_type: "opencode",
-    runtime_kind: "local_cli",
-    implementation_status: "planned",
-    command: "opencode",
-    headless_command_template: [],
-    argument_rendering_strategy: "argv_template",
-    context_file_type: "AGENTS.md",
-    context_target_format: "generic",
-    writes_vendor_context_file: false,
-    credential_runtime_name: "opencode",
-    default_timeout_seconds: 300,
-    max_timeout_seconds: 3600,
-    supports_model_override: false,
-    supports_permission_bypass: false,
-    supports_one_shot_docker: false,
-  },
-  gemini_cli: {
-    adapter_type: "gemini_cli",
-    runtime_kind: "local_cli",
-    implementation_status: "planned",
-    command: "gemini",
-    headless_command_template: [],
-    argument_rendering_strategy: "argv_template",
-    context_file_type: "AGENTS.md",
-    context_target_format: "generic",
-    writes_vendor_context_file: false,
-    credential_runtime_name: "gemini_cli",
-    default_timeout_seconds: 300,
-    max_timeout_seconds: 3600,
-    supports_model_override: false,
-    supports_permission_bypass: false,
-    supports_one_shot_docker: false,
-  },
-};
-
 const ENV_ALLOWED_KEYS = new Set(["PATH", "TERM", "SHELL", "LANG"]);
 const BROKER_ENV_KEYS = new Set(["HOME"]);
 const SECRET_COMMAND_KEYS = ["prompt", "context", "api_key", "token", "secret", "password"];
@@ -193,7 +100,7 @@ export async function executeVendorCliAdapter(
 ): Promise<RunAdapterResultEnvelope> {
   const startedAt = new Date().toISOString();
   const adapterType = input.adapter_type ?? input.run.adapter_type;
-  const spec = adapterType ? SPECS[adapterType] : undefined;
+  const spec = getLocalCliRuntimeAdapterSpec(adapterType);
   if (!spec) {
     return cliFailure(input, "runtime_adapter_not_found", "Runtime adapter is not registered.", startedAt);
   }
@@ -237,13 +144,13 @@ export async function executeVendorCliAdapter(
   let tool: ResolvedRuntimeTool;
   try {
     const toolRegistry = deps.toolRegistry ?? new RuntimeToolRegistry(config);
-    tool = await toolRegistry.resolveForExecution(spec.credential_runtime_name);
+    tool = await toolRegistry.resolveForExecution(spec.credentials.credential_runtime_name);
   } catch (error) {
     await cleanupCredential(input, credentialBroker);
     return cliFailure(
       input,
       error instanceof RuntimeToolError ? error.code : "cli_tool_unavailable",
-      error instanceof Error ? error.message : `Runtime tool '${spec.credential_runtime_name}' is unavailable.`,
+      error instanceof Error ? error.message : `Runtime tool '${spec.credentials.credential_runtime_name}' is unavailable.`,
       startedAt,
       spec,
     );
@@ -406,7 +313,7 @@ export function buildSubprocessEnv(extra: Record<string, string> | null | undefi
 }
 
 export async function renderCliCommand(
-  spec: CliAdapterSpec,
+  spec: LocalCliRuntimeAdapterSpec,
   input: {
     executable: string;
     prompt: string;
@@ -420,19 +327,19 @@ export async function renderCliCommand(
   },
 ): Promise<RenderedCliCommand> {
   const template =
-    input.mode === "interactive" && spec.interactive_command_template
-      ? spec.interactive_command_template
-      : spec.headless_command_template;
+    input.mode === "interactive" && spec.invocation.interactive_command_template
+      ? spec.invocation.interactive_command_template
+      : spec.invocation.headless_command_template;
   const values = { executable: input.executable, prompt: input.prompt };
   const argv = renderTemplate(template, values);
   const redacted = renderTemplate(template, { ...values, prompt: "[REDACTED_PROMPT]" });
 
   const extraArgs: string[] = [];
   if (input.model) {
-    if (!spec.supports_model_override || !spec.model_arg_template) {
+    if (!spec.model.supports_model_override || !spec.model.model_arg_template) {
       throw new CliRenderError("model_override_not_supported", `adapter_type '${spec.adapter_type}' does not support model override`);
     }
-    extraArgs.push(...renderTemplate(spec.model_arg_template, { model: input.model }));
+    extraArgs.push(...renderTemplate(spec.model.model_arg_template, { model: input.model }));
   }
 
   if (input.permission_bypass) {
@@ -440,7 +347,7 @@ export async function renderCliCommand(
     if (permissionError) {
       throw new CliRenderError("permission_bypass_not_allowed", permissionError);
     }
-    extraArgs.push(...(spec.permission_bypass_arg_template ?? []));
+    extraArgs.push(...(spec.permissions.permission_bypass_arg_template ?? []));
   }
 
   if (extraArgs.length > 0) {
@@ -450,14 +357,14 @@ export async function renderCliCommand(
     redacted.splice(redactedInsertAt >= 0 ? redactedInsertAt : redacted.length, 0, ...extraArgs);
   }
 
-  const stdin = spec.argument_rendering_strategy === "stdin" ? input.prompt : null;
+  const stdin = spec.invocation.argument_rendering_strategy === "stdin" ? input.prompt : null;
   return {
     argv: stdin === null ? argv : argv.filter((arg) => arg !== input.prompt),
     redacted_argv: stdin === null ? redacted : redacted.filter((arg) => arg !== "[REDACTED_PROMPT]"),
     stdin,
     permission_bypass_used:
       input.permission_bypass &&
-      (spec.permission_bypass_arg_template ?? []).every((arg) => argv.includes(arg)),
+      (spec.permissions.permission_bypass_arg_template ?? []).every((arg) => argv.includes(arg)),
   };
 }
 
@@ -485,11 +392,11 @@ function renderTemplate(template: string[], values: Record<string, string>): str
 
 function validateSandbox(
   input: VendorCliAdapterInput,
-  spec: CliAdapterSpec,
+  spec: LocalCliRuntimeAdapterSpec,
 ): { code: string; message: string } | null {
   const level = input.required_sandbox_level ?? input.run.required_sandbox_level;
   if (level === "one_shot_docker" || level === "docker") {
-    return spec.supports_one_shot_docker
+    return spec.sandbox.supports_one_shot_docker
       ? null
       : {
           code: "docker_sandbox_not_implemented",
@@ -530,13 +437,13 @@ function validateSandbox(
 
 async function grantCredential(
   input: VendorCliAdapterInput,
-  spec: CliAdapterSpec,
+  spec: LocalCliRuntimeAdapterSpec,
   broker: CliCredentialBrokerPort,
 ): Promise<CredentialGrant> {
   try {
     return await broker.grantForRun(
       input.run.id,
-      spec.credential_runtime_name,
+      spec.credentials.credential_runtime_name,
       "worktree",
       profileId(input),
     );
@@ -544,7 +451,7 @@ async function grantCredential(
     return {
       granted: false,
       profile_id: null,
-      runtime: spec.credential_runtime_name,
+      runtime: spec.credentials.credential_runtime_name,
       executor_mode: "worktree",
       readonly: false,
       temp_home: null,
@@ -558,12 +465,12 @@ async function grantCredential(
 
 async function renderVendorContext(
   input: VendorCliAdapterInput,
-  spec: CliAdapterSpec,
+  spec: LocalCliRuntimeAdapterSpec,
 ): Promise<void> {
-  if (!spec.writes_vendor_context_file) return;
+  if (!spec.context.writes_vendor_context_file) return;
   if (!input.sandbox_cwd) throw new Error("CLI context rendering requires a sandbox worktree.");
   const content = input.context_text ?? "";
-  await writeFile(join(input.sandbox_cwd, spec.context_file_type), content, {
+  await writeFile(join(input.sandbox_cwd, spec.context.context_file_type), content, {
     encoding: "utf8",
     mode: 0o600,
   });
@@ -580,7 +487,7 @@ async function cleanupCredential(
 
 function cliResultEnvelope(
   input: VendorCliAdapterInput,
-  spec: CliAdapterSpec,
+  spec: LocalCliRuntimeAdapterSpec,
   rendered: RenderedCliCommand,
   result: CliExecutionResult,
   timeout: number,
@@ -623,9 +530,9 @@ function cliResultEnvelope(
       trigger_origin: input.trigger_origin ?? input.run.trigger_origin,
       permission_bypass_requested: Boolean(input.adapter_config?.permission_bypass),
       permission_bypass_used: rendered.permission_bypass_used,
-      context_file_type: spec.context_file_type,
-      context_target_format: spec.context_target_format,
-      rendered_in_sandbox: spec.writes_vendor_context_file,
+      context_file_type: spec.context.context_file_type,
+      context_target_format: spec.context.context_target_format,
+      rendered_in_sandbox: spec.context.writes_vendor_context_file,
     }) as RunAdapterResultEnvelope["metadata_json"],
     adapter_log_json: sanitizeEvidenceJson({
       adapter_type: spec.adapter_type,
@@ -642,7 +549,7 @@ function cliFailure(
   errorCode: string,
   message: string,
   startedAt: string,
-  spec?: CliAdapterSpec,
+  spec?: LocalCliRuntimeAdapterSpec,
   metadataJson: unknown = {},
 ): RunAdapterResultEnvelope {
   const adapterType = spec?.adapter_type ?? (input.adapter_type ?? input.run.adapter_type ?? "unknown");
@@ -667,7 +574,7 @@ function cliFailure(
 }
 
 function permissionBypassError(
-  spec: CliAdapterSpec,
+  spec: LocalCliRuntimeAdapterSpec,
   input: {
     runtime_policy_json?: Record<string, unknown>;
     risk_level: string;
@@ -675,10 +582,10 @@ function permissionBypassError(
     sandbox_cwd: string | null;
   },
 ): string | null {
-  if (!spec.supports_permission_bypass) {
+  if (!spec.permissions.supports_permission_bypass) {
     return `Runtime adapter '${spec.adapter_type}' does not support permission bypass.`;
   }
-  const key = spec.permission_bypass_policy_key ?? "allow_permission_bypass";
+  const key = spec.permissions.permission_bypass_policy_key ?? "allow_permission_bypass";
   if (input.runtime_policy_json?.[key] !== true) {
     return `runtime_policy_json.${key}=true is required for permission bypass.`;
   }
@@ -691,11 +598,11 @@ function permissionBypassError(
   return null;
 }
 
-function timeoutSeconds(config: Record<string, unknown> | undefined, spec: CliAdapterSpec): number {
+function timeoutSeconds(config: Record<string, unknown> | undefined, spec: LocalCliRuntimeAdapterSpec): number {
   const raw = config?.timeout;
   const parsed = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
-  const selected = Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : spec.default_timeout_seconds;
-  return Math.min(selected, spec.max_timeout_seconds);
+  const selected = Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : spec.limits.default_timeout_seconds;
+  return Math.min(selected, spec.limits.max_timeout_seconds);
 }
 
 function profileId(input: VendorCliAdapterInput): string | null {

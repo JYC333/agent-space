@@ -216,6 +216,7 @@ export function proposalToOut(row: ProposalRow, now: Date): ProposalOut {
   const provenanceEntries = provenanceEntriesFromPayload(payload);
   const requiredApprover = stringValue(payload.required_approver_user_id)
     ?? stringValue(payload.granting_user_id);
+  const codePatchFields = codePatchProposalFields(row.proposal_type, payload);
   return {
     id: row.id,
     space_id: row.space_id,
@@ -257,6 +258,7 @@ export function proposalToOut(row: ProposalRow, now: Date): ProposalOut {
     egress_approval_status: row.egress_approval_status,
     egress_approval_id: row.egress_approval_id,
     project_id: row.project_id,
+    ...codePatchFields,
   };
 }
 
@@ -373,6 +375,28 @@ function sourceActivityId(
     if (entry.source_type === "activity") return stringValue(entry.source_id);
   }
   return null;
+}
+
+function codePatchProposalFields(
+  proposalType: string,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  if (proposalType !== "code_patch") return {};
+  const skippedChanges = arrayOfRecords(payload.skipped_changes)
+    ?? arrayOfRecords(payload.skipped)
+    ?? [];
+  return {
+    incomplete_patch: payload.incomplete_patch === true,
+    skipped_changes: skippedChanges,
+    skipped_count: numberValue(payload.skipped_count) ?? skippedChanges.length,
+  };
+}
+
+function arrayOfRecords(value: unknown): Array<Record<string, unknown>> | null {
+  if (!Array.isArray(value)) return null;
+  return value.filter((item): item is Record<string, unknown> => (
+    item !== null && typeof item === "object" && !Array.isArray(item)
+  ));
 }
 
 function recordValue(value: unknown): Record<string, unknown> {

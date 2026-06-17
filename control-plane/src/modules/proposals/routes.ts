@@ -2,22 +2,22 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ModuleContext } from "../../gateway/routeRegistry";
 import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
-import { introspectIdentity } from "../providers/identity";
-import { ProposalPythonPortClient, ProposalPythonPortError } from "./pythonProposalPorts";
+import { introspectIdentity } from "../auth/identity";
 import { PgProposalRepository, type ProposalListFilters } from "./repository";
 import {
-  MemoryApplyError,
-  MemoryApplyUnsupportedError,
-  PgMemoryApplyRepository,
-} from "../memory/memoryApplyRepository";
-import { applyGatedMemoryProposal } from "../memory/memoryAcceptDispatch";
-import type { ProposalOut, ProposalPage } from "@agent-space/protocol" with { "resolution-mode": "import" };
+  PgProposalApplyService,
+  ProposalApplyHttpError,
+} from "./applyService";
+import type {
+  ProposalOut,
+  ProposalPage,
+} from "@agent-space/protocol" with { "resolution-mode": "import" };
 
 interface ProposalServices {
   repository: Pick<PgProposalRepository, "listVisible" | "getVisible">;
-  ports: Pick<
-    ProposalPythonPortClient,
-    "acceptProposal" | "rejectProposal" | "approveEgressGrantingUser" | "gateMemoryApply"
+  applyService: Pick<
+    PgProposalApplyService,
+    "accept" | "reject" | "approveEgressGrantingUser"
   >;
 }
 
@@ -46,13 +46,11 @@ function proposalServices(context: ModuleContext): ProposalServices {
   if (servicesFactoryOverride) return servicesFactoryOverride(context);
   return {
     repository: PgProposalRepository.fromConfig(context.config),
-    ports: new ProposalPythonPortClient(context.config),
+    applyService: PgProposalApplyService.fromConfig(context.config),
   };
 }
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
-  if (context.config.proposalsAuthority !== "ts") return;
-
   app.get("/api/v1/proposals", async (request, reply) => {
     const identity = await resolveIdentity(context, request, reply);
     if (!identity) return reply;
@@ -85,51 +83,17 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const identity = await resolveIdentity(context, request, reply);
     if (!identity) return reply;
     const proposalId = params(request).proposalId ?? "";
+    const confirm = parseConfirmIncompletePatch(request);
+    if ("error" in confirm) return reply.code(422).send({ detail: confirm.error });
     const services = proposalServices(context);
-
-    // Stage 6 slice 7b: TS applies accepted memory proposals itself. Gate the
-    // proposal through the Python memory-apply-gate port, then run the active
-    // memory writes + accept state transition in one TS transaction.
-    if (context.config.memoryApplyAuthority === "ts") {
-      const existing = await services.repository.getVisible(
-        identity.spaceId,
-        identity.userId,
-        proposalId,
-      );
-      if (existing && PgMemoryApplyRepository.supportsType(existing.proposal_type)) {
-        try {
-          const gate = await services.ports.gateMemoryApply({
-            proposal_id: proposalId,
-            space_id: identity.spaceId,
-            user_id: identity.userId,
-          });
-          const applied = await applyGatedMemoryProposal(context.config, gate, identity.userId);
-          const accepted = await services.repository.getVisible(
-            identity.spaceId,
-            identity.userId,
-            proposalId,
-          );
-          return reply.send({
-            proposal: accepted,
-            result_type: "memory_entry",
-            result: { memory: applied.memory },
-          });
-        } catch (error) {
-          return sendMemoryAcceptError(request, reply, error);
-        }
-      }
-    }
-
     try {
-      const result = await services.ports.acceptProposal({
-        proposal_id: proposalId,
-        space_id: identity.spaceId,
-        user_id: identity.userId,
-        confirm_incomplete_patch: boolQuery(query(request).confirm_incomplete_patch) ?? false,
+      const result = await services.applyService.accept(proposalId, identity, {
+        confirmIncompletePatch: confirm.value,
       });
+      if (!result) return reply.code(404).send({ detail: "Proposal not found or already decided" });
       return reply.send(result);
     } catch (error) {
-      return sendPortError(request, reply, error);
+      return sendProposalApplyError(request, reply, error);
     }
   });
 
@@ -139,14 +103,11 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const proposalId = params(request).proposalId ?? "";
     const services = proposalServices(context);
     try {
-      const result = await services.ports.rejectProposal({
-        proposal_id: proposalId,
-        space_id: identity.spaceId,
-        user_id: identity.userId,
-      });
+      const result = await services.applyService.reject(proposalId, identity);
+      if (!result) return reply.code(404).send({ detail: "Proposal not found or already decided" });
       return reply.send(result);
     } catch (error) {
-      return sendPortError(request, reply, error);
+      return sendProposalApplyError(request, reply, error);
     }
   });
 
@@ -159,15 +120,14 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const body = jsonBody(request);
       const services = proposalServices(context);
       try {
-        const result = await services.ports.approveEgressGrantingUser({
-          proposal_id: proposalId,
-          space_id: identity.spaceId,
-          user_id: identity.userId,
-          grant_id: stringValue(body.grant_id),
-        });
+        const result = await services.applyService.approveEgressGrantingUser(
+          proposalId,
+          identity,
+          stringValue(body.grant_id) ?? null,
+        );
         return reply.send(result);
       } catch (error) {
-        return sendPortError(request, reply, error);
+        return sendProposalApplyError(request, reply, error);
       }
     },
   );
@@ -247,37 +207,22 @@ function resolveStatus(raw: string | undefined): string | null | Error {
   return new Error(`Invalid status ${JSON.stringify(raw)}`);
 }
 
-function sendMemoryAcceptError(
+function sendProposalApplyError(
   request: FastifyRequest,
   reply: FastifyReply,
   error: unknown,
 ): FastifyReply | Promise<FastifyReply> {
-  // Source-monitoring / placement rejections from the TS applier.
-  if (error instanceof MemoryApplyError) {
-    return reply.code(error.statusCode).send({ detail: error.message });
+  if (error instanceof ProposalApplyHttpError) {
+    return reply.code(error.statusCode).send({ detail: error.detail });
   }
-  // Run/grant egress context or workspace/agent scope: not served by TS yet.
-  if (error instanceof MemoryApplyUnsupportedError) {
-    return reply.code(error.statusCode).send({ detail: error.message });
-  }
-  // Gate-port errors (policy block, 404 already-decided) preserve the Python body.
-  return sendPortError(request, reply, error);
-}
-
-function sendPortError(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  error: unknown,
-): FastifyReply | Promise<FastifyReply> {
-  if (error instanceof ProposalPythonPortError) {
-    if (error.statusCode && error.responseBody !== undefined) {
-      return reply.code(error.statusCode).send(error.responseBody);
-    }
-    return sendErrorEnvelope(
-      reply,
-      error.statusCode ?? 502,
-      errorEnvelope(error.code, error.message, resolveRequestId(request)),
-    );
+  if (
+    error instanceof Error &&
+    "statusCode" in error &&
+    typeof (error as { statusCode?: unknown }).statusCode === "number"
+  ) {
+    return reply
+      .code((error as { statusCode: number }).statusCode)
+      .send({ detail: error.message });
   }
   throw error;
 }
@@ -313,6 +258,30 @@ function boolQuery(value: string | undefined): boolean | null {
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return null;
+}
+
+function parseConfirmIncompletePatch(
+  request: FastifyRequest,
+): { value: boolean } | { error: string } {
+  const q = query(request);
+  let value = false;
+  if (q.confirm_incomplete_patch !== undefined) {
+    const parsed = boolQuery(q.confirm_incomplete_patch);
+    if (parsed === null) {
+      return {
+        error: `Invalid confirm_incomplete_patch ${JSON.stringify(q.confirm_incomplete_patch)}`,
+      };
+    }
+    value = parsed;
+  }
+  const body = jsonBody(request);
+  if (body.confirm_incomplete_patch !== undefined) {
+    if (typeof body.confirm_incomplete_patch !== "boolean") {
+      return { error: "confirm_incomplete_patch must be a boolean" };
+    }
+    value = body.confirm_incomplete_patch;
+  }
+  return { value };
 }
 
 function intQuery(value: string | undefined, fallback: number): number | null {

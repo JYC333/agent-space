@@ -1,8 +1,8 @@
 """Interface seams for session-owned derived context.
 
-These ports are migration preparation only. The Python sessions module remains
-the authority today, but cross-context callers should depend on this narrow
-surface instead of importing session internals such as ``sessions.condenser``.
+These ports keep cross-context callers on narrow seams instead of importing
+session internals such as ``sessions.condenser``. Public sessions and the
+context-safe summary read are owned by the TypeScript control plane.
 """
 
 from __future__ import annotations
@@ -43,9 +43,8 @@ class SessionSummaryPort(Protocol):
 def get_session_summary_port(db: "DBSession") -> SessionSummaryPort:
     """Resolve the active session-summary authority.
 
-    Python remains authoritative unless Stage 6 has moved the sessions-derived
-    summary read to the control plane. Keeping the resolver here gives memory
-    code one stable seam while the authority flips one slice at a time.
+    The resolver stays here so memory/context code has one stable seam while the
+    concrete authority lives in the TypeScript control plane.
     """
 
     from .control_plane_client import (

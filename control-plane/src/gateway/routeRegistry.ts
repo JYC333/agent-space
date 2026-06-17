@@ -16,19 +16,32 @@
 import type { FastifyInstance } from "fastify";
 import { createConfigSnapshot, type ConfigSnapshot, type ControlPlaneConfig } from "../config";
 import { systemModule } from "../modules/system";
+import { authModule } from "../modules/auth";
+import { spacesModule } from "../modules/spaces";
 import { catalogModule } from "../modules/catalog";
 import { streamingModule } from "../modules/streaming";
 import { notificationsModule } from "../modules/notifications";
-import { frontendSupportModule } from "../modules/frontendSupport";
+import { jobsModule } from "../modules/jobs";
+import { automationsModule } from "../modules/automations";
+import { dailyReportsModule } from "../modules/dailyReports";
+import { backupsModule } from "../modules/backups";
 import { providersModule } from "../modules/providers";
 import { runtimeToolsModule } from "../modules/runtimeTools";
 import { runtimeHostModule } from "../modules/runtimeHost";
 import { runsModule } from "../modules/runs";
+import { artifactsModule } from "../modules/artifacts";
 import { policyModule } from "../modules/policy";
 import { proposalsModule } from "../modules/proposals";
 import { sessionsModule } from "../modules/sessions";
 import { agentsModule } from "../modules/agents";
 import { memoryModule } from "../modules/memory";
+import { activityModule } from "../modules/activity";
+import { intakeModule } from "../modules/intake";
+import { knowledgeModule } from "../modules/knowledge";
+import { tasksModule } from "../modules/tasks";
+import { workspacesModule } from "../modules/workspaces";
+import { deploymentModule } from "../modules/deployment";
+import { frontendSupportModule } from "../modules/frontendSupport";
 import { registerPythonFallbackProxy } from "../pythonFallback/proxy";
 import { registerErrorEnvelopeHandler } from "./errorEnvelope";
 import { REQUEST_ID_HEADER, resolveRequestId } from "./requestContext";
@@ -53,6 +66,8 @@ export interface ControlPlaneModule {
  */
 export const TS_OWNED_MODULES: readonly ControlPlaneModule[] = [
   systemModule,
+  authModule,
+  spacesModule,
   catalogModule,
   streamingModule,
   notificationsModule,
@@ -60,11 +75,22 @@ export const TS_OWNED_MODULES: readonly ControlPlaneModule[] = [
   providersModule,
   runtimeHostModule,
   runsModule,
+  artifactsModule,
   policyModule,
   proposalsModule,
   sessionsModule,
   agentsModule,
   memoryModule,
+  activityModule,
+  intakeModule,
+  knowledgeModule,
+  tasksModule,
+  workspacesModule,
+  jobsModule,
+  automationsModule,
+  dailyReportsModule,
+  backupsModule,
+  deploymentModule,
   frontendSupportModule,
 ];
 

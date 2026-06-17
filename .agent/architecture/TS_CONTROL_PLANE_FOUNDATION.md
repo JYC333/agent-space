@@ -38,20 +38,37 @@ route registry.
 
 ## Boundaries
 
-- Control-plane does not own auth/membership. It uses Python identity
-  introspection where needed.
+- Control-plane owns native session-cookie identity resolution, Google OAuth
+  login/callback/config, the canonical feature-gated API-key endpoints, and the
+  Phase 2 space create/member/invitation routes. DB-persisted API-key storage
+  remains deferred because the canonical schema has no `api_keys` table.
 - Python/Alembic owns schema migrations.
 - TS-owned contexts may use the least-privilege control-plane DB role.
 - Credential release stays inside provider/CLI broker channels.
 - Unowned business contexts stay Python-owned until an explicit migration
   decision is recorded.
 
+## Database Foundation
+
+Control-plane database access is centralized under `control-plane/src/db/`:
+
+- `pool.ts` owns `pg` pool construction from `CONTROL_PLANE_DATABASE_URL`;
+- `tx.ts` provides the shared transaction helper for TS-owned write flows;
+- `migrator.ts` and `migrateCli.ts` provide a manual migration runner over
+  `control-plane/migrations/*.sql`.
+
+The migration runner is a parity/ops foundation, not a startup hook. Normal
+runtime schema migration remains Python/Alembic-owned until a later explicit
+schema-ownership cutover is recorded.
+
 ## Configuration
 
 Configuration is environment-based and parsed in `control-plane/src/config.ts`.
-Authority switches are explicit `CONTROL_PLANE_*_AUTHORITY` variables. Dev/test
-and prod templates opt into the completed TS authorities; code fallbacks remain
-`python`.
+Completed foundations such as providers/credentials, policy, public sessions,
+auth/spaces, and runtime adapter catalog are fixed TS authorities. Remaining
+migration slices keep explicit `CONTROL_PLANE_*_AUTHORITY` variables; dev/test
+templates opt into the completed migrated slices while code fallbacks remain
+`python` for slices that have not been finalized.
 
 When adding a new authority switch, update:
 

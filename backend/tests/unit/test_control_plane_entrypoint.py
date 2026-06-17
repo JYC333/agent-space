@@ -32,19 +32,23 @@ def test_control_plane_is_in_every_compose_stack_and_depends_on_backend():
             in control_plane
         )
         assert "CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY=${CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY:-true}" in control_plane
-        assert "CONTROL_PLANE_RUNS_AUTHORITY=${CONTROL_PLANE_RUNS_AUTHORITY:-python}" in control_plane
-        assert "CONTROL_PLANE_POLICY_AUTHORITY=${CONTROL_PLANE_POLICY_AUTHORITY:-python}" in control_plane
-        assert "CONTROL_PLANE_PROPOSALS_AUTHORITY=${CONTROL_PLANE_PROPOSALS_AUTHORITY:-python}" in control_plane
-        assert "CONTROL_PLANE_SESSIONS_AUTHORITY=${CONTROL_PLANE_SESSIONS_AUTHORITY:-python}" in control_plane
-        assert "CONTROL_PLANE_CHAT_TURN_AUTHORITY=${CONTROL_PLANE_CHAT_TURN_AUTHORITY:-python}" in control_plane
+        assert "CONTROL_PLANE_RUNS_AUTHORITY" not in control_plane
+        assert "CONTROL_PLANE_PROPOSALS_AUTHORITY" not in control_plane
+        assert "CONTROL_PLANE_MEMORY_APPLY_AUTHORITY" not in control_plane
+        assert "CONTROL_PLANE_CHAT_TURN_AUTHORITY" not in control_plane
+        assert "CONTROL_PLANE_CONTEXT_AUTHORITY" not in control_plane
+        assert "CONTROL_PLANE_MEMORY_AUTHORITY" not in control_plane
         backend = _service_block(text, "backend")
-        assert "CONTROL_PLANE_RUNS_AUTHORITY=${CONTROL_PLANE_RUNS_AUTHORITY:-python}" in backend
-        assert "CONTROL_PLANE_POLICY_AUTHORITY=${CONTROL_PLANE_POLICY_AUTHORITY:-python}" in backend
-        assert "CONTROL_PLANE_PROPOSALS_AUTHORITY=${CONTROL_PLANE_PROPOSALS_AUTHORITY:-python}" in backend
-        # Stage 6 sessions slice: the Python guard reads this in the backend service too.
-        assert "CONTROL_PLANE_SESSIONS_AUTHORITY=${CONTROL_PLANE_SESSIONS_AUTHORITY:-python}" in backend
-        # Stage 6 chat-turn slice: the Python guard reads this in the backend service too.
-        assert "CONTROL_PLANE_CHAT_TURN_AUTHORITY=${CONTROL_PLANE_CHAT_TURN_AUTHORITY:-python}" in backend
+        assert "CONTROL_PLANE_RUNS_AUTHORITY" not in backend
+        assert "CONTROL_PLANE_PROPOSALS_AUTHORITY" not in backend
+        assert "CONTROL_PLANE_MEMORY_APPLY_AUTHORITY" not in backend
+        assert "CONTROL_PLANE_CHAT_TURN_AUTHORITY" not in backend
+        assert "CONTROL_PLANE_CONTEXT_AUTHORITY" not in backend
+        assert "CONTROL_PLANE_MEMORY_AUTHORITY" not in backend
+        assert "CONTROL_PLANE_POLICY_AUTHORITY" not in control_plane
+        assert "CONTROL_PLANE_SESSIONS_AUTHORITY" not in control_plane
+        assert "CONTROL_PLANE_POLICY_AUTHORITY" not in backend
+        assert "CONTROL_PLANE_SESSIONS_AUTHORITY" not in backend
 
 
 def test_frontend_routes_to_control_plane_in_dev_and_test():

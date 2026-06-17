@@ -1,12 +1,11 @@
 /**
  * Policy module routes — internal, service-authenticated enforcement port.
  *
- * Registered only when `policyAuthority === "ts"`. Python-owned callers reach
- * the TS policy authority through this port so there is never a second decider
- * (§8.1). Run orchestration already calls `policy.enforce` via its context port;
- * once flipped, that port resolves here in-process. Proposal-apply uses the
- * same internal boundary, with Python supplying membership-role and supported
- * proposal-type inputs while TS owns the decision and audit write.
+ * Python-owned callers reach the TS policy authority through this port so there
+ * is never a second decider (§8.1). Run orchestration already calls
+ * `policy.enforce` via its context port. Proposal-apply uses the same internal
+ * boundary, with Python supplying membership-role and supported proposal-type
+ * inputs while TS owns the decision and audit write.
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -27,8 +26,6 @@ function sendDomainError(reply: FastifyReply, error: unknown): FastifyReply {
 }
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
-  if (context.config.policyAuthority !== "ts") return;
-
   app.post("/internal/policy/enforce", async (request, reply) => {
     if (!checkInternalToken(context.config, request)) {
       return reply.code(401).send({ detail: "Unauthorized" });

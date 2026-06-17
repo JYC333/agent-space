@@ -3,56 +3,29 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.jobs.handlers import handle_agent_run
 from app.runs.authority import (
     reject_python_run_command_when_ts_authority,
     runs_commands_owned_by_ts,
 )
 
 
-def test_runs_authority_defaults_to_python(monkeypatch):
+def test_runs_authority_is_fixed_to_ts(monkeypatch):
     monkeypatch.delenv("CONTROL_PLANE_RUNS_AUTHORITY", raising=False)
 
-    assert runs_commands_owned_by_ts() is False
-    reject_python_run_command_when_ts_authority("execute")
+    assert runs_commands_owned_by_ts() is True
+    with pytest.raises(HTTPException) as exc:
+        reject_python_run_command_when_ts_authority("execute")
+    assert exc.value.status_code == 410
 
 
 def test_runs_authority_rejects_python_execute_when_ts_owned(monkeypatch):
-    monkeypatch.setenv("CONTROL_PLANE_RUNS_AUTHORITY", "ts")
+    monkeypatch.setenv("CONTROL_PLANE_RUNS_AUTHORITY", "python")
 
     with pytest.raises(HTTPException) as exc:
         reject_python_run_command_when_ts_authority("execute")
 
     assert exc.value.status_code == 410
     assert "TypeScript control plane" in str(exc.value.detail)
-
-
-def test_agent_run_handler_is_retired_when_ts_owns_runs(monkeypatch):
-    monkeypatch.setenv("CONTROL_PLANE_RUNS_AUTHORITY", "ts")
-    job = SimpleNamespace(
-        id="job-1",
-        space_id="space-1",
-        user_id="user-1",
-        payload_json={"run_id": "run-1"},
-    )
-
-    with pytest.raises(RuntimeError, match="Python agent_run job handler is retired"):
-        handle_agent_run(job)
-
-
-def test_python_worker_excludes_agent_run_claims_when_ts_owns_runs(monkeypatch):
-    from app.jobs.registry import JobHandlerRegistry
-    from app.jobs.worker import claimable_job_types
-
-    registry = JobHandlerRegistry()
-    registry.register("agent_run", lambda job: None)
-    registry.register("memory_consolidation", lambda job: None)
-
-    monkeypatch.delenv("CONTROL_PLANE_RUNS_AUTHORITY", raising=False)
-    assert claimable_job_types(registry) is None
-
-    monkeypatch.setenv("CONTROL_PLANE_RUNS_AUTHORITY", "ts")
-    assert claimable_job_types(registry) == ["memory_consolidation"]
 
 
 class _FakeRunQuery:

@@ -24,7 +24,6 @@ afterEach(async () => {
 
 function tsSessionsConfig() {
   return loadConfig({
-    CONTROL_PLANE_SESSIONS_AUTHORITY: "ts",
     CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false",
     CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
     CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
@@ -316,18 +315,19 @@ describe("session write routes", () => {
   });
 });
 
-describe("session authority gating", () => {
-  it("leaves all session routes unowned by TS when authority is python", async () => {
-    app = buildServer(
-      loadConfig({ CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false" }),
-      { logger: false },
-    );
+describe("session authority registration", () => {
+  it("serves session routes from TS without a sessions authority switch", async () => {
+    __setSessionIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    withRepo({
+      async listSessions(): Promise<SessionPage> {
+        return { items: [], total: 0, limit: 50, offset: 0 };
+      },
+    });
+    app = buildServer(tsSessionsConfig(), { logger: false });
 
     const read = await app.inject({ method: "GET", url: "/api/v1/sessions" });
-    const write = await app.inject({ method: "POST", url: "/api/v1/sessions", payload: {} });
 
-    expect(read.statusCode).toBe(503);
-    expect(read.payload).toContain("python_fallback_proxy_disabled");
-    expect(write.statusCode).toBe(503);
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toEqual({ items: [], total: 0, limit: 50, offset: 0 });
   });
 });

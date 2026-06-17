@@ -100,9 +100,9 @@ def prepare_chat_turn_run(
     still-Python-owned preparation steps so TS can own the outer command without
     prematurely moving the context engine.
 
-    Fails closed once `CONTROL_PLANE_CONTEXT_AUTHORITY=ts`: the TS chat turn then
-    builds context and persists the snapshot itself via the context-candidates +
-    create-run ports, so the combined build-and-persist path must not also run.
+    Fails closed because the TS chat turn builds context, creates the run, and
+    persists the snapshot itself; the combined build-and-persist path must not
+    also run.
     """
 
     reject_python_chat_context_build_when_ts_authority()

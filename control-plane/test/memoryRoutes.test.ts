@@ -23,12 +23,8 @@ afterEach(async () => {
 
 function memoryConfig() {
   return loadConfig({
-    CONTROL_PLANE_POLICY_AUTHORITY: "ts",
-    CONTROL_PLANE_PROPOSALS_AUTHORITY: "ts",
-    CONTROL_PLANE_MEMORY_AUTHORITY: "ts",
     CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false",
     CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
-    CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
   });
 }
 
@@ -344,21 +340,25 @@ describe("memory read routes", () => {
     ]);
   });
 
-  it("does not own memory routes when authority is python", async () => {
-    app = buildServer(
-      loadConfig({ CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false" }),
-      { logger: false },
-    );
-    const res = await app.inject({ method: "GET", url: "/api/v1/memory" });
-    // No TS route registered → falls through to the (disabled) proxy.
-    expect(res.statusCode).toBe(503);
-    expect(res.payload).toContain("python_fallback_proxy_disabled");
+  it("keeps memory routes TS-owned without authority env switches", async () => {
+    __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setMemoryServicesFactoryForTests(() => ({
+      repository: {
+        async list() {
+          return { items: [], total: 0, limit: 50, offset: 0 };
+        },
+        async get() {
+          throw new Error("x");
+        },
+        async search() {
+          throw new Error("x");
+        },
+      } as unknown as MemoryServices["repository"],
+    }));
+    app = buildServer(memoryConfig(), { logger: false });
 
-    const write = await app.inject({
-      method: "POST",
-      url: "/api/v1/memory",
-      payload: { title: "t", content: "c", type: "fact" },
-    });
-    expect(write.statusCode).toBe(503);
+    const res = await app.inject({ method: "GET", url: "/api/v1/memory" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ items: [], total: 0, limit: 50, offset: 0 });
   });
 });

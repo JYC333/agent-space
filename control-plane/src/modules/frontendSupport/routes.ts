@@ -17,15 +17,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
 
   app.get("/api/v1/me/summary", forward);
   app.get("/api/v1/me/timeline", forward);
-  app.get("/api/v1/me/tasks", forward);
   app.get("/api/v1/me/pending", forward);
 
-  app.get("/api/v1/workspace-console/workspaces", forward);
-  app.get("/api/v1/workspace-console/workspaces/:workspaceId/tree", forward);
-  app.get("/api/v1/workspace-console/workspaces/:workspaceId/file", forward);
-  app.get("/api/v1/workspace-console/workspaces/:workspaceId/git/status", forward);
-  app.get("/api/v1/workspace-console/workspaces/:workspaceId/git/diff", forward);
-  app.get("/api/v1/workspace-console/runtimes", forward);
-  app.get("/api/v1/workspace-console/sessions", forward);
-  app.get("/api/v1/workspace-console/sessions/:sessionId", forward);
 }

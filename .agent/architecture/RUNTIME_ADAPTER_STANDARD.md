@@ -7,9 +7,12 @@ Agent-space owns run lifecycle, context snapshots, policy gates, credential
 gating, sandbox/worktree governance, artifacts, proposals, and audit/events.
 Vendor CLIs such as Claude Code and Codex CLI are local CLI runtime adapters.
 
-`RuntimeAdapterSpec` defines built-in adapter semantics: credential mode,
-sandbox requirement, context target, invocation template, permission bypass
-capability, usage behavior, output parser, and catalog display.
+`RuntimeAdapterSpec` defines built-in adapter semantics. For TS-owned execution
+the catalog lives in `control-plane/src/modules/runtimeAdapters/specs.ts`;
+Python `backend/app/runtimes/specs.py` remains for Python-owned execution paths
+during migration. Specs cover credential mode, sandbox requirement, context
+target, invocation template, permission bypass capability, usage behavior,
+output parser, and catalog display.
 `RuntimeAdapter` rows no longer configure space-local instances. They remain
 only as legacy nullable FK targets for trace/read-model compatibility.
 
@@ -46,6 +49,6 @@ cached-only in this build.
 Output parsers must describe real behavior. Current local CLI specs use
 generic/plain-text parsing unless an adapter-specific parser is implemented.
 
-To add a new local CLI adapter, add a validated RuntimeAdapterSpec. Python
-runtime code is needed only for a native adapter or genuinely new
-invocation/parsing behavior.
+To add a new local CLI adapter, add a validated TS `RuntimeAdapterSpec`. Python
+runtime code is needed only if a Python-owned path still needs that adapter or
+for a native adapter/genuinely new invocation/parsing behavior.

@@ -25,15 +25,23 @@ describe("TS-owned features route", () => {
     expect(body.features).toContain("run_event_sse_stream");
     expect(body.features).toContain("frontend_support_read_model_facades");
     expect(body.features).toContain("runtime_tools_controlled_installer");
-    expect(body.features).toContain("providers_readonly_python_facade");
-    expect(body.features).toContain("providers_credentials_python_authority");
-    expect(body.features).toContain("runs_commands_python_authority");
-    expect(body.features).toContain("policy_enforcement_python_authority");
-    expect(body.features).toContain("proposals_review_python_authority");
-    expect(body.features).toContain("sessions_python_authority");
-    expect(body.features).not.toContain("sessions_read_python_authority");
-    expect(body.features).toContain("context_assembly_python_authority");
-    expect(body.features).toContain("memory_python_authority");
+    expect(body.features).toContain("native_identity_auth");
+    expect(body.features).toContain("native_google_oauth");
+    expect(body.features).toContain("native_space_membership");
+    expect(body.features).toContain("api_keys_feature_gate");
+    expect(body.features).toContain("space_default_seeding");
+    expect(body.features).toContain("runtime_adapter_catalog");
+    expect(body.features).toContain("providers_read_ts_authority");
+    expect(body.features).toContain("providers_credentials_ts_authority");
+    expect(body.features).toContain("policy_enforcement_ts_authority");
+    expect(body.features).toContain("sessions_ts_authority");
+    expect(body.features).toContain("ts_agent_runtime_host");
+    expect(body.features).toContain("runs_ts_authority");
+    expect(body.features).toContain("artifacts_ts_authority");
+    expect(body.features).toContain("proposals_ts_authority");
+    expect(body.features).toContain("chat_turn_ts_authority");
+    expect(body.features).toContain("context_assembly_ts_authority");
+    expect(body.features).toContain("memory_ts_authority");
     expect(body.features).toContain("config_semantic_validation");
     expect(body.features).toContain("notification_webhook_egress_policy_gate");
   });
@@ -63,99 +71,34 @@ describe("TS-owned features route", () => {
     expect(enabled).toContain("notification_webhook_egress");
   });
 
-  it("advertises TS runs command authority when enabled", () => {
-    const features = computeFeatures(
-      loadConfig({
-        CONTROL_PLANE_PROVIDERS_AUTHORITY: "ts",
-        CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY: "ts",
-        CONTROL_PLANE_RUNS_AUTHORITY: "ts",
-        CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
-        CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
-      }),
-    );
-    expect(features).toContain("runs_commands_ts_authority");
-  });
-
-  it("advertises TS policy enforcement authority when enabled", () => {
-    const features = computeFeatures(
-      loadConfig({
-        CONTROL_PLANE_POLICY_AUTHORITY: "ts",
-        CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
-        CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
-      }),
-    );
+  it("advertises fixed TS providers, policy, sessions, and runtime-adapter features", () => {
+    const features = computeFeatures(loadConfig({}));
+    expect(features).toContain("providers_read_ts_authority");
+    expect(features).toContain("providers_credentials_ts_authority");
     expect(features).toContain("policy_enforcement_ts_authority");
     expect(features).not.toContain("policy_enforcement_python_authority");
-  });
-
-  it("advertises TS proposals review authority when enabled", () => {
-    const features = computeFeatures(
-      loadConfig({
-        CONTROL_PLANE_PROPOSALS_AUTHORITY: "ts",
-        CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
-        CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
-      }),
-    );
-    expect(features).toContain("proposals_review_ts_authority");
-    expect(features).not.toContain("proposals_review_python_authority");
-  });
-
-  it("advertises TS sessions authority for the whole public session surface", () => {
-    const features = computeFeatures(
-      loadConfig({
-        CONTROL_PLANE_SESSIONS_AUTHORITY: "ts",
-        CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
-        CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
-      }),
-    );
     expect(features).toContain("sessions_ts_authority");
-    expect(features).not.toContain("sessions_read_ts_authority");
     expect(features).not.toContain("sessions_python_authority");
+    expect(features).toContain("runs_ts_authority");
+    expect(features).toContain("artifacts_ts_authority");
+    expect(features).not.toContain("runs_commands_python_authority");
+    expect(features).toContain("runtime_adapter_catalog");
+    expect(features).toContain("ts_agent_runtime_host");
   });
 
-  it("advertises TS chat-turn authority separately from sessions", () => {
-    const features = computeFeatures(
-      loadConfig({
-        CONTROL_PLANE_PROVIDERS_AUTHORITY: "ts",
-        CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY: "ts",
-        CONTROL_PLANE_RUNS_AUTHORITY: "ts",
-        CONTROL_PLANE_SESSIONS_AUTHORITY: "ts",
-        CONTROL_PLANE_CHAT_TURN_AUTHORITY: "ts",
-        CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
-        CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
-      }),
-    );
+  it("advertises fixed TS proposal authority", () => {
+    const features = computeFeatures(loadConfig({}));
+    expect(features).toContain("proposals_ts_authority");
+    expect(features).not.toContain("proposals_review_python_authority");
+    expect(features).not.toContain("proposals_review_ts_authority");
+  });
+
+  it("advertises fixed TS chat-turn, context, and memory authority", () => {
+    const features = computeFeatures(loadConfig({}));
     expect(features).toContain("chat_turn_ts_authority");
     expect(features).not.toContain("chat_turn_python_authority");
-  });
-
-  it("advertises TS context-assembly authority when enabled", () => {
-    const features = computeFeatures(
-      loadConfig({
-        CONTROL_PLANE_PROVIDERS_AUTHORITY: "ts",
-        CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY: "ts",
-        CONTROL_PLANE_RUNS_AUTHORITY: "ts",
-        CONTROL_PLANE_SESSIONS_AUTHORITY: "ts",
-        CONTROL_PLANE_CHAT_TURN_AUTHORITY: "ts",
-        CONTROL_PLANE_CONTEXT_AUTHORITY: "ts",
-        CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
-        CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
-      }),
-    );
     expect(features).toContain("context_assembly_ts_authority");
     expect(features).not.toContain("context_assembly_python_authority");
-  });
-
-  it("advertises TS memory authority when enabled", () => {
-    const features = computeFeatures(
-      loadConfig({
-        CONTROL_PLANE_POLICY_AUTHORITY: "ts",
-        CONTROL_PLANE_PROPOSALS_AUTHORITY: "ts",
-        CONTROL_PLANE_MEMORY_AUTHORITY: "ts",
-        CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
-        CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
-      }),
-    );
     expect(features).toContain("memory_ts_authority");
     expect(features).not.toContain("memory_python_authority");
   });

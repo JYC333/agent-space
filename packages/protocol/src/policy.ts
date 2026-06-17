@@ -6,8 +6,8 @@
  * shapes, durable-audit envelope, and the `PolicyGateBlocked` error taxonomy.
  *
  * Schemas only — no enforcement authority lives here. The authority is the
- * control-plane `policy` module when `CONTROL_PLANE_POLICY_AUTHORITY=ts`, or
- * the Python `PolicyGateway` when explicitly configured for Python authority.
+ * control-plane `policy` module; Python `PolicyGateway` remains a local
+ * implementation behind retired/unowned paths and tests.
  * Field names mirror the Python API JSON (snake_case).
  *
  * Source of truth while both sides exist: `backend/app/policy/decisions.py`,

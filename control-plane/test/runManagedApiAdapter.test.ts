@@ -20,8 +20,6 @@ afterEach(() => {
 function config() {
   return loadConfig({
     CONTROL_PLANE_PYTHON_API_BASE_URL: "http://python.test",
-    CONTROL_PLANE_PROVIDERS_AUTHORITY: "ts",
-    CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY: "ts",
     CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
     CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
   });

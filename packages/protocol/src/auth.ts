@@ -1,12 +1,11 @@
 /**
  * Identity introspection contract for TS control-plane modules.
  *
- * Mirrors Python `GET /api/v1/auth/introspect`, which exposes the
- * `get_identity` resolution as a port. Python remains the sole
- * authentication/membership authority; TS consumers call this endpoint with
- * the original caller's credentials forwarded and never validate credentials
- * themselves. The response carries identifiers only — never token, session,
- * or key material.
+ * Contract for `GET /api/v1/auth/introspect`. The TypeScript control plane owns
+ * session-cookie identity, Google OAuth, and the current feature-gated API-key
+ * routes; DB-persisted API-key storage is still deferred until the canonical
+ * schema grows that table. The response carries identifiers only — never token,
+ * session, or key material.
  */
 
 import { z } from "zod";

@@ -49,10 +49,10 @@ class FakeTransport implements RunPythonContextPortTransport {
           {
             operation: "context.prepare",
             owner: "memory_context",
-            implemented: true,
+            implemented: false,
             auth: "internal_service_token",
-            error_codes: ["context_prepare_failed", "policy_denied"],
-            writes: ["context_snapshots", "memory_access_logs"],
+            error_codes: ["run_context_port_not_implemented"],
+            writes: [],
           },
           {
             operation: "artifact.persist",

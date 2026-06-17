@@ -61,7 +61,7 @@ def test_chat_turn_prepare_run_requires_service_token(api_client, monkeypatch):
     assert response.json().get("error") == "unauthorized"
 
 
-def test_chat_turn_prepare_run_creates_run_and_context_without_messages(
+def test_chat_turn_prepare_run_fails_closed_without_creating_run(
     api_client,
     db,
     monkeypatch,
@@ -79,6 +79,7 @@ def test_chat_turn_prepare_run_creates_run_and_context_without_messages(
     session = _make_session(db, space_id=space_id, user_id=user_id)
     _make_message(db, session_id=session.id, space_id=space_id, user_id=user_id)
     assert db.query(Message).filter(Message.session_id == session.id).count() == 1
+    runs_before = db.query(Run).count()
 
     response = api_client.post(
         "/api/v1/internal/agents-chat/prepare-run",
@@ -92,30 +93,10 @@ def test_chat_turn_prepare_run_creates_run_and_context_without_messages(
         },
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["session_id"] == session.id
-    assert body["run_id"]
-
+    assert response.status_code == 410
+    assert "TypeScript control plane" in response.text
     db.expire_all()
-    run = db.query(Run).filter(Run.id == body["run_id"]).one()
-    assert run.space_id == space_id
-    assert run.agent_id == agent.id
-    assert run.agent_version_id == agent.current_version_id
-    assert run.session_id == session.id
-    assert run.instructed_by_user_id == user_id
-    assert run.status == "queued"
-    assert run.mode == "live"
-    assert run.run_type == "agent"
-    assert run.trigger_origin == "manual"
-    assert run.prompt == "What changed in Stage 6 chat turn?"
-
-    snapshot = db.query(ContextSnapshot).filter(ContextSnapshot.id == run.context_snapshot_id).one()
-    assert snapshot.request_json["space_id"] == space_id
-    assert snapshot.request_json["user_id"] == user_id
-    assert snapshot.request_json["session_id"] == session.id
-    assert snapshot.request_json["run_id"] == run.id
-    assert snapshot.request_json["user_message"] == "What changed in Stage 6 chat turn?"
+    assert db.query(Run).count() == runs_before
     assert db.query(Message).filter(Message.session_id == session.id).count() == 1
 
 
@@ -125,9 +106,8 @@ def test_prepare_run_fails_closed_when_context_authority_is_ts(
     monkeypatch,
     cross_space_pair,
 ):
-    """Stage 6 slice 4: the combined build-and-persist port is retired under ts."""
+    """The combined build-and-persist port is permanently retired."""
     monkeypatch.setattr(settings, "control_plane_internal_token", "internal-token")
-    monkeypatch.setenv("CONTROL_PLANE_CONTEXT_AUTHORITY", "ts")
     space_id = cross_space_pair["space_a_id"]
     user_id = cross_space_pair["user_a"].id
     agent = factories.create_test_agent(db, space_id=space_id, owner_user_id=user_id)

@@ -1,0 +1,42 @@
+import type { ControlPlaneConfig } from "../../config";
+
+export class BackupPolicyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BackupPolicyError";
+  }
+}
+
+export interface BackupPolicyLogger {
+  warn(message: string): void;
+}
+
+/**
+ * Enforce backup safety policy at control-plane startup (mirrors Python
+ * `app.backups.guard.enforce_backup_policy`).
+ */
+export function enforceBackupPolicy(
+  config: ControlPlaneConfig,
+  log: BackupPolicyLogger = console,
+): void {
+  if (config.backupEnabled) return;
+
+  const env = (config.agentSpaceEnv ?? "").trim().toLowerCase();
+  if (env === "prod") {
+    if (config.backupAcceptNoBackup) {
+      log.warn(
+        "BACKUP DISABLED in prod: AGENT_SPACE_ENV=prod with BACKUP_ENABLED=false. " +
+          "Proceeding because BACKUP_ACCEPT_NO_BACKUP=true. No automatic backups will be taken.",
+      );
+      return;
+    }
+    throw new BackupPolicyError(
+      "Refusing to start: AGENT_SPACE_ENV=prod but BACKUP_ENABLED=false. " +
+        "Set BACKUP_ENABLED=true or BACKUP_ACCEPT_NO_BACKUP=true.",
+      );
+  }
+  log.warn(
+    `Automatic backups are DISABLED (BACKUP_ENABLED=false, AGENT_SPACE_ENV=${env || "unset"}). ` +
+      "This is fine for tests/CI, but enable backups before dogfooding data.",
+  );
+}

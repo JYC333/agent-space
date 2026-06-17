@@ -3,8 +3,8 @@
  *
  * Loads + validates config (fail-fast), builds the server, and listens. This
  * process serves TS-owned control-plane routes and proxies unowned `/api/v1/*`
- * paths to the Python backend via the temporary fallback proxy. When the runs
- * authority is TS, it also runs the durable `agent_run` job worker loop.
+ * paths to the Python backend via the temporary fallback proxy. When the database
+ * is configured, it also runs the unified TS jobs worker and in-process schedulers.
  */
 
 import { buildServer } from "./server";
@@ -15,10 +15,8 @@ import {
   describeConfig,
   loadConfig,
 } from "./config";
-import {
-  startRunsJobWorker,
-  type RunsWorkerHandle,
-} from "./modules/runs/workerRuntime";
+import { startBackgroundServices } from "./modules/jobs/backgroundServices";
+import { enforceBackupPolicy, BackupPolicyError } from "./modules/backups/guard";
 
 async function main(): Promise<void> {
   let config;
@@ -30,6 +28,20 @@ async function main(): Promise<void> {
       process.stderr.write(
         `[control-plane] invalid configuration [${err.code}]: ${err.message}\n`,
       );
+      process.exit(1);
+    }
+    if (err instanceof BackupPolicyError) {
+      process.stderr.write(`[control-plane] backup policy: ${err.message}\n`);
+      process.exit(1);
+    }
+    throw err;
+  }
+
+  try {
+    enforceBackupPolicy(config);
+  } catch (err) {
+    if (err instanceof BackupPolicyError) {
+      process.stderr.write(`[control-plane] backup policy: ${err.message}\n`);
       process.exit(1);
     }
     throw err;
@@ -45,11 +57,14 @@ async function main(): Promise<void> {
       `config_schema=${snapshot.schema_version} config_hash=${snapshot.content_hash.slice(0, 12)}`,
   );
 
-  let runsWorker: RunsWorkerHandle | null = null;
+  let background: ReturnType<typeof startBackgroundServices> | null = null;
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info(`[control-plane] received ${signal}, shutting down`);
-    if (runsWorker) await runsWorker.stop();
+    if (background) {
+      await background.worker?.stop();
+      await background.scheduler.stop();
+    }
     await app.close();
     process.exit(0);
   };
@@ -63,13 +78,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  runsWorker = startRunsJobWorker(config, {
+  background = startBackgroundServices(config, {
     info: (message) => app.log.info(message),
     warn: (message) => app.log.warn(message),
     error: (message) => app.log.error(message),
   });
-  if (runsWorker) {
-    app.log.info(`[control-plane] runs job worker active (${runsWorker.worker_id})`);
+  if (background.worker) {
+    app.log.info(`[control-plane] jobs worker active (${background.worker.worker_id})`);
   }
 }
 

@@ -1,10 +1,10 @@
 /**
  * Proposal review contracts.
  *
- * These schemas describe the wire DTOs for the existing proposal review API and
- * the internal Python proposal ports used while per-proposal business appliers
- * are split by migration slice. Schemas only: route ownership and persistence
- * authority live in the services that register the routes.
+ * These schemas describe the wire DTOs for the proposal review API and the
+ * legacy internal Python proposal port contracts retained until Python backend
+ * deletion. Schemas only: route ownership and persistence authority live in the
+ * services that register the routes.
  */
 
 import { z } from "zod";
@@ -52,6 +52,9 @@ export const ProposalOutSchema = z
     egress_approval_status: z.string().nullish(),
     egress_approval_id: IdSchema.nullish(),
     project_id: IdSchema.nullish(),
+    incomplete_patch: z.boolean().optional(),
+    skipped_changes: z.array(JsonObjectSchema).optional(),
+    skipped_count: z.number().int().nonnegative().optional(),
     ...SecretResponseGuards,
   })
   .passthrough();

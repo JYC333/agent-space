@@ -31,8 +31,8 @@ RBAC/ABAC platform — it is a lightweight, code-owned permission layer that rou
 - Approval resolver (`approval.py`) — `can_approve_policy_action`, `get_space_role`.
 - Proposal apply gate (`proposal_apply.py`) — `check_proposal_apply_policy`, `effective_proposal_risk`, `ProposalRiskLevelError`.
 - Active enforcement port (`PolicyPort`, `get_policy_port(db)`) — resolves to
-  Python `PolicyGateway` when `CONTROL_PLANE_POLICY_AUTHORITY=python`, or the
-  TS-backed internal policy client when `ts`.
+  the TS-backed internal policy client; Python `PolicyGateway` remains as the
+  local implementation behind retired/unowned paths and tests.
 - Domain-specific persisted-policy enforcement (`enforcement.py`, `access.py`).
 - Policy decision tracing (`trace.py`).
 
@@ -229,11 +229,10 @@ The documented non-mutating simulation points may call `PolicyEngine`; they do
 not persist `PolicyDecisionRecord`, and actual runtime execution still uses
 the active `PolicyPort`.
 
-Python `PolicyGateway` implements the same interface locally. When
-`CONTROL_PLANE_POLICY_AUTHORITY=ts`, `get_policy_port(db)` returns
-`ControlPlanePolicyGateway`, which calls the service-authenticated TS policy
-internal ports; blocked decisions are marked as already audited so Python does
-not duplicate the TS durable audit write.
+Python `PolicyGateway` implements the same interface locally.
+`get_policy_port(db)` returns `ControlPlanePolicyGateway`, which calls the
+service-authenticated TS policy internal ports; blocked decisions are marked as
+already audited so Python does not duplicate the TS durable audit write.
 
 `DurablePolicyAuditWriter` writes only `PolicyDecisionRecord` using an independent
 transaction. `PolicyGateBlocked` represents DENY and REQUIRE_APPROVAL. Local runtime

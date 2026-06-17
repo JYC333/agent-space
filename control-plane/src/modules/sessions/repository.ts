@@ -68,10 +68,9 @@ interface SessionSummaryRow {
  * owning user inside its own space, and only `status = 'active'` sessions are
  * listed (the same filter Python applies).
  *
- * Owns list/get/create sessions plus list/add messages when
- * `CONTROL_PLANE_SESSIONS_AUTHORITY=ts`, and serves the context-safe latest
- * session-summary read used by Python context assembly. Session `reflect` and
- * summary condense/create remain Python-owned.
+ * Owns list/get/create sessions plus list/add messages, and serves the
+ * context-safe latest session-summary read used by Python context assembly.
+ * Session `reflect` and summary condense/create remain Python-owned.
  */
 export class PgSessionRepository {
   constructor(private readonly db: Queryable) {}

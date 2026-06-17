@@ -18,12 +18,11 @@ import type {
   RunPythonContextPortResponse,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { RuntimeToolResolverPort } from "../src/modules/runtimeTools";
+import type { PreparedWorkspaceRuntime, RunWorkspaceManagerPort } from "../src/modules/workspaces";
 
 function config() {
   return loadConfig({
     CONTROL_PLANE_PYTHON_API_BASE_URL: "http://python.test",
-    CONTROL_PLANE_PROVIDERS_AUTHORITY: "ts",
-    CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY: "ts",
     CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
     CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
   });
@@ -256,14 +255,82 @@ class FakePreparationPorts {
   }
 }
 
+class FakeContextPreparer {
+  calls: Array<{
+    runId: string;
+    spaceId: string;
+    adapterType: string | null;
+    sandboxCwd: string | null;
+    targetFormat: string | null;
+    workspacePath: string | null;
+  }> = [];
+
+  async prepare(input: {
+    runId: string;
+    spaceId: string;
+    adapterType: string | null;
+    sandboxCwd: string | null;
+    targetFormat: string | null;
+    workspacePath: string | null;
+  }) {
+    this.calls.push(input);
+    return {
+      runtime_prompt: "prepared prompt",
+      context_snapshot_id: "snapshot-1",
+      context_rendered: true,
+      target_format: input.targetFormat,
+      instruction_file_path: input.sandboxCwd
+        ? `${input.sandboxCwd}/AGENTS.md`
+        : null,
+      total_chars: 100,
+      budget_chars: 128000,
+      dropped_sections: [],
+    };
+  }
+}
+
+class FakeWorkspaceManager implements RunWorkspaceManagerPort {
+  calls: string[] = [];
+
+  async prepareRunWorkspace(run: RunRecord): Promise<PreparedWorkspaceRuntime> {
+    this.calls.push(`prepare:${run.id}`);
+    return {
+      sandbox_cwd: "/tmp/aspace-prepared-run",
+      cleanup_kind: "git_worktree",
+      sandbox_kind: "worktree",
+      workspace_root: "/tmp/workspace-root",
+      base_commit_sha: "abc123",
+      workspace_is_dirty: false,
+    };
+  }
+
+  async cleanupRunWorkspace(input: {
+    runId: string;
+    spaceId: string;
+    cleanupKind: string;
+    sandboxCwd: string | null;
+    workspaceRoot: string | null;
+  }): Promise<void> {
+    this.calls.push(`cleanup:${input.runId}:${input.cleanupKind}:${input.sandboxCwd}:${input.workspaceRoot}`);
+  }
+
+  async gcSandboxes(): Promise<{ removed: number; errors: number }> {
+    this.calls.push("gc");
+    return { removed: 0, errors: 0 };
+  }
+}
+
 describe("RunOrchestrationService", () => {
   it("executes a managed API run with setup writes before adapter invocation and terminal writes after", async () => {
     const repo = new FakeRepo();
+    repo.run = run({ system_prompt: "You are the space assistant.", instruction: null });
     const adapterCalls: string[] = [];
+    const adapterRequests: Array<{ system_prompt?: string | null }> = [];
     const service = new RunOrchestrationService(config(), repo, {
       managedApi: {
-        executeRuntimeHost: async () => {
+        executeRuntimeHost: async (_config, request) => {
           adapterCalls.push(`adapter_after:${repo.calls.join("|")}`);
+          adapterRequests.push(request);
           return {
             success: true,
             stdout: "done",
@@ -297,6 +364,10 @@ describe("RunOrchestrationService", () => {
 
     expect(adapterCalls[0]).toContain("running:run-1");
     expect(adapterCalls[0]).toContain("event:adapter_invoked:running");
+    expect(adapterRequests[0]).toMatchObject({
+      system_prompt: "You are the space assistant.",
+      prompt: "Say hello",
+    });
     expect(repo.calls).toEqual([
       "get:space-1:run-1",
       "lock:run-1:worker-1:job-1",
@@ -499,7 +570,7 @@ describe("RunOrchestrationService", () => {
     expect(executorResults.length).toBe(1);
   });
 
-  it("prepares CLI sandbox and context through Python-owned ports", async () => {
+  it("prepares CLI sandbox through the legacy workspace port and context natively", async () => {
     const repo = new FakeRepo();
     repo.run = run({
       adapter_type: "codex_cli",
@@ -507,9 +578,13 @@ describe("RunOrchestrationService", () => {
       workspace_id: "workspace-1",
     });
     const ports = new FakePreparationPorts();
+    const contextPreparer = new FakeContextPreparer();
+    const workspaceManager = new FakeWorkspaceManager();
     const executorCalls: Array<{ command: string[]; cwd: string | null }> = [];
     const service = new RunOrchestrationService(config(), repo, {
       contextPorts: ports,
+      contextPreparer,
+      workspaceManager,
       vendorCli: {
         credentialBroker: {
           async grantForRun() {
@@ -553,9 +628,20 @@ describe("RunOrchestrationService", () => {
 
     expect(ports.calls.map((call) => call.operation)).toEqual([
       "policy.enforce",
-      "workspace.prepare",
-      "context.prepare",
-      "workspace.cleanup",
+    ]);
+    expect(workspaceManager.calls).toEqual([
+      "prepare:run-1",
+      "cleanup:run-1:git_worktree:/tmp/aspace-prepared-run:/tmp/workspace-root",
+    ]);
+    expect(contextPreparer.calls).toEqual([
+      {
+        runId: "run-1",
+        spaceId: "space-1",
+        adapterType: "codex_cli",
+        sandboxCwd: "/tmp/aspace-prepared-run",
+        targetFormat: "codex_cli",
+        workspacePath: "/tmp/workspace-root",
+      },
     ]);
     expect(executorCalls[0]).toEqual({
       command: [process.execPath, "prepared prompt"],
@@ -689,6 +775,8 @@ describe("RunOrchestrationService", () => {
     const adapterConfigs: Array<Record<string, unknown>> = [];
     const service = new RunOrchestrationService(config(), repo, {
       contextPorts: ports,
+      contextPreparer: new FakeContextPreparer(),
+      workspaceManager: new FakeWorkspaceManager(),
       vendorCli: {
         credentialBroker: {
           async grantForRun() {
@@ -750,6 +838,7 @@ describe("RunOrchestrationService", () => {
     let hostCalled = false;
     const service = new RunOrchestrationService(config(), repo, {
       contextPorts: ports,
+      contextPreparer: new FakeContextPreparer(),
       managedApi: {
         executeRuntimeHost: async () => {
           hostCalled = true;
@@ -822,6 +911,8 @@ describe("RunOrchestrationService", () => {
       workspace_id: "workspace-1",
     });
     const service: RunOrchestrationService = new RunOrchestrationService(config(), repo, {
+      contextPreparer: new FakeContextPreparer(),
+      workspaceManager: new FakeWorkspaceManager(),
       vendorCli: {
         credentialBroker: {
           async grantForRun() {

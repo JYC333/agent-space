@@ -289,7 +289,7 @@ export const meApi = {
   timeline: (params: Record<string, string> = {}) =>
     get<MeTimelineEntry[]>('/me/timeline?' + new URLSearchParams(params), { includeSpaceParams: false }),
   tasks: (params: Record<string, string> = {}) =>
-    get<MeTaskItem[]>('/me/tasks?' + new URLSearchParams(params), { includeSpaceParams: false }),
+    get<Page<MeTaskItem>>('/me/tasks?' + new URLSearchParams(params), { includeSpaceParams: false }),
   pending: (params: Record<string, string> = {}) =>
     get<MePendingProposalItem[]>('/me/pending?' + new URLSearchParams(params), { includeSpaceParams: false }),
 }
@@ -425,7 +425,10 @@ export const proposalsApi = {
     return get<Page<Proposal>>('/proposals?' + new URLSearchParams(q))
   },
   get: (id: string) => get<Proposal>(`/proposals/${id}`),
-  accept: (id: string) => post<ProposalAcceptOut>(`/proposals/${id}/accept`),
+  accept: (id: string, options: { confirmIncompletePatch?: boolean } = {}) => {
+    const suffix = options.confirmIncompletePatch ? '?confirm_incomplete_patch=true' : ''
+    return post<ProposalAcceptOut>(`/proposals/${id}/accept${suffix}`)
+  },
   reject: (id: string) => post<Proposal>(`/proposals/${id}/reject`),
   approveEgressGrantingUserProposal: (id: string, input: EgressApprovalRequest = {}) =>
     post<ProposalApprovalResponse>(`/proposals/${id}/approvals/egress-granting-user`, input),

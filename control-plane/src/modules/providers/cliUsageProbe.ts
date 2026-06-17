@@ -233,7 +233,7 @@ export async function probeClaudeQuota(
 
   const deadline = Date.now() + timings.deadlineMs;
   try {
-    // Phase 1 — let the REPL render, then inject /usage once output settles.
+    // Step 1: let the REPL render, then inject /usage once output settles.
     const promptDeadline = Date.now() + timings.promptSettleMs;
     while (!exited && Date.now() < promptDeadline) {
       await Promise.race([exitPromise, sleep(timings.pollMs)]);
@@ -246,7 +246,7 @@ export async function probeClaudeQuota(
     }
     const usageSentAt = Date.now();
 
-    // Phase 2 — wait for the quota bars to render and settle.
+    // Step 2: wait for the quota bars to render and settle.
     while (!exited && Date.now() < deadline) {
       await Promise.race([exitPromise, sleep(timings.pollMs)]);
       const now = Date.now();

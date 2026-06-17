@@ -464,7 +464,7 @@ export default function HomePage() {
           meApi.pending({ limit: '20' }),
         ])
         if (cancelled) return
-        setSummary(s); setTimeline(tl); setTasks(t); setPending(p)
+        setSummary(s); setTimeline(tl); setTasks(t.items); setPending(p)
       } catch (e) {
         if (!cancelled) toast.error(errMsg(e))
       } finally {

@@ -6,6 +6,8 @@ import {
   __setProposalIdentityForTests,
   __setProposalServicesFactoryForTests,
 } from "../src/modules/proposals";
+import { ProposalApplyHttpError } from "../src/modules/proposals/applyService";
+import { UnknownProposalApplierError } from "../src/modules/proposals/applierRegistry";
 import type { ProposalOut, ProposalPage } from "@agent-space/protocol" with { "resolution-mode": "import" };
 
 let app: FastifyInstance;
@@ -18,10 +20,8 @@ afterEach(async () => {
 
 function tsProposalsConfig() {
   return loadConfig({
-    CONTROL_PLANE_PROPOSALS_AUTHORITY: "ts",
     CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false",
     CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
-    CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
   });
 }
 
@@ -89,14 +89,11 @@ describe("proposal review routes", () => {
           throw new Error("getVisible should not run");
         },
       },
-      ports: {
-        async acceptProposal() {
+      applyService: {
+        async accept() {
           throw new Error("accept should not run");
         },
-        async gateMemoryApply() {
-          throw new Error("gateMemoryApply should not run");
-        },
-        async rejectProposal() {
+        async reject() {
           throw new Error("reject should not run");
         },
         async approveEgressGrantingUser() {
@@ -143,14 +140,11 @@ describe("proposal review routes", () => {
           return proposal({ id: proposalId });
         },
       },
-      ports: {
-        async acceptProposal() {
+      applyService: {
+        async accept() {
           throw new Error("accept should not run");
         },
-        async gateMemoryApply() {
-          throw new Error("gateMemoryApply should not run");
-        },
-        async rejectProposal() {
+        async reject() {
           throw new Error("reject should not run");
         },
         async approveEgressGrantingUser() {
@@ -169,7 +163,7 @@ describe("proposal review routes", () => {
     expect(res.json()).toMatchObject({ id: "proposal-1", status: "pending" });
   });
 
-  it("dispatches accept, reject, and egress approval through the Python proposal port", async () => {
+  it("applies accept, reject, and egress approval through the TS proposal service", async () => {
     __setProposalIdentityForTests({ spaceId: "space-1", userId: "user-1" });
     const calls: string[] = [];
     __setProposalServicesFactoryForTests(() => ({
@@ -181,31 +175,28 @@ describe("proposal review routes", () => {
           throw new Error("getVisible should not run");
         },
       },
-      ports: {
-        async acceptProposal(input) {
-          calls.push(`accept:${input.proposal_id}:${input.confirm_incomplete_patch}`);
+      applyService: {
+        async accept(proposalId, identity, options) {
+          calls.push(`accept:${proposalId}:${identity.spaceId}:${identity.userId}:${options?.confirmIncompletePatch}`);
           return {
             proposal: proposal({ status: "accepted", decided_at: "2026-06-14T10:01:00.000Z" }),
             result_type: "code_patch_apply",
             result: { updated_paths: ["README.md"] },
           };
         },
-        async gateMemoryApply() {
-          throw new Error("gateMemoryApply should not run");
+        async reject(proposalId, identity) {
+          calls.push(`reject:${proposalId}:${identity.spaceId}:${identity.userId}`);
+          return proposal({ id: proposalId, status: "rejected" });
         },
-        async rejectProposal(input) {
-          calls.push(`reject:${input.proposal_id}:${input.space_id}:${input.user_id}`);
-          return proposal({ id: input.proposal_id, status: "rejected" });
-        },
-        async approveEgressGrantingUser(input) {
-          calls.push(`approval:${input.proposal_id}:${input.grant_id}`);
+        async approveEgressGrantingUser(proposalId, identity, grantId) {
+          calls.push(`approval:${proposalId}:${grantId}`);
           return {
             id: "approval-1",
-            proposal_id: input.proposal_id,
+            proposal_id: proposalId,
             approval_type: "egress_granting_user",
-            approver_user_id: input.user_id,
-            grant_id: input.grant_id ?? null,
-            target_space_id: input.space_id,
+            approver_user_id: identity.userId,
+            grant_id: grantId,
+            target_space_id: identity.spaceId,
             status: "approved",
             metadata_json: {},
             created_at: "2026-06-14T10:02:00.000Z",
@@ -237,21 +228,75 @@ describe("proposal review routes", () => {
     expect(approval.statusCode).toBe(200);
     expect(approval.json()).toMatchObject({ id: "approval-1", status: "approved" });
     expect(calls).toEqual([
-      "accept:proposal-1:true",
+      "accept:proposal-1:space-1:user-1:true",
       "reject:proposal-2:space-1:user-1",
       "approval:proposal-3:grant-1",
     ]);
   });
 
-  it("leaves proposal routes unowned by TS when proposals authority is python", async () => {
-    app = buildServer(
-      loadConfig({ CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false" }),
-      { logger: false },
-    );
+  it("rejects invalid incomplete code patch confirmation query values", async () => {
+    __setProposalIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setProposalServicesFactoryForTests(() => ({
+      repository: {
+        async listVisible() { throw new Error("should not run"); },
+        async getVisible() { throw new Error("should not run"); },
+      },
+      applyService: {
+        async accept() { throw new Error("accept should not run"); },
+        async reject() { throw new Error("reject should not run"); },
+        async approveEgressGrantingUser() { throw new Error("approval should not run"); },
+      },
+    }));
+    app = buildServer(tsProposalsConfig(), { logger: false });
 
-    const res = await app.inject({ method: "GET", url: "/api/v1/proposals" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/proposals/proposal-1/accept?confirm_incomplete_patch=maybe",
+    });
 
-    expect(res.statusCode).toBe(503);
-    expect(res.payload).toContain("python_fallback_proxy_disabled");
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({
+      detail: expect.stringContaining("confirm_incomplete_patch"),
+    });
+  });
+
+  it("returns 422 when accept is called for an unregistered proposal type (fail-closed)", async () => {
+    __setProposalIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setProposalServicesFactoryForTests(() => ({
+      repository: {
+        async listVisible() { throw new Error("should not run"); },
+        async getVisible() { throw new Error("should not run"); },
+      },
+      applyService: {
+        async accept() { throw new UnknownProposalApplierError("code_patch"); },
+        async reject() { throw new Error("should not run"); },
+        async approveEgressGrantingUser() { throw new Error("should not run"); },
+      },
+    }));
+    app = buildServer(tsProposalsConfig(), { logger: false });
+    const res = await app.inject({ method: "POST", url: "/api/v1/proposals/proposal-1/accept" });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ detail: expect.stringContaining("code_patch") });
+  });
+
+  it("returns 403 when the policy gate blocks apply before the applier runs", async () => {
+    __setProposalIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setProposalServicesFactoryForTests(() => ({
+      repository: {
+        async listVisible() { throw new Error("should not run"); },
+        async getVisible() { throw new Error("should not run"); },
+      },
+      applyService: {
+        async accept() {
+          throw new ProposalApplyHttpError(403, { code: "policy_denied", message: "policy denied" });
+        },
+        async reject() { throw new Error("should not run"); },
+        async approveEgressGrantingUser() { throw new Error("should not run"); },
+      },
+    }));
+    app = buildServer(tsProposalsConfig(), { logger: false });
+    const res = await app.inject({ method: "POST", url: "/api/v1/proposals/proposal-1/accept" });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ detail: { code: "policy_denied" } });
   });
 });

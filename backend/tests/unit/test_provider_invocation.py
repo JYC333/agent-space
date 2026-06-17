@@ -1,14 +1,14 @@
 """Tests for the shared provider invocation primitive (providers/invocation.py).
 
-Covers the single litellm call site and model-name builder used by both the memory
-reflector path and the model_api runtime adapter:
+Covers the model-name builder retained for Python-owned helpers plus the fixed
+control-plane forwarding path used by Python callers:
   1. build_litellm_model_name qualification (incl. anthropic — ADR 0010)
   2. resolve_usable_provider validation (missing / disabled / unsupported)
-  3. complete_text: litellm call, base_url, key isolation, anthropic in-process
+  3. complete_text: service-authenticated control-plane forwarding, no litellm
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -82,22 +82,8 @@ class TestProviderValidation:
             assert row.provider_type == pt
 
 
-# ===========================================================================
-# 3. complete_text
-# ===========================================================================
-
-def _mock_litellm_response(content: str):
-    mock_choice = MagicMock()
-    mock_choice.message.content = content
-    resp = MagicMock()
-    resp.choices = [mock_choice]
-    resp.usage = None
-    return resp
-
-
 class TestCompleteText:
     def test_control_plane_authority_forwards_without_litellm(self, db, test_space, monkeypatch):
-        from app.config import settings
         from app.providers.invocation import complete_text
         from tests.support import factories
 
@@ -115,7 +101,6 @@ class TestCompleteText:
             calls.append(payload)
             return {"text": "from-ts", "model": "gpt-4o-mini", "usage": {"total_tokens": 3}}
 
-        monkeypatch.setattr(settings, "control_plane_providers_credentials_authority", "ts")
         monkeypatch.setattr(
             "app.providers.invocation.complete_text_via_control_plane",
             _fake_complete,
@@ -145,83 +130,75 @@ class TestCompleteText:
             }
         ]
 
-    def test_openai_calls_litellm(self, db, test_space):
+    def test_model_override_is_forwarded_to_control_plane(self, db, test_space, monkeypatch):
         from app.providers.invocation import complete_text
         from tests.support import factories
-        mp = factories.create_test_model_provider(
-            db, space_id=test_space.id, provider_type="openai",
-            with_api_key=True, default_model="gpt-4o-mini", enabled=True,
-        )
-        with patch("litellm.completion", return_value=_mock_litellm_response('["ok"]')) as mock_litellm:
-            result = complete_text(db, provider_id=mp.id, model=None, system="sys", user="usr")
-        kwargs = mock_litellm.call_args[1]
-        assert kwargs["model"] == "openai/gpt-4o-mini"  # openai → openai/<model>
-        assert kwargs["api_key"] == "sk-test-factory-key"
-        assert "api_base" not in kwargs
-        assert result.text == '["ok"]'
-        assert result.model == "gpt-4o-mini"
 
-    def test_anthropic_in_process_qualified_model(self, db, test_space):
-        """provider_type=anthropic resolves in-process (ADR 0010) and qualifies the model."""
-        from app.providers.invocation import complete_text
-        from tests.support import factories
         mp = factories.create_test_model_provider(
-            db, space_id=test_space.id, provider_type="anthropic",
-            with_api_key=True, default_model="claude-3-5-sonnet-latest", enabled=True,
+            db,
+            space_id=test_space.id,
+            provider_type="openai",
+            with_api_key=False,
+            default_model="gpt-4o-mini",
+            enabled=True,
         )
-        with patch("litellm.completion", return_value=_mock_litellm_response("hi")) as mock_litellm:
-            result = complete_text(db, provider_id=mp.id, model=None, system="sys", user="usr")
-        assert mock_litellm.call_args[1]["model"] == "anthropic/claude-3-5-sonnet-latest"
-        assert result.text == "hi"
+        calls = []
 
-    def test_base_url_passed_as_api_base(self, db, test_space):
-        from app.providers.invocation import complete_text
-        from tests.support import factories
-        mp = factories.create_test_model_provider(
-            db, space_id=test_space.id, provider_type="custom_openai_compatible",
-            with_api_key=True, default_model="my-local-model",
-            base_url="http://my-llm:8080/v1", enabled=True,
-        )
-        with patch("litellm.completion", return_value=_mock_litellm_response("[]")) as mock_litellm:
-            complete_text(db, provider_id=mp.id, model=None, system="s", user="u")
-        assert mock_litellm.call_args[1]["api_base"] == "http://my-llm:8080/v1"
+        def _fake_complete(**payload):
+            calls.append(payload)
+            return {"text": "from-ts", "model": payload["model"], "usage": None}
 
-    def test_api_key_not_in_output(self, db, test_space):
-        from app.providers.invocation import complete_text
-        from tests.support import factories
-        mp = factories.create_test_model_provider(
-            db, space_id=test_space.id, provider_type="openai",
-            with_api_key=True, default_model="gpt-4o-mini", enabled=True,
+        monkeypatch.setattr(
+            "app.providers.invocation.complete_text_via_control_plane",
+            _fake_complete,
         )
-        with patch("litellm.completion", return_value=_mock_litellm_response("[]")):
-            result = complete_text(db, provider_id=mp.id, model=None, system="s", user="u")
-        assert "sk-test-factory-key" not in result.text
 
-    def test_model_override_takes_priority(self, db, test_space):
-        from app.providers.invocation import complete_text
-        from tests.support import factories
-        mp = factories.create_test_model_provider(
-            db, space_id=test_space.id, provider_type="openai",
-            with_api_key=True, default_model="gpt-4o-mini", enabled=True,
-        )
-        with patch("litellm.completion", return_value=_mock_litellm_response("[]")) as mock_litellm:
-            result = complete_text(db, provider_id=mp.id, model="gpt-4o", system="s", user="u")
-        assert mock_litellm.call_args[1]["model"] == "openai/gpt-4o"
-        assert result.model == "gpt-4o"
-
-    def test_unsupported_provider_raises_without_litellm(self, db, test_space):
-        from app.providers.invocation import UnsupportedProviderError, complete_text
-        from app.models import ModelProvider
-        from tests.support import factories
-        mp = factories.create_test_model_provider(
-            db, space_id=test_space.id, provider_type="openai", with_api_key=True, enabled=True
-        )
-        # Force an unsupported provider_type directly on the row
-        db.query(ModelProvider).filter(ModelProvider.id == mp.id).update(
-            {"provider_type": "totally_unknown_provider"}
-        )
-        db.flush()
         with patch("litellm.completion") as mock_litellm:
-            with pytest.raises(UnsupportedProviderError):
-                complete_text(db, provider_id=mp.id, model=None, system="s", user="u")
+            result = complete_text(db, provider_id=mp.id, model="gpt-4o", system="s", user="u")
+
         mock_litellm.assert_not_called()
+        assert result.model == "gpt-4o"
+        assert calls[0]["model"] == "gpt-4o"
+
+    def test_task_is_forwarded_to_control_plane(self, db, test_space, monkeypatch):
+        from app.providers.invocation import complete_text
+        from tests.support import factories
+
+        mp = factories.create_test_model_provider(
+            db,
+            space_id=test_space.id,
+            provider_type="openai",
+            with_api_key=False,
+            enabled=True,
+        )
+        calls = []
+
+        def _fake_complete(**payload):
+            calls.append(payload)
+            return {"text": "from-ts", "model": "gpt-4o-mini", "usage": None}
+
+        monkeypatch.setattr(
+            "app.providers.invocation.complete_text_via_control_plane",
+            _fake_complete,
+        )
+
+        complete_text(db, provider_id=mp.id, model=None, system="s", user="u", task="reflector")
+
+        assert calls[0]["task"] == "reflector"
+
+    def test_missing_provider_still_fails_before_forward(self, db, monkeypatch):
+        from app.providers.invocation import ProviderUnavailableError, complete_text
+
+        monkeypatch.setattr(
+            "app.providers.invocation.complete_text_via_control_plane",
+            lambda **_payload: {"text": "unexpected"},
+        )
+
+        with pytest.raises(ProviderUnavailableError):
+            complete_text(
+                db,
+                provider_id="01NONEXISTENT000000000000000",
+                model=None,
+                system="s",
+                user="u",
+            )

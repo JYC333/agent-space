@@ -36,8 +36,8 @@ fails before the `adapter_started` RunStep with
 `file_access_sandbox_error`), shared by execution and preflight.
 
 **`worktree` (high risk):**
-The CLI runs as a subprocess of the control-plane process with `cwd=sandboxes/{run_id}/`
-when `CONTROL_PLANE_RUNS_AUTHORITY=ts`.
+The CLI runs as a subprocess of the control-plane process with
+`cwd=sandboxes/{run_id}/`.
 No new container is spawned. Docker images are no longer the runtime tool
 source; vendor CLIs are installed as instance runtime tools under
 `$AGENT_SPACE_HOME/runtime-tools` and resolved by `RuntimeToolRegistry`.

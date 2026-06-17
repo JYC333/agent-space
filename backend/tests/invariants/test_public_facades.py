@@ -72,7 +72,6 @@ def test_public_facades_import_and_lazy_facades_stay_light(tmp_path):
             "app.providers": ["complete_text", "ModelService"],
             "app.router": ["RouterService", "TaskClassification", "RoutingDecision"],
             "app.runtimes": ["BaseRuntimeAdapter"],
-            "app.scheduler": ["SchedulerRegistry", "ScheduledTask"],
         }
         for module_name, names in public_imports.items():
             module = importlib.import_module(module_name)

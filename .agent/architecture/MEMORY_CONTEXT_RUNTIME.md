@@ -57,7 +57,9 @@ Hard filter applied before any ranking:
 
 ## 3. MemoryRetriever (`memory/retriever.py`)
 
-Policy-aware retrieval pipeline. Called from `ContextBuilder` and `ContextSnapshotPopulator`.
+Policy-aware retrieval pipeline. The TS runtime path implements this in
+`control-plane/src/modules/context/repository.ts`; the Python classes named below
+remain the parity/reference model for non-TS jobs and historical behavior.
 
 ```
 MemoryRetriever(db).retrieve(
@@ -368,15 +370,17 @@ Never writes `MemoryEntry`, `Proposal`, or `Policy`.
 
 ---
 
-## 8. ContextSnapshotPopulator (`runs/context_snapshot_populator.py`)
+## 8. Context Snapshot Population
 
-Called immediately before adapter execution. Builds and persists a `ContextSnapshot` row.
+Called immediately before adapter execution. TS `ContextPrepareService` /
+`PgRunContextRepository` builds and persists the run's `ContextSnapshot` row;
+Python `runs/context_snapshot_populator.py` is the reference implementation.
 
-**Policy gate:** `context.inject_memory` is checked via `PolicyGateway.enforce()` at the
-start of `populate()`, before `ContextBuilder.build()`. Cross-space memory injection without a
-`PersonalMemoryGrant` fires `HardInvariantGuard._cross_space_memory_read` → DENY. A DENY raises
-`RuntimeError([error_code=policy_denied_context_inject_memory])` which stops context population
-and propagates as a run failure. No memory is retrieved or injected after a DENY.
+**Policy gate:** `context.inject_memory` is checked at the start of TS context
+prepare, before memory retrieval. Cross-space memory injection without a
+`PersonalMemoryGrant` fires the hard invariant → DENY. A DENY stops context
+population and propagates as a run failure. No memory is retrieved or injected
+after a DENY.
 
 Stable prefix strategy:
 - Resolves `ContextDigest` rows for space / workspace / agent via `_load_digest_bundle()`

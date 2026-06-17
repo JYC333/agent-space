@@ -46,7 +46,6 @@ from ..providers.control_plane_client import (
     ControlPlaneProviderError,
     audit_cli_credential_via_control_plane,
     grant_cli_credential_via_control_plane,
-    provider_credentials_owned_by_control_plane,
     resolve_cli_profile_via_control_plane,
 )
 
@@ -203,20 +202,7 @@ class CredentialBroker:
         Only the exact canonical adapter_type string is checked.
         Credential directories must use canonical names (e.g. claude_code, codex_cli).
         """
-        if provider_credentials_owned_by_control_plane():
-            return self.resolve_profile(runtime, None, require_existing=True)
-
-        profiles = self._load_profiles()
-
-        pid = f"{runtime}/default"
-        if pid in profiles and Path(profiles[pid].source_path).exists():
-            return profiles[pid]
-
-        for p in profiles.values():
-            if p.runtime == runtime and Path(p.source_path).exists():
-                return p
-
-        return None
+        return self.resolve_profile(runtime, None, require_existing=True)
 
     def resolve_profile(
         self,
@@ -231,20 +217,12 @@ class CredentialBroker:
         grants.  When ``require_existing`` is true, a profile row whose
         ``source_path`` no longer exists is treated the same as no profile.
         """
-        if provider_credentials_owned_by_control_plane():
-            value = resolve_cli_profile_via_control_plane(
-                runtime=runtime,
-                profile_id=profile_id,
-                require_existing=require_existing,
-            )
-            return _profile_from_control_plane(value)
-
-        profile = self.get_profile(profile_id) if profile_id else self.get_default_profile(runtime)
-        if profile is None:
-            return None
-        if require_existing and not Path(profile.source_path).exists():
-            return None
-        return profile
+        value = resolve_cli_profile_via_control_plane(
+            runtime=runtime,
+            profile_id=profile_id,
+            require_existing=require_existing,
+        )
+        return _profile_from_control_plane(value)
 
     def profile_ready(self, runtime: str, profile_id: str | None = None) -> bool:
         return self.resolve_profile(runtime, profile_id, require_existing=True) is not None
@@ -267,45 +245,14 @@ class CredentialBroker:
         None means no explicit profile was resolved. CLI runtime adapters must
         fail closed in that case.
         """
-        if provider_credentials_owned_by_control_plane():
-            value = grant_cli_credential_via_control_plane(
-                run_id=run_id,
-                runtime=runtime,
-                risk_level=risk_level,
-                executor_mode=executor_mode,
-                profile_id=profile_id,
-            )
-            return _grant_from_control_plane(value)
-
-        profile = self.resolve_profile(runtime, profile_id, require_existing=True)
-
-        if not profile:
-            log.debug("no credential profile for runtime=%s", runtime)
-            return None
-
-        if executor_mode == "docker":
-            from ..workspace.sandbox_manager import _resolve_host_path
-            host_path = _resolve_host_path(profile.source_path)
-            return CredentialGrant(
-                profile_id=profile.id,
-                runtime=runtime,
-                executor_mode="docker",
-                readonly=profile.readonly,
-                host_source_path=host_path,
-                target_path=profile.target_path,
-                env={},
-            )
-
-        # worktree: create temp HOME with the login-state profile symlinked in
-        temp_home = self._create_temp_home(run_id, profile)
-        return CredentialGrant(
-            profile_id=profile.id,
+        value = grant_cli_credential_via_control_plane(
+            run_id=run_id,
             runtime=runtime,
-            executor_mode="worktree",
-            readonly=False,
-            temp_home=temp_home,
-            env={"HOME": temp_home},
+            risk_level=risk_level,
+            executor_mode=executor_mode,
+            profile_id=profile_id,
         )
+        return _grant_from_control_plane(value)
 
     def _create_temp_home(self, run_id: str, profile: CredentialProfile) -> str:
         """
@@ -366,69 +313,28 @@ class CredentialBroker:
         or credential file contents.  This is a best-effort write; failures are
         logged but never re-raised.
         """
-        if provider_credentials_owned_by_control_plane():
-            try:
-                audit_cli_credential_via_control_plane(
-                    {
-                        "space_id": space_id,
-                        "run_id": run_id or None,
-                        "runtime_adapter_type": runtime_adapter_type,
-                        "credential_profile_id": (
-                            grant.profile_id if grant is not None else None
-                        ),
-                        "trigger_origin": trigger_origin,
-                        "fallback_used": fallback_used,
-                        "fallback_reason": fallback_reason,
-                        "broker_error": broker_error,
-                        "cleanup_status": cleanup_status,
-                        "action": action,
-                    }
-                )
-            except ControlPlaneProviderError:
-                log.warning(
-                    "control-plane credential audit failed run=%s",
-                    run_id,
-                    exc_info=True,
-                )
-            return
-
         try:
-            from ..models import CliCredentialEvent
-            import uuid as _uuid_mod
-
-            if grant is not None:
-                credential_source = "profile"
-                credential_profile_id = grant.profile_id
-            elif broker_error or fallback_used:
-                credential_source = "none"
-                credential_profile_id = None
-            else:
-                credential_source = "none"
-                credential_profile_id = None
-
-            event = CliCredentialEvent(
-                id=str(_uuid_mod.uuid4()),
-                space_id=space_id,
-                run_id=run_id or None,
-                runtime_adapter_type=runtime_adapter_type,
-                credential_profile_id=credential_profile_id,
-                credential_source=credential_source,
-                trigger_origin=trigger_origin,
-                fallback_used=fallback_used,
-                fallback_reason=fallback_reason,
-                broker_error=broker_error,
-                cleanup_status=cleanup_status,
-                action=action,
+            audit_cli_credential_via_control_plane(
+                {
+                    "space_id": space_id,
+                    "run_id": run_id or None,
+                    "runtime_adapter_type": runtime_adapter_type,
+                    "credential_profile_id": (
+                        grant.profile_id if grant is not None else None
+                    ),
+                    "trigger_origin": trigger_origin,
+                    "fallback_used": fallback_used,
+                    "fallback_reason": fallback_reason,
+                    "broker_error": broker_error,
+                    "cleanup_status": cleanup_status,
+                    "action": action,
+                }
             )
-            db.add(event)
-            db.flush()
-            log.debug(
-                "credential audit: action=%s run=%s adapter=%s source=%s fallback=%s",
-                action, run_id, runtime_adapter_type, credential_source, fallback_used,
-            )
-        except Exception:
+        except ControlPlaneProviderError:
             log.warning(
-                "CliCredentialEvent write failed (best-effort) run=%s", run_id, exc_info=True
+                "control-plane credential audit failed run=%s",
+                run_id,
+                exc_info=True,
             )
 
 

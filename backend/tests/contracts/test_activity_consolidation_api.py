@@ -1,20 +1,11 @@
-"""Contracts: activity consolidation HTTP + job handler registration."""
+"""Contracts: activity consolidation HTTP."""
 
 from __future__ import annotations
 import uuid
 
 from datetime import UTC, datetime
 
-from app.jobs import JobHandlerRegistry
 from app.models import ActivityRecord, Proposal
-from app.modules.registry import register_job_handlers
-
-
-def test_memory_consolidation_handler_registered():
-    registry = JobHandlerRegistry()
-    register_job_handlers(registry)
-    assert "memory_consolidation" in registry.registered_job_types()
-    assert registry.get("memory_consolidation") is not None
 
 
 def test_post_memory_consolidation_run_returns_run_summary(api_client, db, cross_space_pair):

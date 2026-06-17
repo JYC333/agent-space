@@ -10,19 +10,16 @@ import {
   __setProviderHttpClientForTests,
   type ProviderCommandStore,
 } from "../src/modules/providers";
-import { startMockUpstream, type MockUpstream } from "./support/mockUpstream";
+import { __setAuthIdentityForTests } from "../src/modules/auth";
 
 let app: FastifyInstance;
-let upstream: MockUpstream | undefined;
 let tempHome: string | undefined;
 
 afterEach(async () => {
   __setProviderCommandStoreForTests(null);
   __setProviderHttpClientForTests(null);
+  __setAuthIdentityForTests(null);
   await app?.close();
-  const current = upstream;
-  upstream = undefined;
-  await current?.close();
   if (tempHome) await rm(tempHome, { recursive: true, force: true });
   tempHome = undefined;
 });
@@ -155,24 +152,10 @@ function fakeStore(calls: string[] = []): ProviderCommandStore {
   };
 }
 
-async function introspectionUpstream() {
-  return startMockUpstream((req, res) => {
-    if (req.url.startsWith("/api/v1/auth/introspect")) {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ space_id: "space-1", user_id: "user-1" }));
-      return;
-    }
-    res.writeHead(500, { "content-type": "application/json" });
-    res.end(JSON.stringify({ detail: "unexpected python authority call" }));
-  });
-}
-
-async function authorityConfig(baseUrl: string) {
+async function authorityConfig() {
   tempHome = await mkdtemp(join(tmpdir(), "aspace-control-plane-"));
   return loadConfig({
-    CONTROL_PLANE_PYTHON_API_BASE_URL: baseUrl,
-    CONTROL_PLANE_PROVIDERS_AUTHORITY: "ts",
-    CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY: "ts",
+    CONTROL_PLANE_PYTHON_API_BASE_URL: "http://127.0.0.1:9",
     CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
     CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
     AGENT_SPACE_HOME: tempHome,
@@ -180,11 +163,11 @@ async function authorityConfig(baseUrl: string) {
 }
 
 describe("providers and credentials TS authority", () => {
-  it("serves provider commands through the TS store and keeps Python limited to identity", async () => {
+  it("serves provider commands through the TS store behind native identity", async () => {
     const calls: string[] = [];
-    upstream = await introspectionUpstream();
+    __setAuthIdentityForTests({ spaceId: "space-1", userId: "user-1" });
     __setProviderCommandStoreForTests(fakeStore(calls));
-    app = buildServer(await authorityConfig(upstream.baseUrl), { logger: false });
+    app = buildServer(await authorityConfig(), { logger: false });
 
     const create = await app.inject({
       method: "POST",
@@ -210,15 +193,13 @@ describe("providers and credentials TS authority", () => {
     expect(supported.json()).toContain("anthropic");
 
     expect(calls).toEqual(["create:Main"]);
-    expect(upstream.requests.every((r) => r.url.startsWith("/api/v1/auth/introspect")))
-      .toBe(true);
   });
 
   it("serves the credential pool and task-policy surfaces (Hermes H1/H2 routes)", async () => {
     const calls: string[] = [];
-    upstream = await introspectionUpstream();
+    __setAuthIdentityForTests({ spaceId: "space-1", userId: "user-1" });
     __setProviderCommandStoreForTests(fakeStore(calls));
-    app = buildServer(await authorityConfig(upstream.baseUrl), { logger: false });
+    app = buildServer(await authorityConfig(), { logger: false });
 
     const pool = await app.inject({
       method: "GET",
@@ -280,7 +261,7 @@ describe("providers and credentials TS authority", () => {
 
   it("invokes provider chat without putting the API key in the response", async () => {
     const fetches: Array<{ url: string; headers: unknown; body: string }> = [];
-    upstream = await introspectionUpstream();
+    __setAuthIdentityForTests({ spaceId: "space-1", userId: "user-1" });
     __setProviderCommandStoreForTests(fakeStore());
     __setProviderHttpClientForTests({
       async fetch(url, init) {
@@ -299,7 +280,7 @@ describe("providers and credentials TS authority", () => {
         );
       },
     });
-    app = buildServer(await authorityConfig(upstream.baseUrl), { logger: false });
+    app = buildServer(await authorityConfig(), { logger: false });
 
     const chat = await app.inject({
       method: "POST",
@@ -319,9 +300,9 @@ describe("providers and credentials TS authority", () => {
   });
 
   it("owns CLI profile reads, status, and internal credential resolution", async () => {
-    upstream = await introspectionUpstream();
+    __setAuthIdentityForTests({ spaceId: "space-1", userId: "user-1" });
     __setProviderCommandStoreForTests(fakeStore());
-    app = buildServer(await authorityConfig(upstream.baseUrl), { logger: false });
+    app = buildServer(await authorityConfig(), { logger: false });
 
     const methods = await app.inject({
       method: "GET",

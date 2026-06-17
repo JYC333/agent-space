@@ -283,175 +283,11 @@ local_compose_ensure_env_secret() {
 }
 
 local_compose_control_plane_ts_authority_enabled() {
-  local credentials_authority runs_authority policy_authority proposals_authority sessions_authority chat_turn_authority context_authority memory_authority memory_apply_authority
-  credentials_authority="$(local_compose_setting_or_default CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY python)"
-  runs_authority="$(local_compose_setting_or_default CONTROL_PLANE_RUNS_AUTHORITY python)"
-  policy_authority="$(local_compose_setting_or_default CONTROL_PLANE_POLICY_AUTHORITY python)"
-  proposals_authority="$(local_compose_setting_or_default CONTROL_PLANE_PROPOSALS_AUTHORITY python)"
-  sessions_authority="$(local_compose_setting_or_default CONTROL_PLANE_SESSIONS_AUTHORITY python)"
-  chat_turn_authority="$(local_compose_setting_or_default CONTROL_PLANE_CHAT_TURN_AUTHORITY python)"
-  context_authority="$(local_compose_setting_or_default CONTROL_PLANE_CONTEXT_AUTHORITY python)"
-  memory_authority="$(local_compose_setting_or_default CONTROL_PLANE_MEMORY_AUTHORITY python)"
-  memory_apply_authority="$(local_compose_setting_or_default CONTROL_PLANE_MEMORY_APPLY_AUTHORITY python)"
-  [[ "${credentials_authority,,}" == "ts" || "${runs_authority,,}" == "ts" || "${policy_authority,,}" == "ts" || "${proposals_authority,,}" == "ts" || "${sessions_authority,,}" == "ts" || "${chat_turn_authority,,}" == "ts" || "${context_authority,,}" == "ts" || "${memory_authority,,}" == "ts" || "${memory_apply_authority,,}" == "ts" ]]
+  return 0
 }
 
 local_compose_ensure_control_plane_ts_authority_env() {
   [[ -f "$ENV_FILE" ]] || return 0
-
-  local providers_authority
-  local credentials_authority
-  local runs_authority
-  local policy_authority
-  local proposals_authority
-  local sessions_authority
-  local chat_turn_authority
-  local context_authority
-  local memory_authority
-  local memory_apply_authority
-  providers_authority="$(local_compose_setting CONTROL_PLANE_PROVIDERS_AUTHORITY || true)"
-  credentials_authority="$(local_compose_setting CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY || true)"
-  runs_authority="$(local_compose_setting CONTROL_PLANE_RUNS_AUTHORITY || true)"
-  policy_authority="$(local_compose_setting CONTROL_PLANE_POLICY_AUTHORITY || true)"
-  proposals_authority="$(local_compose_setting CONTROL_PLANE_PROPOSALS_AUTHORITY || true)"
-  sessions_authority="$(local_compose_setting CONTROL_PLANE_SESSIONS_AUTHORITY || true)"
-  chat_turn_authority="$(local_compose_setting CONTROL_PLANE_CHAT_TURN_AUTHORITY || true)"
-  context_authority="$(local_compose_setting CONTROL_PLANE_CONTEXT_AUTHORITY || true)"
-  memory_authority="$(local_compose_setting CONTROL_PLANE_MEMORY_AUTHORITY || true)"
-  memory_apply_authority="$(local_compose_setting CONTROL_PLANE_MEMORY_APPLY_AUTHORITY || true)"
-
-  # New dev/test environments start directly on the TypeScript authority.
-  # Existing explicit python settings are respected.
-  if [[ "$MODE" != "prod" && -z "$providers_authority" && -z "$credentials_authority" && -z "$runs_authority" && -z "$policy_authority" && -z "$proposals_authority" && -z "$sessions_authority" && -z "$chat_turn_authority" && -z "$context_authority" && -z "$memory_authority" && -z "$memory_apply_authority" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_PROVIDERS_AUTHORITY ts
-    local_compose_set_env_value CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY ts
-    local_compose_set_env_value CONTROL_PLANE_RUNS_AUTHORITY ts
-    local_compose_set_env_value CONTROL_PLANE_POLICY_AUTHORITY ts
-    local_compose_set_env_value CONTROL_PLANE_PROPOSALS_AUTHORITY ts
-    local_compose_set_env_value CONTROL_PLANE_SESSIONS_AUTHORITY ts
-    local_compose_set_env_value CONTROL_PLANE_CHAT_TURN_AUTHORITY ts
-    local_compose_set_env_value CONTROL_PLANE_CONTEXT_AUTHORITY ts
-    local_compose_set_env_value CONTROL_PLANE_MEMORY_AUTHORITY ts
-    local_compose_set_env_value CONTROL_PLANE_MEMORY_APPLY_AUTHORITY ts
-    providers_authority="ts"
-    credentials_authority="ts"
-    runs_authority="ts"
-    policy_authority="ts"
-    proposals_authority="ts"
-    sessions_authority="ts"
-    chat_turn_authority="ts"
-    context_authority="ts"
-    memory_authority="ts"
-    memory_apply_authority="ts"
-  fi
-
-  # Existing dev/test env files from earlier TS migrations may already have
-  # TS providers/credentials authority but lack later authority switches.
-  if [[ "$MODE" != "prod" && -z "$runs_authority" && "${credentials_authority,,}" == "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_RUNS_AUTHORITY ts
-    runs_authority="ts"
-  fi
-  if [[ "$MODE" != "prod" && -z "$policy_authority" && "${credentials_authority,,}" == "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_POLICY_AUTHORITY ts
-    policy_authority="ts"
-  fi
-  if [[ "$MODE" != "prod" && -z "$proposals_authority" && "${credentials_authority,,}" == "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_PROPOSALS_AUTHORITY ts
-    proposals_authority="ts"
-  fi
-  # Stage 6 sessions slice: backfill for existing dev/test envs created before
-  # this switch existed. The public sessions read/write surface is TS-owned when
-  # flipped; session reflect stays Python-owned.
-  if [[ "$MODE" != "prod" && -z "$sessions_authority" && "${credentials_authority,,}" == "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_SESSIONS_AUTHORITY ts
-    sessions_authority="ts"
-  fi
-  # Stage 6 chat-turn slice: backfill for existing dev/test envs after
-  # sessions/runs have moved. Python remains the context/run-preparation port.
-  if [[ "$MODE" != "prod" && -z "$chat_turn_authority" && "${credentials_authority,,}" == "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_CHAT_TURN_AUTHORITY ts
-    chat_turn_authority="ts"
-  fi
-  # Stage 6 context-assembly slice (slice 4): backfill for existing dev/test envs
-  # after the chat-turn slice moved. TS owns chat context build + snapshot
-  # persistence; Python keeps the candidate-read and run-create ports.
-  if [[ "$MODE" != "prod" && -z "$context_authority" && "${chat_turn_authority,,}" == "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_CONTEXT_AUTHORITY ts
-    context_authority="ts"
-  fi
-  # Stage 6 memory-read slice (slice 5): backfill for existing dev/test envs. The
-  # TS memory read model is independent of the other switches; gate the backfill
-  # on credentials=ts (the common "already on TS" marker).
-  if [[ "$MODE" != "prod" && -z "$memory_authority" && "${credentials_authority,,}" == "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_MEMORY_AUTHORITY ts
-    memory_authority="ts"
-  fi
-  # Stage 6 memory-apply slice (7b): backfill for existing dev/test envs after
-  # the memory read/proposal-create slice moved.
-  if [[ "$MODE" != "prod" && -z "$memory_apply_authority" && "${memory_authority,,}" == "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_MEMORY_APPLY_AUTHORITY ts
-    memory_apply_authority="ts"
-  fi
-
-  if ! local_compose_control_plane_ts_authority_enabled; then
-    return 0
-  fi
-
-  providers_authority="$(local_compose_setting_or_default CONTROL_PLANE_PROVIDERS_AUTHORITY python)"
-  credentials_authority="$(local_compose_setting_or_default CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY python)"
-  runs_authority="$(local_compose_setting_or_default CONTROL_PLANE_RUNS_AUTHORITY python)"
-  policy_authority="$(local_compose_setting_or_default CONTROL_PLANE_POLICY_AUTHORITY python)"
-  proposals_authority="$(local_compose_setting_or_default CONTROL_PLANE_PROPOSALS_AUTHORITY python)"
-  sessions_authority="$(local_compose_setting_or_default CONTROL_PLANE_SESSIONS_AUTHORITY python)"
-  chat_turn_authority="$(local_compose_setting_or_default CONTROL_PLANE_CHAT_TURN_AUTHORITY python)"
-  context_authority="$(local_compose_setting_or_default CONTROL_PLANE_CONTEXT_AUTHORITY python)"
-  memory_authority="$(local_compose_setting_or_default CONTROL_PLANE_MEMORY_AUTHORITY python)"
-  memory_apply_authority="$(local_compose_setting_or_default CONTROL_PLANE_MEMORY_APPLY_AUTHORITY python)"
-  # Context assembly depends on the chat-turn slice (which itself cascades to
-  # sessions/runs/credentials below).
-  if [[ "${context_authority,,}" == "ts" && "${chat_turn_authority,,}" != "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_CHAT_TURN_AUTHORITY ts
-    chat_turn_authority="ts"
-  fi
-  if [[ "${memory_apply_authority,,}" == "ts" && "${memory_authority,,}" != "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_MEMORY_AUTHORITY ts
-    memory_authority="ts"
-  fi
-  if [[ "${memory_authority,,}" == "ts" && "${policy_authority,,}" != "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_POLICY_AUTHORITY ts
-    policy_authority="ts"
-  fi
-  if [[ "${memory_authority,,}" == "ts" && "${proposals_authority,,}" != "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_PROPOSALS_AUTHORITY ts
-    proposals_authority="ts"
-  fi
-  if [[ "${runs_authority,,}" == "ts" && "${credentials_authority,,}" != "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY ts
-    credentials_authority="ts"
-  fi
-  if [[ "${policy_authority,,}" == "ts" && "${credentials_authority,,}" != "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY ts
-    credentials_authority="ts"
-  fi
-  if [[ "${proposals_authority,,}" == "ts" && "${credentials_authority,,}" != "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY ts
-    credentials_authority="ts"
-  fi
-  if [[ "${chat_turn_authority,,}" == "ts" && "${credentials_authority,,}" != "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY ts
-    credentials_authority="ts"
-  fi
-  if [[ "${chat_turn_authority,,}" == "ts" && "${sessions_authority,,}" != "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_SESSIONS_AUTHORITY ts
-    sessions_authority="ts"
-  fi
-  if [[ "${chat_turn_authority,,}" == "ts" && "${runs_authority,,}" != "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_RUNS_AUTHORITY ts
-    runs_authority="ts"
-  fi
-  if [[ "${providers_authority,,}" != "ts" ]]; then
-    local_compose_set_env_value CONTROL_PLANE_PROVIDERS_AUTHORITY ts
-  fi
 
   local role
   role="$(local_compose_setting_or_default CONTROL_PLANE_DB_RW_USER agent_space_cp)"
@@ -501,183 +337,295 @@ local_compose_provision_control_plane_db_role() {
   role_sql="${role//\'/\'\'}"
   password_sql="${password//\'/\'\'}"
 
-  # Stage 6 sessions slice: grants are per-slice and dormant until the
-  # CONTROL_PLANE_SESSIONS_AUTHORITY switch is flipped to `ts`. While `python`
-  # (the preparation default) the cp role gets no session/message/summary access
-  # at all, which the smoke test below asserts. When `ts`, the role gains the
-  # session read model plus session create + message append:
+  # Public sessions are TS-owned. The role gains the session read model plus
+  # session create + message append:
   # SELECT/INSERT/UPDATE on sessions (UPDATE touches updated_at),
   # SELECT/INSERT on messages, and SELECT on session_summaries for the
   # context-safe latest-summary read. Sessions are never DELETEd (no archive
   # semantics yet), messages are append-only, and summary condense writes are
-  # not TS-owned yet, so those privileges stay denied in both modes.
-  local sessions_authority sessions_grant_sql sessions_required_rows sessions_denied_rows
-  sessions_authority="$(local_compose_setting_or_default CONTROL_PLANE_SESSIONS_AUTHORITY python)"
-  if [[ "${sessions_authority,,}" == "ts" ]]; then
-    sessions_grant_sql="-- Stage 6 sessions slice (CONTROL_PLANE_SESSIONS_AUTHORITY=ts): read + create/append + summary read.
+  # not TS-owned yet, so those privileges stay denied.
+  local sessions_grant_sql sessions_required_rows sessions_denied_rows
+  sessions_grant_sql="-- TS-owned public sessions: read + create/append + summary read.
 GRANT SELECT, INSERT, UPDATE ON TABLE public.sessions TO \"$role\";
 GRANT SELECT, INSERT ON TABLE public.messages TO \"$role\";
 GRANT SELECT ON TABLE public.session_summaries TO \"$role\";"
-    sessions_required_rows="('sessions', 'SELECT'),
-      ('sessions', 'INSERT'),
-      ('sessions', 'UPDATE'),
-      ('messages', 'SELECT'),
-      ('messages', 'INSERT'),
-      ('session_summaries', 'SELECT'),"
-    sessions_denied_rows=""
-  else
-    sessions_grant_sql="-- Stage 6 sessions slice not flipped; cp role has no session access."
-    sessions_required_rows=""
-    sessions_denied_rows="('sessions', 'SELECT'),
-      ('sessions', 'INSERT'),
-      ('sessions', 'UPDATE'),
-      ('messages', 'SELECT'),
-      ('messages', 'INSERT'),
-      ('session_summaries', 'SELECT'),"
-  fi
+  sessions_required_rows="('sessions', 'SELECT'),
+    ('sessions', 'INSERT'),
+    ('sessions', 'UPDATE'),
+    ('messages', 'SELECT'),
+    ('messages', 'INSERT'),
+    ('session_summaries', 'SELECT'),"
+  sessions_denied_rows=""
 
-  # Stage 6 context-assembly slice (slice 4): grants are per-slice and dormant
-  # until CONTROL_PLANE_CONTEXT_AUTHORITY=ts. When flipped, the TS chat turn owns
-  # the ChatContextBuilder selection loop and persists the audit snapshot, so it
-  # gains SELECT/INSERT/UPDATE on context_snapshots (UPDATE the run's existing
-  # row) and context_snapshot_items (append selected items; UPDATE kept for
-  # idempotent re-persist). memory_access_logs is NOT granted — the chat path
-  # does not write access logs (that stays with the runs path / memory slice).
-  local context_authority context_grant_sql context_required_rows context_denied_rows
-  context_authority="$(local_compose_setting_or_default CONTROL_PLANE_CONTEXT_AUTHORITY python)"
-  if [[ "${context_authority,,}" == "ts" ]]; then
-    context_grant_sql="-- Stage 6 context-assembly slice (CONTROL_PLANE_CONTEXT_AUTHORITY=ts): snapshot read/write + items read/write.
-GRANT SELECT, INSERT, UPDATE ON TABLE public.context_snapshots TO \"$role\";
-GRANT SELECT, INSERT, UPDATE ON TABLE public.context_snapshot_items TO \"$role\";"
-    context_required_rows="('context_snapshots', 'SELECT'),
-      ('context_snapshots', 'INSERT'),
-      ('context_snapshots', 'UPDATE'),
-      ('context_snapshot_items', 'SELECT'),
-      ('context_snapshot_items', 'INSERT'),
-      ('context_snapshot_items', 'UPDATE'),"
-    context_denied_rows=""
-  else
-    context_grant_sql="-- Stage 6 context-assembly slice not flipped; cp role has no context-snapshot access."
-    context_required_rows=""
-    context_denied_rows="('context_snapshots', 'SELECT'),
-      ('context_snapshots', 'INSERT'),
-      ('context_snapshots', 'UPDATE'),
-      ('context_snapshot_items', 'SELECT'),
-      ('context_snapshot_items', 'INSERT'),
-      ('context_snapshot_items', 'UPDATE'),"
-  fi
+  # Context assembly is fixed TS-owned. context_snapshots support run-create and
+  # finalization infrastructure; context_snapshot_items are appended by chat/full
+  # context assembly. Full-run context additionally reads policies, digests,
+  # memory relations, selected evidence, and personal-memory grant metadata/events.
+  local context_grant_sql context_required_rows context_denied_rows context_column_checks
+  context_grant_sql="-- Fixed TS-owned context assembly: snapshot items, source reads, digests, graph, evidence refs, and personal grant metadata.
+GRANT SELECT, INSERT, UPDATE ON TABLE public.context_snapshot_items TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.knowledge_items TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.sources TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.activity_records TO \"$role\";
+GRANT SELECT ON TABLE public.policies TO \"$role\";
+GRANT SELECT ON TABLE public.context_digests TO \"$role\";
+GRANT SELECT ON TABLE public.memory_relations TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.extracted_evidence TO \"$role\";
+GRANT SELECT ON TABLE public.evidence_links TO \"$role\";
+GRANT INSERT (id, space_id, evidence_id, target_type, target_id, link_type, status, created_by_run_id, created_at, updated_at) ON TABLE public.evidence_links TO \"$role\";
+GRANT SELECT ON TABLE public.personal_memory_grants TO \"$role\";
+GRANT UPDATE (status, consume_started_at, used_at, failed_at, failure_stage, updated_at) ON TABLE public.personal_memory_grants TO \"$role\";
+GRANT INSERT ON TABLE public.personal_memory_grant_events TO \"$role\";"
+  context_required_rows="('context_snapshot_items', 'SELECT'),
+    ('context_snapshot_items', 'INSERT'),
+    ('context_snapshot_items', 'UPDATE'),
+    ('knowledge_items', 'SELECT'),
+    ('knowledge_items', 'INSERT'),
+    ('knowledge_items', 'UPDATE'),
+    ('sources', 'SELECT'),
+    ('sources', 'INSERT'),
+    ('sources', 'UPDATE'),
+    ('activity_records', 'SELECT'),
+    ('activity_records', 'INSERT'),
+    ('activity_records', 'UPDATE'),
+    ('policies', 'SELECT'),
+    ('context_digests', 'SELECT'),
+    ('memory_relations', 'SELECT'),
+    ('extracted_evidence', 'SELECT'),
+    ('extracted_evidence', 'INSERT'),
+    ('extracted_evidence', 'UPDATE'),
+    ('evidence_links', 'SELECT'),
+    ('personal_memory_grants', 'SELECT'),
+    ('personal_memory_grant_events', 'INSERT'),"
+  context_denied_rows="('context_snapshot_items', 'DELETE'),
+    ('context_digests', 'INSERT'),
+    ('context_digests', 'UPDATE'),
+    ('context_digests', 'DELETE'),
+    ('activity_records', 'DELETE'),
+    ('knowledge_items', 'DELETE'),
+    ('sources', 'DELETE'),
+    ('extracted_evidence', 'DELETE'),
+    ('evidence_links', 'INSERT'),
+    ('evidence_links', 'UPDATE'),
+    ('evidence_links', 'DELETE'),
+    ('personal_memory_grants', 'UPDATE'),
+    ('personal_memory_grants', 'INSERT'),
+    ('personal_memory_grants', 'DELETE'),
+    ('personal_memory_grant_events', 'UPDATE'),
+    ('personal_memory_grant_events', 'DELETE'),"
+  context_column_checks="  IF NOT has_column_privilege(role_name, 'public.evidence_links', 'id', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks evidence_links.id INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.evidence_links', 'link_type', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks evidence_links.link_type INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.evidence_links', 'created_by_run_id', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks evidence_links.created_by_run_id INSERT', role_name;
+  END IF;
+  IF has_column_privilege(role_name, 'public.evidence_links', 'confidence', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % unexpectedly can INSERT evidence_links.confidence', role_name;
+  END IF;
+  IF has_column_privilege(role_name, 'public.evidence_links', 'reason', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % unexpectedly can INSERT evidence_links.reason', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.personal_memory_grants', 'status', 'UPDATE') THEN
+    RAISE EXCEPTION 'control-plane role % lacks personal_memory_grants.status UPDATE', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.personal_memory_grants', 'updated_at', 'UPDATE') THEN
+    RAISE EXCEPTION 'control-plane role % lacks personal_memory_grants.updated_at UPDATE', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.personal_memory_grants', 'failure_stage', 'UPDATE') THEN
+    RAISE EXCEPTION 'control-plane role % lacks personal_memory_grants.failure_stage UPDATE', role_name;
+  END IF;
+  IF has_column_privilege(role_name, 'public.personal_memory_grants', 'memory_filter_json', 'UPDATE') THEN
+    RAISE EXCEPTION 'control-plane role % unexpectedly can UPDATE personal_memory_grants.memory_filter_json', role_name;
+  END IF;
+  IF has_column_privilege(role_name, 'public.personal_memory_grants', 'target_run_id', 'UPDATE') THEN
+    RAISE EXCEPTION 'control-plane role % unexpectedly can UPDATE personal_memory_grants.target_run_id', role_name;
+  END IF;"
 
-  # Stage 6 memory slices (5-6 + 7a): grants are per-slice and dormant until
-  # CONTROL_PLANE_MEMORY_AUTHORITY=ts. When flipped, TS owns /memory
-  # list/get/search plus public memory proposal creation. It gets SELECT on
-  # memory_entries/projects for read/target authorization and INSERT on
-  # proposals for pending proposal rows only. Slice 7a additionally restores
-  # read-access logging: INSERT on memory_access_logs and a COLUMN-SCOPED UPDATE
-  # on memory_entries(access_count, last_accessed_at) so get/search can bump read
-  # counters. Without the apply switch, the role does not get table-wide
-  # memory_entries write and content/visibility columns remain unwritable.
-  # Slice 7b (CONTROL_PLANE_MEMORY_APPLY_AUTHORITY=ts) additionally grants
-  # table-wide memory_entries INSERT/UPDATE + provenance_links/memory_relations
-  # INSERT so the TS accept path can apply accepted proposals. It also grants
-  # column-scoped spaces(id, type) SELECT for the private-placement hard
-  # invariant. DELETE on memory_entries is never granted (memory is soft-deleted
-  # via status).
-  local memory_authority memory_apply_authority memory_grant_sql memory_required_rows memory_denied_rows
-  local memory_column_checks
-  memory_authority="$(local_compose_setting_or_default CONTROL_PLANE_MEMORY_AUTHORITY python)"
-  memory_apply_authority="$(local_compose_setting_or_default CONTROL_PLANE_MEMORY_APPLY_AUTHORITY python)"
-  if [[ "${memory_authority,,}" == "ts" && "${memory_apply_authority,,}" == "ts" ]]; then
-    memory_grant_sql="-- Stage 6 memory (CONTROL_PLANE_MEMORY_APPLY_AUTHORITY=ts): read + proposal-create + read-logging + active-memory apply.
+  # Memory read/proposal-create, read-access logging, and supported active-memory
+  # proposal apply are fixed TS-owned. DELETE on memory_entries is never granted
+  # (memory is soft-deleted via status). Spaces read access belongs to native
+  # identity and is granted separately.
+  local memory_grant_sql memory_required_rows memory_denied_rows memory_column_checks
+  memory_grant_sql="-- Fixed TS-owned memory read/proposal-create + read-logging + active-memory apply.
 GRANT SELECT, INSERT, UPDATE ON TABLE public.memory_entries TO \"$role\";
 GRANT SELECT ON TABLE public.projects TO \"$role\";
 GRANT INSERT ON TABLE public.proposals TO \"$role\";
 GRANT INSERT ON TABLE public.memory_access_logs TO \"$role\";
-GRANT INSERT ON TABLE public.provenance_links TO \"$role\";
-GRANT INSERT ON TABLE public.memory_relations TO \"$role\";
-GRANT SELECT (id, type) ON TABLE public.spaces TO \"$role\";"
-    memory_required_rows="('memory_entries', 'SELECT'),
+GRANT SELECT, INSERT ON TABLE public.provenance_links TO \"$role\";
+GRANT INSERT ON TABLE public.memory_relations TO \"$role\";"
+  memory_required_rows="('memory_entries', 'SELECT'),
       ('memory_entries', 'INSERT'),
       ('memory_entries', 'UPDATE'),
       ('projects', 'SELECT'),
       ('proposals', 'INSERT'),
       ('memory_access_logs', 'INSERT'),
+      ('provenance_links', 'SELECT'),
       ('provenance_links', 'INSERT'),
       ('memory_relations', 'INSERT'),"
-    # Active-memory writes flow through the applier; hard DELETE never granted.
-    memory_denied_rows="('memory_entries', 'DELETE'),
-      ('spaces', 'SELECT'),"
-    memory_column_checks="  IF NOT has_column_privilege(role_name, 'public.spaces', 'id', 'SELECT') THEN
-    RAISE EXCEPTION 'control-plane role % lacks spaces.id SELECT', role_name;
+  memory_denied_rows="('memory_entries', 'DELETE'),
+      ('provenance_links', 'UPDATE'),
+      ('provenance_links', 'DELETE'),"
+  memory_column_checks=""
+
+  # Leaf domains: activity capture, intake, knowledge notes/sources, tasks/boards,
+  # and summary artifact creation. Shared context tables above already carry the
+  # read/write grants those routes need.
+  local leaf_domain_grant_sql leaf_domain_required_rows leaf_domain_denied_rows
+  leaf_domain_grant_sql="-- TS-owned activity/intake/knowledge/tasks leaf domains.
+GRANT SELECT ON TABLE public.source_connectors TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.source_connections TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.intake_items TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.extraction_jobs TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.workspace_intake_profiles TO \"$role\";
+GRANT SELECT, INSERT ON TABLE public.workspace_source_bindings TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.boards TO \"$role\";
+GRANT SELECT, INSERT ON TABLE public.board_columns TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.tasks TO \"$role\";
+GRANT SELECT, INSERT ON TABLE public.task_runs TO \"$role\";
+GRANT SELECT, INSERT ON TABLE public.task_evaluations TO \"$role\";
+GRANT SELECT ON TABLE public.task_artifacts TO \"$role\";
+GRANT SELECT, INSERT ON TABLE public.task_proposals TO \"$role\";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.knowledge_item_sources TO \"$role\";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.notes TO \"$role\";
+GRANT SELECT, INSERT, DELETE ON TABLE public.entity_links TO \"$role\";
+GRANT SELECT, INSERT, DELETE ON TABLE public.note_collection_items TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.knowledge_item_relations TO \"$role\";"
+  leaf_domain_required_rows="('source_connectors', 'SELECT'),
+    ('source_connections', 'SELECT'),
+    ('source_connections', 'INSERT'),
+    ('source_connections', 'UPDATE'),
+    ('intake_items', 'SELECT'),
+    ('intake_items', 'INSERT'),
+    ('intake_items', 'UPDATE'),
+    ('extraction_jobs', 'SELECT'),
+    ('extraction_jobs', 'INSERT'),
+    ('extraction_jobs', 'UPDATE'),
+    ('workspace_intake_profiles', 'SELECT'),
+    ('workspace_intake_profiles', 'INSERT'),
+    ('workspace_intake_profiles', 'UPDATE'),
+    ('workspace_source_bindings', 'SELECT'),
+    ('workspace_source_bindings', 'INSERT'),
+    ('boards', 'SELECT'),
+    ('boards', 'INSERT'),
+    ('boards', 'UPDATE'),
+    ('board_columns', 'SELECT'),
+    ('board_columns', 'INSERT'),
+    ('tasks', 'SELECT'),
+    ('tasks', 'INSERT'),
+    ('tasks', 'UPDATE'),
+    ('task_runs', 'SELECT'),
+    ('task_runs', 'INSERT'),
+    ('task_evaluations', 'SELECT'),
+    ('task_evaluations', 'INSERT'),
+    ('task_artifacts', 'SELECT'),
+    ('task_proposals', 'SELECT'),
+    ('task_proposals', 'INSERT'),
+    ('knowledge_item_sources', 'SELECT'),
+    ('knowledge_item_sources', 'INSERT'),
+    ('knowledge_item_sources', 'UPDATE'),
+    ('knowledge_item_sources', 'DELETE'),
+    ('notes', 'SELECT'),
+    ('notes', 'INSERT'),
+    ('notes', 'UPDATE'),
+    ('notes', 'DELETE'),
+    ('entity_links', 'SELECT'),
+    ('entity_links', 'INSERT'),
+    ('entity_links', 'DELETE'),
+    ('note_collection_items', 'SELECT'),
+    ('note_collection_items', 'INSERT'),
+    ('note_collection_items', 'DELETE'),
+    ('knowledge_item_relations', 'SELECT'),
+    ('knowledge_item_relations', 'INSERT'),
+    ('knowledge_item_relations', 'UPDATE'),"
+  local scheduler_grant_sql scheduler_required_rows scheduler_denied_rows scheduler_column_checks
+  scheduler_grant_sql="-- TS-owned automations, daily reports, and retention pruning.
+GRANT SELECT, INSERT, UPDATE ON TABLE public.automations TO \"$role\";
+GRANT SELECT, INSERT ON TABLE public.automation_runs TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.automation_credential_grants TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.daily_capture_report_settings TO \"$role\";
+GRANT INSERT (id, space_id, owner_user_id, name, description, role_instruction, status, agent_kind, visibility, created_at, updated_at) ON TABLE public.agents TO \"$role\";
+GRANT UPDATE (name, description, role_instruction, status, visibility, current_version_id, updated_at) ON TABLE public.agents TO \"$role\";
+GRANT INSERT (id, agent_id, space_id, version_label, model_provider_id, model_name, system_prompt, model_config_json, runtime_config_json, context_policy_json, memory_policy_json, capabilities_json, tool_permissions_json, runtime_policy_json, tool_policy_json, output_policy_json, schedule_config_json, output_schema_json, created_at) ON TABLE public.agent_versions TO \"$role\";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.space_assistant_settings TO \"$role\";
+GRANT SELECT (accessed_at) ON TABLE public.memory_access_logs TO \"$role\";
+GRANT DELETE ON TABLE public.memory_access_logs TO \"$role\";"
+  scheduler_required_rows="('jobs', 'INSERT'),
+    ('automations', 'SELECT'),
+    ('automations', 'INSERT'),
+    ('automations', 'UPDATE'),
+    ('automation_runs', 'SELECT'),
+    ('automation_runs', 'INSERT'),
+    ('automation_credential_grants', 'SELECT'),
+    ('automation_credential_grants', 'INSERT'),
+    ('automation_credential_grants', 'UPDATE'),
+    ('daily_capture_report_settings', 'SELECT'),
+    ('daily_capture_report_settings', 'INSERT'),
+    ('daily_capture_report_settings', 'UPDATE'),
+    ('space_assistant_settings', 'SELECT'),
+    ('space_assistant_settings', 'INSERT'),
+    ('space_assistant_settings', 'UPDATE'),
+    ('memory_access_logs', 'DELETE'),"
+  scheduler_denied_rows="('automations', 'DELETE'),
+    ('automation_runs', 'UPDATE'),
+    ('automation_runs', 'DELETE'),
+    ('automation_credential_grants', 'DELETE'),
+    ('daily_capture_report_settings', 'DELETE'),
+    ('space_assistant_settings', 'DELETE'),"
+  scheduler_column_checks="  IF NOT has_column_privilege(role_name, 'public.agents', 'id', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks agents.id INSERT', role_name;
   END IF;
-  IF NOT has_column_privilege(role_name, 'public.spaces', 'type', 'SELECT') THEN
-    RAISE EXCEPTION 'control-plane role % lacks spaces.type SELECT', role_name;
+  IF NOT has_column_privilege(role_name, 'public.agents', 'owner_user_id', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks agents.owner_user_id INSERT', role_name;
   END IF;
-  IF has_column_privilege(role_name, 'public.spaces', 'name', 'SELECT') THEN
-    RAISE EXCEPTION 'control-plane role % unexpectedly can SELECT spaces.name', role_name;
+  IF NOT has_column_privilege(role_name, 'public.agents', 'name', 'UPDATE') THEN
+    RAISE EXCEPTION 'control-plane role % lacks agents.name UPDATE', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.agents', 'current_version_id', 'UPDATE') THEN
+    RAISE EXCEPTION 'control-plane role % lacks agents.current_version_id UPDATE', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.agent_versions', 'model_provider_id', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks agent_versions.model_provider_id INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.agent_versions', 'runtime_config_json', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks agent_versions.runtime_config_json INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.agent_versions', 'tool_policy_json', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks agent_versions.tool_policy_json INSERT', role_name;
+  END IF;
+  IF NOT has_table_privilege(role_name, 'public.space_assistant_settings', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks space_assistant_settings INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.memory_access_logs', 'accessed_at', 'SELECT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks memory_access_logs.accessed_at SELECT', role_name;
   END IF;"
-  elif [[ "${memory_authority,,}" == "ts" ]]; then
-    memory_grant_sql="-- Stage 6 memory slices (CONTROL_PLANE_MEMORY_AUTHORITY=ts): read model + pending proposal creation + read-access logging.
-GRANT SELECT ON TABLE public.memory_entries TO \"$role\";
-GRANT SELECT ON TABLE public.projects TO \"$role\";
-GRANT INSERT ON TABLE public.proposals TO \"$role\";
-GRANT INSERT ON TABLE public.memory_access_logs TO \"$role\";
-GRANT UPDATE (access_count, last_accessed_at) ON TABLE public.memory_entries TO \"$role\";"
-    memory_required_rows="('memory_entries', 'SELECT'),
-      ('projects', 'SELECT'),
-      ('proposals', 'INSERT'),
-      ('memory_access_logs', 'INSERT'),"
-    # memory_entries UPDATE is granted column-scoped only; the table-level check
-    # below must still report it as denied (column grants do not satisfy
-    # has_table_privilege), and INSERT/DELETE + apply tables stay fully denied.
-    memory_denied_rows="('memory_entries', 'INSERT'),
-      ('memory_entries', 'UPDATE'),
-      ('memory_entries', 'DELETE'),
-      ('provenance_links', 'INSERT'),
-      ('memory_relations', 'INSERT'),
-      ('spaces', 'SELECT'),"
-    memory_column_checks="  IF NOT has_column_privilege(role_name, 'public.memory_entries', 'access_count', 'UPDATE') THEN
-    RAISE EXCEPTION 'control-plane role % lacks memory_entries.access_count UPDATE', role_name;
-  END IF;
-  IF NOT has_column_privilege(role_name, 'public.memory_entries', 'last_accessed_at', 'UPDATE') THEN
-    RAISE EXCEPTION 'control-plane role % lacks memory_entries.last_accessed_at UPDATE', role_name;
-  END IF;
-  IF has_column_privilege(role_name, 'public.memory_entries', 'content', 'UPDATE') THEN
-    RAISE EXCEPTION 'control-plane role % unexpectedly can UPDATE memory_entries.content', role_name;
-  END IF;
-  IF has_column_privilege(role_name, 'public.memory_entries', 'visibility', 'UPDATE') THEN
-    RAISE EXCEPTION 'control-plane role % unexpectedly can UPDATE memory_entries.visibility', role_name;
-  END IF;
-  IF has_column_privilege(role_name, 'public.spaces', 'id', 'SELECT') THEN
-    RAISE EXCEPTION 'control-plane role % unexpectedly can SELECT spaces.id', role_name;
-  END IF;
-  IF has_column_privilege(role_name, 'public.spaces', 'type', 'SELECT') THEN
-    RAISE EXCEPTION 'control-plane role % unexpectedly can SELECT spaces.type', role_name;
-  END IF;"
-  else
-    memory_grant_sql="-- Stage 6 memory slices not flipped; cp role has no memory/project/proposal-create/log access."
-    memory_required_rows=""
-    memory_denied_rows="('memory_entries', 'SELECT'),
-      ('projects', 'SELECT'),
-      ('proposals', 'INSERT'),
-      ('memory_access_logs', 'INSERT'),
-      ('provenance_links', 'INSERT'),
-      ('memory_relations', 'INSERT'),
-      ('spaces', 'SELECT'),"
-    memory_column_checks="  IF has_column_privilege(role_name, 'public.memory_entries', 'access_count', 'UPDATE') THEN
-    RAISE EXCEPTION 'control-plane role % unexpectedly can UPDATE memory_entries.access_count', role_name;
-  END IF;
-  IF has_column_privilege(role_name, 'public.spaces', 'id', 'SELECT') THEN
-    RAISE EXCEPTION 'control-plane role % unexpectedly can SELECT spaces.id', role_name;
-  END IF;
-  IF has_column_privilege(role_name, 'public.spaces', 'type', 'SELECT') THEN
-    RAISE EXCEPTION 'control-plane role % unexpectedly can SELECT spaces.type', role_name;
-  END IF;"
-  fi
+  leaf_domain_denied_rows="('source_connections', 'DELETE'),
+    ('intake_items', 'DELETE'),
+    ('extraction_jobs', 'DELETE'),
+    ('workspace_intake_profiles', 'DELETE'),
+    ('workspace_source_bindings', 'UPDATE'),
+    ('workspace_source_bindings', 'DELETE'),
+    ('boards', 'DELETE'),
+    ('board_columns', 'UPDATE'),
+    ('board_columns', 'DELETE'),
+    ('tasks', 'DELETE'),
+    ('task_runs', 'UPDATE'),
+    ('task_runs', 'DELETE'),
+    ('task_evaluations', 'UPDATE'),
+    ('task_evaluations', 'DELETE'),
+    ('task_artifacts', 'INSERT'),
+    ('task_artifacts', 'UPDATE'),
+    ('task_artifacts', 'DELETE'),
+    ('task_proposals', 'UPDATE'),
+    ('task_proposals', 'DELETE'),
+    ('knowledge_item_relations', 'DELETE'),"
 
   local_compose_ensure_postgres_ready "$purpose" "$pguser" "$pgdb"
 
   echo "Configuring PostgreSQL control-plane role '$role' for mode '$MODE'..."
-  echo "  - applying least-privilege provider, run, job, runtime metadata, policy audit, proposal review, and (when flipped) sessions, context-snapshot, and memory grants"
+  echo "  - applying least-privilege identity, provider, run, job, runtime metadata, policy audit, proposal review/apply, sessions, context, memory, artifact, leaf-domain, and scheduler/automation grants"
   "${COMPOSE[@]}" exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U "$pguser" "$pgdb" <<SQL
 DO \$\$
 DECLARE
@@ -704,12 +652,58 @@ REVOKE TEMPORARY ON DATABASE "$pgdb" FROM PUBLIC;
 REVOKE ALL PRIVILEGES ON SCHEMA public FROM "$role";
 GRANT USAGE ON SCHEMA public TO "$role";
 
-REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "$role";
--- Column-level grants are stored separately from table ACLs; clear the slice
--- 7a counter bump and slice 7b placement-check grants explicitly before
--- rebuilding the memory grant tier.
-REVOKE UPDATE (access_count, last_accessed_at) ON TABLE public.memory_entries FROM "$role";
-REVOKE SELECT (id, type) ON TABLE public.spaces FROM "$role";
+  REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "$role";
+-- Column-level grants are stored separately from table ACLs; clear the identity
+-- and memory column grants explicitly before rebuilding the grant tiers.
+REVOKE SELECT (id, email, display_name, avatar_url, created_at, last_login_at) ON TABLE public.users FROM "$role";
+REVOKE INSERT (id, email, display_name, avatar_url, status, last_login_at, created_at, updated_at) ON TABLE public.users FROM "$role";
+REVOKE UPDATE (email, display_name, avatar_url, last_login_at, updated_at) ON TABLE public.users FROM "$role";
+REVOKE SELECT (user_id, provider, provider_user_id) ON TABLE public.auth_accounts FROM "$role";
+REVOKE INSERT (id, user_id, provider, provider_user_id, email, created_at) ON TABLE public.auth_accounts FROM "$role";
+REVOKE SELECT (id, user_id, token_hash, expires_at) ON TABLE public.user_sessions FROM "$role";
+REVOKE INSERT (id, user_id, token_hash, created_at, expires_at, last_seen_at) ON TABLE public.user_sessions FROM "$role";
+REVOKE UPDATE (last_seen_at) ON TABLE public.user_sessions FROM "$role";
+REVOKE SELECT (id, space_id, user_id, role, status, created_at) ON TABLE public.space_memberships FROM "$role";
+REVOKE INSERT (id, space_id, user_id, role, status, created_at, updated_at) ON TABLE public.space_memberships FROM "$role";
+REVOKE SELECT (id, name, type, created_by_user_id, created_at, updated_at) ON TABLE public.spaces FROM "$role";
+REVOKE INSERT (id, name, type, created_by_user_id, created_at, updated_at) ON TABLE public.spaces FROM "$role";
+REVOKE SELECT (id, space_id, invited_email, role, token_hash, status, expires_at, accepted_at) ON TABLE public.space_invitations FROM "$role";
+REVOKE INSERT (id, space_id, invited_email, role, token_hash, status, invited_by_user_id, created_at, expires_at) ON TABLE public.space_invitations FROM "$role";
+REVOKE UPDATE (status, accepted_at) ON TABLE public.space_invitations FROM "$role";
+REVOKE INSERT (id, space_id, name, type, provider, execution_location, runtime_origin, trust_level, observability_level, data_exposure_level, credential_mode, config_json, enabled, created_at, updated_at) ON TABLE public.execution_planes FROM "$role";
+REVOKE SELECT (space_id, namespace, scope_type, deleted_at) ON TABLE public.memory_entries FROM "$role";
+REVOKE INSERT (id, space_id, scope_type, scope_id, memory_type, content, status, created_at, updated_at, subject_user_id, owner_user_id, sensitivity_level, namespace, title, visibility, confidence, importance, created_by, version, access_count) ON TABLE public.memory_entries FROM "$role";
+REVOKE UPDATE (access_count, last_accessed_at, last_retrieved_at) ON TABLE public.memory_entries FROM "$role";
+REVOKE INSERT (id, space_id, evidence_id, target_type, target_id, link_type, status, created_by_run_id, created_at, updated_at) ON TABLE public.evidence_links FROM "$role";
+REVOKE UPDATE (status, consume_started_at, used_at, failed_at, failure_stage, updated_at) ON TABLE public.personal_memory_grants FROM "$role";
+REVOKE SELECT (id, space_id, system_role) ON TABLE public.note_collections FROM "$role";
+REVOKE INSERT (id, space_id, parent_id, name, system_role, sort_order, is_system, is_hidden, created_at, updated_at) ON TABLE public.note_collections FROM "$role";
+
+-- Native TS auth/spaces. Column-scoped grants cover session-cookie auth,
+-- Google OAuth user/session creation, membership/default-space selection,
+-- /me, /me/spaces, space create/read/member/invitation routes, and deterministic
+-- space-created seeds. Table-wide writes remain denied except logout DELETE.
+GRANT SELECT (id, email, display_name, avatar_url, created_at, last_login_at) ON TABLE public.users TO "$role";
+GRANT INSERT (id, email, display_name, avatar_url, status, last_login_at, created_at, updated_at) ON TABLE public.users TO "$role";
+GRANT UPDATE (email, display_name, avatar_url, last_login_at, updated_at) ON TABLE public.users TO "$role";
+GRANT SELECT (user_id, provider, provider_user_id) ON TABLE public.auth_accounts TO "$role";
+GRANT INSERT (id, user_id, provider, provider_user_id, email, created_at) ON TABLE public.auth_accounts TO "$role";
+GRANT SELECT (id, user_id, token_hash, expires_at) ON TABLE public.user_sessions TO "$role";
+GRANT INSERT (id, user_id, token_hash, created_at, expires_at, last_seen_at) ON TABLE public.user_sessions TO "$role";
+GRANT UPDATE (last_seen_at) ON TABLE public.user_sessions TO "$role";
+GRANT DELETE ON TABLE public.user_sessions TO "$role";
+GRANT SELECT (id, space_id, user_id, role, status, created_at) ON TABLE public.space_memberships TO "$role";
+GRANT INSERT (id, space_id, user_id, role, status, created_at, updated_at) ON TABLE public.space_memberships TO "$role";
+GRANT SELECT (id, name, type, created_by_user_id, created_at, updated_at) ON TABLE public.spaces TO "$role";
+GRANT INSERT (id, name, type, created_by_user_id, created_at, updated_at) ON TABLE public.spaces TO "$role";
+GRANT SELECT (id, space_id, invited_email, role, token_hash, status, expires_at, accepted_at) ON TABLE public.space_invitations TO "$role";
+GRANT INSERT (id, space_id, invited_email, role, token_hash, status, invited_by_user_id, created_at, expires_at) ON TABLE public.space_invitations TO "$role";
+GRANT UPDATE (status, accepted_at) ON TABLE public.space_invitations TO "$role";
+GRANT INSERT (id, space_id, name, type, provider, execution_location, runtime_origin, trust_level, observability_level, data_exposure_level, credential_mode, config_json, enabled, created_at, updated_at) ON TABLE public.execution_planes TO "$role";
+GRANT SELECT (space_id, namespace, scope_type, deleted_at) ON TABLE public.memory_entries TO "$role";
+GRANT INSERT (id, space_id, scope_type, scope_id, memory_type, content, status, created_at, updated_at, subject_user_id, owner_user_id, sensitivity_level, namespace, title, visibility, confidence, importance, created_by, version, access_count) ON TABLE public.memory_entries TO "$role";
+GRANT SELECT (id, space_id, system_role) ON TABLE public.note_collections TO "$role";
+GRANT INSERT (id, space_id, parent_id, name, system_role, sort_order, is_system, is_hidden, created_at, updated_at) ON TABLE public.note_collections TO "$role";
 
 -- Providers/credentials TS authority.
 GRANT SELECT, INSERT, UPDATE ON TABLE public.model_providers TO "$role";
@@ -718,38 +712,48 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.model_provider_credentials 
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.provider_task_policies TO "$role";
 GRANT SELECT, INSERT ON TABLE public.cli_credential_events TO "$role";
 
--- Stage 4 TS-owned run orchestration. Keep grants table-scoped and avoid
--- unrelated context tables (memory/activity/policy/proposals/artifacts).
+-- Stage 4 TS-owned run orchestration/read/finalization. Keep grants scoped to
+-- run execution evidence, minimal run-create validation, and trace summaries.
 GRANT SELECT, INSERT, UPDATE ON TABLE public.runs TO "$role";
 GRANT SELECT, INSERT, UPDATE ON TABLE public.run_steps TO "$role";
 GRANT SELECT, INSERT ON TABLE public.run_events TO "$role";
+GRANT SELECT, INSERT ON TABLE public.run_evaluations TO "$role";
+GRANT SELECT, INSERT ON TABLE public.run_finalizations TO "$role";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.context_snapshots TO "$role";
 -- run_steps.actor_id / run_events.actor_id are non-null Actor FKs; TS resolves
 -- (and creates when absent) the same user/job/system actors Python uses.
 GRANT SELECT, INSERT ON TABLE public.actors TO "$role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.run_execution_locks TO "$role";
-GRANT SELECT, UPDATE ON TABLE public.jobs TO "$role";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.jobs TO "$role";
 GRANT SELECT, INSERT ON TABLE public.job_events TO "$role";
 
 -- Trace-safe execution summaries needed for adapter/runtime resolution.
 GRANT SELECT ON TABLE public.execution_planes TO "$role";
 GRANT SELECT ON TABLE public.agents TO "$role";
 GRANT SELECT ON TABLE public.agent_versions TO "$role";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.workspaces TO "$role";
+GRANT SELECT ON TABLE public.projects TO "$role";
+GRANT SELECT, INSERT ON TABLE public.artifacts TO "$role";
 
 -- TS-owned policy enforcement audit. TS may append/read durable policy
 -- decisions, but must not update/delete audit rows or read unrelated contexts.
 GRANT SELECT, INSERT ON TABLE public.policy_decision_records TO "$role";
 
--- TS-owned proposal review read surface. Apply/reject/egress writes
--- still dispatch through the internal Python proposal port, but the role keeps
--- explicit proposal-table permissions for the TS review lifecycle boundary.
+-- TS-owned proposal review/apply surface.
 GRANT SELECT, UPDATE ON TABLE public.proposals TO "$role";
 GRANT SELECT, INSERT, UPDATE ON TABLE public.proposal_approvals TO "$role";
+GRANT SELECT ON TABLE public.personal_memory_grants TO "$role";
+GRANT SELECT ON TABLE public.personal_memory_grant_events TO "$role";
 
 $sessions_grant_sql
 
 $context_grant_sql
 
 $memory_grant_sql
+
+$leaf_domain_grant_sql
+
+$scheduler_grant_sql
 
 -- Least-privilege smoke test: required run/job privileges must exist; schema
 -- mutation, run_event mutation, policy audit mutation, and unrelated
@@ -777,6 +781,8 @@ BEGIN
       $sessions_required_rows
       $context_required_rows
       $memory_required_rows
+      $leaf_domain_required_rows
+      $scheduler_required_rows
       ('model_providers', 'SELECT'),
       ('credentials', 'SELECT'),
       ('model_provider_credentials', 'SELECT'),
@@ -790,24 +796,40 @@ BEGIN
       ('run_steps', 'UPDATE'),
       ('run_events', 'SELECT'),
       ('run_events', 'INSERT'),
+      ('run_evaluations', 'SELECT'),
+      ('run_evaluations', 'INSERT'),
+      ('run_finalizations', 'SELECT'),
+      ('run_finalizations', 'INSERT'),
+      ('context_snapshots', 'SELECT'),
+      ('context_snapshots', 'INSERT'),
+      ('context_snapshots', 'UPDATE'),
       ('run_execution_locks', 'SELECT'),
       ('run_execution_locks', 'INSERT'),
       ('run_execution_locks', 'UPDATE'),
       ('run_execution_locks', 'DELETE'),
       ('jobs', 'SELECT'),
+      ('jobs', 'INSERT'),
       ('jobs', 'UPDATE'),
       ('job_events', 'SELECT'),
       ('job_events', 'INSERT'),
       ('execution_planes', 'SELECT'),
       ('agents', 'SELECT'),
       ('agent_versions', 'SELECT'),
+      ('workspaces', 'SELECT'),
+      ('workspaces', 'INSERT'),
+      ('workspaces', 'UPDATE'),
+      ('artifacts', 'SELECT'),
+      ('artifacts', 'INSERT'),
       ('policy_decision_records', 'SELECT'),
       ('policy_decision_records', 'INSERT'),
       ('proposals', 'SELECT'),
       ('proposals', 'UPDATE'),
       ('proposal_approvals', 'SELECT'),
       ('proposal_approvals', 'INSERT'),
-      ('proposal_approvals', 'UPDATE')
+      ('proposal_approvals', 'UPDATE'),
+      ('personal_memory_grants', 'SELECT'),
+      ('personal_memory_grant_events', 'SELECT'),
+      ('user_sessions', 'DELETE')
     ) AS required(table_name, privilege)
   LOOP
     IF NOT has_table_privilege(role_name, format('public.%I', item.table_name), item.privilege) THEN
@@ -821,6 +843,8 @@ BEGIN
       $sessions_denied_rows
       $context_denied_rows
       $memory_denied_rows
+      $leaf_domain_denied_rows
+      $scheduler_denied_rows
       ('sessions', 'DELETE'),
       ('messages', 'UPDATE'),
       ('messages', 'DELETE'),
@@ -829,15 +853,21 @@ BEGIN
       ('session_summaries', 'DELETE'),
       ('run_events', 'UPDATE'),
       ('run_events', 'DELETE'),
-      ('jobs', 'INSERT'),
+      ('workspaces', 'DELETE'),
       ('jobs', 'DELETE'),
       ('policy_decision_records', 'UPDATE'),
       ('policy_decision_records', 'DELETE'),
       ('proposals', 'DELETE'),
       ('proposal_approvals', 'DELETE'),
       ('memory_access_logs', 'SELECT'),
-      ('activity_records', 'SELECT'),
-      ('artifacts', 'SELECT')
+      ('artifacts', 'UPDATE'),
+      ('artifacts', 'DELETE'),
+      ('users', 'UPDATE'),
+      ('users', 'DELETE'),
+      ('user_sessions', 'INSERT'),
+      ('space_memberships', 'INSERT'),
+      ('space_memberships', 'UPDATE'),
+      ('space_memberships', 'DELETE')
     ) AS denied(table_name, privilege)
   LOOP
     IF has_table_privilege(role_name, format('public.%I', item.table_name), item.privilege) THEN
@@ -846,13 +876,77 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- Stage 6 slice 7a: read-access logging needs a column-scoped counter bump on
-  -- memory_entries, never table-wide write. Assert the exact column grants (or
-  -- their absence when not flipped).
+  -- Memory read-access logging needs a column-scoped counter bump on
+  -- memory_entries, never table-wide write. Assert the exact column grants.
+  IF NOT has_column_privilege(role_name, 'public.users', 'id', 'SELECT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks users.id SELECT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.user_sessions', 'token_hash', 'SELECT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks user_sessions.token_hash SELECT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.user_sessions', 'last_seen_at', 'UPDATE') THEN
+    RAISE EXCEPTION 'control-plane role % lacks user_sessions.last_seen_at UPDATE', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.space_memberships', 'space_id', 'SELECT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks space_memberships.space_id SELECT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.spaces', 'name', 'SELECT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks spaces.name SELECT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.users', 'display_name', 'UPDATE') THEN
+    RAISE EXCEPTION 'control-plane role % lacks users.display_name UPDATE', role_name;
+  END IF;
+  IF has_column_privilege(role_name, 'public.users', 'status', 'UPDATE') THEN
+    RAISE EXCEPTION 'control-plane role % unexpectedly can UPDATE users.status', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.users', 'email', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks users.email INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.auth_accounts', 'provider_user_id', 'SELECT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks auth_accounts.provider_user_id SELECT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.auth_accounts', 'provider_user_id', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks auth_accounts.provider_user_id INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.user_sessions', 'token_hash', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks user_sessions.token_hash INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.space_memberships', 'role', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks space_memberships.role INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.spaces', 'name', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks spaces.name INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.space_invitations', 'token_hash', 'SELECT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks space_invitations.token_hash SELECT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.space_invitations', 'token_hash', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks space_invitations.token_hash INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.space_invitations', 'status', 'UPDATE') THEN
+    RAISE EXCEPTION 'control-plane role % lacks space_invitations.status UPDATE', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.execution_planes', 'name', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks execution_planes.name INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.memory_entries', 'namespace', 'SELECT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks memory_entries.namespace SELECT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.memory_entries', 'namespace', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks memory_entries.namespace INSERT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.note_collections', 'system_role', 'SELECT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks note_collections.system_role SELECT', role_name;
+  END IF;
+  IF NOT has_column_privilege(role_name, 'public.note_collections', 'system_role', 'INSERT') THEN
+    RAISE EXCEPTION 'control-plane role % lacks note_collections.system_role INSERT', role_name;
+  END IF;
+$context_column_checks
 $memory_column_checks
+$scheduler_column_checks
 END
 \$\$;
 SQL
-  echo "  - verified required grants and denied unrelated context-table access"
+  echo "  - verified required grants and denied unrelated table access"
   echo "Control-plane DB role '$role' is ready."
 }

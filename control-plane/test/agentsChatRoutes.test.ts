@@ -13,6 +13,9 @@ type AgentChatServicesFactory = NonNullable<
   Parameters<typeof __setAgentChatServicesFactoryForTests>[0]
 >;
 type AgentChatServices = ReturnType<AgentChatServicesFactory>;
+type AgentChatServiceOverrides = {
+  [K in keyof AgentChatServices]?: Partial<AgentChatServices[K]>;
+};
 
 afterEach(async () => {
   __setAgentChatIdentityForTests(null);
@@ -22,32 +25,13 @@ afterEach(async () => {
 
 function tsChatConfig() {
   return loadConfig({
-    CONTROL_PLANE_PROVIDERS_AUTHORITY: "ts",
-    CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY: "ts",
-    CONTROL_PLANE_RUNS_AUTHORITY: "ts",
-    CONTROL_PLANE_SESSIONS_AUTHORITY: "ts",
-    CONTROL_PLANE_CHAT_TURN_AUTHORITY: "ts",
     CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false",
     CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
     CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
   });
 }
 
-function tsContextConfig() {
-  return loadConfig({
-    CONTROL_PLANE_PROVIDERS_AUTHORITY: "ts",
-    CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY: "ts",
-    CONTROL_PLANE_RUNS_AUTHORITY: "ts",
-    CONTROL_PLANE_SESSIONS_AUTHORITY: "ts",
-    CONTROL_PLANE_CHAT_TURN_AUTHORITY: "ts",
-    CONTROL_PLANE_CONTEXT_AUTHORITY: "ts",
-    CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false",
-    CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
-    CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
-  });
-}
-
-function services(overrides: Partial<AgentChatServices> = {}): AgentChatServices {
+function services(overrides: AgentChatServiceOverrides = {}): AgentChatServices {
   const base: AgentChatServices = {
     agents: {
       async getAgentForChat() {
@@ -79,10 +63,19 @@ function services(overrides: Partial<AgentChatServices> = {}): AgentChatServices
         throw new Error("addMessage should be overridden");
       },
     },
-    preparation: {
-      async prepareRun() {
-        return { session_id: "session-1", run_id: "run-1" };
+    context: {
+      async fetchCandidates() {
+        return {
+          allowed_sources: [],
+          max_tokens: 4000,
+          max_items: 20,
+          context_policy_applied: true,
+          items: [],
+        };
       },
+    },
+    snapshots: {
+      async persistChatSnapshot() {},
     },
     orchestration: {
       async executeRun() {
@@ -99,9 +92,38 @@ function services(overrides: Partial<AgentChatServices> = {}): AgentChatServices
           error_json: null,
         };
       },
+      async createQueuedRun(input) {
+        return {
+          id: "run-1",
+          space_id: "space-1",
+          agent_id: input.agent_id,
+          agent_version_id: "agent-version-1",
+          context_snapshot_id: null,
+          status: "queued",
+          mode: input.mode,
+          prompt: input.prompt ?? null,
+          instruction: null,
+          workspace_id: null,
+          session_id: input.session_id ?? null,
+          project_id: null,
+          adapter_type: null,
+          model_provider_id: null,
+          required_sandbox_level: "none",
+          trigger_origin: input.trigger_origin,
+          started_at: null,
+          ended_at: null,
+        };
+      },
     },
   };
-  return { ...base, ...overrides };
+  return {
+    agents: { ...base.agents, ...overrides.agents },
+    sessions: { ...base.sessions, ...overrides.sessions },
+    runs: { ...base.runs, ...overrides.runs },
+    orchestration: { ...base.orchestration, ...overrides.orchestration },
+    context: { ...base.context, ...overrides.context },
+    snapshots: { ...base.snapshots, ...overrides.snapshots },
+  };
 }
 
 describe("agents chat-turn route", () => {
@@ -143,10 +165,50 @@ describe("agents chat-turn route", () => {
             };
           },
         },
-        preparation: {
-          async prepareRun(input) {
-            calls.push(`prepare:${input.session_id}:${input.message}`);
-            return { session_id: input.session_id, run_id: "run-1" };
+        context: {
+          async fetchCandidates(input) {
+            calls.push(`candidates:${input.message}`);
+            return {
+              allowed_sources: [],
+              max_tokens: 4000,
+              max_items: 20,
+              context_policy_applied: true,
+              items: [],
+            };
+          },
+        },
+        runs: {
+          async createQueuedRun(input) {
+            calls.push(`createQueuedRun:${input.session_id}`);
+            return {
+              id: "run-1",
+              space_id: "space-1",
+              agent_id: input.agent_id,
+              agent_version_id: "agent-version-1",
+              context_snapshot_id: null,
+              status: "queued",
+              mode: input.mode,
+              prompt: input.prompt ?? null,
+              instruction: null,
+              workspace_id: null,
+              session_id: input.session_id ?? null,
+              project_id: null,
+              adapter_type: null,
+              model_provider_id: null,
+              required_sandbox_level: "none",
+              trigger_origin: input.trigger_origin,
+              started_at: null,
+              ended_at: null,
+            };
+          },
+          async getChatRunResult() {
+            return {
+              id: "run-1",
+              space_id: "space-1",
+              status: "succeeded",
+              output_json: { output_text: "Hello from TS." },
+              error_json: null,
+            };
           },
         },
         orchestration: {
@@ -175,7 +237,8 @@ describe("agents chat-turn route", () => {
     expect(calls).toEqual([
       "createSession:Personal Assistant chat",
       "addMessage:user:Hi there",
-      "prepare:session-1:Hi there",
+      "candidates:Hi there",
+      "createQueuedRun:session-1",
       "execute:run-1:space-1:http",
       "addMessage:assistant:Hello from TS.",
     ]);
@@ -365,7 +428,7 @@ describe("agents chat-turn route", () => {
     expect(res.json()).toEqual({ detail: "message must not be empty" });
   });
 
-  it("assembles context in TS and persists the snapshot when context authority is ts", async () => {
+  it("assembles context in TS and persists the snapshot", async () => {
     __setAgentChatIdentityForTests({ spaceId: "space-1", userId: "user-1" });
     const calls: string[] = [];
     let persisted: Record<string, unknown> | null = null;
@@ -401,11 +464,6 @@ describe("agents chat-turn route", () => {
             };
           },
         },
-        preparation: {
-          async prepareRun() {
-            throw new Error("prepareRun must not run under context=ts");
-          },
-        },
         context: {
           async fetchCandidates(input) {
             calls.push(`candidates:${input.message}`);
@@ -428,9 +486,50 @@ describe("agents chat-turn route", () => {
               ],
             };
           },
-          async createRun(input) {
-            calls.push(`createRun:${input.prompt.includes("remember this") ? "with-context" : "bare"}`);
-            return { run_id: "run-1", context_snapshot_id: "snapshot-1" };
+        },
+        runs: {
+          async createQueuedRun(input) {
+            calls.push(
+              `createQueuedRun:${input.prompt?.includes("remember this") ? "with-context" : "bare"}`,
+            );
+            expect(input).toMatchObject({
+              agent_id: "agent-1",
+              space_id: "space-1",
+              user_id: "user-1",
+              session_id: "session-1",
+              mode: "live",
+              run_type: "agent",
+              trigger_origin: "manual",
+            });
+            return {
+              id: "run-1",
+              space_id: "space-1",
+              agent_id: "agent-1",
+              agent_version_id: "agent-version-1",
+              context_snapshot_id: "snapshot-1",
+              status: "queued",
+              mode: "live",
+              prompt: input.prompt ?? null,
+              instruction: null,
+              workspace_id: null,
+              session_id: input.session_id ?? null,
+              project_id: null,
+              adapter_type: null,
+              model_provider_id: null,
+              required_sandbox_level: "none",
+              trigger_origin: "manual",
+              started_at: null,
+              ended_at: null,
+            };
+          },
+          async getChatRunResult() {
+            return {
+              id: "run-1",
+              space_id: "space-1",
+              status: "succeeded",
+              output_json: { output_text: "Hello from TS." },
+              error_json: null,
+            };
           },
         },
         snapshots: {
@@ -447,7 +546,7 @@ describe("agents chat-turn route", () => {
         },
       }),
     );
-    app = buildServer(tsContextConfig(), { logger: false });
+    app = buildServer(tsChatConfig(), { logger: false });
 
     const res = await app.inject({
       method: "POST",
@@ -467,7 +566,7 @@ describe("agents chat-turn route", () => {
     expect(calls).toEqual([
       "addMessage:user",
       "candidates:Hi",
-      "createRun:with-context",
+      "createQueuedRun:with-context",
       "persist:snapshot-1:1",
       "execute:run-1",
       "addMessage:assistant",
@@ -479,7 +578,11 @@ describe("agents chat-turn route", () => {
     });
   });
 
-  it("leaves the chat route unowned by TS when chat authority is python", async () => {
+  it("keeps the chat route TS-owned without authority env switches", async () => {
+    __setAgentChatIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setAgentChatServicesFactoryForTests(() => {
+      throw new Error("services should not be needed for an empty message");
+    });
     app = buildServer(
       loadConfig({ CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false" }),
       { logger: false },
@@ -488,10 +591,10 @@ describe("agents chat-turn route", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/agents/agent-1/chat",
-      payload: { message: "Hello" },
+      payload: { message: "   " },
     });
 
-    expect(res.statusCode).toBe(503);
-    expect(res.payload).toContain("python_fallback_proxy_disabled");
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ detail: "message must not be empty" });
   });
 });

@@ -1,0 +1,642 @@
+import { randomUUID } from "node:crypto";
+import {
+  HttpError,
+  canReadByVisibility,
+  countFromRow,
+  dateIso,
+  numberValue,
+  objectValue,
+  optionalObject,
+  optionalString,
+  page,
+  requiredString,
+  stringArray,
+  toDbDate,
+  type SpaceUserIdentity,
+  type Queryable,
+} from "../routeUtils/common";
+import { proposalToOut, type ProposalRow } from "../proposals/repository";
+import type { ProposalOut } from "@agent-space/protocol" with { "resolution-mode": "import" };
+
+export interface ActivityRow {
+  id: string;
+  space_id: string;
+  source_run_id: string | null;
+  session_id: string | null;
+  user_id: string | null;
+  workspace_id: string | null;
+  agent_id: string | null;
+  source_task_id: string | null;
+  project_id: string | null;
+  source_url: string | null;
+  activity_type: string;
+  title: string | null;
+  content: string | null;
+  payload_json: unknown;
+  occurred_at: unknown;
+  created_at: unknown;
+  status: string;
+  updated_at: unknown;
+  source_kind: string | null;
+  source_trust: string | null;
+  source_integrity_json: unknown;
+  entity_refs_json: unknown;
+  subject_user_id: string | null;
+  consolidation_status: string;
+  processed_at: unknown;
+  discarded_at: unknown;
+  visibility: string;
+  owner_user_id: string | null;
+}
+
+interface SummaryEvidenceRow {
+  id: string;
+  title: string;
+  content_excerpt: string | null;
+  source_uri: string | null;
+  trust_level: string;
+}
+
+interface SummaryIntakeItemRow {
+  id: string;
+  title: string;
+  excerpt: string | null;
+  source_uri: string | null;
+  content_state: string;
+}
+
+interface SummarySourceRef {
+  source_type: "activity" | "extracted_evidence" | "intake_item";
+  source_id: string;
+  source_trust: string;
+  evidence_json?: Record<string, unknown>;
+}
+
+export interface ActivityListFilters {
+  userId?: string | null;
+  workspaceId?: string | null;
+  sourceType?: string | null;
+  status?: string | null;
+  projectId?: string | null;
+  limit: number;
+  offset: number;
+}
+
+export interface SummaryRunInput {
+  activityIds: string[];
+  evidenceIds: string[];
+  intakeItemIds: string[];
+  summaryGoal: string | null;
+  createMemoryProposal: boolean;
+  createKnowledgeProposal: boolean;
+}
+
+const ACTIVITY_COLUMNS = `
+  id, space_id, source_run_id, session_id, user_id, workspace_id, agent_id,
+  source_task_id, project_id, source_url, activity_type, title, content,
+  payload_json, occurred_at, created_at, status, updated_at, source_kind,
+  source_trust, source_integrity_json, entity_refs_json, subject_user_id,
+  consolidation_status, processed_at, discarded_at, visibility, owner_user_id
+`;
+
+const SOURCE_TYPE_ALIASES: Record<string, string> = {
+  user_input: "user_capture",
+  manual: "user_capture",
+  imported_chat: "external_chat",
+  agent_run: "run_event",
+  task_log: "workspace_event",
+  file_capture: "file_import",
+  voice_capture: "file_import",
+};
+
+const SOURCE_TYPES = new Set([
+  "user_capture",
+  "chat_message",
+  "external_chat",
+  "file_import",
+  "web_capture",
+  "run_event",
+  "workspace_event",
+  "system_event",
+  "external_source",
+  "intake",
+]);
+
+export const TRUST_BY_SOURCE_TYPE: Record<string, string> = {
+  user_capture: "user_confirmed",
+  chat_message: "user_confirmed",
+  external_chat: "user_confirmed",
+  file_import: "user_confirmed",
+  web_capture: "untrusted_external",
+  run_event: "internal_system",
+  workspace_event: "internal_system",
+  system_event: "internal_system",
+  external_source: "untrusted_external",
+  intake: "internal_system",
+};
+
+export class PgActivityRepository {
+  constructor(private readonly db: Queryable) {}
+
+  async create(identity: SpaceUserIdentity, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const requestedUserId = optionalString(body.user_id);
+    if (requestedUserId && requestedUserId !== identity.userId) {
+      throw new HttpError(403, "user_id in body must match the authenticated user");
+    }
+    const sourceType = normalizeSourceType(requiredString(body.source_type, "source_type"));
+    const content = requiredString(body.content, "content");
+    const now = new Date().toISOString();
+    const result = await this.db.query<ActivityRow>(
+      `INSERT INTO activity_records (
+         id, space_id, source_run_id, session_id, user_id, workspace_id, agent_id,
+         source_task_id, project_id, source_url, activity_type, title, content,
+         payload_json, occurred_at, created_at, status, updated_at, source_kind,
+         source_trust, visibility, owner_user_id
+       )
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7,
+         $8, $9, $10, $11, $12, $13,
+         $14::jsonb, COALESCE($15::timestamptz, $16::timestamptz), $16, 'raw', $16, $11,
+         $17, $18, $5
+       )
+       RETURNING ${ACTIVITY_COLUMNS}`,
+      [
+        randomUUID(),
+        identity.spaceId,
+        optionalString(body.source_run_id),
+        optionalString(body.source_session_id),
+        identity.userId,
+        optionalString(body.workspace_id),
+        optionalString(body.agent_id),
+        optionalString(body.source_task_id),
+        optionalString(body.project_id),
+        optionalString(body.source_url),
+        sourceType,
+        optionalString(body.title),
+        content,
+        JSON.stringify(optionalObject(body.metadata_json) ?? {}),
+        toDbDate(body.occurred_at),
+        now,
+        TRUST_BY_SOURCE_TYPE[sourceType] ?? "untrusted_external",
+        optionalString(body.visibility) ?? "space_shared",
+      ],
+    );
+    return activityToOut(result.rows[0]!);
+  }
+
+  async list(
+    identity: SpaceUserIdentity,
+    filters: ActivityListFilters,
+  ): Promise<Record<string, unknown>[]> {
+    const built = buildActivityWhere(identity, filters);
+    const result = await this.db.query<ActivityRow>(
+      `SELECT ${ACTIVITY_COLUMNS}
+         FROM activity_records
+        ${built.where}
+        ORDER BY occurred_at DESC, created_at DESC, id DESC
+        LIMIT $${built.params.length + 1} OFFSET $${built.params.length + 2}`,
+      [...built.params, filters.limit, filters.offset],
+    );
+    return result.rows
+      .filter((row) => canReadActivity(row, identity.userId))
+      .map(activityToOut);
+  }
+
+  async get(identity: SpaceUserIdentity, activityId: string): Promise<ActivityRow | null> {
+    const result = await this.db.query<ActivityRow>(
+      `SELECT ${ACTIVITY_COLUMNS}
+         FROM activity_records
+        WHERE id = $1 AND space_id = $2`,
+      [activityId, identity.spaceId],
+    );
+    const row = result.rows[0];
+    return row && canReadActivity(row, identity.userId) ? row : null;
+  }
+
+  async getOut(identity: SpaceUserIdentity, activityId: string): Promise<Record<string, unknown> | null> {
+    const row = await this.get(identity, activityId);
+    return row ? activityToOut(row) : null;
+  }
+
+  async setStatus(
+    identity: SpaceUserIdentity,
+    activityId: string,
+    status: "processed" | "archived",
+  ): Promise<Record<string, unknown>> {
+    const current = await this.get(identity, activityId);
+    if (!current) throw new HttpError(404, "Activity record not found");
+    const now = new Date().toISOString();
+    const result = await this.db.query<ActivityRow>(
+      `UPDATE activity_records
+          SET status = $3,
+              consolidation_status = CASE WHEN $3 = 'processed' THEN 'skipped' ELSE consolidation_status END,
+              processed_at = CASE WHEN $3 = 'processed' THEN $4::timestamptz ELSE processed_at END,
+              discarded_at = CASE WHEN $3 = 'archived' THEN $4::timestamptz ELSE discarded_at END,
+              updated_at = $4
+        WHERE id = $1 AND space_id = $2
+        RETURNING ${ACTIVITY_COLUMNS}`,
+      [activityId, identity.spaceId, status, now],
+    );
+    return activityToOut(result.rows[0]!);
+  }
+
+  async consolidate(identity: SpaceUserIdentity, activityId: string): Promise<ProposalOut[]> {
+    const activity = await this.get(identity, activityId);
+    if (!activity) throw new HttpError(404, "Activity record not found");
+    if (!activity.content || !activity.content.trim()) {
+      throw new HttpError(422, "Activity record has no content to consolidate");
+    }
+    const proposal = await this.insertMemoryProposalFromActivity(identity, activity);
+    const now = new Date().toISOString();
+    await this.db.query(
+      `UPDATE activity_records
+          SET status = 'proposals_generated',
+              consolidation_status = 'proposals_generated',
+              processed_at = $3,
+              updated_at = $3
+        WHERE id = $1 AND space_id = $2`,
+      [activity.id, identity.spaceId, now],
+    );
+    return [proposal];
+  }
+
+  async createSummaryRun(identity: SpaceUserIdentity, input: SummaryRunInput): Promise<Record<string, unknown>> {
+    if (!input.activityIds.length && !input.evidenceIds.length && !input.intakeItemIds.length) {
+      throw new HttpError(
+        422,
+        "At least one of activity_ids, evidence_ids, or intake_item_ids is required.",
+      );
+    }
+    const activityRows = input.activityIds.length
+      ? await this.db.query<ActivityRow>(
+          `SELECT ${ACTIVITY_COLUMNS}
+             FROM activity_records
+            WHERE space_id = $1 AND id::text = ANY($2::text[])`,
+          [identity.spaceId, input.activityIds],
+        )
+      : { rows: [] };
+    if (activityRows.rows.some((row) => !canReadActivity(row, identity.userId))) {
+      throw new HttpError(403, "Summary input is not visible in this space");
+    }
+    if (activityRows.rows.length !== input.activityIds.length) {
+      throw new HttpError(403, "Summary input is not visible in this space");
+    }
+    const evidenceRows = input.evidenceIds.length
+      ? await this.db.query<SummaryEvidenceRow>(
+          `SELECT id, title, content_excerpt, source_uri, trust_level
+             FROM extracted_evidence
+            WHERE space_id = $1 AND id::text = ANY($2::text[]) AND deleted_at IS NULL`,
+          [identity.spaceId, input.evidenceIds],
+        )
+      : { rows: [] };
+    const intakeRows = input.intakeItemIds.length
+      ? await this.db.query<SummaryIntakeItemRow>(
+          `SELECT id, title, excerpt, source_uri, content_state
+             FROM intake_items
+            WHERE space_id = $1 AND id::text = ANY($2::text[]) AND deleted_at IS NULL`,
+          [identity.spaceId, input.intakeItemIds],
+        )
+      : { rows: [] };
+    if (evidenceRows.rows.length !== input.evidenceIds.length || intakeRows.rows.length !== input.intakeItemIds.length) {
+      throw new HttpError(403, "Summary input is not visible in this space");
+    }
+    const sourceRefs: SummarySourceRef[] = [
+      ...activityRows.rows.map((row) => ({
+        source_type: "activity" as const,
+        source_id: row.id,
+        source_trust: row.source_trust ?? TRUST_BY_SOURCE_TYPE[row.activity_type] ?? "untrusted_external",
+        evidence_json: { activity_type: row.activity_type, source_url: row.source_url },
+      })),
+      ...evidenceRows.rows.map((row) => ({
+        source_type: "extracted_evidence" as const,
+        source_id: row.id,
+        source_trust: provenanceTrustFromEvidence(row.trust_level),
+        evidence_json: { source_uri: row.source_uri },
+      })),
+      ...intakeRows.rows.map((row) => ({
+        source_type: "intake_item" as const,
+        source_id: row.id,
+        source_trust: "untrusted_external",
+        evidence_json: { source_uri: row.source_uri, content_state: row.content_state },
+      })),
+    ];
+    const summaryPreview = buildSummaryPreview(activityRows.rows, evidenceRows.rows, intakeRows.rows, input.summaryGoal);
+    const artifactId = randomUUID();
+    const now = new Date().toISOString();
+    await this.db.query(
+      `INSERT INTO artifacts (
+         id, space_id, run_id, proposal_id, artifact_type, title, content,
+         storage_ref, storage_path, mime_type, export_formats_json,
+         canonical_format, preview, created_at, updated_at, metadata_json,
+         visibility, owner_user_id, trust_level
+       )
+       VALUES (
+         $1, $2, NULL, NULL, 'summary', $3, $4,
+         NULL, NULL, 'text/markdown', $5::jsonb,
+         'markdown', false, $6, $6, $7::jsonb,
+         'space_shared', $8, 'medium'
+       )`,
+      [
+        artifactId,
+        identity.spaceId,
+        input.summaryGoal || "Input summary",
+        summaryPreview,
+        JSON.stringify(["markdown", "txt"]),
+        now,
+        JSON.stringify({
+          activity_ids: input.activityIds,
+          evidence_ids: input.evidenceIds,
+          intake_item_ids: input.intakeItemIds,
+          summary_goal: input.summaryGoal,
+          generated_by: "control_plane",
+        }),
+        identity.userId,
+      ],
+    );
+    const proposalIds: string[] = [];
+    if (input.createMemoryProposal && summaryPreview.trim()) {
+      const proposal = await this.insertSummaryMemoryProposal(identity, summaryPreview, artifactId, sourceRefs);
+      proposalIds.push(proposal.id);
+    }
+    if (input.createKnowledgeProposal && summaryPreview.trim()) {
+      const proposal = await this.insertSummaryKnowledgeProposal(identity, summaryPreview, artifactId, sourceRefs);
+      proposalIds.push(proposal.id);
+    }
+    return {
+      run_id: `summary:${artifactId}`,
+      artifact_id: artifactId,
+      proposal_ids: proposalIds,
+      status: "succeeded",
+      summary_preview: summaryPreview.slice(0, 500),
+    };
+  }
+
+  private async insertMemoryProposalFromActivity(
+    identity: SpaceUserIdentity,
+    activity: ActivityRow,
+  ): Promise<ProposalOut> {
+    const payload = {
+      operation: "create",
+      proposed_content: activity.content ?? "",
+      memory_type: "experience",
+      target_scope: "user",
+      target_namespace: "activity.consolidation",
+      target_visibility: "private",
+      owner_user_id: activity.owner_user_id ?? activity.user_id ?? identity.userId,
+      subject_user_id: activity.subject_user_id ?? activity.user_id ?? identity.userId,
+      source_activity_id: activity.id,
+      activity_source_trust: activity.source_trust ?? TRUST_BY_SOURCE_TYPE[activity.activity_type] ?? "untrusted_external",
+      provenance_entries: [
+        {
+          source_type: "activity",
+          source_id: activity.id,
+          source_trust: activity.source_trust ?? TRUST_BY_SOURCE_TYPE[activity.activity_type] ?? "untrusted_external",
+          evidence_json: {
+            activity_type: activity.activity_type,
+            source_url: activity.source_url,
+          },
+        },
+      ],
+    };
+    return this.insertProposal({
+      identity,
+      proposalType: "memory_create",
+      title: activity.title || `Activity: ${(activity.content ?? "").slice(0, 80)}`,
+      payload,
+      rationale: "Activity consolidation generated a memory proposal.",
+      workspaceId: activity.workspace_id,
+      projectId: activity.project_id,
+    });
+  }
+
+  private async insertSummaryMemoryProposal(
+    identity: SpaceUserIdentity,
+    summary: string,
+    artifactId: string,
+    sourceRefs: SummarySourceRef[],
+  ): Promise<ProposalOut> {
+    return this.insertProposal({
+      identity,
+      proposalType: "memory_create",
+      title: "Summary memory",
+      payload: {
+        operation: "create",
+        proposed_content: summary,
+        memory_type: "summary",
+        target_scope: "user",
+        target_namespace: "input.summary",
+        target_visibility: "private",
+        owner_user_id: identity.userId,
+        subject_user_id: identity.userId,
+        provenance_entries: [
+          {
+            source_type: "artifact",
+            source_id: artifactId,
+            source_trust: "internal_system",
+          },
+          ...sourceRefs,
+        ],
+      },
+      rationale: "Input summary requested a memory proposal.",
+      workspaceId: null,
+      projectId: null,
+    });
+  }
+
+  private async insertSummaryKnowledgeProposal(
+    identity: SpaceUserIdentity,
+    summary: string,
+    artifactId: string,
+    sourceRefs: SummarySourceRef[],
+  ): Promise<ProposalOut> {
+    return this.insertProposal({
+      identity,
+      proposalType: "knowledge_create",
+      title: "Summary knowledge",
+      payload: {
+        operation: "create",
+        item_type: "summary",
+        title: "Input summary",
+        content: summary,
+        content_format: "markdown",
+        visibility: "space_shared",
+        tags: ["summary"],
+        source_refs: [
+          {
+            source_type: "artifact",
+            source_id: artifactId,
+            source_trust: "internal_system",
+          },
+          ...sourceRefs,
+        ],
+      },
+      rationale: "Input summary requested a knowledge proposal.",
+      workspaceId: null,
+      projectId: null,
+    });
+  }
+
+  private async insertProposal(input: {
+    identity: SpaceUserIdentity;
+    proposalType: string;
+    title: string;
+    payload: Record<string, unknown>;
+    rationale: string;
+    workspaceId: string | null;
+    projectId: string | null;
+  }): Promise<ProposalOut> {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const result = await this.db.query<ProposalRow>(
+      `INSERT INTO proposals (
+         id, space_id, proposal_type, status, risk_level, urgency, preview,
+         title, summary, payload_json, review_deadline, expires_at, created_at,
+         updated_at, reviewed_at, reviewed_by, workspace_id, rationale,
+         created_by_agent_id, created_by_user_id, required_approver_role,
+         visibility, project_id
+       ) VALUES (
+         $1, $2, $3, 'pending', 'low', 'normal', false,
+         $4, NULL, $5::jsonb, NULL, NULL, $6,
+         $6, NULL, NULL, $7, $8,
+         NULL, $9, NULL,
+         'space_shared', $10
+       )
+       RETURNING id, space_id, created_by_user_id, workspace_id,
+                 created_by_run_id, proposal_type, status, risk_level, urgency,
+                 preview, title, payload_json, rationale, visibility,
+                 review_deadline, expires_at, created_at, reviewed_at,
+                 project_id,
+                 NULL::varchar AS egress_approval_id,
+                 NULL::varchar AS egress_approval_status`,
+      [
+        randomUUID(),
+        input.identity.spaceId,
+        input.proposalType,
+        input.title,
+        JSON.stringify(input.payload),
+        nowIso,
+        input.workspaceId,
+        input.rationale,
+        input.identity.userId,
+        input.projectId,
+      ],
+    );
+    return proposalToOut(result.rows[0]!, now);
+  }
+}
+
+function buildActivityWhere(
+  identity: SpaceUserIdentity,
+  filters: ActivityListFilters,
+): { where: string; params: unknown[] } {
+  const params: unknown[] = [identity.spaceId];
+  const clauses = ["space_id = $1"];
+  const add = (value: unknown): string => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  if (filters.userId) clauses.push(`user_id = ${add(filters.userId)}`);
+  if (filters.workspaceId) clauses.push(`workspace_id = ${add(filters.workspaceId)}`);
+  if (filters.sourceType) clauses.push(`activity_type = ${add(normalizeSourceType(filters.sourceType))}`);
+  if (filters.status) clauses.push(`status = ${add(filters.status)}`);
+  if (filters.projectId) clauses.push(`project_id = ${add(filters.projectId)}`);
+  return { where: `WHERE ${clauses.join(" AND ")}`, params };
+}
+
+export function activityToOut(row: ActivityRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    user_id: row.user_id,
+    workspace_id: row.workspace_id,
+    agent_id: row.agent_id,
+    source_type: row.activity_type,
+    title: row.title,
+    content: row.content ?? "",
+    source_run_id: row.source_run_id,
+    source_task_id: row.source_task_id,
+    source_session_id: row.session_id,
+    source_url: row.source_url,
+    status: row.status,
+    metadata_json: objectValue(row.payload_json),
+    visibility: row.visibility,
+    occurred_at: dateIso(row.occurred_at),
+    created_at: dateIso(row.created_at) ?? new Date(0).toISOString(),
+    updated_at: dateIso(row.updated_at) ?? new Date(0).toISOString(),
+    project_id: row.project_id,
+  };
+}
+
+function canReadActivity(row: ActivityRow, userId: string): boolean {
+  return canReadByVisibility(row.visibility, userId, [
+    row.owner_user_id,
+    row.user_id,
+    row.subject_user_id,
+  ]);
+}
+
+function normalizeSourceType(sourceType: string): string {
+  const value = sourceType.trim().toLowerCase();
+  const normalized = SOURCE_TYPE_ALIASES[value] ?? value;
+  if (!SOURCE_TYPES.has(normalized)) {
+    throw new HttpError(422, `invalid source_type: ${JSON.stringify(sourceType)}`);
+  }
+  return normalized;
+}
+
+function buildSummaryPreview(
+  rows: ActivityRow[],
+  evidenceRows: SummaryEvidenceRow[],
+  intakeRows: SummaryIntakeItemRow[],
+  summaryGoal: string | null,
+): string {
+  const header = summaryGoal ? `# ${summaryGoal}` : "# Input summary";
+  const chunks = rows.map((row) => {
+    const title = row.title ? `## ${row.title}` : `## ${row.activity_type}`;
+    return `${title}\n\n${(row.content ?? "").trim()}`.trim();
+  });
+  for (const row of evidenceRows) {
+    chunks.push(`## Evidence: ${row.title}\n\n${(row.content_excerpt ?? row.source_uri ?? "").trim()}`.trim());
+  }
+  for (const row of intakeRows) {
+    chunks.push(`## Intake: ${row.title}\n\n${(row.excerpt ?? row.source_uri ?? "").trim()}`.trim());
+  }
+  return [header, ...chunks].filter(Boolean).join("\n\n").slice(0, 8000);
+}
+
+function provenanceTrustFromEvidence(trustLevel: string | null | undefined): string {
+  if (trustLevel === "trusted") return "trusted_external";
+  if (trustLevel === "untrusted") return "untrusted_external";
+  return "agent_inferred";
+}
+
+export function summaryInputFromBody(body: Record<string, unknown>): SummaryRunInput {
+  return {
+    activityIds: stringArray(body.activity_ids),
+    evidenceIds: stringArray(body.evidence_ids),
+    intakeItemIds: stringArray(body.intake_item_ids),
+    summaryGoal: optionalString(body.summary_goal),
+    createMemoryProposal: Boolean(body.create_memory_proposal),
+    createKnowledgeProposal: Boolean(body.create_knowledge_proposal),
+  };
+}
+
+export function listPageOut(
+  rows: Record<string, unknown>[],
+  total: number,
+  limit: number,
+  offset: number,
+): Record<string, unknown> {
+  return page(rows, total, limit, offset);
+}
+
+export function totalFromCount(rows: Array<{ total?: unknown }>): number {
+  return countFromRow(rows[0]);
+}
+
+export function confidenceOrNull(value: unknown): number | null {
+  const parsed = numberValue(value);
+  if (parsed === null) return null;
+  if (parsed < 0 || parsed > 1) throw new HttpError(422, "confidence must be between 0 and 1");
+  return parsed;
+}

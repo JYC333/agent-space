@@ -1,154 +1,8 @@
-"""Unit tests for CredentialBroker canonical profile resolution.
-
-Invariants verified:
-  1.  claude_code/default resolves for runtime="claude_code" (canonical name).
-  2.  codex_cli/default resolves for runtime="codex_cli" (canonical name).
-  3.  claude-code/default does NOT resolve for runtime="claude_code" (hyphenated form not recognized).
-  4.  codex/default does NOT resolve for runtime="codex_cli" (short form not recognized).
-  5.  No profile → get_default_profile returns None.
-  6.  Canonical exact-match takes priority over any other profile under the same runtime.
-  7.  RunExecutionService / preflight does NOT manually probe aliases
-      (tested via broker returning the right profile with one exact-match call).
-  8.  uses_cli_credentials attribute on local CLI runtime instances.
-  9.  Native runtime adapters do not use CLI credentials.
-"""
+"""Unit tests for CredentialBroker under fixed TS credential authority."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
-from app.credentials.broker import CredentialBroker, CredentialProfile
-from app.config import settings
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_broker_with_profiles(profiles: dict[str, CredentialProfile]) -> CredentialBroker:
-    """Return a broker whose _load_profiles is pre-seeded with the given dict."""
-    broker = CredentialBroker(instance_root="/nonexistent")
-    broker._profiles = profiles
-    return broker
-
-
-def _make_profile(pid: str, source_path: str) -> CredentialProfile:
-    runtime, name = pid.split("/", 1)
-    return CredentialProfile(
-        id=pid,
-        runtime=runtime,
-        name=name,
-        source_path=source_path,
-        target_path=f"/home/agent/.{runtime}",
-    )
-
-
-# ===========================================================================
-# 1. claude_code/default resolves for runtime="claude_code"
-# ===========================================================================
-
-
-def test_claude_code_canonical_resolves(tmp_path):
-    """Canonical name claude_code/default is found for runtime="claude_code"."""
-    profile_dir = tmp_path / "claude_code" / "default"
-    profile_dir.mkdir(parents=True)
-
-    profiles = {"claude_code/default": _make_profile("claude_code/default", str(profile_dir))}
-    broker = _make_broker_with_profiles(profiles)
-
-    found = broker.get_default_profile("claude_code")
-    assert found is not None
-    assert found.id == "claude_code/default"
-
-
-# ===========================================================================
-# 2. codex_cli/default resolves for runtime="codex_cli"
-# ===========================================================================
-
-
-def test_codex_cli_canonical_resolves(tmp_path):
-    """Canonical name codex_cli/default is found for runtime="codex_cli"."""
-    profile_dir = tmp_path / "codex_cli" / "default"
-    profile_dir.mkdir(parents=True)
-
-    profiles = {"codex_cli/default": _make_profile("codex_cli/default", str(profile_dir))}
-    broker = _make_broker_with_profiles(profiles)
-
-    found = broker.get_default_profile("codex_cli")
-    assert found is not None
-    assert found.id == "codex_cli/default"
-
-
-# ===========================================================================
-# 3. Hyphenated claude-code/default does NOT resolve for runtime="claude_code"
-# ===========================================================================
-
-
-def test_hyphenated_claude_dash_code_does_not_resolve_for_claude_code(tmp_path):
-    """claude-code/default uses a hyphenated name — broker requires underscore-normalized runtime names."""
-    profile_dir = tmp_path / "claude-code" / "default"
-    profile_dir.mkdir(parents=True)
-
-    profiles = {"claude-code/default": _make_profile("claude-code/default", str(profile_dir))}
-    broker = _make_broker_with_profiles(profiles)
-
-    found = broker.get_default_profile("claude_code")
-    assert found is None
-
-
-# ===========================================================================
-# 4. Short-form codex/default does NOT resolve for runtime="codex_cli"
-# ===========================================================================
-
-
-def test_short_codex_does_not_resolve_for_codex_cli(tmp_path):
-    """codex/default uses the short non-canonical name — broker requires codex_cli/default."""
-    profile_dir = tmp_path / "codex" / "default"
-    profile_dir.mkdir(parents=True)
-
-    profiles = {"codex/default": _make_profile("codex/default", str(profile_dir))}
-    broker = _make_broker_with_profiles(profiles)
-
-    found = broker.get_default_profile("codex_cli")
-    assert found is None
-
-
-# ===========================================================================
-# 5. No profile → returns None
-# ===========================================================================
-
-
-def test_get_default_profile_returns_none_when_no_profile():
-    broker = _make_broker_with_profiles({})
-    assert broker.get_default_profile("claude_code") is None
-    assert broker.get_default_profile("codex_cli") is None
-    assert broker.get_default_profile("some_unknown_adapter") is None
-
-
-# ===========================================================================
-# 6. Canonical /default preferred over non-default profile under same runtime
-# ===========================================================================
-
-
-def test_default_profile_preferred_over_other_named_profile(tmp_path):
-    """<runtime>/default takes priority over <runtime>/<other-name>."""
-    dir_default = tmp_path / "claude_code" / "default"
-    dir_default.mkdir(parents=True)
-    dir_other = tmp_path / "claude_code" / "work"
-    dir_other.mkdir(parents=True)
-
-    profiles = {
-        "claude_code/default": _make_profile("claude_code/default", str(dir_default)),
-        "claude_code/work": _make_profile("claude_code/work", str(dir_other)),
-    }
-    broker = _make_broker_with_profiles(profiles)
-
-    found = broker.get_default_profile("claude_code")
-    assert found is not None
-    assert found.id == "claude_code/default"
+from app.credentials.broker import CredentialBroker
 
 
 def test_control_plane_authority_resolves_profile(monkeypatch):
@@ -165,7 +19,6 @@ def test_control_plane_authority_resolves_profile(monkeypatch):
             "readonly": False,
         }
 
-    monkeypatch.setattr(settings, "control_plane_providers_credentials_authority", "ts")
     monkeypatch.setattr(
         "app.credentials.broker.resolve_cli_profile_via_control_plane",
         _fake_resolve,
@@ -178,6 +31,24 @@ def test_control_plane_authority_resolves_profile(monkeypatch):
     assert found.id == "codex_cli/default"
     assert found.source_path.endswith("/codex_cli/default")
     assert calls == [("codex_cli", None, True)]
+
+
+def test_control_plane_authority_returns_none_for_missing_profile(monkeypatch):
+    calls = []
+
+    def _fake_resolve(*, runtime: str, profile_id: str | None, require_existing: bool):
+        calls.append((runtime, profile_id, require_existing))
+        return None
+
+    monkeypatch.setattr(
+        "app.credentials.broker.resolve_cli_profile_via_control_plane",
+        _fake_resolve,
+    )
+
+    broker = CredentialBroker(instance_root="/nonexistent")
+
+    assert broker.get_default_profile("claude_code") is None
+    assert calls == [("claude_code", None, True)]
 
 
 def test_control_plane_authority_grants_profile(monkeypatch):
@@ -200,7 +71,6 @@ def test_control_plane_authority_grants_profile(monkeypatch):
             "fallback_reason": None,
         }
 
-    monkeypatch.setattr(settings, "control_plane_providers_credentials_authority", "ts")
     monkeypatch.setattr(
         "app.credentials.broker.grant_cli_credential_via_control_plane",
         _fake_grant,
@@ -228,22 +98,12 @@ def test_control_plane_authority_grants_profile(monkeypatch):
     ]
 
 
-# ===========================================================================
-# 7. uses_cli_credentials attribute on local CLI runtime instances
-# ===========================================================================
-
-
 def test_cli_runtime_adapter_uses_cli_credentials():
     """Spec-driven local CLI runtime instances declare uses_cli_credentials=True."""
     from app.runtimes.registry import instantiate_runtime_adapter
 
     assert instantiate_runtime_adapter("claude_code").uses_cli_credentials is True
     assert instantiate_runtime_adapter("codex_cli").uses_cli_credentials is True
-
-
-# ===========================================================================
-# 8 & 9. Native runtime adapters do not use CLI credentials
-# ===========================================================================
 
 
 def test_native_runtime_classes_do_not_use_cli_credentials():

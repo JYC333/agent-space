@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.config import settings
 from app.policy.control_plane_client import (
     ControlPlanePolicyGateway,
     policy_owned_by_control_plane,
@@ -27,11 +26,8 @@ def _wire_decision(decision: str = "allow") -> dict:
     }
 
 
-def test_policy_authority_flag_reads_settings(monkeypatch):
-    monkeypatch.setattr(settings, "control_plane_policy_authority", "ts")
+def test_policy_authority_is_fixed_to_control_plane():
     assert policy_owned_by_control_plane() is True
-    monkeypatch.setattr(settings, "control_plane_policy_authority", "python")
-    assert policy_owned_by_control_plane() is False
 
 
 def test_enforce_allow_returns_policy_decision(monkeypatch):

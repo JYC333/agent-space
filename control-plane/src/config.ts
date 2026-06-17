@@ -41,102 +41,56 @@ export interface ControlPlaneConfig {
   /** Maximum JSON body sent to an outbound notification webhook. */
   notificationMaxPayloadBytes: number;
   /**
-   * Authority switch for provider read routes (list/detail/catalog). `python`
-   * forwards to the Python authority; `ts` serves them from the control plane's
-   * DB read port behind Python identity introspection.
-   */
-  providersAuthority: "python" | "ts";
-  /**
-   * Authority switch for provider commands plus the whole credential channel.
-   * `python` leaves those routes unclaimed so the Python fallback proxy remains
-   * authoritative. `ts` registers TS handlers for provider commands, provider
-   * invocation, CLI credential routes, and internal credential-release ports.
-   */
-  providersCredentialsAuthority: "python" | "ts";
-  /**
-   * Authority switch for run execution/cancel commands. `python` leaves command
-   * routes to the fallback proxy; `ts` registers TS-owned command handlers while
-   * run read models remain Python-owned until separately migrated.
-   */
-  runsAuthority: "python" | "ts";
-  /**
-   * Authority switch for the policy enforcement context. `python` leaves
-   * enforcement to the Python `PolicyGateway`; `ts` registers the
-   * internal policy enforce/proposal-apply ports in the control plane and writes
-   * durable audit to `policy_decision_records`. Independent of the other
-   * authority switches; local env templates opt into `ts`.
-   */
-  policyAuthority: "python" | "ts";
-  /**
-   * Authority switch for public proposal review/read routes. `python` leaves
-   * them to the fallback proxy; `ts` registers TS read/list handlers and uses
-   * the internal Python proposal port for apply/reject/egress transactions
-   * until per-type appliers are split out.
-   */
-  proposalsAuthority: "python" | "ts";
-  /**
-   * Authority switch for the public `sessions` command surface. `python` leaves
-   * list/get/create sessions and list/add messages to the fallback proxy; `ts`
-   * serves those commands from the control-plane DB behind Python identity
-   * introspection. Session `reflect` remains Python-owned.
-   */
-  sessionsAuthority: "python" | "ts";
-  /**
-   * Authority switch for the synchronous Personal Assistant chat turn.
-   * `python` leaves `/api/v1/agents/:id/chat` to the fallback proxy; `ts`
-   * registers a TS-owned outer orchestrator while still using explicit Python
-   * ports for context/run preparation until those slices move.
-   */
-  chatTurnAuthority: "python" | "ts";
-  /**
-   * Authority switch for chat-path context assembly (Stage 6 slice 4). `python`
-   * leaves `ChatContextBuilder` (selection + `context_snapshots` /
-   * `context_snapshot_items` persistence) to the Python chat-turn preparation
-   * port; `ts` makes the TS chat turn own the budget/dedup loop and snapshot
-   * persistence, sourcing per-source candidates and run creation through narrow
-   * Python read/run-create ports. Requires `chatTurnAuthority` and
-   * `sessionsAuthority` to be `ts`.
-   */
-  contextAuthority: "python" | "ts";
-  /**
-   * Authority switch for the `memory` context (Stage 6, progressive). `ts` makes
-   * the control plane own the memory read model (`/memory` list/get/search) and
-   * public memory proposal creation (`POST`/`PATCH`/`DELETE /memory`). Proposal
-   * creation writes pending `proposals` rows only; active memory mutation remains
-   * proposal-apply authority. Requires the TS policy/proposals authority, DB URL,
-   * and internal token.
-   */
-  memoryAuthority: "python" | "ts";
-  /**
-   * Authority switch for **memory proposal apply** (Stage 6 slice 7b). `ts` makes
-   * the control plane apply accepted `memory_create`/`memory_update`/
-   * `memory_archive` proposals itself: the accept route gates the proposal through
-   * the Python read-only memory-apply-gate port, then runs `acceptAndApply`
-   * (active-memory INSERT/UPDATE + provenance + relations + accept state) in one
-   * TS transaction. Run/grant egress-context and workspace/agent-scope proposals
-   * fail closed (409, still Python-owned). Requires `memoryAuthority=ts`,
-   * the TS policy/proposals authority, DB URL, and internal token. `python`
-   * leaves all proposal apply to the Python accept port.
-   */
-  memoryApplyAuthority: "python" | "ts";
-  /**
-   * Read-only shadow compare. While Python serves, the TS DB-backed result is
-   * computed and divergences are logged. Never affects responses.
-   */
-  providersShadowCompare: boolean;
-  /**
-   * PostgreSQL connection string for provider reads and provider/credential
-   * commands. Python/Alembic remains the schema owner.
+   * PostgreSQL connection string for TS-owned reads/commands. Python/Alembic
+   * remains the schema owner.
    */
   databaseUrl: string | null;
   /** Instance root used for provider key material and CLI credential profiles. */
   agentSpaceHome: string;
   /** Instance-owned runtime CLI installation root. */
   cliToolsRoot: string;
+  /** Root for registered workspace directories. */
+  workspaceRoot: string;
   /** Root for short-lived run sandboxes (worktrees, ephemeral working dirs). */
   sandboxRoot: string;
+  /** Root for persisted artifact file storage. Artifact.storage_path is relative to this. */
+  artifactStorageRoot: string;
+  /** Unix socket for the host deployer process. */
+  deployerSocketPath: string;
   /** Service-to-service token for internal providers/credentials ports. */
   internalToken: string | null;
+  /** Google OAuth client id. Empty means Google login is disabled. */
+  googleClientId: string;
+  /** Google OAuth client secret. Redacted from diagnostics and snapshots. */
+  googleClientSecret: string;
+  /** Redirect URI registered with Google. */
+  googleRedirectUri: string;
+  /** Frontend base URL used for post-login redirects. */
+  frontendUrl: string;
+  /** Session cookie lifetime in days. */
+  sessionExpireDays: number;
+  /** Mirrors Python DEBUG for secure cookie defaults. */
+  debug: boolean;
+  dailyReportSchedulerEnabled: boolean;
+  dailyReportSchedulerIntervalSeconds: number;
+  automationSchedulerEnabled: boolean;
+  automationSchedulerIntervalSeconds: number;
+  memoryAccessLogRetentionEnabled: boolean;
+  memoryAccessLogRetentionDays: number;
+  memoryAccessLogPruneIntervalSeconds: number;
+  intakeExtractionSchedulerEnabled: boolean;
+  intakeExtractionSchedulerIntervalSeconds: number;
+  agentSpaceEnv: string;
+  appVersion: string | null;
+  backupEnabled: boolean;
+  backupIntervalHours: number;
+  backupRetentionCount: number;
+  backupIncludeLogs: boolean;
+  backupOnStartup: boolean;
+  backupRoot: string;
+  backupAcceptNoBackup: boolean;
+  /** Full-privilege database URL used only for full-system backup dumps. */
+  backupDatabaseUrl: string | null;
 }
 
 export interface RawEnv {
@@ -167,22 +121,39 @@ const KNOWN_ENV_KEYS = new Set([
   "CONTROL_PLANE_ENABLE_NOTIFICATION_WEBHOOK_EGRESS",
   "CONTROL_PLANE_NOTIFICATION_WEBHOOK_ALLOWLIST",
   "CONTROL_PLANE_NOTIFICATION_MAX_PAYLOAD_BYTES",
-  "CONTROL_PLANE_PROVIDERS_AUTHORITY",
-  "CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY",
-  "CONTROL_PLANE_RUNS_AUTHORITY",
-  "CONTROL_PLANE_POLICY_AUTHORITY",
-  "CONTROL_PLANE_PROPOSALS_AUTHORITY",
-  "CONTROL_PLANE_SESSIONS_AUTHORITY",
-  "CONTROL_PLANE_CHAT_TURN_AUTHORITY",
-  "CONTROL_PLANE_CONTEXT_AUTHORITY",
-  "CONTROL_PLANE_MEMORY_AUTHORITY",
-  "CONTROL_PLANE_MEMORY_APPLY_AUTHORITY",
-  "CONTROL_PLANE_PROVIDERS_SHADOW",
   "CONTROL_PLANE_DATABASE_URL",
   "AGENT_SPACE_HOME",
   "CONTROL_PLANE_CLI_TOOLS_ROOT",
+  "WORKSPACE_ROOT",
   "SANDBOX_ROOT",
+  "ARTIFACT_STORAGE_ROOT",
+  "DEPLOYER_SOCKET_PATH",
   "CONTROL_PLANE_INTERNAL_TOKEN",
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  "GOOGLE_REDIRECT_URI",
+  "FRONTEND_URL",
+  "SESSION_EXPIRE_DAYS",
+  "DEBUG",
+  "CONTROL_PLANE_DAILY_REPORT_SCHEDULER_ENABLED",
+  "CONTROL_PLANE_DAILY_REPORT_SCHEDULER_INTERVAL_SECONDS",
+  "CONTROL_PLANE_AUTOMATION_SCHEDULER_ENABLED",
+  "CONTROL_PLANE_AUTOMATION_SCHEDULER_INTERVAL_SECONDS",
+  "CONTROL_PLANE_MEMORY_ACCESS_LOG_RETENTION_ENABLED",
+  "CONTROL_PLANE_MEMORY_ACCESS_LOG_RETENTION_DAYS",
+  "CONTROL_PLANE_MEMORY_ACCESS_LOG_PRUNE_INTERVAL_SECONDS",
+  "CONTROL_PLANE_INTAKE_EXTRACTION_SCHEDULER_ENABLED",
+  "CONTROL_PLANE_INTAKE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS",
+  "AGENT_SPACE_ENV",
+  "APP_VERSION",
+  "BACKUP_ENABLED",
+  "BACKUP_INTERVAL_HOURS",
+  "BACKUP_RETENTION_COUNT",
+  "BACKUP_INCLUDE_LOGS",
+  "BACKUP_ON_STARTUP",
+  "BACKUP_ROOT",
+  "BACKUP_ACCEPT_NO_BACKUP",
+  "BACKUP_DATABASE_URL",
 ]);
 
 export class ConfigError extends Error {
@@ -305,96 +276,6 @@ function parseWebhookAllowlist(value: string | undefined): string[] {
   return [...new Set(urls)].sort();
 }
 
-function parseProvidersAuthority(value: string | undefined): "python" | "ts" {
-  const v = (value?.trim() || "python").toLowerCase();
-  if (v === "python" || v === "ts") return v;
-  throw new ConfigError(
-    `CONTROL_PLANE_PROVIDERS_AUTHORITY must be "python" or "ts", got ${JSON.stringify(value)}`,
-    "invalid_providers_authority",
-  );
-}
-
-function parseProvidersCredentialsAuthority(value: string | undefined): "python" | "ts" {
-  const v = (value?.trim() || "python").toLowerCase();
-  if (v === "python" || v === "ts") return v;
-  throw new ConfigError(
-    `CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY must be "python" or "ts", got ${JSON.stringify(value)}`,
-    "invalid_providers_credentials_authority",
-  );
-}
-
-function parseRunsAuthority(value: string | undefined): "python" | "ts" {
-  const v = (value?.trim() || "python").toLowerCase();
-  if (v === "python" || v === "ts") return v;
-  throw new ConfigError(
-    `CONTROL_PLANE_RUNS_AUTHORITY must be "python" or "ts", got ${JSON.stringify(value)}`,
-    "invalid_runs_authority",
-  );
-}
-
-function parsePolicyAuthority(value: string | undefined): "python" | "ts" {
-  const v = (value?.trim() || "python").toLowerCase();
-  if (v === "python" || v === "ts") return v;
-  throw new ConfigError(
-    `CONTROL_PLANE_POLICY_AUTHORITY must be "python" or "ts", got ${JSON.stringify(value)}`,
-    "invalid_policy_authority",
-  );
-}
-
-function parseProposalsAuthority(value: string | undefined): "python" | "ts" {
-  const v = (value?.trim() || "python").toLowerCase();
-  if (v === "python" || v === "ts") return v;
-  throw new ConfigError(
-    `CONTROL_PLANE_PROPOSALS_AUTHORITY must be "python" or "ts", got ${JSON.stringify(value)}`,
-    "invalid_proposals_authority",
-  );
-}
-
-function parseSessionsAuthority(value: string | undefined): "python" | "ts" {
-  const v = (value?.trim() || "python").toLowerCase();
-  if (v === "python" || v === "ts") return v;
-  throw new ConfigError(
-    `CONTROL_PLANE_SESSIONS_AUTHORITY must be "python" or "ts", got ${JSON.stringify(value)}`,
-    "invalid_sessions_authority",
-  );
-}
-
-function parseMemoryAuthority(value: string | undefined): "python" | "ts" {
-  const v = (value?.trim() || "python").toLowerCase();
-  if (v === "python" || v === "ts") return v;
-  throw new ConfigError(
-    `CONTROL_PLANE_MEMORY_AUTHORITY must be "python" or "ts", got ${JSON.stringify(value)}`,
-    "invalid_memory_authority",
-  );
-}
-
-function parseMemoryApplyAuthority(value: string | undefined): "python" | "ts" {
-  const v = (value?.trim() || "python").toLowerCase();
-  if (v === "python" || v === "ts") return v;
-  throw new ConfigError(
-    `CONTROL_PLANE_MEMORY_APPLY_AUTHORITY must be "python" or "ts", got ${JSON.stringify(value)}`,
-    "invalid_memory_apply_authority",
-  );
-}
-
-function parseChatTurnAuthority(value: string | undefined): "python" | "ts" {
-  const v = (value?.trim() || "python").toLowerCase();
-  if (v === "python" || v === "ts") return v;
-  throw new ConfigError(
-    `CONTROL_PLANE_CHAT_TURN_AUTHORITY must be "python" or "ts", got ${JSON.stringify(value)}`,
-    "invalid_chat_turn_authority",
-  );
-}
-
-function parseContextAuthority(value: string | undefined): "python" | "ts" {
-  const v = (value?.trim() || "python").toLowerCase();
-  if (v === "python" || v === "ts") return v;
-  throw new ConfigError(
-    `CONTROL_PLANE_CONTEXT_AUTHORITY must be "python" or "ts", got ${JSON.stringify(value)}`,
-    "invalid_context_authority",
-  );
-}
-
 function validateDatabaseUrl(value: string): string {
   let url: URL;
   try {
@@ -423,207 +304,6 @@ function validateConfigSemantics(config: ControlPlaneConfig): void {
       "CONTROL_PLANE_NOTIFICATION_WEBHOOK_ALLOWLIST is required when notification webhook egress is enabled",
       "missing_notification_webhook_allowlist",
     );
-  }
-  if (
-    (config.providersShadowCompare || config.providersAuthority === "ts") &&
-    !config.databaseUrl
-  ) {
-    throw new ConfigError(
-      "CONTROL_PLANE_DATABASE_URL is required when providers shadow compare or TS read authority is enabled",
-      "missing_database_url_for_providers",
-    );
-  }
-  if (config.providersCredentialsAuthority === "ts") {
-    if (config.providersAuthority !== "ts") {
-      throw new ConfigError(
-        "CONTROL_PLANE_PROVIDERS_AUTHORITY must be ts before providers/credentials authority can be ts",
-        "providers_credentials_requires_provider_read_authority",
-      );
-    }
-    if (!config.databaseUrl) {
-      throw new ConfigError(
-        "CONTROL_PLANE_DATABASE_URL is required when providers/credentials TS authority is enabled",
-        "missing_database_url_for_providers_credentials",
-      );
-    }
-    if (!config.internalToken) {
-      throw new ConfigError(
-        "CONTROL_PLANE_INTERNAL_TOKEN is required when providers/credentials TS authority is enabled",
-        "missing_internal_token_for_providers_credentials",
-      );
-    }
-  }
-  if (config.runsAuthority === "ts") {
-    if (config.providersCredentialsAuthority !== "ts") {
-      throw new ConfigError(
-        "CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY must be ts before runs authority can be ts",
-        "runs_requires_providers_credentials_authority",
-      );
-    }
-    if (!config.databaseUrl) {
-      throw new ConfigError(
-        "CONTROL_PLANE_DATABASE_URL is required when runs TS authority is enabled",
-        "missing_database_url_for_runs",
-      );
-    }
-    if (!config.internalToken) {
-      throw new ConfigError(
-        "CONTROL_PLANE_INTERNAL_TOKEN is required when runs TS authority is enabled",
-        "missing_internal_token_for_runs",
-      );
-    }
-  }
-  if (config.policyAuthority === "ts") {
-    if (!config.databaseUrl) {
-      throw new ConfigError(
-        "CONTROL_PLANE_DATABASE_URL is required when policy TS authority is enabled",
-        "missing_database_url_for_policy",
-      );
-    }
-    if (!config.internalToken) {
-      throw new ConfigError(
-        "CONTROL_PLANE_INTERNAL_TOKEN is required when policy TS authority is enabled",
-        "missing_internal_token_for_policy",
-      );
-    }
-  }
-  if (config.proposalsAuthority === "ts") {
-    if (!config.databaseUrl) {
-      throw new ConfigError(
-        "CONTROL_PLANE_DATABASE_URL is required when proposals TS authority is enabled",
-        "missing_database_url_for_proposals",
-      );
-    }
-    if (!config.internalToken) {
-      throw new ConfigError(
-        "CONTROL_PLANE_INTERNAL_TOKEN is required when proposals TS authority is enabled",
-        "missing_internal_token_for_proposals",
-      );
-    }
-  }
-  if (config.sessionsAuthority === "ts") {
-    if (!config.databaseUrl) {
-      throw new ConfigError(
-        "CONTROL_PLANE_DATABASE_URL is required when sessions TS authority is enabled",
-        "missing_database_url_for_sessions",
-      );
-    }
-    if (!config.internalToken) {
-      throw new ConfigError(
-        "CONTROL_PLANE_INTERNAL_TOKEN is required when sessions TS authority is enabled",
-        "missing_internal_token_for_sessions",
-      );
-    }
-  }
-  if (config.chatTurnAuthority === "ts") {
-    if (config.sessionsAuthority !== "ts") {
-      throw new ConfigError(
-        "CONTROL_PLANE_SESSIONS_AUTHORITY must be ts before chat-turn authority can be ts",
-        "chat_turn_requires_sessions_authority",
-      );
-    }
-    if (config.runsAuthority !== "ts") {
-      throw new ConfigError(
-        "CONTROL_PLANE_RUNS_AUTHORITY must be ts before chat-turn authority can be ts",
-        "chat_turn_requires_runs_authority",
-      );
-    }
-    if (!config.databaseUrl) {
-      throw new ConfigError(
-        "CONTROL_PLANE_DATABASE_URL is required when chat-turn TS authority is enabled",
-        "missing_database_url_for_chat_turn",
-      );
-    }
-    if (!config.internalToken) {
-      throw new ConfigError(
-        "CONTROL_PLANE_INTERNAL_TOKEN is required when chat-turn TS authority is enabled",
-        "missing_internal_token_for_chat_turn",
-      );
-    }
-  }
-  if (config.contextAuthority === "ts") {
-    if (config.chatTurnAuthority !== "ts") {
-      throw new ConfigError(
-        "CONTROL_PLANE_CHAT_TURN_AUTHORITY must be ts before context authority can be ts",
-        "context_requires_chat_turn_authority",
-      );
-    }
-    if (config.sessionsAuthority !== "ts") {
-      throw new ConfigError(
-        "CONTROL_PLANE_SESSIONS_AUTHORITY must be ts before context authority can be ts",
-        "context_requires_sessions_authority",
-      );
-    }
-    if (!config.databaseUrl) {
-      throw new ConfigError(
-        "CONTROL_PLANE_DATABASE_URL is required when context TS authority is enabled",
-        "missing_database_url_for_context",
-      );
-    }
-    if (!config.internalToken) {
-      throw new ConfigError(
-        "CONTROL_PLANE_INTERNAL_TOKEN is required when context TS authority is enabled",
-        "missing_internal_token_for_context",
-      );
-    }
-  }
-  if (config.memoryAuthority === "ts") {
-    // Stage 6 slices 5-6: TS owns memory reads and proposal-only public memory
-    // writes. Later memory slices extend this switch to proposal apply/quality.
-    if (config.policyAuthority !== "ts") {
-      throw new ConfigError(
-        "CONTROL_PLANE_POLICY_AUTHORITY must be ts before memory authority can be ts",
-        "memory_requires_policy_authority",
-      );
-    }
-    if (config.proposalsAuthority !== "ts") {
-      throw new ConfigError(
-        "CONTROL_PLANE_PROPOSALS_AUTHORITY must be ts before memory authority can be ts",
-        "memory_requires_proposals_authority",
-      );
-    }
-    if (!config.databaseUrl) {
-      throw new ConfigError(
-        "CONTROL_PLANE_DATABASE_URL is required when memory TS authority is enabled",
-        "missing_database_url_for_memory",
-      );
-    }
-    if (!config.internalToken) {
-      throw new ConfigError(
-        "CONTROL_PLANE_INTERNAL_TOKEN is required when memory TS authority is enabled",
-        "missing_internal_token_for_memory",
-      );
-    }
-  }
-  if (config.memoryApplyAuthority === "ts") {
-    // Stage 6 slice 7b: TS applies accepted memory proposals. Requires the memory
-    // read/proposal authority (so the same DB role + ports are in place) plus the
-    // policy/proposals authority for the apply gate, the DB URL, and the internal
-    // token for the Python memory-apply-gate port.
-    if (config.memoryAuthority !== "ts") {
-      throw new ConfigError(
-        "CONTROL_PLANE_MEMORY_AUTHORITY must be ts before memory apply authority can be ts",
-        "memory_apply_requires_memory_authority",
-      );
-    }
-    if (config.policyAuthority !== "ts" || config.proposalsAuthority !== "ts") {
-      throw new ConfigError(
-        "CONTROL_PLANE_POLICY_AUTHORITY and CONTROL_PLANE_PROPOSALS_AUTHORITY must be ts before memory apply authority can be ts",
-        "memory_apply_requires_policy_and_proposals_authority",
-      );
-    }
-    if (!config.databaseUrl) {
-      throw new ConfigError(
-        "CONTROL_PLANE_DATABASE_URL is required when memory apply TS authority is enabled",
-        "missing_database_url_for_memory_apply",
-      );
-    }
-    if (!config.internalToken) {
-      throw new ConfigError(
-        "CONTROL_PLANE_INTERNAL_TOKEN is required when memory apply TS authority is enabled",
-        "missing_internal_token_for_memory_apply",
-      );
-    }
   }
 }
 
@@ -683,26 +363,14 @@ export function loadConfig(env: RawEnv = process.env): ControlPlaneConfig {
     1_024,
     1024 * 1024,
   );
-  const providersAuthority = parseProvidersAuthority(
-    env.CONTROL_PLANE_PROVIDERS_AUTHORITY,
-  );
-  const providersCredentialsAuthority = parseProvidersCredentialsAuthority(
-    env.CONTROL_PLANE_PROVIDERS_CREDENTIALS_AUTHORITY,
-  );
-  const runsAuthority = parseRunsAuthority(env.CONTROL_PLANE_RUNS_AUTHORITY);
-  const policyAuthority = parsePolicyAuthority(env.CONTROL_PLANE_POLICY_AUTHORITY);
-  const proposalsAuthority = parseProposalsAuthority(env.CONTROL_PLANE_PROPOSALS_AUTHORITY);
-  const sessionsAuthority = parseSessionsAuthority(env.CONTROL_PLANE_SESSIONS_AUTHORITY);
-  const chatTurnAuthority = parseChatTurnAuthority(env.CONTROL_PLANE_CHAT_TURN_AUTHORITY);
-  const contextAuthority = parseContextAuthority(env.CONTROL_PLANE_CONTEXT_AUTHORITY);
-  const memoryAuthority = parseMemoryAuthority(env.CONTROL_PLANE_MEMORY_AUTHORITY);
-  const memoryApplyAuthority = parseMemoryApplyAuthority(env.CONTROL_PLANE_MEMORY_APPLY_AUTHORITY);
-  const providersShadowCompare = parseBool(env.CONTROL_PLANE_PROVIDERS_SHADOW, false);
   const rawDatabaseUrl = env.CONTROL_PLANE_DATABASE_URL?.trim();
   const databaseUrl = rawDatabaseUrl ? validateDatabaseUrl(rawDatabaseUrl) : null;
   const agentSpaceHome = resolve(env.AGENT_SPACE_HOME?.trim() || "/aspace");
   const cliToolsRoot = resolve(
     env.CONTROL_PLANE_CLI_TOOLS_ROOT?.trim() || resolve(agentSpaceHome, "runtime-tools"),
+  );
+  const workspaceRoot = resolve(
+    env.WORKSPACE_ROOT?.trim() || resolve(agentSpaceHome, "workspaces"),
   );
   // Mirrors the Python `settings.sandbox_root` default (SANDBOX_ROOT or
   // AGENT_SPACE_HOME/sandboxes) so TS-provisioned ephemeral dirs and Python
@@ -710,7 +378,100 @@ export function loadConfig(env: RawEnv = process.env): ControlPlaneConfig {
   const sandboxRoot = resolve(
     env.SANDBOX_ROOT?.trim() || resolve(agentSpaceHome, "sandboxes"),
   );
+  const artifactStorageRoot = resolve(
+    env.ARTIFACT_STORAGE_ROOT?.trim() || resolve(agentSpaceHome, "storage", "artifacts"),
+  );
+  const deployerSocketPath = resolve(
+    env.DEPLOYER_SOCKET_PATH?.trim() || resolve(agentSpaceHome, "run", "deployer.sock"),
+  );
   const internalToken = env.CONTROL_PLANE_INTERNAL_TOKEN?.trim() || null;
+  const googleClientId = env.GOOGLE_CLIENT_ID?.trim() || "";
+  const googleClientSecret = env.GOOGLE_CLIENT_SECRET?.trim() || "";
+  const googleRedirectUri =
+    env.GOOGLE_REDIRECT_URI?.trim() ||
+    "http://localhost:5173/api/v1/auth/google/callback";
+  const frontendUrl = validateBaseUrl(env.FRONTEND_URL?.trim() || "http://localhost:5173");
+  const sessionExpireDays = parseIntStrict(
+    env.SESSION_EXPIRE_DAYS,
+    30,
+    "SESSION_EXPIRE_DAYS",
+  );
+  const debug = parseBool(env.DEBUG, false);
+  const dailyReportSchedulerEnabled = parseBool(
+    env.CONTROL_PLANE_DAILY_REPORT_SCHEDULER_ENABLED,
+    true,
+  );
+  const dailyReportSchedulerIntervalSeconds = parseBoundedInt(
+    env.CONTROL_PLANE_DAILY_REPORT_SCHEDULER_INTERVAL_SECONDS,
+    60,
+    "CONTROL_PLANE_DAILY_REPORT_SCHEDULER_INTERVAL_SECONDS",
+    30,
+    86_400,
+  );
+  const automationSchedulerEnabled = parseBool(
+    env.CONTROL_PLANE_AUTOMATION_SCHEDULER_ENABLED,
+    true,
+  );
+  const automationSchedulerIntervalSeconds = parseBoundedInt(
+    env.CONTROL_PLANE_AUTOMATION_SCHEDULER_INTERVAL_SECONDS,
+    60,
+    "CONTROL_PLANE_AUTOMATION_SCHEDULER_INTERVAL_SECONDS",
+    30,
+    86_400,
+  );
+  const memoryAccessLogRetentionEnabled = parseBool(
+    env.CONTROL_PLANE_MEMORY_ACCESS_LOG_RETENTION_ENABLED,
+    true,
+  );
+  const memoryAccessLogRetentionDays = parseBoundedInt(
+    env.CONTROL_PLANE_MEMORY_ACCESS_LOG_RETENTION_DAYS,
+    90,
+    "CONTROL_PLANE_MEMORY_ACCESS_LOG_RETENTION_DAYS",
+    1,
+    3650,
+  );
+  const memoryAccessLogPruneIntervalSeconds = parseBoundedInt(
+    env.CONTROL_PLANE_MEMORY_ACCESS_LOG_PRUNE_INTERVAL_SECONDS,
+    3600,
+    "CONTROL_PLANE_MEMORY_ACCESS_LOG_PRUNE_INTERVAL_SECONDS",
+    300,
+    86_400,
+  );
+  const intakeExtractionSchedulerEnabled = parseBool(
+    env.CONTROL_PLANE_INTAKE_EXTRACTION_SCHEDULER_ENABLED,
+    true,
+  );
+  const intakeExtractionSchedulerIntervalSeconds = parseBoundedInt(
+    env.CONTROL_PLANE_INTAKE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS,
+    30,
+    "CONTROL_PLANE_INTAKE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS",
+    5,
+    3600,
+  );
+  const agentSpaceEnv = env.AGENT_SPACE_ENV?.trim() || "";
+  const appVersion = env.APP_VERSION?.trim() || null;
+  const backupEnabled = parseBool(env.BACKUP_ENABLED, false);
+  const backupIntervalHours = parseBoundedInt(
+    env.BACKUP_INTERVAL_HOURS,
+    24,
+    "BACKUP_INTERVAL_HOURS",
+    1,
+    168,
+  );
+  const backupRetentionCount = parseBoundedInt(
+    env.BACKUP_RETENTION_COUNT,
+    7,
+    "BACKUP_RETENTION_COUNT",
+    1,
+    365,
+  );
+  const backupIncludeLogs = parseBool(env.BACKUP_INCLUDE_LOGS, false);
+  const backupOnStartup = parseBool(env.BACKUP_ON_STARTUP, true);
+  const backupRoot = resolve(
+    env.BACKUP_ROOT?.trim() || resolve(agentSpaceHome, "backups"),
+  );
+  const backupAcceptNoBackup = parseBool(env.BACKUP_ACCEPT_NO_BACKUP, false);
+  const backupDatabaseUrl = env.BACKUP_DATABASE_URL?.trim() || null;
 
   const config: ControlPlaneConfig = {
     host,
@@ -725,22 +486,39 @@ export function loadConfig(env: RawEnv = process.env): ControlPlaneConfig {
     enableNotificationWebhookEgress,
     notificationWebhookAllowlist,
     notificationMaxPayloadBytes,
-    providersAuthority,
-    providersCredentialsAuthority,
-    runsAuthority,
-    policyAuthority,
-    proposalsAuthority,
-    sessionsAuthority,
-    chatTurnAuthority,
-    contextAuthority,
-    memoryAuthority,
-    memoryApplyAuthority,
-    providersShadowCompare,
     databaseUrl,
     agentSpaceHome,
     cliToolsRoot,
+    workspaceRoot,
     sandboxRoot,
+    artifactStorageRoot,
+    deployerSocketPath,
     internalToken,
+    googleClientId,
+    googleClientSecret,
+    googleRedirectUri,
+    frontendUrl,
+    sessionExpireDays,
+    debug,
+    dailyReportSchedulerEnabled,
+    dailyReportSchedulerIntervalSeconds,
+    automationSchedulerEnabled,
+    automationSchedulerIntervalSeconds,
+    memoryAccessLogRetentionEnabled,
+    memoryAccessLogRetentionDays,
+    memoryAccessLogPruneIntervalSeconds,
+    intakeExtractionSchedulerEnabled,
+    intakeExtractionSchedulerIntervalSeconds,
+    agentSpaceEnv,
+    appVersion,
+    backupEnabled,
+    backupIntervalHours,
+    backupRetentionCount,
+    backupIncludeLogs,
+    backupOnStartup,
+    backupRoot,
+    backupAcceptNoBackup,
+    backupDatabaseUrl,
   };
   validateConfigSemantics(config);
   return config;
@@ -761,23 +539,20 @@ export function describeConfig(config: ControlPlaneConfig): string {
     `notificationWebhookEgress=${config.enableNotificationWebhookEgress}`,
     `notificationWebhookAllowlistCount=${config.notificationWebhookAllowlist.length}`,
     `notificationMaxPayloadBytes=${config.notificationMaxPayloadBytes}`,
-    `providersAuthority=${config.providersAuthority}`,
-    `providersCredentialsAuthority=${config.providersCredentialsAuthority}`,
-    `runsAuthority=${config.runsAuthority}`,
-    `policyAuthority=${config.policyAuthority}`,
-    `proposalsAuthority=${config.proposalsAuthority}`,
-    `sessionsAuthority=${config.sessionsAuthority}`,
-    `chatTurnAuthority=${config.chatTurnAuthority}`,
-    `contextAuthority=${config.contextAuthority}`,
-    `memoryAuthority=${config.memoryAuthority}`,
-    `memoryApplyAuthority=${config.memoryApplyAuthority}`,
-    `providersShadowCompare=${config.providersShadowCompare}`,
     `agentSpaceHome=${config.agentSpaceHome}`,
     `cliToolsRoot=${config.cliToolsRoot}`,
+    `workspaceRoot=${config.workspaceRoot}`,
     `sandboxRoot=${config.sandboxRoot}`,
+    `artifactStorageRoot=${config.artifactStorageRoot}`,
+    `deployerSocketPath=${config.deployerSocketPath}`,
     `internalTokenConfigured=${config.internalToken !== null}`,
+    `googleOAuthConfigured=${Boolean(config.googleClientId && config.googleClientSecret)}`,
+    `frontendUrl=${config.frontendUrl}`,
+    `sessionExpireDays=${config.sessionExpireDays}`,
+    `debug=${config.debug}`,
     // The connection string may embed a password — never print it.
     `databaseUrlConfigured=${config.databaseUrl !== null}`,
+    `backupDatabaseUrlConfigured=${config.backupDatabaseUrl !== null}`,
   ].join(" ");
 }
 
@@ -786,7 +561,7 @@ export function describeConfig(config: ControlPlaneConfig): string {
 // ---------------------------------------------------------------------------
 
 /** Bumped when the shape of {@link ControlPlaneConfig} changes incompatibly. */
-export const CONFIG_SCHEMA_VERSION = 8 as const;
+export const CONFIG_SCHEMA_VERSION = 17 as const;
 
 /**
  * An immutable, hash-identified view of the validated config. Built once at
@@ -796,7 +571,7 @@ export const CONFIG_SCHEMA_VERSION = 8 as const;
  */
 export interface ConfigSnapshot {
   schema_version: typeof CONFIG_SCHEMA_VERSION;
-  /** SHA-256 hex of the canonical (key-sorted) config JSON. No secrets exist in this config. */
+  /** SHA-256 hex of the canonical (key-sorted) config JSON with secrets redacted. */
   content_hash: string;
   /** ISO-8601 timestamp of when this snapshot was created. */
   loaded_at: string;
@@ -807,7 +582,10 @@ function canonicalConfigJson(config: ControlPlaneConfig): string {
   const record = config as unknown as Record<string, unknown>;
   const sorted: Record<string, unknown> = {};
   for (const key of Object.keys(record).sort()) {
-    sorted[key] = key === "internalToken" ? "<redacted>" : record[key];
+    sorted[key] =
+      key === "internalToken" || key === "googleClientSecret" || key === "backupDatabaseUrl"
+        ? "<redacted>"
+        : record[key];
   }
   return JSON.stringify(sorted);
 }
@@ -883,98 +661,30 @@ export function collectConfigDiagnostics(
           "Run-event stream poll interval is greater than or equal to the Python request timeout",
       });
     }
-    if (
-      config.databaseUrl !== null &&
-      !config.providersShadowCompare &&
-      config.providersAuthority === "python" &&
-      config.providersCredentialsAuthority === "python" &&
-      config.runsAuthority === "python" &&
-      config.policyAuthority === "python" &&
-      config.proposalsAuthority === "python" &&
-      config.sessionsAuthority === "python" &&
-      config.chatTurnAuthority === "python" &&
-      config.memoryAuthority === "python" &&
-      config.memoryApplyAuthority === "python"
-    ) {
-      diagnostics.push({
-        severity: "info",
-        code: "database_url_inactive",
-        message:
-          "CONTROL_PLANE_DATABASE_URL is configured but neither providers shadow compare nor TS read authority is enabled",
-      });
-    }
-    if (config.providersAuthority === "ts") {
-      diagnostics.push({
-        severity: "info",
-        code: "providers_read_authority_ts",
-        message:
-          "Provider read routes are served by the TS authority; confirm the ownership decision is recorded before using this in a shared stack",
-      });
-    }
-    if (config.providersCredentialsAuthority === "ts") {
-      diagnostics.push({
-        severity: "info",
-        code: "providers_credentials_authority_ts",
-        message:
-          "Provider commands and credential routes are served by the TS authority; confirm the ownership decision is recorded before using this in a shared stack",
-      });
-    }
-    if (config.runsAuthority === "ts") {
-      diagnostics.push({
-        severity: "info",
-        code: "runs_authority_ts",
-        message:
-          "Run execution commands are served by the TS authority; run read models still use Python unless separately routed",
-      });
-    }
-    if (config.policyAuthority === "ts") {
-      diagnostics.push({
-        severity: "info",
-        code: "policy_authority_ts",
-        message:
-          "Policy enforcement ports are served by the TS authority; confirm the ownership decision is recorded before using this in a shared stack",
-      });
-    }
-    if (config.proposalsAuthority === "ts") {
-      diagnostics.push({
-        severity: "info",
-        code: "proposals_authority_ts",
-        message:
-          "Proposal review routes are served by the TS authority; proposal apply still dispatches through the internal Python proposal port",
-      });
-    }
-    if (config.sessionsAuthority === "ts") {
-      diagnostics.push({
-        severity: "info",
-        code: "sessions_authority_ts",
-        message:
-          "Public session routes (list/get/create sessions, list/add messages) and session_summary.get_latest are served by the TS authority; session reflect and summary condense remain Python-owned",
-      });
-    }
-    if (config.chatTurnAuthority === "ts") {
-      diagnostics.push({
-        severity: "info",
-        code: "chat_turn_authority_ts",
-        message:
-          "Personal Assistant chat turns are served by the TS authority; context/run preparation still dispatches through the internal Python chat port",
-      });
-    }
-    if (config.memoryAuthority === "ts") {
-      diagnostics.push({
-        severity: "info",
-        code: "memory_authority_ts",
-        message:
-          "Memory read routes and public memory proposal creation are served by the TS authority; active-memory apply remains proposal-gated",
-      });
-    }
-    if (config.memoryApplyAuthority === "ts") {
-      diagnostics.push({
-        severity: "info",
-        code: "memory_apply_authority_ts",
-        message:
-          "Accepted memory proposals are applied by the TS authority (gated through the Python memory-apply-gate port); run/grant-egress and workspace/agent-scope proposals fail closed to Python",
-      });
-    }
+    diagnostics.push({
+      severity: "info",
+      code: "proposals_ts_authority",
+      message:
+        "Proposal review and supported proposal apply routes are served by the fixed TS authority",
+    });
+    diagnostics.push({
+      severity: "info",
+      code: "chat_turn_ts_authority",
+      message:
+        "Personal Assistant chat turns are served by the fixed TS authority",
+    });
+    diagnostics.push({
+      severity: "info",
+      code: "context_assembly_ts_authority",
+      message:
+        "Chat-path and full-run context assembly are served by the fixed TS authority",
+    });
+    diagnostics.push({
+      severity: "info",
+      code: "memory_ts_authority",
+      message:
+        "Memory read routes, public memory proposal creation, and supported active-memory apply are served by the fixed TS authority",
+    });
   }
   return diagnostics;
 }

@@ -4,8 +4,7 @@
  * TS port of the Python `policy` enforcement context: the canonical action
  * registry, hard-invariant guard, rule engine, decision orchestration, and the
  * durable audit writer. Exposes service-authenticated internal enforcement
- * ports when `policyAuthority === "ts"`; otherwise inert (Python `PolicyGateway`
- * stays the local authority).
+ * ports as the single policy decision authority.
  */
 
 import type { ControlPlaneModule } from "../../gateway/routeRegistry";

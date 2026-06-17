@@ -3,7 +3,7 @@ import stat
 from pathlib import Path
 from typing import Optional
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Convenience default for dev/test only. Production must set DATABASE_URL
 # explicitly — the after-validator below rejects this default when
@@ -313,21 +313,6 @@ class Settings(BaseSettings):
     # Path to the credential profile config file
     cli_credentials_config: str = str(paths.cli_credentials_config)
 
-    # Provider commands and credential resolution authority.
-    # "python" keeps the existing local provider/credential implementation.
-    # "ts" makes Python runtime call sites use the control-plane internal ports.
-    control_plane_providers_credentials_authority: str = "python"
-    # Policy enforcement authority. "ts" routes PolicyPort decisions and durable
-    # audit writes through the control-plane internal policy ports.
-    control_plane_policy_authority: str = "python"
-    # Public proposal review/read authority. "ts" registers proposal routes in
-    # control-plane and dispatches Python-owned apply transactions through the
-    # internal proposal port.
-    control_plane_proposals_authority: str = "python"
-    # Public sessions command authority. "ts" makes the control plane serve
-    # list/get/create sessions and list/add messages; the matching Python HTTP
-    # routes fail closed (410). Session reflect remains Python-owned.
-    control_plane_sessions_authority: str = "python"
     # Personal Assistant chat-turn authority. "ts" makes the control plane own
     # /agents/{agent_id}/chat while Python exposes only explicit preparation
     # ports for still-Python-owned context/run creation steps.
@@ -435,10 +420,14 @@ class Settings(BaseSettings):
     # Safety guard for prod-like environments: when AGENT_SPACE_ENV=prod and
     # BACKUP_ENABLED is false, startup fails fast unless this is explicitly set
     # true to acknowledge running without automatic backups. Non-prod envs only
-    # emit a warning. See app.backups.guard.enforce_backup_policy.
+    # emit a warning. Enforced by the TypeScript control plane at startup.
     backup_accept_no_backup: bool = False
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 settings = Settings()

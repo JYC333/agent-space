@@ -54,58 +54,26 @@ export function computeFeatures(config: ControlPlaneConfig): string[] {
     "run_event_sse_stream",
     "frontend_support_read_model_facades",
     "runtime_tools_controlled_installer",
+    "native_identity_auth",
+    "native_google_oauth",
+    "native_space_membership",
+    "api_keys_feature_gate",
+    "space_default_seeding",
+    "runtime_adapter_catalog",
+    "providers_read_ts_authority",
+    "providers_credentials_ts_authority",
+    "policy_enforcement_ts_authority",
+    "sessions_ts_authority",
+    "runs_ts_authority",
+    "artifacts_ts_authority",
+    "ts_agent_runtime_host",
     "config_semantic_validation",
     "notification_webhook_egress_policy_gate",
   ];
-  features.push(
-    config.providersAuthority === "ts"
-      ? "providers_read_ts_authority"
-      : "providers_readonly_python_facade",
-  );
-  features.push(
-    config.providersCredentialsAuthority === "ts"
-      ? "providers_credentials_ts_authority"
-      : "providers_credentials_python_authority",
-  );
-  features.push(
-    config.runsAuthority === "ts"
-      ? "runs_commands_ts_authority"
-      : "runs_commands_python_authority",
-  );
-  features.push(
-    config.policyAuthority === "ts"
-      ? "policy_enforcement_ts_authority"
-      : "policy_enforcement_python_authority",
-  );
-  features.push(
-    config.proposalsAuthority === "ts"
-      ? "proposals_review_ts_authority"
-      : "proposals_review_python_authority",
-  );
-  features.push(
-    config.sessionsAuthority === "ts"
-      ? "sessions_ts_authority"
-      : "sessions_python_authority",
-  );
-  features.push(
-    config.chatTurnAuthority === "ts"
-      ? "chat_turn_ts_authority"
-      : "chat_turn_python_authority",
-  );
-  features.push(
-    config.contextAuthority === "ts"
-      ? "context_assembly_ts_authority"
-      : "context_assembly_python_authority",
-  );
-  features.push(
-    config.memoryAuthority === "ts"
-      ? "memory_ts_authority"
-      : "memory_python_authority",
-  );
-  if (config.providersCredentialsAuthority === "ts") {
-    features.push("ts_agent_runtime_host");
-  }
-  if (config.providersShadowCompare) features.push("providers_read_shadow_compare");
+  features.push("proposals_ts_authority");
+  features.push("chat_turn_ts_authority");
+  features.push("context_assembly_ts_authority");
+  features.push("memory_ts_authority");
   if (config.enablePythonFallbackProxy) features.push("python_fallback_proxy");
   if (config.enableNotificationWebhookEgress) {
     features.push("notification_webhook_egress");

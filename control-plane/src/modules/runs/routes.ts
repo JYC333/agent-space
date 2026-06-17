@@ -3,13 +3,31 @@ import type { ModuleContext } from "../../gateway/routeRegistry";
 import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { checkInternalToken } from "../../gateway/internalAuth";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
-import { forwardPythonAuthorityResponse } from "../../ports/pythonHttp";
-import { introspectIdentity } from "../providers/identity";
+import { introspectIdentity } from "../auth/identity";
 import { PgRunRepository, type RunRecord } from "./repository";
 import { RunOrchestrationService } from "./orchestrationService";
 import { RunPythonContextPortClient } from "./pythonContextPorts";
 import { RunMaterializationService } from "./materializationService";
 import { sharedCliProcessRegistry } from "./processRegistry";
+import { ContextPrepareService } from "../context";
+import { PgCodePatchCollector, PgWorkspaceManager } from "../workspaces";
+import {
+  NonTerminalRunError,
+  PostRunFinalizationService,
+  RunNotFoundError,
+} from "./finalizationService";
+import {
+  artifactSummaryToOut,
+  canReadRun,
+  proposalSummaryToOut,
+  runEvaluationToOut,
+  runEventToOut,
+  runFinalizationToOut,
+  runLineageToOut,
+  runStatusToOut,
+  runStepToOut,
+  runToOut,
+} from "./runReadModel";
 
 interface RunsCommandServices {
   orchestration: Pick<RunOrchestrationService, "executeRun" | "cancelRun">;
@@ -107,19 +125,21 @@ function commandServices(context: ModuleContext): RunsCommandServices {
   const repository = PgRunRepository.fromConfig(context.config);
   const contextPorts = new RunPythonContextPortClient(context.config);
   const materializer = new RunMaterializationService(contextPorts);
+  const contextPreparer = new ContextPrepareService(context.config);
   return {
     repository,
     orchestration: new RunOrchestrationService(context.config, repository, {
       materializer,
       contextPorts,
+      contextPreparer,
+      workspaceManager: PgWorkspaceManager.fromConfig(context.config),
+      codePatchCollector: PgCodePatchCollector.fromConfig(context.config),
       processRegistry: sharedCliProcessRegistry,
     }),
   };
 }
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
-  if (context.config.runsAuthority !== "ts") return;
-
   app.post("/api/v1/runs/:runId/execute", async (request, reply) => {
     const identity = await resolveIdentity(context, request, reply);
     if (!identity) return reply;
@@ -142,12 +162,11 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       command_source: "http",
     });
     if (readResponseOverride) return readResponseOverride(runId, request, reply);
-    return forwardPythonAuthorityResponse(
-      context.config,
-      request,
-      reply,
-      `/api/v1/runs/${encodeURIComponent(runId)}`,
-    );
+    const run = await services.repository.getRun(identity.spaceId, runId);
+    if (!run || !canReadRun(run, identity.userId)) {
+      return reply.code(404).send({ detail: "Run not found in this space" });
+    }
+    return reply.send(runToOut(run));
   });
 
   // Service-authenticated internal execute for Python-owned synchronous
@@ -194,6 +213,137 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
     return reply.send(stopResponse(run, result.status, !result.skipped));
   });
+
+  app.get("/api/v1/runs", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    const q = query(request);
+    const repository = PgRunRepository.fromConfig(context.config);
+    const runs = await repository.listRuns({
+      space_id: identity.spaceId,
+      user_id: identity.userId,
+      status: q.status ?? null,
+      mode: q.mode ?? null,
+      agent_id: q.agent_id ?? null,
+      workspace_id: q.workspace_id ?? null,
+      project_id: q.project_id ?? null,
+      limit: boundedInt(q.limit, 50, 1, 200),
+      offset: boundedInt(q.offset, 0, 0, Number.MAX_SAFE_INTEGER),
+    });
+    return reply.send(
+      await Promise.all(runs.map((run) => runToOutWithProvider(repository, run))),
+    );
+  });
+
+  app.get("/api/v1/runs/:runId/status", async (request, reply) => {
+    const result = await visibleRun(context, request, reply);
+    if (!result) return reply;
+    return reply.send(runStatusToOut(result.run));
+  });
+
+  app.get("/api/v1/runs/:runId/trace", async (request, reply) => {
+    const result = await visibleRun(context, request, reply);
+    if (!result) return reply;
+    const { repository, run } = result;
+    const [steps, events, artifacts, proposals, children] = await Promise.all([
+      repository.listRunSteps(run.space_id, run.id),
+      repository.listRunEvents(run.space_id, run.id),
+      repository.listArtifactSummaries(run.space_id, run.id),
+      repository.listProposalSummaries(run.space_id, run.id),
+      repository.listChildRuns(run.space_id, run.id),
+    ]);
+    return reply.send({
+      run: await runToOutWithProvider(repository, run),
+      agent: null,
+      agent_version: null,
+      model_provider: null,
+      context_snapshot: null,
+      steps: steps.map(runStepToOut),
+      events: events.map(runEventToOut),
+      artifacts: artifacts.map(artifactSummaryToOut),
+      proposals: proposals.map((proposal) => proposalSummaryToOut(proposal)),
+      parent: null,
+      children: children.map(runLineageToOut),
+    });
+  });
+
+  app.post("/api/v1/runs/:runId/finalize", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    const runId = params(request).runId ?? "";
+    const repository = PgRunRepository.fromConfig(context.config);
+    try {
+      const finalization = await new PostRunFinalizationService(repository).finalize(
+        runId,
+        identity.spaceId,
+      );
+      return reply.send(runFinalizationToOut(finalization));
+    } catch (error) {
+      if (error instanceof RunNotFoundError) {
+        return reply.code(404).send({ detail: error.message });
+      }
+      if (error instanceof NonTerminalRunError) {
+        return reply.code(422).send({ detail: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get("/api/v1/runs/:runId/finalization", async (request, reply) => {
+    const result = await visibleRun(context, request, reply);
+    if (!result) return reply;
+    const finalization = await result.repository.getLatestRunFinalization(
+      result.run.space_id,
+      result.run.id,
+    );
+    if (!finalization) {
+      return reply.code(404).send({
+        detail: `No finalization found for run '${result.run.id}'. POST /runs/${result.run.id}/finalize first.`,
+      });
+    }
+    return reply.send(runFinalizationToOut(finalization));
+  });
+
+  app.get("/api/v1/runs/:runId/finalizations", async (request, reply) => {
+    const result = await visibleRun(context, request, reply);
+    if (!result) return reply;
+    const finalizations = await result.repository.listRunFinalizations(
+      result.run.space_id,
+      result.run.id,
+    );
+    return reply.send(finalizations.map(runFinalizationToOut));
+  });
+
+  app.get("/api/v1/runs/:runId/evaluation", async (request, reply) => {
+    const result = await visibleRun(context, request, reply);
+    if (!result) return reply;
+    const evaluation = await result.repository.getLatestRunEvaluation(
+      result.run.space_id,
+      result.run.id,
+    );
+    if (!evaluation) {
+      return reply.code(404).send({
+        detail: `No evaluation found for run '${result.run.id}'. POST /runs/${result.run.id}/finalize first.`,
+      });
+    }
+    return reply.send(runEvaluationToOut(evaluation));
+  });
+
+  app.get("/api/v1/runs/:runId/evaluations", async (request, reply) => {
+    const result = await visibleRun(context, request, reply);
+    if (!result) return reply;
+    const evaluations = await result.repository.listRunEvaluations(
+      result.run.space_id,
+      result.run.id,
+    );
+    return reply.send(evaluations.map(runEvaluationToOut));
+  });
+
+  app.get("/api/v1/runs/:runId", async (request, reply) => {
+    const result = await visibleRun(context, request, reply);
+    if (!result) return reply;
+    return reply.send(await runToOutWithProvider(result.repository, result.run));
+  });
 }
 
 function stopResponse(
@@ -216,4 +366,44 @@ function stopResponse(
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+async function visibleRun(
+  context: ModuleContext,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<{ repository: PgRunRepository; run: RunRecord } | null> {
+  const identity = await resolveIdentity(context, request, reply);
+  if (!identity) return null;
+  const repository = PgRunRepository.fromConfig(context.config);
+  const runId = params(request).runId ?? "";
+  const run = await repository.getRun(identity.spaceId, runId);
+  if (!run || !canReadRun(run, identity.userId)) {
+    reply.code(404).send({ detail: "Run not found in this space" });
+    return null;
+  }
+  return { repository, run };
+}
+
+async function runToOutWithProvider(
+  repository: PgRunRepository,
+  run: RunRecord,
+): Promise<Record<string, unknown>> {
+  const provider = await repository.getModelProviderSummary(
+    run.space_id,
+    run.model_provider_id,
+  );
+  return runToOut(run, provider);
+}
+
+function boundedInt(
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (value == null || value.trim() === "") return fallback;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
 }

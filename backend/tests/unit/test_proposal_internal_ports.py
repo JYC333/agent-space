@@ -41,7 +41,6 @@ def test_internal_accept_does_not_leak_memory_apply_ownership_for_invisible_prop
     monkeypatch,
 ):
     monkeypatch.setattr(settings, "control_plane_internal_token", "internal-token")
-    monkeypatch.setenv("CONTROL_PLANE_MEMORY_APPLY_AUTHORITY", "ts")
 
     class FakeProposalService:
         def __init__(self, db):
@@ -77,7 +76,6 @@ def test_internal_accept_fails_closed_for_visible_memory_proposal_when_ts_apply(
     monkeypatch,
 ):
     monkeypatch.setattr(settings, "control_plane_internal_token", "internal-token")
-    monkeypatch.setenv("CONTROL_PLANE_MEMORY_APPLY_AUTHORITY", "ts")
 
     class FakeProposalService:
         def __init__(self, db):

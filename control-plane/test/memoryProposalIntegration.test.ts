@@ -33,11 +33,7 @@ beforeAll(async () => {
     repo = new PgMemoryProposalRepository(
       pool,
       loadConfig({
-        CONTROL_PLANE_POLICY_AUTHORITY: "ts",
-        CONTROL_PLANE_PROPOSALS_AUTHORITY: "ts",
-        CONTROL_PLANE_MEMORY_AUTHORITY: "ts",
         CONTROL_PLANE_DATABASE_URL: container.getConnectionUri(),
-        CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",
       }),
     );
     available = true;

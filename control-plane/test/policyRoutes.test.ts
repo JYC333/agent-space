@@ -11,7 +11,6 @@ afterEach(async () => {
 
 function tsPolicyConfig() {
   return loadConfig({
-    CONTROL_PLANE_POLICY_AUTHORITY: "ts",
     CONTROL_PLANE_ENABLE_PYTHON_FALLBACK_PROXY: "false",
     CONTROL_PLANE_DATABASE_URL: "postgresql://cp@db:5432/agent_space",
     CONTROL_PLANE_INTERNAL_TOKEN: "internal-token",

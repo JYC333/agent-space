@@ -48,7 +48,7 @@ This document describes current capability lines and known future risks. It is o
 
 ### 4. Runtime / Adapter Expansion
 
-**Current state:** `app.runtimes` is canonical. Registered adapters: `capability`, `model_api`, `ts_agent_host`, `claude_code`, `codex_cli`; `opencode`, `gemini_cli`, and `custom` remain planned/disabled. Claude execution goes through the `claude_code` RuntimeAdapterSpec. `app.agents` contains Agent/AgentVersion CRUD and built-in seeder; new local CLI runtimes should start as RuntimeAdapterSpec entries.
+**Current state:** the TS `runtimeAdapters` catalog is canonical for TS-owned execution. Registered adapters: `capability`, `model_api`, `ts_agent_host`, `claude_code`, `codex_cli`; `opencode`, `gemini_cli`, and `custom` remain planned/disabled. Claude execution goes through the `claude_code` RuntimeAdapterSpec. `app.agents` contains Agent/AgentVersion CRUD and built-in seeder; new local CLI runtimes should start as RuntimeAdapterSpec entries.
 
 `RunEvent` evidence spine is fully implemented. `RunExecutionService` emits structured event types covering the full execution lifecycle: context_compiled, runtime_selected, sandbox_created, adapter_invoked, adapter_completed, artifact_ingested (produced paths, output_json artifacts, runtime_output text), patch_collected, validation_started/completed, proposal_created (worktree code_patch and output_json proposals), evaluation_created. `RunEvaluationService` consumes RunEvent as the sole structured evidence source — `output_json.materialization_errors` is a debug field and is never parsed as classifier evidence. `GET /api/v1/runs/{id}/events` returns paginated RunEvent records with DB-level event_type/status filtering.
 

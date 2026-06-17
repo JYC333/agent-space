@@ -1,10 +1,11 @@
 -- Schema fixture for control-plane runs integration tests (testcontainers).
 -- SOURCE OF TRUTH: backend alembic migrations / backend/app/models.py.
--- Generated via pg_dump -s of the dev PostgreSQL for the 7 tables the TS runs
+-- Generated via pg_dump -s of the dev PostgreSQL for the tables the TS runs
 -- repositories touch. Cross-table FOREIGN KEYs are stripped so it loads into an
 -- empty DB; CHECK / UNIQUE / column-type constraints (the ones that catch real
--- SQL bugs) are kept verbatim. Regenerate when these tables' columns/constraints
--- change: see control-plane/test/integration/README or runsIntegration.test.ts.
+-- SQL bugs) are kept verbatim where this fixture carries the full table surface.
+-- Regenerate when these tables' columns/constraints change: see
+-- control-plane/test/integration/README or runsIntegration.test.ts.
 
 
 CREATE TABLE public.actors (
@@ -21,6 +22,65 @@ CREATE TABLE public.actors (
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_actors_actor_type CHECK (((actor_type)::text = ANY ((ARRAY['user'::character varying, 'agent'::character varying, 'system'::character varying, 'automation'::character varying, 'connector'::character varying, 'integration'::character varying, 'service'::character varying, 'job'::character varying])::text[]))),
     CONSTRAINT ck_actors_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'disabled'::character varying, 'archived'::character varying])::text[])))
+);
+
+CREATE TABLE public.agent_versions (
+    id character varying(36) NOT NULL,
+    agent_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    version_label character varying(64) NOT NULL,
+    model_provider_id character varying(36),
+    model_name character varying(256),
+    system_prompt text,
+    model_config_json jsonb NOT NULL,
+    runtime_config_json jsonb NOT NULL,
+    context_policy_json jsonb NOT NULL,
+    memory_policy_json jsonb NOT NULL,
+    capabilities_json jsonb NOT NULL,
+    tool_permissions_json jsonb NOT NULL,
+    runtime_policy_json jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL
+);
+
+-- Minimal model_providers: the columns run-create model-config resolution reads
+-- (space default provider lookup). SOURCE OF TRUTH: backend/app/models.py.
+CREATE TABLE public.model_providers (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    name character varying(256),
+    provider_type character varying(64),
+    default_model character varying(256),
+    enabled boolean DEFAULT true NOT NULL,
+    credential_id character varying(36),
+    capabilities_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    config_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL
+);
+
+CREATE TABLE public.agents (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
+    name character varying(256) NOT NULL,
+    status character varying(32) NOT NULL,
+    current_version_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    visibility character varying(32) NOT NULL,
+    CONSTRAINT ck_agents_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'inactive'::character varying, 'archived'::character varying, 'disabled'::character varying])::text[])))
+);
+
+CREATE TABLE public.context_snapshots (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_refs_json jsonb NOT NULL,
+    compiled_summary text,
+    token_estimate integer,
+    created_at timestamp with time zone NOT NULL,
+    agent_id character varying(36),
+    session_id character varying(36),
+    run_id character varying(36),
+    request_json jsonb
 );
 
 CREATE TABLE public.job_events (
@@ -59,6 +119,14 @@ CREATE TABLE public.jobs (
     CONSTRAINT ck_jobs_status CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'claimed'::character varying, 'running'::character varying, 'completed'::character varying, 'failed'::character varying, 'cancelled'::character varying])::text[])))
 );
 
+-- Minimal artifacts table for post-run finalization's task-evaluation bridge.
+CREATE TABLE public.artifacts (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    run_id character varying(36),
+    created_at timestamp with time zone NOT NULL
+);
+
 CREATE TABLE public.run_events (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
@@ -89,6 +157,48 @@ CREATE TABLE public.run_execution_locks (
     locked_at timestamp with time zone NOT NULL,
     worker_id character varying(64) NOT NULL,
     job_id character varying(36)
+);
+
+CREATE TABLE public.run_evaluations (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    run_id character varying(36) NOT NULL,
+    evaluator_type character varying(64) DEFAULT 'deterministic_harness'::character varying NOT NULL,
+    evaluator_version character varying(64) DEFAULT 'harness_eval.v1'::character varying NOT NULL,
+    outcome_status character varying(32) NOT NULL,
+    failure_layer character varying(32),
+    failure_reason_code character varying(128),
+    trajectory_status character varying(32) NOT NULL,
+    evidence_json jsonb,
+    rule_trace_json jsonb,
+    notes text,
+    evaluated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_run_evaluations_failure_layer CHECK (((failure_layer IS NULL) OR ((failure_layer)::text = ANY ((ARRAY['context'::character varying, 'sandbox'::character varying, 'runtime'::character varying, 'tool'::character varying, 'validation'::character varying, 'policy'::character varying, 'task_spec'::character varying, 'orchestration'::character varying, 'evaluator'::character varying, 'unknown'::character varying])::text[])))),
+    CONSTRAINT ck_run_evaluations_outcome_status CHECK (((outcome_status)::text = ANY ((ARRAY['passed'::character varying, 'failed'::character varying, 'partial'::character varying, 'unknown'::character varying])::text[]))),
+    CONSTRAINT ck_run_evaluations_trajectory_status CHECK (((trajectory_status)::text = ANY ((ARRAY['acceptable'::character varying, 'incomplete'::character varying, 'unsafe'::character varying, 'insufficient_evidence'::character varying])::text[])))
+);
+
+CREATE TABLE public.run_finalizations (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    run_id character varying(36) NOT NULL,
+    finalizer_version character varying(64) DEFAULT 'post_run_finalization.v1'::character varying NOT NULL,
+    status character varying(32) NOT NULL,
+    run_evaluation_id character varying(36),
+    task_evaluation_id character varying(36),
+    outcome_status character varying(32),
+    failure_layer character varying(32),
+    failure_reason_code character varying(128),
+    trajectory_status character varying(32),
+    skipped_reasons_json jsonb,
+    error_json jsonb,
+    metadata_json jsonb,
+    finalized_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_run_finalizations_failure_layer CHECK (((failure_layer IS NULL) OR ((failure_layer)::text = ANY ((ARRAY['context'::character varying, 'sandbox'::character varying, 'runtime'::character varying, 'tool'::character varying, 'validation'::character varying, 'policy'::character varying, 'task_spec'::character varying, 'orchestration'::character varying, 'evaluator'::character varying, 'unknown'::character varying])::text[])))),
+    CONSTRAINT ck_run_finalizations_outcome_status CHECK (((outcome_status IS NULL) OR ((outcome_status)::text = ANY ((ARRAY['passed'::character varying, 'failed'::character varying, 'partial'::character varying, 'unknown'::character varying])::text[])))),
+    CONSTRAINT ck_run_finalizations_status CHECK (((status)::text = ANY ((ARRAY['completed'::character varying, 'failed'::character varying])::text[]))),
+    CONSTRAINT ck_run_finalizations_trajectory_status CHECK (((trajectory_status IS NULL) OR ((trajectory_status)::text = ANY ((ARRAY['acceptable'::character varying, 'incomplete'::character varying, 'unsafe'::character varying, 'insufficient_evidence'::character varying])::text[]))))
 );
 
 CREATE TABLE public.run_steps (
@@ -182,8 +292,57 @@ CREATE TABLE public.runs (
     CONSTRAINT ck_runs_trust_level CHECK (((trust_level IS NULL) OR ((trust_level)::text = ANY ((ARRAY['high'::character varying, 'medium'::character varying, 'low'::character varying, 'unknown'::character varying])::text[]))))
 );
 
+-- Minimal task-domain tables for post-run finalization's task-evaluation bridge.
+CREATE TABLE public.tasks (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    title character varying(512) NOT NULL,
+    status character varying(32) NOT NULL,
+    deleted_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
+CREATE TABLE public.task_runs (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    task_id character varying(36) NOT NULL,
+    run_id character varying(36) NOT NULL,
+    role character varying(32) NOT NULL,
+    created_at timestamp with time zone NOT NULL
+);
+
+CREATE TABLE public.task_evaluations (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    task_id character varying(36) NOT NULL,
+    run_id character varying(36),
+    run_evaluation_id character varying(36),
+    evaluator_type character varying(64) NOT NULL,
+    score double precision,
+    confidence double precision,
+    summary text,
+    checklist_json jsonb,
+    known_issues_json jsonb,
+    evidence_artifact_ids jsonb,
+    recommendation character varying(64),
+    created_at timestamp with time zone NOT NULL
+);
+
 ALTER TABLE ONLY public.actors
     ADD CONSTRAINT actors_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.agent_versions
+    ADD CONSTRAINT agent_versions_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.agents
+    ADD CONSTRAINT agents_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.artifacts
+    ADD CONSTRAINT artifacts_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.context_snapshots
+    ADD CONSTRAINT context_snapshots_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.job_events
     ADD CONSTRAINT job_events_pkey PRIMARY KEY (id);
@@ -197,17 +356,38 @@ ALTER TABLE ONLY public.run_events
 ALTER TABLE ONLY public.run_execution_locks
     ADD CONSTRAINT run_execution_locks_pkey PRIMARY KEY (run_id);
 
+ALTER TABLE ONLY public.run_evaluations
+    ADD CONSTRAINT run_evaluations_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.run_finalizations
+    ADD CONSTRAINT run_finalizations_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY public.run_steps
     ADD CONSTRAINT run_steps_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.runs
     ADD CONSTRAINT runs_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.tasks
+    ADD CONSTRAINT tasks_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.task_runs
+    ADD CONSTRAINT task_runs_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.task_evaluations
+    ADD CONSTRAINT task_evaluations_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY public.run_events
     ADD CONSTRAINT uq_run_events_space_run_event_index UNIQUE (space_id, run_id, event_index);
 
 ALTER TABLE ONLY public.run_steps
     ADD CONSTRAINT uq_run_steps_run_step_index UNIQUE (run_id, step_index);
+
+ALTER TABLE ONLY public.run_finalizations
+    ADD CONSTRAINT uq_run_finalizations_run_version UNIQUE (run_id, finalizer_version);
+
+ALTER TABLE ONLY public.task_runs
+    ADD CONSTRAINT uq_task_runs_task_run UNIQUE (task_id, run_id);
 
 CREATE INDEX ix_actors_actor_type ON public.actors USING btree (actor_type);
 

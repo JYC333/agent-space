@@ -9,6 +9,10 @@ import {
 } from "@testcontainers/postgresql";
 import { PgRunRepository } from "../src/modules/runs/repository";
 import { PgRunJobRepository } from "../src/modules/runs/jobRepository";
+import {
+  NonTerminalRunError,
+  PostRunFinalizationService,
+} from "../src/modules/runs/finalizationService";
 
 // Real-PostgreSQL integration tests for the TS runs repositories. The unit
 // suites use a FakeDb that does not execute SQL, so they cannot catch parameter
@@ -52,9 +56,41 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    "TRUNCATE actors, runs, run_steps, run_events, run_execution_locks, jobs, job_events CASCADE",
+    "TRUNCATE actors, agents, agent_versions, context_snapshots, runs, run_steps, run_events, run_execution_locks, run_evaluations, run_finalizations, jobs, job_events, artifacts, tasks, task_runs, task_evaluations CASCADE",
   );
 });
+
+async function seedAgent(
+  overrides: Partial<{
+    agent_id: string;
+    version_id: string;
+    space_id: string;
+    status: string;
+    system_prompt: string | null;
+  }> = {},
+): Promise<{ agentId: string; versionId: string }> {
+  const agentId = overrides.agent_id ?? randomUUID();
+  const versionId = overrides.version_id ?? randomUUID();
+  const spaceId = overrides.space_id ?? "space-1";
+  const now = new Date().toISOString();
+  await pool!.query(
+    `INSERT INTO agents (
+       id, space_id, owner_user_id, name, status, current_version_id,
+       created_at, updated_at, visibility
+     ) VALUES ($1,$2,'user-1','Agent',$3,$4,$5,$5,'space_shared')`,
+    [agentId, spaceId, overrides.status ?? "active", versionId, now],
+  );
+  await pool!.query(
+    `INSERT INTO agent_versions (
+       id, agent_id, space_id, version_label, system_prompt, model_config_json,
+       runtime_config_json, context_policy_json, memory_policy_json,
+       capabilities_json, tool_permissions_json, runtime_policy_json, created_at
+     ) VALUES ($1,$2,$3,'v1',$4,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,
+       '[]'::jsonb,'{}'::jsonb,'{}'::jsonb,$5)`,
+    [versionId, agentId, spaceId, overrides.system_prompt ?? "You are a test agent.", now],
+  );
+  return { agentId, versionId };
+}
 
 async function seedRun(
   overrides: Partial<{
@@ -121,6 +157,62 @@ async function seedJob(
 }
 
 describe("runs repositories against real PostgreSQL", () => {
+  it("creates a queued run with a linked minimal context snapshot", async (ctx) => {
+    if (!available) return ctx.skip();
+    const repo = new PgRunRepository(pool!);
+    const { agentId, versionId } = await seedAgent();
+
+    const run = await repo.createQueuedRun({
+      agent_id: agentId,
+      space_id: "space-1",
+      user_id: "user-1",
+      mode: "live",
+      run_type: "agent",
+      trigger_origin: "manual",
+      prompt: "hello",
+    });
+
+    expect(run.status).toBe("queued");
+    expect(run.agent_version_id).toBe(versionId);
+    expect(run.context_snapshot_id).toBeTruthy();
+    const snapshot = await pool!.query<{ run_id: string; agent_id: string }>(
+      "SELECT run_id, agent_id FROM context_snapshots WHERE id = $1",
+      [run.context_snapshot_id],
+    );
+    expect(snapshot.rows[0]).toEqual({ run_id: run.id, agent_id: agentId });
+    await expect(repo.getRun("space-1", run.id)).resolves.toMatchObject({
+      id: run.id,
+      system_prompt: "You are a test agent.",
+    });
+  });
+
+  it("resolves the space default ModelProvider when the version has none", async (ctx) => {
+    if (!available) return ctx.skip();
+    const repo = new PgRunRepository(pool!);
+    const { agentId } = await seedAgent();
+    const providerId = randomUUID();
+    await pool!.query(
+      `INSERT INTO model_providers (id, space_id, default_model, enabled, config_json, created_at)
+       VALUES ($1,'space-1','MiniMax-M3',true,'{"is_default": true}'::jsonb,$2)`,
+      [providerId, new Date().toISOString()],
+    );
+
+    const run = await repo.createQueuedRun({
+      agent_id: agentId,
+      space_id: "space-1",
+      user_id: "user-1",
+      mode: "live",
+      run_type: "agent",
+      trigger_origin: "manual",
+      prompt: "hi",
+    });
+
+    // model_api requires a provider; with none on the version it falls back to
+    // the enabled space default (config_json.is_default) — the chat-turn fix.
+    expect(run.adapter_type).toBe("model_api");
+    expect(run.model_provider_id).toBe(providerId);
+  });
+
   it("appends run events with a DB-computed monotonic event_index", async (ctx) => {
     if (!available) return ctx.skip();
     const repo = new PgRunRepository(pool!);
@@ -259,6 +351,113 @@ describe("runs repositories against real PostgreSQL", () => {
 
     const after = await repo.getRun("space-1", runId);
     expect(after?.status).toBe("cancelled");
+  });
+
+  it("finalizes a terminal run idempotently with evaluation and run_finalized event", async (ctx) => {
+    if (!available) return ctx.skip();
+    const repo = new PgRunRepository(pool!);
+    const runId = await seedRun({ status: "succeeded" });
+    await repo.appendRunEvent({
+      run_id: runId,
+      space_id: "space-1",
+      event_type: "adapter_completed",
+      status: "succeeded",
+    });
+
+    const service = new PostRunFinalizationService(repo);
+    const first = await service.finalize(runId, "space-1");
+    const second = await service.finalize(runId, "space-1");
+
+    expect(second.id).toBe(first.id);
+    expect(first.status).toBe("completed");
+    expect(first.outcome_status).toBe("passed");
+    const evaluations = await repo.listRunEvaluations("space-1", runId);
+    expect(evaluations).toHaveLength(1);
+    expect(evaluations[0].outcome_status).toBe("passed");
+    const finalizations = await repo.listRunFinalizations("space-1", runId);
+    expect(finalizations).toHaveLength(1);
+    const events = await repo.listRunEvents("space-1", runId);
+    expect(events.map((event) => event.event_type)).toEqual([
+      "adapter_completed",
+      "run_finalized",
+    ]);
+  });
+
+  it("bridges a linked run evaluation into one task evaluation idempotently", async (ctx) => {
+    if (!available) return ctx.skip();
+    const repo = new PgRunRepository(pool!);
+    const runId = await seedRun({ status: "succeeded" });
+    const taskId = randomUUID();
+    const artifactId = randomUUID();
+    const now = new Date().toISOString();
+    await pool!.query(
+      `INSERT INTO tasks (id, space_id, title, status, created_at, updated_at)
+       VALUES ($1,'space-1','Task bridge target','open',$2,$2)`,
+      [taskId, now],
+    );
+    await pool!.query(
+      `INSERT INTO task_runs (id, space_id, task_id, run_id, role, created_at)
+       VALUES ($1,'space-1',$2,$3,'primary',$4)`,
+      [randomUUID(), taskId, runId, now],
+    );
+    await pool!.query(
+      `INSERT INTO artifacts (id, space_id, run_id, created_at)
+       VALUES ($1,'space-1',$2,$3)`,
+      [artifactId, runId, now],
+    );
+    await repo.appendRunEvent({
+      run_id: runId,
+      space_id: "space-1",
+      event_type: "adapter_completed",
+      status: "succeeded",
+    });
+
+    const service = new PostRunFinalizationService(repo);
+    const first = await service.finalize(runId, "space-1");
+    const second = await service.finalize(runId, "space-1");
+
+    expect(second.id).toBe(first.id);
+    expect(first.task_evaluation_id).toBeTruthy();
+    expect(first.skipped_reasons_json).toEqual([]);
+    const rows = await pool!.query<{
+      id: string;
+      task_id: string;
+      run_id: string;
+      run_evaluation_id: string;
+      evaluator_type: string;
+      score: number | null;
+      confidence: number | null;
+      evidence_artifact_ids: string[];
+      recommendation: string | null;
+    }>(
+      `SELECT id, task_id, run_id, run_evaluation_id, evaluator_type, score,
+              confidence, evidence_artifact_ids, recommendation
+         FROM task_evaluations
+        WHERE space_id = 'space-1' AND task_id = $1 AND run_id = $2`,
+      [taskId, runId],
+    );
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]).toMatchObject({
+      id: first.task_evaluation_id,
+      task_id: taskId,
+      run_id: runId,
+      evaluator_type: "run_evaluation_bridge",
+      score: 1,
+      confidence: 1,
+      evidence_artifact_ids: [artifactId],
+      recommendation: "accept",
+    });
+    expect(rows.rows[0].run_evaluation_id).toBeTruthy();
+  });
+
+  it("rejects finalization for non-terminal runs", async (ctx) => {
+    if (!available) return ctx.skip();
+    const repo = new PgRunRepository(pool!);
+    const runId = await seedRun({ status: "running" });
+
+    await expect(
+      new PostRunFinalizationService(repo).finalize(runId, "space-1"),
+    ).rejects.toBeInstanceOf(NonTerminalRunError);
   });
 
   it("folds output_text into output_json on the terminal write", async (ctx) => {

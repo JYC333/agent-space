@@ -4,6 +4,25 @@ The system is ready for first personal dogfooding. The next work should validate
 product loop: capture → activity → proposal/review → memory/task → continue working. Fix
 only concrete friction discovered during use.
 
+## TypeScript Re-platform (active)
+
+The backend is being re-platformed from Python to the TypeScript control plane,
+which becomes the full backend authority over time. Binding migration rules live
+in [../architecture/TS_MIGRATION_STRATEGY.md](../architecture/TS_MIGRATION_STRATEGY.md);
+current ownership lives in
+[../architecture/TS_CONTROL_PLANE_OWNERSHIP.md](../architecture/TS_CONTROL_PLANE_OWNERSHIP.md).
+
+**Freeze:** no new Python feature work — new product work targets the TS control
+plane. Python gets bug/security fixes only and stays as reference until each
+domain is TS-native. No-prod posture: rollback is fix-forward / `git revert`;
+authority switches + the fallback proxy are transitional bridges removed
+per-domain, not standing rollback levers.
+
+**Current focus:** close remaining TS re-platform seams: run-context
+preparation, fallback-proxy retirement decisions, and explicit disposition of
+remaining Python-owned product contexts. Python/Alembic remains the runtime
+schema owner until an explicit schema-ownership cutover is recorded.
+
 ## Priorities
 
 - Use the system with real captures, activities, proposals, runs, and memory/task outputs.

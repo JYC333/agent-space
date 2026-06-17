@@ -217,9 +217,9 @@ fail closed via `unknown_policy_action` DENY if ever passed to `PolicyEngine` or
 | `proposal.create` | `runs/code_patch_collector.py` | Uses `enforce()` with `force_record=True` for system-created code_patch proposals. |
 | `proposal.apply` | `proposals/service.py` | Uses `enforce_proposal_apply()`; unsupported types deny first. **fail_closed**. |
 | `agent.config_update` | `agents/agent_service.py` | Uses `enforce()` before creating `agent_config_update` proposals. This is the domain-specific proposal creation audit; accepted mutation still goes through `proposal.apply`. Metadata includes changed field names and safe IDs only, not raw system prompt or policy blobs. |
-| `automation.create` | `automation/service.py` | **Uses `enforce()`** — raises `PolicyGateBlocked` on denial, global handler writes durable record. Runtime preflight and policy preflight simulation must pass before the Automation row is written. `membership_role`, `agent_id`, `trigger_type` in `context`. **fail_closed** — persistence failure blocks creation. |
-| `automation.update` | `automation/service.py` | **Uses `enforce()`**. `membership_role`, `agent_id` in `context`. **fail_closed**. |
-| `automation.fire` | `automation/service.py` | **Uses `enforce()`**. Runtime preflight and policy preflight simulation rerun. `membership_role`, `agent_id`, `trigger_origin="automation"` in `context`. Creates queued Run only. **fail_closed**. |
+| `automation.create` | `control-plane/src/modules/automations/service.ts` | **Uses TS `enforce()`**. Runtime preflight and policy preflight simulation must pass before the Automation row is written. `membership_role`, `agent_id`, `trigger_type` in `context`. **fail_closed** — persistence failure blocks creation. |
+| `automation.update` | `control-plane/src/modules/automations/service.ts` | **Uses TS `enforce()`**. `membership_role`, `agent_id` in `context`. **fail_closed**. |
+| `automation.fire` | `control-plane/src/modules/automations/service.ts` | **Uses TS `enforce()`**. Runtime preflight and policy preflight simulation rerun. `membership_role`, `agent_id`, `trigger_origin="automation"` in `context`. Creates a queued Run, an `agent_run` job, and an AutomationRun record; scheduled fire advances the schedule in the same transaction as the Run/Job/AutomationRun writes. **fail_closed**. |
 
 ### WIRED_VIA_PROPOSAL action inventory
 
@@ -305,9 +305,9 @@ instead of silently using `model_provider_mode=none`.
 | `proposal.apply` | `proposals/service.py` PolicyGateway | PolicyDecisionRecord (audit_required=True). Unsupported proposal types deny at gate (`audit_code="unsupported_proposal_type"`) before any role check. Role matrix: owner=all, admin=low/medium/high, reviewer=low/medium. |
 | `knowledge.*` | `proposals/service.py` + `knowledge/service.py` via `proposal.apply` | No direct write gate. Accepted `knowledge_*` proposals create/version/archive KnowledgeItem or archive/create KnowledgeItemRelation rows. |
 | `agent.config_update` | `agents/agent_service.py` PolicyGateway before `agent_config_update` proposal creation | PolicyDecisionRecord (audit_required=True, safe metadata only) |
-| `automation.create` | `automation/service.py` PolicyGateway | PolicyDecisionRecord (audit_required=True, fail_closed). `membership_role` in context; requires admin/owner. Runtime preflight + policy preflight snapshots are stored in `preflight_snapshot_json`. |
-| `automation.update` | `automation/service.py` PolicyGateway | PolicyDecisionRecord (audit_required=True, fail_closed). `membership_role` in context; requires admin/owner. |
-| `automation.fire` | `automation/service.py` PolicyGateway | PolicyDecisionRecord (audit_required=True, fail_closed). `membership_role`, `trigger_origin="automation"` in context. Runtime preflight + policy preflight snapshots are stored in `AutomationRun.preflight_snapshot_json`. |
+| `automation.create` | `control-plane/src/modules/automations/service.ts` PolicyGateway | PolicyDecisionRecord (audit_required=True, fail_closed). `membership_role` in context; requires admin/owner. Runtime preflight + policy preflight snapshots are stored in `preflight_snapshot_json`. |
+| `automation.update` | `control-plane/src/modules/automations/service.ts` PolicyGateway | PolicyDecisionRecord (audit_required=True, fail_closed). `membership_role` in context; requires admin/owner. |
+| `automation.fire` | `control-plane/src/modules/automations/service.ts` PolicyGateway | PolicyDecisionRecord (audit_required=True, fail_closed). `membership_role`, `trigger_origin="automation"` in context. Runtime preflight + policy preflight snapshots are stored in `AutomationRun.preflight_snapshot_json`. |
 
 Malformed effects on security-sensitive domains fail safe → **deny** (`get_active_policy_match`).
 

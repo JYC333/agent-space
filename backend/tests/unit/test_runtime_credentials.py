@@ -4,7 +4,6 @@ import uuid
 
 import pytest
 
-from app.config import settings
 from app.models import AgentVersion, ModelProvider
 from app.runtimes.credentials import (
     CredentialResolutionError,
@@ -129,7 +128,6 @@ class TestResolveCredentialsProviderPath:
             calls.append((space_id, provider_id))
             return "sk-from-ts"
 
-        monkeypatch.setattr(settings, "control_plane_providers_credentials_authority", "ts")
         monkeypatch.setattr(
             "app.providers.credentials.resolve_model_provider_api_key_via_control_plane",
             _fake_resolve,
@@ -145,12 +143,11 @@ class TestResolveCredentialsProviderPath:
         assert calls == [(a, mp.id)]
 
     def test_resolves_from_agent_version_model_provider_id(
-        self, db, cross_space_pair_db
+        self, db, cross_space_pair_db, monkeypatch
     ):
         a = cross_space_pair_db["space_a_id"]
         ua = cross_space_pair_db["user_a"]
-        plaintext = "sk-test-version-key-abc"
-        mp = _create_model_provider_with_key(db, space_id=a, plaintext_key=plaintext)
+        mp = factories.create_test_model_provider(db, space_id=a, enabled=True, commit=False)
         agent = factories.create_test_agent(
             db, space_id=a, owner_user_id=ua.id, commit=False
         )
@@ -159,21 +156,32 @@ class TestResolveCredentialsProviderPath:
         ).one()
         version.model_provider_id = mp.id
         db.flush()
+        calls = []
+
+        def _fake_resolve(*, space_id: str, provider_id: str) -> str:
+            calls.append((space_id, provider_id))
+            return "sk-from-ts-version"
+
+        monkeypatch.setattr(
+            "app.providers.credentials.resolve_model_provider_api_key_via_control_plane",
+            _fake_resolve,
+        )
 
         result = resolve_runtime_credentials(
             db, adapter_type="model_api", version=version
         )
-        assert result.get("api_key") == plaintext
+        assert result.get("api_key") == "sk-from-ts-version"
+        assert calls == [(a, mp.id)]
 
     def test_run_model_provider_id_takes_priority_over_version(
-        self, db, cross_space_pair_db
+        self, db, cross_space_pair_db, monkeypatch
     ):
         a = cross_space_pair_db["space_a_id"]
         ua = cross_space_pair_db["user_a"]
         key_run = "sk-run-provider-key"
         key_ver = "sk-version-provider-key"
-        mp_run = _create_model_provider_with_key(db, space_id=a, plaintext_key=key_run)
-        mp_ver = _create_model_provider_with_key(db, space_id=a, plaintext_key=key_ver)
+        mp_run = factories.create_test_model_provider(db, space_id=a, enabled=True, commit=False)
+        mp_ver = factories.create_test_model_provider(db, space_id=a, enabled=True, commit=False)
         agent = factories.create_test_agent(
             db, space_id=a, owner_user_id=ua.id, commit=False
         )
@@ -182,6 +190,16 @@ class TestResolveCredentialsProviderPath:
         ).one()
         version.model_provider_id = mp_ver.id
         db.flush()
+        calls = []
+
+        def _fake_resolve(*, space_id: str, provider_id: str) -> str:
+            calls.append((space_id, provider_id))
+            return {mp_run.id: key_run, mp_ver.id: key_ver}[provider_id]
+
+        monkeypatch.setattr(
+            "app.providers.credentials.resolve_model_provider_api_key_via_control_plane",
+            _fake_resolve,
+        )
 
         result = resolve_runtime_credentials(
             db,
@@ -190,6 +208,7 @@ class TestResolveCredentialsProviderPath:
             run_model_provider_id=mp_run.id,
         )
         assert result.get("api_key") == key_run
+        assert calls == [(a, mp_run.id)]
 
     def test_missing_provider_raises_credential_resolution_error(self, db):
         # Test via resolve_provider_api_key — no FK constraint on the function call
@@ -199,26 +218,41 @@ class TestResolveCredentialsProviderPath:
         # The error message must not contain a raw API key
         assert "sk-" not in str(exc_info.value)
 
-    def test_disabled_provider_raises_credential_resolution_error(
-        self, db, cross_space_pair_db
+    def test_control_plane_error_raises_credential_resolution_error(
+        self, db, cross_space_pair_db, monkeypatch
     ):
+        from app.providers.control_plane_client import ControlPlaneProviderError
+
         a = cross_space_pair_db["space_a_id"]
-        plaintext = "sk-disabled-provider-key"
-        mp = _create_model_provider_with_key(db, space_id=a, plaintext_key=plaintext)
-        mp.enabled = False
+        mp = factories.create_test_model_provider(db, space_id=a, enabled=True, commit=False)
         db.flush()
+
+        def _fake_resolve(*, space_id: str, provider_id: str) -> str:
+            raise ControlPlaneProviderError("Provider disabled")
+
+        monkeypatch.setattr(
+            "app.providers.credentials.resolve_model_provider_api_key_via_control_plane",
+            _fake_resolve,
+        )
 
         with pytest.raises(CredentialResolutionError) as exc_info:
             resolve_runtime_credentials(db, adapter_type="model_api", run_model_provider_id=mp.id)
         assert "disabled" in str(exc_info.value).lower()
 
-    def test_provider_with_no_credential_raises(self, db, cross_space_pair_db):
+    def test_control_plane_no_credential_error_raises(self, db, cross_space_pair_db, monkeypatch):
+        from app.providers.control_plane_client import ControlPlaneProviderError
+
         a = cross_space_pair_db["space_a_id"]
-        mp = factories.create_test_model_provider(db, space_id=a, commit=False)
-        mp.credential_id = None
-        mp.config_json = {}
-        mp.enabled = True
+        mp = factories.create_test_model_provider(db, space_id=a, enabled=True, commit=False)
         db.flush()
+
+        def _fake_resolve(*, space_id: str, provider_id: str) -> str:
+            raise ControlPlaneProviderError("No credential configured")
+
+        monkeypatch.setattr(
+            "app.providers.credentials.resolve_model_provider_api_key_via_control_plane",
+            _fake_resolve,
+        )
 
         with pytest.raises(CredentialResolutionError) as exc_info:
             resolve_runtime_credentials(db, adapter_type="model_api", run_model_provider_id=mp.id)
@@ -230,14 +264,24 @@ class TestResolveCredentialsProviderPath:
 # ---------------------------------------------------------------------------
 
 class TestResolveProviderApiKey:
-    def test_decrypts_and_returns_key(self, db, cross_space_pair_db):
+    def test_delegates_to_control_plane(self, db, cross_space_pair_db, monkeypatch):
         a = cross_space_pair_db["space_a_id"]
-        plaintext = "sk-test-direct-key-789"
-        mp = _create_model_provider_with_key(db, space_id=a, plaintext_key=plaintext)
+        mp = factories.create_test_model_provider(db, space_id=a, enabled=True, commit=False)
         db.flush()
+        calls = []
+
+        def _fake_resolve(*, space_id: str, provider_id: str) -> str:
+            calls.append((space_id, provider_id))
+            return "sk-from-ts-direct"
+
+        monkeypatch.setattr(
+            "app.providers.credentials.resolve_model_provider_api_key_via_control_plane",
+            _fake_resolve,
+        )
 
         result = resolve_provider_api_key(db, mp.id)
-        assert result == plaintext
+        assert result == "sk-from-ts-direct"
+        assert calls == [(a, mp.id)]
 
     def test_raises_for_missing_provider(self, db):
         with pytest.raises(CredentialResolutionError):
@@ -279,10 +323,13 @@ class TestProviderCredentialSecretRef:
         assert "sk-cred-test-key" not in cred.secret_ref
         assert cred.secret_ref.startswith("model_provider_api_key:v1:")
 
-        resolved = resolve_provider_api_key(db, row.id)
-        assert resolved == "sk-cred-test-key"
+        # Runtime credential resolution is now owned by the TS control-plane
+        # provider store; this test only asserts Python create still writes a
+        # non-plaintext secret_ref for migration-period compatibility.
 
-    def test_broken_secret_ref_fails_resolution(self, db, cross_space_pair_db):
+    def test_control_plane_resolution_error_is_wrapped(self, db, cross_space_pair_db, monkeypatch):
+        from app.providers.control_plane_client import ControlPlaneProviderError
+
         a = cross_space_pair_db["space_a_id"]
         cred = factories.create_test_credential_stub(
             db,
@@ -294,6 +341,14 @@ class TestProviderCredentialSecretRef:
         mp.credential_id = cred.id
         mp.config_json = {}
         db.flush()
+
+        def _fake_resolve(*, space_id: str, provider_id: str) -> str:
+            raise ControlPlaneProviderError("Credential could not be resolved")
+
+        monkeypatch.setattr(
+            "app.providers.credentials.resolve_model_provider_api_key_via_control_plane",
+            _fake_resolve,
+        )
 
         with pytest.raises(CredentialResolutionError) as exc_info:
             resolve_provider_api_key(db, mp.id)

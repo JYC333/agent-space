@@ -15,6 +15,7 @@ import { Select } from '../../components/ui/select'
 import { PreviewBadge, UrgencyBadge } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
 import { EgressReviewNotice, isGrantDerivedProposal } from './EgressReviewNotice'
+import { codePatchAcceptOptions } from './codePatchConfirm'
 
 function fmt(dt: string | null | undefined) { return dt ? new Date(dt).toLocaleString() : '—' }
 
@@ -100,7 +101,10 @@ export default function ProposalsPage() {
   async function decide(id: string, action: 'accept' | 'reject') {
     try {
       if (action === 'accept') {
-        const out: ProposalAcceptOut = await proposalsApi.accept(id)
+        const proposal = proposals.find(p => p.id === id) ?? await proposalsApi.get(id)
+        const options = codePatchAcceptOptions(proposal)
+        if (options === null) return
+        const out: ProposalAcceptOut = await proposalsApi.accept(id, options)
         if (out.result_type === 'memory_entry') {
           toast.success('Accepted — memory entry created.')
         } else if (out.result_type === 'code_patch_apply') {

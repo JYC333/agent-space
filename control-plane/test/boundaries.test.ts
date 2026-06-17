@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 const srcDir = join(__dirname, "..", "src");
 
@@ -21,14 +21,16 @@ function tsFiles(dir: string): string[] {
 const ALLOWED_BARE = new Set(["fastify", "undici", "yaml", "@agent-space/protocol"]);
 
 /**
- * Packages allowed only from specific files. `pg` is the providers/credentials
- * DB driver (a raw client, deliberately not an ORM) and must stay confined to
- * the single shared pool module so database access cannot spread
- * module-by-module without showing up here. `node-pty` is the CLI login PTY
- * host and must stay confined to the login engine.
+ * Packages allowed only from a specific file or directory. `pg` is the raw DB
+ * driver (deliberately not an ORM) and must stay confined to the `src/db/`
+ * data-access layer (pool, transaction helper, migration runner) so database
+ * access cannot spread into feature modules without showing up here. `node-pty`
+ * is the CLI login PTY host and must stay confined to the login engine. A value
+ * ending in `.ts` matches that exact file; a directory value matches any file
+ * beneath it.
  */
 const ALLOWED_BARE_BY_FILE = new Map<string, string>([
-  ["pg", join("src", "db", "pool.ts")],
+  ["pg", join("src", "db")],
   ["node-pty", join("src", "modules", "providers", "cliLoginEngine.ts")],
 ]);
 
@@ -79,7 +81,11 @@ describe("control-plane import boundaries", () => {
           : spec.split("/")[0];
         const scopedAllowance = ALLOWED_BARE_BY_FILE.get(pkg);
         if (scopedAllowance) {
-          if (!file.endsWith(scopedAllowance)) {
+          // `.ts` value → exact file; directory value → any file beneath it.
+          const allowed = scopedAllowance.endsWith(".ts")
+            ? file.endsWith(scopedAllowance)
+            : file.includes(scopedAllowance + sep);
+          if (!allowed) {
             offenders.push(`${file}: ${spec} (allowed only from ${scopedAllowance})`);
           }
           continue;
@@ -108,10 +114,29 @@ describe("control-plane import boundaries", () => {
         "../../deployer",
         "deployer/",
         "alembic.ini",
-        "migrations/",
+        // The Python/Alembic migration tree. The control plane owns its OWN
+        // `control-plane/migrations/` (the TS runner baseline), so the generic
+        // "migrations/" ban is narrowed to the backend's tree.
+        "backend/migrations",
         "local-host",
       ]) {
         if (text.includes(bad)) offenders.push(`${file}: contains "${bad}"`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("does not call the retired Python identity bridge from TS modules", () => {
+    const offenders: string[] = [];
+    for (const file of tsFiles(srcDir)) {
+      const relative = file.slice(srcDir.length + 1);
+      const text = readFileSync(file, "utf8");
+      if (relative === join("modules", "auth", "routes.ts")) continue;
+      if (text.includes("/api/v1/auth/introspect")) {
+        offenders.push(`${file}: contains /api/v1/auth/introspect`);
+      }
+      if (text.includes("providers/identity") || text.includes("../providers/identity")) {
+        offenders.push(`${file}: imports retired providers/identity`);
       }
     }
     expect(offenders).toEqual([]);

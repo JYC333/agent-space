@@ -13,6 +13,7 @@ import { Badge, StatusBadge } from '../../components/ui/badge'
 import { Skeleton } from '../../components/ui/skeleton'
 import { PreviewBadge, UrgencyBadge } from '../../components/PreviewBadge'
 import { EgressReviewNotice, isGrantDerivedProposal } from './EgressReviewNotice'
+import { codePatchAcceptOptions } from './codePatchConfirm'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -60,7 +61,9 @@ export default function ProposalDetailPage() {
     setBusy(true)
     try {
       if (action === 'accept') {
-        const out: ProposalAcceptOut = await proposalsApi.accept(p.id)
+        const options = codePatchAcceptOptions(p)
+        if (options === null) return
+        const out: ProposalAcceptOut = await proposalsApi.accept(p.id, options)
         if (out.result_type === 'memory_entry') {
           toast.success('Accepted — memory entry created.')
         } else if (out.result_type === 'code_patch_apply') {

@@ -26,9 +26,9 @@ AGENT_SPACE_HOME/
   cache/       Ephemeral cache (never backed up)
 ```
 
-## Backup — Canonical: BackupService
+## Backup — Canonical: Control-Plane BackupService
 
-`BackupService` (`backend/app/backups/service.py`) is the canonical full-system backup mechanism. It runs automatically on schedule and writes a structured manifest into every archive. The full procedure lives in [docs/BACKUP_AND_RESTORE.md](../../docs/BACKUP_AND_RESTORE.md).
+`BackupService` (`control-plane/src/modules/backups/service.ts`) is the canonical full-system backup mechanism. It runs automatically on the control-plane scheduler and writes a structured manifest into every archive. The full procedure lives in [docs/BACKUP_AND_RESTORE.md](../../docs/BACKUP_AND_RESTORE.md).
 
 **Enable in `$ASPACE_ROOT/<mode>/.env`:**
 
@@ -42,8 +42,8 @@ BACKUP_ON_STARTUP=true
 
 Without `BACKUP_ENABLED=true`, no automatic backups are created. For dogfooding, this setting is required.
 `BACKUP_ON_STARTUP=true` triggers the first automatic backup in the background
-after backend startup; readiness and dependent services must not wait for the
-archive to finish.
+after control-plane startup; readiness and dependent services must not wait for
+the archive to finish.
 
 **What is backed up:**
 
@@ -70,7 +70,7 @@ archive to finish.
 - Manual (API): `$ASPACE_ROOT/<mode>/backups/manual-YYYYMMDD-HHMMSS.tar.gz`
 - Offline CLI: `$ASPACE_ROOT/<mode>/backups/system-YYYYMMDD-HHMMSS.tar.gz`
 
-**Local overlap protection:** `backups/.backup.lock` (advisory, fcntl-based). Fails closed if `pg_dump` fails.
+**Local overlap protection:** `backups/.backup.lock` (local lock file with stale-lock recovery). Fails closed if `pg_dump` fails.
 
 **Retention:** Latest `BACKUP_RETENTION_COUNT` auto archives kept; older pruned. Manual archives never pruned automatically.
 

@@ -1,8 +1,8 @@
-"""Internal proposal ports for the TypeScript proposal review authority.
+"""Legacy internal proposal ports kept until Python backend deletion.
 
-These routes are service-to-service boundaries only. They preserve Python-owned
-proposal apply transactions for targets that have not moved yet and expose the
-Stage 6 memory-apply gate used by the TypeScript apply path.
+These routes are service-to-service boundaries only. The current TypeScript
+control-plane proposal route no longer calls them; they remain for backend
+compatibility and guard coverage until the Python service is retired.
 """
 
 from __future__ import annotations
@@ -169,10 +169,10 @@ def accept_proposal_via_internal_port(
     svc = ProposalService(db)
 
     visible_proposal = svc.get_proposal_for_viewer(body.proposal_id, body.space_id, body.user_id)
-    # Stage 6 slice 7b: when memory apply authority is TS, Python must not apply
-    # memory proposals — the TS accept path owns them. Check only after the
-    # space/viewer-scoped lookup so cross-space proposal IDs still return 404
-    # through the normal accept path instead of leaking a 409 ownership signal.
+    # TS-owned memory proposal types must not be applied by this legacy Python
+    # port. Check only after the space/viewer-scoped lookup so cross-space
+    # proposal IDs still return 404 through the normal accept path instead of
+    # leaking a 409 ownership signal.
     if visible_proposal is not None and memory_proposal_apply_owned_by_ts(
         visible_proposal.proposal_type
     ):
@@ -235,11 +235,11 @@ def memory_apply_gate_via_internal_port(
 ) -> MemoryApplyGateOut:
     """Validate + policy-gate an accepted memory proposal for the TS apply path.
 
-    Stage 6 slice 7b: only reached when ``CONTROL_PLANE_MEMORY_APPLY_AUTHORITY=ts``.
-    Runs the same pending/preview/space validation and ``proposal.apply`` gate as
-    ``ProposalService.accept`` (the gate writes the durable ALLOW record), but does
-    not apply the proposal or mark it accepted — TS does that in its own
-    transaction. A blocked gate raises ``PolicyGateBlocked`` (global 403 handler).
+    Legacy Stage 6 bridge retained for backend compatibility. It runs the same
+    pending/preview/space validation and ``proposal.apply`` gate as
+    ``ProposalService.accept`` (the gate writes the durable ALLOW record), but
+    does not apply the proposal or mark it accepted. The current TS proposal
+    apply path no longer calls this route.
     """
     svc = ProposalService(db)
     proposal = svc.get(body.proposal_id)
