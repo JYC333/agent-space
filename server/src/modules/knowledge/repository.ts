@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
   HttpError,
-  canReadByVisibility,
   countFromRow,
   dateIso,
   numberValue,
-  objectValue,
   optionalObject,
   optionalString,
   page,
@@ -16,194 +14,42 @@ import {
 } from "../routeUtils/common";
 import { proposalToOut, type ProposalRow } from "../proposals/repository";
 import type { ProposalOut } from "@agent-space/protocol" with { "resolution-mode": "import" };
-
-interface KnowledgeItemRow {
-  id: string;
-  space_id: string;
-  project_id: string | null;
-  workspace_id: string | null;
-  root_item_id: string | null;
-  supersedes_item_id: string | null;
-  redirect_to_item_id: string | null;
-  item_type: string;
-  slug: string | null;
-  aliases_json: unknown;
-  title: string;
-  content: string;
-  content_json: unknown;
-  content_format: string;
-  content_schema_version: unknown;
-  plain_text: string | null;
-  excerpt: string | null;
-  status: string;
-  visibility: string;
-  verification_status: string;
-  reflection_status: string;
-  tags_json: unknown;
-  confidence: number | null;
-  source_url: string | null;
-  owner_user_id: string | null;
-  created_by_user_id: string | null;
-  created_by_agent_id: string | null;
-  created_by_run_id: string | null;
-  source_activity_id: string | null;
-  source_artifact_id: string | null;
-  created_from_proposal_id: string | null;
-  approved_by_user_id: string | null;
-  version: unknown;
-  created_at: unknown;
-  updated_at: unknown;
-  archived_at: unknown;
-  deprecated_at: unknown;
-}
-
-interface KnowledgeRelationRow {
-  id: string;
-  space_id: string;
-  from_item_id: string;
-  to_item_id: string;
-  relation_type: string;
-  status: string;
-  confidence: number | null;
-  evidence_summary: string | null;
-  source_proposal_id: string | null;
-  created_by_user_id: string | null;
-  created_by_agent_id: string | null;
-  created_from_assessment_id: string | null;
-  created_at: unknown;
-  updated_at: unknown;
-}
-
-interface SourceRow {
-  id: string;
-  space_id: string;
-  source_type: string;
-  title: string;
-  uri: string | null;
-  content_ref: string | null;
-  raw_text: string | null;
-  summary: string | null;
-  metadata_json: unknown;
-  status: string;
-  source_activity_id: string | null;
-  created_by_user_id: string | null;
-  created_at: unknown;
-  updated_at: unknown;
-}
-
-interface NoteRow {
-  id: string;
-  space_id: string;
-  title: string;
-  content_json: unknown;
-  content_format: string;
-  content_schema_version: unknown;
-  plain_text: string | null;
-  excerpt: string | null;
-  status: string;
-  primary_project_id: string | null;
-  collection_id: string | null;
-  created_from_activity_id: string | null;
-  created_by_user_id: string | null;
-  created_at: unknown;
-  updated_at: unknown;
-  archived_at: unknown;
-  deleted_at: unknown;
-}
-
-interface NoteCollectionRow {
-  id: string;
-  space_id: string;
-  parent_id: string | null;
-  name: string;
-  system_role: string;
-  sort_order: number | string;
-  is_system: boolean;
-  is_hidden: boolean;
-  created_at: unknown;
-  updated_at: unknown;
-}
-
-interface EntityLinkRow {
-  id: string;
-  space_id: string;
-  source_type: string;
-  source_id: string;
-  target_type: string;
-  target_id: string;
-  link_type: string;
-  confidence: number | null;
-  status: string;
-  created_by_user_id: string | null;
-  created_at: unknown;
-}
-
-interface ProvenanceLinkRow {
-  source_type: string;
-  source_id: string;
-  source_trust: string | null;
-  evidence_json: unknown;
-  created_at: unknown;
-}
-
-const KNOWLEDGE_ITEM_COLUMNS = `
-  id, space_id, project_id, workspace_id, root_item_id, supersedes_item_id,
-  redirect_to_item_id, item_type, slug, aliases_json, title, content, content_json,
-  content_format, content_schema_version, plain_text, excerpt, status, visibility,
-  verification_status, reflection_status, tags_json, confidence, source_url,
-  owner_user_id, created_by_user_id, created_by_agent_id, created_by_run_id,
-  source_activity_id, source_artifact_id, created_from_proposal_id,
-  approved_by_user_id, version, created_at, updated_at, archived_at, deprecated_at
-`;
-
-const KNOWLEDGE_RELATION_COLUMNS = `
-  id, space_id, from_item_id, to_item_id, relation_type, status, confidence,
-  evidence_summary, source_proposal_id, created_by_user_id, created_by_agent_id,
-  created_from_assessment_id, created_at, updated_at
-`;
-
-const SOURCE_COLUMNS = `
-  id, space_id, source_type, title, uri, content_ref, raw_text, summary,
-  metadata_json, status, source_activity_id, created_by_user_id, created_at, updated_at
-`;
-
-const NOTE_COLUMNS = `
-  n.id, n.space_id, n.title, n.content_json, n.content_format,
-  n.content_schema_version, n.plain_text, n.excerpt, n.status,
-  n.primary_project_id, n.created_from_activity_id, n.created_by_user_id,
-  n.created_at, n.updated_at, n.archived_at, n.deleted_at,
-  first_collection.collection_id
-`;
-
-const NOTE_COLLECTION_COLUMNS = `
-  id, space_id, parent_id, name, system_role, sort_order, is_system,
-  is_hidden, created_at, updated_at
-`;
-
-const ENTITY_LINK_COLUMNS = `
-  id, space_id, source_type, source_id, target_type, target_id, link_type,
-  confidence, status, created_by_user_id, created_at
-`;
-
-const ITEM_TYPES = new Set(["concept", "claim", "lesson", "procedure", "decision", "question", "answer", "summary"]);
-const CONTENT_FORMATS = new Set(["markdown", "plain", "prosemirror_json"]);
-const KNOWLEDGE_VISIBILITIES = new Set(["private", "space_shared", "workspace_shared", "restricted"]);
-const RELATION_TYPES = new Set([
-  "related_to",
-  "explains",
-  "depends_on",
-  "prerequisite_of",
-  "part_of",
-  "example_of",
-  "applies_to",
-  "supports",
-  "contradicts",
-  "derived_from",
-  "summarizes",
-  "updates",
-]);
-const SOURCE_TYPES = new Set(["activity_record", "chat_capture", "webpage", "article", "paper", "pdf", "file", "email", "manual_reference", "external_note"]);
-const SOURCE_STATUSES = new Set(["raw", "processing", "processed", "archived", "error"]);
+import {
+  canMutateKnowledge,
+  canReadKnowledge,
+  confidence,
+  entityLinkOut,
+  knowledgeItemOut,
+  knowledgeSummaryOut,
+  normalizeDates,
+  noteCollectionOut,
+  noteOut,
+  noteSummaryOut,
+  relationOut,
+  sourceOut,
+  sourceSummaryOut,
+} from "./knowledgeRepositoryMappers";
+import {
+  CONTENT_FORMATS,
+  ENTITY_LINK_COLUMNS,
+  ITEM_TYPES,
+  KNOWLEDGE_ITEM_COLUMNS,
+  KNOWLEDGE_RELATION_COLUMNS,
+  KNOWLEDGE_VISIBILITIES,
+  NOTE_COLLECTION_COLUMNS,
+  NOTE_COLUMNS,
+  RELATION_TYPES,
+  SOURCE_COLUMNS,
+  SOURCE_STATUSES,
+  SOURCE_TYPES,
+  type EntityLinkRow,
+  type KnowledgeItemRow,
+  type KnowledgeRelationRow,
+  type NoteCollectionRow,
+  type NoteRow,
+  type ProvenanceLinkRow,
+  type SourceRow,
+} from "./knowledgeRepositoryRows";
 
 export class PgKnowledgeRepository {
   constructor(private readonly db: Queryable) {}
@@ -1085,153 +931,4 @@ function buildNoteWhere(
   if (filters.collectionId) clauses.push(`nci_filter.collection_id = ${add(filters.collectionId)}`);
   if (filters.q) clauses.push(`(n.title ILIKE ${add(`%${filters.q}%`)} OR n.plain_text ILIKE $${params.length})`);
   return { where: `WHERE ${clauses.join(" AND ")}`, params };
-}
-
-function knowledgeSummaryOut(row: KnowledgeItemRow): Record<string, unknown> {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    project_id: row.project_id,
-    workspace_id: row.workspace_id,
-    item_type: row.item_type,
-    slug: row.slug,
-    title: row.title,
-    content_preview: row.excerpt ?? (row.plain_text ?? row.content).slice(0, 280),
-    excerpt: row.excerpt,
-    status: row.status,
-    visibility: row.visibility,
-    verification_status: row.verification_status,
-    reflection_status: row.reflection_status,
-    tags: stringArray(row.tags_json),
-    confidence: row.confidence,
-    version: numberValue(row.version) ?? 1,
-    updated_at: dateIso(row.updated_at) ?? new Date(0).toISOString(),
-  };
-}
-
-function knowledgeItemOut(row: KnowledgeItemRow, sourceRefs: Record<string, unknown>[]): Record<string, unknown> {
-  return {
-    ...knowledgeSummaryOut(row),
-    root_item_id: row.root_item_id,
-    supersedes_item_id: row.supersedes_item_id,
-    redirect_to_item_id: row.redirect_to_item_id,
-    aliases: stringArray(row.aliases_json),
-    content: row.content,
-    content_json: optionalObject(row.content_json),
-    content_format: row.content_format,
-    content_schema_version: numberValue(row.content_schema_version) ?? 1,
-    plain_text: row.plain_text,
-    source_url: row.source_url,
-    source_refs: sourceRefs,
-    owner_user_id: row.owner_user_id,
-    created_by_user_id: row.created_by_user_id,
-    created_by_agent_id: row.created_by_agent_id,
-    created_by_run_id: row.created_by_run_id,
-    source_activity_id: row.source_activity_id,
-    source_artifact_id: row.source_artifact_id,
-    created_from_proposal_id: row.created_from_proposal_id,
-    approved_by_user_id: row.approved_by_user_id,
-    created_at: dateIso(row.created_at),
-    archived_at: dateIso(row.archived_at),
-    deprecated_at: dateIso(row.deprecated_at),
-  };
-}
-
-function relationOut(row: KnowledgeRelationRow): Record<string, unknown> {
-  return normalizeDates({ ...row });
-}
-
-function sourceSummaryOut(row: SourceRow): Record<string, unknown> {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    source_type: row.source_type,
-    title: row.title,
-    uri: row.uri,
-    status: row.status,
-    source_activity_id: row.source_activity_id,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-  };
-}
-
-function sourceOut(row: SourceRow): Record<string, unknown> {
-  return {
-    ...sourceSummaryOut(row),
-    content_ref: row.content_ref,
-    raw_text: row.raw_text,
-    summary: row.summary,
-    metadata: objectValue(row.metadata_json),
-    created_by_user_id: row.created_by_user_id,
-  };
-}
-
-function noteSummaryOut(row: NoteRow): Record<string, unknown> {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    title: row.title,
-    excerpt: row.excerpt,
-    status: row.status,
-    content_format: row.content_format,
-    primary_project_id: row.primary_project_id,
-    collection_id: row.collection_id,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-    deleted_at: dateIso(row.deleted_at),
-  };
-}
-
-function noteOut(row: NoteRow): Record<string, unknown> {
-  return {
-    ...noteSummaryOut(row),
-    content_json: optionalObject(row.content_json),
-    content_schema_version: numberValue(row.content_schema_version) ?? 1,
-    plain_text: row.plain_text,
-    created_from_activity_id: row.created_from_activity_id,
-    created_by_user_id: row.created_by_user_id,
-    archived_at: dateIso(row.archived_at),
-  };
-}
-
-function noteCollectionOut(row: NoteCollectionRow): Record<string, unknown> {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    parent_id: row.parent_id,
-    name: row.name,
-    system_role: row.system_role,
-    sort_order: numberValue(row.sort_order) ?? 0,
-    is_system: row.is_system,
-    is_hidden: row.is_hidden,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-  };
-}
-
-function entityLinkOut(row: EntityLinkRow): Record<string, unknown> {
-  return normalizeDates({ ...row });
-}
-
-function normalizeDates(row: Record<string, unknown>): Record<string, unknown> {
-  for (const key of Object.keys(row)) {
-    if (key.endsWith("_at")) row[key] = dateIso(row[key]);
-  }
-  return row;
-}
-
-function canReadKnowledge(row: KnowledgeItemRow, userId: string): boolean {
-  return canReadByVisibility(row.visibility, userId, [row.owner_user_id, row.created_by_user_id]);
-}
-
-function canMutateKnowledge(row: KnowledgeItemRow, userId: string): boolean {
-  if (row.visibility === "space_shared" || row.visibility === "workspace_shared") return true;
-  return row.owner_user_id === userId || row.created_by_user_id === userId;
-}
-
-function confidence(value: unknown): number | null {
-  const parsed = numberValue(value);
-  if (parsed === null) return null;
-  if (parsed < 0 || parsed > 1) throw new HttpError(422, "confidence must be between 0 and 1");
-  return parsed;
 }

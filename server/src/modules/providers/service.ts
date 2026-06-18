@@ -24,9 +24,9 @@ async function resolveIdentityOrReply(
   request: FastifyRequest,
   reply: FastifyReply,
   requestId: string,
-): Promise<{ spaceId: string } | FastifyReply> {
+): Promise<{ spaceId: string; userId: string } | FastifyReply> {
   const identity = await introspectIdentity(config, request);
-  if (identity.ok) return { spaceId: identity.spaceId };
+  if (identity.ok) return { spaceId: identity.spaceId, userId: identity.userId };
   if (identity.reason === "denied") {
     // Pass the auth module's denial response through unchanged.
     reply.code(identity.statusCode);
@@ -50,7 +50,7 @@ async function serveProviderRead(
   config: ServerConfig,
   request: FastifyRequest,
   reply: FastifyReply,
-  compute: (spaceId: string) => Promise<unknown | null>,
+  compute: (spaceId: string, userId: string) => Promise<unknown | null>,
   notFoundDetail?: (configId: string) => string,
 ): Promise<FastifyReply> {
   const requestId = resolveRequestId(request);
@@ -61,7 +61,7 @@ async function serveProviderRead(
 
   let value: unknown | null;
   try {
-    value = await compute(identityOrReply.spaceId);
+    value = await compute(identityOrReply.spaceId, identityOrReply.userId);
   } catch (err) {
     request.log.error(
       { path: request.url, reason: err instanceof Error ? err.message : "unknown" },
@@ -103,8 +103,8 @@ export function listProviderConfigs(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<FastifyReply> {
-  return serveProviderRead(config, request, reply, (spaceId) =>
-    requireDbPort(config).listProviders(spaceId),
+  return serveProviderRead(config, request, reply, (spaceId, userId) =>
+    requireDbPort(config).listProviders(spaceId, userId),
   );
 }
 
@@ -118,7 +118,7 @@ export function getProviderConfig(
     config,
     request,
     reply,
-    (spaceId) => requireDbPort(config).getProvider(spaceId, configId),
+    (spaceId, userId) => requireDbPort(config).getProvider(spaceId, userId, configId),
     (id) => `ModelProvider '${id}' not found`,
   );
 }
@@ -145,7 +145,6 @@ export async function listLitellmProviders(
     "anthropic",
     "openrouter",
     "ollama",
-    "custom_openai_compatible",
     "other",
   ]);
 }

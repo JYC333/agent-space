@@ -38,6 +38,7 @@ function config(): ServerConfig {
     deployerSocketPath: "/tmp/aspace/run/deployer.sock",
     artifactStorageRoot: "/tmp/aspace/storage/artifacts",
     internalToken: "token",
+    instanceAdminEmail: null,
     googleClientId: "",
     googleClientSecret: "",
     googleRedirectUri: "",

@@ -11,8 +11,6 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server";
 import { loadConfig } from "../src/config";
-import { catalogModule } from "../src/modules/catalog";
-import { SERVER_MODULES } from "../src/gateway/routeRegistry";
 
 let fixtureRoot: string;
 let app: FastifyInstance;
@@ -70,11 +68,8 @@ function buildApp(catalogRoot: string): FastifyInstance {
   });
 }
 
-describe("catalog module registration", () => {
-  it("is a server-owned module advertised through features", async () => {
-    expect(catalogModule.name).toBe("catalog");
-    expect(SERVER_MODULES).toContain(catalogModule);
-
+describe("catalog feature descriptor", () => {
+  it("advertises catalog reads through the public features endpoint", async () => {
     app = buildApp(fixtureRoot);
     const res = await app.inject({ method: "GET", url: "/api/v1/server/features" });
     expect((res.json() as { features: string[] }).features).toContain("catalog_read");

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../config";
 import type { Queryable } from "../routeUtils/common";
 import {
@@ -15,184 +15,39 @@ import {
   type SpaceUserIdentity,
 } from "../routeUtils/common";
 import { IntakeExtractionWorker } from "./extractionWorker";
-
-interface SourceConnectorRow {
-  id: string;
-  connector_key: string;
-  display_name: string;
-  connector_type: string;
-  ingestion_mode: string;
-  status: string;
-  capabilities_json: unknown;
-  config_schema_json: unknown;
-  created_at: unknown;
-  updated_at: unknown;
-}
-
-interface SourceConnectionRow {
-  id: string;
-  space_id: string;
-  connector_id: string;
-  owner_user_id: string;
-  credential_id: string | null;
-  name: string;
-  endpoint_url: string | null;
-  status: string;
-  fetch_frequency: string;
-  capture_policy: string;
-  trust_level: string;
-  topic_hints_json: unknown;
-  consent_json: unknown;
-  policy_json: unknown;
-  config_json: unknown;
-  last_checked_at: unknown;
-  next_check_at: unknown;
-  created_at: unknown;
-  updated_at: unknown;
-}
-
-interface IntakeItemRow {
-  id: string;
-  space_id: string;
-  connection_id: string | null;
-  item_type: string;
-  source_object_type: string | null;
-  source_object_id: string | null;
-  title: string;
-  source_uri: string | null;
-  canonical_uri: string | null;
-  source_domain: string | null;
-  source_external_id: string | null;
-  author: string | null;
-  occurred_at: unknown;
-  first_seen_at: unknown;
-  last_seen_at: unknown;
-  content_hash: string | null;
-  excerpt: string | null;
-  status: string;
-  read_status: string;
-  content_state: string;
-  retention_policy: string;
-  relevance_score: number | null;
-  novelty_score: number | null;
-  raw_artifact_id: string | null;
-  extracted_artifact_id: string | null;
-  summary_artifact_id: string | null;
-  search_index_ref: string | null;
-  embedding_index_ref: string | null;
-  metadata_json: unknown;
-  created_at: unknown;
-  updated_at: unknown;
-}
-
-interface ExtractionJobRow {
-  id: string;
-  space_id: string;
-  connection_id: string | null;
-  intake_item_id: string | null;
-  source_snapshot_id: string | null;
-  source_object_type: string | null;
-  source_object_id: string | null;
-  job_type: string;
-  status: string;
-  started_at: unknown;
-  completed_at: unknown;
-  items_seen: number | null;
-  items_created: number | null;
-  items_updated: number | null;
-  error_code: string | null;
-  error_message: string | null;
-  metadata_json: unknown;
-  created_at: unknown;
-}
-
-interface EvidenceRow {
-  id: string;
-  space_id: string;
-  intake_item_id: string | null;
-  extraction_job_id: string | null;
-  source_snapshot_id: string | null;
-  source_object_type: string | null;
-  source_object_id: string | null;
-  evidence_type: string;
-  title: string;
-  content_excerpt: string | null;
-  content_hash: string | null;
-  artifact_id: string | null;
-  source_uri: string | null;
-  source_title: string | null;
-  source_author: string | null;
-  occurred_at: unknown;
-  trust_level: string;
-  extraction_method: string;
-  confidence: number | null;
-  status: string;
-  metadata_json: unknown;
-  created_by_user_id: string | null;
-  created_by_agent_id: string | null;
-  created_by_run_id: string | null;
-  created_at: unknown;
-  updated_at: unknown;
-}
-
-interface EvidenceLinkRow {
-  id: string;
-  space_id: string;
-  evidence_id: string;
-  target_type: string;
-  target_id: string | null;
-  link_type: string;
-  status: string;
-  confidence: number | null;
-  reason: string | null;
-  created_by_user_id: string | null;
-  created_by_agent_id: string | null;
-  created_by_run_id: string | null;
-  created_at: unknown;
-  updated_at: unknown;
-}
-
-interface WorkspaceProfileRow {
-  id: string;
-  space_id: string;
-  workspace_id: string;
-  name: string;
-  status: string;
-  observation_policy: string;
-  routing_policy_json: unknown;
-  filters_json: unknown;
-  extraction_policy_json: unknown;
-  context_policy_json: unknown;
-  created_by_user_id: string | null;
-  created_at: unknown;
-  updated_at: unknown;
-}
-
-interface WorkspaceBindingRow {
-  id: string;
-  space_id: string;
-  workspace_id: string;
-  project_id: string | null;
-  source_connection_id: string;
-  binding_key: string;
-  status: string;
-  priority: number;
-  filters_json: unknown;
-  routing_policy_json: unknown;
-  extraction_policy_json: unknown;
-  created_by_user_id: string | null;
-  created_at: unknown;
-  updated_at: unknown;
-}
-
-const CONNECTOR_COLUMNS = `id, connector_key, display_name, connector_type, ingestion_mode, status, capabilities_json, config_schema_json, created_at, updated_at`;
-const CONNECTION_COLUMNS = `id, space_id, connector_id, owner_user_id, credential_id, name, endpoint_url, status, fetch_frequency, capture_policy, trust_level, topic_hints_json, consent_json, policy_json, config_json, last_checked_at, next_check_at, created_at, updated_at`;
-const ITEM_COLUMNS = `id, space_id, connection_id, item_type, source_object_type, source_object_id, title, source_uri, canonical_uri, source_domain, source_external_id, author, occurred_at, first_seen_at, last_seen_at, content_hash, excerpt, status, read_status, content_state, retention_policy, relevance_score, novelty_score, raw_artifact_id, extracted_artifact_id, summary_artifact_id, search_index_ref, embedding_index_ref, metadata_json, created_at, updated_at`;
-const JOB_COLUMNS = `id, space_id, connection_id, intake_item_id, source_snapshot_id, source_object_type, source_object_id, job_type, status, started_at, completed_at, items_seen, items_created, items_updated, error_code, error_message, metadata_json, created_at`;
-const EVIDENCE_COLUMNS = `id, space_id, intake_item_id, extraction_job_id, source_snapshot_id, source_object_type, source_object_id, evidence_type, title, content_excerpt, content_hash, artifact_id, source_uri, source_title, source_author, occurred_at, trust_level, extraction_method, confidence, status, metadata_json, created_by_user_id, created_by_agent_id, created_by_run_id, created_at, updated_at`;
-const EVIDENCE_LINK_COLUMNS = `id, space_id, evidence_id, target_type, target_id, link_type, status, confidence, reason, created_by_user_id, created_by_agent_id, created_by_run_id, created_at, updated_at`;
-const PROFILE_COLUMNS = `id, space_id, workspace_id, name, status, observation_policy, routing_policy_json, filters_json, extraction_policy_json, context_policy_json, created_by_user_id, created_at, updated_at`;
-const BINDING_COLUMNS = `id, space_id, workspace_id, project_id, source_connection_id, binding_key, status, priority, filters_json, routing_policy_json, extraction_policy_json, created_by_user_id, created_at, updated_at`;
+import {
+  bindingOut,
+  buildSummary,
+  connectionOut,
+  connectorOut,
+  evidenceLinkOut,
+  evidenceOut,
+  itemOut,
+  jobOut,
+  normalizeUrl,
+  profileOut,
+  sha256,
+  sourceDomain,
+  stringList,
+} from "./intakeRepositoryMappers";
+import {
+  BINDING_COLUMNS,
+  CONNECTION_COLUMNS,
+  CONNECTOR_COLUMNS,
+  EVIDENCE_COLUMNS,
+  EVIDENCE_LINK_COLUMNS,
+  ITEM_COLUMNS,
+  JOB_COLUMNS,
+  PROFILE_COLUMNS,
+  type EvidenceLinkRow,
+  type EvidenceRow,
+  type ExtractionJobRow,
+  type IntakeItemRow,
+  type SourceConnectionRow,
+  type SourceConnectorRow,
+  type WorkspaceBindingRow,
+  type WorkspaceProfileRow,
+} from "./intakeRepositoryRows";
 
 export class PgIntakeRepository {
   constructor(
@@ -878,226 +733,4 @@ export class PgIntakeRepository {
     );
     return result.rows[0]!.id;
   }
-}
-
-function connectorOut(row: SourceConnectorRow) {
-  return {
-    id: row.id,
-    connector_key: row.connector_key,
-    display_name: row.display_name,
-    connector_type: row.connector_type,
-    ingestion_mode: row.ingestion_mode,
-    status: row.status,
-    capabilities_json: row.capabilities_json ?? {},
-    config_schema_json: row.config_schema_json ?? null,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-  };
-}
-
-function connectionOut(row: SourceConnectionRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    connector_id: row.connector_id,
-    owner_user_id: row.owner_user_id,
-    credential_id: row.credential_id,
-    name: row.name,
-    endpoint_url: row.endpoint_url,
-    status: row.status,
-    fetch_frequency: row.fetch_frequency,
-    capture_policy: row.capture_policy,
-    trust_level: row.trust_level,
-    topic_hints_json: row.topic_hints_json ?? null,
-    consent_json: row.consent_json ?? {},
-    policy_json: row.policy_json ?? {},
-    config_json: row.config_json ?? {},
-    last_checked_at: dateIso(row.last_checked_at),
-    next_check_at: dateIso(row.next_check_at),
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-  };
-}
-
-function itemOut(row: IntakeItemRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    connection_id: row.connection_id,
-    item_type: row.item_type,
-    source_object_type: row.source_object_type,
-    source_object_id: row.source_object_id,
-    title: row.title,
-    source_uri: row.source_uri,
-    canonical_uri: row.canonical_uri,
-    source_domain: row.source_domain,
-    source_external_id: row.source_external_id,
-    author: row.author,
-    occurred_at: dateIso(row.occurred_at),
-    first_seen_at: dateIso(row.first_seen_at),
-    last_seen_at: dateIso(row.last_seen_at),
-    content_hash: row.content_hash,
-    excerpt: row.excerpt,
-    status: row.status,
-    read_status: row.read_status,
-    content_state: row.content_state,
-    retention_policy: row.retention_policy,
-    relevance_score: row.relevance_score,
-    novelty_score: row.novelty_score,
-    raw_artifact_id: row.raw_artifact_id,
-    extracted_artifact_id: row.extracted_artifact_id,
-    summary_artifact_id: row.summary_artifact_id,
-    search_index_ref: row.search_index_ref,
-    embedding_index_ref: row.embedding_index_ref,
-    metadata_json: row.metadata_json ?? null,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-  };
-}
-
-function jobOut(row: ExtractionJobRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    connection_id: row.connection_id,
-    intake_item_id: row.intake_item_id,
-    source_snapshot_id: row.source_snapshot_id,
-    source_object_type: row.source_object_type,
-    source_object_id: row.source_object_id,
-    job_type: row.job_type,
-    status: row.status,
-    started_at: dateIso(row.started_at),
-    completed_at: dateIso(row.completed_at),
-    items_seen: row.items_seen,
-    items_created: row.items_created,
-    items_updated: row.items_updated,
-    error_code: row.error_code,
-    error_message: row.error_message,
-    metadata_json: row.metadata_json ?? null,
-    created_at: dateIso(row.created_at),
-  };
-}
-
-function evidenceOut(row: EvidenceRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    intake_item_id: row.intake_item_id,
-    extraction_job_id: row.extraction_job_id,
-    source_snapshot_id: row.source_snapshot_id,
-    source_object_type: row.source_object_type,
-    source_object_id: row.source_object_id,
-    evidence_type: row.evidence_type,
-    title: row.title,
-    content_excerpt: row.content_excerpt,
-    content_hash: row.content_hash,
-    artifact_id: row.artifact_id,
-    source_uri: row.source_uri,
-    source_title: row.source_title,
-    source_author: row.source_author,
-    occurred_at: dateIso(row.occurred_at),
-    trust_level: row.trust_level,
-    extraction_method: row.extraction_method,
-    confidence: row.confidence,
-    status: row.status,
-    metadata_json: row.metadata_json ?? null,
-    created_by_user_id: row.created_by_user_id,
-    created_by_agent_id: row.created_by_agent_id,
-    created_by_run_id: row.created_by_run_id,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-  };
-}
-
-function evidenceLinkOut(row: EvidenceLinkRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    evidence_id: row.evidence_id,
-    target_type: row.target_type,
-    target_id: row.target_id,
-    link_type: row.link_type,
-    status: row.status,
-    confidence: row.confidence,
-    reason: row.reason,
-    created_by_user_id: row.created_by_user_id,
-    created_by_agent_id: row.created_by_agent_id,
-    created_by_run_id: row.created_by_run_id,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-  };
-}
-
-function profileOut(row: WorkspaceProfileRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    workspace_id: row.workspace_id,
-    name: row.name,
-    status: row.status,
-    observation_policy: row.observation_policy,
-    routing_policy_json: row.routing_policy_json ?? {},
-    filters_json: row.filters_json ?? {},
-    extraction_policy_json: row.extraction_policy_json ?? {},
-    context_policy_json: row.context_policy_json ?? {},
-    created_by_user_id: row.created_by_user_id,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-  };
-}
-
-function bindingOut(row: WorkspaceBindingRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    workspace_id: row.workspace_id,
-    project_id: row.project_id,
-    source_connection_id: row.source_connection_id,
-    binding_key: row.binding_key,
-    status: row.status,
-    priority: row.priority,
-    filters_json: row.filters_json ?? {},
-    routing_policy_json: row.routing_policy_json ?? {},
-    extraction_policy_json: row.extraction_policy_json ?? {},
-    created_by_user_id: row.created_by_user_id,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-  };
-}
-
-function normalizeUrl(value: string): string {
-  try {
-    const url = new URL(value);
-    url.hash = "";
-    return url.toString();
-  } catch {
-    throw new HttpError(422, "url must be a valid URL");
-  }
-}
-
-function sourceDomain(value: string): string | null {
-  try {
-    return new URL(value).hostname || null;
-  } catch {
-    return null;
-  }
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function stringList(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
-}
-
-function buildSummary(evidence: EvidenceRow[], items: IntakeItemRow[], goal: string | null): string {
-  const lines = [goal ? `# ${goal}` : "# Intake evidence summary", ""];
-  for (const row of evidence) {
-    lines.push(`- Evidence: ${row.title}${row.content_excerpt ? ` — ${row.content_excerpt.slice(0, 240)}` : ""}`);
-  }
-  for (const row of items) {
-    lines.push(`- Intake item: ${row.title}${row.excerpt ? ` — ${row.excerpt.slice(0, 240)}` : ""}`);
-  }
-  return lines.join("\n");
 }

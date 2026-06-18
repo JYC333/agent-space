@@ -3,19 +3,18 @@ import type {
   RunExecuteRequest,
   RunJobResult,
   RunMaterializationItemSummary,
-  RunStatus,
-  RunTerminalStatus,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { ServerConfig } from "../../config";
+import { getDbPool } from "../../db/pool";
 import {
   executeManagedApiNoToolAdapter,
   type ManagedApiNoToolAdapterDeps,
 } from "./managedApiAdapter";
 import {
   executeVendorCliAdapter,
-  type CliProcessRegistry,
   type VendorCliAdapterDeps,
 } from "./vendorCliAdapter";
+import type { CliProcessRegistry } from "./localCliExecution";
 import type {
   PgRunRepository,
   RunEventInput,
@@ -24,10 +23,6 @@ import type {
   RunStepRecord,
   RunTerminalUpdate,
 } from "./repository";
-import {
-  redactEvidenceText,
-  sanitizeEvidenceJson,
-} from "./evidenceRedaction";
 import {
   EPHEMERAL_CLEANUP_KIND,
   prepareEphemeralDir,
@@ -43,6 +38,26 @@ import type { RunMaterializationService } from "./materializationService";
 import type { ContextPrepareInput, ContextPrepareResult } from "../context";
 import { loadActionRegistry } from "../policy/actionRegistry";
 import { enforce, type EnforceResult } from "../policy/service";
+import { RuntimeToolRegistry } from "../runtimeTools";
+import { resolveRuntimeToolVersionForSpace } from "../runtimeTools/policies";
+import { RunPreparationError } from "./orchestrationErrors";
+import {
+  adapterErrorJson,
+  adapterFailureEnvelope,
+  adapterTimeoutEnvelope,
+  errorMessage,
+  inputWithPreparedRuntime,
+  isHardTerminalRunStatus,
+  isTerminalRunStatus,
+  materializationEventStatus,
+  outputJsonWithMaterialization,
+  protocolRunStatus,
+  recordValue,
+  summarizeOutput,
+  terminalStatusFromAdapter,
+  toRunPreparationError,
+  withTimeout,
+} from "./orchestrationResults";
 
 export interface RunExecutionRepositoryPort {
   getRun(spaceId: string, runId: string): Promise<RunRecord | null>;
@@ -90,6 +105,7 @@ export interface RunExecutionAdapterDeps {
   workspaceManager?: RunWorkspaceManagerPort;
   codePatchCollector?: RunCodePatchCollectorPort;
   policyEnforcer?: RunPolicyEnforcer;
+  runtimeToolVersionResolver?: RunRuntimeToolVersionResolver;
   /**
    * Shared CLI process registry. Execute registers spawned CLI processes here;
    * cancelRun terminates them through it. Must be the same instance across the
@@ -102,6 +118,12 @@ export interface RunExecutionAdapterDeps {
 export type RunPolicyEnforcer = (
   request: Parameters<typeof enforce>[2],
 ) => Promise<EnforceResult>;
+
+export type RunRuntimeToolVersionResolver = (input: {
+  spaceId: string;
+  runtime: string;
+  requestedVersion: string | null;
+}) => Promise<string>;
 
 export interface RunContextPrepareClient {
   prepare(input: ContextPrepareInput): Promise<ContextPrepareResult>;
@@ -147,16 +169,6 @@ interface ResolvedRuntimePolicy {
   adapter_config: Record<string, unknown>;
   risk_level: string | null;
   required_sandbox_level: string | null;
-}
-
-class RunPreparationError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "RunPreparationError";
-  }
 }
 
 export class RunOrchestrationService {
@@ -549,9 +561,11 @@ export class RunOrchestrationService {
     run: RunRecord,
     input: RunExecutionInput,
   ): Promise<ResolvedRuntimePolicy> {
+    const runtimeConfig = recordValue(run.runtime_config_json);
+    const callerConfig = input.command_source === "http" ? {} : input.adapter_config ?? {};
     const base: ResolvedRuntimePolicy = {
       adapter_type: run.adapter_type,
-      adapter_config: { ...(input.adapter_config ?? {}) },
+      adapter_config: { ...runtimeConfig, ...callerConfig },
       risk_level: input.risk_level ?? null,
       required_sandbox_level: run.required_sandbox_level ?? null,
     };
@@ -577,18 +591,125 @@ export class RunOrchestrationService {
       },
       force_record: false,
     };
+    await this.enforcePolicyRequest(
+      policyRequest,
+      "policy_requires_approval_runtime_execute",
+      "policy_denied_runtime_execute",
+      "runtime.execute denied by policy.",
+    );
+    if (run.model_provider_id) {
+      await this.enforcePolicyRequest(
+        {
+          action: "runtime.use_credential",
+          actor_type: "run",
+          actor_id: run.id,
+          space_id: run.space_id,
+          resource_type: "model_provider",
+          resource_id: run.model_provider_id,
+          resource_space_id: run.space_id,
+          run_id: run.id,
+          context: {
+            adapter_type: run.adapter_type,
+            command_source: input.command_source,
+            trigger_origin: run.trigger_origin,
+            risk_level: base.risk_level,
+          },
+          metadata_json: {
+            adapter_type: run.adapter_type,
+            command_source: input.command_source,
+            credential_kind: "model_provider",
+            provider_id: run.model_provider_id,
+          },
+          force_record: false,
+        },
+        "policy_requires_approval_runtime_use_credential",
+        "policy_denied_runtime_use_credential",
+        "runtime.use_credential denied by policy.",
+      );
+    }
+    if (isVendorCliAdapter(run.adapter_type)) {
+      const credentialProfileId = stringConfigValue(base.adapter_config.credential_profile_id);
+      const requestedRuntimeToolVersion = stringConfigValue(base.adapter_config.runtime_tool_version);
+      try {
+        base.adapter_config.runtime_tool_version = await this.resolveRuntimeToolVersion({
+          spaceId: run.space_id,
+          runtime: run.adapter_type ?? "",
+          requestedVersion: requestedRuntimeToolVersion,
+        });
+      } catch (error) {
+        throw new RunPreparationError(
+          "runtime_tool_version_unavailable",
+          error instanceof Error ? error.message : "Runtime tool version is unavailable.",
+        );
+      }
+      await this.enforcePolicyRequest(
+        {
+          action: "runtime.use_credential",
+          actor_type: "run",
+          actor_id: run.id,
+          space_id: run.space_id,
+          resource_type: "cli_credential_profile",
+          resource_id: credentialProfileId ?? `${run.adapter_type ?? "cli"}:default`,
+          resource_space_id: run.space_id,
+          run_id: run.id,
+          context: {
+            adapter_type: run.adapter_type,
+            command_source: input.command_source,
+            trigger_origin: run.trigger_origin,
+            credential_profile_id: credentialProfileId,
+            risk_level: base.risk_level,
+          },
+          metadata_json: {
+            adapter_type: run.adapter_type,
+            command_source: input.command_source,
+            credential_kind: "cli_profile",
+            credential_profile_id: credentialProfileId,
+          },
+          force_record: false,
+        },
+        "policy_requires_approval_runtime_use_credential",
+        "policy_denied_runtime_use_credential",
+        "runtime.use_credential denied by policy.",
+      );
+    }
+    return base;
+  }
+
+  private async resolveRuntimeToolVersion(input: {
+    spaceId: string;
+    runtime: string;
+    requestedVersion: string | null;
+  }): Promise<string> {
+    if (this.adapters.runtimeToolVersionResolver) {
+      return this.adapters.runtimeToolVersionResolver(input);
+    }
+    if (!this.config.databaseUrl) {
+      throw new Error("SERVER_DATABASE_URL is required");
+    }
+    return resolveRuntimeToolVersionForSpace(
+      getDbPool(this.config.databaseUrl),
+      new RuntimeToolRegistry(this.config),
+      input.spaceId,
+      input.runtime,
+      input.requestedVersion,
+    );
+  }
+
+  private async enforcePolicyRequest(
+    policyRequest: Parameters<typeof enforce>[2],
+    requiresApprovalCode: string,
+    deniedCode: string,
+    fallbackMessage: string,
+  ): Promise<void> {
     const policy = this.adapters.policyEnforcer
       ? await this.adapters.policyEnforcer(policyRequest)
       : await enforce(this.config, await loadActionRegistry(), policyRequest);
     if (policy.status !== "allow") {
       throw new RunPreparationError(
-        policy.error_code === "policy_requires_approval"
-          ? "policy_requires_approval_runtime_execute"
-          : "policy_denied_runtime_execute",
-        policy.message ?? "runtime.execute denied by policy.",
+        policy.error_code === "policy_requires_approval" ? requiresApprovalCode : deniedCode,
+        policy.message ?? fallbackMessage,
       );
     }
-    return base;
   }
 
   private async prepareRuntimeContext(
@@ -901,185 +1022,6 @@ export class RunOrchestrationService {
   }
 }
 
-function terminalStatusFromAdapter(result: RunAdapterResultEnvelope): RunTerminalStatus {
-  if (result.success) return "succeeded";
-  if (result.error_code === "run_cancelled") return "cancelled";
-  return "failed";
-}
-
-function adapterErrorJson(result: RunAdapterResultEnvelope): unknown {
-  if (result.success) return {};
-  return sanitizeEvidenceJson({
-    error_code: result.error_code ?? "adapter_failed",
-    error_text: result.error_message ?? "Runtime adapter failed.",
-    adapter_type: result.adapter_type,
-    adapter_kind: result.adapter_kind,
-    exit_code: result.exit_code,
-  });
-}
-
-function outputJsonWithMaterialization(
-  outputJson: unknown,
-  items: RunMaterializationItemSummary[],
-  errors: string[],
-): unknown {
-  const output = recordValue(outputJson);
-  if (items.length > 0) output.materialization = sanitizeEvidenceJson(items);
-  if (errors.length > 0) output.materialization_errors = errors.map((error) => redactEvidenceText(error));
-  return sanitizeEvidenceJson(output);
-}
-
-function materializationEventStatus(
-  item: RunMaterializationItemSummary,
-): "succeeded" | "failed" | "warning" | "skipped" {
-  if (item.status === "succeeded") return "succeeded";
-  if (item.status === "skipped") return "skipped";
-  if (item.status === "warning") return "warning";
-  return "failed";
-}
-
-function adapterFailureEnvelope(
-  run: RunRecord,
-  errorCode: string,
-  message: string,
-): RunAdapterResultEnvelope {
-  const now = new Date().toISOString();
-  return {
-    adapter_type: run.adapter_type ?? "unknown",
-    adapter_kind: "custom",
-    success: false,
-    output_text: "",
-    output_json: { adapter_type: run.adapter_type ?? "unknown" },
-    exit_code: 1,
-    error_code: errorCode,
-    error_message: redactEvidenceText(message),
-    started_at: now,
-    completed_at: now,
-    usage: null,
-    metadata_json: {
-      adapter_type: run.adapter_type ?? "unknown",
-    },
-  };
-}
-
-function adapterTimeoutEnvelope(
-  run: RunRecord,
-  timeoutMs: number,
-): RunAdapterResultEnvelope {
-  const now = new Date().toISOString();
-  return {
-    adapter_type: run.adapter_type ?? "unknown",
-    adapter_kind: run.adapter_type === "claude_code" || run.adapter_type === "codex_cli"
-      ? "local_cli"
-      : "managed_api",
-    success: false,
-    output_text: "",
-    output_json: { adapter_type: run.adapter_type ?? "unknown" },
-    exit_code: 1,
-    error_code: "adapter_timeout",
-    error_message: `Runtime adapter timed out after ${timeoutMs}ms.`,
-    started_at: now,
-    completed_at: now,
-    usage: null,
-    metadata_json: {
-      adapter_type: run.adapter_type ?? "unknown",
-      timeout_ms: timeoutMs,
-    },
-  };
-}
-
-function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  timeoutValue: T,
-): Promise<T> {
-  return new Promise((resolveValue, reject) => {
-    const timer = setTimeout(() => resolveValue(timeoutValue), timeoutMs);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolveValue(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-}
-
-function inputWithPreparedRuntime(
-  input: RunExecutionInput,
-  prepared: PreparedRuntimeContext,
-): RunExecutionInput {
-  return {
-    ...input,
-    prompt: prepared.prompt,
-    sandbox_cwd: prepared.sandbox_cwd,
-    context_text: prepared.context_text,
-    adapter_config: prepared.adapter_config,
-    risk_level: prepared.risk_level ?? input.risk_level ?? null,
-  };
-}
-
-function toRunPreparationError(error: unknown, fallbackCode: string): RunPreparationError {
-  if (error instanceof RunPreparationError) return error;
-  const code = errorCodeValue(error) ?? fallbackCode;
-  return new RunPreparationError(code, errorMessage(error));
-}
-
-function errorCodeValue(error: unknown): string | null {
-  if (error !== null && typeof error === "object") {
-    const code = (error as { code?: unknown }).code;
-    return typeof code === "string" && code ? code : null;
-  }
-  return null;
-}
-
-function isTerminalRunStatus(status: string): status is RunTerminalStatus | "waiting_for_review" {
-  return [
-    "succeeded",
-    "failed",
-    "degraded",
-    "cancelled",
-    "waiting_for_review",
-  ].includes(status);
-}
-
-function isHardTerminalRunStatus(status: string): status is RunTerminalStatus {
-  return ["succeeded", "failed", "degraded", "cancelled"].includes(status);
-}
-
-function protocolRunStatus(status: string): RunStatus | "unknown" {
-  if (
-    [
-      "queued",
-      "running",
-      "succeeded",
-      "failed",
-      "degraded",
-      "cancelled",
-      "waiting_for_review",
-    ].includes(status)
-  ) {
-    return status as RunStatus;
-  }
-  return "unknown";
-}
-
-function summarizeOutput(value: string | undefined): string | null {
-  if (!value) return null;
-  return redactEvidenceText(value.length > 500 ? `${value.slice(0, 500)}...` : value);
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  return "run orchestration failed";
-}
-
-function recordValue(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+function stringConfigValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }

@@ -1,4 +1,4 @@
-import { LocalCliProcessRegistry } from "./vendorCliAdapter";
+import { LocalCliProcessRegistry } from "./localCliExecution";
 
 /**
  * Process-wide CLI process registry. Execute paths (HTTP route, internal

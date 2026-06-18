@@ -31,6 +31,7 @@ describe("loadConfig", () => {
     expect(c.googleClientSecret).toBe("");
     expect(c.googleRedirectUri).toBe("http://localhost:5173/api/v1/auth/google/callback");
     expect(c.frontendUrl).toBe("http://localhost:5173");
+    expect(c.instanceAdminEmail).toBeNull();
     expect(c.sessionExpireDays).toBe(30);
     expect(c.debug).toBe(false);
   });
@@ -51,6 +52,7 @@ describe("loadConfig", () => {
       GOOGLE_CLIENT_SECRET: "google-secret",
       GOOGLE_REDIRECT_URI: "http://localhost:8010/api/v1/auth/google/callback",
       FRONTEND_URL: "http://localhost:5173/",
+      INSTANCE_ADMIN_EMAIL: "Owner@Example.COM ",
       SESSION_EXPIRE_DAYS: "7",
       SERVER_DEBUG: "true",
       AGENT_SPACE_HOME: "/tmp/aspace",
@@ -77,6 +79,7 @@ describe("loadConfig", () => {
     expect(c.googleClientSecret).toBe("google-secret");
     expect(c.googleRedirectUri).toBe("http://localhost:8010/api/v1/auth/google/callback");
     expect(c.frontendUrl).toBe("http://localhost:5173");
+    expect(c.instanceAdminEmail).toBe("owner@example.com");
     expect(c.sessionExpireDays).toBe(7);
     expect(c.debug).toBe(true);
     expect(c.agentSpaceHome).toBe("/tmp/aspace");
@@ -173,7 +176,7 @@ describe("loadConfig", () => {
 describe("config snapshot", () => {
   it("is immutable and identifies the config by schema version + content hash", () => {
     const snapshot = loadConfigSnapshot({});
-    expect(snapshot.schema_version).toBe(19);
+    expect(snapshot.schema_version).toBe(20);
     expect(snapshot.content_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(snapshot.loaded_at).toBeTruthy();
     expect(Object.isFrozen(snapshot)).toBe(true);

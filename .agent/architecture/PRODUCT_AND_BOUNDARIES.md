@@ -44,7 +44,7 @@ capture / trigger
 
 ### ModelProvider and RuntimeAdapter are separate
 
-- `ModelProvider` = model/vendor/API endpoint (Anthropic, OpenAI, OpenRouter, Ollama, custom OpenAI-compatible).
+- `ModelProvider` = model/vendor/API endpoint (OpenAI-compatible, Anthropic-compatible, OpenRouter, Ollama, or other).
 - Configured per space via `GET/POST/PATCH /api/v1/providers`. API keys are encrypted server-side; responses expose `has_api_key` only.
 - `RuntimeAdapter` = execution loop/tool environment (capability, model_api, claude_code, codex_cli, etc.).
 - Agents select a default provider/model on `AgentVersion` (`model_provider_id`, `model_name`); runs resolve provider at creation time.

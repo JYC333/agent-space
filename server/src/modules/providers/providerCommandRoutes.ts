@@ -45,11 +45,11 @@ async function resolveIdentity(
   config: ServerConfig,
   request: FastifyRequest,
   reply: FastifyReply,
-): Promise<{ spaceId: string } | null> {
+): Promise<{ spaceId: string; userId: string } | null> {
   const requestId = resolveRequestId(request);
   reply.header(REQUEST_ID_HEADER, requestId);
   const identity = await introspectIdentity(config, request);
-  if (identity.ok) return { spaceId: identity.spaceId };
+  if (identity.ok) return { spaceId: identity.spaceId, userId: identity.userId };
   if (identity.reason === "denied") {
     reply.code(identity.statusCode);
     reply.header("content-type", "application/json");
@@ -111,6 +111,7 @@ export function registerProviderCommandRoutes(
       );
       const value = await resolveProviderCommandStore(config).createProvider(
         identity.spaceId,
+        identity.userId,
         body,
       );
       return reply.code(201).send(value);
@@ -129,6 +130,7 @@ export function registerProviderCommandRoutes(
       );
       const value = await resolveProviderCommandStore(config).updateProvider(
         identity.spaceId,
+        identity.userId,
         params(request).configId ?? "",
         body,
       );
@@ -144,7 +146,46 @@ export function registerProviderCommandRoutes(
     try {
       await resolveProviderCommandStore(config).deleteProvider(
         identity.spaceId,
+        identity.userId,
         params(request).configId ?? "",
+      );
+      return reply.code(204).send();
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  app.put("/api/v1/providers/:configId/grants", async (request, reply) => {
+    const identity = await resolveIdentity(config, request, reply);
+    if (!identity) return reply;
+    try {
+      const body = await parseWith<{
+        space_id: string;
+        enabled?: boolean;
+        is_default?: boolean;
+        network_profile_id?: string | null;
+      }>("ModelProviderSpaceGrantRequestSchema", jsonBody(request));
+      const value = await resolveProviderCommandStore(config).grantProviderToSpace(
+        identity.spaceId,
+        identity.userId,
+        params(request).configId ?? "",
+        body,
+      );
+      return reply.send(value);
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  app.delete("/api/v1/providers/:configId/grants/:spaceId", async (request, reply) => {
+    const identity = await resolveIdentity(config, request, reply);
+    if (!identity) return reply;
+    try {
+      await resolveProviderCommandStore(config).revokeProviderGrant(
+        identity.spaceId,
+        identity.userId,
+        params(request).configId ?? "",
+        params(request).spaceId ?? "",
       );
       return reply.code(204).send();
     } catch (error) {
@@ -223,6 +264,7 @@ export function registerProviderCommandRoutes(
       );
       const member = await resolveProviderCommandStore(config).addPoolCredential(
         identity.spaceId,
+        identity.userId,
         params(request).configId ?? "",
         body,
       );
@@ -238,6 +280,7 @@ export function registerProviderCommandRoutes(
     try {
       await resolveProviderCommandStore(config).removePoolCredential(
         identity.spaceId,
+        identity.userId,
         params(request).configId ?? "",
         params(request).memberId ?? "",
       );
@@ -258,6 +301,7 @@ export function registerProviderCommandRoutes(
       return reply.send(
         await resolveProviderCommandStore(config).updatePoolConfig(
           identity.spaceId,
+          identity.userId,
           params(request).configId ?? "",
           body as ProviderPoolConfigUpdateInput,
         ),
@@ -335,24 +379,117 @@ export function registerProviderCommandRoutes(
     const identity = await resolveIdentity(config, request, reply);
     if (!identity) return reply;
     const runtime = query(request).runtime;
-    const profiles = await broker.listProfiles(runtime);
+    const profiles = await broker.listProfiles(runtime, identity.spaceId, identity.userId);
     return reply.send(await Promise.all(profiles.map((p) => broker.profileOut(p))));
   });
 
-  app.get("/api/v1/credentials/cli/profiles/:runtime/:name", async (request, reply) => {
+  app.get("/api/v1/credentials/cli/available", async (request, reply) => {
     const identity = await resolveIdentity(config, request, reply);
     if (!identity) return reply;
-    const profileId = `${params(request).runtime}/${params(request).name}`;
-    const profile = await broker.getProfile(profileId);
+    return reply.send(
+      await broker.availableProfiles(identity.spaceId, identity.userId, query(request).runtime),
+    );
+  });
+
+  app.post("/api/v1/credentials/cli/profiles", async (request, reply) => {
+    const identity = await resolveIdentity(config, request, reply);
+    if (!identity) return reply;
+    try {
+      const body = await parseWith<{
+        runtime: string;
+        name: string;
+        readonly?: boolean;
+        notes?: string;
+        network_profile_id?: string | null;
+        is_default?: boolean;
+      }>("CliCredentialProfileCreateRequestSchema", jsonBody(request));
+      return reply
+        .code(201)
+        .send(await broker.createProfile(identity.spaceId, identity.userId, body));
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  app.put("/api/v1/credentials/cli/profiles/:profileId/grants", async (request, reply) => {
+    const identity = await resolveIdentity(config, request, reply);
+    if (!identity) return reply;
+    try {
+      const body = await parseWith<{
+        space_id: string;
+        enabled?: boolean;
+        is_default?: boolean;
+        network_profile_id?: string | null;
+      }>("CliCredentialSpaceGrantRequestSchema", jsonBody(request));
+      return reply.send(
+        await broker.grantCliProfileToSpace(
+          identity.spaceId,
+          identity.userId,
+          params(request).profileId ?? "",
+          body,
+        ),
+      );
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  app.delete("/api/v1/credentials/cli/profiles/:profileId/grants/:spaceId", async (request, reply) => {
+    const identity = await resolveIdentity(config, request, reply);
+    if (!identity) return reply;
+    try {
+      await broker.revokeCliProfileGrant(
+        identity.userId,
+        params(request).profileId ?? "",
+        params(request).spaceId ?? "",
+      );
+      return reply.code(204).send();
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/credentials/cli/profiles/:profileId", async (request, reply) => {
+    const identity = await resolveIdentity(config, request, reply);
+    if (!identity) return reply;
+    const profileId = params(request).profileId ?? "";
+    const profile = await broker.getProfile(profileId, identity.spaceId, identity.userId);
     if (!profile) return reply.code(404).send({ detail: `Profile '${profileId}' not found` });
     return reply.send(await broker.profileOut(profile));
   });
 
-  app.post("/api/v1/credentials/cli/profiles/:runtime/:name/detect", async (request, reply) => {
+  app.post("/api/v1/credentials/cli/profiles/:profileId/detect", async (request, reply) => {
     const identity = await resolveIdentity(config, request, reply);
     if (!identity) return reply;
     try {
-      return reply.send(await broker.detectProfile(`${params(request).runtime}/${params(request).name}`));
+      return reply.send(
+        await broker.detectProfile(
+          params(request).profileId ?? "",
+          identity.spaceId,
+          identity.userId,
+        ),
+      );
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  app.patch("/api/v1/credentials/cli/profiles/:profileId", async (request, reply) => {
+    const identity = await resolveIdentity(config, request, reply);
+    if (!identity) return reply;
+    try {
+      const body = await parseWith<{ network_profile_id?: string | null }>(
+        "CliCredentialProfileUpdateRequestSchema",
+        jsonBody(request),
+      );
+      return reply.send(
+        await broker.updateProfileNetworkProfileId(
+          params(request).profileId ?? "",
+          body.network_profile_id ?? null,
+          identity.spaceId,
+          identity.userId,
+        ),
+      );
     } catch (error) {
       return sendDomainError(reply, error);
     }
@@ -367,7 +504,13 @@ export function registerProviderCommandRoutes(
   app.get("/api/v1/credentials/cli/login/stream", async (request, reply) => {
     const identity = await resolveIdentity(config, request, reply);
     if (!identity) return reply;
-    await broker.streamLogin(query(request).runtime ?? "", reply);
+    await broker.streamLogin(
+      query(request).runtime ?? "",
+      reply,
+      identity.spaceId,
+      identity.userId,
+      query(request).profile_id,
+    );
     return reply;
   });
 
@@ -375,11 +518,11 @@ export function registerProviderCommandRoutes(
     const identity = await resolveIdentity(config, request, reply);
     if (!identity) return reply;
     try {
-      const body = await parseWith<{ input: string }>(
+      const body = await parseWith<{ input: string; profile_id?: string }>(
         "CliLoginInputRequestSchema",
         jsonBody(request),
       );
-      if (!broker.sendLoginInput(query(request).runtime ?? "", body.input)) {
+      if (!broker.sendLoginInput(query(request).runtime ?? "", body.input, body.profile_id)) {
         return reply
           .code(404)
           .send({ detail: `No active login session for runtime '${query(request).runtime ?? ""}'` });
@@ -393,13 +536,13 @@ export function registerProviderCommandRoutes(
   app.get("/api/v1/credentials/cli/status", async (request, reply) => {
     const identity = await resolveIdentity(config, request, reply);
     if (!identity) return reply;
-    return reply.send(await broker.status());
+    return reply.send(await broker.status(identity.spaceId, identity.userId));
   });
 
   app.get("/api/v1/credentials/cli/usage", async (request, reply) => {
     const identity = await resolveIdentity(config, request, reply);
     if (!identity) return reply;
-    return reply.send(await broker.cliUsage());
+    return reply.send(await broker.cliUsage(identity.spaceId, identity.userId));
   });
 
   app.get("/api/v1/credentials/cli/usage/auto-refresh", async (request, reply) => {
@@ -426,7 +569,14 @@ export function registerProviderCommandRoutes(
     const identity = await resolveIdentity(config, request, reply);
     if (!identity) return reply;
     try {
-      return reply.send(await broker.refreshCliQuota(query(request).runtime ?? ""));
+      return reply.send(
+        await broker.refreshCliQuota(
+          query(request).runtime ?? "",
+          identity.spaceId,
+          identity.userId,
+          query(request).profile_id,
+        ),
+      );
     } catch (error) {
       return sendDomainError(reply, error);
     }
@@ -467,6 +617,7 @@ export function registerProviderCommandRoutes(
         | { kind: "credential_api_key"; space_id: string; credential_id: string }
         | {
             kind: "cli_profile";
+            space_id: string;
             runtime: string;
             profile_id?: string | null;
             require_existing?: boolean;
@@ -496,6 +647,7 @@ export function registerProviderCommandRoutes(
         body.runtime,
         body.profile_id,
         body.require_existing ?? true,
+        body.space_id,
       );
       if (!profile) return reply.code(404).send({ detail: "Credential profile not found" });
       return reply.send({
@@ -516,6 +668,7 @@ export function registerProviderCommandRoutes(
     try {
       const body = await parseWith<{
         run_id: string;
+        space_id: string;
         runtime: string;
         executor_mode: "worktree" | "docker";
         profile_id?: string | null;
@@ -523,6 +676,7 @@ export function registerProviderCommandRoutes(
       return reply.send(
         await broker.grantForRun(
           body.run_id,
+          body.space_id,
           body.runtime,
           body.executor_mode,
           body.profile_id,

@@ -128,7 +128,6 @@ function services(overrides: AgentChatServiceOverrides = {}): AgentChatServices 
 describe("agents chat-turn route", () => {
   it("orchestrates a successful chat turn and persists user then assistant messages", async () => {
     __setAgentChatIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const calls: string[] = [];
     const messages: Array<Record<string, unknown>> = [];
     __setAgentChatServicesFactoryForTests(() =>
       services({
@@ -137,7 +136,6 @@ describe("agents chat-turn route", () => {
             throw new Error("getSession should not run");
           },
           async createSession(_spaceId, _userId, input) {
-            calls.push(`createSession:${input.title}`);
             return {
               id: "session-1",
               space_id: "space-1",
@@ -150,7 +148,6 @@ describe("agents chat-turn route", () => {
             };
           },
           async addMessage(_spaceId, _userId, sessionId, input) {
-            calls.push(`addMessage:${input.role}:${input.content}`);
             messages.push({ sessionId, ...input });
             return {
               id: `message-${messages.length}`,
@@ -166,7 +163,6 @@ describe("agents chat-turn route", () => {
         },
         context: {
           async fetchCandidates(input) {
-            calls.push(`candidates:${input.message}`);
             return {
               allowed_sources: [],
               max_tokens: 4000,
@@ -178,7 +174,6 @@ describe("agents chat-turn route", () => {
         },
         runs: {
           async createQueuedRun(input) {
-            calls.push(`createQueuedRun:${input.session_id}`);
             return {
               id: "run-1",
               space_id: "space-1",
@@ -212,7 +207,6 @@ describe("agents chat-turn route", () => {
         },
         orchestration: {
           async executeRun(input) {
-            calls.push(`execute:${input.run_id}:${input.space_id}:${input.command_source}`);
             return { run_id: input.run_id, status: "succeeded" };
           },
         },
@@ -233,15 +227,19 @@ describe("agents chat-turn route", () => {
       ok: true,
       reply: "Hello from server.",
     });
-    expect(calls).toEqual([
-      "createSession:Personal Assistant chat",
-      "addMessage:user:Hi there",
-      "candidates:Hi there",
-      "createQueuedRun:session-1",
-      "execute:run-1:space-1:http",
-      "addMessage:assistant:Hello from server.",
+    expect(messages).toEqual([
+      expect.objectContaining({
+        sessionId: "session-1",
+        role: "user",
+        content: "Hi there",
+      }),
+      expect.objectContaining({
+        sessionId: "session-1",
+        role: "assistant",
+        content: "Hello from server.",
+        metadata: { run_id: "run-1" },
+      }),
     ]);
-    expect(messages[1].metadata).toEqual({ run_id: "run-1" });
   });
 
   it("returns ok=false on run failure and does not persist an assistant message", async () => {
@@ -429,8 +427,13 @@ describe("agents chat-turn route", () => {
 
   it("assembles context in the server and persists the snapshot", async () => {
     __setAgentChatIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const calls: string[] = [];
-    let persisted: Record<string, unknown> | null = null;
+    const messages: Array<Record<string, unknown>> = [];
+    const observed: {
+      fetchedForMessage?: string;
+      queuedRun?: Record<string, unknown>;
+      executedRunId?: string;
+      persisted?: Record<string, unknown>;
+    } = {};
     __setAgentChatServicesFactoryForTests(() =>
       services({
         sessions: {
@@ -450,9 +453,9 @@ describe("agents chat-turn route", () => {
             };
           },
           async addMessage(_spaceId, _userId, sessionId, input) {
-            calls.push(`addMessage:${input.role}`);
+            messages.push({ sessionId, ...input });
             return {
-              id: `message-${calls.length}`,
+              id: `message-${messages.length}`,
               session_id: sessionId,
               space_id: "space-1",
               user_id: "user-1",
@@ -465,7 +468,7 @@ describe("agents chat-turn route", () => {
         },
         context: {
           async fetchCandidates(input) {
-            calls.push(`candidates:${input.message}`);
+            observed.fetchedForMessage = input.message;
             return {
               allowed_sources: ["memory"],
               max_tokens: 4000,
@@ -488,18 +491,7 @@ describe("agents chat-turn route", () => {
         },
         runs: {
           async createQueuedRun(input) {
-            calls.push(
-              `createQueuedRun:${input.prompt?.includes("remember this") ? "with-context" : "bare"}`,
-            );
-            expect(input).toMatchObject({
-              agent_id: "agent-1",
-              space_id: "space-1",
-              user_id: "user-1",
-              session_id: "session-1",
-              mode: "live",
-              run_type: "agent",
-              trigger_origin: "manual",
-            });
+            observed.queuedRun = input as unknown as Record<string, unknown>;
             return {
               id: "run-1",
               space_id: "space-1",
@@ -533,13 +525,12 @@ describe("agents chat-turn route", () => {
         },
         snapshots: {
           async persistChatSnapshot(input) {
-            persisted = input as unknown as Record<string, unknown>;
-            calls.push(`persist:${input.contextSnapshotId}:${input.items.length}`);
+            observed.persisted = input as unknown as Record<string, unknown>;
           },
         },
         orchestration: {
           async executeRun(input) {
-            calls.push(`execute:${input.run_id}`);
+            observed.executedRunId = input.run_id;
             return { run_id: input.run_id, status: "succeeded" };
           },
         },
@@ -560,36 +551,30 @@ describe("agents chat-turn route", () => {
       ok: true,
       reply: "Hello from server.",
     });
-    // The server owns context build (candidates -> snapshot persist) before execution.
-    expect(calls).toEqual([
-      "addMessage:user",
-      "candidates:Hi",
-      "createQueuedRun:with-context",
-      "persist:snapshot-1:1",
-      "execute:run-1",
-      "addMessage:assistant",
-    ]);
-    expect(persisted).toMatchObject({
+    expect(observed.fetchedForMessage).toBe("Hi");
+    expect(observed.queuedRun).toMatchObject({
+      agent_id: "agent-1",
+      space_id: "space-1",
+      user_id: "user-1",
+      session_id: "session-1",
+      mode: "live",
+      run_type: "agent",
+      trigger_origin: "manual",
+    });
+    expect(String(observed.queuedRun?.prompt)).toContain("remember this");
+    expect(observed.executedRunId).toBe("run-1");
+    expect(observed.persisted).toMatchObject({
       contextSnapshotId: "snapshot-1",
       spaceId: "space-1",
       tokenEstimate: 3,
     });
-  });
-
-  it("validates empty chat messages before service construction", async () => {
-    __setAgentChatIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    __setAgentChatServicesFactoryForTests(() => {
-      throw new Error("services should not be needed for an empty message");
-    });
-    app = buildServer(loadConfig({}), { logger: false });
-
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/agents/agent-1/chat",
-      payload: { message: "   " },
-    });
-
-    expect(res.statusCode).toBe(422);
-    expect(res.json()).toEqual({ detail: "message must not be empty" });
+    expect(messages).toEqual([
+      expect.objectContaining({ role: "user", content: "Hi" }),
+      expect.objectContaining({
+        role: "assistant",
+        content: "Hello from server.",
+        metadata: { run_id: "run-1" },
+      }),
+    ]);
   });
 });

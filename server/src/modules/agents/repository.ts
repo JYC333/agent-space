@@ -3,10 +3,26 @@ import type { ServerConfig } from "../../config";
 import { getDbPool, type Pool, type PoolClient } from "../../db/pool";
 import { withTransaction } from "../../db/tx";
 import { HttpError } from "../routeUtils/common";
+import { RuntimeToolRegistry } from "../runtimeTools";
+import {
+  isCliRuntimeTool,
+  resolveRuntimeToolVersionForSpace,
+} from "../runtimeTools/policies";
 import {
   BUILTIN_RUNTIME_ADAPTER_SPECS,
   type RuntimeAdapterType,
 } from "../runtimeAdapters/specs";
+import {
+  DEFAULT_MEMORY_POLICY,
+  DEFAULT_MODEL_CONFIG,
+  DEFAULT_RUNTIME_CONFIG,
+  agentOut,
+  buildRuntimePolicy,
+  normalizeAdapterType,
+  recordValue,
+  stringOrNull,
+  stringValue,
+} from "./agentRepositoryHelpers";
 
 interface QueryResult<Row> {
   rows: Row[];
@@ -19,27 +35,6 @@ interface Queryable {
     params?: readonly unknown[],
   ): Promise<QueryResult<Row>>;
 }
-
-const DEFAULT_MODEL_CONFIG = { model: "claude-sonnet-4-6", max_tokens: 8192 };
-const DEFAULT_MEMORY_POLICY = {
-  readable_scopes: ["system", "space", "user", "workspace", "capability", "agent"],
-  writable_scopes: ["agent"],
-  readable_types: ["preference", "semantic", "episodic", "procedural", "project"],
-};
-const DEFAULT_RUNTIME_POLICY = {
-  risk_level: "medium",
-  max_run_time_seconds: 300,
-  allowed_adapter_types: [
-    "capability",
-    "model_api",
-    "claude_code",
-    "codex_cli",
-    "opencode",
-    "gemini_cli",
-  ],
-  default_adapter_type: "model_api",
-};
-const DEFAULT_RUNTIME_CONFIG = { risk_level: "medium", max_run_time_seconds: 300 };
 
 export interface AgentRecord {
   id: string;
@@ -209,13 +204,16 @@ export class PgAgentChatRepository {
 }
 
 export class PgAgentRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly config?: ServerConfig,
+  ) {}
 
   static fromConfig(config: ServerConfig): PgAgentRepository {
     if (!config.databaseUrl) {
       throw new HttpError(502, "SERVER_DATABASE_URL is required");
     }
-    return new PgAgentRepository(getDbPool(config.databaseUrl));
+    return new PgAgentRepository(getDbPool(config.databaseUrl), config);
   }
 
   async list(
@@ -304,6 +302,11 @@ export class PgAgentRepository {
     const providerId = input.defaultModelProviderId ?? null;
     const modelName = input.defaultModel ?? null;
     await this.validateModelSelection(input.spaceId, adapterType, providerId, modelName);
+    const runtimeConfigJson = await this.resolveRuntimeConfig(
+      input.spaceId,
+      adapterType,
+      input.runtimeConfigJson ?? DEFAULT_RUNTIME_CONFIG,
+    );
     return withTransaction(this.pool, async (client) =>
       this.createAgentWithVersion(client, {
         spaceId: input.spaceId,
@@ -323,7 +326,7 @@ export class PgAgentRepository {
           ...DEFAULT_MODEL_CONFIG,
           ...(modelName ? { model: modelName } : {}),
         },
-        runtimeConfigJson: input.runtimeConfigJson ?? DEFAULT_RUNTIME_CONFIG,
+        runtimeConfigJson,
         contextPolicyJson: input.contextPolicyJson ?? {},
         memoryPolicyJson: input.memoryPolicyJson ?? DEFAULT_MEMORY_POLICY,
         capabilitiesJson: input.capabilitiesJson ?? [],
@@ -396,6 +399,7 @@ export class PgAgentRepository {
       outputPolicyJson?: Record<string, unknown> | null;
       scheduleConfigJson?: Record<string, unknown> | null;
       outputSchemaJson?: Record<string, unknown> | null;
+      runtimeConfigJson?: Record<string, unknown> | null;
     },
   ): Promise<AgentOut> {
     const current = await this.getCurrentVersion(spaceId, agentId);
@@ -443,7 +447,19 @@ export class PgAgentRepository {
         output_policy_json: patch.outputPolicyJson ?? current.output_policy_json,
         schedule_config_json: patch.scheduleConfigJson ?? current.schedule_config_json,
         output_schema_json: patch.outputSchemaJson ?? current.output_schema_json,
+        runtime_config_json: patch.runtimeConfigJson
+          ? { ...current.runtime_config_json, ...patch.runtimeConfigJson }
+          : current.runtime_config_json,
       };
+      const currentAdapterType = normalizeAdapterType(
+        stringValue(versionPatch.runtime_config_json?.adapter_type) ||
+        stringValue(current.runtime_policy_json?.default_adapter_type),
+      );
+      const runtimeConfigJson = await this.resolveRuntimeConfig(
+        spaceId,
+        currentAdapterType,
+        versionPatch.runtime_config_json ?? current.runtime_config_json,
+      );
       const newVersion = await this.insertVersion(client, {
         agentId,
         spaceId,
@@ -452,7 +468,7 @@ export class PgAgentRepository {
         modelName: versionPatch.model_name ?? null,
         systemPrompt: versionPatch.system_prompt ?? null,
         modelConfigJson: versionPatch.model_config_json ?? DEFAULT_MODEL_CONFIG,
-        runtimeConfigJson: current.runtime_config_json,
+        runtimeConfigJson,
         contextPolicyJson: versionPatch.context_policy_json ?? {},
         memoryPolicyJson: versionPatch.memory_policy_json ?? DEFAULT_MEMORY_POLICY,
         capabilitiesJson: current.capabilities_json,
@@ -694,14 +710,62 @@ export class PgAgentRepository {
       );
     }
     if (providerId) {
-      const provider = await this.pool.query<{ id: string }>(
-        `SELECT id FROM model_providers WHERE space_id = $1 AND id = $2 AND enabled = true`,
+      const provider = await this.pool.query<{ id: string; config_json: unknown }>(
+        `SELECT p.id, p.config_json
+           FROM model_provider_space_grants g
+           JOIN model_providers p ON p.id = g.provider_id
+          WHERE g.space_id = $1
+            AND g.provider_id = $2
+            AND g.enabled = true
+            AND p.enabled = true`,
         [spaceId, providerId],
       );
-      if (!provider.rows[0]) {
+      const row = provider.rows[0];
+      if (!row) {
         throw new HttpError(400, "Model provider is not selectable in this space");
       }
+      if (adapterType === "claude_code") {
+        const cfg = recordValue(row.config_json) ?? {};
+        const claudeUrl = cfg.claude_compatible_base_url;
+        if (typeof claudeUrl !== "string" || !claudeUrl.trim()) {
+          throw new HttpError(
+            400,
+            "Claude Code provider selection requires claude_compatible_base_url",
+          );
+        }
+      }
+      if (adapterType === "codex_cli") {
+        const cfg = recordValue(row.config_json) ?? {};
+        const openAiUrl = cfg.openai_compatible_base_url;
+        if (typeof openAiUrl !== "string" || !openAiUrl.trim()) {
+          throw new HttpError(
+            400,
+            "Codex CLI provider selection requires openai_compatible_base_url",
+          );
+        }
+      }
     }
+  }
+
+  private async resolveRuntimeConfig(
+    spaceId: string,
+    adapterType: string,
+    input: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const config: Record<string, unknown> = { ...input, adapter_type: adapterType };
+    if (!isCliRuntimeTool(adapterType)) return config;
+    if (!this.config) {
+      throw new HttpError(500, "Server config is required to resolve CLI runtime tool versions");
+    }
+    const requestedVersion = stringValue(config["runtime_tool_version"]);
+    const version = await resolveRuntimeToolVersionForSpace(
+      this.pool,
+      new RuntimeToolRegistry(this.config),
+      spaceId,
+      adapterType,
+      requestedVersion,
+    );
+    return { ...config, runtime_tool_version: version };
   }
 
   private async requireAgent(spaceId: string, agentId: string): Promise<void> {
@@ -890,78 +954,4 @@ export class PgAgentRepository {
     );
     return result.rows[0] ? agentOut(result.rows[0]) : null;
   }
-}
-
-function agentOut(row: AgentRecord): AgentOut {
-  const adapterType = normalizeAdapterType(runtimePolicy(row).default_adapter_type);
-  const spec = BUILTIN_RUNTIME_ADAPTER_SPECS[adapterType as RuntimeAdapterType];
-  const requiresModelProvider = spec?.model.model_provider_mode === "required";
-  const hasModel =
-    row.model_provider_id !== null ||
-    row.provider_name !== null ||
-    row.provider_type !== null ||
-    row.model_name !== null;
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    created_by_user_id: row.owner_user_id,
-    name: row.name,
-    description: row.description,
-    visibility: row.visibility,
-    role_instruction: row.role_instruction,
-    status: row.status,
-    agent_kind: row.agent_kind,
-    current_version_id: row.current_version_id,
-    source_template_id: row.source_template_id,
-    source_template_version_id: row.source_template_version_id,
-    model: hasModel
-      ? {
-          provider_id: row.model_provider_id ?? null,
-          provider_name: row.provider_name ?? null,
-          provider_type: row.provider_type ?? null,
-          model: row.model_name ?? null,
-        }
-      : null,
-    adapter_type: adapterType,
-    requires_model_provider: requiresModelProvider,
-    system_prompt: row.system_prompt ?? null,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
-}
-
-function runtimePolicy(row: AgentRecord): Record<string, unknown> {
-  return recordValue(row.runtime_policy_json) ?? DEFAULT_RUNTIME_POLICY;
-}
-
-function buildRuntimePolicy(
-  adapterType: string,
-  base: Record<string, unknown> | null | undefined,
-): Record<string, unknown> {
-  const policy = { ...DEFAULT_RUNTIME_POLICY, ...(base ?? {}) };
-  const allowed = Array.isArray(policy.allowed_adapter_types)
-    ? policy.allowed_adapter_types.filter((item): item is string => typeof item === "string")
-    : [...DEFAULT_RUNTIME_POLICY.allowed_adapter_types];
-  if (!allowed.includes(adapterType)) allowed.push(adapterType);
-  policy.allowed_adapter_types = allowed;
-  policy.default_adapter_type = adapterType;
-  return policy;
-}
-
-function normalizeAdapterType(value: unknown): string {
-  return typeof value === "string" && value.trim() ? value.trim() : "model_api";
-}
-
-function recordValue(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function stringValue(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function stringOrNull(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
 }

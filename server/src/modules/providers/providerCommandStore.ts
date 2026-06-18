@@ -26,321 +26,86 @@ import {
   loadOrCreateModelProviderApiKeyMasterKey,
 } from "./secretRefCrypto";
 import { mapProviderRowToDto } from "./dbReader";
-import type { ProviderFailureClass } from "./providerResilience";
+import { resolveNetworkProfileRepository } from "../networkProfiles";
+import {
+  ROTATION_STRATEGIES,
+  configRecord,
+  configuredModelsFromRow,
+  fallbackProviderIdsFromRow,
+  isDefaultFromRow,
+  json,
+  mapPoolMember,
+  modelList,
+  normalizeBaseUrl,
+  optionalTrimmedString,
+  orderPoolMembers,
+  providerInfoFromRow,
+  rotationStrategyFromRow,
+  validateBaseUrl,
+  validateCreateFields,
+  validateProviderType,
+  type PoolMemberRow,
+  type ProviderRow,
+} from "./providerCommandHelpers";
+import {
+  ProviderCommandNotFoundError,
+  ProviderCommandValidationError,
+  type CliCredentialAuditInput,
+  type InvocationTarget,
+  type ModelProviderCreateInput,
+  type ModelProviderUpdateInput,
+  type PoolKeyCandidate,
+  type PoolOutcome,
+  type ProviderCommandStore,
+  type ProviderPoolConfigUpdateInput,
+  type ProviderPoolCredentialAddInput,
+  type ProviderSpaceGrantInput,
+  type ProviderTaskChainEntry,
+} from "./providerCommandTypes";
 
-const PROVIDER_TYPES = new Set([
-  "openai",
-  "anthropic",
-  "openrouter",
-  "ollama",
-  "custom_openai_compatible",
-  "other",
-]);
-const CLOUD_PROVIDER_TYPES = new Set(["openai", "anthropic", "openrouter"]);
-const BASE_URL_REQUIRED_TYPES = new Set(["ollama", "custom_openai_compatible"]);
-const ROTATION_STRATEGIES = new Set(["fill_first", "round_robin", "least_used", "random"]);
+export {
+  ProviderCommandNotFoundError,
+  ProviderCommandValidationError,
+  type CliCredentialAuditInput,
+  type InvocationTarget,
+  type ModelProviderCreateInput,
+  type ModelProviderUpdateInput,
+  type PoolKeyCandidate,
+  type PoolOutcome,
+  type ProviderCommandStore,
+  type ProviderInfo,
+  type ProviderPoolConfigUpdateInput,
+  type ProviderPoolCredentialAddInput,
+  type ProviderSpaceGrantInput,
+  type ProviderTaskChainEntry,
+  type RotationStrategy,
+} from "./providerCommandTypes";
+export { orderPoolMembers } from "./providerCommandHelpers";
 
-export type RotationStrategy = "fill_first" | "round_robin" | "least_used" | "random";
-
-export class ProviderCommandValidationError extends Error {
-  readonly statusCode = 400;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "ProviderCommandValidationError";
-  }
-}
-
-export class ProviderCommandNotFoundError extends Error {
-  readonly statusCode = 404;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "ProviderCommandNotFoundError";
-  }
-}
-
-export interface ModelProviderCreateInput {
-  name: string;
-  provider_type: string;
-  base_url?: string | null;
-  api_key?: string | null;
-  default_model?: string | null;
-  available_models?: string[];
-  enabled?: boolean;
-  is_default?: boolean;
-}
-
-export interface ModelProviderUpdateInput {
-  name?: string;
-  provider_type?: string;
-  base_url?: string | null;
-  api_key?: string | null;
-  default_model?: string | null;
-  available_models?: string[];
-  enabled?: boolean;
-  is_default?: boolean;
-}
-
-export interface ProviderInfo {
+function grantOut(row: {
   id: string;
+  provider_id: string;
   space_id: string;
-  name: string;
-  provider_type: string;
-  base_url: string | null;
-  default_model: string | null;
-  available_models: string[];
+  owner_user_id: string | null;
+  granted_by_user_id: string | null;
   enabled: boolean;
   is_default: boolean;
-}
-
-/** One decrypted pool key, ready for a single invocation attempt. */
-export interface PoolKeyCandidate {
-  member_id: string | null;
-  credential_id: string | null;
-  api_key: string | null;
-}
-
-export interface InvocationTarget {
-  provider: ProviderInfo;
-  rotation_strategy: RotationStrategy;
-  fallback_provider_ids: string[];
-  /** Ordered per the rotation strategy; cooling-down keys are excluded. */
-  candidates: PoolKeyCandidate[];
-}
-
-export type PoolOutcome =
-  | { kind: "success" }
-  | { kind: "failure"; failure_class: ProviderFailureClass; cooldown_seconds?: number; unhealthy?: boolean };
-
-export interface ProviderPoolCredentialAddInput {
-  api_key: string;
-  name?: string;
-  position?: number;
-}
-
-export interface ProviderPoolConfigUpdateInput {
-  rotation_strategy?: RotationStrategy;
-  fallback_provider_ids?: string[];
-}
-
-export interface ProviderTaskChainEntry {
-  provider_id: string;
-  model?: string | null;
-}
-
-export interface CliCredentialAuditInput {
-  space_id: string;
-  run_id?: string | null;
-  runtime_adapter_type?: string | null;
-  credential_profile_id?: string | null;
-  trigger_origin?: string | null;
-  fallback_used?: boolean;
-  fallback_reason?: string | null;
-  broker_error?: boolean;
-  cleanup_status?: string;
-  action?: string;
-}
-
-export interface ProviderCommandStore {
-  createProvider(spaceId: string, input: ModelProviderCreateInput): Promise<unknown>;
-  updateProvider(
-    spaceId: string,
-    providerId: string,
-    input: ModelProviderUpdateInput,
-  ): Promise<unknown>;
-  deleteProvider(spaceId: string, providerId: string): Promise<void>;
-  getInvocationTarget(spaceId: string, providerId?: string | null): Promise<InvocationTarget>;
-  recordPoolOutcome(memberId: string, outcome: PoolOutcome): Promise<void>;
-  resolveProviderApiKey(spaceId: string, providerId: string): Promise<string>;
-  resolveCredentialApiKey(spaceId: string, credentialId: string): Promise<string>;
-  listConfiguredModels(spaceId: string, providerId: string): Promise<string[]>;
-  recordCliCredentialUsage(input: CliCredentialAuditInput): Promise<string>;
-  listPool(spaceId: string, providerId: string): Promise<unknown>;
-  addPoolCredential(
-    spaceId: string,
-    providerId: string,
-    input: ProviderPoolCredentialAddInput,
-  ): Promise<unknown>;
-  removePoolCredential(spaceId: string, providerId: string, memberId: string): Promise<void>;
-  updatePoolConfig(
-    spaceId: string,
-    providerId: string,
-    input: ProviderPoolConfigUpdateInput,
-  ): Promise<unknown>;
-  getTaskChain(spaceId: string, task: string): Promise<ProviderTaskChainEntry[] | null>;
-  listTaskPolicies(spaceId: string): Promise<unknown[]>;
-  putTaskPolicy(
-    spaceId: string,
-    task: string,
-    chain: ProviderTaskChainEntry[],
-    enabled?: boolean,
-  ): Promise<unknown>;
-  deleteTaskPolicy(spaceId: string, task: string): Promise<void>;
-}
-
-type ProviderRow = Parameters<typeof mapProviderRowToDto>[0];
-
-interface PoolMemberRow {
-  id: string;
-  credential_id: string;
-  name: string;
-  position: number;
-  enabled: boolean;
-  healthy: boolean;
-  cooldown_until: Date | null;
-  last_failure_class: string | null;
-  request_count: string | number;
-  failure_count: string | number;
-  last_used_at: Date | null;
+  network_profile_id: string | null;
   created_at: Date;
   updated_at: Date;
-  secret_ref?: string;
-}
-
-function validateProviderType(providerType: string): void {
-  if (!PROVIDER_TYPES.has(providerType)) {
-    throw new ProviderCommandValidationError(
-      `Invalid provider_type '${providerType}'. Must be one of: ${[...PROVIDER_TYPES]
-        .sort()
-        .join(", ")}`,
-    );
-  }
-}
-
-function validateCreateFields(input: ModelProviderCreateInput): void {
-  validateProviderType(input.provider_type);
-  if (
-    BASE_URL_REQUIRED_TYPES.has(input.provider_type) &&
-    !(input.base_url && input.base_url.trim())
-  ) {
-    throw new ProviderCommandValidationError(
-      `base_url is required for provider_type '${input.provider_type}'`,
-    );
-  }
-  if (
-    CLOUD_PROVIDER_TYPES.has(input.provider_type) &&
-    !(input.api_key && input.api_key.trim())
-  ) {
-    throw new ProviderCommandValidationError(
-      `api_key is required for provider_type '${input.provider_type}'`,
-    );
-  }
-}
-
-function validateBaseUrl(providerType: string, baseUrl: string | null): void {
-  if (BASE_URL_REQUIRED_TYPES.has(providerType) && !(baseUrl && baseUrl.trim())) {
-    throw new ProviderCommandValidationError(
-      `base_url cannot be empty for provider_type '${providerType}'`,
-    );
-  }
-}
-
-function configuredModelsFromRow(row: ProviderRow): string[] {
-  const caps = row.capabilities_json;
-  if (Array.isArray(caps)) return caps.filter((m): m is string => typeof m === "string");
-  if (caps !== null && typeof caps === "object") {
-    const models = (caps as { models?: unknown }).models;
-    if (Array.isArray(models)) return models.filter((m): m is string => typeof m === "string");
-  }
-  return [];
-}
-
-function configRecord(row: ProviderRow): Record<string, unknown> {
-  return row.config_json !== null && typeof row.config_json === "object"
-    ? { ...(row.config_json as Record<string, unknown>) }
-    : {};
-}
-
-function isDefaultFromRow(row: ProviderRow): boolean {
-  return Boolean(configRecord(row).is_default);
-}
-
-function rotationStrategyFromRow(row: ProviderRow): RotationStrategy {
-  const value = configRecord(row).rotation_strategy;
-  return typeof value === "string" && ROTATION_STRATEGIES.has(value)
-    ? (value as RotationStrategy)
-    : "fill_first";
-}
-
-function fallbackProviderIdsFromRow(row: ProviderRow): string[] {
-  const value = configRecord(row).fallback_provider_ids;
-  if (!Array.isArray(value)) return [];
-  return value.filter((id): id is string => typeof id === "string");
-}
-
-function providerInfoFromRow(row: ProviderRow): ProviderInfo {
+}): Record<string, unknown> {
   return {
     id: row.id,
+    provider_id: row.provider_id,
     space_id: row.space_id,
-    name: row.name,
-    provider_type: row.provider_type,
-    base_url: row.base_url,
-    default_model: row.default_model,
-    available_models: configuredModelsFromRow(row),
-    enabled: Boolean(row.enabled),
-    is_default: isDefaultFromRow(row),
-  };
-}
-
-function modelList(defaultModel: string | null | undefined, availableModels?: string[]): string[] {
-  const models = [...(availableModels ?? [])];
-  if (defaultModel && !models.includes(defaultModel)) models.unshift(defaultModel);
-  return models;
-}
-
-function json(value: unknown): string {
-  return JSON.stringify(value);
-}
-
-function mapPoolMember(row: PoolMemberRow): Record<string, unknown> {
-  return {
-    id: row.id,
-    credential_id: row.credential_id,
-    name: row.name,
-    position: row.position,
+    owner_user_id: row.owner_user_id,
+    granted_by_user_id: row.granted_by_user_id,
     enabled: row.enabled,
-    healthy: row.healthy,
-    cooldown_until: row.cooldown_until ? row.cooldown_until.toISOString() : null,
-    last_failure_class: row.last_failure_class,
-    request_count: Number(row.request_count),
-    failure_count: Number(row.failure_count),
-    last_used_at: row.last_used_at ? row.last_used_at.toISOString() : null,
+    is_default: row.is_default,
+    network_profile_id: row.network_profile_id,
     created_at: row.created_at.toISOString(),
     updated_at: row.updated_at.toISOString(),
   };
-}
-
-/** Order available members per the rotation strategy. */
-export function orderPoolMembers<T extends {
-  position: number;
-  request_count: string | number;
-  last_used_at: Date | null;
-}>(members: T[], strategy: RotationStrategy): T[] {
-  const sorted = [...members];
-  switch (strategy) {
-    case "round_robin":
-      // Least-recently-used first; never-used keys lead.
-      sorted.sort((a, b) => {
-        const aT = a.last_used_at?.getTime() ?? 0;
-        const bT = b.last_used_at?.getTime() ?? 0;
-        return aT - bT || a.position - b.position;
-      });
-      return sorted;
-    case "least_used":
-      sorted.sort((a, b) => Number(a.request_count) - Number(b.request_count) || a.position - b.position);
-      return sorted;
-    case "random":
-      for (let i = sorted.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [sorted[i], sorted[j]] = [sorted[j], sorted[i]];
-      }
-      return sorted;
-    case "fill_first":
-    default:
-      sorted.sort((a, b) => a.position - b.position);
-      return sorted;
-  }
 }
 
 class PgProviderCommandStore implements ProviderCommandStore {
@@ -359,11 +124,28 @@ class PgProviderCommandStore implements ProviderCommandStore {
 
   private async providerById(spaceId: string, providerId: string): Promise<ProviderRow | null> {
     const result = await this.pool.query<ProviderRow>(
-      `SELECT id, space_id, name, provider_type, base_url, default_model,
-              enabled, credential_id, capabilities_json, config_json,
-              created_at, updated_at
-         FROM model_providers
-        WHERE space_id = $1 AND id = $2
+      `SELECT p.id,
+              g.space_id AS space_id,
+              p.space_id AS home_space_id,
+              p.owner_user_id,
+              p.name,
+              p.provider_type,
+              p.base_url,
+              p.default_model,
+              COALESCE(g.network_profile_id, p.network_profile_id) AS network_profile_id,
+              p.enabled,
+              p.credential_id,
+              p.capabilities_json,
+              p.config_json,
+              g.is_default AS grant_is_default,
+              p.created_at,
+              p.updated_at
+         FROM model_provider_space_grants g
+         JOIN model_providers p ON p.id = g.provider_id
+        WHERE g.space_id = $1
+          AND g.provider_id = $2
+          AND g.enabled = true
+          AND p.enabled = true
         LIMIT 1`,
       [spaceId, providerId],
     );
@@ -372,18 +154,54 @@ class PgProviderCommandStore implements ProviderCommandStore {
 
   private async defaultProvider(spaceId: string): Promise<ProviderRow | null> {
     const result = await this.pool.query<ProviderRow>(
-      `SELECT id, space_id, name, provider_type, base_url, default_model,
-              enabled, credential_id, capabilities_json, config_json,
-              created_at, updated_at
-         FROM model_providers
-        WHERE space_id = $1
-          AND enabled = true
-          AND COALESCE((config_json->>'is_default')::boolean, false) = true
-        ORDER BY created_at DESC
+      `SELECT p.id,
+              g.space_id AS space_id,
+              p.space_id AS home_space_id,
+              p.owner_user_id,
+              p.name,
+              p.provider_type,
+              p.base_url,
+              p.default_model,
+              COALESCE(g.network_profile_id, p.network_profile_id) AS network_profile_id,
+              p.enabled,
+              p.credential_id,
+              p.capabilities_json,
+              p.config_json,
+              g.is_default AS grant_is_default,
+              p.created_at,
+              p.updated_at
+         FROM model_provider_space_grants g
+         JOIN model_providers p ON p.id = g.provider_id
+        WHERE g.space_id = $1
+          AND g.enabled = true
+          AND p.enabled = true
+          AND g.is_default = true
+        ORDER BY p.created_at DESC
         LIMIT 1`,
       [spaceId],
     );
     return result.rows[0] ?? null;
+  }
+
+  private async providerOwnedBy(userId: string, providerId: string): Promise<ProviderRow | null> {
+    const result = await this.pool.query<ProviderRow>(
+      `SELECT id, space_id, space_id AS home_space_id, owner_user_id, name, provider_type,
+              base_url, default_model, network_profile_id, enabled, credential_id,
+              capabilities_json, config_json, created_at, updated_at
+         FROM model_providers
+        WHERE id = $1 AND owner_user_id = $2
+        LIMIT 1`,
+      [providerId, userId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async requireOwnedProvider(userId: string, providerId: string): Promise<ProviderRow> {
+    const row = await this.providerOwnedBy(userId, providerId);
+    if (!row) {
+      throw new ProviderCommandNotFoundError(`ModelProvider '${providerId}' not found`);
+    }
+    return row;
   }
 
   private async requireProvider(spaceId: string, providerId: string): Promise<ProviderRow> {
@@ -396,13 +214,31 @@ class PgProviderCommandStore implements ProviderCommandStore {
 
   private async clearDefault(spaceId: string, exceptId?: string): Promise<void> {
     await this.pool.query(
-      `UPDATE model_providers
-          SET config_json = jsonb_set(COALESCE(config_json, '{}'::jsonb), '{is_default}', 'false'::jsonb, true),
+      `UPDATE model_provider_space_grants
+          SET is_default = false,
               updated_at = $2
         WHERE space_id = $1
-          AND ($3::text IS NULL OR id <> $3)`,
+          AND ($3::text IS NULL OR provider_id <> $3)`,
       [spaceId, new Date(), exceptId ?? null],
     );
+  }
+
+  private async validateNetworkProfileId(
+    spaceId: string,
+    value: string | null | undefined,
+  ): Promise<string | null> {
+    const networkProfileId = optionalTrimmedString(value);
+    if (!networkProfileId) return null;
+    const profile = await resolveNetworkProfileRepository(this.config).resolve(
+      spaceId,
+      networkProfileId,
+    );
+    if (!profile) {
+      throw new ProviderCommandValidationError(
+        `NetworkProfile '${networkProfileId}' not found`,
+      );
+    }
+    return networkProfileId;
   }
 
   /**
@@ -413,6 +249,9 @@ class PgProviderCommandStore implements ProviderCommandStore {
   private async enrollPrimaryCredential(row: ProviderRow): Promise<void> {
     if (!row.credential_id) return;
     const now = new Date();
+    const homeSpaceId = typeof row.home_space_id === "string" && row.home_space_id
+      ? row.home_space_id
+      : row.space_id;
     await this.pool.query(
       `INSERT INTO model_provider_credentials
         (id, space_id, provider_id, credential_id, position, enabled, healthy,
@@ -420,12 +259,12 @@ class PgProviderCommandStore implements ProviderCommandStore {
        VALUES ($1, $2, $3, $4, 0, true, true, 0, 0, $5, $5)
        ON CONFLICT ON CONSTRAINT uq_model_provider_credentials_provider_credential
        DO NOTHING`,
-      [randomUUID(), row.space_id, row.id, row.credential_id, now],
+      [randomUUID(), homeSpaceId, row.id, row.credential_id, now],
     );
   }
 
   private async poolMembers(
-    spaceId: string,
+    _spaceId: string,
     providerId: string,
     withSecrets: boolean,
   ): Promise<PoolMemberRow[]> {
@@ -435,16 +274,17 @@ class PgProviderCommandStore implements ProviderCommandStore {
               m.cooldown_until, m.last_failure_class, m.request_count,
               m.failure_count, m.last_used_at, m.created_at, m.updated_at${secretColumn}
          FROM model_provider_credentials m
-         JOIN credentials c ON c.id = m.credential_id AND c.space_id = m.space_id
-        WHERE m.space_id = $1 AND m.provider_id = $2
+         JOIN credentials c ON c.id = m.credential_id
+        WHERE m.provider_id = $1
         ORDER BY m.position ASC, m.created_at ASC`,
-      [spaceId, providerId],
+      [providerId],
     );
     return result.rows;
   }
 
   private async attachApiKeyCredential(
-    spaceId: string,
+    homeSpaceId: string,
+    ownerUserId: string,
     providerId: string,
     providerName: string,
     existingCredentialId: string | null | undefined,
@@ -455,10 +295,10 @@ class PgProviderCommandStore implements ProviderCommandStore {
     if (existingCredentialId) {
       const updated = await this.pool.query<{ id: string }>(
         `UPDATE credentials
-            SET secret_ref = $3, updated_at = $4
+            SET secret_ref = $3, owner_user_id = COALESCE(owner_user_id, $5), updated_at = $4
           WHERE id = $1 AND space_id = $2
           RETURNING id`,
-        [existingCredentialId, spaceId, secretRef, now],
+        [existingCredentialId, homeSpaceId, secretRef, now, ownerUserId],
       );
       if (updated.rows[0]) {
         // A re-keyed credential is healthy again until proven otherwise.
@@ -466,7 +306,7 @@ class PgProviderCommandStore implements ProviderCommandStore {
           `UPDATE model_provider_credentials
               SET healthy = true, cooldown_until = NULL, last_failure_class = NULL, updated_at = $3
             WHERE space_id = $1 AND credential_id = $2`,
-          [spaceId, existingCredentialId, now],
+          [homeSpaceId, existingCredentialId, now],
         );
         return updated.rows[0].id;
       }
@@ -475,14 +315,14 @@ class PgProviderCommandStore implements ProviderCommandStore {
     const credentialId = randomUUID();
     await this.pool.query(
       `INSERT INTO credentials
-        (id, space_id, name, credential_type, secret_ref, scopes_json, created_at, updated_at)
-       VALUES ($1, $2, $3, 'api_key', $4, $5::jsonb, $6, $6)`,
-      [credentialId, spaceId, `${providerName} API key`, secretRef, json([]), now],
+        (id, space_id, owner_user_id, name, credential_type, secret_ref, scopes_json, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'api_key', $5, $6::jsonb, $7, $7)`,
+      [credentialId, homeSpaceId, ownerUserId, `${providerName} API key`, secretRef, json([]), now],
     );
     await this.pool.query(
       `UPDATE model_providers SET credential_id = $3, updated_at = $4
         WHERE id = $1 AND space_id = $2`,
-      [providerId, spaceId, credentialId, now],
+      [providerId, homeSpaceId, credentialId, now],
     );
     await this.pool.query(
       `INSERT INTO model_provider_credentials
@@ -491,40 +331,64 @@ class PgProviderCommandStore implements ProviderCommandStore {
        VALUES ($1, $2, $3, $4, 0, true, true, 0, 0, $5, $5)
        ON CONFLICT ON CONSTRAINT uq_model_provider_credentials_provider_credential
        DO NOTHING`,
-      [randomUUID(), spaceId, providerId, credentialId, now],
+      [randomUUID(), homeSpaceId, providerId, credentialId, now],
     );
     return credentialId;
   }
 
-  async createProvider(spaceId: string, input: ModelProviderCreateInput): Promise<unknown> {
+  async createProvider(
+    spaceId: string,
+    userId: string,
+    input: ModelProviderCreateInput,
+  ): Promise<unknown> {
     validateCreateFields(input);
     const isDefault = Boolean(input.is_default);
     if (isDefault) await this.clearDefault(spaceId);
+    const networkProfileId = await this.validateNetworkProfileId(
+      spaceId,
+      input.network_profile_id,
+    );
 
     const providerId = randomUUID();
     const now = new Date();
     const models = modelList(input.default_model, input.available_models ?? []);
     const name = input.name.trim();
+    const baseUrl = normalizeBaseUrl(input.provider_type, input.base_url);
     await this.pool.query(
       `INSERT INTO model_providers
-        (id, space_id, name, provider_type, base_url, default_model, enabled,
-         credential_id, capabilities_json, config_json, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8::jsonb, $9::jsonb, $10, $10)`,
+        (id, space_id, owner_user_id, name, provider_type, base_url, default_model, enabled,
+         credential_id, network_profile_id, capabilities_json, config_json, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL, $9::jsonb, $10::jsonb, $11, $11)`,
       [
         providerId,
         spaceId,
+        userId,
         name,
         input.provider_type,
-        input.base_url || null,
+        baseUrl,
         input.default_model || (models[0] ?? null),
         input.enabled ?? true,
         json({ models }),
-        json({ is_default: isDefault }),
+        json({
+          ...(optionalTrimmedString(input.claude_compatible_base_url)
+            ? { claude_compatible_base_url: optionalTrimmedString(input.claude_compatible_base_url) }
+            : {}),
+          ...(optionalTrimmedString(input.openai_compatible_base_url)
+            ? { openai_compatible_base_url: optionalTrimmedString(input.openai_compatible_base_url) }
+            : {}),
+        }),
         now,
       ],
     );
+    await this.pool.query(
+      `INSERT INTO model_provider_space_grants
+        (id, provider_id, space_id, owner_user_id, granted_by_user_id, enabled,
+         is_default, network_profile_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $4, true, $5, $6, $7, $7)`,
+      [randomUUID(), providerId, spaceId, userId, isDefault, networkProfileId, now],
+    );
     if (input.api_key?.trim()) {
-      await this.attachApiKeyCredential(spaceId, providerId, name, null, input.api_key);
+      await this.attachApiKeyCredential(spaceId, userId, providerId, name, null, input.api_key);
     }
     const row = await this.providerById(spaceId, providerId);
     if (!row) throw new Error("created provider was not readable");
@@ -533,16 +397,23 @@ class PgProviderCommandStore implements ProviderCommandStore {
 
   async updateProvider(
     spaceId: string,
+    userId: string,
     providerId: string,
     input: ModelProviderUpdateInput,
   ): Promise<unknown> {
-    const current = await this.requireProvider(spaceId, providerId);
+    const current = await this.requireOwnedProvider(userId, providerId);
 
     const providerType = input.provider_type ?? current.provider_type;
     validateProviderType(providerType);
     const baseUrl =
-      input.base_url === undefined ? current.base_url : input.base_url || null;
+      input.base_url === undefined
+        ? normalizeBaseUrl(providerType, current.base_url)
+        : normalizeBaseUrl(providerType, input.base_url);
     validateBaseUrl(providerType, baseUrl);
+    const networkProfileId =
+      input.network_profile_id === undefined
+        ? current.network_profile_id ?? null
+        : await this.validateNetworkProfileId(spaceId, input.network_profile_id);
     if (input.is_default === true && !isDefaultFromRow(current)) {
       await this.clearDefault(spaceId, providerId);
     }
@@ -552,7 +423,8 @@ class PgProviderCommandStore implements ProviderCommandStore {
     const apiKey = input.api_key?.trim();
     if (apiKey) {
       credentialId = await this.attachApiKeyCredential(
-        spaceId,
+        current.space_id,
+        userId,
         providerId,
         name,
         credentialId,
@@ -567,7 +439,17 @@ class PgProviderCommandStore implements ProviderCommandStore {
     const defaultModel =
       input.default_model === undefined ? current.default_model : input.default_model || null;
     const configJson = configRecord(current);
-    if (input.is_default !== undefined) configJson.is_default = input.is_default;
+    delete configJson.is_default;
+    if (input.claude_compatible_base_url !== undefined) {
+      const claudeUrl = optionalTrimmedString(input.claude_compatible_base_url);
+      if (claudeUrl) configJson.claude_compatible_base_url = claudeUrl;
+      else delete configJson.claude_compatible_base_url;
+    }
+    if (input.openai_compatible_base_url !== undefined) {
+      const openAiUrl = optionalTrimmedString(input.openai_compatible_base_url);
+      if (openAiUrl) configJson.openai_compatible_base_url = openAiUrl;
+      else delete configJson.openai_compatible_base_url;
+    }
 
     const updated = await this.pool.query<ProviderRow>(
       `UPDATE model_providers
@@ -577,40 +459,172 @@ class PgProviderCommandStore implements ProviderCommandStore {
               default_model = $6,
               enabled = $7,
               credential_id = $8,
-              capabilities_json = $9::jsonb,
-              config_json = $10::jsonb,
-              updated_at = $11
+              network_profile_id = $9,
+              capabilities_json = $10::jsonb,
+              config_json = $11::jsonb,
+              updated_at = $12
         WHERE id = $1 AND space_id = $2
         RETURNING id, space_id, name, provider_type, base_url, default_model,
-                  enabled, credential_id, capabilities_json, config_json,
+                  network_profile_id, enabled, credential_id, capabilities_json, config_json,
                   created_at, updated_at`,
       [
         providerId,
-        spaceId,
+        current.space_id,
         name,
         providerType,
         baseUrl,
         defaultModel,
         input.enabled ?? current.enabled,
         credentialId,
+        null,
         json({ models: modelList(defaultModel, available) }),
         json(configJson),
         new Date(),
       ],
     );
-    return mapProviderRowToDto(updated.rows[0]);
+    if (input.network_profile_id !== undefined || input.is_default !== undefined) {
+      await this.grantProviderToSpace(spaceId, userId, providerId, {
+        space_id: spaceId,
+        network_profile_id: input.network_profile_id === undefined ? undefined : networkProfileId,
+        is_default: input.is_default,
+      });
+    }
+    const row = await this.providerById(spaceId, providerId);
+    if (!row) return mapProviderRowToDto(updated.rows[0]);
+    return mapProviderRowToDto({ ...row, manageable: true });
   }
 
-  async deleteProvider(spaceId: string, providerId: string): Promise<void> {
-    const current = await this.requireProvider(spaceId, providerId);
+  async deleteProvider(spaceId: string, userId: string, providerId: string): Promise<void> {
+    const current = await this.requireOwnedProvider(userId, providerId);
     const cfg = configRecord(current);
     cfg.is_default = false;
     await this.pool.query(
       `UPDATE model_providers
           SET enabled = false, config_json = $3::jsonb, updated_at = $4
         WHERE id = $1 AND space_id = $2`,
-      [providerId, spaceId, json(cfg), new Date()],
+      [providerId, current.space_id, json(cfg), new Date()],
     );
+    await this.pool.query(
+      `UPDATE model_provider_space_grants
+          SET enabled = false, is_default = false, updated_at = $2
+        WHERE provider_id = $1`,
+      [providerId, new Date()],
+    );
+  }
+
+  private async userSpaceRole(userId: string, spaceId: string): Promise<string | null> {
+    const result = await this.pool.query<{ role: string }>(
+      `SELECT role
+         FROM space_memberships
+        WHERE user_id = $1 AND space_id = $2 AND status = 'active'
+        LIMIT 1`,
+      [userId, spaceId],
+    );
+    return result.rows[0]?.role ?? null;
+  }
+
+  private async requireSpaceMembership(userId: string, spaceId: string): Promise<void> {
+    if (await this.userSpaceRole(userId, spaceId)) return;
+    throw new ProviderCommandNotFoundError(`Space '${spaceId}' not found`);
+  }
+
+  private async canAdminSpace(userId: string, spaceId: string): Promise<boolean> {
+    const role = await this.userSpaceRole(userId, spaceId);
+    return role === "owner" || role === "admin";
+  }
+
+  async grantProviderToSpace(
+    activeSpaceId: string,
+    userId: string,
+    providerId: string,
+    input: ProviderSpaceGrantInput,
+  ): Promise<unknown> {
+    const provider = await this.requireOwnedProvider(userId, providerId);
+    const targetSpaceId = input.space_id || activeSpaceId;
+    await this.requireSpaceMembership(userId, targetSpaceId);
+    const networkProfileId =
+      input.network_profile_id === undefined
+        ? undefined
+        : await this.validateNetworkProfileId(targetSpaceId, input.network_profile_id);
+    const existingGrant = await this.pool.query<{ is_default: boolean }>(
+      `SELECT is_default
+         FROM model_provider_space_grants
+        WHERE provider_id = $1 AND space_id = $2
+        LIMIT 1`,
+      [providerId, targetSpaceId],
+    );
+    const isDefault =
+      input.is_default === undefined
+        ? Boolean(existingGrant.rows[0]?.is_default)
+        : Boolean(input.is_default);
+    if (isDefault) await this.clearDefault(targetSpaceId, providerId);
+    const now = new Date();
+    const result = await this.pool.query<{
+      id: string;
+      provider_id: string;
+      space_id: string;
+      owner_user_id: string | null;
+      granted_by_user_id: string | null;
+      enabled: boolean;
+      is_default: boolean;
+      network_profile_id: string | null;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `INSERT INTO model_provider_space_grants
+        (id, provider_id, space_id, owner_user_id, granted_by_user_id, enabled,
+         is_default, network_profile_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+       ON CONFLICT ON CONSTRAINT uq_model_provider_space_grants_provider_space
+       DO UPDATE SET enabled = EXCLUDED.enabled,
+                     is_default = EXCLUDED.is_default,
+                     network_profile_id = CASE
+                       WHEN $10::boolean THEN EXCLUDED.network_profile_id
+                       ELSE model_provider_space_grants.network_profile_id
+                     END,
+                     granted_by_user_id = EXCLUDED.granted_by_user_id,
+                     owner_user_id = EXCLUDED.owner_user_id,
+                     updated_at = EXCLUDED.updated_at
+       RETURNING id, provider_id, space_id, owner_user_id, granted_by_user_id,
+                 enabled, is_default, network_profile_id, created_at, updated_at`,
+      [
+        randomUUID(),
+        providerId,
+        targetSpaceId,
+        provider.owner_user_id ?? userId,
+        userId,
+        input.enabled ?? true,
+        isDefault,
+        networkProfileId ?? null,
+        now,
+        input.network_profile_id !== undefined,
+      ],
+    );
+    return grantOut(result.rows[0]);
+  }
+
+  async revokeProviderGrant(
+    _activeSpaceId: string,
+    userId: string,
+    providerId: string,
+    grantSpaceId: string,
+  ): Promise<void> {
+    const owned = await this.providerOwnedBy(userId, providerId);
+    if (!owned && !(await this.canAdminSpace(userId, grantSpaceId))) {
+      throw new ProviderCommandNotFoundError(`ModelProvider '${providerId}' not found`);
+    }
+    const result = await this.pool.query(
+      `UPDATE model_provider_space_grants
+          SET enabled = false,
+              is_default = false,
+              updated_at = $3
+        WHERE provider_id = $1 AND space_id = $2 AND enabled = true
+        RETURNING id`,
+      [providerId, grantSpaceId, new Date()],
+    );
+    if (result.rowCount === 0) {
+      throw new ProviderCommandNotFoundError(`ModelProvider grant not found`);
+    }
   }
 
   async getInvocationTarget(
@@ -650,6 +664,10 @@ class PgProviderCommandStore implements ProviderCommandStore {
     }
     return {
       provider: providerInfoFromRow(row),
+      network_profile: await resolveNetworkProfileRepository(this.config).resolve(
+        spaceId,
+        row.network_profile_id,
+      ),
       rotation_strategy: strategy,
       fallback_provider_ids: fallbackProviderIdsFromRow(row),
       candidates,
@@ -777,10 +795,11 @@ class PgProviderCommandStore implements ProviderCommandStore {
 
   async addPoolCredential(
     spaceId: string,
+    userId: string,
     providerId: string,
     input: ProviderPoolCredentialAddInput,
   ): Promise<unknown> {
-    const row = await this.requireProvider(spaceId, providerId);
+    const row = await this.requireOwnedProvider(userId, providerId);
     if (!input.api_key.trim()) {
       throw new ProviderCommandValidationError("api_key must not be empty");
     }
@@ -795,31 +814,31 @@ class PgProviderCommandStore implements ProviderCommandStore {
     if (position === undefined) {
       const result = await this.pool.query<{ max: number | null }>(
         `SELECT MAX(position) AS max FROM model_provider_credentials
-          WHERE space_id = $1 AND provider_id = $2`,
-        [spaceId, providerId],
+          WHERE provider_id = $1`,
+        [providerId],
       );
       position = (result.rows[0]?.max ?? -1) + 1;
     }
 
     await this.pool.query(
       `INSERT INTO credentials
-        (id, space_id, name, credential_type, secret_ref, scopes_json, created_at, updated_at)
-       VALUES ($1, $2, $3, 'api_key', $4, $5::jsonb, $6, $6)`,
-      [credentialId, spaceId, name, secretRef, json([]), now],
+        (id, space_id, owner_user_id, name, credential_type, secret_ref, scopes_json, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'api_key', $5, $6::jsonb, $7, $7)`,
+      [credentialId, row.space_id, userId, name, secretRef, json([]), now],
     );
     await this.pool.query(
       `INSERT INTO model_provider_credentials
         (id, space_id, provider_id, credential_id, position, enabled, healthy,
          request_count, failure_count, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, true, true, 0, 0, $6, $6)`,
-      [memberId, spaceId, providerId, credentialId, position, now],
+      [memberId, row.space_id, providerId, credentialId, position, now],
     );
     // A provider that previously had no key at all gains this one as primary.
     if (!row.credential_id) {
       await this.pool.query(
         `UPDATE model_providers SET credential_id = $3, updated_at = $4
           WHERE id = $1 AND space_id = $2`,
-        [providerId, spaceId, credentialId, now],
+        [providerId, row.space_id, credentialId, now],
       );
     }
     const members = await this.poolMembers(spaceId, providerId, false);
@@ -828,13 +847,18 @@ class PgProviderCommandStore implements ProviderCommandStore {
     return mapPoolMember(created);
   }
 
-  async removePoolCredential(spaceId: string, providerId: string, memberId: string): Promise<void> {
-    const row = await this.requireProvider(spaceId, providerId);
+  async removePoolCredential(
+    spaceId: string,
+    userId: string,
+    providerId: string,
+    memberId: string,
+  ): Promise<void> {
+    const row = await this.requireOwnedProvider(userId, providerId);
     const member = await this.pool.query<{ credential_id: string }>(
       `DELETE FROM model_provider_credentials
-        WHERE id = $1 AND space_id = $2 AND provider_id = $3
+        WHERE id = $1 AND provider_id = $2
         RETURNING credential_id`,
-      [memberId, spaceId, providerId],
+      [memberId, providerId],
     );
     const credentialId = member.rows[0]?.credential_id;
     if (!credentialId) {
@@ -848,7 +872,7 @@ class PgProviderCommandStore implements ProviderCommandStore {
       await this.pool.query(
         `UPDATE model_providers SET credential_id = $3, updated_at = $4
           WHERE id = $1 AND space_id = $2`,
-        [providerId, spaceId, next, now],
+        [providerId, row.space_id, next, now],
       );
     }
     // Drop the credential row itself unless any other pool still references it.
@@ -862,17 +886,18 @@ class PgProviderCommandStore implements ProviderCommandStore {
     if (stillUsed.rows.length === 0) {
       await this.pool.query(`DELETE FROM credentials WHERE id = $1 AND space_id = $2`, [
         credentialId,
-        spaceId,
+        row.space_id,
       ]);
     }
   }
 
   async updatePoolConfig(
     spaceId: string,
+    userId: string,
     providerId: string,
     input: ProviderPoolConfigUpdateInput,
   ): Promise<unknown> {
-    const row = await this.requireProvider(spaceId, providerId);
+    const row = await this.requireOwnedProvider(userId, providerId);
     const cfg = configRecord(row);
     if (input.rotation_strategy !== undefined) {
       if (!ROTATION_STRATEGIES.has(input.rotation_strategy)) {
@@ -896,7 +921,7 @@ class PgProviderCommandStore implements ProviderCommandStore {
     await this.pool.query(
       `UPDATE model_providers SET config_json = $3::jsonb, updated_at = $4
         WHERE id = $1 AND space_id = $2`,
-      [providerId, spaceId, json(cfg), new Date()],
+      [providerId, row.space_id, json(cfg), new Date()],
     );
     return this.listPool(spaceId, providerId);
   }

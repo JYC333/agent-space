@@ -21,7 +21,7 @@ describe('navigation model', () => {
     expect(labels).not.toContain('my view')
     expect(labels).not.toContain('personalview')
     expect(labels).toEqual(expect.arrayContaining([
-      'home', 'inbox', 'review', 'knowledge', 'tasks', 'agents', 'evolution', 'workspaces', 'settings',
+      'home', 'inbox', 'review', 'knowledge', 'tasks', 'agents', 'evolution', 'workspaces', 'instance settings', 'settings',
     ]))
   })
 
@@ -39,6 +39,7 @@ describe('navigation model', () => {
     const byId = Object.fromEntries(RAIL_ITEMS.map(i => [i.id, i.scope]))
     expect(byId.home).toBe('home')
     expect(byId.settings).toBe('home')
+    expect(byId['instance-settings']).toBe('home')
     expect(byId.evolution).toBe('home')
     expect(byId.inbox).toBe('space')
     expect(byId.review).toBe('space')
@@ -75,6 +76,8 @@ describe('spacePath / stripSpacePrefix', () => {
   it('leaves user-scoped, already-scoped, and missing-space paths untouched', () => {
     expect(spacePath('team-1', '/home')).toBe('/home')
     expect(spacePath('team-1', '/settings')).toBe('/settings')
+    expect(spacePath('team-1', '/instance-settings')).toBe('/instance-settings')
+    expect(spacePath('team-1', '/cli-profiles')).toBe('/cli-profiles')
     expect(spacePath('team-1', '/evolution')).toBe('/evolution')
     expect(spacePath('team-1', '/spaces/other/today')).toBe('/spaces/other/today')
     expect(spacePath(null, '/proposals')).toBe('/proposals')

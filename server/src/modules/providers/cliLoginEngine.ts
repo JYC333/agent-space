@@ -201,6 +201,7 @@ async function syncCredentials(
   emit: LoginEmit,
   loginStartedAt: number,
   loginHome: string,
+  profileId?: string | null,
 ): Promise<boolean> {
   if (!cfg.home_subdir) return false;
 
@@ -236,7 +237,7 @@ async function syncCredentials(
     emit({
       type: "synced",
       text: "Credentials copied to managed profile.\n",
-      profile_id: `${runtime}/default`,
+      profile_id: profileId ?? null,
     });
     return true;
   } catch (error) {
@@ -252,11 +253,13 @@ async function syncCredentials(
 
 async function runPtyLogin(
   runtime: string,
+  sessionKey: string,
   cfg: LoginRuntimeConfig,
   profileDir: string,
   emit: LoginEmit,
   loginHome: string,
   timings: LoginTimings,
+  profileId?: string | null,
 ): Promise<void> {
   const command = cfg.command as string[];
   // Captured before spawn so a credential file written during login is newer.
@@ -271,8 +274,8 @@ async function runPtyLogin(
   env.HOME = loginHome;
   isolateVendorLoginEnv(env);
 
-  activeLogins.get(runtime)?.kill();
-  activeLogins.delete(runtime);
+  activeLogins.get(sessionKey)?.kill();
+  activeLogins.delete(sessionKey);
 
   await mkdir(loginHome, { recursive: true, mode: 0o700 });
   const factory = ptyFactoryOverride ?? (await defaultPtyFactory());
@@ -317,7 +320,7 @@ async function runPtyLogin(
     }
   });
 
-  activeLogins.set(runtime, {
+  activeLogins.set(sessionKey, {
     write(input: string): boolean {
       try {
         handle.write(`${input.trim()}\r`);
@@ -381,7 +384,7 @@ async function runPtyLogin(
       }
     }
   } finally {
-    activeLogins.delete(runtime);
+    activeLogins.delete(sessionKey);
   }
 
   if (!exited) {
@@ -390,7 +393,16 @@ async function runPtyLogin(
   }
 
   // Report success when credentials landed, even if the TUI exit code was non-zero.
-  const synced = await syncCredentials(exitCode, cfg, profileDir, runtime, emit, startedAt, loginHome);
+  const synced = await syncCredentials(
+    exitCode,
+    cfg,
+    profileDir,
+    runtime,
+    emit,
+    startedAt,
+    loginHome,
+    profileId,
+  );
   emit({ type: "done", exit_code: synced ? 0 : exitCode });
 }
 
@@ -406,6 +418,8 @@ export async function runCliLogin(
   timings: LoginTimings = DEFAULT_TIMINGS,
   toolResolver?: LoginToolResolver,
   loginHome?: string,
+  profileId?: string | null,
+  sessionKey?: string,
 ): Promise<void> {
   if (!cfg) {
     emit({ type: "error", text: `Unknown runtime: ${runtime}\n` });
@@ -444,7 +458,16 @@ export async function runCliLogin(
   emit({ type: "output", text: `$ ${command.join(" ")}\n` });
   if (cfg.hint_cli) emit({ type: "hint", text: `${cfg.hint_cli}\n` });
 
-  await runPtyLogin(runtime, runtimeCfg, profileDir, emit, resolvedHome, timings);
+  await runPtyLogin(
+    runtime,
+    sessionKey ?? runtime,
+    runtimeCfg,
+    profileDir,
+    emit,
+    resolvedHome,
+    timings,
+    profileId,
+  );
 }
 
 /**
@@ -452,8 +475,8 @@ export async function runCliLogin(
  * PTY logins also advance to the post_code state so the engine starts
  * sending /exit. Returns true when the input was delivered.
  */
-export function sendCliLoginInput(runtime: string, input: string): boolean {
-  const session = activeLogins.get(runtime);
+export function sendCliLoginInput(runtime: string, input: string, sessionKey?: string): boolean {
+  const session = activeLogins.get(sessionKey ?? runtime);
   if (!session) return false;
   return session.write(input);
 }

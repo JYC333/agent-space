@@ -24,6 +24,7 @@ export interface CurrentUser {
   email: string | null;
   display_name: string;
   avatar_url: string | null;
+  is_instance_admin: boolean;
   created_at: string;
   last_login_at: string | null;
 }
@@ -112,7 +113,7 @@ export function __setAuthIdentityForTests(
 export function authRepositoryFromConfig(config: ServerConfig): AuthRepository | null {
   if (repositoryOverride) return repositoryOverride;
   if (!config.databaseUrl) return null;
-  return new PgAuthRepository(getDbPool(config.databaseUrl));
+  return new PgAuthRepository(getDbPool(config.databaseUrl), config.instanceAdminEmail);
 }
 
 export async function introspectIdentity(
@@ -185,7 +186,10 @@ function now(): Date {
 }
 
 export class PgAuthRepository implements AuthRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly instanceAdminEmail: string | null = null,
+  ) {}
 
   async resolveIdentity(input: {
     authorization?: string;
@@ -249,6 +253,7 @@ export class PgAuthRepository implements AuthRepository {
       email: user.email,
       display_name: user.display_name,
       avatar_url: user.avatar_url,
+      is_instance_admin: isInstanceAdminEmail(user.email, this.instanceAdminEmail),
       created_at: asIso(user.created_at)!,
       last_login_at: asIso(user.last_login_at),
     };
@@ -333,7 +338,7 @@ export class PgAuthRepository implements AuthRepository {
             RETURNING id, email, display_name, avatar_url, created_at, last_login_at`,
           [account.rows[0].user_id, input.email, input.displayName, input.avatarUrl ?? null],
         );
-        return currentUserFromRow(updated.rows[0]);
+        return currentUserFromRow(updated.rows[0], this.instanceAdminEmail);
       }
 
       const userId = randomUUID();
@@ -363,7 +368,7 @@ export class PgAuthRepository implements AuthRepository {
         [randomUUID(), personalSpaceId, userId],
       );
       await seedSpaceDefaults(client, personalSpaceId);
-      return currentUserFromRow(inserted.rows[0]);
+      return currentUserFromRow(inserted.rows[0], this.instanceAdminEmail);
     });
   }
 
@@ -446,12 +451,21 @@ export class PgAuthRepository implements AuthRepository {
   }
 }
 
-function currentUserFromRow(user: UserRow): CurrentUser {
+function isInstanceAdminEmail(email: string | null, instanceAdminEmail: string | null): boolean {
+  return Boolean(
+    email &&
+    instanceAdminEmail &&
+    email.trim().toLowerCase() === instanceAdminEmail.trim().toLowerCase(),
+  );
+}
+
+function currentUserFromRow(user: UserRow, instanceAdminEmail: string | null): CurrentUser {
   return {
     id: user.id,
     email: user.email,
     display_name: user.display_name,
     avatar_url: user.avatar_url,
+    is_instance_admin: isInstanceAdminEmail(user.email, instanceAdminEmail),
     created_at: asIso(user.created_at)!,
     last_login_at: asIso(user.last_login_at),
   };

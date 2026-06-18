@@ -175,17 +175,15 @@ describe("RunMaterializationService", () => {
     ]);
   });
 
-  it("calls the server finalization service directly", async () => {
+  it("returns a finalization materialization item for terminal runs", async () => {
     const db = new FakeDb();
     const config = loadConfig({
       SERVER_DATABASE_URL: "postgresql://server@localhost:5432/agent_space",
     });
-    const calls: Array<{ runId: string; spaceId: string }> = [];
     const finalizer = {
       async finalize(runId: string, spaceId: string): Promise<RunFinalizationRecord> {
-        calls.push({ runId, spaceId });
         return {
-          id: "finalization-1",
+          id: `${spaceId}:${runId}:finalization`,
           space_id: spaceId,
           run_id: runId,
           finalizer_version: "post_run_finalization.v1",
@@ -213,13 +211,12 @@ describe("RunMaterializationService", () => {
 
     const result = await service.finalizeRun(run({ status: "succeeded" }));
 
-    expect(calls).toEqual([{ runId: "run-1", spaceId: "space-1" }]);
     expect(result).toMatchObject({
       kind: "activity",
       status: "succeeded",
-      activity_id: "finalization-1",
+      activity_id: "space-1:run-1:finalization",
       metadata_json: {
-        run_finalization_id: "finalization-1",
+        run_finalization_id: "space-1:run-1:finalization",
         run_evaluation_id: "evaluation-1",
         task_evaluation_id: "task-evaluation-1",
       },

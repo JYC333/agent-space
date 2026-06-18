@@ -17,6 +17,7 @@ import {
 } from "./config";
 import { startBackgroundServices } from "./modules/jobs/backgroundServices";
 import { enforceBackupPolicy, BackupPolicyError } from "./modules/backups/guard";
+import { startProviderProxyServer } from "./modules/providers/providerProxyServer";
 
 async function main(): Promise<void> {
   let config;
@@ -58,12 +59,16 @@ async function main(): Promise<void> {
   );
 
   let background: ReturnType<typeof startBackgroundServices> | null = null;
+  let providerProxy: Awaited<ReturnType<typeof startProviderProxyServer>> | null = null;
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info(`[server] received ${signal}, shutting down`);
     if (background) {
       await background.worker?.stop();
       await background.scheduler.stop();
+    }
+    if (providerProxy) {
+      await providerProxy.close();
     }
     await app.close();
     process.exit(0);
@@ -72,8 +77,11 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   try {
+    providerProxy = await startProviderProxyServer(config);
+    app.log.info(`[server] provider proxy listening on ${providerProxy.baseUrl}`);
     await app.listen({ host: config.host, port: config.port });
   } catch (err) {
+    await providerProxy?.close();
     app.log.error(err, "[server] failed to start");
     process.exit(1);
   }

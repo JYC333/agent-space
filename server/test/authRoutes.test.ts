@@ -37,6 +37,7 @@ function fakeRepo(overrides: Partial<AuthRepository> = {}): AuthRepository {
         avatar_url: null,
         created_at: "2026-06-15T12:00:00.000Z",
         last_login_at: null,
+        is_instance_admin: false,
       };
     },
     async getUserSpaces() {
@@ -71,6 +72,7 @@ function fakeRepo(overrides: Partial<AuthRepository> = {}): AuthRepository {
         avatar_url: null,
         created_at: "2026-06-15T12:00:00.000Z",
         last_login_at: null,
+        is_instance_admin: false,
       };
     },
     async createSession() {
@@ -244,6 +246,7 @@ describe("native server auth routes", () => {
             avatar_url: input.avatarUrl ?? null,
             created_at: "2026-06-15T12:00:00.000Z",
             last_login_at: "2026-06-15T12:00:00.000Z",
+            is_instance_admin: false,
           };
         },
         async createSession(userId) {

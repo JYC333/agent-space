@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import {
   type CliCredentialBrokerPort,
   type CliExecutionResult,
 } from "../src/modules/runs/vendorCliAdapter";
+import { ProviderProxyLeaseRegistry } from "../src/modules/providers/providerProxyLease";
 import type { RuntimeToolResolverPort } from "../src/modules/runtimeTools";
 import type { RunRecord } from "../src/modules/runs/repository";
 
@@ -54,6 +55,7 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
 class FakeBroker implements CliCredentialBrokerPort {
   grants: Array<{
     runId: string;
+    spaceId: string;
     runtime: string;
     executorMode: string;
     profileId?: string | null;
@@ -63,11 +65,12 @@ class FakeBroker implements CliCredentialBrokerPort {
 
   async grantForRun(
     runId: string,
+    spaceId: string,
     runtime: string,
     executorMode: "worktree" | "docker",
     profileId?: string | null,
   ) {
-    this.grants.push({ runId, runtime, executorMode, profileId });
+    this.grants.push({ runId, spaceId, runtime, executorMode, profileId });
     const env: Record<string, string> = this.granted
       ? {
           HOME: `/tmp/runtime-home/${runId}`,
@@ -76,7 +79,7 @@ class FakeBroker implements CliCredentialBrokerPort {
       : {};
     return {
       granted: this.granted,
-      profile_id: this.granted ? profileId ?? `${runtime}/default` : null,
+      profile_id: this.granted ? profileId ?? "default-profile-id" : null,
       runtime,
       executor_mode: executorMode,
       readonly: false,
@@ -84,12 +87,49 @@ class FakeBroker implements CliCredentialBrokerPort {
       host_source_path: null,
       target_path: null,
       env,
+      network_profile_id: null,
       fallback_reason: this.granted ? null : "no_profile_configured",
     };
   }
 
   async cleanupRunHome(runId: string): Promise<void> {
     this.cleanups.push(runId);
+  }
+}
+
+class TempCodexBroker extends FakeBroker {
+  tempHome: string | null = null;
+  profileDir: string | null = null;
+
+  async grantForRun(
+    runId: string,
+    spaceId: string,
+    runtime: string,
+    executorMode: "worktree" | "docker",
+    profileId?: string | null,
+  ) {
+    this.grants.push({ runId, spaceId, runtime, executorMode, profileId });
+    const root = await mkdtemp(join(tmpdir(), "aspace-runtime-home-"));
+    tmpPaths.push(root);
+    this.tempHome = join(root, "home");
+    this.profileDir = join(root, "profile");
+    await mkdir(this.tempHome, { recursive: true });
+    await mkdir(this.profileDir, { recursive: true });
+    await writeFile(join(this.profileDir, "auth.json"), "{\"token\":\"login-state\"}", "utf8");
+    await symlink(this.profileDir, join(this.tempHome, ".codex"));
+    return {
+      granted: true,
+      profile_id: profileId ?? "default-profile-id",
+      runtime,
+      executor_mode: executorMode,
+      readonly: false,
+      temp_home: this.tempHome,
+      host_source_path: null,
+      target_path: null,
+      env: { HOME: this.tempHome },
+      network_profile_id: null,
+      fallback_reason: null,
+    };
   }
 }
 
@@ -148,7 +188,7 @@ describe("executeVendorCliAdapter", () => {
         sandbox_cwd: sandbox,
         context_text: "Repo instructions",
         adapter_config: {
-          credential_profile_id: "codex_cli/default",
+          credential_profile_id: "11111111-1111-4111-8111-111111111111",
           timeout: 120,
         },
       },
@@ -159,20 +199,31 @@ describe("executeVendorCliAdapter", () => {
     expect(broker.grants).toEqual([
       {
         runId: "run-1",
+        spaceId: "space-1",
         runtime: "codex_cli",
         executorMode: "worktree",
-        profileId: "codex_cli/default",
+        profileId: "11111111-1111-4111-8111-111111111111",
       },
     ]);
     expect(broker.cleanups).toEqual(["run-1"]);
     expect(executor.calls[0]).toMatchObject({
-      command: [process.execPath, "Fix the bug"],
+      command: [
+        process.execPath,
+        "--ask-for-approval",
+        "never",
+        "exec",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "workspace-write",
+        "Fix the bug",
+      ],
       cwd: sandbox,
       timeout_seconds: 120,
       run_id: "run-1",
       stdin: null,
     });
     expect(executor.calls[0].env.OPENAI_API_KEY).toBeUndefined();
+    expect(executor.calls[0].env.CODEX_HOME).toBe("/tmp/runtime-home/run-1/.codex");
     expect(executor.calls[0].env.SHOULD_NOT_PASS).toBeUndefined();
     expect(result).toMatchObject({
       adapter_type: "codex_cli",
@@ -181,12 +232,21 @@ describe("executeVendorCliAdapter", () => {
       output_text: "cli output",
       error_code: null,
       metadata_json: {
-        credential_profile_id: "codex_cli/default",
+        credential_profile_id: "11111111-1111-4111-8111-111111111111",
         context_file_type: "AGENTS.md",
         rendered_in_sandbox: true,
       },
       adapter_log_json: {
-        command: [process.execPath, "[REDACTED_PROMPT]"],
+        command: [
+          process.execPath,
+          "--ask-for-approval",
+          "never",
+          "exec",
+          "--skip-git-repo-check",
+          "--sandbox",
+          "workspace-write",
+          "[REDACTED_PROMPT]",
+        ],
         timeout_seconds: 120,
       },
     });
@@ -204,7 +264,7 @@ describe("executeVendorCliAdapter", () => {
         run: run({ required_sandbox_level: "ephemeral", workspace_id: null }),
         sandbox_cwd: sandbox,
         context_text: "Daily organize",
-        adapter_config: { credential_profile_id: "codex_cli/default", timeout: 60 },
+        adapter_config: { credential_profile_id: "11111111-1111-4111-8111-111111111111", timeout: 60 },
       },
       { credentialBroker: broker, executor, toolRegistry: new FakeTools() },
     );
@@ -218,6 +278,258 @@ describe("executeVendorCliAdapter", () => {
     expect(await readFile(join(sandbox, "AGENTS.md"), "utf8")).toBe("Daily organize");
   });
 
+  it("writes run-scoped Codex provider config for an OpenAI-compatible provider", async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), "aspace-cli-codex-provider-"));
+    tmpPaths.push(sandbox);
+    const broker = new TempCodexBroker();
+    const executor = new FakeExecutor();
+    const leases = new ProviderProxyLeaseRegistry();
+
+    const result = await executeVendorCliAdapter(
+      config(),
+      {
+        run: run({
+          model_provider_id: "provider-openai",
+          model_override_json: { model: "MiniMax-M3", source: "agent_default" },
+        }),
+        model: "MiniMax-M2.7",
+        sandbox_cwd: sandbox,
+        context_text: "Codex instructions",
+        adapter_config: { credential_profile_id: "11111111-1111-4111-8111-111111111111" },
+      },
+      {
+        credentialBroker: broker,
+        executor,
+        toolRegistry: new FakeTools(),
+        providerLeaseRegistry: leases,
+        providerProxyBaseUrl: "http://127.0.0.1:49152",
+        providerResolver: {
+          async getProvider(_spaceId, providerId) {
+            return {
+              id: providerId,
+              space_id: "space-1",
+              name: "MiniMax",
+              provider_type: "other",
+              base_url: "https://api.minimaxi.com/anthropic",
+              openai_compatible_base_url: "https://api.minimaxi.com/v1",
+              claude_compatible_base_url: "https://api.minimaxi.com/anthropic",
+              default_model: "MiniMax-M3",
+              available_models: ["MiniMax-M3", "MiniMax-M2.7"],
+              enabled: true,
+              is_default: false,
+            };
+          },
+        },
+      },
+    );
+
+    expect(result.success).toBe(true);
+    expect(broker.tempHome).toBeTruthy();
+    expect(executor.calls[0].env.HOME).toBe(broker.tempHome);
+    expect(executor.calls[0].env.CODEX_HOME).toBe(join(broker.tempHome!, ".codex"));
+    expect(executor.calls[0].env.OPENAI_API_KEY).toBeUndefined();
+    expect(executor.calls[0].env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+
+    const codexDir = executor.calls[0].env.CODEX_HOME;
+    const configToml = await readFile(join(codexDir, "config.toml"), "utf8");
+    expect(executor.calls[0].command).toEqual([
+      process.execPath,
+      "--ask-for-approval",
+      "never",
+      "exec",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "workspace-write",
+      "Fix the bug",
+    ]);
+    expect(configToml).toContain('model = "MiniMax-M2.7"');
+    expect(configToml).toContain('model_provider = "agent_space_provider"');
+    expect(configToml).toContain(
+      `model_catalog_json = "${join(codexDir, "model-catalogs", "agent-space-provider.json")}"`,
+    );
+    expect(configToml).toContain('base_url = "http://127.0.0.1:49152/openai/');
+    expect(configToml).toContain('wire_api = "responses"');
+    expect(configToml).toContain('experimental_bearer_token = "');
+    expect(configToml).not.toContain("provider-secret");
+    await expect(readFile(join(codexDir, "auth.json"), "utf8")).resolves.toContain("login-state");
+    const catalog = JSON.parse(
+      await readFile(join(codexDir, "model-catalogs", "agent-space-provider.json"), "utf8"),
+    ) as {
+      models: Array<{
+        slug: string;
+        default_reasoning_level: string;
+        supported_reasoning_levels: Array<{ effort: string; description: string }>;
+        base_instructions: string;
+        supports_reasoning_summaries: boolean;
+        truncation_policy: { mode: string; limit: number };
+      }>;
+    };
+    expect(catalog.models.map((model) => model.slug)).toEqual(["MiniMax-M2.7", "MiniMax-M3"]);
+    expect(catalog.models[0]).toMatchObject({
+      default_reasoning_level: "none",
+      supported_reasoning_levels: [{ effort: "none", description: "Reasoning off" }],
+      supports_reasoning_summaries: false,
+      truncation_policy: { mode: "bytes", limit: 10000 },
+    });
+    expect(catalog.models[0].base_instructions).toContain("using MiniMax-M2.7 through MiniMax");
+    expect(leases.size()).toBe(0);
+    expect(result.metadata_json).toMatchObject({
+      runtime_provider_id: "provider-openai",
+      runtime_provider_model: "MiniMax-M2.7",
+      runtime_provider_protocol: "openai_responses",
+      runtime_provider_proxy: true,
+    });
+  });
+
+  it("injects Claude-compatible provider env only for a configured claude_code provider", async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), "aspace-cli-claude-"));
+    tmpPaths.push(sandbox);
+    const executor = new FakeExecutor();
+    const leases = new ProviderProxyLeaseRegistry();
+
+    const result = await executeVendorCliAdapter(
+      config(),
+      {
+        run: run({
+          adapter_type: "claude_code",
+          model_provider_id: "provider-claude",
+          model_override_json: { model: "MiniMax-M2.7", source: "agent_default" },
+        }),
+        sandbox_cwd: sandbox,
+        context_text: "Claude instructions",
+        adapter_config: { credential_profile_id: "22222222-2222-4222-8222-222222222222" },
+      },
+      {
+        credentialBroker: new FakeBroker(),
+        executor,
+        toolRegistry: new FakeTools(),
+        providerLeaseRegistry: leases,
+        providerProxyBaseUrl: "http://127.0.0.1:49152",
+        providerResolver: {
+          async getProvider(_spaceId, providerId) {
+            return {
+              id: providerId,
+              space_id: "space-1",
+              name: "MiniMax",
+              provider_type: "other",
+              base_url: "https://api.minimaxi.com/v1",
+              openai_compatible_base_url: null,
+              claude_compatible_base_url: "https://api.minimaxi.com/anthropic",
+              default_model: "MiniMax-M2.7",
+              available_models: ["MiniMax-M2.7"],
+              enabled: true,
+              is_default: false,
+            };
+          },
+        },
+      },
+    );
+
+    expect(result.success).toBe(true);
+    expect(executor.calls[0].env.ANTHROPIC_BASE_URL).toMatch(
+      /^http:\/\/127\.0\.0\.1:49152\/anthropic\/[-0-9a-f]+$/,
+    );
+    expect(executor.calls[0].env.ANTHROPIC_AUTH_TOKEN).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(executor.calls[0].env).toMatchObject({
+      ANTHROPIC_MODEL: "MiniMax-M2.7",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "MiniMax-M2.7",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "MiniMax-M2.7",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "MiniMax-M2.7",
+    });
+    expect(leases.size()).toBe(0);
+    expect(result.metadata_json).toMatchObject({
+      claude_compatible_provider_id: "provider-claude",
+      claude_compatible_model: "MiniMax-M2.7",
+      claude_compatible_provider_proxy: true,
+    });
+  });
+
+  it("fails closed when a selected Claude provider has no compatible URL", async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), "aspace-cli-claude-missing-"));
+    tmpPaths.push(sandbox);
+    const executor = new FakeExecutor();
+
+    const result = await executeVendorCliAdapter(
+      config(),
+      {
+        run: run({ adapter_type: "claude_code", model_provider_id: "provider-plain" }),
+        sandbox_cwd: sandbox,
+        adapter_config: { credential_profile_id: "22222222-2222-4222-8222-222222222222" },
+      },
+      {
+        credentialBroker: new FakeBroker(),
+        executor,
+        toolRegistry: new FakeTools(),
+        providerResolver: {
+          async getProvider(_spaceId, providerId) {
+            return {
+              id: providerId,
+              space_id: "space-1",
+              name: "Plain",
+              provider_type: "anthropic",
+              base_url: "https://api.anthropic.com",
+              openai_compatible_base_url: null,
+              claude_compatible_base_url: null,
+              default_model: "claude-sonnet-4-6",
+              available_models: ["claude-sonnet-4-6"],
+              enabled: true,
+              is_default: false,
+            };
+          },
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error_code: "claude_compatible_base_url_required",
+    });
+    expect(executor.calls).toHaveLength(0);
+  });
+
+  it("fails closed when a selected Codex provider has no OpenAI-compatible URL", async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), "aspace-cli-codex-missing-"));
+    tmpPaths.push(sandbox);
+    const executor = new FakeExecutor();
+
+    const result = await executeVendorCliAdapter(
+      config(),
+      {
+        run: run({ adapter_type: "codex_cli", model_provider_id: "provider-plain" }),
+        sandbox_cwd: sandbox,
+        adapter_config: { credential_profile_id: "11111111-1111-4111-8111-111111111111" },
+      },
+      {
+        credentialBroker: new FakeBroker(),
+        executor,
+        toolRegistry: new FakeTools(),
+        providerResolver: {
+          async getProvider(_spaceId, providerId) {
+            return {
+              id: providerId,
+              space_id: "space-1",
+              name: "Plain",
+              provider_type: "openai",
+              base_url: "https://api.example.test/v1",
+              openai_compatible_base_url: null,
+              claude_compatible_base_url: null,
+              default_model: "example-model",
+              available_models: ["example-model"],
+              enabled: true,
+              is_default: false,
+            };
+          },
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error_code: "openai_compatible_base_url_required",
+    });
+    expect(executor.calls).toHaveLength(0);
+  });
+
   it("fails closed for an ephemeral CLI without a prepared working dir", async () => {
     const broker = new FakeBroker();
     const executor = new FakeExecutor();
@@ -227,7 +539,7 @@ describe("executeVendorCliAdapter", () => {
       {
         run: run({ required_sandbox_level: "ephemeral", workspace_id: null }),
         sandbox_cwd: null,
-        adapter_config: { credential_profile_id: "codex_cli/default" },
+        adapter_config: { credential_profile_id: "11111111-1111-4111-8111-111111111111" },
       },
       { credentialBroker: broker, executor, toolRegistry: new FakeTools() },
     );
@@ -287,7 +599,7 @@ describe("executeVendorCliAdapter", () => {
       {
         run: run(),
         sandbox_cwd: "/tmp/worktree",
-        adapter_config: { credential_profile_id: "codex_cli/missing" },
+        adapter_config: { credential_profile_id: "33333333-3333-4333-8333-333333333333" },
       },
       { credentialBroker: broker, executor },
     );
@@ -401,14 +713,30 @@ describe("buildSubprocessEnv", () => {
 
     const env = buildSubprocessEnv({
       HOME: "/tmp/home",
+      CODEX_HOME: "/tmp/broker-codex-home",
       ANTHROPIC_API_KEY: "sk-test",
+      ANTHROPIC_AUTH_TOKEN: "should-not-pass-from-broker",
       GEMINI_API_KEY: "gemini-test",
       OPENAI_API_KEY: "sk-should-not-pass",
+      HTTPS_PROXY: "http://broker-proxy.invalid:8080",
       AWS_SECRET_ACCESS_KEY: "secret",
+    }, {
+      CODEX_HOME: "/tmp/home/.codex",
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:49152/anthropic/lease-1",
+      ANTHROPIC_AUTH_TOKEN: "lease-token",
+      HTTPS_PROXY: "http://127.0.0.1:7890",
+      HTTP_PROXY: "http://127.0.0.1:7890",
+      NO_PROXY: "localhost,127.0.0.1,::1",
     });
 
     expect(env.HOME).toBe("/tmp/home");
+    expect(env.CODEX_HOME).toBe("/tmp/home/.codex");
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:49152/anthropic/lease-1");
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("lease-token");
+    expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:7890");
+    expect(env.HTTP_PROXY).toBe("http://127.0.0.1:7890");
+    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,::1");
     expect(env.GEMINI_API_KEY).toBeUndefined();
     expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.LC_TEST_VALUE).toBe("ok");

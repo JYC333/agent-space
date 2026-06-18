@@ -22,28 +22,100 @@ export function isCliLoginMethod(value: string): value is CliLoginMethodValue {
 export const CliCredentialProfileDTOSchema = z
   .object({
     id: IdSchema,
+    owner_user_id: IdSchema.nullish(),
     runtime: z.string(),
     name: z.string(),
     source_path: z.string(),
     target_path: z.string(),
     readonly: z.boolean(),
     notes: z.string(),
+    network_profile_id: IdSchema.nullish(),
     source_exists: z.boolean(),
+    logged_in: z.boolean(),
+    file_count: z.number().int(),
+    manageable: z.boolean().optional(),
+    grant_id: IdSchema.nullish().optional(),
+    grant_enabled: z.boolean().optional(),
+    is_default: z.boolean().optional(),
     ...SecretResponseGuards,
   })
   .passthrough();
 export type CliCredentialProfileDTO = z.infer<typeof CliCredentialProfileDTOSchema>;
 
+export const CliCredentialAvailableProfileDTOSchema = z
+  .object({
+    id: IdSchema,
+    owner_user_id: IdSchema.nullish(),
+    runtime: z.string(),
+    name: z.string(),
+    target_path: z.string(),
+    readonly: z.boolean(),
+    notes: z.string(),
+    network_profile_id: IdSchema.nullish(),
+    source_exists: z.boolean(),
+    logged_in: z.boolean(),
+    file_count: z.number().int(),
+    manageable: z.boolean(),
+    grant_id: IdSchema,
+    is_default: z.boolean(),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type CliCredentialAvailableProfileDTO = z.infer<
+  typeof CliCredentialAvailableProfileDTOSchema
+>;
+
+export const CliCredentialProfileCreateRequestSchema = z.object({
+  runtime: z.string().min(1),
+  name: z.string().min(1),
+  readonly: z.boolean().optional(),
+  notes: z.string().optional(),
+  network_profile_id: IdSchema.nullish(),
+  is_default: z.boolean().optional(),
+});
+export type CliCredentialProfileCreateRequest = z.infer<
+  typeof CliCredentialProfileCreateRequestSchema
+>;
+
+export const CliCredentialSpaceGrantRequestSchema = z.object({
+  space_id: IdSchema,
+  enabled: z.boolean().optional(),
+  is_default: z.boolean().optional(),
+  network_profile_id: IdSchema.nullish(),
+});
+export type CliCredentialSpaceGrantRequest = z.infer<
+  typeof CliCredentialSpaceGrantRequestSchema
+>;
+
+export const CliCredentialSpaceGrantDTOSchema = z
+  .object({
+    id: IdSchema,
+    profile_id: IdSchema,
+    space_id: IdSchema,
+    owner_user_id: IdSchema,
+    granted_by_user_id: IdSchema.nullish(),
+    enabled: z.boolean(),
+    is_default: z.boolean(),
+    network_profile_id: IdSchema.nullish(),
+    created_at: z.string(),
+    updated_at: z.string(),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type CliCredentialSpaceGrantDTO = z.infer<typeof CliCredentialSpaceGrantDTOSchema>;
+
 /** Mirror of `POST /credentials/cli/profiles/{id}/detect`. */
 export const CliCredentialProfileDetectResponseSchema = z
   .object({
-    profile_id: IdSchema,
+    profile_id: z.string(),
     source_path: z.string(),
     exists: z.boolean(),
     non_empty: z.boolean(),
+    logged_in: z.boolean(),
     file_count: z.number().int(),
     target_path: z.string(),
     readonly: z.boolean(),
+    network_profile_id: IdSchema.nullish(),
     ...SecretResponseGuards,
   })
   .passthrough();
@@ -71,6 +143,7 @@ export const CliCredentialStatusDTOSchema = z
     label: z.string(),
     method: z.string(),
     profile_id: z.string().nullish(),
+    network_profile_id: IdSchema.nullish(),
     logged_in: z.boolean(),
     file_count: z.number().int(),
     ...SecretResponseGuards,
@@ -88,6 +161,7 @@ export const CLI_LOGIN_EVENT_TYPE_VALUES = [
   "error",
   "warning",
   "hint",
+  "profile",
   "needs_input",
   "device_auth",
   "synced",
@@ -117,6 +191,7 @@ export type CliLoginStreamEvent = z.infer<typeof CliLoginStreamEventSchema>;
 /** Request body for `POST /credentials/cli/login/input`. */
 export const CliLoginInputRequestSchema = z.object({
   input: z.string(),
+  profile_id: IdSchema.optional(),
 });
 export type CliLoginInputRequest = z.infer<typeof CliLoginInputRequestSchema>;
 

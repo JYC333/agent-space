@@ -15,7 +15,12 @@ interface ActiveItem {
   active: boolean
 }
 
-function sceneItems(scene: Scene, pathname: string, searchValue: string | null, spaceId: string | null): ActiveItem[] {
+function sceneItems(
+  scene: Scene,
+  pathname: string,
+  searchValue: string | null,
+  spaceId: string | null,
+): ActiveItem[] {
   const logical = stripSpacePrefix(pathname)
   if (scene.kind === 'filter') {
     const current = searchValue ?? scene.defaultValue
@@ -38,7 +43,15 @@ function sceneItems(scene: Scene, pathname: string, searchValue: string | null, 
 }
 
 /** Desktop second-level navigation for the current scene. Collapsible. */
-export function SceneSidebar({ scene, onCollapse, spaceId }: { scene: Scene; onCollapse: () => void; spaceId: string | null }) {
+export function SceneSidebar({
+  scene,
+  onCollapse,
+  spaceId,
+}: {
+  scene: Scene
+  onCollapse: () => void
+  spaceId: string | null
+}) {
   const { pathname } = useLocation()
   const [searchParams] = useSearchParams()
   const searchValue = scene.kind === 'filter' ? searchParams.get(scene.filterKey) : null
@@ -83,7 +96,13 @@ export function SceneSidebar({ scene, onCollapse, spaceId }: { scene: Scene; onC
 }
 
 /** Mobile second-level navigation — a horizontal scrollable tab strip (no dual sidebars). */
-export function SceneTabs({ scene, spaceId }: { scene: Scene; spaceId: string | null }) {
+export function SceneTabs({
+  scene,
+  spaceId,
+}: {
+  scene: Scene
+  spaceId: string | null
+}) {
   const { pathname } = useLocation()
   const [searchParams] = useSearchParams()
   const searchValue = scene.kind === 'filter' ? searchParams.get(scene.filterKey) : null

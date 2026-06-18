@@ -54,8 +54,22 @@ Runtime tool installation and status are server-owned:
 - `GET /api/v1/runtime-tools/catalog`
 - `GET /api/v1/runtime-tools`
 - `GET /api/v1/runtime-tools/{runtime}`
+- `GET /api/v1/runtime-tools/space-policy`
+- `GET /api/v1/runtime-tools/space-policy/{runtime}`
+- `PUT /api/v1/runtime-tools/space-policy/{runtime}`
 - `POST /api/v1/runtime-tools/{runtime}/install`
 - `POST /api/v1/runtime-tools/{runtime}/activate`
+
+Runtime tool installs are instance operations. `INSTANCE_ADMIN_EMAIL` identifies
+the single user allowed to install or activate CLI tool versions. Space
+owners/admins do not install binaries; they manage `space_runtime_tool_policies`
+for their space: enabled/disabled state, default version, and optional allowed
+version list. Runtime tool installs run npm from the server container. The
+compose server service passes proxy and npm network settings (`HTTP_PROXY`,
+`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `NPM_CONFIG_REGISTRY`,
+`NPM_CONFIG_STRICT_SSL`, and `NPM_CONFIG_CAFILE`) into the container, and the
+server allowlists only network settings for the npm subprocess. Provider API
+keys and CLI credentials must not be passed through this path.
 
 CLI credential login and status are served by the server providers/credentials
 authority under `/api/v1/credentials/cli/*`. The frontend runtime page is
@@ -69,15 +83,50 @@ authority under `/api/v1/credentials/cli/*`. The frontend runtime page is
 2. `server/src/modules/runtimeAdapters` validates that the adapter exists
    and is implemented.
 3. Native adapters are planned; no native capability executor is active today.
-4. server local CLI runtime specs use `server/src/modules/runs/vendorCliAdapter.ts`.
-5. `RuntimeToolRegistry` resolves the allowlisted active CLI binary from
-   `$AGENT_SPACE_HOME/runtime-tools/<runtime>/active`. If no active tool is
-   installed, execution fails closed with `cli_tool_not_installed`.
+4. server local CLI runtime specs enter through
+   `server/src/modules/runs/vendorCliAdapter.ts`. Shared local CLI execution
+   details are split by responsibility: command rendering in
+   `cliCommandRendering.ts`, subprocess execution and process registration in
+   `localCliExecution.ts`, subprocess env allowlisting in `cliSubprocessEnv.ts`,
+   runtime provider binding in `runtimeProviderBinding.ts`, and Codex config
+   materialization in `codexProviderConfig.ts`.
+5. For local CLI runtimes, `RunOrchestrationService` resolves the run's
+   effective tool version from immutable `AgentVersion.runtime_config_json`,
+   active-space `space_runtime_tool_policies`, and installed instance tool
+   versions. Disabled, disallowed, or missing versions fail closed before
+   credential release. `RuntimeToolRegistry` then resolves that exact installed
+   version under `$AGENT_SPACE_HOME/runtime-tools/<runtime>/versions/<version>`.
 6. Credential profiles are granted through the server CLI credential broker.
+   Claude Code may also receive a per-run Claude-compatible ModelProvider
+   binding. When selected, the server resolves the provider's
+   `claude_compatible_base_url` and model, creates a short-lived provider proxy
+   lease, then injects only the local proxy URL, lease token, and model
+   environment variables into the Claude subprocess. Codex CLI may also receive
+   a per-run OpenAI Responses-compatible ModelProvider binding. When selected,
+   the server resolves `openai_compatible_base_url`, creates a short-lived
+   provider proxy lease, materializes the run's temporary `CODEX_HOME`, and
+   writes a run-scoped `config.toml` with `wire_api = "responses"` plus a
+   generated model catalog. The Codex subprocess receives `CODEX_HOME` for both
+   provider-backed and CLI-default runs, and the Codex config stores only the
+   local proxy URL and lease token, not the real provider key. The internal
+   provider proxy listener is started by the server process on an OS-assigned
+   loopback port and is not user-configurable through env or compose. Provider
+   API keys are resolved only inside the server proxy and are not released to
+   CLI subprocess env. When a provider is selected, upstream proxy/direct
+   routing is taken from the Provider's NetworkProfile. No provider selected
+   means no base URL override; the CLI uses its managed login state and the
+   CLI credential profile's default NetworkProfile, if one is configured.
 7. server workspace/sandbox services validate and prepare the worktree.
    `ContextPrepareService` renders runtime context files only inside the
    sandbox/worktree.
 8. server command rendering produces `string[]` argv and never uses `shell=True`.
+   Codex CLI headless runs use
+   `codex --ask-for-approval never exec --skip-git-repo-check --sandbox workspace-write <prompt>`;
+   invoking `codex <prompt>` enters the interactive TUI and requires a
+   terminal, the default `codex exec` sandbox is read-only, and the git-repo
+   check would block ephemeral/no-workspace sandbox directories. When the
+   prompt is rendered through argv, the CLI executor does not open a stdin
+   pipe; otherwise Codex treats piped stdin as additional input context.
 9. The server CLI executor starts the subprocess and registers it in the shared
    `CliProcessRegistry`; `PATCH /runs/{id}/stop` SIGTERMs the registered
    process before writing terminal cancellation state.
@@ -106,7 +155,8 @@ $AGENT_SPACE_HOME/runtime-tools/
 ```
 
 The server-owned `runtimeTools` module provides the controlled installer. The
-installer accepts only code-allowlisted runtime/package mappings:
+installer is restricted to the configured instance admin and accepts only
+code-allowlisted runtime/package mappings:
 
 | runtime | package | bin |
 |---|---|---|
@@ -116,16 +166,42 @@ installer accepts only code-allowlisted runtime/package mappings:
 It invokes `npm` with argv (`shell=false`) and writes into
 `$AGENT_SPACE_HOME/runtime-tools`; npm cache is under
 `$AGENT_SPACE_HOME/cache/npm`. API callers cannot provide arbitrary package
-names or shell commands. Runtime execution and CLI login flows both resolve the
-active binary through `RuntimeToolRegistry`; neither falls back to ambient PATH
-or image-global installs.
+names or shell commands. The installer passes through only npm network
+configuration such as proxy, registry, strict-ssl, cafile, and fetch retry env
+vars; provider/API tokens are not inherited. Codex CLI and Claude Code validate
+their platform native optional packages (for example
+`@openai/codex-linux-x64` and `@anthropic-ai/claude-code-linux-x64`) and
+explicitly install the package spec declared by `optionalDependencies` when npm
+does not materialize it automatically. Claude Code also reruns its fixed
+postinstall script so the wrapper package places the native binary under
+`bin/claude.exe`. CLI login resolves the instance active binary through
+`RuntimeToolRegistry`. Runtime execution resolves the version pinned on
+`AgentVersion.runtime_config_json.runtime_tool_version`, after applying the
+active-space runtime policy. Neither path falls back to ambient PATH or
+image-global installs.
+
+## Space Runtime Version Policy
+
+Installed CLI binaries are shared instance state; spaces do not own separate
+installs. Each space can set a policy row per CLI runtime:
+
+- `enabled=false` blocks that runtime in the space.
+- `default_version` is used when an agent does not request a version.
+- `allowed_versions_json` optionally constrains which installed versions can be
+  selected in that space. Empty means any installed version is allowed.
+
+Agent create/update resolves the effective CLI tool version and stores it on
+`AgentVersion.runtime_config_json.runtime_tool_version`. Runs read that
+immutable agent version value; HTTP run execution cannot override adapter
+config. If the pinned version is later uninstalled, disabled, or removed from
+the space allowlist, the run fails closed with
+`runtime_tool_version_unavailable` before credential resolution.
 
 ## Credential Profile Binding
 
-CLI credential profile ids are stable runtime/name values such as:
-
-- `claude_code/default`
-- `codex_cli/default`
+CLI credential profile ids are UUIDs from `cli_credential_profiles.id`. Agent
+version runtime config stores the selected `credential_profile_id`; when it is
+absent, execution falls back to the active-space default grant for that runtime.
 
 CLI runs fail closed with `runtime_credential_profile_required` when a required
 profile is missing. No ambient HOME or inherited API-key fallback is allowed.

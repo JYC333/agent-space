@@ -140,7 +140,8 @@ function SceneHeader({
 /* ── Shell ─────────────────────────────────────────────────────────────────── */
 export default function Shell() {
   const { theme } = useTheme()
-  const { preferredSpaceId } = useSpace()
+  const { currentUser } = useAuth()
+  const { activeSpaceId, preferredSpaceId, spaces } = useSpace()
   const location = useLocation()
 
   const scope = routeScopeForPath(location.pathname)
@@ -157,6 +158,10 @@ export default function Shell() {
   const sceneCollapsed = scene ? (collapsedScenes[scene.id] ?? false) : false
   const showSidebar = Boolean(scene) && !sceneCollapsed
   const title = scene?.title ?? (isHome ? 'Home' : moduleForPath(logicalPath)?.label ?? 'agent-space')
+  const permissionSpaceId = activeSpaceId ?? preferredSpaceId
+  const permissionRole = spaces.find(s => s.id === permissionSpaceId)?.role
+  const canManageSpace = permissionRole === 'owner' || permissionRole === 'admin'
+  const canManageInstance = Boolean(currentUser?.is_instance_admin)
 
   function setSceneCollapsed(collapsed: boolean) {
     if (!scene) return
@@ -165,10 +170,20 @@ export default function Shell() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
-      <GlobalRail expanded={railExpanded} onToggle={() => setRailExpanded(v => !v)} spaceId={preferredSpaceId} />
+      <GlobalRail
+        expanded={railExpanded}
+        onToggle={() => setRailExpanded(v => !v)}
+        spaceId={preferredSpaceId}
+        canManageSpace={canManageSpace}
+        canManageInstance={canManageInstance}
+      />
 
       {showSidebar && scene && (
-        <SceneSidebar scene={scene} onCollapse={() => setSceneCollapsed(true)} spaceId={preferredSpaceId} />
+        <SceneSidebar
+          scene={scene}
+          onCollapse={() => setSceneCollapsed(true)}
+          spaceId={preferredSpaceId}
+        />
       )}
 
       <div className="flex-1 flex flex-col min-w-0">

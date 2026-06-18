@@ -8,6 +8,9 @@ interface ProviderSelectorProps {
   /** When true, a provider must be chosen (no "System default" option) and an empty
    *  state nudges the user to define one. */
   required?: boolean
+  requireClaudeCompatible?: boolean
+  requireOpenAiCompatible?: boolean
+  emptyLabel?: string
 }
 
 /** Opens the Providers page in a new tab so the in-progress form is preserved. */
@@ -24,7 +27,14 @@ function ManageProvidersLink({ label = 'Manage providers' }: { label?: string })
   )
 }
 
-export default function ProviderSelector({ value, onChange, required = false }: ProviderSelectorProps) {
+export default function ProviderSelector({
+  value,
+  onChange,
+  required = false,
+  requireClaudeCompatible = false,
+  requireOpenAiCompatible = false,
+  emptyLabel,
+}: ProviderSelectorProps) {
   const [providers, setProviders] = useState<ModelProviderOut[]>([])
   const [models, setModels] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -38,6 +48,26 @@ export default function ProviderSelector({ value, onChange, required = false }: 
   }, [])
 
   useEffect(() => { loadProviders() }, [loadProviders])
+
+  const incompatibleReason = useCallback((provider: ModelProviderOut): string | null => {
+    if (requireClaudeCompatible && !provider.claude_compatible_base_url) {
+      return 'no Claude-compatible URL'
+    }
+    if (requireOpenAiCompatible && !provider.openai_compatible_base_url) {
+      return 'no OpenAI-compatible URL'
+    }
+    return null
+  }, [requireClaudeCompatible, requireOpenAiCompatible])
+
+  const isSelectable = useCallback((provider: ModelProviderOut) => (
+    incompatibleReason(provider) === null
+  ), [incompatibleReason])
+
+  useEffect(() => {
+    if (!value?.provider_id) return
+    const selected = providers.find(p => p.id === value.provider_id)
+    if (selected && !isSelectable(selected)) onChange(null)
+  }, [isSelectable, onChange, providers, value?.provider_id])
 
   useEffect(() => {
     if (!value?.provider_id) { setModels([]); return }
@@ -53,11 +83,15 @@ export default function ProviderSelector({ value, onChange, required = false }: 
     return <p className="text-sm text-muted-foreground">Loading providers…</p>
   }
 
-  if (providers.length === 0) {
+  const hasSelectableProvider = providers.some(isSelectable)
+
+  if (providers.length === 0 || (required && !hasSelectableProvider)) {
     return (
       <div className="space-y-2 p-3 rounded-md border border-dashed border-border text-sm">
         <p className="text-muted-foreground">
-          No enabled model providers yet.{required ? ' One is required for this runtime.' : ''}
+          {providers.length === 0
+            ? `No enabled model providers yet.${required ? ' One is required for this runtime.' : ''}`
+            : 'No selectable model providers for this runtime.'}
         </p>
         <div className="flex items-center gap-3">
           <a
@@ -98,10 +132,15 @@ export default function ProviderSelector({ value, onChange, required = false }: 
           }}
           className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
         >
-          <option value="">{required ? 'Select a provider…' : 'System default'}</option>
-          {providers.map(p => (
-            <option key={p.id} value={p.id}>{p.name} ({p.provider_type})</option>
-          ))}
+          <option value="" disabled={required}>{emptyLabel ?? (required ? 'Select a provider…' : 'System default')}</option>
+          {providers.map(p => {
+            const reason = incompatibleReason(p)
+            return (
+              <option key={p.id} value={p.id} disabled={reason !== null}>
+                {p.name} ({p.provider_type}){reason ? ` — ${reason}` : ''}
+              </option>
+            )
+          })}
         </select>
         {required && !value?.provider_id && (
           <p className="text-xs text-amber-600">This runtime requires a model provider. Not seeing the right one? <ManageProvidersLink label="Add a provider" /></p>

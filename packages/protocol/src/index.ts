@@ -36,6 +36,9 @@ export * from "./providers.js";
 // CLI credential-channel contracts
 export * from "./credentials.js";
 
+// Network profile contracts
+export * from "./networkProfiles.js";
+
 // Identity introspection contract
 export * from "./auth.js";
 

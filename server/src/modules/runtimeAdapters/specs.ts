@@ -262,7 +262,16 @@ export const BUILTIN_RUNTIME_ADAPTER_SPECS: Readonly<Record<RuntimeAdapterType, 
     enabled_by_default: true,
     executable: { command: "codex", allow_path_override: true },
     invocation: {
-      headless_command_template: ["{executable}", "{prompt}"],
+      headless_command_template: [
+        "{executable}",
+        "--ask-for-approval",
+        "never",
+        "exec",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "workspace-write",
+        "{prompt}",
+      ],
       argument_rendering_strategy: "argv_template",
     },
     context: {

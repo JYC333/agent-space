@@ -158,6 +158,7 @@ export const RUN_EXECUTION_ERROR_CODES = [
   "produced_artifact_ingestion_error",
   "run_cancelled",
   "runtime_removed",
+  "runtime_tool_version_unavailable",
   "runtime_tools_not_implemented",
   "sandbox_creation_failed",
   "stale_run_recovered",

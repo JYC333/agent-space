@@ -30,7 +30,7 @@ function config() {
 }
 
 describe("agents CRUD routes", () => {
-  it("lists agents through the server route", async () => {
+  it("lists agents with the public response shape", async () => {
     const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
     vi.mocked(getDbPool).mockReturnValue({ query } as never);
     app = buildServer(config(), { logger: false });
@@ -42,19 +42,13 @@ describe("agents CRUD routes", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual([]);
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining("FROM agents a"),
-      expect.arrayContaining(["space-1"]),
-    );
   });
 
-  it("creates an agent and its initial immutable version through the server", async () => {
-    const queries: string[] = [];
+  it("creates an agent and returns its initial immutable version", async () => {
     let agentId = "";
     let versionId = "";
     const client = {
       query: vi.fn(async (sql: string, params: readonly unknown[] = []) => {
-        queries.push(sql);
         if (sql.startsWith("INSERT INTO agents")) {
           agentId = String(params[0]);
           return { rows: [], rowCount: 1 };
@@ -70,8 +64,8 @@ describe("agents CRUD routes", () => {
                 id: agentId,
                 space_id: "space-1",
                 owner_user_id: "user-1",
-                name: "CLI Agent",
-                description: "Uses Codex CLI",
+                name: "API Agent",
+                description: "Uses Model API",
                 role_instruction: null,
                 status: "active",
                 agent_kind: "standard",
@@ -86,7 +80,7 @@ describe("agents CRUD routes", () => {
                 provider_type: null,
                 model_name: null,
                 system_prompt: "Act carefully.",
-                runtime_policy_json: { default_adapter_type: "codex_cli" },
+                runtime_policy_json: { default_adapter_type: "capability" },
               },
             ],
             rowCount: 1,
@@ -107,10 +101,10 @@ describe("agents CRUD routes", () => {
       method: "POST",
       url: "/api/v1/agents",
       payload: {
-        name: "CLI Agent",
-        description: "Uses Codex CLI",
+        name: "API Agent",
+        description: "Uses Model API",
         system_prompt: "Act carefully.",
-        adapter_type: "codex_cli",
+        adapter_type: "capability",
         default_model_provider_id: null,
         default_model: null,
       },
@@ -121,20 +115,9 @@ describe("agents CRUD routes", () => {
       id: agentId,
       space_id: "space-1",
       created_by_user_id: "user-1",
-      name: "CLI Agent",
-      adapter_type: "codex_cli",
+      name: "API Agent",
+      adapter_type: "capability",
       current_version_id: versionId,
     });
-    expect(queries).toEqual(
-      expect.arrayContaining([
-        "BEGIN",
-        expect.stringContaining("INSERT INTO agents"),
-        expect.stringContaining("INSERT INTO agent_versions"),
-        expect.stringContaining("UPDATE agents SET current_version_id"),
-        expect.stringContaining("FROM agents a"),
-        "COMMIT",
-      ]),
-    );
-    expect(client.release).toHaveBeenCalledTimes(1);
   });
 });

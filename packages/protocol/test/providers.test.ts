@@ -22,7 +22,9 @@ describe("provider contracts", () => {
       space_id: "s1",
       name: "Main",
       provider_type: "anthropic",
-      base_url: null,
+      base_url: "https://api.anthropic.com",
+      claude_compatible_base_url: "https://api.example.test/anthropic",
+      openai_compatible_base_url: null,
       default_model: "claude-sonnet-4-6",
       available_models: ["claude-sonnet-4-6"],
       enabled: true,
@@ -32,6 +34,7 @@ describe("provider contracts", () => {
       updated_at: "2026-06-11T12:00:00+00:00",
     });
     expect(parsed.provider_type).toBe("anthropic");
+    expect(parsed.claude_compatible_base_url).toBe("https://api.example.test/anthropic");
     expect(parsed.has_api_key).toBe(true);
   });
 
@@ -41,7 +44,9 @@ describe("provider contracts", () => {
       space_id: "s1",
       name: "Main",
       provider_type: "openai",
-      base_url: null,
+      base_url: "https://api.openai.com/v1",
+      claude_compatible_base_url: null,
+      openai_compatible_base_url: "https://api.openai.com/v1",
       default_model: "gpt-4o",
       available_models: [],
       enabled: true,
@@ -64,14 +69,39 @@ describe("provider contracts", () => {
       ModelProviderCreateRequestSchema.parse({
         name: "Main",
         provider_type: "openai",
+        base_url: "https://api.openai.com/v1",
         api_key: "sk-test",
+        claude_compatible_base_url: "https://api.example.test/anthropic",
+        openai_compatible_base_url: "https://api.example.test/v1",
         default_model: "gpt-4o",
       }).api_key,
     ).toBe("sk-test");
 
+    expect(
+      ModelProviderCreateRequestSchema.parse({
+        name: "Claude Gateway",
+        provider_type: "other",
+        base_url: "https://api.example.test/v1",
+        claude_compatible_base_url: "https://api.example.test/anthropic",
+      }).claude_compatible_base_url,
+    ).toBe("https://api.example.test/anthropic");
+
     expect(ModelProviderUpdateRequestSchema.parse({ api_key: "sk-new" }).api_key).toBe(
       "sk-new",
     );
+    expect(
+      ModelProviderUpdateRequestSchema.parse({ claude_compatible_base_url: null })
+        .claude_compatible_base_url,
+    ).toBeNull();
+    expect(
+      ModelProviderUpdateRequestSchema.parse({ openai_compatible_base_url: null })
+        .openai_compatible_base_url,
+    ).toBeNull();
+    expect(ModelProviderCreateRequestSchema.safeParse({
+      name: "Missing URL",
+      provider_type: "openai",
+      api_key: "sk-test",
+    }).success).toBe(false);
   });
 
   it("parses provider support responses and chat request/response bodies", () => {
@@ -136,7 +166,9 @@ describe("provider contracts", () => {
       space_id: "s1",
       name: "Future",
       provider_type: "future_provider",
-      base_url: null,
+      base_url: "https://api.future.test/v1",
+      claude_compatible_base_url: null,
+      openai_compatible_base_url: null,
       default_model: null,
       available_models: [],
       enabled: true,

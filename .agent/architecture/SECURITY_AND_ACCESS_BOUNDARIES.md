@@ -199,11 +199,22 @@ throughout.
 
 ## 9. Credential, Provider, and Runtime Secrecy
 
-- `ProviderConfigOut` explicitly excludes `api_key`. The internal `ProviderConfigDB` model
-  (which carries the decrypted key) must not be exposed outside the service/adapter layer.
-- `GET /providers/{id}` constructs `ProviderConfigOut` manually — no `api_key` field included.
+- Provider API responses explicitly exclude `api_key`. The internal provider
+  invocation target (which carries the decrypted key) must not be exposed
+  outside the service/adapter layer.
+- Provider and CLI credentials are user-owned resources. Active-space use is
+  controlled by explicit grant rows; ungranted use fails before secret/profile
+  resolution.
+- CLI runtime tool installs are instance state, not user or space secrets.
+  `INSTANCE_ADMIN_EMAIL` gates install/activate mutations. Space owners/admins
+  can only enable/disable and select allowed/default installed versions for
+  their own space.
+- Provider edit/key replacement and CLI login/profile mutation are owner-only.
+  Space owners/admins may disable grants for their space without reading or
+  editing secret material.
 - CLI credentials are stored as filesystem-managed paths; no secret material appears in API
-  responses or SSE event streams.
+  responses or SSE event streams. The secret-free `available` endpoint omits
+  `source_path`.
 - `AgentVersionOut`, `RunOut`, and `ArtifactOut` schemas contain no credential fields.
 - Run trace exposes AgentVersion system prompt presence/hash metadata only; it
   does not inline raw system prompt text, raw rendered context text, or artifact

@@ -14,6 +14,10 @@ type MemoryServicesFactory = NonNullable<
   Parameters<typeof __setMemoryServicesFactoryForTests>[0]
 >;
 type MemoryServices = ReturnType<MemoryServicesFactory>;
+type MemoryRepository = MemoryServices["repository"];
+type MemoryListArgs = Parameters<MemoryRepository["list"]>;
+type MemorySearchArgs = Parameters<MemoryRepository["search"]>;
+type CreateMemoryProposalArgs = Parameters<MemoryRepository["createMemoryProposal"]>;
 
 afterEach(async () => {
   __setMemoryIdentityForTests(null);
@@ -90,18 +94,17 @@ function proposalOut(over: Record<string, unknown> = {}) {
 }
 
 describe("memory read routes", () => {
-  it("lists memories with pagination passthrough", async () => {
+  it("lists memories with the public pagination shape", async () => {
     __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    let seen: unknown = null;
     __setMemoryServicesFactoryForTests(() => ({
       repository: {
-        async list(
-          spaceId: string,
-          userId: string,
-          filters: { limit: number; offset: number; [key: string]: unknown },
-        ) {
-          seen = { spaceId, userId, filters };
-          return { items: [memoryOut()], total: 1, limit: filters.limit, offset: filters.offset };
+        async list(_spaceId: MemoryListArgs[0], _userId: MemoryListArgs[1], filters: MemoryListArgs[2]) {
+          return {
+            items: [memoryOut({ id: `page-${filters.limit}-${filters.offset}` })],
+            total: 1,
+            limit: filters.limit,
+            offset: filters.offset,
+          };
         },
         async get() {
           throw new Error("not used");
@@ -118,11 +121,11 @@ describe("memory read routes", () => {
       url: "/api/v1/memory?type=fact&status=active&limit=10&offset=5&workspace_id=ws-1",
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ total: 1, limit: 10, offset: 5 });
-    expect(seen).toMatchObject({
-      spaceId: "space-1",
-      userId: "user-1",
-      filters: { memoryType: "fact", status: "active", workspaceId: "ws-1", limit: 10, offset: 5 },
+    expect(res.json()).toMatchObject({
+      items: [{ id: "page-10-5" }],
+      total: 1,
+      limit: 10,
+      offset: 5,
     });
   });
 
@@ -192,7 +195,6 @@ describe("memory read routes", () => {
 
   it("searches with body space/user overrides honored", async () => {
     __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    let seen: unknown = null;
     __setMemoryServicesFactoryForTests(() => ({
       repository: {
         async list() {
@@ -201,13 +203,14 @@ describe("memory read routes", () => {
         async get() {
           throw new Error("x");
         },
-        async search(
-          spaceId: string,
-          userId: string,
-          filters: { query: string; limit: number; [key: string]: unknown },
-        ) {
-          seen = { spaceId, userId, filters };
-          return [memoryOut()];
+        async search(spaceId: MemorySearchArgs[0], userId: MemorySearchArgs[1], filters: MemorySearchArgs[2]) {
+          return [
+            memoryOut({
+              id: `${userId}-search`,
+              space_id: spaceId,
+              title: filters.query,
+            }),
+          ];
         },
       } as unknown as MemoryServices["repository"],
     }));
@@ -219,17 +222,13 @@ describe("memory read routes", () => {
       payload: { query: "server", space_id: "space-2", user_id: "user-9", limit: 3 },
     });
     expect(res.statusCode).toBe(200);
-    expect(Array.isArray(res.json())).toBe(true);
-    expect(seen).toMatchObject({
-      spaceId: "space-2",
-      userId: "user-9",
-      filters: { query: "server", limit: 3 },
-    });
+    expect(res.json()).toEqual([
+      expect.objectContaining({ id: "user-9-search", space_id: "space-2", title: "server" }),
+    ]);
   });
 
   it("creates a memory_create proposal without mutating memory directly", async () => {
     __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    let seen: unknown = null;
     __setMemoryServicesFactoryForTests(() => ({
       repository: {
         async list() {
@@ -242,12 +241,14 @@ describe("memory read routes", () => {
           throw new Error("x");
         },
         async createMemoryProposal(
-          spaceId: string,
-          userId: string,
-          command: Record<string, unknown>,
+          _spaceId: CreateMemoryProposalArgs[0],
+          _userId: CreateMemoryProposalArgs[1],
+          command: CreateMemoryProposalArgs[2],
         ) {
-          seen = { spaceId, userId, command };
-          return proposalOut();
+          return proposalOut({
+            proposed_title: command.title,
+            proposed_content: command.content,
+          });
         },
         async updateMemoryProposal() {
           throw new Error("x");
@@ -271,17 +272,16 @@ describe("memory read routes", () => {
     });
 
     expect(res.statusCode).toBe(202);
-    expect(res.json()).toMatchObject({ proposal_type: "memory_create", status: "pending" });
-    expect(seen).toMatchObject({
-      spaceId: "space-1",
-      userId: "user-1",
-      command: { operation: "create", title: "Remember", content: "content" },
+    expect(res.json()).toMatchObject({
+      proposal_type: "memory_create",
+      status: "pending",
+      proposed_title: "Remember",
+      proposed_content: "content",
     });
   });
 
   it("creates memory_update and memory_archive proposals for target memories", async () => {
     __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const calls: string[] = [];
     __setMemoryServicesFactoryForTests(() => ({
       repository: {
         async list() {
@@ -297,23 +297,32 @@ describe("memory read routes", () => {
           throw new Error("x");
         },
         async updateMemoryProposal(
-          spaceId: string,
-          userId: string,
+          _spaceId: string,
+          _userId: string,
           memoryId: string,
           workspaceId: string | null,
           command: { content?: string | null },
         ) {
-          calls.push(`update:${spaceId}:${userId}:${memoryId}:${workspaceId}:${command.content}`);
-          return proposalOut({ id: "proposal-update", proposal_type: "memory_update" });
+          return proposalOut({
+            id: "proposal-update",
+            proposal_type: "memory_update",
+            workspace_id: workspaceId,
+            proposed_content: command.content,
+            resulting_memory_id: memoryId,
+          });
         },
         async archiveMemoryProposal(
-          spaceId: string,
-          userId: string,
+          _spaceId: string,
+          _userId: string,
           memoryId: string,
           workspaceId: string | null,
         ) {
-          calls.push(`archive:${spaceId}:${userId}:${memoryId}:${workspaceId}`);
-          return proposalOut({ id: "proposal-archive", proposal_type: "memory_archive" });
+          return proposalOut({
+            id: "proposal-archive",
+            proposal_type: "memory_archive",
+            workspace_id: workspaceId,
+            resulting_memory_id: memoryId,
+          });
         },
       } as unknown as MemoryServices["repository"],
     }));
@@ -330,34 +339,19 @@ describe("memory read routes", () => {
     });
 
     expect(patch.statusCode).toBe(202);
-    expect(patch.json()).toMatchObject({ proposal_type: "memory_update" });
+    expect(patch.json()).toMatchObject({
+      id: "proposal-update",
+      proposal_type: "memory_update",
+      workspace_id: "ws-1",
+      proposed_content: "new content",
+      resulting_memory_id: "memory-1",
+    });
     expect(del.statusCode).toBe(202);
-    expect(del.json()).toMatchObject({ proposal_type: "memory_archive" });
-    expect(calls).toEqual([
-      "update:space-1:user-1:memory-1:ws-1:new content",
-      "archive:space-1:user-1:memory-1:ws-1",
-    ]);
-  });
-
-  it("serves memory list through the registered server route", async () => {
-    __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    __setMemoryServicesFactoryForTests(() => ({
-      repository: {
-        async list() {
-          return { items: [], total: 0, limit: 50, offset: 0 };
-        },
-        async get() {
-          throw new Error("x");
-        },
-        async search() {
-          throw new Error("x");
-        },
-      } as unknown as MemoryServices["repository"],
-    }));
-    app = buildServer(memoryConfig(), { logger: false });
-
-    const res = await app.inject({ method: "GET", url: "/api/v1/memory" });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ items: [], total: 0, limit: 50, offset: 0 });
+    expect(del.json()).toMatchObject({
+      id: "proposal-archive",
+      proposal_type: "memory_archive",
+      workspace_id: "ws-1",
+      resulting_memory_id: "memory-1",
+    });
   });
 });

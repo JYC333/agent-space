@@ -20,6 +20,7 @@ function railItemActive(item: RailItem, pathname: string): boolean {
   if (item.id === 'home') return logical === '/' || logical === '/home' || logical.startsWith('/home/')
   const scene = sceneForPath(pathname)
   if (scene && scene.id === item.id) return true
+  if (item.activePaths?.some(path => logical === path || logical.startsWith(`${path}/`))) return true
   return logical === item.to || logical.startsWith(`${item.to}/`)
 }
 
@@ -28,10 +29,26 @@ function railItemActive(item: RailItem, pathname: string): boolean {
  * Carries only major app-level destinations — never scene-specific navigation. Space-scoped
  * items target the active/preferred Space; Home and Settings are user-level.
  */
-export function GlobalRail({ expanded, onToggle, spaceId }: { expanded: boolean; onToggle: () => void; spaceId: string | null }) {
+export function GlobalRail({
+  expanded,
+  onToggle,
+  spaceId,
+  canManageSpace = false,
+  canManageInstance = false,
+}: {
+  expanded: boolean
+  onToggle: () => void
+  spaceId: string | null
+  canManageSpace?: boolean
+  canManageInstance?: boolean
+}) {
   const { pathname } = useLocation()
-  const main = RAIL_ITEMS.filter(i => !i.footer)
-  const footer = RAIL_ITEMS.filter(i => i.footer)
+  const visibleItems = RAIL_ITEMS.filter(i =>
+    (!i.requiresSpaceAdmin || canManageSpace) &&
+    (!i.requiresInstanceAdmin || canManageInstance),
+  )
+  const main = visibleItems.filter(i => !i.footer)
+  const footer = visibleItems.filter(i => i.footer)
 
   function renderItem(item: RailItem) {
     const Icon = item.icon

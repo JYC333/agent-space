@@ -1,6 +1,6 @@
-import { useState, useEffect, useId } from 'react'
+import { useState, useId } from 'react'
 import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/spaceNav'
-import { Settings, Sun, Moon, Users, Plus, Mail, Send, KeyRound } from 'lucide-react'
+import { Settings, Sun, Moon, Plus, KeyRound, Terminal } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../contexts/AuthContext'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -10,10 +10,8 @@ import { Card, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
-import { Badge } from '../../components/ui/badge'
-import { UserAvatar } from '../../components/UserAvatar'
 import { cn, errMsg } from '../../lib/utils'
-import type { SpaceMember, SpaceType } from '../../types/api'
+import type { SpaceType } from '../../types/api'
 
 const THEME_OPTIONS: { value: Theme; label: string; icon: typeof Sun; description: string }[] = [
   { value: 'dark',  label: 'Dark',  icon: Moon, description: 'Deep navy — default' },
@@ -27,7 +25,7 @@ const SPACE_TYPES: { value: Exclude<SpaceType, 'personal'>; label: string; descr
 
 export default function SettingsPage() {
   const { currentUser } = useAuth()
-  const { spaces, preferredSpaceId, reloadSpaces } = useSpace()
+  const { reloadSpaces } = useSpace()
   const navigate = useNavigate()
   const { theme, setTheme } = useTheme()
 
@@ -36,30 +34,7 @@ export default function SettingsPage() {
   const [newSpaceType, setNewSpaceType] = useState<Exclude<SpaceType, 'personal'>>('team')
   const [creating, setCreating]         = useState(false)
 
-  // Invite member
-  const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole]   = useState('member')
-  const [inviting, setInviting]       = useState(false)
-
-  // Members list
-  const [members, setMembers]         = useState<SpaceMember[]>([])
-  const [loadingMembers, setLoadingMembers] = useState(false)
-
   const headingId = useId()
-  // Settings is a top-level surface (no Space in the URL); it operates on the preferred Space.
-  const effectiveSpaceId = preferredSpaceId
-
-  useEffect(() => {
-    if (!currentUser || !effectiveSpaceId) {
-      setMembers([])
-      return
-    }
-    setLoadingMembers(true)
-    spacesApi.members(effectiveSpaceId)
-      .then(setMembers)
-      .catch(() => setMembers([]))
-      .finally(() => setLoadingMembers(false))
-  }, [effectiveSpaceId, currentUser])
 
   async function handleCreateSpace(e: React.FormEvent) {
     e.preventDefault()
@@ -79,30 +54,8 @@ export default function SettingsPage() {
     }
   }
 
-  async function handleInvite(e: React.FormEvent) {
-    e.preventDefault()
-    if (!inviteEmail.trim()) return
-    setInviting(true)
-    try {
-      if (!effectiveSpaceId) {
-        toast.error('Select a space before inviting members')
-        return
-      }
-      const inv = await spacesApi.invite(effectiveSpaceId, { email: inviteEmail.trim(), role: inviteRole })
-      toast.success(`Invitation sent to ${inv.invited_email}`)
-      const link = `${window.location.origin}/invitations/${inv.token}`
-      await navigator.clipboard.writeText(link).catch(() => null)
-      toast.info('Invite link copied to clipboard')
-      setInviteEmail('')
-    } catch (err) {
-      toast.error(errMsg(err))
-    } finally {
-      setInviting(false)
-    }
-  }
-
   return (
-    <div className="p-6 space-y-6 max-w-2xl" id={headingId}>
+    <div className="p-6 space-y-6 max-w-4xl" id={headingId}>
       {/* Page header */}
       <div className="flex items-center gap-4 pb-4 border-b border-border">
         <div
@@ -116,7 +69,7 @@ export default function SettingsPage() {
         </div>
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
-          <p className="text-sm text-muted-foreground">Configure spaces, users, API keys, and preferences.</p>
+          <p className="text-sm text-muted-foreground">Configure your account credentials, personal spaces, and preferences.</p>
         </div>
       </div>
 
@@ -130,6 +83,19 @@ export default function SettingsPage() {
         </p>
         <Button asChild variant="outline" size="sm">
           <Link to="/providers">Open Model Providers</Link>
+        </Button>
+      </Card>
+
+      {/* CLI runtime profiles */}
+      <Card>
+        <CardTitle className="flex items-center gap-2">
+          <Terminal className="size-3.5" /> CLI Runtime Profiles
+        </CardTitle>
+        <p className="text-sm text-muted-foreground mb-3">
+          Manage CLI login profiles, grants, and runtime login state separately from instance runtime tools.
+        </p>
+        <Button asChild variant="outline" size="sm">
+          <Link to="/cli-profiles">Open CLI Profiles</Link>
         </Button>
       </Card>
 
@@ -205,78 +171,6 @@ export default function SettingsPage() {
             </form>
           </Card>
 
-          {/* Members of selected operational space */}
-          <Card>
-            <CardTitle className="flex items-center gap-2">
-              <Users className="size-3.5" /> Members · {spaces.find(s => s.id === effectiveSpaceId)?.name ?? effectiveSpaceId ?? 'No space selected'}
-            </CardTitle>
-
-            {loadingMembers ? (
-              <p className="text-sm text-muted-foreground">Loading…</p>
-            ) : members.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No members found.</p>
-            ) : (
-              <div className="divide-y divide-border">
-                {members.map(m => (
-                  <div key={m.user_id} className="flex items-center gap-3 py-2.5">
-                    <div className="size-7 shrink-0 overflow-hidden rounded-full border border-border">
-                      <UserAvatar
-                        avatarUrl={m.avatar_url}
-                        displayName={m.display_name}
-                        email={m.email}
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[13px] font-medium text-foreground truncate">{m.display_name}</div>
-                      <div className="text-[11px] text-muted-foreground truncate">{m.email}</div>
-                    </div>
-                    <Badge variant="muted" className="text-[10px] px-1.5 py-0 shrink-0">{m.role}</Badge>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-
-          {/* Invite member */}
-          <Card>
-            <CardTitle className="flex items-center gap-2">
-              <Mail className="size-3.5" /> Invite member
-            </CardTitle>
-            <form onSubmit={handleInvite} className="space-y-3">
-              <div className="space-y-2">
-                <Input
-                  type="email"
-                  value={inviteEmail}
-                  onChange={e => setInviteEmail(e.target.value)}
-                  placeholder="colleague@example.com"
-                />
-                <div className="flex gap-1.5">
-                  {(['admin', 'member', 'viewer'] as const).map(role => (
-                    <button
-                      key={role}
-                      type="button"
-                      onClick={() => setInviteRole(role)}
-                      className={cn(
-                        'flex-1 h-8 rounded-md border text-[12px] font-medium capitalize transition-colors',
-                        inviteRole === role
-                          ? 'border-primary/50 bg-primary/8 text-foreground'
-                          : 'border-border text-muted-foreground hover:text-foreground hover:bg-accent',
-                      )}
-                    >
-                      {role}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                An invitation link will be generated and copied to your clipboard.
-              </p>
-              <Button type="submit" size="sm" disabled={!inviteEmail.trim() || inviting}>
-                <Send className="size-3.5 mr-1.5" />
-                {inviting ? 'Sending…' : 'Generate invite link'}
-              </Button>
-            </form>
-          </Card>
         </>
       ) : null}
     </div>

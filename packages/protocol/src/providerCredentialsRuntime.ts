@@ -57,6 +57,7 @@ export const RuntimeCredentialResolveRequestSchema = z.discriminatedUnion("kind"
   }),
   z.object({
     kind: z.literal("cli_profile"),
+    space_id: IdSchema.optional(),
     runtime: z.string().min(1),
     profile_id: z.string().nullish(),
     require_existing: z.boolean().optional(),
@@ -92,6 +93,7 @@ export type RuntimeCredentialResolveResponse = z.infer<
 
 export const CliCredentialGrantRequestSchema = z.object({
   run_id: z.string().min(1),
+  space_id: IdSchema,
   runtime: z.string().min(1),
   risk_level: z.string().min(1),
   executor_mode: z.enum(["worktree", "docker"]),

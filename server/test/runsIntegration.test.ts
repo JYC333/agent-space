@@ -67,6 +67,7 @@ async function seedAgent(
     space_id: string;
     status: string;
     system_prompt: string | null;
+    runtime_config_json: Record<string, unknown>;
   }> = {},
 ): Promise<{ agentId: string; versionId: string }> {
   const agentId = overrides.agent_id ?? randomUUID();
@@ -85,9 +86,16 @@ async function seedAgent(
        id, agent_id, space_id, version_label, system_prompt, model_config_json,
        runtime_config_json, context_policy_json, memory_policy_json,
        capabilities_json, tool_permissions_json, runtime_policy_json, created_at
-     ) VALUES ($1,$2,$3,'v1',$4,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,
+     ) VALUES ($1,$2,$3,'v1',$4,'{}'::jsonb,$6::jsonb,'{}'::jsonb,'{}'::jsonb,
        '[]'::jsonb,'{}'::jsonb,'{}'::jsonb,$5)`,
-    [versionId, agentId, spaceId, overrides.system_prompt ?? "You are a test agent.", now],
+    [
+      versionId,
+      agentId,
+      spaceId,
+      overrides.system_prompt ?? "You are a test agent.",
+      now,
+      JSON.stringify(overrides.runtime_config_json ?? {}),
+    ],
   );
   return { agentId, versionId };
 }
@@ -196,6 +204,13 @@ describe("runs repositories against real PostgreSQL", () => {
        VALUES ($1,'space-1','MiniMax-M3',true,'{"is_default": true}'::jsonb,$2)`,
       [providerId, new Date().toISOString()],
     );
+    await pool!.query(
+      `INSERT INTO model_provider_space_grants (
+         id, provider_id, space_id, owner_user_id, granted_by_user_id,
+         enabled, is_default, created_at, updated_at
+       ) VALUES ($1,$2,'space-1','user-1','user-1',true,true,$3,$3)`,
+      [randomUUID(), providerId, new Date().toISOString()],
+    );
 
     const run = await repo.createQueuedRun({
       agent_id: agentId,
@@ -211,6 +226,28 @@ describe("runs repositories against real PostgreSQL", () => {
     // the enabled space default (config_json.is_default) — the chat-turn fix.
     expect(run.adapter_type).toBe("model_api");
     expect(run.model_provider_id).toBe(providerId);
+  });
+
+  it("defaults no-workspace CLI runs to an ephemeral sandbox", async (ctx) => {
+    if (!available) return ctx.skip();
+    const repo = new PgRunRepository(pool!);
+    const { agentId } = await seedAgent({
+      runtime_config_json: { adapter_type: "claude_code" },
+    });
+
+    const run = await repo.createQueuedRun({
+      agent_id: agentId,
+      space_id: "space-1",
+      user_id: "user-1",
+      mode: "live",
+      run_type: "agent",
+      trigger_origin: "manual",
+      prompt: "chat",
+    });
+
+    expect(run.adapter_type).toBe("claude_code");
+    expect(run.workspace_id).toBeNull();
+    expect(run.required_sandbox_level).toBe("ephemeral");
   });
 
   it("appends run events with a DB-computed monotonic event_index", async (ctx) => {

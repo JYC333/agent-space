@@ -1,28 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
-import { SpaceLink as Link } from '../../core/spaceNav'
-import {
-  Archive,
-  Bookmark,
-  CheckCircle2,
-  FileText,
-  Folder,
-  Link2,
-  Play,
-  Radio,
-  RefreshCw,
-  Sparkles,
-  XCircle,
-} from 'lucide-react'
 import { toast } from 'sonner'
 import { intakeApi, workspacesApi } from '../../api/client'
-import { Badge, StatusBadge } from '../../components/ui/badge'
-import { Button } from '../../components/ui/button'
-import { Card, CardHeader, CardTitle } from '../../components/ui/card'
 import { EmptyState } from '../../components/ui/empty-state'
-import { Input } from '../../components/ui/input'
-import { Label } from '../../components/ui/label'
-import { Select } from '../../components/ui/select'
-import { Tabs, TabsList, TabsTrigger } from '../../components/ui/tabs'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
 import type {
@@ -36,38 +15,21 @@ import type {
   WorkspaceIntakeProfile,
   WorkspaceSourceBinding,
 } from '../../types/api'
-
-type ItemFilter = 'open' | 'new' | 'triaged' | 'selected' | 'ignored'
-type EvidenceFilter = 'candidate' | 'active' | 'all'
-
-const CAPTURE_POLICIES = [
-  { value: 'metadata_only', label: 'Metadata' },
-  { value: 'excerpt_only', label: 'Excerpt' },
-  { value: 'auto_extract_relevant', label: 'Extract relevant' },
-  { value: 'auto_extract_all_text', label: 'Extract text' },
-  { value: 'archive_all_snapshots', label: 'Archive snapshots' },
-]
-
-const FREQUENCIES = [
-  { value: 'manual', label: 'Manual' },
-  { value: 'hourly', label: 'Hourly' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-]
-
-function fmt(dt: string | null) {
-  return dt ? new Date(dt).toLocaleString() : 'never'
-}
-
-function short(id: string | null | undefined) {
-  return id ? `${id.slice(0, 8)}...` : ''
-}
-
-function preview(text: string | null | undefined, fallback = 'No excerpt') {
-  const raw = (text || '').trim()
-  if (!raw) return fallback
-  return raw.length > 280 ? `${raw.slice(0, 280)}...` : raw
-}
+import {
+  type EvidenceFilter,
+  type IntakeSummaryResult,
+  type ItemFilter,
+} from './intakePageModel'
+import {
+  ConnectionCard,
+  ConnectionsSection,
+  EvidenceSection,
+  IntakePageHeader,
+  ItemsSection,
+  JobsSection,
+  ManualUrlCard,
+  WorkspaceRoutingCard,
+} from './IntakePageSections'
 
 export default function IntakePage() {
   const { activeSpaceId, activeSpaceName } = useSpace()
@@ -83,8 +45,8 @@ export default function IntakePage() {
   const [bindings, setBindings] = useState<WorkspaceSourceBinding[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
-  const [summaryResults, setSummaryResults] = useState<Record<string, { run_id: string; artifact_id: string; preview: string; proposal_ids: string[] }>>({})
-  const [itemSummaryResults, setItemSummaryResults] = useState<Record<string, { run_id: string; artifact_id: string; preview: string; proposal_ids: string[] }>>({})
+  const [summaryResults, setSummaryResults] = useState<Record<string, IntakeSummaryResult>>({})
+  const [itemSummaryResults, setItemSummaryResults] = useState<Record<string, IntakeSummaryResult>>({})
 
   const [itemFilter, setItemFilter] = useState<ItemFilter>('open')
   const [evidenceFilter, setEvidenceFilter] = useState<EvidenceFilter>('candidate')
@@ -373,10 +335,6 @@ export default function IntakePage() {
     return connectorById.get(connection.connector_id)?.connector_key ?? 'connector'
   }
 
-  function evidenceLinked(row: ExtractedEvidence) {
-    return links.some(l => l.evidence_id === row.id && l.status === 'active' && l.target_type === 'space')
-  }
-
   if (!activeSpaceId) {
     return (
       <div className="p-6">
@@ -387,420 +345,90 @@ export default function IntakePage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between gap-4 pb-4 border-b border-border">
-        <div className="flex items-center gap-4">
-          <div
-            className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
-            style={{
-              background: 'color-mix(in oklch, var(--primary) 12%, transparent)',
-              border: '1px solid color-mix(in oklch, var(--primary) 35%, transparent)',
-            }}
-          >
-            <Radio className="size-5 text-accent-foreground" />
-          </div>
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Intake</h1>
-            <p className="text-sm text-muted-foreground">Source connections, candidate items, and citable evidence.</p>
-            <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId}</p>
-          </div>
-        </div>
-        <Button variant="outline" onClick={load} disabled={loading} type="button">
-          <RefreshCw className="size-4" />
-          Refresh
-        </Button>
-      </div>
+      <IntakePageHeader
+        activeSpaceId={activeSpaceId}
+        activeSpaceName={activeSpaceName}
+        loading={loading}
+        onRefresh={load}
+      />
 
       <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
         <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Manual URL</CardTitle>
-            </CardHeader>
-            <form className="space-y-3" onSubmit={createManualUrl}>
-              <div className="space-y-1.5">
-                <Label>URL</Label>
-                <Input value={manualUrl} onChange={e => setManualUrl(e.target.value)} placeholder="https://example.com/post" required />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Title</Label>
-                <Input value={manualTitle} onChange={e => setManualTitle(e.target.value)} placeholder="Optional" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Connection</Label>
-                <Select options={connectionOptions} value={manualConnectionId} onChange={setManualConnectionId} />
-              </div>
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                <input
-                  type="checkbox"
-                  className="size-4 rounded border-border"
-                  checked={queueContent}
-                  onChange={e => setQueueContent(e.target.checked)}
-                />
-                Queue extraction
-              </label>
-              <Button className="w-full" disabled={busy === 'manual:create'}>
-                <Link2 className="size-4" />
-                Save URL
-              </Button>
-            </form>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Connection</CardTitle>
-            </CardHeader>
-            <form className="space-y-3" onSubmit={createConnection}>
-              <div className="space-y-1.5">
-                <Label>Connector</Label>
-                <Select options={connectorOptions} value={connectorKey} onChange={setConnectorKey} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Name</Label>
-                <Input value={connectionName} onChange={e => setConnectionName(e.target.value)} placeholder={selectedConnector?.display_name ?? 'Connection'} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Endpoint</Label>
-                <Input value={endpointUrl} onChange={e => setEndpointUrl(e.target.value)} placeholder="https://example.com/feed.xml" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label>Frequency</Label>
-                  <Select options={FREQUENCIES} value={fetchFrequency} onChange={setFetchFrequency} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Capture</Label>
-                  <Select options={CAPTURE_POLICIES} value={capturePolicy} onChange={setCapturePolicy} />
-                </div>
-              </div>
-              <Button className="w-full" disabled={busy === 'connection:create'}>
-                <Radio className="size-4" />
-                Create connection
-              </Button>
-            </form>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Workspace Routing</CardTitle>
-            </CardHeader>
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <Label>Workspace</Label>
-                <Select options={workspaceOptions} value={workspaceId} onChange={setWorkspaceId} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Connection</Label>
-                <Select options={connectionOptions} value={bindingConnectionId} onChange={setBindingConnectionId} />
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="flex-1"
-                  disabled={!workspaces.length || busy === 'workspace:profile'}
-                  onClick={createWorkspaceProfile}
-                >
-                  <Folder className="size-4" />
-                  Profile
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="flex-1"
-                  disabled={!workspaces.length || !connections.length || busy === 'workspace:binding'}
-                  onClick={createWorkspaceBinding}
-                >
-                  <Link2 className="size-4" />
-                  Bind
-                </Button>
-              </div>
-              <div className="flex gap-1.5 flex-wrap">
-                <Badge variant="outline">{profiles.length} profiles</Badge>
-                <Badge variant="outline">{bindings.length} bindings</Badge>
-              </div>
-            </div>
-          </Card>
+          <ManualUrlCard
+            manualUrl={manualUrl}
+            manualTitle={manualTitle}
+            manualConnectionId={manualConnectionId}
+            queueContent={queueContent}
+            connectionOptions={connectionOptions}
+            busy={busy}
+            onManualUrlChange={setManualUrl}
+            onManualTitleChange={setManualTitle}
+            onManualConnectionChange={setManualConnectionId}
+            onQueueContentChange={setQueueContent}
+            onSubmit={createManualUrl}
+          />
+          <ConnectionCard
+            connectorOptions={connectorOptions}
+            connectorKey={connectorKey}
+            connectionName={connectionName}
+            endpointUrl={endpointUrl}
+            fetchFrequency={fetchFrequency}
+            capturePolicy={capturePolicy}
+            selectedConnector={selectedConnector}
+            busy={busy}
+            onConnectorKeyChange={setConnectorKey}
+            onConnectionNameChange={setConnectionName}
+            onEndpointUrlChange={setEndpointUrl}
+            onFetchFrequencyChange={setFetchFrequency}
+            onCapturePolicyChange={setCapturePolicy}
+            onSubmit={createConnection}
+          />
+          <WorkspaceRoutingCard
+            workspaceId={workspaceId}
+            bindingConnectionId={bindingConnectionId}
+            workspaceOptions={workspaceOptions}
+            connectionOptions={connectionOptions}
+            workspaces={workspaces}
+            connections={connections}
+            profiles={profiles}
+            bindings={bindings}
+            busy={busy}
+            onWorkspaceIdChange={setWorkspaceId}
+            onBindingConnectionIdChange={setBindingConnectionId}
+            onCreateWorkspaceProfile={createWorkspaceProfile}
+            onCreateWorkspaceBinding={createWorkspaceBinding}
+          />
         </div>
 
         <div className="space-y-6 min-w-0">
-          <section className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Connections</h2>
-                <p className="text-xs text-muted-foreground">{connections.length} configured</p>
-              </div>
-            </div>
-            {loading ? (
-              <Card><p className="text-muted-foreground text-center py-8 text-sm">Loading...</p></Card>
-            ) : connections.length === 0 ? (
-              <EmptyState title="No connections" description="Create a source connection or save a manual URL." />
-            ) : (
-              <div className="grid gap-3 lg:grid-cols-2">
-                {connections.map(connection => {
-                  const key = connectorName(connection)
-                  const canScan = key === 'rss' || key === 'atom'
-                  return (
-                    <Card key={connection.id} className="mb-0">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="font-medium text-sm truncate">{connection.name}</p>
-                          <p className="text-xs text-muted-foreground truncate">{connection.endpoint_url ?? key}</p>
-                        </div>
-                        <StatusBadge status={connection.status} />
-                      </div>
-                      <div className="flex gap-1.5 flex-wrap mt-3">
-                        <Badge variant="outline">{key}</Badge>
-                        <Badge variant="muted">{connection.fetch_frequency}</Badge>
-                        <Badge variant="muted">{connection.capture_policy}</Badge>
-                        <Badge variant="muted">{connection.trust_level}</Badge>
-                      </div>
-                      <div className="flex items-center justify-between gap-2 mt-4">
-                        <p className="text-xs text-muted-foreground">Checked: {fmt(connection.last_checked_at)}</p>
-                        <div className="flex gap-1.5">
-                          {canScan && (
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="secondary"
-                              disabled={busy === `scan:${connection.id}`}
-                              onClick={() => scanConnection(connection)}
-                            >
-                              <RefreshCw className="size-3.5" />
-                              Scan
-                            </Button>
-                          )}
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            disabled={busy === `connection:${connection.id}`}
-                            onClick={() => updateConnection(connection, connection.status === 'active' ? 'paused' : 'active')}
-                          >
-                            {connection.status === 'active' ? 'Pause' : 'Activate'}
-                          </Button>
-                        </div>
-                      </div>
-                    </Card>
-                  )
-                })}
-              </div>
-            )}
-          </section>
-
-          <section className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Items</h2>
-                <p className="text-xs text-muted-foreground">{items.length} visible</p>
-              </div>
-              <Tabs value={itemFilter} onValueChange={v => setItemFilter(v as ItemFilter)}>
-                <TabsList>
-                  <TabsTrigger value="open">Open</TabsTrigger>
-                  <TabsTrigger value="new">New</TabsTrigger>
-                  <TabsTrigger value="triaged">Triaged</TabsTrigger>
-                  <TabsTrigger value="selected">Selected</TabsTrigger>
-                  <TabsTrigger value="ignored">Ignored</TabsTrigger>
-                </TabsList>
-              </Tabs>
-            </div>
-            {items.length === 0 ? (
-              <EmptyState title="No intake items" description="Candidate items appear after manual URL capture or a connection scan." />
-            ) : (
-              items.map(item => (
-                <Card key={item.id}>
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">{item.title}</p>
-                      <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{preview(item.excerpt, item.source_uri ?? 'No source URI')}</p>
-                    </div>
-                    <StatusBadge status={item.status} />
-                  </div>
-                  <div className="flex gap-1.5 flex-wrap mt-3">
-                    <Badge variant="outline">{item.item_type}</Badge>
-                    <Badge variant="muted">{item.content_state}</Badge>
-                    {item.source_domain && <Badge variant="muted">{item.source_domain}</Badge>}
-                    {item.connection_id && <Badge variant="muted">conn {short(item.connection_id)}</Badge>}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 mt-4">
-                    <Button type="button" size="sm" variant="outline" disabled={busy?.startsWith(`item:${item.id}`) ?? false} onClick={() => itemAction(item, 'queue_content')}>
-                      <FileText className="size-3.5" />
-                      Extract
-                    </Button>
-                    <Button type="button" size="sm" variant="outline" disabled={busy?.startsWith(`item:${item.id}`) ?? false} onClick={() => itemAction(item, 'extract_evidence')}>
-                      <Sparkles className="size-3.5" />
-                      Evidence
-                    </Button>
-                    {(item.excerpt || item.title) && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        disabled={busy === `item:summarize:${item.id}`}
-                        onClick={() => summarizeItem(item)}
-                        title={!item.excerpt ? 'Only metadata available — summary will be limited' : undefined}
-                      >
-                        <Sparkles className="size-3.5" />
-                        {item.excerpt ? 'Summarize' : 'Summarize metadata'}
-                      </Button>
-                    )}
-                    <Button type="button" size="sm" variant="ghost" disabled={busy?.startsWith(`item:${item.id}`) ?? false} onClick={() => itemAction(item, 'read_later')}>
-                      <Bookmark className="size-3.5" />
-                      Later
-                    </Button>
-                    <Button type="button" size="sm" variant="ghost" disabled={busy?.startsWith(`item:${item.id}`) ?? false} onClick={() => itemAction(item, 'mark_selected')}>
-                      <CheckCircle2 className="size-3.5" />
-                      Select
-                    </Button>
-                    <Button type="button" size="sm" variant="ghost" disabled={busy?.startsWith(`item:${item.id}`) ?? false} onClick={() => itemAction(item, 'mark_ignored')}>
-                      <XCircle className="size-3.5" />
-                      Ignore
-                    </Button>
-                  </div>
-                  {itemSummaryResults[item.id] && (
-                    <div className="mt-3 text-xs border-t border-border pt-2 space-y-0.5">
-                      <p className="text-muted-foreground line-clamp-2">{itemSummaryResults[item.id].preview}</p>
-                      <Link to={`/artifacts/${itemSummaryResults[item.id].artifact_id}`} className="text-accent-foreground hover:underline block">
-                        View summary artifact →
-                      </Link>
-                      <Link to={`/runs/${itemSummaryResults[item.id].run_id}`} className="text-muted-foreground hover:underline block">
-                        View run →
-                      </Link>
-                      {itemSummaryResults[item.id].proposal_ids.length > 0 && (
-                        <Link to="/proposals" className="text-muted-foreground hover:underline block">
-                          {itemSummaryResults[item.id].proposal_ids.length} proposal{itemSummaryResults[item.id].proposal_ids.length !== 1 ? 's' : ''} pending review →
-                        </Link>
-                      )}
-                    </div>
-                  )}
-                </Card>
-              ))
-            )}
-          </section>
-
-          <section className="space-y-3">
-            <div>
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Extraction Jobs</h2>
-              <p className="text-xs text-muted-foreground">{jobs.length} recent</p>
-            </div>
-            {jobs.length === 0 ? (
-              <EmptyState title="No jobs" description="Queued extraction and scan jobs appear here." />
-            ) : (
-              <div className="grid gap-3 lg:grid-cols-2">
-                {jobs.map(job => (
-                  <Card key={job.id} className="mb-0">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-medium text-sm">{job.job_type.replace('_', ' ')}</p>
-                        <p className="text-xs text-muted-foreground">{fmt(job.created_at)}</p>
-                      </div>
-                      <StatusBadge status={job.status} />
-                    </div>
-                    <div className="flex gap-1.5 flex-wrap mt-3">
-                      {job.intake_item_id && <Badge variant="muted">item {short(job.intake_item_id)}</Badge>}
-                      {job.connection_id && <Badge variant="muted">conn {short(job.connection_id)}</Badge>}
-                      {job.items_created !== null && <Badge variant="outline">{job.items_created} created</Badge>}
-                    </div>
-                    {job.error_message && <p className="text-xs text-destructive mt-3 line-clamp-2">{job.error_message}</p>}
-                    {job.status === 'pending' && (
-                      <Button type="button" size="sm" variant="secondary" className="mt-4" disabled={busy === `job:${job.id}`} onClick={() => runJob(job)}>
-                        <Play className="size-3.5" />
-                        Run
-                      </Button>
-                    )}
-                  </Card>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Evidence</h2>
-                <p className="text-xs text-muted-foreground">{evidence.length} visible</p>
-              </div>
-              <Tabs value={evidenceFilter} onValueChange={v => setEvidenceFilter(v as EvidenceFilter)}>
-                <TabsList>
-                  <TabsTrigger value="candidate">Candidate</TabsTrigger>
-                  <TabsTrigger value="active">Active</TabsTrigger>
-                  <TabsTrigger value="all">All</TabsTrigger>
-                </TabsList>
-              </Tabs>
-            </div>
-            {evidence.length === 0 ? (
-              <EmptyState title="No evidence" description="Evidence is extracted from intake items before context selection." />
-            ) : (
-              evidence.map(row => {
-                const linked = evidenceLinked(row)
-                return (
-                  <Card key={row.id}>
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <p className="font-medium text-sm truncate">{row.title}</p>
-                        <p className="text-xs text-muted-foreground line-clamp-3 mt-1">{preview(row.content_excerpt)}</p>
-                      </div>
-                      <div className="flex gap-1.5 shrink-0">
-                        <StatusBadge status={row.status} />
-                        {linked && <Badge variant="success">context</Badge>}
-                      </div>
-                    </div>
-                    <div className="flex gap-1.5 flex-wrap mt-3">
-                      <Badge variant="outline">{row.evidence_type}</Badge>
-                      <Badge variant="muted">{row.extraction_method}</Badge>
-                      <Badge variant="muted">{row.trust_level}</Badge>
-                      {row.intake_item_id && <Badge variant="muted">item {short(row.intake_item_id)}</Badge>}
-                    </div>
-                    <div className="flex gap-1.5 mt-4 flex-wrap">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={linked ? 'success' : 'secondary'}
-                        disabled={busy === `evidence:${row.id}`}
-                        onClick={() => useEvidenceInContext(row)}
-                      >
-                        <CheckCircle2 className="size-3.5" />
-                        {linked ? 'Linked' : 'Use in context'}
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={busy === `evidence:summarize:${row.id}`}
-                        onClick={() => summarizeEvidence(row)}
-                      >
-                        <Sparkles className="size-3.5" />
-                        Summarize
-                      </Button>
-                      {row.source_uri && (
-                        <Button type="button" size="sm" variant="ghost" asChild>
-                          <a href={row.source_uri} target="_blank" rel="noreferrer">
-                            <Archive className="size-3.5" />
-                            Source
-                          </a>
-                        </Button>
-                      )}
-                    </div>
-                    {summaryResults[row.id] && (
-                      <div className="mt-3 text-xs border-t border-border pt-2 space-y-0.5">
-                        <p className="text-muted-foreground line-clamp-2">{summaryResults[row.id].preview}</p>
-                        <Link to={`/artifacts/${summaryResults[row.id].artifact_id}`} className="text-accent-foreground hover:underline block">
-                          View summary artifact →
-                        </Link>
-                        <Link to={`/runs/${summaryResults[row.id].run_id}`} className="text-muted-foreground hover:underline block">
-                          View run →
-                        </Link>
-                        {summaryResults[row.id].proposal_ids.length > 0 && (
-                          <Link to="/proposals" className="text-muted-foreground hover:underline block">
-                            {summaryResults[row.id].proposal_ids.length} proposal{summaryResults[row.id].proposal_ids.length !== 1 ? 's' : ''} pending review →
-                          </Link>
-                        )}
-                      </div>
-                    )}
-                  </Card>
-                )
-              })
-            )}
-          </section>
+          <ConnectionsSection
+            connections={connections}
+            loading={loading}
+            busy={busy}
+            connectorName={connectorName}
+            onScanConnection={scanConnection}
+            onUpdateConnection={updateConnection}
+          />
+          <ItemsSection
+            items={items}
+            itemFilter={itemFilter}
+            busy={busy}
+            summaryResults={itemSummaryResults}
+            onItemFilterChange={setItemFilter}
+            onItemAction={itemAction}
+            onSummarizeItem={summarizeItem}
+          />
+          <JobsSection jobs={jobs} busy={busy} onRunJob={runJob} />
+          <EvidenceSection
+            evidence={evidence}
+            links={links}
+            evidenceFilter={evidenceFilter}
+            busy={busy}
+            summaryResults={summaryResults}
+            onEvidenceFilterChange={setEvidenceFilter}
+            onUseEvidenceInContext={useEvidenceInContext}
+            onSummarizeEvidence={summarizeEvidence}
+          />
         </div>
       </div>
     </div>

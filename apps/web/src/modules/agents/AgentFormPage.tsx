@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/spaceNav'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { agentsApi, credentialsApi } from '../../api/client'
-import type { CredentialStatus } from '../../types/api'
+import { agentsApi, credentialsApi, runtimeToolsApi } from '../../api/client'
+import type { CliCredentialAvailableProfileOut, SpaceRuntimeToolPolicyOut } from '../../types/api'
 import { useSpace } from '../../contexts/SpaceContext'
 import ProviderSelector from '../providers/ProviderSelector'
 import { Button } from '../../components/ui/button'
@@ -17,6 +17,75 @@ import { errMsg } from '../../lib/utils'
  * /agents/templates/:id/use; editing an existing agent happens in the
  * Agent Detail tabs (which create new immutable versions).
  */
+function CliProfileSelector({
+  runtime,
+  profiles,
+  value,
+  onChange,
+}: {
+  runtime: string
+  profiles: CliCredentialAvailableProfileOut[]
+  value: string
+  onChange: (value: string) => void
+}) {
+  const runtimeProfiles = profiles.filter(profile => profile.runtime === runtime)
+  if (runtimeProfiles.length === 0) {
+    return (
+      <p className="text-xs text-amber-600">
+        No granted login profile is available for this runtime in the active space.
+      </p>
+    )
+  }
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">CLI profile</label>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
+      >
+        <option value="">Active-space default</option>
+        {runtimeProfiles.map(profile => (
+          <option key={profile.id} value={profile.id}>
+            {profile.name}{profile.is_default ? ' (default)' : ''}{profile.manageable ? ' · mine' : ''}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+function RuntimeVersionSelector({
+  runtime,
+  policies,
+  value,
+  onChange,
+}: {
+  runtime: string
+  policies: SpaceRuntimeToolPolicyOut[]
+  value: string
+  onChange: (value: string) => void
+}) {
+  const policy = policies.find(item => item.runtime === runtime)
+  if (!policy) return null
+  const versions = policy.installed_versions.filter(version => version.installed)
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">CLI runtime version</label>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
+      >
+        <option value="">Space default ({policy.default_version ?? 'none'})</option>
+        {versions.map(version => (
+          <option key={version.version} value={version.version}>{version.version}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 export default function AgentFormPage() {
   const navigate = useNavigate()
   const { activeSpaceId } = useSpace()
@@ -25,20 +94,52 @@ export default function AgentFormPage() {
   const [systemPrompt, setSystemPrompt] = useState('')
   const [modelSelection, setModelSelection] = useState<{ provider_id: string; model: string } | null>(null)
   const [runtime, setRuntime] = useState<string>('model_api')
-  const [cliRuntimes, setCliRuntimes] = useState<CredentialStatus[]>([])
+  const [cliProfiles, setCliProfiles] = useState<CliCredentialAvailableProfileOut[]>([])
+  const [runtimePolicies, setRuntimePolicies] = useState<SpaceRuntimeToolPolicyOut[]>([])
+  const [credentialProfileId, setCredentialProfileId] = useState<string>('')
+  const [runtimeToolVersion, setRuntimeToolVersion] = useState<string>('')
   const [saving, setSaving] = useState(false)
 
   // CLI runtimes are offered only when a login profile exists for them; the
   // catalog of installed-and-logged-in CLIs comes from the credential status
   // endpoint rather than a hardcoded list.
   useEffect(() => {
-    credentialsApi.status()
-      .then(list => setCliRuntimes(list.filter(c => c.logged_in)))
-      .catch(() => setCliRuntimes([]))
+    Promise.all([
+      credentialsApi.available().catch(() => [] as CliCredentialAvailableProfileOut[]),
+      runtimeToolsApi.spacePolicies().catch(() => [] as SpaceRuntimeToolPolicyOut[]),
+    ])
+      .then(([profiles, policies]) => {
+        setCliProfiles(profiles.filter(c => c.logged_in))
+        setRuntimePolicies(policies)
+      })
+      .catch(() => {
+        setCliProfiles([])
+        setRuntimePolicies([])
+      })
   }, [])
 
+  const enabledRuntimeSet = new Set(
+    runtimePolicies
+      .filter(policy =>
+        policy.policy_id &&
+        policy.enabled &&
+        policy.installed_versions.some(version => version.installed),
+      )
+      .map(policy => policy.runtime),
+  )
+  const cliRuntimes = Array.from(
+    new Map(
+      cliProfiles
+        .filter(profile => enabledRuntimeSet.has(profile.runtime))
+        .map(profile => [profile.runtime, profile]),
+    ).values(),
+  )
+
   const isCli = runtime !== 'model_api'
+  const isClaudeCli = runtime === 'claude_code'
+  const isCodexCli = runtime === 'codex_cli'
   const providerRequired = !isCli
+  const showProviderSelector = !isCli || isClaudeCli || isCodexCli
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -54,9 +155,15 @@ export default function AgentFormPage() {
         description: description.trim() || null,
         system_prompt: systemPrompt.trim() || null,
         adapter_type: runtime,
-        // CLI runtimes manage their own model; never carry a provider/model.
-        default_model_provider_id: isCli ? null : (modelSelection?.provider_id ?? null),
-        default_model: isCli ? null : (modelSelection?.model || null),
+        runtime_config_json: {
+          adapter_type: runtime,
+          ...(isCli && credentialProfileId ? { credential_profile_id: credentialProfileId } : {}),
+          ...(isCli && runtimeToolVersion ? { runtime_tool_version: runtimeToolVersion } : {}),
+        },
+        // Claude/Codex may optionally use a compatible provider endpoint.
+        // Other CLI runtimes manage their own model/login state.
+        default_model_provider_id: showProviderSelector ? (modelSelection?.provider_id ?? null) : null,
+        default_model: showProviderSelector ? (modelSelection?.model || null) : null,
       })
       toast.success('Agent created')
       navigate(`/agents/${created.id}`)
@@ -102,22 +209,56 @@ export default function AgentFormPage() {
               <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Runtime</label>
               <select
                 value={runtime}
-                onChange={e => setRuntime(e.target.value)}
+                onChange={e => {
+                  const next = e.target.value
+                  setRuntime(next)
+                  const defaultProfile = cliProfiles.find(p => p.runtime === next && p.is_default) ?? cliProfiles.find(p => p.runtime === next)
+                  const policy = runtimePolicies.find(p => p.runtime === next)
+                  setCredentialProfileId(defaultProfile?.id ?? '')
+                  setRuntimeToolVersion(policy?.default_version ?? '')
+                }}
                 className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
               >
                 <option value="model_api">API — call a model provider (no tools)</option>
                 {cliRuntimes.map(c => (
-                  <option key={c.runtime} value={c.runtime}>{c.label} (tools, filesystem)</option>
+                  <option key={c.runtime} value={c.runtime}>{c.runtime} (tools, filesystem)</option>
                 ))}
               </select>
               <p className="text-xs text-muted-foreground">
                 {isCli
-                  ? 'Uses the CLI with its own login; the model is managed by the CLI runtime.'
+                  ? isClaudeCli
+                    ? 'Uses Claude Code login by default; optionally select a Claude-compatible provider below.'
+                    : isCodexCli
+                      ? 'Uses Codex login by default; optionally select an OpenAI-compatible provider below.'
+                      : 'Uses the CLI with its own login; the model is managed by the CLI runtime.'
                   : 'Runs a prompt against a configured model provider. Pick the provider below.'}
               </p>
             </div>
-            {!isCli && (
-              <ProviderSelector value={modelSelection} onChange={setModelSelection} required={providerRequired} />
+            {isCli && (
+              <>
+                <CliProfileSelector
+                  runtime={runtime}
+                  profiles={cliProfiles}
+                  value={credentialProfileId}
+                  onChange={setCredentialProfileId}
+                />
+                <RuntimeVersionSelector
+                  runtime={runtime}
+                  policies={runtimePolicies}
+                  value={runtimeToolVersion}
+                  onChange={setRuntimeToolVersion}
+                />
+              </>
+            )}
+            {showProviderSelector && (
+              <ProviderSelector
+                value={modelSelection}
+                onChange={setModelSelection}
+                required={providerRequired}
+                requireClaudeCompatible={isClaudeCli}
+                requireOpenAiCompatible={isCodexCli}
+                emptyLabel={isClaudeCli ? 'Claude Code default' : isCodexCli ? 'Codex default' : undefined}
+              />
             )}
           </div>
           <div className="flex gap-2">

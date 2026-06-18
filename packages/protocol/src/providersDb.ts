@@ -11,9 +11,11 @@ export const MODEL_PROVIDERS_TABLE = "model_providers" as const;
 export const MODEL_PROVIDERS_READ_COLUMNS = [
   "id",
   "space_id",
+  "owner_user_id",
   "name",
   "provider_type",
   "base_url",
+  "network_profile_id",
   "default_model",
   "enabled",
   "credential_id",

@@ -1,201 +1,39 @@
 import type { ServerConfig } from "../../config";
+import { dbPool, type Queryable, type SpaceUserIdentity } from "../routeUtils/common";
 import {
-  dbPool,
-  HttpError,
-  intQuery,
-  type Queryable,
-  type SpaceUserIdentity,
-} from "../routeUtils/common";
-
-export interface HomeSummaryOut {
-  recent_runs: HomeRunSummaryItem[];
-  active_runs: HomeRunSummaryItem[];
-  pending_proposals: {
-    count: number;
-    items: HomePendingProposalItem[];
-  };
-  recent_artifacts: HomeArtifactSummaryItem[];
-  task_summary: {
-    by_status: Record<string, number>;
-    total_open: number;
-    needs_review_count: number;
-    blocked_count: number;
-    done_count: number;
-  };
-  active_tasks: HomeActiveTaskItem[];
-  activity_summary: {
-    recent_count: number;
-    raw_count: number;
-    today_count: number;
-  };
-  run_stats_today: {
-    created: number;
-    queued: number;
-    running: number;
-    succeeded: number;
-    failed: number;
-    cancelled: number;
-    dry_run_count: number;
-  };
-  job_queue_status: {
-    queued: number;
-    running: number;
-    failed: number;
-    retryable: number;
-    recent_error_preview: string | null;
-  };
-  runtime_status: {
-    real_adapters_configured_count: number;
-    configured_adapter_types: string[];
-    message: string;
-  };
-  model_provider_status: {
-    model_providers_count: number;
-    enabled_model_providers_count: number;
-    missing_model_provider_config: boolean;
-    message: string;
-  };
-  suggested_actions: Array<{
-    id: string;
-    label: string;
-    reason: string;
-    target_path: string;
-    priority: "high" | "normal" | "low";
-  }>;
-  intake_summary: {
-    open_items: number;
-    new_items_today: number;
-    pending_extraction_jobs: number;
-    failed_extraction_jobs: number;
-    candidate_evidence: number;
-    active_evidence: number;
-    due_connections: number;
-  };
-}
-
-export interface MeSummaryOut {
-  pending_proposals_count: number;
-  assigned_tasks_count: number;
-  recent_runs: MeRecentRunItem[];
-  recent_participation: MeRecentParticipationItem[];
-  accessible_spaces_count: number;
-  spaces: MeSpaceRollup[];
-}
-
-export interface MeTimelineEntry {
-  id: string;
-  entry_type: string;
-  source_space_id: string | null;
-  source_object_type: string | null;
-  source_object_id: string | null;
-  role: string | null;
-  occurred_at: string;
-  created_at: string;
-}
-
-export interface MePendingProposalItem {
-  id: string;
-  space_id: string;
-  proposal_type: string;
-  status: string;
-  urgency: string;
-  title: string;
-  visibility: string;
-  created_by_user_id: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface HomeRunSummaryItem {
-  id: string;
-  status: string;
-  mode: string;
-  run_type: string;
-  agent_id: string;
-  task_id: string | null;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-  error_text: string | null;
-  visibility: string;
-}
-
-interface HomePendingProposalItem {
-  id: string;
-  title: string;
-  proposal_type: string;
-  status: string;
-  risk_level: string;
-  urgency: string;
-  review_deadline: string | null;
-  expires_at: string | null;
-  expired: boolean;
-  preview: boolean;
-  created_by_run_id: string | null;
-  visibility: string;
-}
-
-interface HomeArtifactSummaryItem {
-  id: string;
-  title: string;
-  artifact_type: string;
-  preview: boolean;
-  run_id: string | null;
-  created_at: string;
-  visibility: string;
-}
-
-interface HomeActiveTaskItem {
-  id: string;
-  title: string;
-  status: string;
-  priority: string;
-  risk_level: string;
-  task_type: string;
-  assigned_user_id: string | null;
-  assigned_agent_id: string | null;
-  due_at: string | null;
-  updated_at: string;
-  visibility: string;
-}
-
-interface MeRecentRunItem {
-  id: string;
-  space_id: string;
-  agent_id: string;
-  status: string;
-  mode: string;
-  run_type: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface MeRecentParticipationItem {
-  id: string;
-  user_id: string;
-  personal_space_id: string;
-  source_space_id: string;
-  source_object_type: string;
-  source_object_id: string;
-  role: string;
-  occurred_at: string;
-  created_at: string;
-}
-
-interface MeSpaceRollup {
-  space_id: string;
-  name: string;
-  type: string;
-  pending_proposals_count: number;
-  assigned_tasks_count: number;
-  recent_failed_runs_count: number;
-}
-
-type QueryParams = Record<string, string | undefined>;
-
-const ACTIVE_RUN_STATUSES = ["queued", "running", "waiting_for_review"];
-const DONE_TASK_STATUSES = ["done", "completed", "cancelled", "archived"];
-const REVIEW_TASK_STATUSES = ["needs_review", "review", "in_review"];
+  ACTIVE_RUN_STATUSES,
+  DONE_TASK_STATUSES,
+  REVIEW_TASK_STATUSES,
+  artifactVisibleSql,
+  boundedQueryInt,
+  iso,
+  isoOrNull,
+  numeric,
+  proposalVisibleSelect,
+  proposalVisibleSql,
+  runVisibleSql,
+  suggestedActions,
+  taskVisibleSql,
+} from "./frontendSupportReadModel";
+import type {
+  HomeActiveTaskItem,
+  HomeArtifactSummaryItem,
+  HomeRunSummaryItem,
+  HomeSummaryOut,
+  MePendingProposalItem,
+  MeRecentParticipationItem,
+  MeRecentRunItem,
+  MeSpaceRollup,
+  MeSummaryOut,
+  MeTimelineEntry,
+  QueryParams,
+} from "./frontendSupportTypes";
+export type {
+  HomeSummaryOut,
+  MePendingProposalItem,
+  MeSummaryOut,
+  MeTimelineEntry,
+} from "./frontendSupportTypes";
 
 export class PgFrontendSupportService {
   constructor(private readonly db: Queryable) {}
@@ -921,121 +759,4 @@ export class PgFrontendSupportService {
       created_at: iso(row.created_at),
     }));
   }
-}
-
-function boundedQueryInt(
-  value: string | undefined,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  const parsed = intQuery(value, fallback);
-  if (parsed === null || parsed < min || parsed > max) {
-    throw new HttpError(422, `limit must be between ${min} and ${max}`);
-  }
-  return parsed;
-}
-
-function runVisibleSql(userParam: string): string {
-  return `(
-    r.visibility = 'space_shared'
-    OR r.instructed_by_user_id = ${userParam}
-  )`;
-}
-
-function proposalVisibleSql(userParam: string): string {
-  return `(
-    p.visibility = 'space_shared'
-    OR p.created_by_user_id = ${userParam}
-    OR run_for_instructed.instructed_by_user_id = ${userParam}
-  )`;
-}
-
-function artifactVisibleSql(userParam: string): string {
-  return `(
-    a.visibility IN ('space_shared', 'workspace_shared', 'public_template')
-    OR a.owner_user_id IS NULL
-    OR a.owner_user_id = ${userParam}
-  )`;
-}
-
-function taskVisibleSql(userParam: string): string {
-  return `(
-    t.visibility IN ('space_shared', 'workspace_shared', 'public_template')
-    OR t.created_by_user_id = ${userParam}
-    OR t.assigned_user_id = ${userParam}
-    OR t.claimed_by_user_id = ${userParam}
-  )`;
-}
-
-function proposalVisibleSelect(): string {
-  return `SELECT p.id, p.space_id, p.proposal_type, p.status, p.urgency,
-                 p.title, p.visibility, p.created_by_user_id,
-                 p.created_at, p.updated_at
-            FROM proposals p
-            JOIN space_memberships sm
-              ON sm.space_id = p.space_id
-             AND sm.status = 'active'
-            LEFT JOIN runs run_for_instructed
-              ON run_for_instructed.id = p.created_by_run_id
-             AND run_for_instructed.space_id = p.space_id`;
-}
-
-function suggestedActions(input: {
-  pendingCount: number;
-  retryableJobs: number;
-  missingModelProvider: boolean;
-}): HomeSummaryOut["suggested_actions"] {
-  const actions: HomeSummaryOut["suggested_actions"] = [];
-  if (input.pendingCount > 0) {
-    actions.push({
-      id: "review_pending_proposals",
-      label: "Review pending proposals",
-      reason: `${input.pendingCount} proposal(s) are waiting for review.`,
-      target_path: "/proposals?status=pending",
-      priority: input.pendingCount >= 5 ? "high" : "normal",
-    });
-  }
-  if (input.retryableJobs > 0) {
-    actions.push({
-      id: "retry_failed_jobs",
-      label: "Review failed jobs",
-      reason: `${input.retryableJobs} failed job(s) can be retried.`,
-      target_path: "/jobs?status=failed",
-      priority: "normal",
-    });
-  }
-  if (input.missingModelProvider) {
-    actions.push({
-      id: "configure_model_provider",
-      label: "Configure model provider",
-      reason: "No enabled model provider is configured for this space.",
-      target_path: "/settings/providers",
-      priority: "high",
-    });
-  }
-  return actions;
-}
-
-function numeric(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
-}
-
-function iso(value: unknown): string {
-  return isoOrNull(value) ?? new Date(0).toISOString();
-}
-
-function isoOrNull(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
-  if (typeof value === "string") {
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? null : date.toISOString();
-  }
-  return null;
 }

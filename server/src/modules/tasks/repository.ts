@@ -4,7 +4,6 @@ import {
   HttpError,
   canReadByVisibility,
   countFromRow,
-  dateIso,
   numberValue,
   optionalObject,
   optionalString,
@@ -15,171 +14,32 @@ import {
   type SpaceUserIdentity,
   type Queryable,
 } from "../routeUtils/common";
-import { PgRunRepository, type RunRecord } from "../runs/repository";
+import { PgRunRepository } from "../runs/repository";
 import { runToOut } from "../runs/runReadModel";
-
-interface BoardRow {
-  id: string;
-  space_id: string;
-  workspace_id: string | null;
-  name: string;
-  description: string | null;
-  board_type: string;
-  status: string;
-  default_view: string | null;
-  sort_order: number | null;
-  metadata_json: unknown;
-  created_by_user_id: string | null;
-  created_by_agent_id: string | null;
-  created_at: unknown;
-  updated_at: unknown;
-  deleted_at: unknown;
-}
-
-interface BoardColumnRow {
-  id: string;
-  space_id: string;
-  board_id: string;
-  name: string;
-  description: string | null;
-  status_key: string;
-  position: number;
-  wip_limit: number | null;
-  is_done_column: boolean;
-  is_default_column: boolean;
-  metadata_json: unknown;
-  created_at: unknown;
-  updated_at: unknown;
-  deleted_at: unknown;
-}
-
-interface TaskRow {
-  id: string;
-  space_id: string;
-  workspace_id: string | null;
-  board_id: string | null;
-  column_id: string | null;
-  parent_task_id: string | null;
-  title: string;
-  description: string | null;
-  task_type: string;
-  status: string;
-  priority: string;
-  risk_level: string;
-  visibility: string;
-  created_by_user_id: string | null;
-  created_by_agent_id: string | null;
-  assigned_user_id: string | null;
-  assigned_agent_id: string | null;
-  claimed_by_user_id: string | null;
-  claimed_by_agent_id: string | null;
-  source_activity_id: string | null;
-  source_run_id: string | null;
-  source_proposal_id: string | null;
-  source_artifact_id: string | null;
-  due_at: unknown;
-  start_after: unknown;
-  completed_at: unknown;
-  cancelled_at: unknown;
-  blocked_reason: string | null;
-  max_runs: number | null;
-  created_at: unknown;
-  updated_at: unknown;
-  deleted_at: unknown;
-}
-
-interface TaskRunListRow extends RunRecord {
-  task_run_id: string;
-  task_run_space_id: string;
-  task_run_task_id: string;
-  task_run_run_id: string;
-  task_run_role: string;
-  task_run_created_at: unknown;
-}
-
-interface TaskEvaluationRow {
-  id: string;
-  space_id: string;
-  task_id: string;
-  run_id: string | null;
-  run_evaluation_id: string | null;
-  evaluator_type: string;
-  evaluator_user_id: string | null;
-  evaluator_agent_id: string | null;
-  score: number | null;
-  confidence: number | null;
-  summary: string | null;
-  checklist_json: unknown;
-  known_issues_json: unknown;
-  evidence_artifact_ids: unknown;
-  recommendation: string | null;
-  created_at: unknown;
-}
-
-interface TaskArtifactRow {
-  id: string;
-  space_id: string;
-  task_id: string;
-  artifact_id: string;
-  role: string;
-  created_at: unknown;
-  artifact_space_id: string;
-  run_id: string | null;
-  proposal_id: string | null;
-  artifact_type: string;
-  title: string;
-  mime_type: string | null;
-  visibility: string;
-  artifact_created_at: unknown;
-}
-
-interface TaskProposalRow {
-  id: string;
-  space_id: string;
-  task_id: string;
-  proposal_id: string;
-  role: string;
-  created_at: unknown;
-  proposal_space_id: string;
-  proposal_type: string;
-  status: string;
-  title: string;
-  visibility: string;
-  proposal_created_at: unknown;
-  preview: boolean;
-  urgency: string;
-  review_deadline: unknown;
-  expires_at: unknown;
-  created_by_run_id: string | null;
-}
-
-const BOARD_COLUMNS = `
-  id, space_id, workspace_id, name, description, board_type, status,
-  default_view, sort_order, metadata_json, created_by_user_id,
-  created_by_agent_id, created_at, updated_at, deleted_at
-`;
-
-const BOARD_COLUMN_COLUMNS = `
-  id, space_id, board_id, name, description, status_key, position,
-  wip_limit, is_done_column, is_default_column, metadata_json,
-  created_at, updated_at, deleted_at
-`;
-
-const TASK_COLUMNS = `
-  id, space_id, workspace_id, board_id, column_id, parent_task_id,
-  title, description, task_type, status, priority, risk_level, visibility,
-  created_by_user_id, created_by_agent_id, assigned_user_id, assigned_agent_id,
-  claimed_by_user_id, claimed_by_agent_id, source_activity_id, source_run_id,
-  source_proposal_id, source_artifact_id, due_at, start_after, completed_at,
-  cancelled_at, blocked_reason, max_runs, created_at, updated_at, deleted_at
-`;
-
-const DEFAULT_COLUMNS = [
-  { name: "Inbox", status_key: "inbox", position: 0, isDone: false, isDefault: true },
-  { name: "Ready", status_key: "ready", position: 1, isDone: false, isDefault: false },
-  { name: "In Progress", status_key: "in_progress", position: 2, isDone: false, isDefault: false },
-  { name: "Done", status_key: "done", position: 3, isDone: true, isDefault: false },
-];
+import {
+  bounded01,
+  boardColumnOut,
+  boardOut,
+  defaultTaskInstruction,
+  taskArtifactOut,
+  taskEvaluationOut,
+  taskOut,
+  taskProposalOut,
+  taskRunOutFromList,
+} from "./taskRepositoryMappers";
+import {
+  BOARD_COLUMNS,
+  BOARD_COLUMN_COLUMNS,
+  DEFAULT_COLUMNS,
+  TASK_COLUMNS,
+  type BoardColumnRow,
+  type BoardRow,
+  type TaskArtifactRow,
+  type TaskEvaluationRow,
+  type TaskProposalRow,
+  type TaskRow,
+  type TaskRunListRow,
+} from "./taskRepositoryRows";
 
 export class PgTaskRepository {
   constructor(private readonly pool: Pool) {}
@@ -752,171 +612,4 @@ function buildTaskWhere(identity: SpaceUserIdentity, filters: { boardId: string 
   if (filters.assignedToMe) clauses.push("(t.assigned_user_id = $2 OR t.claimed_by_user_id = $2)");
   if (filters.q) clauses.push(`(t.title ILIKE ${add(`%${filters.q}%`)} OR t.description ILIKE $${params.length})`);
   return { where: `WHERE ${clauses.join(" AND ")}`, params };
-}
-
-function boardOut(row: BoardRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    workspace_id: row.workspace_id,
-    name: row.name,
-    description: row.description,
-    board_type: row.board_type,
-    status: row.status,
-    default_view: row.default_view,
-    sort_order: row.sort_order,
-    metadata_json: row.metadata_json ?? null,
-    created_by_user_id: row.created_by_user_id,
-    created_by_agent_id: row.created_by_agent_id,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-    deleted_at: dateIso(row.deleted_at),
-  };
-}
-
-function boardColumnOut(row: BoardColumnRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    board_id: row.board_id,
-    name: row.name,
-    description: row.description,
-    status_key: row.status_key,
-    position: row.position,
-    wip_limit: row.wip_limit,
-    is_done_column: Boolean(row.is_done_column),
-    is_default_column: Boolean(row.is_default_column),
-    metadata_json: row.metadata_json ?? null,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-    deleted_at: dateIso(row.deleted_at),
-  };
-}
-
-function taskOut(row: TaskRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    workspace_id: row.workspace_id,
-    board_id: row.board_id,
-    column_id: row.column_id,
-    parent_task_id: row.parent_task_id,
-    title: row.title,
-    description: row.description,
-    task_type: row.task_type,
-    status: row.status,
-    priority: row.priority,
-    risk_level: row.risk_level,
-    visibility: row.visibility,
-    created_by_user_id: row.created_by_user_id,
-    created_by_agent_id: row.created_by_agent_id,
-    assigned_user_id: row.assigned_user_id,
-    assigned_agent_id: row.assigned_agent_id,
-    claimed_by_user_id: row.claimed_by_user_id,
-    claimed_by_agent_id: row.claimed_by_agent_id,
-    source_activity_id: row.source_activity_id,
-    source_run_id: row.source_run_id,
-    source_proposal_id: row.source_proposal_id,
-    source_artifact_id: row.source_artifact_id,
-    due_at: dateIso(row.due_at),
-    start_after: dateIso(row.start_after),
-    completed_at: dateIso(row.completed_at),
-    cancelled_at: dateIso(row.cancelled_at),
-    blocked_reason: row.blocked_reason,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-    deleted_at: dateIso(row.deleted_at),
-  };
-}
-
-function taskRunOutFromList(row: TaskRunListRow) {
-  return {
-    id: row.task_run_id,
-    space_id: row.task_run_space_id,
-    task_id: row.task_run_task_id,
-    run_id: row.task_run_run_id,
-    role: row.task_run_role,
-    created_at: dateIso(row.task_run_created_at),
-  };
-}
-
-function taskArtifactOut(row: TaskArtifactRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    task_id: row.task_id,
-    artifact_id: row.artifact_id,
-    role: row.role,
-    created_at: dateIso(row.created_at),
-    artifact: {
-      id: row.artifact_id,
-      space_id: row.artifact_space_id,
-      run_id: row.run_id,
-      proposal_id: row.proposal_id,
-      artifact_type: row.artifact_type,
-      title: row.title,
-      mime_type: row.mime_type,
-      visibility: row.visibility,
-      created_at: dateIso(row.artifact_created_at),
-    },
-  };
-}
-
-function taskProposalOut(row: TaskProposalRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    task_id: row.task_id,
-    proposal_id: row.proposal_id,
-    role: row.role,
-    created_at: dateIso(row.created_at),
-    proposal: {
-      id: row.proposal_id,
-      space_id: row.proposal_space_id,
-      proposal_type: row.proposal_type,
-      status: row.status,
-      title: row.title,
-      visibility: row.visibility,
-      created_at: dateIso(row.proposal_created_at),
-      preview: Boolean(row.preview),
-      urgency: row.urgency,
-      review_deadline: dateIso(row.review_deadline),
-      expires_at: dateIso(row.expires_at),
-      expired: Boolean(row.expires_at && new Date(row.expires_at as string).getTime() < Date.now() && row.status === "pending"),
-      created_by_run_id: row.created_by_run_id,
-    },
-  };
-}
-
-function taskEvaluationOut(row: TaskEvaluationRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    task_id: row.task_id,
-    run_id: row.run_id,
-    run_evaluation_id: row.run_evaluation_id,
-    evaluator_type: row.evaluator_type,
-    evaluator_user_id: row.evaluator_user_id,
-    evaluator_agent_id: row.evaluator_agent_id,
-    score: row.score,
-    confidence: row.confidence,
-    summary: row.summary,
-    checklist_json: row.checklist_json ?? null,
-    known_issues_json: row.known_issues_json ?? null,
-    evidence_artifact_ids: row.evidence_artifact_ids ?? null,
-    recommendation: row.recommendation,
-    created_at: dateIso(row.created_at),
-  };
-}
-
-function defaultTaskInstruction(task: TaskRow): string {
-  const details = [task.description, task.blocked_reason ? `Blocked: ${task.blocked_reason}` : null].filter(Boolean).join("\n\n");
-  return details ? `Task: ${task.title}\n\n${details}` : `Task: ${task.title}`;
-}
-
-function bounded01(value: unknown, field: string): number | null {
-  const parsed = numberValue(value);
-  if (parsed === null) return null;
-  if (parsed < 0 || parsed > 1) throw new HttpError(422, `${field} must be between 0 and 1`);
-  return parsed;
 }

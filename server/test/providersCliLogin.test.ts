@@ -122,7 +122,7 @@ describe("CLI login engine", () => {
     await run;
 
     expect(events.find((e) => e.type === "synced")).toMatchObject({
-      profile_id: "claude_code/default",
+      profile_id: null,
     });
     expect(events.at(-1)).toMatchObject({ type: "done", exit_code: 0 });
     expect(await readFile(join(profileDir, "credentials.json"), "utf8")).toBe('{"session":"s"}');
@@ -160,7 +160,7 @@ describe("CLI login engine", () => {
     await run;
 
     expect(events.find((e) => e.type === "synced")).toMatchObject({
-      profile_id: "claude_code/default",
+      profile_id: null,
     });
     expect(events.at(-1)).toMatchObject({ type: "done", exit_code: 0 });
     expect(await readFile(join(profileDir, "credentials.json"), "utf8")).toBe('{"session":"fresh"}');
@@ -390,8 +390,8 @@ describe("docker grant host path translation", () => {
           "1545 678 8:32 /home/me/.aspace/dev /aspace rw,relatime - ext4 /dev/sdc rw",
         ].join("\n") + "\n",
     );
-    expect(resolveHostPath("/aspace/secrets/cli-credentials/claude_code/default")).toBe(
-      "/home/me/.aspace/dev/secrets/cli-credentials/claude_code/default",
+    expect(resolveHostPath("/aspace/secrets/cli-credentials/users/user-1/claude_code/profile-1")).toBe(
+      "/home/me/.aspace/dev/secrets/cli-credentials/users/user-1/claude_code/profile-1",
     );
     // Paths outside any bind stay untranslated (overlay root has no host path).
     expect(resolveHostPath("/etc/passwd")).toBe("/etc/passwd");

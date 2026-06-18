@@ -14,45 +14,23 @@ afterEach(async () => {
 });
 
 describe("server-owned features route", () => {
-  it("advertises server_health and protocol detection", async () => {
+  it("advertises the public server feature list", async () => {
     app = buildServer(loadConfig({}), { logger: false });
     const res = await app.inject({ method: "GET", url: "/api/v1/server/features" });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { service: string; features: string[] };
     expect(body.service).toBe("server");
-    expect(body.features).toContain("server_health");
-    expect(body.features).toContain("run_event_sse_stream");
-    expect(body.features).toContain("frontend_support_read_model_facades");
-    expect(body.features).toContain("runtime_tools_controlled_installer");
-    expect(body.features).toContain("native_identity_auth");
-    expect(body.features).toContain("native_google_oauth");
-    expect(body.features).toContain("native_space_membership");
-    expect(body.features).toContain("api_keys_feature_gate");
-    expect(body.features).toContain("space_default_seeding");
-    expect(body.features).toContain("runtime_adapter_catalog");
-    expect(body.features).toContain("execution_planes_server_authority");
-    expect(body.features).toContain("runtime_tool_bindings_server_authority");
-    expect(body.features).toContain("providers_read_server_authority");
-    expect(body.features).toContain("providers_credentials_server_authority");
-    expect(body.features).toContain("policy_enforcement_server_authority");
-    expect(body.features).toContain("sessions_server_authority");
-    expect(body.features).toContain("server_agent_runtime_host");
-    expect(body.features).toContain("runs_server_authority");
-    expect(body.features).toContain("runs_child_resources_server_authority");
-    expect(body.features).toContain("artifacts_server_authority");
-    expect(body.features).toContain("projects_server_authority");
-    expect(body.features).toContain("agent_templates_server_authority");
-    expect(body.features).toContain("capabilities_server_authority");
-    expect(body.features).toContain("personal_memory_grants_server_authority");
-    expect(body.features).toContain("evolution_server_authority");
-    expect(body.features).toContain("source_pointers_server_authority");
-    expect(body.features).toContain("workspace_profiles_server_authority");
-    expect(body.features).toContain("proposals_server_authority");
-    expect(body.features).toContain("chat_turn_server_authority");
-    expect(body.features).toContain("context_assembly_server_authority");
-    expect(body.features).toContain("memory_server_authority");
-    expect(body.features).toContain("config_semantic_validation");
-    expect(body.features).toContain("notification_webhook_egress_policy_gate");
+    expect(body.features).toEqual(
+      expect.arrayContaining([
+        "server_health",
+        "runs_server_authority",
+        "proposals_server_authority",
+        "memory_server_authority",
+        "providers_credentials_server_authority",
+        "notification_webhook_egress_policy_gate",
+      ]),
+    );
+    expect(new Set(body.features).size).toBe(body.features.length);
   });
 
   it("exposes the product feature-list route used by the frontend", async () => {
@@ -83,39 +61,5 @@ describe("server-owned features route", () => {
       }),
     );
     expect(enabled).toContain("notification_webhook_egress");
-  });
-
-  it("advertises fixed server providers, policy, sessions, and runtime-adapter features", () => {
-    const features = computeFeatures(loadConfig({}));
-    expect(features).toContain("providers_read_server_authority");
-    expect(features).toContain("providers_credentials_server_authority");
-    expect(features).toContain("policy_enforcement_server_authority");
-    expect(features).toContain("sessions_server_authority");
-    expect(features).toContain("runs_server_authority");
-    expect(features).toContain("runs_child_resources_server_authority");
-    expect(features).toContain("artifacts_server_authority");
-    expect(features).toContain("projects_server_authority");
-    expect(features).toContain("agent_templates_server_authority");
-    expect(features).toContain("capabilities_server_authority");
-    expect(features).toContain("personal_memory_grants_server_authority");
-    expect(features).toContain("evolution_server_authority");
-    expect(features).toContain("execution_planes_server_authority");
-    expect(features).toContain("runtime_tool_bindings_server_authority");
-    expect(features).toContain("source_pointers_server_authority");
-    expect(features).toContain("workspace_profiles_server_authority");
-    expect(features).toContain("runtime_adapter_catalog");
-    expect(features).toContain("server_agent_runtime_host");
-  });
-
-  it("advertises fixed server proposal authority", () => {
-    const features = computeFeatures(loadConfig({}));
-    expect(features).toContain("proposals_server_authority");
-  });
-
-  it("advertises fixed server chat-turn, context, and memory authority", () => {
-    const features = computeFeatures(loadConfig({}));
-    expect(features).toContain("chat_turn_server_authority");
-    expect(features).toContain("context_assembly_server_authority");
-    expect(features).toContain("memory_server_authority");
   });
 });

@@ -22,6 +22,7 @@ const profile = {
   readonly: true,
   notes: "",
   source_exists: true,
+  file_count: 2,
 };
 
 describe("cli credential contracts", () => {
@@ -104,6 +105,7 @@ describe("cli credential contracts", () => {
       CliLoginStreamEventSchema.safeParse({ type: "synced", api_key: "sk-leak" }).success,
     ).toBe(false);
 
+    expect(isCliLoginEventType("profile")).toBe(true);
     expect(isCliLoginEventType("synced")).toBe(true);
     expect(isCliLoginEventType("device_auth")).toBe(true);
     expect(isCliLoginEventType("future_event")).toBe(false);

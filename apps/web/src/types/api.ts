@@ -9,6 +9,7 @@ export interface CurrentUser {
   email: string
   display_name: string
   avatar_url: string | null
+  is_instance_admin?: boolean
   default_space_id: string | null
   created_at: string
   last_login_at: string | null
@@ -140,6 +141,16 @@ export interface RuntimeToolStatus {
   executable_path: string | null
   executable_exists: boolean
   manifest: RuntimeToolManifest | null
+  installed_versions: RuntimeToolInstalledVersion[]
+  warnings: string[]
+}
+
+export interface RuntimeToolInstalledVersion {
+  version: string
+  installed: boolean
+  executable_path: string | null
+  executable_exists: boolean
+  manifest: RuntimeToolManifest | null
   warnings: string[]
 }
 
@@ -152,6 +163,20 @@ export interface RuntimeToolLatest {
   runtime: string
   package_name: string
   latest_version: string | null
+}
+
+export interface SpaceRuntimeToolPolicyOut {
+  runtime: string
+  label: string
+  enabled: boolean
+  default_version: string | null
+  allowed_versions: string[]
+  policy_id: string | null
+  active_version: string | null
+  installed_versions: RuntimeToolInstalledVersion[]
+  warnings: string[]
+  updated_by_user_id: string | null
+  updated_at: string | null
 }
 
 // CLI Credentials / Login
@@ -171,8 +196,69 @@ export interface CredentialStatus {
   label: string
   method: LoginMethod
   profile_id: string | null
+  network_profile_id: string | null
   logged_in: boolean
   file_count: number
+}
+
+export type NetworkProfileMode = 'direct' | 'http_proxy'
+
+export interface NetworkProfileOut {
+  id: string
+  space_id: string
+  name: string
+  mode: NetworkProfileMode
+  proxy_url: string | null
+  no_proxy: string | null
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface NetworkProfileCreateBody {
+  name: string
+  mode: NetworkProfileMode
+  proxy_url?: string | null
+  no_proxy?: string | null
+  enabled?: boolean
+}
+
+export type NetworkProfileUpdateBody = Partial<NetworkProfileCreateBody>
+
+export interface CliCredentialProfileOut {
+  id: string
+  owner_user_id?: string | null
+  runtime: string
+  name: string
+  source_path: string
+  target_path: string
+  readonly: boolean
+  notes: string
+  network_profile_id: string | null
+  source_exists: boolean
+  logged_in: boolean
+  file_count: number
+  manageable?: boolean
+  grant_id?: string | null
+  grant_enabled?: boolean
+  is_default?: boolean
+}
+
+export interface CliCredentialAvailableProfileOut {
+  id: string
+  owner_user_id?: string | null
+  runtime: string
+  name: string
+  target_path: string
+  readonly: boolean
+  notes: string
+  network_profile_id: string | null
+  source_exists: boolean
+  logged_in: boolean
+  file_count: number
+  manageable: boolean
+  grant_id: string
+  is_default: boolean
 }
 
 export interface TokenUsage {
@@ -210,7 +296,7 @@ export interface CliUsageAutoRefreshSettings {
   updated_at: string | null
 }
 
-export type LoginEventType = 'output' | 'error' | 'warning' | 'hint' | 'synced' | 'done' | 'needs_input' | 'device_auth'
+export type LoginEventType = 'output' | 'error' | 'warning' | 'hint' | 'profile' | 'synced' | 'done' | 'needs_input' | 'device_auth'
 
 export interface LoginEvent {
   type: LoginEventType
@@ -1453,6 +1539,7 @@ export interface AgentConfigUpdateBody {
   model_provider_id?: string | null
   model_name?: string | null
   model_config_json?: Record<string, unknown> | null
+  runtime_config_json?: Record<string, unknown> | null
   context_policy_json?: Record<string, unknown> | null
   memory_policy_json?: Record<string, unknown> | null
   output_policy_json?: Record<string, unknown> | null
@@ -1483,6 +1570,7 @@ export interface AgentCreateBody {
   default_model_provider_id?: string | null
   default_model?: string | null
   adapter_type?: string | null
+  runtime_config_json?: Record<string, unknown> | null
 }
 
 export interface AgentUpdateBody {

@@ -33,7 +33,9 @@ function provider(id: string, spaceId = "space-1") {
     space_id: spaceId,
     name: "Main",
     provider_type: "openai",
-    base_url: null,
+    base_url: "https://api.openai.com/v1",
+    claude_compatible_base_url: null,
+    openai_compatible_base_url: "https://api.openai.com/v1",
     default_model: "gpt-4o",
     available_models: ["gpt-4o"],
     enabled: true,
@@ -49,7 +51,7 @@ function fakeDb(rowsBySpace: Record<string, ReturnType<typeof provider>[]>): Pro
     async listProviders(spaceId) {
       return rowsBySpace[spaceId] ?? [];
     },
-    async getProvider(spaceId, configId) {
+    async getProvider(spaceId, _userId, configId) {
       return (rowsBySpace[spaceId] ?? []).find((r) => r.id === configId) ?? null;
     },
   };
@@ -158,7 +160,6 @@ describe("providers read authority", () => {
       "anthropic",
       "openrouter",
       "ollama",
-      "custom_openai_compatible",
       "other",
     ]);
   });

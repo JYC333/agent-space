@@ -155,8 +155,8 @@ non-standard location.
 ENABLE_SYSTEM_EVOLUTION=false   # default; do not change for dogfooding
 ```
 
-`SYSTEM_CORE_OWNER_EMAIL` must be left unset or empty unless you intend to register a
-system_core workspace.
+`INSTANCE_ADMIN_EMAIL` must be set only for the deployment owner who should manage
+instance-level runtime tools and other server-wide admin surfaces.
 
 ### Auth config
 

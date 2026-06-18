@@ -53,6 +53,10 @@ change.
 
 - Read the relevant docs first, then the code.
 - Keep changes scoped to the requested module/context.
+- Prefer small, purpose-specific modules over large catch-all files. Before
+  adding substantial behavior to an already large file, scan nearby file sizes
+  and split along existing ownership boundaries when the extraction is low
+  risk.
 - Add or update focused tests when behavior changes.
 - Use the smallest verification command that proves the change; broaden only
   when the blast radius requires it.

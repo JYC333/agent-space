@@ -59,6 +59,8 @@ export interface ServerConfig {
   googleRedirectUri: string;
   /** Frontend base URL used for post-login redirects. */
   frontendUrl: string;
+  /** Email address allowed to perform instance-level administration. */
+  instanceAdminEmail: string | null;
   /** Session cookie lifetime in days. */
   sessionExpireDays: number;
   /** Server debug flag for local-only cookie defaults. */
@@ -121,6 +123,7 @@ const KNOWN_ENV_KEYS = new Set([
   "GOOGLE_CLIENT_SECRET",
   "GOOGLE_REDIRECT_URI",
   "FRONTEND_URL",
+  "INSTANCE_ADMIN_EMAIL",
   "SESSION_EXPIRE_DAYS",
   "SERVER_DEBUG",
   "DEBUG",
@@ -218,6 +221,11 @@ function validateHttpBaseUrl(value: string, name: string): string {
   }
   // Normalise: drop a trailing slash so we can concatenate request paths cleanly.
   return value.replace(/\/+$/, "");
+}
+
+function normalizeEmail(value: string | undefined): string | null {
+  const normalized = value?.trim().toLowerCase() ?? "";
+  return normalized || null;
 }
 
 function isLocalHttpWebhookHost(hostname: string): boolean {
@@ -377,6 +385,7 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     env.FRONTEND_URL?.trim() || "http://localhost:5173",
     "FRONTEND_URL",
   );
+  const instanceAdminEmail = normalizeEmail(env.INSTANCE_ADMIN_EMAIL);
   const sessionExpireDays = parseIntStrict(
     env.SESSION_EXPIRE_DAYS,
     30,
@@ -482,6 +491,7 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     googleClientSecret,
     googleRedirectUri,
     frontendUrl,
+    instanceAdminEmail,
     sessionExpireDays,
     debug,
     dailyReportSchedulerEnabled,
@@ -530,6 +540,7 @@ export function describeConfig(config: ServerConfig): string {
     `internalTokenConfigured=${config.internalToken !== null}`,
     `googleOAuthConfigured=${Boolean(config.googleClientId && config.googleClientSecret)}`,
     `frontendUrl=${config.frontendUrl}`,
+    `instanceAdminConfigured=${config.instanceAdminEmail !== null}`,
     `sessionExpireDays=${config.sessionExpireDays}`,
     `debug=${config.debug}`,
     // The connection string may embed a password — never print it.
@@ -543,7 +554,7 @@ export function describeConfig(config: ServerConfig): string {
 // ---------------------------------------------------------------------------
 
 /** Bumped when the shape of {@link ServerConfig} changes incompatibly. */
-export const CONFIG_SCHEMA_VERSION = 19 as const;
+export const CONFIG_SCHEMA_VERSION = 20 as const;
 
 /**
  * An immutable, hash-identified view of the validated config. Built once at

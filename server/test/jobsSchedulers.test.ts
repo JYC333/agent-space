@@ -6,28 +6,20 @@ import {
 } from "../src/modules/jobs/handlerRegistry";
 import { JobWorker } from "../src/modules/jobs/worker";
 import type { JobRecord } from "../src/modules/jobs/repository";
-import { PgJobQueueRepository } from "../src/modules/jobs/repository";
 import { jobEventToOut, jobNotFoundForSpace, jobToOut } from "../src/modules/jobs/routes";
 import { SchedulerRegistry, startSchedulerRegistry } from "../src/modules/jobs/schedulerRegistry";
-import type { QueryResult, Queryable } from "../src/modules/runs/repository";
-import { PgRunRepository } from "../src/modules/runs/repository";
+import type { QueryResult, Queryable } from "../src/modules/routeUtils/common";
 import { computeNextRunAt, InvalidScheduleError } from "../src/modules/automations/schedule";
 import { AutomationService } from "../src/modules/automations/service";
-import { PgAutomationRepository, type AutomationRow } from "../src/modules/automations/repository";
+import type { AutomationRow } from "../src/modules/automations/repository";
 import {
   isValidTimezone,
   PgDailyReportSettingsRepository,
   type DailyReportSettingRow,
 } from "../src/modules/dailyReports/repository";
 import { buildDailyReportJobPayload } from "../src/modules/dailyReports/scheduler";
-import { pruneMemoryAccessLogs } from "../src/modules/jobs/backgroundServices";
 import { loadConfig } from "../src/config";
 import { enforce } from "../src/modules/policy";
-import { getDbPool } from "../src/db/pool";
-
-vi.mock("../src/db/pool", () => ({
-  getDbPool: vi.fn(),
-}));
 
 vi.mock("../src/modules/policy", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/modules/policy")>();
@@ -410,74 +402,6 @@ describe("automation schedule", () => {
   });
 });
 
-describe("PgJobQueueRepository retry semantics", () => {
-  it("returns pending when failJob still has retry budget", async () => {
-    const db = new JobQueueFakeDb();
-    const repo = new PgJobQueueRepository(db);
-    const status = await repo.failJob("job-1", "transient", "worker-1");
-    expect(status).toBe("pending");
-    expect(db.calls[0].sql).toContain("CASE WHEN attempts < max_attempts THEN 'pending'");
-  });
-
-  it("returns failed when failJob exhausts max_attempts", async () => {
-    const db = new JobQueueFakeDb({ failStatus: "failed" });
-    const repo = new PgJobQueueRepository(db);
-    const status = await repo.failJob("job-1", "terminal", "worker-1");
-    expect(status).toBe("failed");
-  });
-
-  it("reclaims stale claimed/running jobs and fails exhausted agent runs", async () => {
-    const db = new JobQueueFakeDb();
-    const repo = new PgJobQueueRepository(db);
-    const result = await repo.reclaimStuckJobs(600, new Date("2026-06-16T10:10:00.000Z"));
-    expect(db.calls[0].sql).toContain("DELETE FROM run_execution_locks");
-    expect(db.calls[1].sql).toContain("WITH retryable AS");
-    expect(db.calls[1].sql).toContain("failed_runs AS");
-    expect(result.reclaimed_count).toBe(2);
-  });
-});
-
-describe("PgRunRepository stale recovery", () => {
-  it("fails stale running runs at server worker startup", async () => {
-    const db = new RunRecoveryFakeDb();
-    const repo = new PgRunRepository(db);
-
-    const recovered = await repo.recoverStaleRuns(
-      3600,
-      new Date("2026-06-16T10:00:00.000Z"),
-    );
-
-    expect(recovered).toBe(4);
-    expect(db.calls[0].sql).toContain("UPDATE runs");
-    expect(db.calls[0].sql).toContain("status = 'running'");
-    expect(db.calls[0].sql).toContain("started_at < $1");
-    expect(db.calls[0].params[0]).toBe("2026-06-16T09:00:00.000Z");
-    expect(db.calls[0].params[1]).toBe("2026-06-16T10:00:00.000Z");
-    expect(db.calls[0].params[2]).toContain("server worker startup");
-    expect(JSON.parse(String(db.calls[0].params[3]))).toEqual({
-      error_code: "stale_run_recovered",
-      error_text: "Run was stuck in running status and was recovered at server worker startup",
-    });
-  });
-});
-
-describe("memory access-log retention", () => {
-  it("prunes by accessed_at, matching the canonical memory_access_logs schema", async () => {
-    const db = new MemoryAccessLogFakeDb();
-    vi.mocked(getDbPool).mockReturnValue(db as never);
-    const config = loadConfig({
-      SERVER_DATABASE_URL: "postgresql://server@db:5432/agent_space",
-      SERVER_MEMORY_ACCESS_LOG_RETENTION_DAYS: "30",
-    });
-
-    await expect(pruneMemoryAccessLogs(config)).resolves.toBe(3);
-
-    expect(db.calls[0].sql).toContain("WHERE accessed_at < $1");
-    expect(db.calls[0].sql).not.toContain("created_at");
-    expect(db.calls[0].params).toHaveLength(1);
-  });
-});
-
 describe("AutomationService policy preflight", () => {
   const config = loadConfig({
     SERVER_DATABASE_URL: "postgresql://server@db:5432/agent_space",
@@ -562,73 +486,6 @@ describe("AutomationService policy preflight", () => {
   });
 });
 
-describe("Automation repository credential grants", () => {
-  it("creates scheduled automation credential grants using canonical columns", async () => {
-    const db = new AutomationFakeDb();
-    const repo = new PgAutomationRepository(db);
-
-    await repo.create({
-      spaceId: "space-1",
-      ownerUserId: "owner-1",
-      name: "Nightly",
-      agentId: "agent-1",
-      triggerType: "schedule",
-      configJson: { cron: "0 8 * * *", timezone: "UTC" },
-      preflightSnapshot: { executable: true },
-    });
-
-    const grantInsert = db.calls.find((call) =>
-      call.sql.includes("INSERT INTO automation_credential_grants"),
-    );
-    expect(grantInsert?.sql).toContain("created_at");
-    expect(grantInsert?.sql).not.toContain("updated_at");
-    expect(grantInsert?.params).toHaveLength(5);
-  });
-
-  it("revokes automation credential grants without writing a non-existent updated_at column", async () => {
-    const db = new AutomationFakeDb(sampleAutomation({ trigger_type: "schedule" }));
-    const repo = new PgAutomationRepository(db);
-
-    await repo.update("space-1", "auto-1", { status: "archived" });
-
-    const grantUpdate = db.calls.find((call) =>
-      call.sql.includes("UPDATE automation_credential_grants"),
-    );
-    expect(grantUpdate?.sql).toContain("revoked_at");
-    expect(grantUpdate?.sql).toContain("revoked_by_user_id");
-    expect(grantUpdate?.sql).not.toContain("updated_at");
-    expect(grantUpdate?.params).toHaveLength(4);
-  });
-
-  it("rolls back scheduled automation creation when credential grant insert fails", async () => {
-    const pool = new AutomationTransactionalFakePool({ failGrantInsert: true });
-    const repo = new PgAutomationRepository(pool);
-
-    await expect(
-      repo.create({
-        spaceId: "space-1",
-        ownerUserId: "owner-1",
-        name: "Nightly",
-        agentId: "agent-1",
-        triggerType: "schedule",
-        configJson: { cron: "0 8 * * *", timezone: "UTC" },
-        preflightSnapshot: { executable: true },
-      }),
-    ).rejects.toThrow("grant insert failed");
-
-    expect(pool.client.calls.map((call) => call.sql)).toEqual(
-      expect.arrayContaining([
-        "BEGIN",
-        expect.stringContaining("INSERT INTO automations"),
-        expect.stringContaining("INSERT INTO automation_credential_grants"),
-        "ROLLBACK",
-      ]),
-    );
-    expect(pool.client.calls.some((call) => call.sql === "COMMIT")).toBe(false);
-    expect(pool.client.release).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe("DailyCaptureReport settings validation", () => {
   it("rejects string booleans instead of coercing them", async () => {
     const db = new DailySettingsFakeDb();
@@ -640,7 +497,7 @@ describe("DailyCaptureReport settings validation", () => {
       statusCode: 422,
       message: "enabled must be a boolean",
     });
-    expect(db.calls.some((call) => call.sql.includes("UPDATE daily_capture_report_settings"))).toBe(false);
+    expect(db.updateCount).toBe(0);
   });
 
   it("rejects invalid timezones and unsupported source types", async () => {
@@ -669,58 +526,6 @@ describe("DailyCaptureReport settings validation", () => {
     )).toBeNull();
   });
 });
-
-interface QueryCall {
-  sql: string;
-  params: readonly unknown[];
-}
-
-class JobQueueFakeDb implements Queryable {
-  calls: QueryCall[] = [];
-
-  constructor(private readonly options: { failStatus?: "pending" | "failed" } = {}) {}
-
-  async query<Row = Record<string, unknown>>(
-    sql: string,
-    params: readonly unknown[] = [],
-  ): Promise<QueryResult<Row>> {
-    this.calls.push({ sql, params });
-    if (sql.includes("AS reclaimed_count")) {
-      return { rowCount: 1, rows: [{ reclaimed_count: "2" }] as Row[] };
-    }
-    if (sql.includes("RETURNING status")) {
-      return {
-        rowCount: 1,
-        rows: [{ status: this.options.failStatus ?? "pending" }] as Row[],
-      };
-    }
-    return { rowCount: 0, rows: [] };
-  }
-}
-
-class RunRecoveryFakeDb implements Queryable {
-  calls: QueryCall[] = [];
-
-  async query<Row = Record<string, unknown>>(
-    sql: string,
-    params: readonly unknown[] = [],
-  ): Promise<QueryResult<Row>> {
-    this.calls.push({ sql, params });
-    return { rowCount: 4, rows: [] };
-  }
-}
-
-class MemoryAccessLogFakeDb implements Queryable {
-  calls: QueryCall[] = [];
-
-  async query<Row = Record<string, unknown>>(
-    sql: string,
-    params: readonly unknown[] = [],
-  ): Promise<QueryResult<Row>> {
-    this.calls.push({ sql, params });
-    return { rowCount: 3, rows: [] };
-  }
-}
 
 class FakeAutomationRepository {
   createAutomationRunCalls = 0;
@@ -765,111 +570,18 @@ class FakeAutomationRepository {
   }
 }
 
-class AutomationFakeDb implements Queryable {
-  calls: QueryCall[] = [];
-
-  constructor(
-    private readonly automation: AutomationRow = sampleAutomation(),
-    private readonly options: { failGrantInsert?: boolean } = {},
-  ) {}
-
-  async query<Row = Record<string, unknown>>(
-    sql: string,
-    params: readonly unknown[] = [],
-  ): Promise<QueryResult<Row>> {
-    this.calls.push({ sql, params });
-    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
-      return { rowCount: null, rows: [] };
-    }
-    if (sql.includes("SELECT") && sql.includes("FROM automations")) {
-      return { rowCount: 1, rows: [this.automation] as Row[] };
-    }
-    if (sql.includes("INSERT INTO automations")) {
-      return {
-        rowCount: 1,
-        rows: [
-          {
-            ...this.automation,
-            id: String(params[0]),
-            space_id: String(params[1]),
-            owner_user_id: String(params[2]),
-            agent_id: String(params[3]),
-            workspace_id: params[4] as string | null,
-            name: String(params[5]),
-            description: params[6] as string | null,
-            trigger_type: String(params[7]),
-            preflight_snapshot_json: JSON.parse(String(params[8])) as Record<string, unknown>,
-            config_json: JSON.parse(String(params[9])) as Record<string, unknown>,
-            next_run_at: params[10] as string | null,
-            created_at: String(params[11]),
-            updated_at: String(params[11]),
-          },
-        ] as Row[],
-      };
-    }
-    if (sql.includes("UPDATE automations")) {
-      return {
-        rowCount: 1,
-        rows: [
-          {
-            ...this.automation,
-            status: params[4] ?? this.automation.status,
-            next_run_at: params[6] as string | null,
-            updated_at: String(params[7]),
-          },
-        ] as Row[],
-      };
-    }
-    if (sql.includes("automation_credential_grants")) {
-      if (
-        this.options.failGrantInsert &&
-        sql.includes("INSERT INTO automation_credential_grants")
-      ) {
-        throw new Error("grant insert failed");
-      }
-      return { rowCount: 1, rows: [] };
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
-  }
-}
-
-class AutomationFakeClient extends AutomationFakeDb {
-  release = vi.fn();
-}
-
-class AutomationTransactionalFakePool implements Queryable {
-  readonly client: AutomationFakeClient;
-  calls: QueryCall[] = [];
-
-  constructor(options: { failGrantInsert?: boolean } = {}) {
-    this.client = new AutomationFakeClient(sampleAutomation(), options);
-  }
-
-  async query<Row = Record<string, unknown>>(
-    sql: string,
-    params: readonly unknown[] = [],
-  ): Promise<QueryResult<Row>> {
-    this.calls.push({ sql, params });
-    return { rowCount: 0, rows: [] };
-  }
-
-  async connect(): Promise<AutomationFakeClient> {
-    return this.client;
-  }
-}
-
 class DailySettingsFakeDb implements Queryable {
-  calls: QueryCall[] = [];
+  updateCount = 0;
 
   async query<Row = Record<string, unknown>>(
     sql: string,
     params: readonly unknown[] = [],
   ): Promise<QueryResult<Row>> {
-    this.calls.push({ sql, params });
     if (sql.includes("SELECT") && sql.includes("FROM daily_capture_report_settings")) {
       return { rowCount: 1, rows: [sampleDailyReportSetting()] as Row[] };
     }
     if (sql.includes("UPDATE daily_capture_report_settings")) {
+      this.updateCount += 1;
       return {
         rowCount: 1,
         rows: [

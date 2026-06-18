@@ -33,6 +33,7 @@ import type {
   ProviderInfo,
 } from "./providerCommandStore";
 import { classifyProviderFailure, type ProviderResilienceDecision } from "./providerResilience";
+import { fetchWithNetworkProfile, type ResolvedNetworkProfile } from "../networkProfiles";
 
 export interface ChatMessage {
   role: string;
@@ -76,7 +77,8 @@ export function __setProviderHttpClientForTests(client: ProviderHttpClient | nul
   httpClientOverride = client;
 }
 
-function httpClient(): ProviderHttpClient {
+function httpClient(profile?: ResolvedNetworkProfile | null): ProviderHttpClient {
+  if (!httpClientOverride && profile) return { fetch: fetchWithNetworkProfile(profile) };
   return httpClientOverride ?? { fetch: globalThis.fetch.bind(globalThis) };
 }
 
@@ -98,10 +100,7 @@ function bareModelName(providerType: string, model: string): string {
   if (providerType === "ollama" && model.startsWith("ollama/")) {
     return model.slice("ollama/".length);
   }
-  if (
-    ["openai", "custom_openai_compatible", "other"].includes(providerType) &&
-    model.startsWith("openai/")
-  ) {
+  if (["openai", "other"].includes(providerType) && model.startsWith("openai/")) {
     return model.slice("openai/".length);
   }
   return model;
@@ -145,6 +144,12 @@ function openAiBase(provider: ProviderInfo): string {
   return "https://api.openai.com/v1";
 }
 
+function anthropicMessagesUrl(provider: ProviderInfo): string {
+  const base = (provider.base_url || "https://api.anthropic.com").replace(/\/+$/, "");
+  const versioned = base.endsWith("/v1") ? base : `${base}/v1`;
+  return `${versioned}/messages`;
+}
+
 function openAiMessages(body: ProviderChatRequestBody): ChatMessage[] {
   return body.system
     ? [{ role: "system", content: body.system }, ...body.messages]
@@ -157,6 +162,7 @@ function openAiMessages(body: ProviderChatRequestBody): ChatMessage[] {
 
 async function completeOpenAiCompatible(
   provider: ProviderInfo,
+  networkProfile: ResolvedNetworkProfile | null,
   apiKey: string | null,
   body: ProviderChatRequestBody,
 ): Promise<ProviderChatResponseBody> {
@@ -167,7 +173,7 @@ async function completeOpenAiCompatible(
     );
   }
   const model = bareModelName(provider.provider_type, resolveModel(provider, body.model));
-  const response = await httpClient().fetch(`${openAiBase(provider)}/chat/completions`, {
+  const response = await httpClient(networkProfile).fetch(`${openAiBase(provider)}/chat/completions`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -195,6 +201,7 @@ async function completeOpenAiCompatible(
 
 async function completeAnthropic(
   provider: ProviderInfo,
+  networkProfile: ResolvedNetworkProfile | null,
   apiKey: string | null,
   body: ProviderChatRequestBody,
 ): Promise<ProviderChatResponseBody> {
@@ -205,7 +212,7 @@ async function completeAnthropic(
     );
   }
   const model = bareModelName("anthropic", resolveModel(provider, body.model));
-  const response = await httpClient().fetch("https://api.anthropic.com/v1/messages", {
+  const response = await httpClient(networkProfile).fetch(anthropicMessagesUrl(provider), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -235,6 +242,7 @@ async function completeAnthropic(
 
 async function completeOllama(
   provider: ProviderInfo,
+  networkProfile: ResolvedNetworkProfile | null,
   body: ProviderChatRequestBody,
 ): Promise<ProviderChatResponseBody> {
   const base = provider.base_url?.replace(/\/+$/, "");
@@ -242,7 +250,7 @@ async function completeOllama(
     throw new ProviderInvocationError(400, "base_url is required for provider_type 'ollama'");
   }
   const model = bareModelName("ollama", resolveModel(provider, body.model));
-  const response = await httpClient().fetch(`${base}/api/chat`, {
+  const response = await httpClient(networkProfile).fetch(`${base}/api/chat`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -268,13 +276,16 @@ async function completeOllama(
 }
 
 function attemptOnce(
-  provider: ProviderInfo,
+  target: InvocationTarget,
   apiKey: string | null,
   body: ProviderChatRequestBody,
 ): Promise<ProviderChatResponseBody> {
-  if (provider.provider_type === "anthropic") return completeAnthropic(provider, apiKey, body);
-  if (provider.provider_type === "ollama") return completeOllama(provider, body);
-  return completeOpenAiCompatible(provider, apiKey, body);
+  const provider = target.provider;
+  if (provider.provider_type === "anthropic") {
+    return completeAnthropic(provider, target.network_profile, apiKey, body);
+  }
+  if (provider.provider_type === "ollama") return completeOllama(provider, target.network_profile, body);
+  return completeOpenAiCompatible(provider, target.network_profile, apiKey, body);
 }
 
 // ---------------------------------------------------------------------------
@@ -324,7 +335,7 @@ async function invokeProviderWithPool(
     let retriedSameKey = false;
     for (;;) {
       try {
-        const result = await attemptOnce(target.provider, candidate.api_key, body);
+        const result = await attemptOnce(target, candidate.api_key, body);
         if (candidate.member_id) {
           await store.recordPoolOutcome(candidate.member_id, { kind: "success" });
         }
@@ -475,18 +486,18 @@ export async function listProviderModels(
   const apiKey = target.candidates.find((c) => c.api_key)?.api_key ?? null;
   if (provider.provider_type === "ollama" && provider.base_url) {
     const data = (await parseJsonResponse(
-      await httpClient().fetch(`${provider.base_url.replace(/\/+$/, "")}/api/tags`),
+      await httpClient(target.network_profile).fetch(`${provider.base_url.replace(/\/+$/, "")}/api/tags`),
     )) as { models?: Array<{ name?: string }> };
     return {
       models: (data.models ?? []).map((m) => m.name).filter((m): m is string => Boolean(m)),
       source: "live",
     };
   }
-  if (["openai", "openrouter", "custom_openai_compatible", "other"].includes(provider.provider_type)) {
+  if (["openai", "openrouter", "other"].includes(provider.provider_type)) {
     const headers: Record<string, string> = {};
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;
     const data = (await parseJsonResponse(
-      await httpClient().fetch(`${openAiBase(provider)}/models`, { headers }),
+      await httpClient(target.network_profile).fetch(`${openAiBase(provider)}/models`, { headers }),
     )) as { data?: Array<{ id?: string }> };
     return {
       models: (data.data ?? []).map((m) => m.id).filter((m): m is string => Boolean(m)),

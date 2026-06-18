@@ -14,21 +14,28 @@ import type { ServerConfig } from "../../config";
 import { loadProtocol } from "./protocolRuntime";
 
 export interface ProvidersDbPort {
-  listProviders(spaceId: string): Promise<unknown[]>;
-  getProvider(spaceId: string, configId: string): Promise<unknown | null>;
+  listProviders(spaceId: string, userId: string): Promise<unknown[]>;
+  getProvider(spaceId: string, userId: string | null, configId: string): Promise<unknown | null>;
 }
 
-interface ProviderRow {
+export interface ProviderRow {
   id: string;
   space_id: string;
+  home_space_id?: string | null;
+  owner_user_id?: string | null;
+  grant_id?: string | null;
+  manageable?: boolean | null;
+  grant_enabled?: boolean | null;
   name: string;
   provider_type: string;
   base_url: string | null;
+  network_profile_id: string | null;
   default_model: string | null;
   enabled: boolean;
   credential_id: string | null;
   capabilities_json: unknown;
   config_json: unknown;
+  grant_is_default?: boolean | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -53,18 +60,48 @@ function isDefault(config: unknown): boolean {
   return false;
 }
 
+function isDefaultForRow(row: ProviderRow): boolean {
+  if (typeof row.grant_is_default === "boolean") return row.grant_is_default;
+  return isDefault(row.config_json);
+}
+
+function stringConfig(config: unknown, key: string): string | null {
+  if (config !== null && typeof config === "object") {
+    const value = (config as Record<string, unknown>)[key];
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+  return null;
+}
+
+function defaultBaseUrlFor(providerType: string): string | null {
+  if (providerType === "openai") return "https://api.openai.com/v1";
+  if (providerType === "anthropic") return "https://api.anthropic.com";
+  if (providerType === "openrouter") return "https://openrouter.ai/api/v1";
+  return null;
+}
+
 export function mapProviderRowToDto(row: ProviderRow): Record<string, unknown> {
   return {
     id: row.id,
     space_id: row.space_id,
+    home_space_id: row.home_space_id ?? row.space_id,
+    owner_user_id: row.owner_user_id ?? null,
+    grant_id: row.grant_id ?? null,
     name: row.name,
     provider_type: row.provider_type,
-    base_url: row.base_url,
+    base_url: row.base_url ?? defaultBaseUrlFor(row.provider_type) ?? "",
+    network_profile_id: row.network_profile_id ?? null,
+    claude_compatible_base_url: stringConfig(row.config_json, "claude_compatible_base_url"),
+    openai_compatible_base_url: stringConfig(row.config_json, "openai_compatible_base_url"),
     default_model: row.default_model,
     available_models: availableModels(row.capabilities_json),
     enabled: Boolean(row.enabled),
-    is_default: isDefault(row.config_json),
+    is_default: isDefaultForRow(row),
     has_api_key: row.credential_id !== null && row.credential_id !== undefined,
+    manageable: Boolean(row.manageable),
+    grant_enabled: row.grant_enabled === undefined || row.grant_enabled === null
+      ? undefined
+      : Boolean(row.grant_enabled),
     created_at: row.created_at.toISOString(),
     updated_at: row.updated_at.toISOString(),
   };
@@ -85,20 +122,81 @@ class PgProvidersDbPort implements ProvidersDbPort {
     };
   }
 
-  async listProviders(spaceId: string): Promise<unknown[]> {
-    const { table, columns } = await this.selectClause();
+  private async grantSelect(): Promise<{ table: string; columns: string }> {
+    const { table } = await this.selectClause();
+    return {
+      table,
+      columns: `p.id,
+              g.space_id AS space_id,
+              p.name,
+              p.provider_type,
+              p.base_url,
+              p.default_model,
+              p.enabled,
+              p.credential_id,
+              p.capabilities_json,
+              p.created_at,
+              p.updated_at`,
+    };
+  }
+
+  async listProviders(spaceId: string, userId: string): Promise<unknown[]> {
+    const { table, columns } = await this.grantSelect();
     const result = await this.pool.query<ProviderRow>(
-      `SELECT ${columns} FROM "${table}" WHERE space_id = $1 ORDER BY created_at DESC`,
-      [spaceId],
+      `SELECT ${columns},
+              p.space_id AS home_space_id,
+              p.owner_user_id,
+              g.id AS grant_id,
+              g.enabled AS grant_enabled,
+              g.is_default AS grant_is_default,
+              (p.owner_user_id = $2) AS manageable,
+              jsonb_set(
+                COALESCE(p.config_json, '{}'::jsonb),
+                '{is_default}',
+                to_jsonb(g.is_default),
+                true
+              ) AS config_json,
+              COALESCE(g.network_profile_id, p.network_profile_id) AS network_profile_id
+         FROM model_provider_space_grants g
+         JOIN "${table}" p ON p.id = g.provider_id
+        WHERE g.space_id = $1
+          AND g.enabled = true
+          AND p.enabled = true
+        ORDER BY g.is_default DESC, p.created_at DESC`,
+      [spaceId, userId],
     );
     return result.rows.map(mapProviderRowToDto);
   }
 
-  async getProvider(spaceId: string, configId: string): Promise<unknown | null> {
-    const { table, columns } = await this.selectClause();
+  async getProvider(
+    spaceId: string,
+    userId: string | null,
+    configId: string,
+  ): Promise<unknown | null> {
+    const { table, columns } = await this.grantSelect();
     const result = await this.pool.query<ProviderRow>(
-      `SELECT ${columns} FROM "${table}" WHERE space_id = $1 AND id = $2 LIMIT 1`,
-      [spaceId, configId],
+      `SELECT ${columns},
+              p.space_id AS home_space_id,
+              p.owner_user_id,
+              g.id AS grant_id,
+              g.enabled AS grant_enabled,
+              g.is_default AS grant_is_default,
+              (p.owner_user_id = $3) AS manageable,
+              jsonb_set(
+                COALESCE(p.config_json, '{}'::jsonb),
+                '{is_default}',
+                to_jsonb(g.is_default),
+                true
+              ) AS config_json,
+              COALESCE(g.network_profile_id, p.network_profile_id) AS network_profile_id
+         FROM model_provider_space_grants g
+         JOIN "${table}" p ON p.id = g.provider_id
+        WHERE g.space_id = $1
+          AND g.provider_id = $2
+          AND g.enabled = true
+          AND p.enabled = true
+        LIMIT 1`,
+      [spaceId, configId, userId],
     );
     if (result.rows.length === 0) return null;
     return mapProviderRowToDto(result.rows[0]);

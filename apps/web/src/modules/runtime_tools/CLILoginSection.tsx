@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { ChevronDown, ChevronRight, Copy, Download, ExternalLink } from 'lucide-react'
-import { credentialsApi, runtimeToolsApi } from '../../api/client'
-import type { CliUsageAutoRefreshSettings, CliUsageEntry, CredentialLoginMethod, CredentialStatus, LoginEvent, RuntimeToolStatus } from '../../types/api'
+import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, Loader2, Plus } from 'lucide-react'
+import { authApi, credentialsApi, runtimeToolsApi } from '../../api/client'
+import type { CliCredentialProfileOut, CliUsageAutoRefreshSettings, CliUsageEntry, CredentialLoginMethod, CredentialStatus, LoginEvent, RuntimeToolStatus, SpaceWithMembership } from '../../types/api'
 import { Card, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Input } from '../../components/ui/input'
 import { Skeleton } from '../../components/ui/skeleton'
 import { errMsg } from '../../lib/utils'
+import NetworkProfileSelector from '../network_profiles/NetworkProfileSelector'
 
 const URL_RE = /https?:\/\/[^\s<>"']+/g
 const NON_BROWSER_LOGIN_URL_RE = /https:\/\/auth\.openai\.com\/api\/accounts\/deviceauth\/usercode\b/
@@ -139,8 +140,10 @@ function LogPanel({ events }: { events: LoginEvent[] }) {
 
 // ── Interactive PTY input (menu choices, OAuth code, etc.) ────────────────────
 
-function CodeInput({ runtime, prompt, onSent, onRefresh }: {
+function CodeInput({ runtime, profileId, spaceId, prompt, onSent, onRefresh }: {
   runtime: string
+  profileId?: string | null
+  spaceId?: string | null
   prompt: string
   onSent: () => void
   onRefresh: () => void
@@ -152,7 +155,7 @@ function CodeInput({ runtime, prompt, onSent, onRefresh }: {
     if (!code.trim()) return
     setSending(true)
     try {
-      await credentialsApi.sendLoginInput(runtime, code.trim())
+      await credentialsApi.sendLoginInput(runtime, code.trim(), profileId, spaceId)
       setCode('')
       onSent()
       // Give the backend time to complete login and sync credentials
@@ -295,6 +298,17 @@ function UsagePanel({ usage, onRefreshQuota, refreshingQuota }: {
   )
 }
 
+function profileIsLoggedIn(profile: CliCredentialProfileOut | null): boolean {
+  return Boolean(profile?.logged_in)
+}
+
+function profileOptionLabel(profile: CliCredentialProfileOut): string {
+  const name = profile.name || 'Unnamed profile'
+  const defaultSuffix = profile.is_default && name.toLowerCase() !== 'default' ? ' (default)' : ''
+  const loginSuffix = profileIsLoggedIn(profile) ? '' : ' (not logged in)'
+  return `${name}${defaultSuffix}${loginSuffix}`
+}
+
 // ── Single runtime card ───────────────────────────────────────────────────────
 
 function LoginCard({
@@ -308,6 +322,10 @@ function LoginCard({
   usage,
   onRefreshQuota,
   refreshingQuota = false,
+  profiles,
+  profileSelectionHint,
+  spaces,
+  spaceId,
   version,
   onVersionChange,
 }: {
@@ -317,6 +335,10 @@ function LoginCard({
   usage?: CliUsageEntry
   onRefreshQuota?: () => void
   refreshingQuota?: boolean
+  profiles: CliCredentialProfileOut[]
+  profileSelectionHint?: string | null
+  spaces: SpaceWithMembership[]
+  spaceId?: string | null
   runtimeTool?: RuntimeToolStatus
   toolsLoading?: boolean
   installingTool?: boolean
@@ -337,8 +359,37 @@ function LoginCard({
   const [showTool, setShowTool]       = useState(false)   // advanced tool-management
   const [latest, setLatest]           = useState<string | null | undefined>(undefined)
   const [latestError, setLatestError] = useState(false)
+  const [networkProfileId, setNetworkProfileId] = useState<string | null>(status.network_profile_id ?? null)
+  const [selectedProfileId, setSelectedProfileId] = useState<string>(status.profile_id ?? '')
+  const [grantSpaceId, setGrantSpaceId] = useState('')
+  const [grantingProfile, setGrantingProfile] = useState(false)
+  const [savingNetwork, setSavingNetwork] = useState(false)
   const latestReqRef = useRef(false)
   const accTextRef = useRef('')
+
+  useEffect(() => {
+    const fallbackProfileId = status.profile_id ?? profiles.find(profile => profile.is_default)?.id ?? profiles[0]?.id ?? ''
+    const fallbackProfile = profiles.find(profile => profile.id === fallbackProfileId) ?? null
+    setNetworkProfileId(fallbackProfile?.network_profile_id ?? status.network_profile_id ?? null)
+    setSelectedProfileId(fallbackProfileId)
+  }, [status.network_profile_id, status.profile_id])
+
+  const profilesForRuntime = profiles
+  const selectedProfile = profilesForRuntime.find(profile => profile.id === selectedProfileId) ?? null
+
+  useEffect(() => {
+    if (!profileSelectionHint) return
+    const hintedProfile = profilesForRuntime.find(profile => profile.id === profileSelectionHint)
+    if (!hintedProfile) return
+    setSelectedProfileId(hintedProfile.id)
+    setNetworkProfileId(hintedProfile.network_profile_id ?? status.network_profile_id ?? null)
+    setActive(false)
+    setExitCode(null)
+    setNeedsCode(false)
+    setDeviceAuth(null)
+    setUrls([])
+    setLogs([])
+  }, [profileSelectionHint])
 
   // Check the registry's latest version once the user opens tool management, so
   // they can tell whether an update exists. On-demand to avoid network on load.
@@ -366,8 +417,13 @@ function LoginCard({
     setRunning(true)
     accTextRef.current = ''
     try {
-      for await (const event of credentialsApi.loginStream(status.runtime)) {
-        setLogs(prev => [...prev, event])
+      for await (const event of credentialsApi.loginStream(status.runtime, selectedProfileId || null, spaceId)) {
+        if (event.type !== 'profile') {
+          setLogs(prev => [...prev, event])
+        }
+        if (event.profile_id) {
+          setSelectedProfileId(event.profile_id)
+        }
         if (event.type === 'output' && event.text) {
           accTextRef.current += event.text
           const found = extractUrls(accTextRef.current)
@@ -411,11 +467,53 @@ function LoginCard({
     return { text: 'Setting up…', color: 'text-muted-foreground' }
   })()
 
-  const loggedIn = status.logged_in
+  const selectedLoggedIn = selectedProfile ? profileIsLoggedIn(selectedProfile) : false
+  const statusBadgeText = selectedProfile
+    ? selectedLoggedIn ? 'logged in' : 'not logged in'
+    : 'not configured'
+  const showDefaultUsage = Boolean(status.logged_in && selectedProfile?.id === status.profile_id)
   const cliToolReady = !method.supports_cli || Boolean(runtimeTool?.installed)
   const cliToolKnown = !method.supports_cli || Boolean(runtimeTool)
 
   const installLabel = installingTool ? 'Installing…' : toolsLoading ? 'Checking…' : 'Install tool'
+
+  async function updateNetworkProfile(next: string | null) {
+    const profile = selectedProfile
+    if (!profile) return
+    setNetworkProfileId(next)
+    setSavingNetwork(true)
+    try {
+      await credentialsApi.updateProfile(profile.id, { network_profile_id: next }, spaceId)
+      toast.success('CLI default network updated')
+      onRefresh()
+    } catch (e) {
+      setNetworkProfileId(profile.network_profile_id ?? null)
+      toast.error(errMsg(e))
+    } finally {
+      setSavingNetwork(false)
+    }
+  }
+
+  async function grantSelectedProfile() {
+    if (!selectedProfile || !grantSpaceId) return
+    setGrantingProfile(true)
+    try {
+      await credentialsApi.grantProfile(
+        selectedProfile.id,
+        {
+          space_id: grantSpaceId,
+          enabled: true,
+        },
+        spaceId,
+      )
+      toast.success('CLI profile granted')
+      onRefresh()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setGrantingProfile(false)
+    }
+  }
 
   return (
     <div className="border rounded-lg p-4 space-y-3">
@@ -431,8 +529,8 @@ function LoginCard({
             : <ChevronRight className="size-4 text-muted-foreground shrink-0" />}
           <span className="font-medium">{status.label}</span>
           <span className="text-xs font-mono text-muted-foreground">{status.runtime}</span>
-          <Badge variant={loggedIn ? 'default' : 'secondary'} className="shrink-0">
-            {loggedIn ? 'logged in' : 'not configured'}
+          <Badge variant={selectedLoggedIn ? 'default' : 'secondary'} className="shrink-0">
+            {statusBadgeText}
           </Badge>
           {method.supports_cli && (
             <Badge variant={cliToolReady ? 'success' : 'warning'} className="shrink-0">
@@ -447,9 +545,72 @@ function LoginCard({
       {expanded && (
         <div className="space-y-3">
           {/* Usage — tokens (local transcripts/sessions) + subscription quota (cached probe) */}
-          {loggedIn && (
+          {showDefaultUsage && (
             <UsagePanel usage={usage} onRefreshQuota={onRefreshQuota} refreshingQuota={refreshingQuota} />
           )}
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">CLI profile</label>
+              <span className="text-[10px] text-muted-foreground">
+                {profilesForRuntime.length} configured
+              </span>
+            </div>
+            <select
+              value={selectedProfileId}
+              onChange={e => {
+                const next = e.target.value
+                setSelectedProfileId(next)
+                const profile = profilesForRuntime.find(p => p.id === next)
+                setNetworkProfileId(profile?.network_profile_id ?? null)
+                setActive(false)
+                setExitCode(null)
+                setNeedsCode(false)
+                setDeviceAuth(null)
+                setUrls([])
+                setLogs([])
+              }}
+              className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
+            >
+              {profilesForRuntime.length === 0 && <option value="">No profiles yet</option>}
+              {profilesForRuntime.length > 0 && !selectedProfile && <option value="">Select profile…</option>}
+              {profilesForRuntime.map(profile => (
+                <option key={profile.id} value={profile.id}>
+                  {profileOptionLabel(profile)}
+                </option>
+              ))}
+            </select>
+            <div className="flex gap-2">
+              <select
+                value={grantSpaceId}
+                onChange={e => setGrantSpaceId(e.target.value)}
+                className="flex h-8 flex-1 rounded-md border border-border bg-input px-2 text-xs"
+                disabled={!selectedProfile}
+              >
+                <option value="">Grant to space…</option>
+                {spaces.map(space => (
+                  <option key={space.id} value={space.id}>{space.name}</option>
+                ))}
+              </select>
+              <Button size="sm" variant="outline" onClick={grantSelectedProfile} disabled={!selectedProfile || !grantSpaceId || grantingProfile}>
+                {grantingProfile ? <Loader2 className="size-3.5 animate-spin" /> : 'Grant'}
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Profile network</label>
+              <span className="text-[10px] text-muted-foreground">
+                {selectedProfile ? 'used when no provider is selected' : 'select a profile first'}
+              </span>
+            </div>
+            <NetworkProfileSelector
+              value={networkProfileId}
+              onChange={updateNetworkProfile}
+              disabled={!selectedProfile || savingNetwork}
+            />
+          </div>
 
           {/* Primary actions */}
           <div className="flex gap-2 flex-wrap">
@@ -466,11 +627,11 @@ function LoginCard({
             {method.supports_cli && (
               <Button
                 size="sm"
-                variant={loggedIn && !active ? 'outline' : 'default'}
+                variant={selectedLoggedIn && !active ? 'outline' : 'default'}
                 onClick={startCLILogin}
                 disabled={running || !cliToolReady}
               >
-                {running ? 'Logging in…' : loggedIn ? 'Re-login via CLI' : 'Login via CLI'}
+                {running ? 'Logging in…' : selectedLoggedIn ? 'Re-login via CLI' : 'Login via CLI'}
               </Button>
             )}
           </div>
@@ -497,6 +658,8 @@ function LoginCard({
               {needsCode && (
                 <CodeInput
                   runtime={status.runtime}
+                  profileId={selectedProfileId || null}
+                  spaceId={spaceId}
                   prompt="Open the URL above in your browser, then paste the authorization code here."
                   onSent={() => setNeedsCode(false)}
                   onRefresh={onRefresh}
@@ -506,7 +669,7 @@ function LoginCard({
           )}
 
           {/* Advanced — tool install/version/update (folded) */}
-          {method.supports_cli && runtimeTool && (
+          {method.supports_cli && runtimeTool && onInstallTool && (
             <div className="border-t pt-2">
               <button
                 className="text-xs text-muted-foreground underline underline-offset-2"
@@ -573,6 +736,10 @@ function LoginCard({
 // ── CLI credentials section ───────────────────────────────────────────────────
 
 export default function CLILoginSection({
+  title = 'CLI runtime profiles',
+  description,
+  spaceId,
+  allowedRuntimes,
   runtimeToolsByRuntime = {},
   runtimeToolsLoading = false,
   installingRuntime = null,
@@ -581,6 +748,10 @@ export default function CLILoginSection({
   onVersionChange,
   onRefreshTools,
 }: {
+  title?: string
+  description?: ReactNode
+  spaceId?: string | null
+  allowedRuntimes?: string[]
   runtimeToolsByRuntime?: Record<string, RuntimeToolStatus | undefined>
   runtimeToolsLoading?: boolean
   installingRuntime?: string | null
@@ -591,15 +762,22 @@ export default function CLILoginSection({
 } = {}) {
   const [statuses, setStatuses] = useState<CredentialStatus[]>([])
   const [methods, setMethods]   = useState<CredentialLoginMethod[]>([])
+  const [profilesByRuntime, setProfilesByRuntime] = useState<Record<string, CliCredentialProfileOut[]>>({})
+  const [spaces, setSpaces] = useState<SpaceWithMembership[]>([])
   const [usageByRuntime, setUsageByRuntime] = useState<Record<string, CliUsageEntry>>({})
   const [usageAutoRefresh, setUsageAutoRefresh] = useState<CliUsageAutoRefreshSettings | null>(null)
   const [refreshingQuota, setRefreshingQuota] = useState<string | null>(null)
   const [savingAutoRefresh, setSavingAutoRefresh] = useState(false)
   const [loading, setLoading]   = useState(true)
+  const [showAddProfile, setShowAddProfile] = useState(false)
+  const [newProfileRuntime, setNewProfileRuntime] = useState('')
+  const [newProfileName, setNewProfileName] = useState('')
+  const [profileSelectionHints, setProfileSelectionHints] = useState<Record<string, string>>({})
+  const [creatingProfile, setCreatingProfile] = useState(false)
 
   async function loadUsage(quiet = false) {
     try {
-      const usage = await credentialsApi.usage()
+      const usage = await credentialsApi.usage(spaceId)
       setUsageByRuntime(Object.fromEntries(usage.map(e => [e.runtime, e])))
     } catch (e) {
       if (!quiet) toast.error(errMsg(e))
@@ -609,14 +787,22 @@ export default function CLILoginSection({
   async function load() {
     setLoading(true)
     try {
-      const [s, m, usage, autoRefresh] = await Promise.all([
-        credentialsApi.status(),
-        credentialsApi.methods(),
-        credentialsApi.usage().catch(() => [] as CliUsageEntry[]),
-        credentialsApi.usageAutoRefresh().catch(() => null),
+      const [s, m, profiles, spacesList, usage, autoRefresh] = await Promise.all([
+        credentialsApi.status(spaceId),
+        credentialsApi.methods(spaceId),
+        credentialsApi.profiles(undefined, spaceId).catch(() => [] as CliCredentialProfileOut[]),
+        authApi.mySpaces().catch(() => [] as SpaceWithMembership[]),
+        credentialsApi.usage(spaceId).catch(() => [] as CliUsageEntry[]),
+        credentialsApi.usageAutoRefresh(spaceId).catch(() => null),
       ])
       setStatuses(s)
       setMethods(m)
+      setSpaces(spacesList)
+      const grouped: Record<string, CliCredentialProfileOut[]> = {}
+      for (const profile of profiles) {
+        grouped[profile.runtime] = [...(grouped[profile.runtime] ?? []), profile]
+      }
+      setProfilesByRuntime(grouped)
       setUsageByRuntime(Object.fromEntries(usage.map(e => [e.runtime, e])))
       if (autoRefresh) setUsageAutoRefresh(autoRefresh)
     } catch (e) {
@@ -630,7 +816,7 @@ export default function CLILoginSection({
   async function refreshQuota(runtime: string) {
     setRefreshingQuota(runtime)
     try {
-      const entry = await credentialsApi.refreshUsage(runtime)
+      const entry = await credentialsApi.refreshUsage(runtime, undefined, spaceId)
       setUsageByRuntime(prev => ({ ...prev, [runtime]: entry }))
     } catch (e) {
       toast.error(errMsg(e))
@@ -641,7 +827,7 @@ export default function CLILoginSection({
 
   useEffect(() => {
     load()
-  }, [])
+  }, [spaceId])
 
   useEffect(() => {
     if (!usageAutoRefresh?.enabled) return
@@ -654,7 +840,7 @@ export default function CLILoginSection({
   async function updateAutoRefresh(enabled: boolean) {
     setSavingAutoRefresh(true)
     try {
-      setUsageAutoRefresh(await credentialsApi.setUsageAutoRefresh(enabled))
+      setUsageAutoRefresh(await credentialsApi.setUsageAutoRefresh(enabled, spaceId))
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
@@ -668,12 +854,54 @@ export default function CLILoginSection({
     onRefreshTools?.()
   }
 
-  const methodMap = Object.fromEntries(methods.map(m => [m.runtime, m]))
+  const methodMap = useMemo(() => Object.fromEntries(methods.map(m => [m.runtime, m])), [methods])
+  const eligibleStatuses = useMemo(() => {
+    const allowedRuntimeSet = allowedRuntimes ? new Set(allowedRuntimes) : null
+    return statuses.filter(status =>
+      methodMap[status.runtime] &&
+      (!allowedRuntimeSet || allowedRuntimeSet.has(status.runtime)),
+    )
+  }, [allowedRuntimes, methodMap, statuses])
+  const profileStatuses = useMemo(
+    () => eligibleStatuses.filter(status => (profilesByRuntime[status.runtime] ?? []).length > 0),
+    [eligibleStatuses, profilesByRuntime],
+  )
+
+  useEffect(() => {
+    if (newProfileRuntime && eligibleStatuses.some(status => status.runtime === newProfileRuntime)) return
+    setNewProfileRuntime(eligibleStatuses[0]?.runtime ?? '')
+  }, [newProfileRuntime, eligibleStatuses])
+
+  async function createProfile() {
+    const runtime = newProfileRuntime
+    const name = newProfileName.trim()
+    if (!runtime || !name) return
+    setCreatingProfile(true)
+    try {
+      const profile = await credentialsApi.createProfile({ runtime, name }, spaceId)
+      setProfilesByRuntime(prev => ({
+        ...prev,
+        [runtime]: [...(prev[runtime] ?? []).filter(item => item.id !== profile.id), profile],
+      }))
+      setProfileSelectionHints(prev => ({ ...prev, [runtime]: profile.id }))
+      setNewProfileName('')
+      setShowAddProfile(false)
+      toast.success('CLI profile created')
+      refreshAll()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setCreatingProfile(false)
+    }
+  }
 
   return (
     <Card>
       <div className="flex items-center justify-between mb-4">
-        <CardTitle>CLI Runtimes</CardTitle>
+        <div>
+          <CardTitle>{title}</CardTitle>
+          {description && <div className="mt-1 text-sm text-muted-foreground">{description}</div>}
+        </div>
         <div className="flex items-center gap-3">
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <input
@@ -696,7 +924,53 @@ export default function CLILoginSection({
         </div>
       ) : (
         <div className="space-y-3">
-          {statuses.map(s => {
+          {eligibleStatuses.length === 0 ? (
+            <p className="rounded-lg border p-3 text-sm text-muted-foreground">
+              No CLI runtimes have been added to this space yet. Add installed CLI runtimes from Space Settings first.
+            </p>
+          ) : !showAddProfile ? (
+            <div className="flex justify-end">
+              <Button size="sm" variant={showAddProfile || profileStatuses.length === 0 ? 'default' : 'outline'} onClick={() => setShowAddProfile(true)}>
+                <Plus className="size-3.5" />
+                Add new profile
+              </Button>
+            </div>
+          ) : null}
+
+          {showAddProfile && (
+            <div className="rounded-lg border p-3 space-y-2">
+              <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">New profile</div>
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                <select
+                  value={newProfileRuntime}
+                  onChange={e => setNewProfileRuntime(e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
+                  disabled={eligibleStatuses.length === 0 || creatingProfile}
+                >
+                  {eligibleStatuses.map(status => (
+                    <option key={status.runtime} value={status.runtime}>{status.label}</option>
+                  ))}
+                </select>
+                <Input
+                  value={newProfileName}
+                  onChange={e => setNewProfileName(e.target.value)}
+                  placeholder="Profile name"
+                  className="h-9"
+                  disabled={creatingProfile}
+                />
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setShowAddProfile(false)} disabled={creatingProfile}>
+                    Cancel
+                  </Button>
+                  <Button size="sm" onClick={createProfile} disabled={!newProfileRuntime || !newProfileName.trim() || creatingProfile}>
+                    {creatingProfile ? <Loader2 className="size-3.5 animate-spin" /> : 'Create'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {profileStatuses.map(s => {
             const m = methodMap[s.runtime]
             if (!m) return null
             return (
@@ -712,6 +986,10 @@ export default function CLILoginSection({
                 usage={usageByRuntime[s.runtime]}
                 onRefreshQuota={() => refreshQuota(s.runtime)}
                 refreshingQuota={refreshingQuota === s.runtime}
+                profiles={profilesByRuntime[s.runtime] ?? []}
+                profileSelectionHint={profileSelectionHints[s.runtime] ?? null}
+                spaces={spaces}
+                spaceId={spaceId}
                 version={versions[s.runtime] ?? ''}
                 onVersionChange={onVersionChange ?? (() => {})}
               />

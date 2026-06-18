@@ -69,20 +69,17 @@ function proposal(overrides: Partial<ProposalOut> = {}): ProposalOut {
 }
 
 describe("proposal review routes", () => {
-  it("serves proposal list from the server read model", async () => {
+  it("serves proposal list with the public page shape", async () => {
     __setProposalIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const calls: Array<Record<string, unknown>> = [];
-    const page: ProposalPage = {
-      items: [proposal()],
-      total: 1,
-      limit: 25,
-      offset: 10,
-    };
     __setProposalServicesFactoryForTests(() => ({
       repository: {
-        async listVisible(spaceId, userId, filters) {
-          calls.push({ spaceId, userId, filters });
-          return page;
+        async listVisible(_spaceId, _userId, filters) {
+          return {
+            items: [proposal({ proposal_type: filters.proposalType ?? "memory_create" })],
+            total: 1,
+            limit: filters.limit,
+            offset: filters.offset,
+          } satisfies ProposalPage;
         },
         async getVisible() {
           throw new Error("getVisible should not run");
@@ -108,34 +105,22 @@ describe("proposal review routes", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual(page);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      spaceId: "space-1",
-      userId: "user-1",
-      filters: {
-        status: "pending",
-        proposalType: "code_patch",
-        expired: false,
-        limit: 25,
-        offset: 10,
-      },
+    expect(res.json()).toMatchObject({
+      items: [{ proposal_type: "code_patch" }],
+      total: 1,
+      limit: 25,
+      offset: 10,
     });
   });
 
-  it("serves visible proposal details from the server read model", async () => {
+  it("serves visible proposal details with the public proposal shape", async () => {
     __setProposalIdentityForTests({ spaceId: "space-1", userId: "user-1" });
     __setProposalServicesFactoryForTests(() => ({
       repository: {
         async listVisible() {
           throw new Error("listVisible should not run");
         },
-        async getVisible(spaceId, userId, proposalId) {
-          expect({ spaceId, userId, proposalId }).toEqual({
-            spaceId: "space-1",
-            userId: "user-1",
-            proposalId: "proposal-1",
-          });
+        async getVisible(_spaceId, _userId, proposalId) {
           return proposal({ id: proposalId });
         },
       },
@@ -162,9 +147,8 @@ describe("proposal review routes", () => {
     expect(res.json()).toMatchObject({ id: "proposal-1", status: "pending" });
   });
 
-  it("applies accept, reject, and egress approval through the server proposal service", async () => {
+  it("serves accept, reject, and egress approval response shapes", async () => {
     __setProposalIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const calls: string[] = [];
     __setProposalServicesFactoryForTests(() => ({
       repository: {
         async listVisible() {
@@ -175,20 +159,23 @@ describe("proposal review routes", () => {
         },
       },
       applyService: {
-        async accept(proposalId, identity, options) {
-          calls.push(`accept:${proposalId}:${identity.spaceId}:${identity.userId}:${options?.confirmIncompletePatch}`);
+        async accept(proposalId, _identity, options) {
           return {
-            proposal: proposal({ status: "accepted", decided_at: "2026-06-14T10:01:00.000Z" }),
+            proposal: proposal({
+              id: proposalId,
+              status: "accepted",
+              decided_at: "2026-06-14T10:01:00.000Z",
+            }),
             result_type: "code_patch_apply",
-            result: { updated_paths: ["README.md"] },
+            result: {
+              updated_paths: options?.confirmIncompletePatch ? ["README.md"] : [],
+            },
           };
         },
-        async reject(proposalId, identity) {
-          calls.push(`reject:${proposalId}:${identity.spaceId}:${identity.userId}`);
+        async reject(proposalId) {
           return proposal({ id: proposalId, status: "rejected" });
         },
         async approveEgressGrantingUser(proposalId, identity, grantId) {
-          calls.push(`approval:${proposalId}:${grantId}`);
           return {
             id: "approval-1",
             proposal_id: proposalId,
@@ -221,16 +208,21 @@ describe("proposal review routes", () => {
     });
 
     expect(accept.statusCode).toBe(200);
-    expect(accept.json()).toMatchObject({ result_type: "code_patch_apply" });
+    expect(accept.json()).toMatchObject({
+      proposal: { id: "proposal-1", status: "accepted" },
+      result_type: "code_patch_apply",
+      result: { updated_paths: ["README.md"] },
+    });
     expect(reject.statusCode).toBe(200);
     expect(reject.json()).toMatchObject({ id: "proposal-2", status: "rejected" });
     expect(approval.statusCode).toBe(200);
-    expect(approval.json()).toMatchObject({ id: "approval-1", status: "approved" });
-    expect(calls).toEqual([
-      "accept:proposal-1:space-1:user-1:true",
-      "reject:proposal-2:space-1:user-1",
-      "approval:proposal-3:grant-1",
-    ]);
+    expect(approval.json()).toMatchObject({
+      id: "approval-1",
+      proposal_id: "proposal-3",
+      grant_id: "grant-1",
+      approver_user_id: "user-1",
+      status: "approved",
+    });
   });
 
   it("rejects invalid incomplete code patch confirmation query values", async () => {

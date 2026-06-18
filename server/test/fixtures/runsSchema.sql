@@ -57,6 +57,21 @@ CREATE TABLE public.model_providers (
     created_at timestamp with time zone NOT NULL
 );
 
+-- Minimal grants table for resolveDefaultProvider. The production query treats
+-- default-ness as a space grant property, not only provider-local config.
+CREATE TABLE public.model_provider_space_grants (
+    id character varying(36) NOT NULL,
+    provider_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
+    granted_by_user_id character varying(36),
+    enabled boolean NOT NULL,
+    is_default boolean NOT NULL,
+    network_profile_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
 CREATE TABLE public.agents (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,

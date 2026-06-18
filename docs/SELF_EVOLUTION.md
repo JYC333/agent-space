@@ -152,7 +152,7 @@ Communicate through Unix socket only. Accepts structured allowlisted jobs only.
 - `ENABLE_SYSTEM_EVOLUTION=true`
 - `SYSTEM_CORE_REPO_PATH=/path/to/agent-space-repo` (must be an existing git repo)
 - `SYSTEM_CORE_BASE_BRANCH=master`
-- `SYSTEM_CORE_OWNER_EMAIL=<developer email>`
+- `INSTANCE_ADMIN_EMAIL=<developer email>`
 - `SYSTEM_EVOLUTION_SANDBOX_ROOT=~/.aspace/dev/sandboxes/system-evolution`
 
 ## System-Core Workspace Policy

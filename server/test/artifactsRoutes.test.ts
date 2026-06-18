@@ -53,23 +53,23 @@ function artifact(overrides: Partial<ArtifactOut> = {}): ArtifactOut {
 }
 
 describe("artifact routes", () => {
-  it("lists and reads artifacts through the server read model", async () => {
+  it("lists and reads artifacts with public response shapes", async () => {
     __setArtifactIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const page: ArtifactPage = {
-      items: [artifact()],
-      total: 1,
-      limit: 25,
-      offset: 5,
-    };
-    const calls: Array<Record<string, unknown>> = [];
     __setArtifactRepositoryFactoryForTests(() => ({
       async listVisible(spaceId, userId, filters) {
-        calls.push({ spaceId, userId, filters });
-        return page;
+        return {
+          items: [
+            artifact({
+              id: `${spaceId}:${userId}:${filters.artifactType ?? "all"}`,
+            }),
+          ],
+          total: 1,
+          limit: filters.limit,
+          offset: filters.offset,
+        } satisfies ArtifactPage;
       },
-      async getVisible(spaceId, userId, artifactId, includeContent) {
-        calls.push({ spaceId, userId, artifactId, includeContent });
-        return artifact({ id: artifactId, content: "inline" });
+      async getVisible(_spaceId, _userId, artifactId, includeContent) {
+        return artifact({ id: artifactId, content: includeContent ? "inline" : null });
       },
       async exportVisible() {
         throw new Error("export should not run");
@@ -84,22 +84,14 @@ describe("artifact routes", () => {
     const get = await app.inject({ method: "GET", url: "/api/v1/artifacts/artifact-1" });
 
     expect(list.statusCode).toBe(200);
-    expect(list.json()).toEqual(page);
+    expect(list.json()).toMatchObject({
+      items: [{ id: "space-1:user-1:summary" }],
+      total: 1,
+      limit: 25,
+      offset: 5,
+    });
     expect(get.statusCode).toBe(200);
     expect(get.json()).toMatchObject({ id: "artifact-1", content: "inline" });
-    expect(calls).toEqual([
-      {
-        spaceId: "space-1",
-        userId: "user-1",
-        filters: { artifactType: "summary", projectId: null, runId: null, limit: 25, offset: 5 },
-      },
-      {
-        spaceId: "space-1",
-        userId: "user-1",
-        artifactId: "artifact-1",
-        includeContent: true,
-      },
-    ]);
   });
 
   it("exports inline artifact content with an attachment disposition", async () => {
@@ -111,12 +103,7 @@ describe("artifact routes", () => {
       async getVisible() {
         throw new Error("get should not run");
       },
-      async exportVisible(spaceId, userId, artifactId) {
-        expect({ spaceId, userId, artifactId }).toEqual({
-          spaceId: "space-1",
-          userId: "user-1",
-          artifactId: "artifact-1",
-        });
+      async exportVisible(_spaceId, _userId, artifactId) {
         return {
           artifact: artifact({ id: artifactId, content: "download" }),
           filename: "Summary",

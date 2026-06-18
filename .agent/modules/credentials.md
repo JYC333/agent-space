@@ -17,8 +17,9 @@ state at runtime. Without credential management:
 ## Solution: CredentialBroker
 
 The `CredentialBroker` (`server/src/modules/providers/cliCredentialBroker.ts`) manages:
-- **Profile discovery** — reads `instance/config/cli-credentials.yaml` + auto-discovers `instance/secrets/cli-credentials/<runtime>/<name>/` directories.
-- **Grants** — before each run, the broker issues a `CredentialGrant` scoped to one profile.
+- **User-owned profiles** — `cli_credential_profiles` rows are owned by a user and point at managed filesystem login-state directories.
+- **Space grants** — `cli_credential_space_grants` makes a profile usable in a space; active-space grants carry `is_default` and `network_profile_id`.
+- **Grants** — before each run, the broker resolves an enabled active-space grant and issues a `CredentialGrant` scoped to one profile.
 - **Cleanup** — removes per-run temp HOME dirs after the run completes.
 - **Audit** — every grant, denied grant, or no-profile failure is recorded in `cli_credential_events`.
 
@@ -28,32 +29,32 @@ The `CredentialBroker` (`server/src/modules/providers/cliCredentialBroker.ts`) m
 instance/
 └── secrets/
     └── cli-credentials/
-        ├── claude_code/
-        │   └── default/      ← Claude Code login state (~/.claude contents)
-        ├── codex_cli/
-        │   └── default/      ← Codex login state (~/.codex contents)
-        └── opencode/
-            └── default/
+        └── users/
+            └── <owner_user_id>/
+                └── <runtime>/
+                    └── <profile_uuid>/
 ```
 
 This directory is private, not committed, and mounted via Docker Compose at `/app/instance`.
+Profiles use the per-user `users/<owner_user_id>/<runtime>/<profile_uuid>/`
+layout. Runtime/name filesystem profiles are not imported.
 
 ## Config File
 
-`instance/config/cli-credentials.yaml` maps runtimes to profile directories:
+CLI profile metadata lives in the database:
 
-```yaml
-profiles:
-  claude_code:
-    default:
-      source_path: "/app/instance/secrets/cli-credentials/claude_code/default"
-      target_path: "/home/agent/.claude"
-      readonly: false
-```
+| Table | Purpose |
+|---|---|
+| `cli_credential_profiles` | UUID profile, `owner_user_id`, runtime, display name, managed `source_path`, `target_path`, readonly flag, notes |
+| `cli_credential_space_grants` | profile-to-space grant, owner, grantor, enabled/default flags, grant-level `network_profile_id` |
 
-If a profile directory exists but is not listed in the config, the broker auto-discovers it.
 CLI runtimes do not fall back to the backend container's default HOME credentials.
 Manual and automation runs both require an explicit resolved profile.
+
+`network_profile_id` is grant-level metadata. It is used only when a CLI run
+does not bind to a ModelProvider. Provider-bound CLI runs use the selected
+provider grant's NetworkProfile because the server-side provider proxy owns
+upstream provider traffic.
 
 ## Execution Modes
 
@@ -66,15 +67,20 @@ git worktree. The broker:
 3. Sets `HOME=<run_id>/` in the subprocess environment
 
 The CLI finds its login state at the expected path without seeing the full container HOME.
+If the profile has a `network_profile_id` and the run has no provider binding,
+the server injects only `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and
+`NO_PROXY` env values derived from that NetworkProfile into the CLI subprocess.
+Provider API keys still never enter the subprocess env.
 
 ```
 /app/instance/cache/runtime-homes/<run_id>/
-├── .claude  →  /app/instance/secrets/cli-credentials/claude_code/default/
+├── .claude  →  /app/instance/secrets/cli-credentials/users/<owner_user_id>/claude_code/<profile_uuid>/
 └── (nothing else)
 ```
 
-If no explicit profile is resolved, runtime execution fails before the runtime adapter is
-invoked with `runtime_credential_profile_required`.
+If no explicit or active-space default profile grant is resolved, runtime
+execution fails before the runtime adapter is invoked with
+`runtime_credential_profile_required`.
 
 `one_shot_docker` is not implemented in this build. Critical-risk runs that
 require that sandbox level fail closed before runtime invocation.
@@ -82,18 +88,22 @@ require that sandbox level fail closed before runtime invocation.
 ## Initializing a Profile
 
 ```bash
-# Step 1: install the runtime tool through the server installer
+# Step 1: the configured INSTANCE_ADMIN_EMAIL user installs the runtime tool
+# through the server installer.
 curl -X POST localhost:3000/api/v1/runtime-tools/claude_code/install \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"version":"latest"}'
 
-# Step 2: run the managed login stream from the frontend or API.
-# The server launches the active runtime-tool binary and syncs the
-# resulting login state into:
-#   $AGENT_SPACE_HOME/secrets/cli-credentials/claude_code/default/
+# Step 2: a space owner/admin enables/selects the runtime version for the space
+# through /api/v1/runtime-tools/space-policy or the Runtime page.
 
-# Step 3: verify the broker sees it through the default server entrypoint
+# Step 3: run the managed login stream from the frontend or API.
+# The server launches the active runtime-tool binary and syncs the
+# resulting login state into the selected user-owned profile directory:
+#   $AGENT_SPACE_HOME/secrets/cli-credentials/users/<owner_user_id>/claude_code/<profile_uuid>/
+
+# Step 4: verify the broker sees it through the default server entrypoint
 curl localhost:3000/api/v1/credentials/cli/profiles?runtime=claude_code
 ```
 
@@ -129,9 +139,14 @@ No-profile failures use `credential_source="none"` and
 ## API
 
 ```
-GET  /api/v1/credentials/cli/profiles                 — list profiles (reloads from disk)
-GET  /api/v1/credentials/cli/profiles/{id}            — get one profile
-POST /api/v1/credentials/cli/profiles/{id}/detect     — check if source_path exists
+GET    /api/v1/credentials/cli/profiles                 — list profiles owned by current user
+GET    /api/v1/credentials/cli/available?runtime=...    — list active-space granted profiles, no source_path
+POST   /api/v1/credentials/cli/profiles                 — create an owned profile and grant it to the active space
+PUT    /api/v1/credentials/cli/profiles/{profile_id}/grants — grant owned profile to a space
+DELETE /api/v1/credentials/cli/profiles/{profile_id}/grants/{space_id} — disable a grant
+GET    /api/v1/credentials/cli/profiles/{profile_id}    — read an owned profile by UUID
+POST   /api/v1/credentials/cli/profiles/{profile_id}/detect — check if source_path exists
+PATCH  /api/v1/credentials/cli/profiles/{profile_id}    — update active-space grant metadata
 ```
 
 ## Related Files
@@ -142,6 +157,5 @@ POST /api/v1/credentials/cli/profiles/{id}/detect     — check if source_path e
 - `server/src/modules/runtimeAdapters/` — CredentialSpec/runtime spec semantics
 - `server/src/modules/runs/vendorCliAdapter.ts` — GenericCliRuntimeAdapter profile grant behavior
 - `server/src/modules/runs/` — runtime execution integration and credential mount
-- `server/migrations/` — CliCredentialEvent tables
-- `instance/config/cli-credentials.yaml` — profile config (private)
+- `server/migrations/` — CliCredentialEvent, profile, and grant tables
 - `instance/secrets/cli-credentials/` — credential directories (gitignored)

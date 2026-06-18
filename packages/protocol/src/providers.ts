@@ -14,7 +14,6 @@ export const PROVIDER_TYPE_VALUES = [
   "anthropic",
   "openrouter",
   "ollama",
-  "custom_openai_compatible",
   "other",
 ] as const;
 export type ProviderTypeValue = (typeof PROVIDER_TYPE_VALUES)[number];
@@ -35,15 +34,25 @@ export function isCredentialChannel(value: string): value is CredentialChannelVa
 export const ModelProviderDTOSchema = z
   .object({
     id: IdSchema,
+    /** Effective active space for this response. */
     space_id: IdSchema,
+    /** Home/creation space of the provider row. */
+    home_space_id: IdSchema.nullish(),
+    owner_user_id: IdSchema.nullish(),
+    grant_id: IdSchema.nullish(),
     name: z.string(),
     provider_type: z.string(),
-    base_url: z.string().nullish(),
+    base_url: z.string(),
+    network_profile_id: IdSchema.nullish(),
+    claude_compatible_base_url: z.string().nullish(),
+    openai_compatible_base_url: z.string().nullish(),
     default_model: z.string().nullish(),
     available_models: z.array(z.string()),
     enabled: z.boolean(),
     is_default: z.boolean(),
     has_api_key: z.boolean(),
+    manageable: z.boolean().optional(),
+    grant_enabled: z.boolean().optional(),
     created_at: ISODateTimeSchema,
     updated_at: ISODateTimeSchema,
     ...SecretResponseGuards,
@@ -58,7 +67,10 @@ export type ModelProviderDTO = z.infer<typeof ModelProviderDTOSchema>;
 export const ModelProviderCreateRequestSchema = z.object({
   name: z.string().min(1),
   provider_type: z.string().min(1),
-  base_url: z.string().nullish(),
+  base_url: z.string().min(1),
+  network_profile_id: IdSchema.nullish(),
+  claude_compatible_base_url: z.string().nullish(),
+  openai_compatible_base_url: z.string().nullish(),
   api_key: z.string().nullish(),
   default_model: z.string().nullish(),
   available_models: z.array(z.string()).optional(),
@@ -71,7 +83,10 @@ export type ModelProviderCreateRequest = z.infer<typeof ModelProviderCreateReque
 export const ModelProviderUpdateRequestSchema = z.object({
   name: z.string().min(1).optional(),
   provider_type: z.string().min(1).optional(),
-  base_url: z.string().nullish(),
+  base_url: z.string().min(1).optional(),
+  network_profile_id: IdSchema.nullish(),
+  claude_compatible_base_url: z.string().nullish(),
+  openai_compatible_base_url: z.string().nullish(),
   api_key: z.string().nullish(),
   default_model: z.string().nullish(),
   available_models: z.array(z.string()).optional(),
@@ -79,6 +94,35 @@ export const ModelProviderUpdateRequestSchema = z.object({
   is_default: z.boolean().optional(),
 });
 export type ModelProviderUpdateRequest = z.infer<typeof ModelProviderUpdateRequestSchema>;
+
+export const ModelProviderSpaceGrantRequestSchema = z.object({
+  space_id: IdSchema,
+  enabled: z.boolean().optional(),
+  is_default: z.boolean().optional(),
+  network_profile_id: IdSchema.nullish(),
+});
+export type ModelProviderSpaceGrantRequest = z.infer<
+  typeof ModelProviderSpaceGrantRequestSchema
+>;
+
+export const ModelProviderSpaceGrantDTOSchema = z
+  .object({
+    id: IdSchema,
+    provider_id: IdSchema,
+    space_id: IdSchema,
+    owner_user_id: IdSchema.nullish(),
+    granted_by_user_id: IdSchema.nullish(),
+    enabled: z.boolean(),
+    is_default: z.boolean(),
+    network_profile_id: IdSchema.nullish(),
+    created_at: ISODateTimeSchema,
+    updated_at: ISODateTimeSchema,
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ModelProviderSpaceGrantDTO = z.infer<
+  typeof ModelProviderSpaceGrantDTOSchema
+>;
 
 export const ModelProviderModelsResponseSchema = z.object({
   models: z.array(z.string()),
@@ -112,7 +156,7 @@ export const PROVIDER_CATALOG_INFO: ProviderCatalogInfo = {
   id: "litellm",
   name: "LiteLLM (Open Format)",
   description:
-    "Configure OpenAI, Anthropic, OpenRouter, Ollama, or custom OpenAI-compatible endpoints.",
+    "Configure OpenAI-compatible, Anthropic-compatible, OpenRouter, Ollama, or other endpoints.",
   model_hint: "Set default_model and/or available_models on the provider",
   supported_params: ["model", "temperature", "max_tokens", "system"],
 };

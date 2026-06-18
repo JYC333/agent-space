@@ -2,8 +2,10 @@ import type {
   Memory, Session, Message, Task,
   Capability, ContextPackage, Feature, Workspace, WorkspaceCreateBody, WorkspaceUpdateBody, Page,
   CapabilitiesReloadResult, ReflectResult, ApiError,
-  RuntimeToolDefinition, RuntimeToolInstallResult, RuntimeToolStatus, RuntimeToolLatest,
+  RuntimeToolDefinition, RuntimeToolInstallResult, RuntimeToolStatus, RuntimeToolLatest, SpaceRuntimeToolPolicyOut,
   CredentialLoginMethod, CredentialStatus, CliUsageEntry, CliUsageAutoRefreshSettings, LoginEvent,
+  NetworkProfileOut, NetworkProfileCreateBody, NetworkProfileUpdateBody, CliCredentialProfileOut,
+  CliCredentialAvailableProfileOut,
   CurrentUser, SpaceWithMembership, SpaceMember, SpaceInvitationOut,
   Job, JobEvent, ActivityInboxRecord,
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
@@ -569,6 +571,11 @@ export const runtimeToolsApi = {
   list: () => get<RuntimeToolStatus[]>('/runtime-tools'),
   get: (runtime: string) => get<RuntimeToolStatus>(`/runtime-tools/${encodeURIComponent(runtime)}`),
   latest: (runtime: string) => get<RuntimeToolLatest>(`/runtime-tools/${encodeURIComponent(runtime)}/latest`),
+  spacePolicies: () => get<SpaceRuntimeToolPolicyOut[]>('/runtime-tools/space-policy'),
+  spacePolicy: (runtime: string) =>
+    get<SpaceRuntimeToolPolicyOut>(`/runtime-tools/space-policy/${encodeURIComponent(runtime)}`),
+  updateSpacePolicy: (runtime: string, data: { enabled?: boolean; default_version?: string | null; allowed_versions?: string[] }) =>
+    put<SpaceRuntimeToolPolicyOut>(`/runtime-tools/space-policy/${encodeURIComponent(runtime)}`, data),
   install: (runtime: string, data: { version?: string | null; activate?: boolean; force?: boolean } = {}) =>
     post<RuntimeToolInstallResult>(`/runtime-tools/${encodeURIComponent(runtime)}/install`, data),
   activate: (runtime: string, version: string) =>
@@ -577,20 +584,75 @@ export const runtimeToolsApi = {
 
 // ── Credentials / Login ───────────────────────────────────────────────────
 export const credentialsApi = {
-  methods: () => get<CredentialLoginMethod[]>('/credentials/cli/methods'),
-  status:  () => get<CredentialStatus[]>('/credentials/cli/status'),
-  usage:   () => get<CliUsageEntry[]>('/credentials/cli/usage'),
-  usageAutoRefresh: () => get<CliUsageAutoRefreshSettings>('/credentials/cli/usage/auto-refresh'),
-  setUsageAutoRefresh: (enabled: boolean) =>
-    put<CliUsageAutoRefreshSettings>('/credentials/cli/usage/auto-refresh', { enabled }),
-  refreshUsage: (runtime: string) =>
-    post<CliUsageEntry>(`/credentials/cli/usage/refresh?runtime=${encodeURIComponent(runtime)}`, {}),
+  profiles: (runtime?: string, spaceId?: string | null) =>
+    get<CliCredentialProfileOut[]>(
+      '/credentials/cli/profiles' + (runtime ? `?runtime=${encodeURIComponent(runtime)}` : ''),
+      spaceId ? { spaceId } : undefined,
+    ),
+  available: (runtime?: string, spaceId?: string | null) =>
+    get<CliCredentialAvailableProfileOut[]>(
+      '/credentials/cli/available' + (runtime ? `?runtime=${encodeURIComponent(runtime)}` : ''),
+      spaceId ? { spaceId } : undefined,
+    ),
+  createProfile: (body: {
+    runtime: string
+    name: string
+    readonly?: boolean
+    notes?: string
+    network_profile_id?: string | null
+    is_default?: boolean
+  }, spaceId?: string | null) => post<CliCredentialProfileOut>(
+    '/credentials/cli/profiles',
+    body,
+    spaceId ? { spaceId } : undefined,
+  ),
+  grantProfile: (profileId: string, body: {
+    space_id: string
+    enabled?: boolean
+    is_default?: boolean
+    network_profile_id?: string | null
+  }, spaceId?: string | null) => put(
+    `/credentials/cli/profiles/${encodeURIComponent(profileId)}/grants`,
+    body,
+    spaceId ? { spaceId } : undefined,
+  ),
+  updateProfile: (profileId: string, body: { network_profile_id?: string | null }, spaceId?: string | null) =>
+    patch<CliCredentialProfileOut>(
+      `/credentials/cli/profiles/${encodeURIComponent(profileId)}`,
+      body,
+      spaceId ? { spaceId } : undefined,
+    ),
+  methods: (spaceId?: string | null) =>
+    get<CredentialLoginMethod[]>('/credentials/cli/methods', spaceId ? { spaceId } : undefined),
+  status: (spaceId?: string | null) =>
+    get<CredentialStatus[]>('/credentials/cli/status', spaceId ? { spaceId } : undefined),
+  usage: (spaceId?: string | null) =>
+    get<CliUsageEntry[]>('/credentials/cli/usage', spaceId ? { spaceId } : undefined),
+  usageAutoRefresh: (spaceId?: string | null) =>
+    get<CliUsageAutoRefreshSettings>('/credentials/cli/usage/auto-refresh', spaceId ? { spaceId } : undefined),
+  setUsageAutoRefresh: (enabled: boolean, spaceId?: string | null) =>
+    put<CliUsageAutoRefreshSettings>(
+      '/credentials/cli/usage/auto-refresh',
+      { enabled },
+      spaceId ? { spaceId } : undefined,
+    ),
+  refreshUsage: (runtime: string, profileId?: string | null, spaceId?: string | null) =>
+    post<CliUsageEntry>(
+      `/credentials/cli/usage/refresh?runtime=${encodeURIComponent(runtime)}${profileId ? `&profile_id=${encodeURIComponent(profileId)}` : ''}`,
+      {},
+      spaceId ? { spaceId } : undefined,
+    ),
 
-  sendLoginInput: (runtime: string, input: string) =>
-    post<{ status: string }>(`/credentials/cli/login/input?runtime=${encodeURIComponent(runtime)}`, { input }),
+  sendLoginInput: (runtime: string, input: string, profileId?: string | null, spaceId?: string | null) =>
+    post<{ status: string }>(
+      `/credentials/cli/login/input?runtime=${encodeURIComponent(runtime)}`,
+      profileId ? { input, profile_id: profileId } : { input },
+      spaceId ? { spaceId } : undefined,
+    ),
 
-  async *loginStream(runtime: string): AsyncGenerator<LoginEvent> {
-    const url = `${BASE}/credentials/cli/login/stream?runtime=${encodeURIComponent(runtime)}&${spaceParams()}`
+  async *loginStream(runtime: string, profileId?: string | null, spaceId?: string | null): AsyncGenerator<LoginEvent> {
+    const profileParam = profileId ? `&profile_id=${encodeURIComponent(profileId)}` : ''
+    const url = `${BASE}/credentials/cli/login/stream?runtime=${encodeURIComponent(runtime)}${profileParam}&${spaceParams(spaceId ?? _spaceId)}`
     const headers: Record<string, string> = {}
     if (_apiKey) headers['Authorization'] = `Bearer ${_apiKey}`
 
@@ -616,6 +678,15 @@ export const credentialsApi = {
       }
     }
   },
+}
+
+export const networkProfilesApi = {
+  list: () => get<NetworkProfileOut[]>('/network-profiles'),
+  get: (id: string) => get<NetworkProfileOut>(`/network-profiles/${encodeURIComponent(id)}`),
+  create: (body: NetworkProfileCreateBody) => post<NetworkProfileOut>('/network-profiles', body),
+  patch: (id: string, body: NetworkProfileUpdateBody) =>
+    patch<NetworkProfileOut>(`/network-profiles/${encodeURIComponent(id)}`, body),
+  delete: (id: string) => del<void>(`/network-profiles/${encodeURIComponent(id)}`),
 }
 
 // ── Jobs ──────────────────────────────────────────────────────────────────
@@ -892,20 +963,27 @@ export type ProviderType =
   | 'anthropic'
   | 'openrouter'
   | 'ollama'
-  | 'custom_openai_compatible'
   | 'other'
 
 export interface ModelProviderOut {
   id: string
   space_id: string
+  home_space_id?: string
+  owner_user_id?: string | null
+  grant_id?: string | null
   name: string
   provider_type: ProviderType | string
-  base_url: string | null
+  base_url: string
+  network_profile_id: string | null
+  claude_compatible_base_url: string | null
+  openai_compatible_base_url: string | null
   default_model: string | null
   available_models: string[]
   enabled: boolean
   is_default: boolean
   has_api_key: boolean
+  manageable?: boolean
+  grant_enabled?: boolean
   created_at: string
   updated_at: string
 }
@@ -955,7 +1033,10 @@ export const providersApi = {
     api_key?: string
     default_model?: string
     available_models?: string[]
-    base_url?: string
+    base_url: string
+    network_profile_id?: string | null
+    claude_compatible_base_url?: string
+    openai_compatible_base_url?: string
     enabled?: boolean
     is_default?: boolean
   }) => post<ModelProviderOut>('/providers', data),
@@ -967,6 +1048,9 @@ export const providersApi = {
     default_model: string
     available_models: string[]
     base_url: string
+    network_profile_id: string | null
+    claude_compatible_base_url: string | null
+    openai_compatible_base_url: string | null
     enabled: boolean
     is_default: boolean
   }>) => patch<ModelProviderOut>(`/providers/${id}`, data),
@@ -976,6 +1060,13 @@ export const providersApi = {
   models: (id: string) => get<ModelProviderModelsOut>(`/providers/${id}/models`),
 
   test: (id: string) => post<TestConnectionOut>(`/providers/${id}/test`, {}),
+
+  grant: (id: string, data: {
+    space_id: string
+    enabled?: boolean
+    is_default?: boolean
+    network_profile_id?: string | null
+  }) => put(`/providers/${encodeURIComponent(id)}/grants`, data),
 
   catalog: () => get<CatalogInfo>('/providers/catalog'),
 

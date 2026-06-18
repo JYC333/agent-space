@@ -472,6 +472,42 @@ CREATE TABLE public.cli_credential_events (
 
 
 --
+-- Name: cli_credential_profiles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cli_credential_profiles (
+    id character varying(36) NOT NULL,
+    owner_user_id character varying(36) NOT NULL,
+    runtime character varying(64) NOT NULL,
+    name character varying(128) NOT NULL,
+    source_path text NOT NULL,
+    target_path text NOT NULL,
+    readonly boolean NOT NULL,
+    notes text NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: cli_credential_space_grants; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cli_credential_space_grants (
+    id character varying(36) NOT NULL,
+    profile_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36) NOT NULL,
+    granted_by_user_id character varying(36),
+    enabled boolean NOT NULL,
+    is_default boolean NOT NULL,
+    network_profile_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
+
+--
 -- Name: context_digests; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -570,6 +606,7 @@ CREATE TABLE public.context_snapshots (
 CREATE TABLE public.credentials (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
     name character varying(256) NOT NULL,
     credential_type character varying(64) NOT NULL,
     secret_ref text NOT NULL,
@@ -1123,6 +1160,24 @@ CREATE TABLE public.messages (
 
 
 --
+-- Name: network_profiles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.network_profiles (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    name character varying(128) NOT NULL,
+    mode character varying(32) NOT NULL,
+    proxy_url character varying(512),
+    no_proxy text,
+    enabled boolean NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_network_profiles_mode CHECK (((mode)::text = ANY ((ARRAY['direct'::character varying, 'http_proxy'::character varying])::text[])))
+);
+
+
+--
 -- Name: model_provider_credentials; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1152,14 +1207,34 @@ CREATE TABLE public.model_provider_credentials (
 CREATE TABLE public.model_providers (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
     name character varying(128) NOT NULL,
     provider_type character varying(64) NOT NULL,
     base_url character varying(512),
+    network_profile_id character varying(36),
     default_model character varying(256),
     enabled boolean NOT NULL,
     credential_id character varying(36),
     capabilities_json jsonb NOT NULL,
     config_json jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: model_provider_space_grants; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.model_provider_space_grants (
+    id character varying(36) NOT NULL,
+    provider_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
+    granted_by_user_id character varying(36),
+    enabled boolean NOT NULL,
+    is_default boolean NOT NULL,
+    network_profile_id character varying(36),
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL
 );
@@ -1911,6 +1986,23 @@ CREATE TABLE public.space_assistant_settings (
 
 
 --
+-- Name: space_runtime_tool_policies; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.space_runtime_tool_policies (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    runtime character varying(64) NOT NULL,
+    enabled boolean DEFAULT false NOT NULL,
+    default_version character varying(128),
+    allowed_versions_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    updated_by_user_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
+
+--
 -- Name: space_invitations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2421,6 +2513,22 @@ ALTER TABLE ONLY public.cli_credential_events
 
 
 --
+-- Name: cli_credential_profiles cli_credential_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cli_credential_profiles
+    ADD CONSTRAINT cli_credential_profiles_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: cli_credential_space_grants cli_credential_space_grants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cli_credential_space_grants
+    ADD CONSTRAINT cli_credential_space_grants_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: context_digests context_digests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2605,11 +2713,27 @@ ALTER TABLE ONLY public.messages
 
 
 --
+-- Name: network_profiles network_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.network_profiles
+    ADD CONSTRAINT network_profiles_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: model_provider_credentials model_provider_credentials_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.model_provider_credentials
     ADD CONSTRAINT model_provider_credentials_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: model_provider_space_grants model_provider_space_grants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_provider_space_grants
+    ADD CONSTRAINT model_provider_space_grants_pkey PRIMARY KEY (id);
 
 
 --
@@ -2869,6 +2993,14 @@ ALTER TABLE ONLY public.space_assistant_settings
 
 
 --
+-- Name: space_runtime_tool_policies space_runtime_tool_policies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_runtime_tool_policies
+    ADD CONSTRAINT space_runtime_tool_policies_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: space_invitations space_invitations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2997,11 +3129,35 @@ ALTER TABLE ONLY public.execution_planes
 
 
 --
+-- Name: cli_credential_profiles uq_cli_credential_profiles_owner_runtime_name; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cli_credential_profiles
+    ADD CONSTRAINT uq_cli_credential_profiles_owner_runtime_name UNIQUE (owner_user_id, runtime, name);
+
+
+--
+-- Name: cli_credential_space_grants uq_cli_credential_space_grants_profile_space; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cli_credential_space_grants
+    ADD CONSTRAINT uq_cli_credential_space_grants_profile_space UNIQUE (profile_id, space_id);
+
+
+--
 -- Name: model_provider_credentials uq_model_provider_credentials_provider_credential; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.model_provider_credentials
     ADD CONSTRAINT uq_model_provider_credentials_provider_credential UNIQUE (provider_id, credential_id);
+
+
+--
+-- Name: model_provider_space_grants uq_model_provider_space_grants_provider_space; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_provider_space_grants
+    ADD CONSTRAINT uq_model_provider_space_grants_provider_space UNIQUE (provider_id, space_id);
 
 
 --
@@ -3066,6 +3222,14 @@ ALTER TABLE ONLY public.session_summaries
 
 ALTER TABLE ONLY public.space_assistant_settings
     ADD CONSTRAINT uq_space_assistant_settings_space_id UNIQUE (space_id);
+
+
+--
+-- Name: space_runtime_tool_policies uq_space_runtime_tool_policies_space_runtime; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_runtime_tool_policies
+    ADD CONSTRAINT uq_space_runtime_tool_policies_space_runtime UNIQUE (space_id, runtime);
 
 
 --
@@ -3884,6 +4048,41 @@ CREATE INDEX ix_cli_credential_events_space_id ON public.cli_credential_events U
 
 
 --
+-- Name: ix_cli_credential_profiles_owner_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_cli_credential_profiles_owner_user_id ON public.cli_credential_profiles USING btree (owner_user_id);
+
+
+--
+-- Name: ix_cli_credential_profiles_runtime; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_cli_credential_profiles_runtime ON public.cli_credential_profiles USING btree (runtime);
+
+
+--
+-- Name: ix_cli_credential_space_grants_network_profile_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_cli_credential_space_grants_network_profile_id ON public.cli_credential_space_grants USING btree (network_profile_id);
+
+
+--
+-- Name: ix_cli_credential_space_grants_owner_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_cli_credential_space_grants_owner_user_id ON public.cli_credential_space_grants USING btree (owner_user_id);
+
+
+--
+-- Name: ix_cli_credential_space_grants_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_cli_credential_space_grants_space_id ON public.cli_credential_space_grants USING btree (space_id);
+
+
+--
 -- Name: ix_context_digests_digest_type; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3972,6 +4171,13 @@ CREATE INDEX ix_context_snapshots_space_id ON public.context_snapshots USING btr
 --
 
 CREATE INDEX ix_credentials_space_id ON public.credentials USING btree (space_id);
+
+
+--
+-- Name: ix_credentials_owner_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_credentials_owner_user_id ON public.credentials USING btree (owner_user_id);
 
 
 --
@@ -5081,6 +5287,13 @@ CREATE INDEX ix_messages_user_id ON public.messages USING btree (user_id);
 
 
 --
+-- Name: ix_network_profiles_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_network_profiles_space_id ON public.network_profiles USING btree (space_id);
+
+
+--
 -- Name: ix_model_provider_credentials_provider_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5095,10 +5308,45 @@ CREATE INDEX ix_model_provider_credentials_space_id ON public.model_provider_cre
 
 
 --
+-- Name: ix_model_provider_space_grants_network_profile_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_model_provider_space_grants_network_profile_id ON public.model_provider_space_grants USING btree (network_profile_id);
+
+
+--
+-- Name: ix_model_provider_space_grants_owner_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_model_provider_space_grants_owner_user_id ON public.model_provider_space_grants USING btree (owner_user_id);
+
+
+--
+-- Name: ix_model_provider_space_grants_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_model_provider_space_grants_space_id ON public.model_provider_space_grants USING btree (space_id);
+
+
+--
 -- Name: ix_model_providers_credential_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX ix_model_providers_credential_id ON public.model_providers USING btree (credential_id);
+
+
+--
+-- Name: ix_model_providers_network_profile_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_model_providers_network_profile_id ON public.model_providers USING btree (network_profile_id);
+
+
+--
+-- Name: ix_model_providers_owner_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_model_providers_owner_user_id ON public.model_providers USING btree (owner_user_id);
 
 
 --
@@ -6348,6 +6596,27 @@ CREATE INDEX ix_space_invitations_status ON public.space_invitations USING btree
 
 
 --
+-- Name: ix_space_runtime_tool_policies_runtime; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_runtime_tool_policies_runtime ON public.space_runtime_tool_policies USING btree (runtime);
+
+
+--
+-- Name: ix_space_runtime_tool_policies_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_runtime_tool_policies_space_id ON public.space_runtime_tool_policies USING btree (space_id);
+
+
+--
+-- Name: ix_space_runtime_tool_policies_updated_by_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_runtime_tool_policies_updated_by_user_id ON public.space_runtime_tool_policies USING btree (updated_by_user_id);
+
+
+--
 -- Name: ix_space_memberships_space_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7177,6 +7446,54 @@ ALTER TABLE ONLY public.cli_credential_events
 
 
 --
+-- Name: cli_credential_profiles cli_credential_profiles_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cli_credential_profiles
+    ADD CONSTRAINT cli_credential_profiles_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: cli_credential_space_grants cli_credential_space_grants_granted_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cli_credential_space_grants
+    ADD CONSTRAINT cli_credential_space_grants_granted_by_user_id_fkey FOREIGN KEY (granted_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: cli_credential_space_grants cli_credential_space_grants_network_profile_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cli_credential_space_grants
+    ADD CONSTRAINT cli_credential_space_grants_network_profile_id_fkey FOREIGN KEY (network_profile_id) REFERENCES public.network_profiles(id) ON DELETE SET NULL;
+
+
+--
+-- Name: cli_credential_space_grants cli_credential_space_grants_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cli_credential_space_grants
+    ADD CONSTRAINT cli_credential_space_grants_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: cli_credential_space_grants cli_credential_space_grants_profile_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cli_credential_space_grants
+    ADD CONSTRAINT cli_credential_space_grants_profile_id_fkey FOREIGN KEY (profile_id) REFERENCES public.cli_credential_profiles(id) ON DELETE CASCADE;
+
+
+--
+-- Name: cli_credential_space_grants cli_credential_space_grants_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cli_credential_space_grants
+    ADD CONSTRAINT cli_credential_space_grants_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
+
+
+--
 -- Name: context_digests context_digests_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7206,6 +7523,14 @@ ALTER TABLE ONLY public.context_snapshots
 
 ALTER TABLE ONLY public.credentials
     ADD CONSTRAINT credentials_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: credentials credentials_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.credentials
+    ADD CONSTRAINT credentials_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
 
 
 --
@@ -8113,6 +8438,14 @@ ALTER TABLE ONLY public.messages
 
 
 --
+-- Name: network_profiles network_profiles_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.network_profiles
+    ADD CONSTRAINT network_profiles_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
 -- Name: model_provider_credentials model_provider_credentials_credential_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8137,11 +8470,67 @@ ALTER TABLE ONLY public.model_provider_credentials
 
 
 --
+-- Name: model_provider_space_grants model_provider_space_grants_granted_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_provider_space_grants
+    ADD CONSTRAINT model_provider_space_grants_granted_by_user_id_fkey FOREIGN KEY (granted_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: model_provider_space_grants model_provider_space_grants_network_profile_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_provider_space_grants
+    ADD CONSTRAINT model_provider_space_grants_network_profile_id_fkey FOREIGN KEY (network_profile_id) REFERENCES public.network_profiles(id) ON DELETE SET NULL;
+
+
+--
+-- Name: model_provider_space_grants model_provider_space_grants_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_provider_space_grants
+    ADD CONSTRAINT model_provider_space_grants_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: model_provider_space_grants model_provider_space_grants_provider_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_provider_space_grants
+    ADD CONSTRAINT model_provider_space_grants_provider_id_fkey FOREIGN KEY (provider_id) REFERENCES public.model_providers(id) ON DELETE CASCADE;
+
+
+--
+-- Name: model_provider_space_grants model_provider_space_grants_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_provider_space_grants
+    ADD CONSTRAINT model_provider_space_grants_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
+
+
+--
 -- Name: model_providers model_providers_credential_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.model_providers
     ADD CONSTRAINT model_providers_credential_id_fkey FOREIGN KEY (credential_id) REFERENCES public.credentials(id);
+
+
+--
+-- Name: model_providers model_providers_network_profile_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_providers
+    ADD CONSTRAINT model_providers_network_profile_id_fkey FOREIGN KEY (network_profile_id) REFERENCES public.network_profiles(id) ON DELETE SET NULL;
+
+
+--
+-- Name: model_providers model_providers_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_providers
+    ADD CONSTRAINT model_providers_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
 
 
 --
@@ -8942,6 +9331,22 @@ ALTER TABLE ONLY public.sources
 
 ALTER TABLE ONLY public.space_assistant_settings
     ADD CONSTRAINT space_assistant_settings_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: space_runtime_tool_policies space_runtime_tool_policies_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_runtime_tool_policies
+    ADD CONSTRAINT space_runtime_tool_policies_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
+
+
+--
+-- Name: space_runtime_tool_policies space_runtime_tool_policies_updated_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_runtime_tool_policies
+    ADD CONSTRAINT space_runtime_tool_policies_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
 
 
 --

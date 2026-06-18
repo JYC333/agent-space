@@ -5,6 +5,7 @@ import {
   access,
   lstat,
   mkdir,
+  readdir,
   readFile,
   readlink,
   rename,
@@ -50,6 +51,16 @@ export interface RuntimeToolStatus {
   executable_path: string | null;
   executable_exists: boolean;
   manifest: RuntimeToolManifest | null;
+  installed_versions: RuntimeToolInstalledVersion[];
+  warnings: string[];
+}
+
+export interface RuntimeToolInstalledVersion {
+  version: string;
+  installed: boolean;
+  executable_path: string | null;
+  executable_exists: boolean;
+  manifest: RuntimeToolManifest | null;
   warnings: string[];
 }
 
@@ -79,7 +90,7 @@ export interface ResolvedRuntimeTool {
 }
 
 export interface RuntimeToolResolverPort {
-  resolveForExecution(runtime: string): Promise<ResolvedRuntimeTool>;
+  resolveForExecution(runtime: string, version?: string | null): Promise<ResolvedRuntimeTool>;
 }
 
 export interface RuntimeToolInstallRunner {
@@ -114,6 +125,34 @@ const NPM_INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
 const LATEST_VERSION_TIMEOUT_MS = 10_000;
 const VERSION_REF_RE = /^[A-Za-z0-9_.@+-]+$/;
 const COMPONENT_RE = /^[A-Za-z0-9_.-]+$/;
+const NPM_NETWORK_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+  "NPM_CONFIG_PROXY",
+  "NPM_CONFIG_HTTPS_PROXY",
+  "NPM_CONFIG_NOPROXY",
+  "NPM_CONFIG_REGISTRY",
+  "NPM_CONFIG_STRICT_SSL",
+  "NPM_CONFIG_CAFILE",
+  "NPM_CONFIG_FETCH_RETRIES",
+  "NPM_CONFIG_FETCH_RETRY_MINTIMEOUT",
+  "NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT",
+  "npm_config_proxy",
+  "npm_config_https_proxy",
+  "npm_config_noproxy",
+  "npm_config_registry",
+  "npm_config_strict_ssl",
+  "npm_config_cafile",
+  "npm_config_fetch_retries",
+  "npm_config_fetch_retry_mintimeout",
+  "npm_config_fetch_retry_maxtimeout",
+] as const;
 
 export class RuntimeToolError extends Error {
   constructor(
@@ -191,6 +230,37 @@ async function executableExists(path: string): Promise<boolean> {
   }
 }
 
+async function fileSize(path: string): Promise<number | null> {
+  try {
+    const stat = await lstat(path);
+    return stat.isFile() ? stat.size : null;
+  } catch {
+    return null;
+  }
+}
+
+async function claudePlacedBinaryReady(prefix: string): Promise<boolean> {
+  const size = await fileSize(claudePlacedBinaryPath(prefix));
+  return size !== null && size > 4096;
+}
+
+async function runtimeToolVersionReady(
+  definition: RuntimeToolDefinition,
+  versionRoot: string,
+): Promise<boolean> {
+  if (!(await executableExists(resolve(versionRoot, definition.bin_relative_path)))) {
+    return false;
+  }
+  const nativePackagePath = nativeOptionalPackagePath(definition, versionRoot);
+  if (nativePackagePath && !(await exists(nativePackagePath))) {
+    return false;
+  }
+  if (definition.runtime === "claude_code" && !(await claudePlacedBinaryReady(versionRoot))) {
+    return false;
+  }
+  return true;
+}
+
 function isWithinRoot(root: string, candidate: string): boolean {
   const rel = relative(resolve(root), resolve(candidate));
   return rel === "" || (!rel.startsWith("..") && !rel.startsWith("/"));
@@ -215,11 +285,73 @@ function codexNativePackageName(): string | null {
   return null;
 }
 
-function codexNativePackagePath(versionRoot: string): string | null {
-  const packageName = codexNativePackageName();
-  if (!packageName) return null;
+function claudeNativePackageName(): string | null {
+  if (process.platform === "linux") {
+    if (process.arch === "x64") {
+      return isMuslRuntime()
+        ? "@anthropic-ai/claude-code-linux-x64-musl"
+        : "@anthropic-ai/claude-code-linux-x64";
+    }
+    if (process.arch === "arm64") {
+      return isMuslRuntime()
+        ? "@anthropic-ai/claude-code-linux-arm64-musl"
+        : "@anthropic-ai/claude-code-linux-arm64";
+    }
+  }
+  if (process.platform === "darwin") {
+    if (process.arch === "x64") return "@anthropic-ai/claude-code-darwin-x64";
+    if (process.arch === "arm64") return "@anthropic-ai/claude-code-darwin-arm64";
+  }
+  if (process.platform === "win32") {
+    if (process.arch === "x64") return "@anthropic-ai/claude-code-win32-x64";
+    if (process.arch === "arm64") return "@anthropic-ai/claude-code-win32-arm64";
+  }
+  return null;
+}
+
+function isMuslRuntime(): boolean {
+  if (process.platform !== "linux") return false;
+  const report = typeof process.report?.getReport === "function"
+    ? process.report.getReport()
+    : null;
+  const header = report && typeof report === "object"
+    ? (report as { header?: { glibcVersionRuntime?: string } }).header
+    : undefined;
+  return Boolean(header && !header.glibcVersionRuntime);
+}
+
+function nativeOptionalPackageName(definition: RuntimeToolDefinition): string | null {
+  if (definition.runtime === "codex_cli") return codexNativePackageName();
+  if (definition.runtime === "claude_code") return claudeNativePackageName();
+  return null;
+}
+
+function packageInstallPath(prefix: string, packageName: string): string {
   const [scope, name] = packageName.split("/");
-  return join(versionRoot, "node_modules", scope, name);
+  return name
+    ? join(prefix, "node_modules", scope, name)
+    : join(prefix, "node_modules", packageName);
+}
+
+function nativeOptionalPackagePath(
+  definition: RuntimeToolDefinition,
+  versionRoot: string,
+): string | null {
+  const packageName = nativeOptionalPackageName(definition);
+  if (!packageName) return null;
+  return packageInstallPath(versionRoot, packageName);
+}
+
+function claudeWrapperPackagePath(prefix: string): string {
+  return join(prefix, "node_modules", "@anthropic-ai", "claude-code");
+}
+
+function claudePostinstallPath(prefix: string): string {
+  return join(claudeWrapperPackagePath(prefix), "install.cjs");
+}
+
+function claudePlacedBinaryPath(prefix: string): string {
+  return join(claudeWrapperPackagePath(prefix), "bin", "claude.exe");
 }
 
 async function readJsonFile<T>(path: string): Promise<T | null> {
@@ -228,6 +360,22 @@ async function readJsonFile<T>(path: string): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+export function npmInstallEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const safe: Record<string, string> = {};
+  for (const key of ["PATH", "HOME", "LANG", "TERM"]) {
+    const value = source[key];
+    if (value) safe[key] = value;
+  }
+  for (const [key, value] of Object.entries(source)) {
+    if (value && key.startsWith("LC_")) safe[key] = value;
+  }
+  for (const key of NPM_NETWORK_ENV_KEYS) {
+    const value = source[key];
+    if (value) safe[key] = value;
+  }
+  return safe;
 }
 
 async function runNpmInstall(input: {
@@ -244,18 +392,14 @@ async function runNpmInstall(input: {
     "--include=optional",
     "--no-audit",
     "--no-fund",
+    "--fetch-retries=5",
+    "--fetch-retry-mintimeout=10000",
+    "--fetch-retry-maxtimeout=120000",
     "--cache",
     input.cache_dir,
     input.package_ref,
   ];
-  const safeEnv: Record<string, string> = {};
-  for (const key of ["PATH", "HOME", "LANG", "TERM"]) {
-    const value = process.env[key];
-    if (value) safeEnv[key] = value;
-  }
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value && key.startsWith("LC_")) safeEnv[key] = value;
-  }
+  const safeEnv = npmInstallEnv();
   await new Promise<void>((resolvePromise, reject) => {
     let output = "";
     let settled = false;
@@ -310,6 +454,62 @@ async function runNpmInstall(input: {
   });
 }
 
+async function runNodePostinstall(scriptPath: string, cwd: string): Promise<void> {
+  await new Promise<void>((resolvePromise, reject) => {
+    let output = "";
+    let settled = false;
+    let proc;
+    try {
+      proc = spawn(process.execPath, [scriptPath], {
+        cwd,
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: npmInstallEnv(),
+      });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      proc.kill("SIGKILL");
+      reject(
+        new RuntimeToolError(
+          "runtime_tool_postinstall_timeout",
+          "Runtime tool postinstall timed out.",
+          504,
+        ),
+      );
+    }, NPM_INSTALL_TIMEOUT_MS);
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      output = boundedAppend(output, chunk);
+    });
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      output = boundedAppend(output, chunk);
+    });
+    proc.on("error", (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    proc.on("close", (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) return resolvePromise();
+      reject(
+        new RuntimeToolError(
+          "runtime_tool_postinstall_failed",
+          output.trim() || `postinstall exited with ${code ?? -1}.`,
+          502,
+        ),
+      );
+    });
+  });
+}
+
 export class RuntimeToolRegistry implements RuntimeToolResolverPort {
   constructor(
     private readonly config: ServerConfig,
@@ -329,6 +529,7 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
     const root = this.runtimeRoot(definition.runtime);
     const activePath = join(root, "active");
     const warnings: string[] = [];
+    const installedVersions = await this.listInstalledVersions(runtime);
     let activeVersion: string | null = null;
     let manifest: RuntimeToolManifest | null = null;
     let executablePath: string | null = null;
@@ -357,6 +558,7 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
             executable_path: null,
             executable_exists: false,
             manifest: null,
+            installed_versions: installedVersions,
             warnings,
           };
         }
@@ -365,12 +567,15 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
         executablePath = resolve(versionRoot, definition.bin_relative_path);
         executableOk = await executableExists(executablePath);
         if (!executableOk) warnings.push("active executable is missing or not executable");
-        const nativePackagePath = definition.runtime === "codex_cli"
-          ? codexNativePackagePath(versionRoot)
-          : null;
+        const nativePackageName = nativeOptionalPackageName(definition);
+        const nativePackagePath = nativeOptionalPackagePath(definition, versionRoot);
         if (nativePackagePath && !(await exists(nativePackagePath))) {
           executableOk = false;
-          warnings.push(`${codexNativePackageName()} is missing; reinstall the Codex runtime tool.`);
+          warnings.push(`${nativePackageName} is missing; reinstall the ${definition.label} runtime tool.`);
+        }
+        if (definition.runtime === "claude_code" && !(await claudePlacedBinaryReady(versionRoot))) {
+          executableOk = false;
+          warnings.push("Claude native binary is missing; reinstall the Claude Code runtime tool.");
         }
       }
     } catch (error) {
@@ -389,8 +594,28 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
       executable_path: executablePath,
       executable_exists: executableOk,
       manifest,
+      installed_versions: installedVersions,
       warnings,
     };
+  }
+
+  async listInstalledVersions(runtime: string): Promise<RuntimeToolInstalledVersion[]> {
+    const definition = definitionFor(runtime);
+    const versionsRoot = join(this.runtimeRoot(definition.runtime), "versions");
+    let entries: string[];
+    try {
+      entries = await readdir(versionsRoot);
+    } catch (error) {
+      if ((error as { code?: string }).code === "ENOENT") return [];
+      throw error;
+    }
+    const versions = await Promise.all(
+      entries
+        .filter((entry) => COMPONENT_RE.test(entry))
+        .sort()
+        .map((version) => this.installedVersionStatus(definition, version)),
+    );
+    return versions;
   }
 
   /**
@@ -433,8 +658,35 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
     }
   }
 
-  async resolveForExecution(runtime: string): Promise<ResolvedRuntimeTool> {
+  async resolveForExecution(runtime: string, version?: string | null): Promise<ResolvedRuntimeTool> {
     const definition = definitionFor(runtime);
+    if (version?.trim()) {
+      const cleanVersion = cleanComponent(version.trim(), "version");
+      const versionStatus = await this.installedVersionStatus(definition, cleanVersion);
+      if (!versionStatus.installed || !versionStatus.executable_path) {
+        throw new RuntimeToolError(
+          "runtime_tool_version_not_installed",
+          `Runtime tool '${runtime}' version '${cleanVersion}' is not installed.`,
+          409,
+        );
+      }
+      const root = this.runtimeRoot(runtime);
+      const resolved = resolve(versionStatus.executable_path);
+      if (!isWithinRoot(root, resolved)) {
+        throw new RuntimeToolError(
+          "runtime_tool_path_escape",
+          "Runtime tool executable escapes its installation root.",
+          500,
+        );
+      }
+      return {
+        runtime,
+        executable_path: resolved,
+        version: cleanVersion,
+        source: definition.source,
+        package_name: definition.package_name,
+      };
+    }
     const status = await this.status(runtime);
     if (!status.installed || !status.executable_path || !status.active_version) {
       throw new RuntimeToolError(
@@ -474,7 +726,10 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
         prefix: tmpDir,
         cache_dir: join(this.config.agentSpaceHome, "cache", "npm"),
       });
-      const packageJson = await readJsonFile<{ version?: string }>(
+      const packageJson = await readJsonFile<{
+        version?: string;
+        optionalDependencies?: Record<string, string>;
+      }>(
         join(tmpDir, definition.package_json_relative_path),
       );
       const installedVersion = cleanComponent(
@@ -489,19 +744,30 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
           502,
         );
       }
-      const nativePackagePath = definition.runtime === "codex_cli"
-        ? codexNativePackagePath(tmpDir)
-        : null;
+      await this.ensureNativeOptionalPackage(
+        definition,
+        tmpDir,
+        packageJson?.optionalDependencies ?? {},
+      );
+      const nativePackageName = nativeOptionalPackageName(definition);
+      const nativePackagePath = nativeOptionalPackagePath(definition, tmpDir);
       if (nativePackagePath && !(await exists(nativePackagePath))) {
         throw new RuntimeToolError(
           "runtime_tool_optional_dependency_missing",
-          `${codexNativePackageName()} was not installed. Reinstall Codex with optional npm dependencies enabled.`,
+          `${nativePackageName} was not installed. Reinstall ${definition.label} with optional npm dependencies enabled.`,
+          502,
+        );
+      }
+      if (definition.runtime === "claude_code" && !(await claudePlacedBinaryReady(tmpDir))) {
+        throw new RuntimeToolError(
+          "runtime_tool_native_binary_missing",
+          "Claude native binary was not installed. Reinstall Claude Code with optional npm dependencies and postinstall scripts enabled.",
           502,
         );
       }
       const target = this.versionRoot(runtime, installedVersion);
       if (await exists(target)) {
-        if (!input.force) {
+        if (!input.force && await runtimeToolVersionReady(definition, target)) {
           await rm(tmpDir, { recursive: true, force: true });
           if (input.activate !== false) await this.activate(runtime, installedVersion);
           const status = await this.status(runtime);
@@ -539,6 +805,38 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
     }
   }
 
+  private async ensureNativeOptionalPackage(
+    definition: RuntimeToolDefinition,
+    prefix: string,
+    optionalDependencies: Record<string, string>,
+  ): Promise<void> {
+    const nativePackageName = nativeOptionalPackageName(definition);
+    const nativePackagePath = nativeOptionalPackagePath(definition, prefix);
+    if (!nativePackageName || !nativePackagePath) return;
+    if (await exists(nativePackagePath)) {
+      if (definition.runtime === "claude_code") {
+        await this.ensureClaudePostinstall(prefix);
+      }
+      return;
+    }
+    const nativePackageSpec = optionalDependencies[nativePackageName];
+    if (!nativePackageSpec) return;
+
+    await this.runner.run({
+      package_ref: `${nativePackageName}@${nativePackageSpec}`,
+      prefix,
+      cache_dir: join(this.config.agentSpaceHome, "cache", "npm"),
+    });
+    if (definition.runtime === "claude_code") {
+      await this.ensureClaudePostinstall(prefix);
+    }
+  }
+
+  private async ensureClaudePostinstall(prefix: string): Promise<void> {
+    if (await claudePlacedBinaryReady(prefix)) return;
+    await runNodePostinstall(claudePostinstallPath(prefix), claudeWrapperPackagePath(prefix));
+  }
+
   async activate(runtime: string, version: string): Promise<RuntimeToolStatus> {
     const definition = definitionFor(runtime);
     const cleanVersion = cleanComponent(version, "version");
@@ -569,5 +867,36 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
 
   private async readManifest(runtime: string, version: string): Promise<RuntimeToolManifest | null> {
     return readJsonFile<RuntimeToolManifest>(join(this.versionRoot(runtime, version), "tool.json"));
+  }
+
+  private async installedVersionStatus(
+    definition: RuntimeToolDefinition,
+    version: string,
+  ): Promise<RuntimeToolInstalledVersion> {
+    const cleanVersion = cleanComponent(version, "version");
+    const versionRoot = this.versionRoot(definition.runtime, cleanVersion);
+    const executablePath = resolve(versionRoot, definition.bin_relative_path);
+    const warnings: string[] = [];
+    const manifest = await this.readManifest(definition.runtime, cleanVersion);
+    let executableOk = await executableExists(executablePath);
+    if (!executableOk) warnings.push("executable is missing or not executable");
+    const nativePackageName = nativeOptionalPackageName(definition);
+    const nativePackagePath = nativeOptionalPackagePath(definition, versionRoot);
+    if (nativePackagePath && !(await exists(nativePackagePath))) {
+      executableOk = false;
+      warnings.push(`${nativePackageName} is missing`);
+    }
+    if (definition.runtime === "claude_code" && !(await claudePlacedBinaryReady(versionRoot))) {
+      executableOk = false;
+      warnings.push("Claude native binary is missing");
+    }
+    return {
+      version: cleanVersion,
+      installed: executableOk,
+      executable_path: executablePath,
+      executable_exists: executableOk,
+      manifest,
+      warnings,
+    };
   }
 }

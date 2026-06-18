@@ -8,6 +8,7 @@ export const runtimeToolsModule: ServerModule = {
 
 export {
   RUNTIME_TOOL_DEFINITIONS,
+  npmInstallEnv,
   RuntimeToolError,
   RuntimeToolRegistry,
   type ResolvedRuntimeTool,

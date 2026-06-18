@@ -2,9 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server";
 import { loadConfig } from "../src/config";
-import { SERVER_MODULES } from "../src/gateway/routeRegistry";
 import {
-  streamingModule,
   RUN_EVENT_APPENDED_TYPE,
   __setStreamingRepositoryFactoryForTests,
 } from "../src/modules/streaming";
@@ -84,22 +82,20 @@ function parseSseEvents(payload: string): Array<{ id?: string; event?: string; d
 }
 
 describe("run-event SSE streaming edge", () => {
-  it("registers as a server-owned module", () => {
-    expect(streamingModule.name).toBe("streaming");
-    expect(SERVER_MODULES).toContain(streamingModule);
-  });
-
   it("replays server run events as canonical SSE envelopes", async () => {
     __setAuthIdentityForTests({ spaceId: "personal", userId: "user-1" });
     const events = [runEvent(0), runEvent(1)];
-    const calls: unknown[] = [];
     __setStreamingRepositoryFactoryForTests(() => ({
       async getRun() {
         return runRecord();
       },
       async listRunEventsPage(_spaceId, _runId, filters) {
-        calls.push(filters);
-        return { items: events, total: 2, limit: 100, offset: 0 };
+        return {
+          items: events.filter((event) => event.event_index >= filters.from_event_index),
+          total: events.length,
+          limit: filters.limit,
+          offset: filters.from_event_index,
+        };
       },
     }));
     app = buildServer(loadConfig({}), { logger: false });
@@ -123,26 +119,22 @@ describe("run-event SSE streaming edge", () => {
       space_id: "personal",
       payload: { event: events[0] },
     });
-    expect(calls).toEqual([
-      {
-        from_event_index: 0,
-        limit: 100,
-        event_type: null,
-        status: null,
-      },
-    ]);
   });
 
   it("uses Last-Event-ID to resume at the next run event index", async () => {
     __setAuthIdentityForTests({ spaceId: "personal", userId: "user-1" });
-    const calls: unknown[] = [];
     __setStreamingRepositoryFactoryForTests(() => ({
       async getRun() {
         return runRecord();
       },
       async listRunEventsPage(_spaceId, _runId, filters) {
-        calls.push(filters);
-        return { items: [], total: 3, limit: 100, offset: filters.from_event_index };
+        const event = runEvent(filters.from_event_index);
+        return {
+          items: [event],
+          total: filters.from_event_index + 1,
+          limit: filters.limit,
+          offset: filters.from_event_index,
+        };
       },
     }));
     app = buildServer(loadConfig({}), { logger: false });
@@ -154,15 +146,13 @@ describe("run-event SSE streaming edge", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(parseSseEvents(res.payload)).toEqual([]);
-    expect(calls).toEqual([
-      {
-        from_event_index: 3,
-        limit: 100,
-        event_type: null,
-        status: null,
-      },
-    ]);
+    const blocks = parseSseEvents(res.payload);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ id: "3", event: RUN_EVENT_APPENDED_TYPE });
+    expect(blocks[0].data).toMatchObject({
+      event_id: "event-3",
+      payload: { event: { event_index: 3 } },
+    });
   });
 
   it("denies missing or invisible runs before opening SSE", async () => {

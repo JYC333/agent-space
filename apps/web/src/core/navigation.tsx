@@ -1,6 +1,6 @@
 import {
   Home, Inbox, CheckCircle, BookOpen, ListTodo, Bot, Folder, Settings,
-  GitBranch,
+  GitBranch, Building2, ServerCog,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -33,6 +33,12 @@ export interface RailItem {
   footer?: boolean
   /** Surface in the mobile bottom tab bar. */
   mobile?: boolean
+  /** Hide this item unless the current user can administer the active Space. */
+  requiresSpaceAdmin?: boolean
+  /** Hide this item unless the current user is the instance admin. */
+  requiresInstanceAdmin?: boolean
+  /** Additional logical paths that should make this item active. */
+  activePaths?: string[]
 }
 
 /** Major destinations. Home is always first and stable. */
@@ -45,6 +51,8 @@ export const RAIL_ITEMS: RailItem[] = [
   { id: 'agents',     label: 'Agents',     to: '/agents',      icon: Bot,         scope: 'space' },
   { id: 'evolution',  label: 'Evolution',  to: '/evolution',   icon: GitBranch,   scope: 'home' },
   { id: 'workspaces', label: 'Workspaces', to: '/workspaces',  icon: Folder,      scope: 'space' },
+  { id: 'instance-settings', label: 'Instance Settings', to: '/instance-settings', icon: ServerCog, scope: 'home', footer: true, requiresInstanceAdmin: true, activePaths: ['/runtime-tools'] },
+  { id: 'space-settings', label: 'Space Settings', to: '/space-settings', icon: Building2, scope: 'space', footer: true, requiresSpaceAdmin: true, activePaths: ['/network-profiles'] },
   { id: 'settings',   label: 'Settings',   to: '/settings',    icon: Settings,    scope: 'home',  footer: true },
 ]
 
@@ -57,7 +65,10 @@ export const MOBILE_TAB_ITEMS = RAIL_ITEMS.filter(i => i.mobile)
  * - "route" scenes link to real sibling routes that belong to the same workspace area.
  */
 export interface FilterSceneItem { label: string; value: string }
-export interface RouteSceneItem { label: string; to: string }
+export interface RouteSceneItem {
+  label: string
+  to: string
+}
 
 interface SceneBase {
   id: string
@@ -125,14 +136,13 @@ export const SCENES: Scene[] = [
     id: 'agents',
     title: 'Agents',
     icon: Bot,
-    segments: ['agents', 'sessions', 'runs', 'automations', 'runtime-tools', 'capabilities'],
+    segments: ['agents', 'sessions', 'runs', 'automations', 'capabilities'],
     items: [
       { label: 'My agents',  to: '/agents' },
       { label: 'Chat history', to: '/sessions' },
       { label: 'Templates',  to: '/agents/templates' },
       { label: 'Runs',       to: '/runs' },
       { label: 'Automations', to: '/automations' },
-      { label: 'Runtime',    to: '/runtime-tools' },
     ],
   },
   {
@@ -156,7 +166,7 @@ export type RouteScope = 'home' | 'space'
  * Top-level paths that are NOT inside a Space, so they never get a `/spaces/:id` prefix.
  * Home is user-scoped (cross-space); Settings/Time/Cards are neutral system surfaces.
  */
-const USER_SCOPED_PREFIXES = ['/home', '/settings', '/time', '/cards', '/evolution', '/login']
+const USER_SCOPED_PREFIXES = ['/home', '/settings', '/instance-settings', '/runtime-tools', '/cli-profiles', '/time', '/cards', '/evolution', '/login']
 
 function isUserScopedPath(path: string): boolean {
   return USER_SCOPED_PREFIXES.some(p => path === p || path.startsWith(`${p}/`))

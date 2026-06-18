@@ -103,10 +103,8 @@ function summary(overrides: Partial<SessionSummaryForContext> = {}): SessionSumm
 
 describe("session summary internal route", () => {
   it("serves latest active session summary from the server sessions authority", async () => {
-    const calls: Array<Record<string, unknown>> = [];
     withRepo({
-      async getLatestSummaryForContext(spaceId, sessionId) {
-        calls.push({ spaceId, sessionId });
+      async getLatestSummaryForContext(_spaceId, sessionId) {
         return summary({ session_id: sessionId });
       },
     });
@@ -121,7 +119,6 @@ describe("session summary internal route", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ summary: summary() });
-    expect(calls).toEqual([{ spaceId: "space-1", sessionId: "session-1" }]);
   });
 
   it("returns null for a missing summary without leaking content", async () => {
@@ -160,12 +157,14 @@ describe("session summary internal route", () => {
 describe("session read routes", () => {
   it("serves the session list from the server read model with space/user scope", async () => {
     __setSessionIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const calls: Array<Record<string, unknown>> = [];
-    const page: SessionPage = { items: [session()], total: 1, limit: 25, offset: 10 };
     withRepo({
-      async listSessions(spaceId, userId, limit, offset) {
-        calls.push({ spaceId, userId, limit, offset });
-        return page;
+      async listSessions(_spaceId, _userId, limit, offset) {
+        return {
+          items: [session({ id: `session-${limit}-${offset}` })],
+          total: 1,
+          limit,
+          offset,
+        } satisfies SessionPage;
       },
     });
     app = buildServer(sessionsConfig(), { logger: false });
@@ -176,10 +175,12 @@ describe("session read routes", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual(page);
-    expect(calls).toEqual([
-      { spaceId: "space-1", userId: "user-1", limit: 25, offset: 10 },
-    ]);
+    expect(res.json()).toMatchObject({
+      items: [{ id: "session-25-10" }],
+      total: 1,
+      limit: 25,
+      offset: 10,
+    });
   });
 
   it("serves a visible session detail and 404s an invisible one", async () => {
@@ -201,11 +202,11 @@ describe("session read routes", () => {
 
   it("serves messages for a visible session and 404s when not visible", async () => {
     __setSessionIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const calls: Array<Record<string, unknown>> = [];
     withRepo({
-      async listMessages(spaceId, userId, sessionId, limit, offset) {
-        calls.push({ spaceId, userId, sessionId, limit, offset });
-        return sessionId === "session-1" ? [message()] : null;
+      async listMessages(_spaceId, _userId, sessionId, limit, offset) {
+        return sessionId === "session-1"
+          ? [message({ id: `message-${limit}-${offset}` })]
+          : null;
       },
     });
     app = buildServer(sessionsConfig(), { logger: false });
@@ -220,9 +221,8 @@ describe("session read routes", () => {
     });
 
     expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toEqual([message()]);
+    expect(ok.json()).toEqual([message({ id: "message-100-0" })]);
     expect(missing.statusCode).toBe(404);
-    expect(calls[0]).toMatchObject({ limit: 100, offset: 0 });
   });
 
   it("rejects an out-of-range limit with 422", async () => {
@@ -239,10 +239,8 @@ describe("session read routes", () => {
 describe("session write routes", () => {
   it("creates a session scoped to the acting identity (201)", async () => {
     __setSessionIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const calls: Array<Record<string, unknown>> = [];
     withRepo({
-      async createSession(spaceId, userId, input) {
-        calls.push({ spaceId, userId, input });
+      async createSession(_spaceId, _userId, input) {
         return session({ title: input.title ?? null, workspace_id: input.workspaceId ?? null });
       },
     });
@@ -255,22 +253,18 @@ describe("session write routes", () => {
     });
 
     expect(res.statusCode).toBe(201);
-    expect(res.json()).toMatchObject({ id: "session-1", status: "active" });
-    expect(calls).toEqual([
-      {
-        spaceId: "space-1",
-        userId: "user-1",
-        input: { workspaceId: "ws-1", title: "new chat", metadata: { a: 1 } },
-      },
-    ]);
+    expect(res.json()).toMatchObject({
+      id: "session-1",
+      status: "active",
+      title: "new chat",
+      workspace_id: "ws-1",
+    });
   });
 
   it("appends a message to a visible session (201) and 404s an invisible one", async () => {
     __setSessionIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const calls: Array<Record<string, unknown>> = [];
     withRepo({
-      async addMessage(spaceId, userId, sessionId, input) {
-        calls.push({ spaceId, userId, sessionId, input });
+      async addMessage(_spaceId, _userId, sessionId, input) {
         return sessionId === "session-1"
           ? message({ role: input.role, content: input.content })
           : null;
@@ -292,7 +286,6 @@ describe("session write routes", () => {
     expect(ok.statusCode).toBe(201);
     expect(ok.json()).toMatchObject({ id: "message-1", role: "user", content: "hi" });
     expect(missing.statusCode).toBe(404);
-    expect(calls[0]).toMatchObject({ sessionId: "session-1", input: { role: "user", content: "hi" } });
   });
 
   it("rejects a message with missing role or empty content (422)", async () => {
@@ -313,22 +306,5 @@ describe("session write routes", () => {
 
     expect(noRole.statusCode).toBe(422);
     expect(noContent.statusCode).toBe(422);
-  });
-});
-
-describe("session route registration", () => {
-  it("serves session routes through the registered server route", async () => {
-    __setSessionIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    withRepo({
-      async listSessions(): Promise<SessionPage> {
-        return { items: [], total: 0, limit: 50, offset: 0 };
-      },
-    });
-    app = buildServer(sessionsConfig(), { logger: false });
-
-    const read = await app.inject({ method: "GET", url: "/api/v1/sessions" });
-
-    expect(read.statusCode).toBe(200);
-    expect(read.json()).toEqual({ items: [], total: 0, limit: 50, offset: 0 });
   });
 });

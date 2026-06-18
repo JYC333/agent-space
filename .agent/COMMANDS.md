@@ -115,7 +115,8 @@ npm run preview
 ## Runtime CLI tools
 
 Vendor CLIs are installed as instance runtime tools, not into Docker images.
-Use the server API after the stack is running:
+Only the user whose email matches `INSTANCE_ADMIN_EMAIL` may install or activate
+versions. Use the server API after the stack is running:
 
 ```bash
 curl -X POST http://localhost:3000/api/v1/runtime-tools/claude_code/install \
@@ -133,7 +134,8 @@ curl http://localhost:3000/api/v1/runtime-tools \
 ```
 
 Tools are written under `$AGENT_SPACE_HOME/runtime-tools`; npm cache is under
-`$AGENT_SPACE_HOME/cache/npm`.
+`$AGENT_SPACE_HOME/cache/npm`. Space owners/admins select enabled/default
+versions through `PUT /api/v1/runtime-tools/space-policy/{runtime}`.
 
 ## Docker
 
@@ -189,12 +191,11 @@ npm run typecheck && npm test && npm run build
 cd ../server
 npm run typecheck
 npx vitest run \
+  test/evidenceRedaction.test.ts \
   test/runOrchestrationService.test.ts \
   test/runMaterializationService.test.ts \
   test/runManagedApiAdapter.test.ts \
   test/runVendorCliAdapter.test.ts \
-  test/runJobRepository.test.ts \
-  test/runRepository.test.ts \
   test/runsRoutes.test.ts \
   test/runtimeHost.test.ts \
   test/config.test.ts \

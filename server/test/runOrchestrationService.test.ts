@@ -408,18 +408,20 @@ describe("RunOrchestrationService", () => {
     const repo = new FakeRepo();
     repo.run = run({
       adapter_type: "codex_cli",
+      model_provider_id: null,
       required_sandbox_level: "worktree",
       workspace_id: "workspace-1",
     });
     const executorResults: RunAdapterResultEnvelope[] = [];
     const service = new RunOrchestrationService(config(), repo, {
       policyEnforcer: allowPolicy,
+      runtimeToolVersionResolver: async () => "test-version",
       vendorCli: {
         credentialBroker: {
           async grantForRun() {
             return {
               granted: true,
-              profile_id: "codex_cli/default",
+              profile_id: "11111111-1111-4111-8111-111111111111",
               runtime: "codex_cli",
               executor_mode: "worktree",
               readonly: false,
@@ -427,6 +429,7 @@ describe("RunOrchestrationService", () => {
               host_source_path: null,
               target_path: null,
               env: {},
+              network_profile_id: null,
               fallback_reason: null,
             };
           },
@@ -483,6 +486,7 @@ describe("RunOrchestrationService", () => {
     const repo = new FakeRepo();
     repo.run = run({
       adapter_type: "codex_cli",
+      model_provider_id: null,
       required_sandbox_level: "worktree",
       workspace_id: "workspace-1",
     });
@@ -491,6 +495,7 @@ describe("RunOrchestrationService", () => {
     const executorCalls: Array<{ command: string[]; cwd: string | null }> = [];
     const service = new RunOrchestrationService(config(), repo, {
       policyEnforcer: allowPolicy,
+      runtimeToolVersionResolver: async () => "test-version",
       contextPreparer,
       workspaceManager,
       vendorCli: {
@@ -498,7 +503,7 @@ describe("RunOrchestrationService", () => {
           async grantForRun() {
             return {
               granted: true,
-              profile_id: "codex_cli/default",
+              profile_id: "11111111-1111-4111-8111-111111111111",
               runtime: "codex_cli",
               executor_mode: "worktree",
               readonly: false,
@@ -506,6 +511,7 @@ describe("RunOrchestrationService", () => {
               host_source_path: null,
               target_path: null,
               env: {},
+              network_profile_id: null,
               fallback_reason: null,
             };
           },
@@ -549,7 +555,16 @@ describe("RunOrchestrationService", () => {
       },
     ]);
     expect(executorCalls[0]).toEqual({
-      command: [process.execPath, "prepared prompt"],
+      command: [
+        process.execPath,
+        "--ask-for-approval",
+        "never",
+        "exec",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "workspace-write",
+        "prepared prompt",
+      ],
       cwd: "/tmp/aspace-prepared-run",
     });
     expect(repo.calls).toContain("event:sandbox_created:succeeded");
@@ -675,12 +690,14 @@ describe("RunOrchestrationService", () => {
     const repo = new FakeRepo();
     repo.run = run({
       adapter_type: "codex_cli",
+      model_provider_id: null,
       required_sandbox_level: "worktree",
       workspace_id: "workspace-1",
     });
     const adapterConfigs: Array<Record<string, unknown>> = [];
     const service = new RunOrchestrationService(config(), repo, {
       policyEnforcer: allowPolicy,
+      runtimeToolVersionResolver: async () => "test-version",
       contextPreparer: new FakeContextPreparer(),
       workspaceManager: new FakeWorkspaceManager(),
       vendorCli: {
@@ -688,7 +705,7 @@ describe("RunOrchestrationService", () => {
           async grantForRun() {
             return {
               granted: true,
-              profile_id: "codex_cli/default",
+              profile_id: "11111111-1111-4111-8111-111111111111",
               runtime: "codex_cli",
               executor_mode: "worktree" as const,
               readonly: false,
@@ -696,6 +713,7 @@ describe("RunOrchestrationService", () => {
               host_source_path: null,
               target_path: null,
               env: {},
+              network_profile_id: null,
               fallback_reason: null,
             };
           },
@@ -719,7 +737,16 @@ describe("RunOrchestrationService", () => {
         adapter_config: { executable_path: "/tmp/attacker-binary" },
       }),
     ).resolves.toMatchObject({ status: "succeeded" });
-    expect(adapterConfigs[0].command).toEqual([process.execPath, "prepared prompt"]);
+    expect(adapterConfigs[0].command).toEqual([
+      process.execPath,
+      "--ask-for-approval",
+      "never",
+      "exec",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "workspace-write",
+      "prepared prompt",
+    ]);
   });
 
   it("uses the run row adapter type as authoritative and fails closed for unknown adapters", async () => {
@@ -773,7 +800,7 @@ describe("RunOrchestrationService", () => {
 
   it("terminates the registered CLI process on cancel", async () => {
     const repo = new FakeRepo();
-    repo.run = run({ status: "running", adapter_type: "codex_cli" });
+    repo.run = run({ status: "running", adapter_type: "codex_cli", model_provider_id: null });
     const terminated: string[] = [];
     const service = new RunOrchestrationService(config(), repo, {
       processRegistry: {
@@ -802,11 +829,13 @@ describe("RunOrchestrationService", () => {
     const repo = new FakeRepo();
     repo.run = run({
       adapter_type: "codex_cli",
+      model_provider_id: null,
       required_sandbox_level: "worktree",
       workspace_id: "workspace-1",
     });
     const service: RunOrchestrationService = new RunOrchestrationService(config(), repo, {
       policyEnforcer: allowPolicy,
+      runtimeToolVersionResolver: async () => "test-version",
       contextPreparer: new FakeContextPreparer(),
       workspaceManager: new FakeWorkspaceManager(),
       vendorCli: {
@@ -814,7 +843,7 @@ describe("RunOrchestrationService", () => {
           async grantForRun() {
             return {
               granted: true,
-              profile_id: "codex_cli/default",
+              profile_id: "11111111-1111-4111-8111-111111111111",
               runtime: "codex_cli",
               executor_mode: "worktree" as const,
               readonly: false,
@@ -822,6 +851,7 @@ describe("RunOrchestrationService", () => {
               host_source_path: null,
               target_path: null,
               env: {},
+              network_profile_id: null,
               fallback_reason: null,
             };
           },

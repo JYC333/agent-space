@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RunAdapterResultEnvelope } from "@agent-space/protocol" with { "resolution-mode": "import" };
@@ -7,6 +6,7 @@ import {
   CliCredentialBroker,
   type CredentialGrant,
 } from "../providers/cliCredentialBroker";
+import type { ProviderProxyLeaseRegistry } from "../providers/providerProxyLease";
 import {
   RuntimeToolError,
   RuntimeToolRegistry,
@@ -22,45 +22,46 @@ import {
   redactEvidenceText,
   sanitizeEvidenceJson,
 } from "./evidenceRedaction";
+import {
+  CliRenderError,
+  renderCliCommand,
+  type RenderedCliCommand,
+} from "./cliCommandRendering";
+import {
+  LocalCliCommandExecutor,
+  type CliCommandExecutor,
+  type CliExecutionResult,
+  type CliProcessRegistry,
+} from "./localCliExecution";
+import {
+  buildRuntimeProviderBinding,
+  cleanupRuntimeProviderBinding,
+  RuntimeProviderBindingError,
+  type RuntimeProviderBinding,
+  type RuntimeProviderResolverPort,
+} from "./runtimeProviderBinding";
+import { buildSubprocessEnv } from "./cliSubprocessEnv";
+import {
+  envForNetworkProfile,
+  resolveNetworkProfileRepository,
+} from "../networkProfiles";
+
+export { buildSubprocessEnv } from "./cliSubprocessEnv";
+export { renderCliCommand } from "./cliCommandRendering";
+export {
+  LocalCliProcessRegistry,
+  type CliCommandExecutor,
+  type CliExecutionResult,
+  type CliProcessRegistry,
+} from "./localCliExecution";
 
 export type VendorCliAdapterType = "claude_code" | "codex_cli";
 export type ExecutorMode = "worktree" | "docker";
 
-export interface RenderedCliCommand {
-  argv: string[];
-  redacted_argv: string[];
-  stdin: string | null;
-  permission_bypass_used: boolean;
-}
-
-export interface CliExecutionResult {
-  returncode: number;
-  stdout: string;
-  stderr: string;
-  timed_out: boolean;
-}
-
-export interface CliCommandExecutor {
-  runCommand(input: {
-    command: string[];
-    cwd: string | null;
-    timeout_seconds: number;
-    env: Record<string, string>;
-    run_id: string;
-    stdin: string | null;
-    process_registry?: CliProcessRegistry;
-  }): Promise<CliExecutionResult>;
-}
-
-export interface CliProcessRegistry {
-  register(runId: string, pid: number): void;
-  deregister(runId: string): void;
-  terminate(runId: string): boolean;
-}
-
 export interface CliCredentialBrokerPort {
   grantForRun(
     runId: string,
+    spaceId: string,
     runtime: string,
     executorMode: ExecutorMode,
     profileId?: string | null,
@@ -87,10 +88,11 @@ export interface VendorCliAdapterDeps {
   credentialBroker?: CliCredentialBrokerPort;
   executor?: CliCommandExecutor;
   toolRegistry?: RuntimeToolResolverPort;
+  providerResolver?: RuntimeProviderResolverPort;
+  providerLeaseRegistry?: ProviderProxyLeaseRegistry;
+  providerProxyBaseUrl?: string;
 }
 
-const ENV_ALLOWED_KEYS = new Set(["PATH", "TERM", "SHELL", "LANG"]);
-const BROKER_ENV_KEYS = new Set(["HOME"]);
 const SECRET_COMMAND_KEYS = ["prompt", "context", "api_key", "token", "secret", "password"];
 
 export async function executeVendorCliAdapter(
@@ -144,7 +146,10 @@ export async function executeVendorCliAdapter(
   let tool: ResolvedRuntimeTool;
   try {
     const toolRegistry = deps.toolRegistry ?? new RuntimeToolRegistry(config);
-    tool = await toolRegistry.resolveForExecution(spec.credentials.credential_runtime_name);
+    tool = await toolRegistry.resolveForExecution(
+      spec.credentials.credential_runtime_name,
+      stringValue(input.adapter_config?.runtime_tool_version),
+    );
   } catch (error) {
     await cleanupCredential(input, credentialBroker);
     return cliFailure(
@@ -162,7 +167,7 @@ export async function executeVendorCliAdapter(
       executable: tool.executable_path,
       prompt: input.prompt ?? input.run.prompt ?? "",
       mode: input.mode ?? input.run.mode,
-      model: input.model ?? null,
+      model: spec.adapter_type === "codex_cli" ? null : input.model ?? null,
       permission_bypass: Boolean(input.adapter_config?.permission_bypass),
       runtime_policy_json: recordValue(input.adapter_config?.runtime_policy_json),
       risk_level: input.risk_level ?? "low",
@@ -181,213 +186,81 @@ export async function executeVendorCliAdapter(
   }
 
   const timeout = timeoutSeconds(input.adapter_config, spec);
+  let runtimeBinding: RuntimeProviderBinding;
+  try {
+    runtimeBinding = await buildRuntimeProviderBinding(
+      config,
+      {
+        run: input.run,
+        model: input.model ?? null,
+      },
+      spec,
+      {
+        credential,
+        providerResolver: deps.providerResolver,
+        leaseRegistry: deps.providerLeaseRegistry,
+        proxyBaseUrl: deps.providerProxyBaseUrl,
+        ttlSeconds: timeout + 300,
+      },
+    );
+  } catch (error) {
+    await cleanupCredential(input, credentialBroker);
+    return cliFailure(
+      input,
+      error instanceof RuntimeProviderBindingError ? error.code : "cli_runtime_provider_config_failed",
+      error instanceof Error ? error.message : "CLI runtime provider configuration failed.",
+      startedAt,
+      spec,
+    );
+  }
+
   const executor = deps.executor ?? new LocalCliCommandExecutor();
-  const result = await executor.runCommand({
-    command: rendered.argv,
-    cwd: input.sandbox_cwd ?? null,
-    timeout_seconds: timeout,
-    env: buildSubprocessEnv(credential.env),
-    run_id: input.run.id,
-    stdin: rendered.stdin,
-    process_registry: input.process_registry,
-  });
-  await cleanupCredential(input, credentialBroker);
-
-  return cliResultEnvelope(input, spec, rendered, result, timeout, credential, tool, startedAt);
-}
-
-export class LocalCliProcessRegistry implements CliProcessRegistry {
-  private readonly processes = new Map<string, number>();
-
-  register(runId: string, pid: number): void {
-    this.processes.set(runId, pid);
-  }
-
-  deregister(runId: string): void {
-    this.processes.delete(runId);
-  }
-
-  terminate(runId: string): boolean {
-    const pid = this.processes.get(runId);
-    if (!pid) return false;
-    try {
-      process.kill(-pid, "SIGTERM");
-    } catch {
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        return false;
-      }
-    }
-    return true;
-  }
-}
-
-export class LocalCliCommandExecutor implements CliCommandExecutor {
-  async runCommand(input: {
-    command: string[];
-    cwd: string | null;
-    timeout_seconds: number;
-    env: Record<string, string>;
-    run_id: string;
-    stdin: string | null;
-    process_registry?: CliProcessRegistry;
-  }): Promise<CliExecutionResult> {
-    return new Promise((resolveResult) => {
-      let settled = false;
-      let stdout = "";
-      let stderr = "";
-      let proc;
-      try {
-        proc = spawn(input.command[0], input.command.slice(1), {
-          cwd: input.cwd ?? undefined,
-          env: input.env,
-          detached: true,
-          shell: false,
-          stdio: ["pipe", "pipe", "pipe"],
-        });
-      } catch (error) {
-        resolveResult({
-          returncode: -1,
-          stdout: "",
-          stderr: error instanceof Error ? error.message : "CLI spawn failed.",
-          timed_out: false,
-        });
-        return;
-      }
-
-      input.process_registry?.register(input.run_id, proc.pid ?? -1);
-      proc.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString("utf8");
-      });
-      proc.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString("utf8");
-      });
-      proc.on("error", (error: Error) => {
-        if (settled) return;
-        settled = true;
-        input.process_registry?.deregister(input.run_id);
-        clearTimeout(timer);
-        resolveResult({ returncode: -1, stdout, stderr: error.message, timed_out: false });
-      });
-      proc.on("close", (code: number | null) => {
-        if (settled) return;
-        settled = true;
-        input.process_registry?.deregister(input.run_id);
-        clearTimeout(timer);
-        resolveResult({ returncode: code ?? -1, stdout, stderr, timed_out: false });
-      });
-      if (input.stdin !== null) proc.stdin?.end(input.stdin);
-      else proc.stdin?.end();
-
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        try {
-          if (proc.pid) process.kill(-proc.pid, "SIGKILL");
-        } catch {
-          proc.kill("SIGKILL");
-        }
-        input.process_registry?.deregister(input.run_id);
-        resolveResult({
-          returncode: -1,
-          stdout,
-          stderr: stderr || "Command timed out.",
-          timed_out: true,
-        });
-      }, input.timeout_seconds * 1000);
+  let result: CliExecutionResult;
+  try {
+    const cliNetworkEnv = await cliDefaultNetworkEnv(config, input.run.space_id, credential, runtimeBinding);
+    result = await executor.runCommand({
+      command: rendered.argv,
+      cwd: input.sandbox_cwd ?? null,
+      timeout_seconds: timeout,
+      env: buildSubprocessEnv(credential.env, { ...runtimeBinding.env, ...cliNetworkEnv }),
+      run_id: input.run.id,
+      stdin: rendered.stdin,
+      process_registry: input.process_registry,
     });
-  }
-}
-
-export function buildSubprocessEnv(extra: Record<string, string> | null | undefined): Record<string, string> {
-  const safe: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value === undefined) continue;
-    if (ENV_ALLOWED_KEYS.has(key) || key.startsWith("LC_")) safe[key] = value;
-  }
-  for (const [key, value] of Object.entries(extra ?? {})) {
-    if (BROKER_ENV_KEYS.has(key)) safe[key] = value;
-  }
-  return safe;
-}
-
-export async function renderCliCommand(
-  spec: LocalCliRuntimeAdapterSpec,
-  input: {
-    executable: string;
-    prompt: string;
-    mode: string;
-    model: string | null;
-    permission_bypass: boolean;
-    runtime_policy_json?: Record<string, unknown>;
-    risk_level: string;
-    workspace_id: string | null;
-    sandbox_cwd: string | null;
-  },
-): Promise<RenderedCliCommand> {
-  const template =
-    input.mode === "interactive" && spec.invocation.interactive_command_template
-      ? spec.invocation.interactive_command_template
-      : spec.invocation.headless_command_template;
-  const values = { executable: input.executable, prompt: input.prompt };
-  const argv = renderTemplate(template, values);
-  const redacted = renderTemplate(template, { ...values, prompt: "[REDACTED_PROMPT]" });
-
-  const extraArgs: string[] = [];
-  if (input.model) {
-    if (!spec.model.supports_model_override || !spec.model.model_arg_template) {
-      throw new CliRenderError("model_override_not_supported", `adapter_type '${spec.adapter_type}' does not support model override`);
-    }
-    extraArgs.push(...renderTemplate(spec.model.model_arg_template, { model: input.model }));
+  } finally {
+    cleanupRuntimeProviderBinding(runtimeBinding);
+    await cleanupCredential(input, credentialBroker);
   }
 
-  if (input.permission_bypass) {
-    const permissionError = permissionBypassError(spec, input);
-    if (permissionError) {
-      throw new CliRenderError("permission_bypass_not_allowed", permissionError);
-    }
-    extraArgs.push(...(spec.permissions.permission_bypass_arg_template ?? []));
-  }
-
-  if (extraArgs.length > 0) {
-    const insertAt = argv.findIndex((arg) => arg === input.prompt);
-    argv.splice(insertAt >= 0 ? insertAt : argv.length, 0, ...extraArgs);
-    const redactedInsertAt = redacted.findIndex((arg) => arg === "[REDACTED_PROMPT]");
-    redacted.splice(redactedInsertAt >= 0 ? redactedInsertAt : redacted.length, 0, ...extraArgs);
-  }
-
-  const stdin = spec.invocation.argument_rendering_strategy === "stdin" ? input.prompt : null;
-  return {
-    argv: stdin === null ? argv : argv.filter((arg) => arg !== input.prompt),
-    redacted_argv: stdin === null ? redacted : redacted.filter((arg) => arg !== "[REDACTED_PROMPT]"),
-    stdin,
-    permission_bypass_used:
-      input.permission_bypass &&
-      (spec.permissions.permission_bypass_arg_template ?? []).every((arg) => argv.includes(arg)),
-  };
-}
-
-class CliRenderError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "CliRenderError";
-  }
-}
-
-function renderTemplate(template: string[], values: Record<string, string>): string[] {
-  return template.map((part) =>
-    part.replace(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, (_match, name: string) => {
-      const value = values[name];
-      if (value === undefined) {
-        throw new CliRenderError("unknown_template_variable", `unknown command template variable: ${name}`);
-      }
-      return value;
-    }),
+  return cliResultEnvelope(
+    input,
+    spec,
+    rendered,
+    result,
+    timeout,
+    credential,
+    tool,
+    startedAt,
+    runtimeBinding,
   );
+}
+
+async function cliDefaultNetworkEnv(
+  config: ServerConfig,
+  spaceId: string,
+  credential: CredentialGrant,
+  binding: RuntimeProviderBinding,
+): Promise<Record<string, string>> {
+  if (binding.provider_id || !credential.network_profile_id) return {};
+  try {
+    const profile = await resolveNetworkProfileRepository(config).resolve(
+      spaceId,
+      credential.network_profile_id,
+    );
+    return envForNetworkProfile(profile);
+  } catch {
+    return {};
+  }
 }
 
 function validateSandbox(
@@ -443,6 +316,7 @@ async function grantCredential(
   try {
     return await broker.grantForRun(
       input.run.id,
+      input.run.space_id,
       spec.credentials.credential_runtime_name,
       "worktree",
       profileId(input),
@@ -458,6 +332,7 @@ async function grantCredential(
       host_source_path: null,
       target_path: null,
       env: {},
+      network_profile_id: null,
       fallback_reason: "broker_error",
     };
   }
@@ -494,6 +369,7 @@ function cliResultEnvelope(
   credential: CredentialGrant,
   tool: ResolvedRuntimeTool,
   startedAt: string,
+  runtimeBinding: RuntimeProviderBinding,
 ): RunAdapterResultEnvelope {
   const success = result.returncode === 0 && !result.timed_out;
   const stdout = redactCliOutput(result.stdout);
@@ -533,6 +409,16 @@ function cliResultEnvelope(
       context_file_type: spec.context.context_file_type,
       context_target_format: spec.context.context_target_format,
       rendered_in_sandbox: spec.context.writes_vendor_context_file,
+      runtime_provider_id: runtimeBinding.provider_id,
+      runtime_provider_model: runtimeBinding.model ?? modelFromRun(input.run),
+      runtime_provider_protocol: runtimeBinding.protocol,
+      runtime_provider_proxy: Boolean(runtimeBinding.lease_id),
+      claude_compatible_provider_id:
+        spec.adapter_type === "claude_code" ? input.run.model_provider_id : null,
+      claude_compatible_model:
+        spec.adapter_type === "claude_code" ? runtimeBinding.model ?? modelFromRun(input.run) : null,
+      claude_compatible_provider_proxy:
+        spec.adapter_type === "claude_code" ? Boolean(runtimeBinding.lease_id) : null,
     }) as RunAdapterResultEnvelope["metadata_json"],
     adapter_log_json: sanitizeEvidenceJson({
       adapter_type: spec.adapter_type,
@@ -573,31 +459,6 @@ function cliFailure(
   };
 }
 
-function permissionBypassError(
-  spec: LocalCliRuntimeAdapterSpec,
-  input: {
-    runtime_policy_json?: Record<string, unknown>;
-    risk_level: string;
-    workspace_id: string | null;
-    sandbox_cwd: string | null;
-  },
-): string | null {
-  if (!spec.permissions.supports_permission_bypass) {
-    return `Runtime adapter '${spec.adapter_type}' does not support permission bypass.`;
-  }
-  const key = spec.permissions.permission_bypass_policy_key ?? "allow_permission_bypass";
-  if (input.runtime_policy_json?.[key] !== true) {
-    return `runtime_policy_json.${key}=true is required for permission bypass.`;
-  }
-  if (!["high", "critical"].includes(input.risk_level)) {
-    return "Permission bypass requires risk_level high or critical.";
-  }
-  if (!input.workspace_id || !input.sandbox_cwd) {
-    return "Permission bypass requires an existing worktree workspace.";
-  }
-  return null;
-}
-
 function timeoutSeconds(config: Record<string, unknown> | undefined, spec: LocalCliRuntimeAdapterSpec): number {
   const raw = config?.timeout;
   const parsed = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
@@ -607,6 +468,10 @@ function timeoutSeconds(config: Record<string, unknown> | undefined, spec: Local
 
 function profileId(input: VendorCliAdapterInput): string | null {
   return stringValue(input.adapter_config?.credential_profile_id);
+}
+
+function modelFromRun(run: RunRecord): string | null {
+  return stringValue(recordValue(run.model_override_json).model);
 }
 
 function stringValue(value: unknown): string | null {

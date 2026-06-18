@@ -27,4 +27,13 @@ describe("database migration ops scripts", () => {
     expect(start).toContain('"$REPO_ROOT/ops/scripts/db/migrate.sh" --mode "$MODE"');
     expect(start).toContain("ensure_server_image_for_migrations");
   });
+
+  it("waits for stable postgres SQL readiness during compose bootstrap", () => {
+    const localCompose = readRepoFile("ops/scripts/lib/local-compose.sh");
+
+    expect(localCompose).toContain("required_successes=3");
+    expect(localCompose).toContain('psql -X -q -U "$pguser" -d "$db"');
+    expect(localCompose).toContain("-tAc \"SELECT 1;\"");
+    expect(localCompose).toContain("consecutive_successes=0");
+  });
 });

@@ -69,7 +69,12 @@ code and migrations still win over documentation.
 
 **Next work**
 - Wire reserved actions only when their product surfaces exist: capability enable/update, tool binding, artifact/evidence export, deployment proposal/execute.
-- Add per-run or per-tool credential scoping only after the current credential boundary remains stable.
+- Current credential baseline: ModelProvider keys and CLI login profiles are
+  user-owned resources with explicit active-space grants. Add per-run or
+  per-tool credential scoping only after this grant boundary remains stable.
+- CLI runtime tool installs are instance-admin-managed shared binaries. Space
+  policy chooses enabled/default/allowed installed versions; credential grants
+  remain user-owned and separate from tool installation.
 - Keep policy tests focused on fail-closed behavior and audit durability.
 
 **Prerequisites**
@@ -179,6 +184,32 @@ code and migrations still win over documentation.
 
 **Not now**
 - Direct self-modifying agents, app-container deployment control, plugin marketplace, full native coding-agent loop.
+
+---
+
+## External Absorption Backlog
+
+Items from the PilotDeck (P*) and Hermes (H*) review that are deferred, not
+rejected. Each maps to a capability section above. Rejected items are listed
+at the end.
+
+| Item | Description | Maps to |
+|---|---|---|
+| H3 | Provider privacy/compliance policy: data-collection deny, provider allow/deny, required parameter rules. Add as space-scoped policy/provider-routing rules, not global config. | Capability 3 (Policy and Governance) |
+| H4 | Durable apply rollback: pre-apply snapshots and user-facing rollback for proposal apply operations. Future workspace/proposal-apply hardening. | Capability 2 (Runtime and Adapter Safety) |
+| P2 | Per-session chat concurrency guard. Add only if real chat ordering issues appear during dogfooding. | Capability 1 (Dogfooding Stabilization) |
+| P3 | Full context engine: prompt assembly, message projection, token budgeting, graduated compaction, overflow recovery. Build TS-native on top of migrated context/session/memory seams. | Capability 4 (Memory, Context, Intake) |
+| P6/P7 | Self-hosted TS agent loop (AgentSession/TurnRunner/AgentLoop), tool scheduler (sequential/concurrent with observability), MCP client integration. `RuntimeToolBinding` remains the authorization surface until then. | Capability 2 (Runtime and Adapter Safety) |
+| P8 | Channel adapters: IM/email/channel ingestion with external-session mapping. Requires stable intake/evidence provenance and proposal boundaries first. | Capability 5 (Automation and Triggers) |
+| P9 | Always-On governance: trigger budgets and cooldowns. Future automation/policy vocabulary. | Capability 5 (Automation and Triggers) |
+
+**Explicitly rejected (not to be revisited without a new decision):**
+- PilotDeck-style secrets in YAML or `${ENV}` substitution.
+- Global single-scope config that ignores `space_id`.
+- Gateway-as-plugin/event-bus architecture.
+- Hermes local `auth.json` credential pool state.
+- Hermes media stack, batch RL trajectory generation, and external memory provider backends as MVP work.
+- OpenAI-compatible API server as a planned stage.
 
 ---
 

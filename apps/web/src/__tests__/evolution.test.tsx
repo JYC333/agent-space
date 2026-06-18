@@ -84,7 +84,9 @@ interface MockEvolutionData {
     space_id: string
     name: string
     provider_type: string
-    base_url: string | null
+    base_url: string
+    claude_compatible_base_url: string | null
+    openai_compatible_base_url: string | null
     default_model: string | null
     available_models: string[]
     enabled: boolean
@@ -107,7 +109,9 @@ function mockEvolutionData({
     space_id: 'personal-1',
     name: 'Test Provider',
     provider_type: 'openai',
-    base_url: null,
+    base_url: 'https://api.openai.com/v1',
+    claude_compatible_base_url: null,
+    openai_compatible_base_url: 'https://api.openai.com/v1',
     default_model: 'gpt-test',
     available_models: ['gpt-test'],
     enabled: true,

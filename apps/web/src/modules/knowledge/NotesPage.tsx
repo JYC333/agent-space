@@ -7,20 +7,29 @@ import { toast } from 'sonner'
 import { notesApi, notesCollectionsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { cn, errMsg } from '../../lib/utils'
-import type { EntityLink, Note, NoteCollection, NoteStatus, NoteSummary } from '../../types/api'
+import type { Note, NoteCollection, NoteSummary } from '../../types/api'
 import { Button } from '../../components/ui/button'
 import { Label } from '../../components/ui/label'
 import { Input } from '../../components/ui/input'
 import { Select } from '../../components/ui/select'
 import { Skeleton } from '../../components/ui/skeleton'
-import { EmptyState } from '../../components/ui/empty-state'
 import { emptyRichTextDocument, richTextSnapshotFromDocument } from '../../components/editor'
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from '../../components/ui/dialog'
 import KnowledgeSectionHeader from './KnowledgeSectionHeader'
+import { NotesListPane } from './NotesListPane'
 import NotesTree from './notes-tree/NotesTree'
 import { collectionPath } from './notes-tree/model'
+import {
+  ROOT_PARENT,
+  activeNoteIdFromPath,
+  hideArchivedOrDeletedNotes,
+  isNoteToNoteLink,
+  readTabs,
+  restoreStatus,
+  writeTabs,
+} from './notesPageModel'
 
 /** Context handed to the open-note editor (NoteEditor) via the Outlet. */
 export interface NotesOutletContext {
@@ -42,8 +51,6 @@ interface LinkedDeleteDialogState {
   relatedLinkCount: number
 }
 
-const ROOT_PARENT = '__root__'
-
 // Chrome-style tab silhouette in a 176×32 viewBox: rounded top corners plus
 // curved feet flaring to the bottom edge. The fill path is closed; the stroke
 // path is the same outline minus the bottom edge, so the active tab's border is
@@ -52,41 +59,6 @@ const TAB_FILL_PATH =
   'M0 32 C6 32 10 27 10 22 L10 8 Q10 0 18 0 L158 0 Q166 0 166 8 L166 22 C166 27 170 32 176 32 Z'
 const TAB_STROKE_PATH =
   'M0 32 C6 32 10 27 10 22 L10 8 Q10 0 18 0 L158 0 Q166 0 166 8 L166 22 C166 27 170 32 176 32'
-
-function fmt(dt: string | null | undefined) {
-  return dt ? new Date(dt).toLocaleString() : '—'
-}
-
-function activeNoteIdFromPath(logicalPath: string): string | undefined {
-  return logicalPath.match(/^\/knowledge\/notes\/([^/]+)$/)?.[1]
-}
-
-function tabsKey(spaceId: string | null) {
-  return `agent-space:notes-tabs:${spaceId ?? 'none'}`
-}
-function readTabs(spaceId: string | null): string[] {
-  try {
-    const v = JSON.parse(sessionStorage.getItem(tabsKey(spaceId)) ?? '[]')
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
-  } catch {
-    return []
-  }
-}
-function writeTabs(spaceId: string | null, ids: string[]) {
-  try { sessionStorage.setItem(tabsKey(spaceId), JSON.stringify(ids)) } catch { /* ignore */ }
-}
-
-function hideArchivedOrDeletedNotes(notes: NoteSummary[]) {
-  return notes.filter(note => note.status !== 'archived' && note.status !== 'deleted')
-}
-
-function isNoteToNoteLink(link: EntityLink) {
-  return link.source_type === 'note' && link.target_type === 'note'
-}
-
-function restoreStatus(status: NoteStatus | undefined) {
-  return status && status !== 'archived' && status !== 'deleted' ? status : 'active'
-}
 
 export default function NotesPage() {
   const navigate = useNavigate()
@@ -763,79 +735,6 @@ export default function NotesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
-  )
-}
-
-function NotesListPane({
-  loading, hasSpace, hasCollections, collection, notes, searching, creating, canCreateNote, onOpen, onNew, titleFor,
-}: {
-  loading: boolean
-  hasSpace: boolean
-  hasCollections: boolean
-  collection: NoteCollection | null
-  notes: NoteSummary[]
-  searching: boolean
-  creating: boolean
-  canCreateNote: boolean
-  onOpen: (id: string) => void
-  onNew: () => void
-  titleFor: (id: string) => string
-}) {
-  if (loading) return <div className="p-6"><Skeleton className="h-32 w-full" /></div>
-
-  if (!hasSpace) {
-    return (
-      <div className="p-6">
-        <EmptyState title="Select an operational space" description="Choose a space to browse and create notes." />
-      </div>
-    )
-  }
-
-  if (!hasCollections || !collection) {
-    return (
-      <div className="p-6">
-        <EmptyState title="No note folders" description="Create a folder to start organizing notes." />
-      </div>
-    )
-  }
-
-  if (notes.length === 0) {
-    return (
-      <div className="p-6">
-        <EmptyState
-          title={searching ? 'No matching notes' : `${collection.name} is empty`}
-          description={searching ? 'Try a different search term.' : canCreateNote ? 'Create a note in this folder.' : 'Archived notes appear here after you archive them.'}
-          action={!searching && canCreateNote ? (
-            <Button size="sm" onClick={onNew} disabled={creating}>
-              <Plus className="size-4 mr-1" /> {creating ? 'Creating...' : 'New note'}
-            </Button>
-          ) : undefined}
-        />
-      </div>
-    )
-  }
-
-  return (
-    <div className="divide-y divide-border">
-      {notes.map(note => (
-        <button
-          key={note.id}
-          type="button"
-          onClick={() => onOpen(note.id)}
-          className="block w-full text-left px-6 py-4 hover:bg-accent/30"
-        >
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-1.5 mb-1">
-                <h2 className="font-medium text-sm">{titleFor(note.id)}</h2>
-              </div>
-              {note.excerpt && <p className="text-sm text-muted-foreground line-clamp-2">{note.excerpt}</p>}
-            </div>
-            <p className="text-xs text-muted-foreground shrink-0">{fmt(note.updated_at)}</p>
-          </div>
-        </button>
-      ))}
     </div>
   )
 }

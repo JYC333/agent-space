@@ -2,8 +2,6 @@ import { describe, it, expect, afterEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server";
 import { loadConfig } from "../src/config";
-import { SERVER_MODULES } from "../src/gateway/routeRegistry";
-import { notificationsModule } from "../src/modules/notifications";
 import { startMockUpstream, type MockUpstream } from "./support/mockUpstream";
 
 let app: FastifyInstance;
@@ -17,10 +15,7 @@ afterEach(async () => {
 });
 
 describe("notification webhook egress", () => {
-  it("registers as a server-owned module and exposes policy state", async () => {
-    expect(notificationsModule.name).toBe("notifications");
-    expect(SERVER_MODULES).toContain(notificationsModule);
-
+  it("exposes webhook egress policy state", async () => {
     app = buildServer(loadConfig({}), { logger: false });
     const res = await app.inject({
       method: "GET",

@@ -74,7 +74,9 @@ Existing Run and Proposal rows use separate nullable `*_user_id` and `*_agent_id
 
 - **Canonical adapter catalog:** `RuntimeAdapterSpec` entries in
   `server/src/modules/runtimeAdapters/specs.ts`
-- **Controlled CLI tools:** `runtimeTools` installs active vendor CLI binaries under `$AGENT_SPACE_HOME/runtime-tools`
+- **Controlled CLI tools:** `runtimeTools` installs vendor CLI versions under
+  `$AGENT_SPACE_HOME/runtime-tools`; only the `INSTANCE_ADMIN_EMAIL` user may
+  install/activate instance tool versions.
 - **Run authority:** server `runs` owns run execution, stop,
   top-level run read/status/trace, post-run evaluation/finalization, the
   internal `POST /internal/runs/execute` port, server execution locks, and
@@ -88,6 +90,10 @@ Existing Run and Proposal rows use separate nullable `*_user_id` and `*_agent_id
   prepares the server sandbox/worktree, invokes the local CLI process, parses
   output, and materializes produced artifacts/proposals. Runtime instruction
   files are rendered by server context preparation into the sandbox only.
+- **Space runtime policy:** space owners/admins manage
+  `space_runtime_tool_policies`. Agent versions store the resolved
+  `runtime_tool_version`, and runs fail closed before credential resolution if
+  that version is unavailable, disabled, or disallowed for the active space.
 
 Do not add new adapters to the agents module — it contains Agent/AgentVersion CRUD only.
 
@@ -109,7 +115,13 @@ Policy gates run in this order inside server run orchestration:
 
 1. **`runtime.execute`** — `PolicyGateway.enforce()` is called **before** credential resolution, context snapshot population, and `adapter.execute()`. Rule-relevant fields (`agent_status`, `agent_tool_permissions`, `tool_name`, `adapter_type`, `trigger_origin`, etc.) are passed in `PolicyCheckRequest.context`; safe audit copies remain in `metadata_json`. Blocking decisions raise `PolicyGateBlocked`, are written once through `write_blocked_gate_audit()`, and fail the run.
 
-2. **`runtime.use_credential`** — called after adapter type resolution but **before** any secret fetch. `resource_space_id` is resolved from the actual `Credential` row by ID — never inferred from `RuntimeAdapter.space_id`. If `credential_id` exists but the `Credential` row is missing, execution fails closed with `error_code=credential_metadata_missing`. Cross-space credential → hard DENY (CRITICAL). Automation origin → REQUIRE_APPROVAL. Same-space manual/api → ALLOW. DENY → `error_code=policy_denied_runtime_use_credential`.
+2. **`runtime.use_credential`** — called after adapter type resolution but
+   **before** any ModelProvider key fetch or CLI profile release. The resource
+   is the selected ModelProvider or CLI credential profile in the run's active
+   space. Active-space grant resolution happens before secret/profile material
+   is loaded; missing or disabled grants fail closed. Cross-space credential →
+   hard DENY (CRITICAL). Automation origin → REQUIRE_APPROVAL. Same-space
+   manual/api → ALLOW. DENY → `error_code=policy_denied_runtime_use_credential`.
 
 3. **`context.inject_memory`** — called by server `ContextPrepareService` **before** memory context retrieval. Cross-space without grant → hard DENY. DENY → run context preparation fails closed.
 
@@ -124,8 +136,11 @@ None of these gates may be bypassed. No secret material is resolved before `runt
 `server/src/modules/providers` and the server credential broker are the
 canonical runtime credential resolver.
 
-- Resolves credentials from `ModelProvider` encrypted config, not env variables directly.
-- Runtime adapters must not read `ANTHROPIC_API_KEY` from the environment.
+- Resolves credentials through active-space grants: ModelProvider API keys from
+  encrypted user-owned `Credential` rows, CLI login state from user-owned
+  filesystem profiles.
+- Runtime adapters must not read `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from
+  the ambient environment.
 - Raw credential values are never stored in RunStep fields, artifact content, or logs.
 - `server/src/modules/runs/evidenceRedaction.ts` redacts sensitive
   content before persisting runtime evidence.

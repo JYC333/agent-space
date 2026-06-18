@@ -3,9 +3,9 @@ import type { ServerConfig } from "../../config";
 import { loadActionRegistry } from "../policy/actionRegistry";
 import { enforce } from "../policy/service";
 import { ContextCompiler, type CompiledContext } from "./compiler";
+import { buildContextPackage } from "./contextPackage";
 import {
   PgRunContextRepository,
-  buildContextPackage,
   type ContextDigestRow,
   type DigestBundle,
   type RunContextRecord,

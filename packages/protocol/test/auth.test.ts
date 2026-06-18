@@ -40,9 +40,11 @@ describe("provider DB read allowlist", () => {
       [
         "id",
         "space_id",
+        "owner_user_id",
         "name",
         "provider_type",
         "base_url",
+        "network_profile_id",
         "default_model",
         "enabled",
         "credential_id",
@@ -61,7 +63,7 @@ describe("provider catalog constant", () => {
       id: "litellm",
       name: "LiteLLM (Open Format)",
       description:
-        "Configure OpenAI, Anthropic, OpenRouter, Ollama, or custom OpenAI-compatible endpoints.",
+        "Configure OpenAI-compatible, Anthropic-compatible, OpenRouter, Ollama, or other endpoints.",
       model_hint: "Set default_model and/or available_models on the provider",
       supported_params: ["model", "temperature", "max_tokens", "system"],
     });

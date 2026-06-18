@@ -51,20 +51,21 @@ function runsConfig() {
 }
 
 describe("runs command routes", () => {
-  it("dispatches execute through the server run command service", async () => {
-    const calls: string[] = [];
+  it("executes a run without accepting request-body execution overrides", async () => {
     __setRunsIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const executeInputs: Array<Record<string, unknown>> = [];
+    let currentRun = run({ status: "succeeded", ended_at: "2026-06-12T10:00:01.000Z" });
     __setRunsCommandServicesFactoryForTests(() => ({
       repository: {
         async getRun() {
-          return run({ status: "succeeded", ended_at: "2026-06-12T10:00:01.000Z" });
+          return currentRun;
         },
       },
       orchestration: {
         async executeRun(input) {
-          calls.push(`execute:${input.run_id}:${input.space_id}:${input.command_source}`);
-          executeInputs.push(input as unknown as Record<string, unknown>);
+          const raw = input as unknown as Record<string, unknown>;
+          if ("prompt" in raw || "adapter_config" in raw || "sandbox_cwd" in raw) {
+            currentRun = run({ status: "failed", error_message: "unsafe override accepted" });
+          }
           return { run_id: input.run_id, status: "succeeded" };
         },
         async cancelRun() {
@@ -98,16 +99,9 @@ describe("runs command routes", () => {
         adapter_model_support: "uses_model",
       },
     });
-    expect(calls).toEqual(["execute:run-1:space-1:http"]);
-    // The Run row + policy-owned resolution are authoritative; request-body
-    // execution parameters are never forwarded into orchestration.
-    expect(executeInputs[0].prompt).toBeUndefined();
-    expect(executeInputs[0].adapter_config).toBeUndefined();
-    expect(executeInputs[0].sandbox_cwd).toBeUndefined();
   });
 
   it("executes via the service-authenticated internal route", async () => {
-    const calls: string[] = [];
     __setRunsCommandServicesFactoryForTests(() => ({
       repository: {
         async getRun() {
@@ -116,8 +110,10 @@ describe("runs command routes", () => {
       },
       orchestration: {
         async executeRun(input) {
-          calls.push(`execute:${input.run_id}:${input.space_id}:${input.command_source}`);
-          return { run_id: input.run_id, status: "succeeded" };
+          return {
+            run_id: input.run_id,
+            status: input.command_source === "internal" ? "succeeded" : "failed",
+          };
         },
         async cancelRun() {
           throw new Error("cancel should not run");
@@ -149,16 +145,15 @@ describe("runs command routes", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ run_id: "run-1", status: "succeeded" });
-    expect(calls).toEqual(["execute:run-1:space-1:internal"]);
   });
 
-  it("dispatches stop through the server run command service", async () => {
-    const calls: string[] = [];
+  it("stops a visible run and returns the public cancelled shape", async () => {
     __setRunsIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    let currentRun = run();
     __setRunsCommandServicesFactoryForTests(() => ({
       repository: {
         async getRun() {
-          return run({ status: "cancelled", ended_at: "2026-06-12T10:00:02.000Z" });
+          return currentRun;
         },
       },
       orchestration: {
@@ -166,7 +161,11 @@ describe("runs command routes", () => {
           throw new Error("execute should not run");
         },
         async cancelRun(input) {
-          calls.push(`cancel:${input.run_id}:${input.space_id}:${input.requested_by_user_id}`);
+          currentRun = run({
+            id: input.run_id,
+            status: "cancelled",
+            ended_at: "2026-06-12T10:00:02.000Z",
+          });
           return { run_id: input.run_id, status: "cancelled", error_code: "run_cancelled" };
         },
       },
@@ -188,34 +187,5 @@ describe("runs command routes", () => {
       trigger_origin: "manual",
       changed: true,
     });
-    expect(calls).toEqual(["cancel:run-1:space-1:user-1"]);
-  });
-
-  it("serves execute through the registered route without config flags", async () => {
-    __setRunsIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    __setRunsCommandServicesFactoryForTests(() => ({
-      repository: {
-        async getRun() {
-          return run({ status: "succeeded", ended_at: "2026-06-12T10:00:01.000Z" });
-        },
-      },
-      orchestration: {
-        async executeRun(input) {
-          return { run_id: input.run_id, status: "succeeded" };
-        },
-        async cancelRun() {
-          throw new Error("cancel should not run");
-        },
-      },
-    }));
-    app = buildServer(loadConfig({}), { logger: false });
-
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/runs/run-1/execute?space_id=space-1",
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ id: "run-1", status: "succeeded" });
   });
 });

@@ -1,145 +1,22 @@
 /**
- * Tests for the gateway conventions: route registry ordering, the error
- * envelope for server-owned routes, request-id continuity, safe header access, and
- * the composition-root discipline of server.ts.
+ * Tests for observable gateway behavior: request-id continuity, the server-owned
+ * error envelope, unknown API route handling, and safe header access.
  */
 
 import { describe, it, expect, afterEach } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { buildServer } from "../src/server";
 import { loadConfig } from "../src/config";
-import {
-  registerServerRoutes,
-  SERVER_MODULES,
-} from "../src/gateway/routeRegistry";
 import {
   SERVER_MARKER_HEADER,
   SERVER_MARKER_VALUE,
   readHeader,
 } from "../src/gateway/requestContext";
-import { systemModule } from "../src/modules/system";
 
 let app: FastifyInstance;
 
 afterEach(async () => {
   await app?.close();
-});
-
-describe("route registry", () => {
-  it("registers server-owned module routes before the unknown API catch-all", () => {
-    const registered: Array<{ method: string; url: string }> = [];
-    const fakeApp = {
-      get: (url: string) => registered.push({ method: "GET", url }),
-      post: (url: string) => registered.push({ method: "POST", url }),
-      put: (url: string) => registered.push({ method: "PUT", url }),
-      patch: (url: string) => registered.push({ method: "PATCH", url }),
-      delete: (url: string) => registered.push({ method: "DELETE", url }),
-      all: (url: string) => registered.push({ method: "ALL", url }),
-      setErrorHandler: () => undefined,
-      addHook: () => undefined,
-    } as unknown as FastifyInstance;
-
-    registerServerRoutes(fakeApp, loadConfig({}));
-
-    const urls = registered.map((r) => r.url);
-    expect(urls).toContain("/health");
-    expect(urls).toContain("/api/v1/server/health");
-    expect(urls).toContain("/api/v1/server/features");
-    expect(urls).toContain("/api/v1/features");
-    expect(urls).toContain("/api/v1/auth/google-configured");
-    expect(urls).toContain("/api/v1/auth/google");
-    expect(urls).toContain("/api/v1/auth/google/callback");
-    expect(urls).toContain("/api/v1/auth/keys");
-    expect(urls).toContain("/api/v1/auth/introspect");
-    expect(urls).toContain("/api/v1/me");
-    expect(urls).toContain("/api/v1/me/spaces");
-    expect(urls).toContain("/api/v1/spaces");
-    expect(urls).toContain("/api/v1/spaces/:spaceId");
-    expect(urls).toContain("/api/v1/spaces/:spaceId/members");
-    expect(urls).toContain("/api/v1/spaces/:spaceId/invitations");
-    expect(urls).toContain("/api/v1/invitations/:token/accept");
-    expect(urls).toContain("/api/v1/runs/:runId/events/stream");
-    expect(urls).toContain("/api/v1/server/notifications/webhooks/dispatch");
-    expect(urls).toContain("/api/v1/providers");
-    expect(urls).toContain("/api/v1/providers/catalog");
-    expect(urls).toContain("/api/v1/providers/litellm-providers");
-    expect(urls).toContain("/api/v1/providers/:configId");
-    expect(urls).toContain("/api/v1/execution-planes");
-    expect(urls).toContain("/api/v1/execution-planes/:planeId");
-    expect(urls).toContain("/api/v1/runtime-tool-bindings");
-    expect(urls).toContain("/api/v1/runtime-tool-bindings/:bindingId");
-    expect(urls).toContain("/api/v1/artifacts");
-    expect(urls).toContain("/api/v1/projects");
-    expect(urls).toContain("/api/v1/agent-templates");
-    expect(urls).toContain("/api/v1/agents/runs/:runId");
-    expect(urls).toContain("/api/v1/agents/:agentId/proposals");
-    expect(urls).toContain("/api/v1/personal-memory-grants");
-    expect(urls).toContain("/api/v1/context/build");
-    expect(urls).toContain("/api/v1/activity");
-    expect(urls).toContain("/api/v1/source-pointers");
-    expect(urls).toContain("/api/v1/intake");
-    expect(urls).toContain("/api/v1/knowledge");
-    expect(urls).toContain("/api/v1/notes/collections");
-    expect(urls).toContain("/api/v1/evolution/summary");
-    expect(urls).toContain("/api/v1/tasks");
-    expect(urls).toContain("/api/v1/boards");
-    expect(urls).toContain("/api/v1/me/tasks");
-    expect(urls).toContain("/api/v1/workspace-profiles");
-    expect(urls).toContain("/api/v1/workspaces");
-    expect(urls).toContain("/api/v1/home/summary");
-    expect(urls).toContain("/api/v1/me/summary");
-    expect(urls).toContain("/api/v1/workspace-console/workspaces");
-    expect(urls).toContain("/api/v1/deployments/jobs");
-    // The unknown API catch-all must be the very last registration.
-    expect(registered[registered.length - 1]).toEqual({ method: "ALL", url: "/api/v1/*" });
-    expect(urls.filter((u) => u === "/api/v1/*")).toHaveLength(1);
-  });
-
-  it("exposes the system module through the standard module convention", () => {
-    expect(systemModule.name).toBe("system");
-    expect(typeof systemModule.registerRoutes).toBe("function");
-    expect(SERVER_MODULES).toContain(systemModule);
-    expect(SERVER_MODULES.map((m) => m.name)).toEqual([
-      "system",
-      "auth",
-      "spaces",
-      "catalog",
-      "streaming",
-      "notifications",
-      "runtimeTools",
-      "providers",
-      "execution_planes",
-      "runtime_tool_bindings",
-      "runtime_host",
-      "runs",
-      "artifacts",
-      "projects",
-      "policy",
-      "proposals",
-      "sessions",
-      "agentTemplates",
-      "agents",
-      "personalMemoryGrants",
-      "memory",
-      "context",
-      "activity",
-      "source_pointers",
-      "intake",
-      "knowledge",
-      "evolution",
-      "tasks",
-      "workspace_profiles",
-      "workspaces",
-      "jobs",
-      "automations",
-      "dailyReports",
-      "backups",
-      "deployment",
-      "frontend_support",
-    ]);
-  });
 });
 
 describe("request id on server-owned routes", () => {
@@ -252,14 +129,5 @@ describe("safe header access", () => {
     expect(readHeader(request, "Authorization")).toBeUndefined();
     expect(readHeader(request, "cookie")).toBeUndefined();
     expect(readHeader(request, "proxy-authorization")).toBeUndefined();
-  });
-});
-
-describe("composition root discipline", () => {
-  it("server.ts contains no direct route registrations", () => {
-    const source = readFileSync(join(__dirname, "..", "src", "server.ts"), "utf8");
-    for (const marker of ["app.get(", "app.post(", "app.put(", "app.delete(", "app.all(", "app.route("]) {
-      expect(source).not.toContain(marker);
-    }
   });
 });

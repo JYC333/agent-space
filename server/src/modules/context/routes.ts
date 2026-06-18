@@ -7,7 +7,8 @@ import {
   resolveIdentity,
   sendRouteError,
 } from "../routeUtils/common";
-import { PgRunContextRepository, buildContextPackage } from "./repository";
+import { buildContextPackage } from "./contextPackage";
+import { PgRunContextRepository } from "./repository";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
   app.post("/api/v1/context/build", async (request, reply) => {

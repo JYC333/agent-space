@@ -93,11 +93,25 @@ local_compose_wait_postgres_ready() {
   local pguser="$1"
   local db="${2:-postgres}"
   local timeout_seconds="${3:-30}"
-  local attempt
+  local attempt consecutive_successes=0
+  local required_successes=3
 
   for ((attempt = 1; attempt <= timeout_seconds; attempt++)); do
-    if "${COMPOSE[@]}" exec -T postgres pg_isready -U "$pguser" -d "$db" >/dev/null 2>&1; then
-      return 0
+    # The official postgres image starts a short-lived bootstrap server during
+    # first initdb, then shuts it down before starting the real server. A single
+    # pg_isready success can land in that shutdown window. Require consecutive
+    # SQL probes so migration/bootstrap scripts only proceed once the final
+    # server is stable enough to accept real queries.
+    if "${COMPOSE[@]}" exec -T postgres \
+      psql -X -q -U "$pguser" -d "$db" \
+        -v ON_ERROR_STOP=1 \
+        -tAc "SELECT 1;" >/dev/null 2>&1; then
+      consecutive_successes=$((consecutive_successes + 1))
+      if (( consecutive_successes >= required_successes )); then
+        return 0
+      fi
+    else
+      consecutive_successes=0
     fi
     sleep 1
   done

@@ -34,6 +34,7 @@ describe("compose server config", () => {
         "FRONTEND_URL",
         "SESSION_EXPIRE_DAYS",
         "SERVER_DEBUG",
+        "INSTANCE_ADMIN_EMAIL",
       ]) {
         expect(block).toContain(`- ${key}=`);
       }

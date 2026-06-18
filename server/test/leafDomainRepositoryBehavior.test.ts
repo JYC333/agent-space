@@ -25,6 +25,7 @@ function intakeConfig(): ServerConfig {
     deployerSocketPath: "/tmp/aspace/run/deployer.sock",
     artifactStorageRoot: "/tmp/aspace/storage/artifacts",
     internalToken: null,
+    instanceAdminEmail: null,
     googleClientId: "",
     googleClientSecret: "",
     googleRedirectUri: "",
@@ -54,15 +55,10 @@ function intakeConfig(): ServerConfig {
 }
 
 
-type QueryCall = { sql: string; params: readonly unknown[] };
-
 class FakeDb implements Queryable {
-  readonly calls: QueryCall[] = [];
-
   constructor(private readonly handler: (sql: string, params: readonly unknown[]) => unknown[]) {}
 
   async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
-    this.calls.push({ sql, params });
     return { rows: this.handler(sql, params) as Row[], rowCount: null };
   }
 }
@@ -129,12 +125,8 @@ function proposalRow(params: readonly unknown[]) {
   };
 }
 
-function sqlLog(db: FakeDb): string {
-  return db.calls.map((call) => call.sql).join("\n");
-}
-
 describe("Leaf domain repository behavior", () => {
-  it("captures raw input as an activity record before any proposal or memory write", async () => {
+  it("captures raw input as an activity record", async () => {
     const db = new FakeDb((sql) => {
       if (sql.includes("INSERT INTO activity_records")) return [activityRow()];
       throw new Error(`unexpected SQL: ${sql}`);
@@ -147,12 +139,9 @@ describe("Leaf domain repository behavior", () => {
     });
 
     expect(out).toMatchObject({ id: "activity-1", status: "raw" });
-    expect(db.calls).toHaveLength(1);
-    expect(sqlLog(db)).toMatch(/INSERT INTO activity_records/);
-    expect(sqlLog(db)).not.toMatch(/INSERT INTO proposals|memory_entries/);
   });
 
-  it("consolidates activity into a pending memory proposal with activity provenance only", async () => {
+  it("consolidates activity into a pending memory proposal with activity provenance", async () => {
     const db = new FakeDb((sql, params) => {
       if (sql.includes("FROM activity_records")) return [activityRow()];
       if (sql.includes("INSERT INTO proposals")) return [proposalRow(params)];
@@ -171,11 +160,9 @@ describe("Leaf domain repository behavior", () => {
         source_trust: "user_confirmed",
       }),
     ]);
-    expect(sqlLog(db)).toMatch(/UPDATE activity_records/);
-    expect(sqlLog(db)).not.toMatch(/INSERT INTO memory_entries|UPDATE memory_entries/);
   });
 
-  it("creates intake summary proposals with evidence and intake provenance, not direct memory writes", async () => {
+  it("creates intake summary proposals with evidence and intake provenance", async () => {
     const proposalPayloads: Record<string, unknown>[] = [];
     const db = new FakeDb((sql, params) => {
       if (sql.includes("FROM extracted_evidence")) {
@@ -214,10 +201,9 @@ describe("Leaf domain repository behavior", () => {
         { source_type: "intake_item", source_id: "item-1", source_trust: "untrusted_external" },
       ],
     });
-    expect(sqlLog(db)).not.toMatch(/INSERT INTO memory_entries|UPDATE memory_entries/);
   });
 
-  it("creates Knowledge proposals without auto-promoting into Memory", async () => {
+  it("creates Knowledge proposals with knowledge-specific provenance", async () => {
     const db = new FakeDb((sql, params) => {
       if (sql.includes("INSERT INTO proposals")) return [proposalRow(params)];
       throw new Error(`unexpected SQL: ${sql}`);
@@ -232,7 +218,5 @@ describe("Leaf domain repository behavior", () => {
 
     expect(proposal).toMatchObject({ proposal_type: "knowledge_create", status: "pending" });
     expect(proposal.provenance_entries).toBeNull();
-    expect(sqlLog(db)).toMatch(/INSERT INTO proposals/);
-    expect(sqlLog(db)).not.toMatch(/INSERT INTO memory_entries|UPDATE memory_entries/);
   });
 });

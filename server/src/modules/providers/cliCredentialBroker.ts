@@ -8,9 +8,10 @@
 
 import { mkdir, readdir, readFile, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import YAML from "yaml";
+import { randomUUID } from "node:crypto";
 import type { FastifyBaseLogger, FastifyReply } from "fastify";
 import type { ServerConfig } from "../../config";
+import { getDbPool, type Pool } from "./db";
 import { resolveHostPath } from "./hostPath";
 import { runCliLogin, sendCliLoginInput } from "./cliLoginEngine";
 import { CLI_LOGIN_ADAPTERS, cliLoginAdapterFor } from "./cliLoginAdapters";
@@ -21,15 +22,70 @@ import { probeClaudeOAuthQuota } from "./claudeOAuthUsageProbe";
 import { probeCodexQuota } from "./codexUsageProbe";
 import { CLI_USAGE_REFRESH_INTERVAL_MS } from "./cliUsageScheduler";
 import { RuntimeToolRegistry } from "../runtimeTools";
+import { resolveNetworkProfileRepository } from "../networkProfiles";
+import {
+  ProviderCommandNotFoundError,
+  ProviderCommandValidationError,
+} from "./providerCommandTypes";
 
 export interface CredentialProfile {
   id: string;
+  owner_user_id?: string | null;
   runtime: string;
   name: string;
   source_path: string;
   target_path: string;
   readonly: boolean;
   notes: string;
+  network_profile_id: string | null;
+  grant_id?: string | null;
+  is_default?: boolean;
+  manageable?: boolean;
+}
+
+export interface CliCredentialProfileCreateInput {
+  runtime: string;
+  name: string;
+  readonly?: boolean;
+  notes?: string;
+  network_profile_id?: string | null;
+  is_default?: boolean;
+}
+
+export interface CliCredentialSpaceGrantInput {
+  space_id: string;
+  enabled?: boolean;
+  is_default?: boolean;
+  network_profile_id?: string | null;
+}
+
+interface CredentialProfileRow {
+  id: string;
+  owner_user_id: string | null;
+  runtime: string;
+  name: string;
+  source_path: string;
+  target_path: string;
+  readonly: boolean;
+  notes: string;
+  grant_id: string | null;
+  grant_enabled: boolean | null;
+  is_default: boolean | null;
+  network_profile_id: string | null;
+  manageable: boolean | null;
+}
+
+interface CliCredentialGrantRow {
+  id: string;
+  profile_id: string;
+  space_id: string;
+  owner_user_id: string;
+  granted_by_user_id: string | null;
+  enabled: boolean;
+  is_default: boolean;
+  network_profile_id: string | null;
+  created_at: Date;
+  updated_at: Date;
 }
 
 /** Subscription quota snapshot from the cached runtime-specific usage probe. */
@@ -66,6 +122,7 @@ export interface CredentialGrant {
   host_source_path: string | null;
   target_path: string | null;
   env: Record<string, string>;
+  network_profile_id: string | null;
   fallback_reason: string | null;
 }
 
@@ -90,6 +147,24 @@ async function fileCount(path: string): Promise<number> {
   }
 }
 
+async function sourceStats(
+  profile: CredentialProfile,
+): Promise<{ source_exists: boolean; file_count: number; logged_in: boolean }> {
+  const sourceExists = await exists(profile.source_path);
+  const count = sourceExists ? await fileCount(profile.source_path) : 0;
+  if (!sourceExists) return { source_exists: false, file_count: 0, logged_in: false };
+
+  const adapter = cliLoginAdapterFor(profile.runtime);
+  if (adapter?.credential_file) {
+    return {
+      source_exists: true,
+      file_count: count,
+      logged_in: await exists(join(profile.source_path, adapter.credential_file)),
+    };
+  }
+  return { source_exists: true, file_count: count, logged_in: count > 0 };
+}
+
 function cleanComponent(value: string, field: string): string {
   if (!/^[A-Za-z0-9_.-]+$/.test(value)) {
     throw new Error(`${field} may contain only letters, numbers, dot, underscore, and dash`);
@@ -109,14 +184,22 @@ function errorSummary(error: unknown): string {
 }
 
 export class CliCredentialBroker {
+  private pool: Pool | null = null;
+
   constructor(private config: ServerConfig, private logger?: CliCredentialBrokerLogger) {}
+
+  private db(): Pool | null {
+    if (!this.config.databaseUrl) return null;
+    if (!this.pool) this.pool = getDbPool(this.config.databaseUrl);
+    return this.pool;
+  }
 
   private get credentialsRoot(): string {
     return join(this.config.agentSpaceHome, "secrets", "cli-credentials");
   }
 
-  private get configPath(): string {
-    return join(this.config.agentSpaceHome, "config", "cli-credentials.yaml");
+  private get userCredentialsRoot(): string {
+    return join(this.credentialsRoot, "users");
   }
 
   private get runtimeHomesRoot(): string {
@@ -129,22 +212,137 @@ export class CliCredentialBroker {
     return join(this.config.agentSpaceHome, "cache", "login-homes");
   }
 
-  async listProfiles(runtime?: string | null): Promise<CredentialProfile[]> {
-    const profiles = await this.loadProfiles();
+  private profileFromRow(row: CredentialProfileRow): CredentialProfile {
+    return {
+      id: row.id,
+      owner_user_id: row.owner_user_id,
+      runtime: row.runtime,
+      name: row.name,
+      source_path: row.source_path,
+      target_path: row.target_path,
+      readonly: Boolean(row.readonly),
+      notes: row.notes ?? "",
+      network_profile_id: row.network_profile_id ?? null,
+      grant_id: row.grant_id ?? null,
+      is_default: Boolean(row.is_default),
+      manageable: Boolean(row.manageable),
+    };
+  }
+
+  private grantOut(row: CliCredentialGrantRow): Record<string, unknown> {
+    return {
+      id: row.id,
+      profile_id: row.profile_id,
+      space_id: row.space_id,
+      owner_user_id: row.owner_user_id,
+      granted_by_user_id: row.granted_by_user_id,
+      enabled: row.enabled,
+      is_default: row.is_default,
+      network_profile_id: row.network_profile_id,
+      created_at: row.created_at.toISOString(),
+      updated_at: row.updated_at.toISOString(),
+    };
+  }
+
+  private managedProfilePath(ownerUserId: string, runtime: string, profileId: string): string {
+    return join(
+      this.userCredentialsRoot,
+      cleanComponent(ownerUserId, "owner_user_id"),
+      cleanComponent(runtime, "runtime"),
+      cleanComponent(profileId, "profile_id"),
+    );
+  }
+
+  private async validateNetworkProfileId(
+    spaceId: string,
+    value: string | null | undefined,
+  ): Promise<string | null> {
+    const trimmed = typeof value === "string" && value.trim() ? value.trim() : null;
+    if (!trimmed) return null;
+    const profile = await resolveNetworkProfileRepository(this.config).resolve(spaceId, trimmed);
+    if (!profile) {
+      throw new ProviderCommandValidationError(`NetworkProfile '${trimmed}' not found`);
+    }
+    return trimmed;
+  }
+
+  private async userSpaceRole(userId: string, spaceId: string): Promise<string | null> {
+    const db = this.db();
+    if (!db) return null;
+    const result = await db.query<{ role: string }>(
+      `SELECT role
+         FROM space_memberships
+        WHERE user_id = $1 AND space_id = $2 AND status = 'active'
+        LIMIT 1`,
+      [userId, spaceId],
+    );
+    return result.rows[0]?.role ?? null;
+  }
+
+  private async requireSpaceMembership(userId: string, spaceId: string): Promise<void> {
+    if (await this.userSpaceRole(userId, spaceId)) return;
+    throw new ProviderCommandNotFoundError(`Space '${spaceId}' not found`);
+  }
+
+  private async canAdminSpace(userId: string, spaceId: string): Promise<boolean> {
+    const role = await this.userSpaceRole(userId, spaceId);
+    return role === "owner" || role === "admin";
+  }
+
+  async listProfiles(
+    runtime?: string | null,
+    spaceId?: string | null,
+    userId?: string | null,
+  ): Promise<CredentialProfile[]> {
+    const profiles = await this.loadProfiles(spaceId, userId, "owned");
     const all = [...profiles.values()];
     return runtime ? all.filter((p) => p.runtime === runtime) : all;
   }
 
-  async getProfile(profileId: string): Promise<CredentialProfile | null> {
-    return (await this.loadProfiles()).get(profileId) ?? null;
+  async availableProfiles(
+    spaceId: string,
+    userId: string,
+    runtime?: string | null,
+  ): Promise<Record<string, unknown>[]> {
+    const profiles = await this.loadProfiles(spaceId, userId, "granted");
+    const all = [...profiles.values()].filter((p) => !runtime || p.runtime === runtime);
+    return Promise.all(
+      all.map(async (profile) => ({
+        id: profile.id,
+        owner_user_id: profile.owner_user_id ?? null,
+        runtime: profile.runtime,
+        name: profile.name,
+        target_path: profile.target_path,
+        readonly: profile.readonly,
+        notes: profile.notes,
+        network_profile_id: profile.network_profile_id,
+        ...(await sourceStats(profile)),
+        manageable: Boolean(profile.manageable),
+        grant_id: profile.grant_id,
+        is_default: Boolean(profile.is_default),
+      })),
+    );
   }
 
-  async getDefaultProfile(runtime: string): Promise<CredentialProfile | null> {
-    const profiles = await this.loadProfiles();
-    const exact = profiles.get(`${runtime}/default`);
-    if (exact && (await exists(exact.source_path))) return exact;
+  async getProfile(
+    profileId: string,
+    spaceId?: string | null,
+    userId?: string | null,
+  ): Promise<CredentialProfile | null> {
+    const profiles = await this.loadProfiles(spaceId, userId, userId ? "owned" : "all");
+    return profiles.get(profileId) ?? null;
+  }
+
+  async getDefaultProfile(
+    runtime: string,
+    spaceId?: string | null,
+    userId?: string | null,
+  ): Promise<CredentialProfile | null> {
+    const profiles = await this.loadProfiles(spaceId, userId, spaceId ? "granted" : "all");
+    const exact = this.findDefaultProfile(profiles, runtime);
+    if (exact && (await sourceStats(exact)).logged_in) return exact;
     for (const profile of profiles.values()) {
-      if (profile.runtime === runtime && (await exists(profile.source_path))) {
+      if (profile.runtime === runtime && (await sourceStats(profile)).logged_in) {
         return profile;
       }
     }
@@ -152,23 +350,54 @@ export class CliCredentialBroker {
   }
 
   async profileOut(profile: CredentialProfile): Promise<Record<string, unknown>> {
-    return { ...profile, source_exists: await exists(profile.source_path) };
+    return {
+      ...profile,
+      ...(await sourceStats(profile)),
+    };
   }
 
-  async detectProfile(profileId: string): Promise<Record<string, unknown>> {
-    const profile = await this.getProfile(profileId);
+  async detectProfile(
+    profileId: string,
+    spaceId?: string | null,
+    userId?: string | null,
+  ): Promise<Record<string, unknown>> {
+    const profile = await this.getProfile(profileId, spaceId, userId);
     if (!profile) throw new Error(`Profile '${profileId}' not found`);
-    const sourceExists = await exists(profile.source_path);
-    const count = sourceExists ? await fileCount(profile.source_path) : 0;
+    const stats = await sourceStats(profile);
     return {
       profile_id: profileId,
       source_path: profile.source_path,
-      exists: sourceExists,
-      non_empty: count > 0,
-      file_count: count,
+      exists: stats.source_exists,
+      non_empty: stats.file_count > 0,
+      logged_in: stats.logged_in,
+      file_count: stats.file_count,
       target_path: profile.target_path,
       readonly: profile.readonly,
+      network_profile_id: profile.network_profile_id,
     };
+  }
+
+  async updateProfileNetworkProfileId(
+    profileId: string,
+    networkProfileId: string | null,
+    spaceId?: string | null,
+    userId?: string | null,
+  ): Promise<Record<string, unknown>> {
+    const db = this.db();
+    if (!db || !spaceId || !userId) {
+      throw new Error("CLI credential profile updates require SERVER_DATABASE_URL and an authenticated space");
+    }
+    const profile = await this.getOwnedProfile(userId, profileId, spaceId);
+    if (!profile) throw new ProviderCommandNotFoundError(`Profile '${profileId}' not found`);
+    await this.grantCliProfileToSpace(spaceId, userId, profile.id, {
+      space_id: spaceId,
+      network_profile_id: networkProfileId,
+      enabled: true,
+      is_default: profile.is_default,
+    });
+    const updated = await this.getProfile(profile.id, spaceId, userId);
+    if (!updated) throw new Error("updated profile was not readable");
+    return this.profileOut(updated);
   }
 
   listLoginMethods(): Record<string, unknown>[] {
@@ -181,19 +410,21 @@ export class CliCredentialBroker {
     }));
   }
 
-  async status(): Promise<Record<string, unknown>[]> {
+  async status(spaceId?: string | null, userId?: string | null): Promise<Record<string, unknown>[]> {
     const result: Record<string, unknown>[] = [];
     for (const cfg of CLI_LOGIN_ADAPTERS) {
-      const profile = await this.getDefaultProfile(cfg.runtime);
-      const sourceExists = profile !== null && (await exists(profile.source_path));
-      const count = sourceExists && profile ? await fileCount(profile.source_path) : 0;
+      const profile = await this.getDefaultProfile(cfg.runtime, spaceId, userId);
+      const stats = profile
+        ? await sourceStats(profile)
+        : { source_exists: false, file_count: 0, logged_in: false };
       result.push({
         runtime: cfg.runtime,
         label: cfg.label,
         method: cfg.method,
         profile_id: profile?.id ?? null,
-        logged_in: sourceExists && count > 0,
-        file_count: count,
+        network_profile_id: profile?.network_profile_id ?? null,
+        logged_in: stats.logged_in,
+        file_count: stats.file_count,
       });
     }
     return result;
@@ -204,10 +435,10 @@ export class CliCredentialBroker {
    * from local CLI transcripts/sessions (offline). `quota` is filled by the
    * cached runtime-specific probe and stays null for runtimes/builds without it.
    */
-  async cliUsage(): Promise<CliUsageEntry[]> {
+  async cliUsage(spaceId?: string | null, userId?: string | null): Promise<CliUsageEntry[]> {
     const result: CliUsageEntry[] = [];
     for (const cfg of CLI_LOGIN_ADAPTERS) {
-      const profile = await this.getDefaultProfile(cfg.runtime);
+      const profile = await this.getDefaultProfile(cfg.runtime, spaceId, userId);
       let tokens: TokenUsage = unsupportedTokenUsage();
       let quota: QuotaResult | null = null;
       if (cfg.runtime === "claude_code" && profile) {
@@ -227,10 +458,21 @@ export class CliCredentialBroker {
    * the combined (tokens + fresh quota) entry. Runtimes without a quota adapter
    * return token usage with quota=null.
    */
-  async refreshCliQuota(runtime: string): Promise<CliUsageEntry> {
+  async refreshCliQuota(
+    runtime: string,
+    spaceId?: string | null,
+    userId?: string | null,
+    profileId?: string | null,
+  ): Promise<CliUsageEntry> {
     const cfg = cliLoginAdapterFor(runtime);
     if (!cfg) throw new Error(`Unknown runtime: ${runtime}`);
-    const profile = await this.getDefaultProfile(runtime);
+    const profile = await this.resolveProfile(
+      runtime,
+      profileId,
+      true,
+      spaceId,
+      userId,
+    );
     let tokens: TokenUsage = unsupportedTokenUsage();
     let quota: QuotaResult | null = null;
 
@@ -355,7 +597,12 @@ export class CliCredentialBroker {
     return { runtime, label: cfg.label, tokens, quota };
   }
 
-  async refreshStaleCliQuota(runtime: string, maxAgeMs: number): Promise<CliUsageEntry | null> {
+  async refreshStaleCliQuota(
+    runtime: string,
+    maxAgeMs: number,
+    spaceId?: string | null,
+    userId?: string | null,
+  ): Promise<CliUsageEntry | null> {
     const cfg = cliLoginAdapterFor(runtime);
     if (!cfg) throw new Error(`Unknown runtime: ${runtime}`);
     if (runtime !== "claude_code" && runtime !== "codex_cli") return null;
@@ -365,7 +612,7 @@ export class CliCredentialBroker {
     if (Number.isFinite(checkedAt) && Date.now() - checkedAt < maxAgeMs) {
       return null;
     }
-    return this.refreshCliQuota(runtime);
+    return this.refreshCliQuota(runtime, spaceId, userId);
   }
 
   private quotaCachePath(runtime: string): string {
@@ -412,6 +659,158 @@ export class CliCredentialBroker {
     return (await this.cliUsageAutoRefreshSettings()).enabled;
   }
 
+  async createProfile(
+    spaceId: string,
+    userId: string,
+    input: CliCredentialProfileCreateInput,
+  ): Promise<Record<string, unknown>> {
+    const db = this.db();
+    if (!db) throw new Error("CLI credential profile creation requires SERVER_DATABASE_URL");
+    await this.requireSpaceMembership(userId, spaceId);
+
+    const runtime = cleanComponent(input.runtime.trim(), "runtime");
+    const name = cleanComponent(input.name.trim(), "name");
+    const profileId = randomUUID();
+    const sourcePath = this.managedProfilePath(userId, runtime, profileId);
+    const targetPath = defaultTargetPath(runtime);
+    const networkProfileId = await this.validateNetworkProfileId(
+      spaceId,
+      input.network_profile_id,
+    );
+    const now = new Date();
+    await mkdir(sourcePath, { recursive: true, mode: 0o700 });
+    if (input.is_default) await this.clearDefaultGrant(spaceId, runtime, profileId);
+
+    try {
+      await db.query(
+        `INSERT INTO cli_credential_profiles
+          (id, owner_user_id, runtime, name, source_path, target_path, readonly,
+           notes, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)`,
+        [
+          profileId,
+          userId,
+          runtime,
+          name,
+          sourcePath,
+          targetPath,
+          Boolean(input.readonly),
+          input.notes ?? "",
+          now,
+        ],
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505") {
+        throw new ProviderCommandValidationError(
+          `CLI credential profile '${runtime}/${name}' already exists`,
+        );
+      }
+      throw error;
+    }
+
+    await db.query(
+      `INSERT INTO cli_credential_space_grants
+        (id, profile_id, space_id, owner_user_id, granted_by_user_id, enabled,
+         is_default, network_profile_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $4, true, $5, $6, $7, $7)`,
+      [randomUUID(), profileId, spaceId, userId, Boolean(input.is_default), networkProfileId, now],
+    );
+    const profile = await this.getProfile(profileId, spaceId, userId);
+    if (!profile) throw new Error("created CLI credential profile was not readable");
+    return this.profileOut(profile);
+  }
+
+  async grantCliProfileToSpace(
+    activeSpaceId: string,
+    userId: string,
+    profileId: string,
+    input: CliCredentialSpaceGrantInput,
+  ): Promise<Record<string, unknown>> {
+    const db = this.db();
+    if (!db) throw new Error("CLI credential grants require SERVER_DATABASE_URL");
+    const profile = await this.getOwnedProfile(userId, profileId, activeSpaceId);
+    if (!profile) throw new ProviderCommandNotFoundError(`Profile '${profileId}' not found`);
+    const targetSpaceId = input.space_id || activeSpaceId;
+    await this.requireSpaceMembership(userId, targetSpaceId);
+    const networkProfileId =
+      input.network_profile_id === undefined
+        ? undefined
+        : await this.validateNetworkProfileId(targetSpaceId, input.network_profile_id);
+    const existingGrant = await db.query<{ is_default: boolean }>(
+      `SELECT is_default
+         FROM cli_credential_space_grants
+        WHERE profile_id = $1 AND space_id = $2
+        LIMIT 1`,
+      [profile.id, targetSpaceId],
+    );
+    const isDefault =
+      input.is_default === undefined
+        ? Boolean(existingGrant.rows[0]?.is_default)
+        : Boolean(input.is_default);
+    if (isDefault) await this.clearDefaultGrant(targetSpaceId, profile.runtime, profile.id);
+    const now = new Date();
+    const result = await db.query<CliCredentialGrantRow>(
+      `INSERT INTO cli_credential_space_grants
+        (id, profile_id, space_id, owner_user_id, granted_by_user_id, enabled,
+         is_default, network_profile_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+       ON CONFLICT ON CONSTRAINT uq_cli_credential_space_grants_profile_space
+       DO UPDATE SET enabled = EXCLUDED.enabled,
+                     is_default = EXCLUDED.is_default,
+                     network_profile_id = CASE
+                       WHEN $10::boolean THEN EXCLUDED.network_profile_id
+                       ELSE cli_credential_space_grants.network_profile_id
+                     END,
+                     granted_by_user_id = EXCLUDED.granted_by_user_id,
+                     owner_user_id = EXCLUDED.owner_user_id,
+                     updated_at = EXCLUDED.updated_at
+       RETURNING id, profile_id, space_id, owner_user_id, granted_by_user_id,
+                 enabled, is_default, network_profile_id, created_at, updated_at`,
+      [
+        randomUUID(),
+        profile.id,
+        targetSpaceId,
+        profile.owner_user_id ?? userId,
+        userId,
+        input.enabled ?? true,
+        isDefault,
+        networkProfileId ?? null,
+        now,
+        input.network_profile_id !== undefined,
+      ],
+    );
+    return this.grantOut(result.rows[0]);
+  }
+
+  async revokeCliProfileGrant(
+    userId: string,
+    profileId: string,
+    grantSpaceId: string,
+  ): Promise<void> {
+    const db = this.db();
+    if (!db) throw new Error("CLI credential grants require SERVER_DATABASE_URL");
+    const owned = await this.getOwnedProfile(userId, profileId, grantSpaceId);
+    if (!owned && !(await this.canAdminSpace(userId, grantSpaceId))) {
+      throw new ProviderCommandNotFoundError(`Profile '${profileId}' not found`);
+    }
+    const result = await db.query(
+      `UPDATE cli_credential_space_grants g
+          SET enabled = false,
+              is_default = false,
+              updated_at = $3
+         FROM cli_credential_profiles p
+        WHERE g.profile_id = p.id
+          AND g.space_id = $2
+          AND p.id = $1
+          AND g.enabled = true
+        RETURNING g.id`,
+      [profileId, grantSpaceId, new Date()],
+    );
+    if (result.rowCount === 0) {
+      throw new ProviderCommandNotFoundError("CLI credential grant not found");
+    }
+  }
+
   private async readQuotaCache(runtime: string): Promise<QuotaResult | null> {
     try {
       return JSON.parse(await readFile(this.quotaCachePath(runtime), "utf8")) as QuotaResult;
@@ -438,20 +837,25 @@ export class CliCredentialBroker {
     runtime: string,
     profileId?: string | null,
     requireExisting = true,
+    spaceId?: string | null,
+    userId?: string | null,
   ): Promise<CredentialProfile | null> {
-    const profile = profileId ? await this.getProfile(profileId) : await this.getDefaultProfile(runtime);
+    const profile = profileId
+      ? await this.getGrantedProfile(runtime, profileId, spaceId, userId)
+      : await this.getDefaultProfile(runtime, spaceId, userId);
     if (!profile) return null;
-    if (requireExisting && !(await exists(profile.source_path))) return null;
+    if (requireExisting && !(await sourceStats(profile)).logged_in) return null;
     return profile;
   }
 
   async grantForRun(
     runId: string,
+    spaceId: string,
     runtime: string,
     executorMode: "worktree" | "docker",
     profileId?: string | null,
   ): Promise<CredentialGrant> {
-    const profile = await this.resolveProfile(runtime, profileId, true);
+    const profile = await this.resolveProfile(runtime, profileId, true, spaceId);
     if (!profile) {
       return {
         granted: false,
@@ -463,7 +867,8 @@ export class CliCredentialBroker {
         host_source_path: null,
         target_path: null,
         env: {},
-        fallback_reason: "no_profile_configured",
+        network_profile_id: null,
+        fallback_reason: profileId ? "credential_grant_denied" : "no_profile_configured",
       };
     }
     if (executorMode === "docker") {
@@ -478,6 +883,7 @@ export class CliCredentialBroker {
         host_source_path: resolveHostPath(profile.source_path),
         target_path: profile.target_path,
         env: {},
+        network_profile_id: profile.network_profile_id,
         fallback_reason: null,
       };
     }
@@ -492,6 +898,7 @@ export class CliCredentialBroker {
       host_source_path: null,
       target_path: null,
       env: { HOME: tempHome },
+      network_profile_id: profile.network_profile_id,
       fallback_reason: null,
     };
   }
@@ -503,81 +910,257 @@ export class CliCredentialBroker {
     });
   }
 
-  async streamLogin(runtime: string, reply: FastifyReply): Promise<void> {
+  async streamLogin(
+    runtime: string,
+    reply: FastifyReply,
+    spaceId?: string | null,
+    userId?: string | null,
+    profileId?: string | null,
+  ): Promise<void> {
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
       "x-accel-buffering": "no",
     });
-    const profileDir = join(this.credentialsRoot, runtime, "default");
     // Only known runtimes reach a real login; a clean component keeps the
     // login HOME path inside aspace even if an unknown runtime slips through.
     const adapter = cliLoginAdapterFor(runtime);
     const safeRuntime = adapter ? cleanComponent(runtime, "runtime") : "_invalid";
-    const loginHome = join(this.loginHomesRoot, safeRuntime);
+    const db = this.db();
+    if (!db || !spaceId || !userId) {
+      throw new Error("CLI login requires SERVER_DATABASE_URL and an authenticated space");
+    }
+    let profileDir = "";
+    let resolvedProfileId: string | null = null;
+    let sessionKey: string | undefined;
+    let profile = profileId
+      ? await this.getOwnedProfile(userId, profileId, spaceId)
+      : await this.getOwnedDefaultForRuntime(userId, runtime, spaceId);
+    if (!profile && !profileId) {
+      await this.createProfile(spaceId, userId, {
+        runtime,
+        name: "default",
+        is_default: true,
+      });
+      profile = await this.getOwnedDefaultForRuntime(userId, runtime, spaceId);
+    }
+    if (!profile) throw new ProviderCommandNotFoundError(`Profile '${profileId ?? "default"}' not found`);
+    await mkdir(profile.source_path, { recursive: true, mode: 0o700 });
+    profileDir = profile.source_path;
+    resolvedProfileId = profile.id;
+    sessionKey = `${runtime}:${profile.id}`;
+    const loginHome = join(this.loginHomesRoot, safeRuntime, resolvedProfileId ?? "default");
     const tools = new RuntimeToolRegistry(this.config);
+    reply.raw.write(sse({ type: "profile", profile_id: resolvedProfileId }));
     await runCliLogin(runtime, adapter, profileDir, (event) => {
       reply.raw.write(sse(event));
-    }, undefined, tools, loginHome);
+    }, undefined, tools, loginHome, resolvedProfileId, sessionKey);
     reply.raw.end();
   }
 
-  sendLoginInput(runtime: string, input: string): boolean {
-    return sendCliLoginInput(runtime, input);
+  sendLoginInput(runtime: string, input: string, profileId?: string | null): boolean {
+    return sendCliLoginInput(
+      runtime,
+      input,
+      profileId ? `${runtime}:${profileId}` : undefined,
+    );
   }
 
-  private async loadProfiles(): Promise<Map<string, CredentialProfile>> {
-    const profiles = new Map<string, CredentialProfile>();
-    try {
-      const raw = await readFile(this.configPath, "utf8");
-      const parsed = YAML.parse(raw) as
-        | { profiles?: Record<string, Record<string, Partial<CredentialProfile>>> }
-        | null;
-      for (const [runtime, named] of Object.entries(parsed?.profiles ?? {})) {
-        for (const [name, spec] of Object.entries(named ?? {})) {
-          const id = `${runtime}/${name}`;
-          profiles.set(id, {
-            id,
-            runtime,
-            name,
-            source_path: spec.source_path ?? "",
-            target_path: spec.target_path ?? defaultTargetPath(runtime),
-            readonly: Boolean(spec.readonly),
-            notes: spec.notes ?? "",
-          });
-        }
-      }
-    } catch (error) {
-      const code = (error as { code?: string }).code;
-      if (code !== "ENOENT") throw error;
-    }
+  private findDefaultProfile(
+    profiles: Map<string, CredentialProfile>,
+    runtime: string,
+  ): CredentialProfile | null {
+    const defaultByGrant = [...profiles.values()].find(
+      (profile) => profile.runtime === runtime && profile.is_default,
+    );
+    if (defaultByGrant) return defaultByGrant;
+    return null;
+  }
 
-    try {
-      for (const runtimeDir of await readdir(this.credentialsRoot, { withFileTypes: true })) {
-        if (!runtimeDir.isDirectory()) continue;
-        for (const profileDir of await readdir(join(this.credentialsRoot, runtimeDir.name), {
-          withFileTypes: true,
-        })) {
-          if (!profileDir.isDirectory()) continue;
-          const id = `${runtimeDir.name}/${profileDir.name}`;
-          if (!profiles.has(id)) {
-            profiles.set(id, {
-              id,
-              runtime: runtimeDir.name,
-              name: profileDir.name,
-              source_path: join(this.credentialsRoot, runtimeDir.name, profileDir.name),
-              target_path: defaultTargetPath(runtimeDir.name),
-              readonly: false,
-              notes: "",
-            });
-          }
-        }
-      }
-    } catch (error) {
-      const code = (error as { code?: string }).code;
-      if (code !== "ENOENT") throw error;
+  private async loadOwnedProfiles(
+    spaceId: string,
+    userId: string,
+  ): Promise<Map<string, CredentialProfile>> {
+    const db = this.db();
+    if (!db) return new Map();
+    const result = await db.query<CredentialProfileRow>(
+      `SELECT p.id,
+              p.owner_user_id,
+              p.runtime,
+              p.name,
+              p.source_path,
+              p.target_path,
+              p.readonly,
+              p.notes,
+              g.id AS grant_id,
+              g.enabled AS grant_enabled,
+              g.is_default,
+              g.network_profile_id,
+              true AS manageable
+         FROM cli_credential_profiles p
+         LEFT JOIN cli_credential_space_grants g
+           ON g.profile_id = p.id
+          AND g.space_id = $2
+        WHERE p.owner_user_id = $1
+        ORDER BY p.runtime ASC, p.name ASC, p.created_at ASC`,
+      [userId, spaceId],
+    );
+    return this.rowsToProfileMap(result.rows);
+  }
+
+  private async loadGrantedProfiles(
+    spaceId: string,
+    userId?: string | null,
+  ): Promise<Map<string, CredentialProfile>> {
+    const db = this.db();
+    if (!db) return new Map();
+    const result = await db.query<CredentialProfileRow>(
+      `SELECT p.id,
+              p.owner_user_id,
+              p.runtime,
+              p.name,
+              p.source_path,
+              p.target_path,
+              p.readonly,
+              p.notes,
+              g.id AS grant_id,
+              g.enabled AS grant_enabled,
+              g.is_default,
+              g.network_profile_id,
+              (p.owner_user_id = $2) AS manageable
+         FROM cli_credential_space_grants g
+         JOIN cli_credential_profiles p ON p.id = g.profile_id
+        WHERE g.space_id = $1
+          AND g.enabled = true
+        ORDER BY p.runtime ASC, g.is_default DESC, p.name ASC, p.created_at ASC`,
+      [spaceId, userId ?? null],
+    );
+    return this.rowsToProfileMap(result.rows);
+  }
+
+  private rowsToProfileMap(rows: CredentialProfileRow[]): Map<string, CredentialProfile> {
+    const profiles = new Map<string, CredentialProfile>();
+    for (const row of rows) {
+      const profile = this.profileFromRow(row);
+      profiles.set(profile.id, profile);
     }
     return profiles;
+  }
+
+  private async getOwnedProfile(
+    userId: string,
+    profileId: string,
+    spaceId?: string | null,
+  ): Promise<CredentialProfile | null> {
+    const db = this.db();
+    if (!db) return null;
+    const result = await db.query<CredentialProfileRow>(
+      `SELECT p.id,
+              p.owner_user_id,
+              p.runtime,
+              p.name,
+              p.source_path,
+              p.target_path,
+              p.readonly,
+              p.notes,
+              g.id AS grant_id,
+              g.enabled AS grant_enabled,
+              g.is_default,
+              g.network_profile_id,
+              true AS manageable
+         FROM cli_credential_profiles p
+         LEFT JOIN cli_credential_space_grants g
+           ON g.profile_id = p.id
+          AND g.space_id = $3
+        WHERE p.owner_user_id = $1
+          AND p.id = $2
+        LIMIT 1`,
+      [userId, profileId, spaceId ?? null],
+    );
+    return result.rows[0] ? this.profileFromRow(result.rows[0]) : null;
+  }
+
+  private async getOwnedDefaultForRuntime(
+    userId: string,
+    runtime: string,
+    spaceId: string,
+  ): Promise<CredentialProfile | null> {
+    const profiles = await this.loadOwnedProfiles(spaceId, userId);
+    const defaultProfile = this.findDefaultProfile(profiles, runtime);
+    if (defaultProfile) return defaultProfile;
+    for (const profile of profiles.values()) {
+      if (profile.runtime === runtime) return profile;
+    }
+    return null;
+  }
+
+  private async getGrantedProfile(
+    runtime: string,
+    profileId?: string | null,
+    spaceId?: string | null,
+    userId?: string | null,
+  ): Promise<CredentialProfile | null> {
+    if (!profileId) return this.getDefaultProfile(runtime, spaceId, userId);
+    const db = this.db();
+    if (!db || !spaceId) return null;
+    const result = await db.query<CredentialProfileRow>(
+      `SELECT p.id,
+              p.owner_user_id,
+              p.runtime,
+              p.name,
+              p.source_path,
+              p.target_path,
+              p.readonly,
+              p.notes,
+              g.id AS grant_id,
+              g.enabled AS grant_enabled,
+              g.is_default,
+              g.network_profile_id,
+              (p.owner_user_id = $4) AS manageable
+         FROM cli_credential_space_grants g
+         JOIN cli_credential_profiles p ON p.id = g.profile_id
+        WHERE g.space_id = $1
+          AND g.enabled = true
+          AND p.runtime = $2
+          AND p.id = $3
+        LIMIT 1`,
+      [spaceId, runtime, profileId, userId ?? null],
+    );
+    return result.rows[0] ? this.profileFromRow(result.rows[0]) : null;
+  }
+
+  private async clearDefaultGrant(
+    spaceId: string,
+    runtime: string,
+    exceptProfileId?: string,
+  ): Promise<void> {
+    const db = this.db();
+    if (!db) return;
+    await db.query(
+      `UPDATE cli_credential_space_grants g
+          SET is_default = false,
+              updated_at = $3
+         FROM cli_credential_profiles p
+        WHERE g.profile_id = p.id
+          AND g.space_id = $1
+          AND p.runtime = $2
+          AND ($4::text IS NULL OR g.profile_id <> $4)`,
+      [spaceId, runtime, new Date(), exceptProfileId ?? null],
+    );
+  }
+
+  private async loadProfiles(
+    spaceId?: string | null,
+    userId?: string | null,
+    scope: "all" | "owned" | "granted" = "all",
+  ): Promise<Map<string, CredentialProfile>> {
+    const db = this.db();
+    if (!db) return new Map();
+    if (scope === "granted" && spaceId) return this.loadGrantedProfiles(spaceId, userId);
+    if ((scope === "owned" || scope === "all") && spaceId && userId) {
+      return this.loadOwnedProfiles(spaceId, userId);
+    }
+    return new Map();
   }
 
   private async createTempHome(runId: string, profile: CredentialProfile): Promise<string> {

@@ -19,18 +19,22 @@ only as legacy nullable FK targets for trace/read-model compatibility.
 same command rendering, credential, context, subprocess, output parser, and
 usage provider path. Native adapters are limited to `capability`.
 
-Use `/runtime-tools` for CLI binary installation/status and
+Use `/runtime-tools` for CLI binary installation/status, space runtime policy,
+and
 `RuntimeAdapterSpec` / `adapter_type` for runtime semantics. The old
 `/runtime-adapters` instance API is retired.
 
 Runtime tool status is non-mutating: it checks the active allowlisted binary
-under `$AGENT_SPACE_HOME/runtime-tools` and credential profile readiness without
-creating runs, sandboxes, events, credential grants, or model calls.
+and installed versions under `$AGENT_SPACE_HOME/runtime-tools` without creating
+runs, sandboxes, events, credential grants, or model calls. Installing or
+activating tool versions requires the configured `INSTANCE_ADMIN_EMAIL` user.
+Space owners/admins choose enabled/default/allowed versions for their own
+space; agent versions store the resolved CLI tool version used by runs.
 
-Credential profile binding uses stable profile ids such as
-`claude_code/default` and `codex_cli/default`. Permission bypass is policy
-controlled and denied before invocation unless both runtime config and runtime
-policy allow it under worktree isolation.
+Credential profile binding uses UUID profile ids from
+`cli_credential_profiles.id`. Permission bypass is policy controlled and denied
+before invocation unless both runtime config and runtime policy allow it under
+worktree isolation.
 
 Credential profile readiness requires the selected source path to exist.
 

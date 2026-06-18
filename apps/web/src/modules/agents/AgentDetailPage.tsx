@@ -3,8 +3,8 @@ import { useParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
 import { Loader2, MessageSquare, Ban, Power } from 'lucide-react'
 import { toast } from 'sonner'
-import { agentsApi } from '../../api/client'
-import type { AgentOut, AgentVersionOut, Run, Proposal } from '../../types/api'
+import { agentsApi, credentialsApi, runtimeToolsApi } from '../../api/client'
+import type { AgentOut, AgentVersionOut, Run, Proposal, CliCredentialAvailableProfileOut, SpaceRuntimeToolPolicyOut } from '../../types/api'
 import { Button } from '../../components/ui/button'
 import { Card, CardTitle } from '../../components/ui/card'
 import { Badge, StatusBadge } from '../../components/ui/badge'
@@ -16,6 +16,7 @@ import { errMsg } from '../../lib/utils'
 import { InputsView, OutputsView, ScheduleView, SafetyView } from './ConfigCards'
 import { modelFields, scheduleSummary } from './policyMap'
 import AssistantSettingsPanel from './AssistantSettingsPanel'
+import ProviderSelector from '../providers/ProviderSelector'
 
 export default function AgentDetailPage() {
   const { agentId } = useParams()
@@ -304,27 +305,161 @@ function ScheduleTab({ agentId, version, onSaved }: { agentId: string; version: 
 
 // ── Model (editable) ──────────────────────────────────────────────────────────
 
+function CliProfileSelector({
+  runtime,
+  profiles,
+  value,
+  onChange,
+}: {
+  runtime: string
+  profiles: CliCredentialAvailableProfileOut[]
+  value: string
+  onChange: (value: string) => void
+}) {
+  const runtimeProfiles = profiles.filter(profile => profile.runtime === runtime)
+  if (runtimeProfiles.length === 0) return null
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">CLI profile</label>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
+      >
+        <option value="">Active-space default</option>
+        {runtimeProfiles.map(profile => (
+          <option key={profile.id} value={profile.id}>
+            {profile.name}{profile.is_default ? ' (default)' : ''}{profile.manageable ? ' · mine' : ''}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+function RuntimeVersionSelector({
+  runtime,
+  policies,
+  value,
+  onChange,
+}: {
+  runtime: string
+  policies: SpaceRuntimeToolPolicyOut[]
+  value: string
+  onChange: (value: string) => void
+}) {
+  const policy = policies.find(item => item.runtime === runtime)
+  if (!policy) return null
+  const versions = policy.installed_versions.filter(version => version.installed)
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">CLI runtime version</label>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
+      >
+        <option value="">Space default ({policy.default_version ?? 'none'})</option>
+        {versions.map(version => (
+          <option key={version.version} value={version.version}>{version.version}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 function ModelTab({ agentId, version, onSaved }: { agentId: string; version: AgentVersionOut; onSaved: () => Promise<void> }) {
   const m = modelFields(version)
   const [model, setModel] = useState(m.model ?? version.model_name ?? '')
   const [temperature, setTemperature] = useState(m.temperature != null ? String(m.temperature) : '')
   const [maxTokens, setMaxTokens] = useState(m.max_tokens != null ? String(m.max_tokens) : '')
+  const [providerSelection, setProviderSelection] = useState<{ provider_id: string; model: string } | null>(
+    version.model_provider_id
+      ? { provider_id: version.model_provider_id, model: version.model_name ?? m.model ?? '' }
+      : null,
+  )
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [saving, setSaving] = useState(false)
   const hasProvider = Boolean(version.model_provider_id)
+  const runtimeConfig = version.runtime_config_json as Record<string, unknown>
+  const runtimePolicy = version.runtime_policy_json as Record<string, unknown>
+  const adapterType =
+    (typeof runtimeConfig.adapter_type === 'string' && runtimeConfig.adapter_type) ||
+    (typeof runtimePolicy.default_adapter_type === 'string' && runtimePolicy.default_adapter_type) ||
+    'model_api'
+  const supportsProviderSelection = adapterType === 'model_api' || adapterType === 'claude_code' || adapterType === 'codex_cli'
+  const providerRequired = adapterType === 'model_api'
+  const requireClaudeCompatible = adapterType === 'claude_code'
+  const requireOpenAiCompatible = adapterType === 'codex_cli'
+  const isCli = adapterType === 'claude_code' || adapterType === 'codex_cli'
+  const [cliProfiles, setCliProfiles] = useState<CliCredentialAvailableProfileOut[]>([])
+  const [runtimePolicies, setRuntimePolicies] = useState<SpaceRuntimeToolPolicyOut[]>([])
+  const [credentialProfileId, setCredentialProfileId] = useState(
+    typeof runtimeConfig.credential_profile_id === 'string' ? runtimeConfig.credential_profile_id : '',
+  )
+  const [runtimeToolVersion, setRuntimeToolVersion] = useState(
+    typeof runtimeConfig.runtime_tool_version === 'string' ? runtimeConfig.runtime_tool_version : '',
+  )
+
+  useEffect(() => {
+    setCredentialProfileId(
+      typeof runtimeConfig.credential_profile_id === 'string' ? runtimeConfig.credential_profile_id : '',
+    )
+    setRuntimeToolVersion(
+      typeof runtimeConfig.runtime_tool_version === 'string' ? runtimeConfig.runtime_tool_version : '',
+    )
+  }, [version.id, runtimeConfig.credential_profile_id, runtimeConfig.runtime_tool_version])
+
+  useEffect(() => {
+    if (!isCli) {
+      setCliProfiles([])
+      setRuntimePolicies([])
+      return
+    }
+    Promise.all([
+      credentialsApi.available(adapterType).catch(() => [] as CliCredentialAvailableProfileOut[]),
+      runtimeToolsApi.spacePolicies().catch(() => [] as SpaceRuntimeToolPolicyOut[]),
+    ])
+      .then(([profiles, policies]) => {
+        setCliProfiles(profiles.filter(profile => profile.logged_in))
+        setRuntimePolicies(policies)
+      })
+      .catch(() => {
+        setCliProfiles([])
+        setRuntimePolicies([])
+      })
+  }, [adapterType, isCli])
+
+  function changeProviderSelection(next: { provider_id: string; model: string } | null) {
+    setProviderSelection(next)
+    if (next?.model) setModel(next.model)
+  }
 
   async function save() {
     setSaving(true)
     try {
       const cfg: Record<string, unknown> = { ...(version.model_config_json as Record<string, unknown>) }
-      cfg.model = model.trim() || undefined
+      const selectedModel = providerSelection?.model || model.trim()
+      cfg.model = selectedModel || undefined
       if (temperature.trim()) cfg.temperature = Number(temperature)
       else delete cfg.temperature
       if (maxTokens.trim()) cfg.max_tokens = Number(maxTokens)
+      const nextRuntimeConfig: Record<string, unknown> = { ...runtimeConfig, adapter_type: adapterType }
+      if (isCli && credentialProfileId) nextRuntimeConfig.credential_profile_id = credentialProfileId
+      else delete nextRuntimeConfig.credential_profile_id
+      if (isCli && runtimeToolVersion) nextRuntimeConfig.runtime_tool_version = runtimeToolVersion
+      else delete nextRuntimeConfig.runtime_tool_version
       // Keep the provider's model binding consistent with the edited model name.
-      const body = hasProvider && model.trim()
-        ? { model_config_json: cfg, model_name: model.trim() }
-        : { model_config_json: cfg }
+      const body = supportsProviderSelection
+        ? {
+            model_config_json: cfg,
+            ...(isCli ? { runtime_config_json: nextRuntimeConfig } : {}),
+            model_provider_id: providerSelection?.provider_id ?? null,
+            model_name: providerSelection?.provider_id && selectedModel ? selectedModel : null,
+          }
+        : hasProvider && model.trim()
+          ? { model_config_json: cfg, ...(isCli ? { runtime_config_json: nextRuntimeConfig } : {}), model_name: model.trim() }
+          : { model_config_json: cfg, ...(isCli ? { runtime_config_json: nextRuntimeConfig } : {}) }
       await agentsApi.updateConfig(agentId, body)
       toast.success('Model updated (new version created)')
       await onSaved()
@@ -335,6 +470,32 @@ function ModelTab({ agentId, version, onSaved }: { agentId: string; version: Age
     <Card className="space-y-4">
       <CardTitle>Model</CardTitle>
       {hasProvider && <p className="text-xs text-muted-foreground -mt-2">Bound to a configured provider. Resolved from the system default at creation.</p>}
+      {supportsProviderSelection && (
+        <ProviderSelector
+          value={providerSelection}
+          onChange={changeProviderSelection}
+          required={providerRequired}
+          requireClaudeCompatible={requireClaudeCompatible}
+          requireOpenAiCompatible={requireOpenAiCompatible}
+          emptyLabel={requireClaudeCompatible ? 'Claude Code default' : requireOpenAiCompatible ? 'Codex default' : undefined}
+        />
+      )}
+      {isCli && (
+        <>
+          <CliProfileSelector
+            runtime={adapterType}
+            profiles={cliProfiles}
+            value={credentialProfileId}
+            onChange={setCredentialProfileId}
+          />
+          <RuntimeVersionSelector
+            runtime={adapterType}
+            policies={runtimePolicies}
+            value={runtimeToolVersion}
+            onChange={setRuntimeToolVersion}
+          />
+        </>
+      )}
       <div className="space-y-1.5">
         <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Model</label>
         <Input value={model} onChange={e => setModel(e.target.value)} placeholder="claude-sonnet-4-6" className="font-mono" />

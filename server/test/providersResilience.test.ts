@@ -30,12 +30,14 @@ function target(
       name: providerId,
       provider_type: "openai",
       base_url: `https://api.${providerId}.test/v1`,
+      network_profile_id: null,
       default_model: `default-of-${providerId}`,
       available_models: [],
       enabled: true,
       is_default: false,
       ...provider,
     },
+    network_profile: null,
     rotation_strategy: "fill_first",
     fallback_provider_ids,
     candidates: keys.map(({ member, key }) => ({
@@ -58,6 +60,8 @@ function makeStore(
     createProvider: unsupported,
     updateProvider: unsupported,
     deleteProvider: unsupported,
+    grantProviderToSpace: unsupported,
+    revokeProviderGrant: unsupported,
     async getInvocationTarget(_spaceId, providerId) {
       const t = targets[providerId ?? "default"];
       if (!t) throw new ProviderInvocationError(404, `no provider ${providerId}`);

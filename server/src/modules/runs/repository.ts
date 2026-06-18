@@ -10,305 +10,68 @@ import {
   BUILTIN_RUNTIME_ADAPTER_SPECS,
   type RuntimeAdapterType,
 } from "../runtimeAdapters/specs";
+import {
+  addOptionalFilter,
+  extractErrorMessage,
+  recordValue,
+  requiredSandboxLevelForRun,
+  trimmed,
+  validateRunCreateInput,
+} from "./runRepositoryHelpers";
+import {
+  type ArtifactSummaryRecord,
+  type ModelProviderSummaryRecord,
+  type ProposalSummaryRecord,
+  type Queryable,
+  RunCreateValidationError,
+  type RunChatResultRecord,
+  type RunCreateInput,
+  type RunEvaluationRecord,
+  type RunEventDetailRecord,
+  type RunEventInput,
+  type RunEventPage,
+  type RunEventPageFilters,
+  type RunEventRecord,
+  type RunFinalizationRecord,
+  type RunListFilters,
+  type RunRecord,
+  type RunStepDetailRecord,
+  type RunStepInput,
+  type RunStepRecord,
+  type RunTerminalUpdate,
+} from "./runRepositoryTypes";
+import {
+  taskChecklistFromRunEvaluation,
+  taskConfidenceForOutcome,
+  taskKnownIssuesFromRunEvaluation,
+  taskRecommendationForOutcome,
+  taskScoreForOutcome,
+  taskSummaryFromRunEvaluation,
+} from "./taskEvaluationProjection";
 
-export interface QueryResult<Row> {
-  rows: Row[];
-  rowCount: number | null;
-}
-
-export interface Queryable {
-  query<Row = Record<string, unknown>>(
-    sql: string,
-    params?: readonly unknown[],
-  ): Promise<QueryResult<Row>>;
-}
-
-export interface RunRecord {
-  id: string;
-  space_id: string;
-  agent_id: string;
-  agent_version_id: string;
-  system_prompt?: string | null;
-  context_snapshot_id?: string | null;
-  run_type?: string;
-  status: string;
-  mode: string;
-  prompt: string | null;
-  instruction: string | null;
-  workspace_id: string | null;
-  session_id: string | null;
-  parent_run_id?: string | null;
-  project_id: string | null;
-  scheduled_at?: string | null;
-  adapter_type: string | null;
-  capability_id?: string | null;
-  model_provider_id: string | null;
-  model_override_json?: unknown;
-  required_sandbox_level: string;
-  trigger_origin: string;
-  instructed_by_user_id?: string | null;
-  error_message?: string | null;
-  error_json?: unknown;
-  output_json?: unknown;
-  usage_json?: unknown;
-  started_at: string | null;
-  ended_at: string | null;
-  created_at?: string;
-  updated_at?: string;
-  visibility?: string;
-}
-
-export interface RunListFilters {
-  space_id: string;
-  user_id: string;
-  status?: string | null;
-  mode?: string | null;
-  agent_id?: string | null;
-  workspace_id?: string | null;
-  project_id?: string | null;
-  limit: number;
-  offset: number;
-}
-
-export interface ModelProviderSummaryRecord {
-  id: string;
-  name: string;
-  provider_type: string;
-  default_model: string | null;
-  enabled: boolean;
-  credential_id?: string | null;
-}
-
-export interface RunEvaluationRecord {
-  id: string;
-  space_id: string;
-  run_id: string;
-  evaluator_type: string;
-  evaluator_version: string;
-  outcome_status: string;
-  failure_layer: string | null;
-  failure_reason_code: string | null;
-  trajectory_status: string;
-  evidence_json: unknown;
-  rule_trace_json: unknown;
-  notes: string | null;
-  evaluated_at: string;
-}
-
-export interface RunFinalizationRecord {
-  id: string;
-  space_id: string;
-  run_id: string;
-  finalizer_version: string;
-  status: string;
-  run_evaluation_id: string | null;
-  task_evaluation_id: string | null;
-  outcome_status: string | null;
-  failure_layer: string | null;
-  failure_reason_code: string | null;
-  trajectory_status: string | null;
-  skipped_reasons_json: unknown;
-  error_json: unknown;
-  metadata_json: unknown;
-  finalized_at: string;
-  created_at: string;
-}
-
-export interface RunStepDetailRecord {
-  id: string;
-  space_id: string;
-  run_id: string;
-  parent_step_id: string | null;
-  actor_id: string;
-  step_index: number;
-  step_type: string;
-  status: string;
-  title: string | null;
-  workspace_id: string | null;
-  session_id: string | null;
-  task_id: string | null;
-  artifact_id: string | null;
-  proposal_id: string | null;
-  started_at: string | null;
-  ended_at: string | null;
-  input_summary: string | null;
-  output_summary: string | null;
-  error_type: string | null;
-  error_message: string | null;
-  metadata_json: unknown;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface RunEventDetailRecord {
-  id: string;
-  space_id: string;
-  run_id: string;
-  step_id: string | null;
-  actor_id: string | null;
-  event_index: number;
-  event_type: string;
-  status: string;
-  summary: string | null;
-  error_code: string | null;
-  error_message: string | null;
-  workspace_id: string | null;
-  artifact_id: string | null;
-  proposal_id: string | null;
-  data_exposure_level: string | null;
-  trust_level: string | null;
-  metadata_json: unknown;
-  created_at: string;
-}
-
-export interface RunEventPageFilters {
-  from_event_index: number;
-  limit: number;
-  event_type?: string | null;
-  status?: string | null;
-}
-
-export interface RunEventPage {
-  items: RunEventDetailRecord[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-export interface ArtifactSummaryRecord {
-  id: string;
-  space_id: string;
-  run_id: string | null;
-  proposal_id: string | null;
-  artifact_type: string;
-  title: string;
-  mime_type: string | null;
-  visibility: string;
-  created_at: string;
-}
-
-export interface ProposalSummaryRecord {
-  id: string;
-  space_id: string;
-  proposal_type: string;
-  status: string;
-  title: string;
-  visibility: string;
-  created_at: string;
-  preview: boolean;
-  urgency: string;
-  review_deadline: string | null;
-  expires_at: string | null;
-  created_by_run_id: string | null;
-}
-
-export interface RunCreateInput {
-  agent_id: string;
-  space_id: string;
-  user_id: string;
-  mode: string;
-  run_type: string;
-  trigger_origin: string;
-  session_id?: string | null;
-  workspace_id?: string | null;
-  project_id?: string | null;
-  prompt?: string | null;
-  instruction?: string | null;
-  scheduled_at?: string | null;
-  parent_run_id?: string | null;
-  adapter_type?: string | null;
-  capability_id?: string | null;
-  model_provider_id?: string | null;
-  model?: string | null;
-}
-
-export class RunCreateValidationError extends Error {
-  constructor(
-    message: string,
-    readonly statusCode: number = 422,
-  ) {
-    super(message);
-    this.name = "RunCreateValidationError";
-  }
-}
-
-export interface RunTerminalUpdate {
-  run_id: string;
-  space_id: string;
-  status: "succeeded" | "failed" | "degraded" | "cancelled";
-  output_text?: string | null;
-  output_json?: unknown;
-  error_json?: unknown;
-  exit_code?: number | null;
-  completed_at: string;
-  usage_json?: unknown;
-}
-
-export interface RunEventRecord {
-  id: string;
-  space_id: string;
-  run_id: string;
-  event_index: number;
-  event_type: string;
-  status: string;
-}
-
-export interface RunChatResultRecord {
-  id: string;
-  space_id: string;
-  status: string;
-  output_json: unknown;
-  error_json: unknown;
-}
-
-export interface RunEventInput {
-  run_id: string;
-  space_id: string;
-  event_type: string;
-  status: "pending" | "running" | "succeeded" | "failed" | "skipped" | "warning" | "cancelled";
-  step_id?: string | null;
-  actor_id?: string | null;
-  summary?: string | null;
-  metadata_json?: unknown;
-  error_code?: string | null;
-  error_message?: string | null;
-  workspace_id?: string | null;
-  artifact_id?: string | null;
-  proposal_id?: string | null;
-  data_exposure_level?: string | null;
-  trust_level?: string | null;
-}
-
-export interface RunStepRecord {
-  id: string;
-  space_id: string;
-  run_id: string;
-  step_index: number;
-  step_type: string;
-  status: string;
-}
-
-export interface RunStepInput {
-  run_id: string;
-  space_id: string;
-  actor_id: string;
-  step_type: string;
-  status: "pending" | "running" | "succeeded" | "failed" | "skipped" | "cancelled";
-  title?: string | null;
-  parent_step_id?: string | null;
-  workspace_id?: string | null;
-  session_id?: string | null;
-  task_id?: string | null;
-  artifact_id?: string | null;
-  proposal_id?: string | null;
-  started_at?: string | null;
-  ended_at?: string | null;
-  input_summary?: string | null;
-  output_summary?: string | null;
-  error_type?: string | null;
-  error_message?: string | null;
-  metadata_json?: unknown;
-}
+export {
+  RunCreateValidationError,
+  type ArtifactSummaryRecord,
+  type ModelProviderSummaryRecord,
+  type ProposalSummaryRecord,
+  type QueryResult,
+  type Queryable,
+  type RunChatResultRecord,
+  type RunCreateInput,
+  type RunEvaluationRecord,
+  type RunEventDetailRecord,
+  type RunEventInput,
+  type RunEventPage,
+  type RunEventPageFilters,
+  type RunEventRecord,
+  type RunFinalizationRecord,
+  type RunListFilters,
+  type RunRecord,
+  type RunStepDetailRecord,
+  type RunStepInput,
+  type RunStepRecord,
+  type RunTerminalUpdate,
+} from "./runRepositoryTypes";
 
 export class PgRunRepository {
   constructor(private readonly db: Queryable) {}
@@ -404,6 +167,10 @@ export class PgRunRepository {
       agent.current_version_id,
       input,
     );
+    const requiredSandboxLevel = requiredSandboxLevelForRun(
+      resolved.adapterType,
+      input.workspace_id,
+    );
     if (resolved.modelProviderId) {
       const provider = await this.getModelProviderSummary(
         input.space_id,
@@ -463,7 +230,7 @@ export class PgRunRepository {
        VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, 'queued', $12, $13, $14, $15, $16, $16,
-          $17, $18, $19, $20::jsonb, 'none', 'estimated',
+          $17, $18, $19, $20::jsonb, $22, 'estimated',
           'space_shared', $21, 'managed'
        )
        RETURNING id, space_id, agent_id, agent_version_id, context_snapshot_id,
@@ -498,6 +265,7 @@ export class PgRunRepository {
           ? JSON.stringify({ model: resolved.modelName, source: resolved.source })
           : null,
         input.project_id ?? null,
+        requiredSandboxLevel,
       ],
     );
     const row = result.rows[0];
@@ -573,6 +341,14 @@ export class PgRunRepository {
         source: "agent_default",
       };
     }
+    if ((adapterType === "claude_code" || adapterType === "codex_cli") && version?.model_provider_id) {
+      return {
+        adapterType,
+        modelProviderId: version.model_provider_id,
+        modelName: requestModel ?? versionModel,
+        source: "agent_default",
+      };
+    }
     if (mode === "required") {
       const fallback = await this.resolveDefaultProvider(spaceId, adapterType);
       if (fallback) {
@@ -631,9 +407,19 @@ export class PgRunRepository {
       default_model: string | null;
       config_json: unknown;
     }>(
-      `SELECT id, default_model, config_json
-         FROM model_providers
-        WHERE space_id = $1 AND enabled = TRUE`,
+      `SELECT p.id,
+              p.default_model,
+              jsonb_set(
+                COALESCE(p.config_json, '{}'::jsonb),
+                '{is_default}',
+                to_jsonb(g.is_default),
+                true
+              ) AS config_json
+         FROM model_provider_space_grants g
+         JOIN model_providers p ON p.id = g.provider_id
+        WHERE g.space_id = $1
+          AND g.enabled = TRUE
+          AND p.enabled = TRUE`,
       [spaceId],
     );
     let spaceDefault: { id: string; default_model: string | null } | null = null;
@@ -703,6 +489,7 @@ export class PgRunRepository {
               r.instruction, r.workspace_id, r.session_id, r.parent_run_id,
               r.project_id, r.scheduled_at, r.adapter_type, r.capability_id,
               r.model_provider_id, r.model_override_json, r.required_sandbox_level,
+              av.runtime_config_json,
               r.trigger_origin, r.instructed_by_user_id, r.error_message,
               r.error_json, r.output_json, r.usage_json, r.started_at,
               r.ended_at, r.created_at, r.updated_at, r.visibility
@@ -754,9 +541,12 @@ export class PgRunRepository {
   ): Promise<ModelProviderSummaryRecord | null> {
     if (!providerId) return null;
     const result = await this.db.query<ModelProviderSummaryRecord>(
-      `SELECT id, name, provider_type, default_model, enabled, credential_id
-         FROM model_providers
-        WHERE space_id = $1 AND id = $2`,
+      `SELECT p.id, p.name, p.provider_type, p.default_model, p.enabled, p.credential_id
+         FROM model_provider_space_grants g
+         JOIN model_providers p ON p.id = g.provider_id
+        WHERE g.space_id = $1
+          AND g.provider_id = $2
+          AND g.enabled = TRUE`,
       [spaceId, providerId],
     );
     return result.rows[0] ?? null;
@@ -1235,16 +1025,25 @@ export class PgRunRepository {
     required_sandbox_level?: string | null;
   }): Promise<RunRecord | null> {
     const result = await this.db.query<RunRecord>(
-      `UPDATE runs
-          SET status = 'running',
-              started_at = $3,
-              updated_at = $3,
-              required_sandbox_level = COALESCE($4, required_sandbox_level)
-        WHERE space_id = $1 AND id = $2 AND status = 'queued'
-        RETURNING id, space_id, agent_id, agent_version_id, run_type, status, mode,
-                  prompt, instruction, workspace_id, session_id, project_id,
-                  adapter_type, model_provider_id,
-                  required_sandbox_level, trigger_origin, instructed_by_user_id, error_message, started_at, ended_at`,
+      `WITH updated AS (
+         UPDATE runs
+            SET status = 'running',
+                started_at = $3,
+                updated_at = $3,
+                required_sandbox_level = COALESCE($4, required_sandbox_level)
+          WHERE space_id = $1 AND id = $2 AND status = 'queued'
+          RETURNING id, space_id, agent_id, agent_version_id, run_type, status, mode,
+                    prompt, instruction, workspace_id, session_id, project_id,
+                    adapter_type, model_provider_id,
+                    required_sandbox_level, trigger_origin, instructed_by_user_id, error_message,
+                    started_at, ended_at
+       )
+       SELECT u.*, av.runtime_config_json
+         FROM updated u
+         LEFT JOIN agent_versions av
+           ON av.id = u.agent_version_id
+          AND av.space_id = u.space_id
+          AND av.agent_id = u.agent_id`,
       [
         input.space_id,
         input.run_id,
@@ -1447,140 +1246,5 @@ export class PgRunRepository {
 
   async releaseExecutionLock(runId: string): Promise<void> {
     await this.db.query("DELETE FROM run_execution_locks WHERE run_id = $1", [runId]);
-  }
-}
-
-function recordValue(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-/** Trim a value to a non-empty string, or "" when absent/non-string. */
-function trimmed(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function extractErrorMessage(value: unknown): string | null {
-  if (!value || typeof value !== "object") return null;
-  const record = value as Record<string, unknown>;
-  const message = record.error_message ?? record.error_text ?? record.message;
-  return typeof message === "string" ? message : null;
-}
-
-function addOptionalFilter(
-  clauses: string[],
-  params: unknown[],
-  column: string,
-  value: string | null | undefined,
-): void {
-  if (value == null || value === "") return;
-  params.push(value);
-  clauses.push(`${column} = $${params.length}`);
-}
-
-function validateRunCreateInput(input: RunCreateInput): void {
-  assertOneOf(input.mode, ["live", "dry_run"], "mode");
-  assertOneOf(
-    input.run_type,
-    ["agent", "system", "workflow", "validation", "reflection", "export", "evolution"],
-    "run_type",
-  );
-  assertOneOf(input.trigger_origin, ["manual", "automation", "job", "system"], "trigger_origin");
-}
-
-function assertOneOf(value: string, allowed: readonly string[], field: string): void {
-  if (allowed.includes(value)) return;
-  throw new RunCreateValidationError(
-    `Invalid ${field} '${value}'. Must be one of: ${allowed.slice().sort().join(", ")}`,
-  );
-}
-
-function taskScoreForOutcome(outcome: string): number | null {
-  if (outcome === "passed") return 1;
-  if (outcome === "partial") return 0.5;
-  if (outcome === "failed") return 0;
-  return null;
-}
-
-function taskConfidenceForOutcome(outcome: string): number {
-  if (outcome === "passed" || outcome === "failed") return 1;
-  if (outcome === "partial") return 0.7;
-  return 0.3;
-}
-
-function taskRecommendationForOutcome(outcome: string): string {
-  if (outcome === "passed") return "accept";
-  if (outcome === "partial") return "review";
-  if (outcome === "failed") return "retry";
-  return "needs_evidence";
-}
-
-function taskSummaryFromRunEvaluation(row: RunEvaluationRecord): string {
-  const outcome = row.outcome_status;
-  const trajectory = row.trajectory_status;
-  if (outcome === "passed" && trajectory === "acceptable") {
-    return "Run evaluation passed with acceptable trajectory.";
-  }
-  if (outcome === "failed") {
-    if (row.failure_layer && row.failure_reason_code) {
-      return `Run evaluation failed at ${row.failure_layer}: ${row.failure_reason_code}.`;
-    }
-    if (row.failure_layer) return `Run evaluation failed at ${row.failure_layer}.`;
-    if (row.failure_reason_code) return `Run evaluation failed: ${row.failure_reason_code}.`;
-    return "Run evaluation failed.";
-  }
-  if (outcome === "partial") return `Run evaluation is partial; trajectory ${trajectory}.`;
-  if (outcome === "unknown") return `Run evaluation is unknown; trajectory ${trajectory}.`;
-  return `Run evaluation ${outcome}; trajectory ${trajectory}.`;
-}
-
-function taskChecklistFromRunEvaluation(row: RunEvaluationRecord): Record<string, unknown> {
-  return {
-    run_evaluation_id: row.id,
-    run_id: row.run_id,
-    outcome_status: row.outcome_status,
-    trajectory_status: row.trajectory_status,
-    failure_layer: row.failure_layer,
-    failure_reason_code: row.failure_reason_code,
-    evaluator_version: row.evaluator_version,
-  };
-}
-
-function taskKnownIssuesFromRunEvaluation(row: RunEvaluationRecord): Record<string, unknown>[] {
-  const issues: Record<string, unknown>[] = [];
-  if (row.failure_layer || row.failure_reason_code) {
-    issues.push({
-      kind: "failure",
-      failure_layer: row.failure_layer,
-      failure_reason_code: row.failure_reason_code,
-    });
-  }
-  const evidence = recordValue(row.evidence_json);
-  collectIssueList(issues, recordValue(evidence.context).warnings, "context_warning", "code");
-  const materialization = recordValue(evidence.materialization);
-  collectIssueList(issues, materialization.codes, "materialization_code", "code");
-  collectIssueList(issues, materialization.errors, "materialization_error", "error");
-  collectIssueList(issues, materialization.code_patch_warnings, "materialization_warning", "code");
-  const validation = recordValue(evidence.validation);
-  if (typeof validation.status === "string" && validation.status) {
-    issues.push({ kind: "validation_status", status: validation.status });
-  }
-  collectIssueList(issues, validation.signals, "validation_signal", "code");
-  if (row.trajectory_status === "unsafe") {
-    issues.push({ kind: "trajectory", status: "unsafe" });
-  }
-  return issues;
-}
-
-function collectIssueList(
-  issues: Record<string, unknown>[],
-  value: unknown,
-  kind: string,
-  field: string,
-): void {
-  if (!Array.isArray(value)) return;
-  for (const item of value) {
-    if (item) issues.push({ kind, [field]: item });
   }
 }

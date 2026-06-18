@@ -1,0 +1,166 @@
+import {
+  HttpError,
+  canReadByVisibility,
+  dateIso,
+  numberValue,
+  objectValue,
+  optionalObject,
+  stringArray,
+} from "../routeUtils/common";
+import type {
+  EntityLinkRow,
+  KnowledgeItemRow,
+  KnowledgeRelationRow,
+  NoteCollectionRow,
+  NoteRow,
+  SourceRow,
+} from "./knowledgeRepositoryRows";
+
+export function knowledgeSummaryOut(row: KnowledgeItemRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    project_id: row.project_id,
+    workspace_id: row.workspace_id,
+    item_type: row.item_type,
+    slug: row.slug,
+    title: row.title,
+    content_preview: row.excerpt ?? (row.plain_text ?? row.content).slice(0, 280),
+    excerpt: row.excerpt,
+    status: row.status,
+    visibility: row.visibility,
+    verification_status: row.verification_status,
+    reflection_status: row.reflection_status,
+    tags: stringArray(row.tags_json),
+    confidence: row.confidence,
+    version: numberValue(row.version) ?? 1,
+    updated_at: dateIso(row.updated_at) ?? new Date(0).toISOString(),
+  };
+}
+
+export function knowledgeItemOut(row: KnowledgeItemRow, sourceRefs: Record<string, unknown>[]): Record<string, unknown> {
+  return {
+    ...knowledgeSummaryOut(row),
+    root_item_id: row.root_item_id,
+    supersedes_item_id: row.supersedes_item_id,
+    redirect_to_item_id: row.redirect_to_item_id,
+    aliases: stringArray(row.aliases_json),
+    content: row.content,
+    content_json: optionalObject(row.content_json),
+    content_format: row.content_format,
+    content_schema_version: numberValue(row.content_schema_version) ?? 1,
+    plain_text: row.plain_text,
+    source_url: row.source_url,
+    source_refs: sourceRefs,
+    owner_user_id: row.owner_user_id,
+    created_by_user_id: row.created_by_user_id,
+    created_by_agent_id: row.created_by_agent_id,
+    created_by_run_id: row.created_by_run_id,
+    source_activity_id: row.source_activity_id,
+    source_artifact_id: row.source_artifact_id,
+    created_from_proposal_id: row.created_from_proposal_id,
+    approved_by_user_id: row.approved_by_user_id,
+    created_at: dateIso(row.created_at),
+    archived_at: dateIso(row.archived_at),
+    deprecated_at: dateIso(row.deprecated_at),
+  };
+}
+
+export function relationOut(row: KnowledgeRelationRow): Record<string, unknown> {
+  return normalizeDates({ ...row });
+}
+
+export function sourceSummaryOut(row: SourceRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    source_type: row.source_type,
+    title: row.title,
+    uri: row.uri,
+    status: row.status,
+    source_activity_id: row.source_activity_id,
+    created_at: dateIso(row.created_at),
+    updated_at: dateIso(row.updated_at),
+  };
+}
+
+export function sourceOut(row: SourceRow): Record<string, unknown> {
+  return {
+    ...sourceSummaryOut(row),
+    content_ref: row.content_ref,
+    raw_text: row.raw_text,
+    summary: row.summary,
+    metadata: objectValue(row.metadata_json),
+    created_by_user_id: row.created_by_user_id,
+  };
+}
+
+export function noteSummaryOut(row: NoteRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    title: row.title,
+    excerpt: row.excerpt,
+    status: row.status,
+    content_format: row.content_format,
+    primary_project_id: row.primary_project_id,
+    collection_id: row.collection_id,
+    created_at: dateIso(row.created_at),
+    updated_at: dateIso(row.updated_at),
+    deleted_at: dateIso(row.deleted_at),
+  };
+}
+
+export function noteOut(row: NoteRow): Record<string, unknown> {
+  return {
+    ...noteSummaryOut(row),
+    content_json: optionalObject(row.content_json),
+    content_schema_version: numberValue(row.content_schema_version) ?? 1,
+    plain_text: row.plain_text,
+    created_from_activity_id: row.created_from_activity_id,
+    created_by_user_id: row.created_by_user_id,
+    archived_at: dateIso(row.archived_at),
+  };
+}
+
+export function noteCollectionOut(row: NoteCollectionRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    parent_id: row.parent_id,
+    name: row.name,
+    system_role: row.system_role,
+    sort_order: numberValue(row.sort_order) ?? 0,
+    is_system: row.is_system,
+    is_hidden: row.is_hidden,
+    created_at: dateIso(row.created_at),
+    updated_at: dateIso(row.updated_at),
+  };
+}
+
+export function entityLinkOut(row: EntityLinkRow): Record<string, unknown> {
+  return normalizeDates({ ...row });
+}
+
+export function normalizeDates(row: Record<string, unknown>): Record<string, unknown> {
+  for (const key of Object.keys(row)) {
+    if (key.endsWith("_at")) row[key] = dateIso(row[key]);
+  }
+  return row;
+}
+
+export function canReadKnowledge(row: KnowledgeItemRow, userId: string): boolean {
+  return canReadByVisibility(row.visibility, userId, [row.owner_user_id, row.created_by_user_id]);
+}
+
+export function canMutateKnowledge(row: KnowledgeItemRow, userId: string): boolean {
+  if (row.visibility === "space_shared" || row.visibility === "workspace_shared") return true;
+  return row.owner_user_id === userId || row.created_by_user_id === userId;
+}
+
+export function confidence(value: unknown): number | null {
+  const parsed = numberValue(value);
+  if (parsed === null) return null;
+  if (parsed < 0 || parsed > 1) throw new HttpError(422, "confidence must be between 0 and 1");
+  return parsed;
+}
