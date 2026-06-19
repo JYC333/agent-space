@@ -102,6 +102,52 @@ Keep facades narrow so tests and peer modules do not couple to internal helpers.
 | Runtime adapter | Register adapter/spec in `server/src/modules/runtimeAdapters`; adapters return `RuntimeAdapterResult` and use server runtime services. |
 | Model API runtime | Use `model_api` for no-tools provider-backed execution; it calls server providers and does not use CLI credentials, terminal, local-host, or sandbox capabilities. |
 
+## Adding An Official Optional Module
+
+Official optional modules are product feature packages that can be enabled/disabled per
+space or per user. Their control-plane descriptor lives in the `plugins` module,
+while runtime code for bundled official plugins lives under `plugins/official/<plugin_id>/`,
+is compiled into `server/dist/official-plugins/<plugin_id>/`, and is activated by `PluginHost`.
+
+Steps:
+1. Add an `OfficialPluginDescriptor` under `server/src/modules/plugins/official/<pluginId>.ts`.
+2. Register the descriptor in `server/src/modules/plugins/registry.ts`.
+3. If the plugin contributes runtime behavior, create `plugins/official/<plugin-id>/`.
+4. Export an `AgentSpacePlugin` whose `activate(ctx)` synchronously registers routes, jobs,
+   schedulers, and proposal appliers, then returns `{ activated: true }`.
+5. Ensure the plugin package has `plugin.json` and `server/tsconfig.json`; `server/scripts/build-official-plugins.mjs` compiles it into `server/dist/official-plugins/<plugin-id>/`, and `server/src/modules/plugins/builtInPlugins.ts` loads that artifact at startup.
+6. In plugin routes, call `ctx.http.pluginGuard(request, reply)` before returning any real content.
+   Disabled state returns `{ error_code: "plugin_disabled" }`.
+7. Add plugin-owned SQL files under `plugins/official/<plugin-id>/migrations/`,
+   load them from the runtime plugin, and expose them through
+   `AgentSpacePlugin.migrations`; the installer runs them, not `activate()`.
+8. Put plugin-owned frontend pages under `plugins/official/<plugin-id>/web/src/`.
+   Plugin frontend source must define the host API it needs and must not import
+   `apps/web/src` directly.
+9. Add a frontend entry with `source: 'official_plugin'`, `pluginId: '<id>'`, `enabled: false`
+   in `apps/web/src/modules/registry.ts`, and lazy-import an app-owned adapter under
+   `apps/web/src/plugins/<plugin-id>/`. The adapter imports the plugin page factory
+   and injects frontend host APIs. Runtime state is overlaid from backend.
+10. Use `useEffectivePlugins()` hook to show/hide UI elements based on backend state.
+11. Add core migrations only for control-plane tables shared by all plugins; plugin-owned
+    domain tables belong to installer-managed plugin migrations.
+12. See `.agent/architecture/OFFICIAL_OPTIONAL_MODULES.md` and ADR 0007 for full context.
+
+Implemented contribution points:
+- Routes through `ctx.fastify` plus `ctx.http.pluginGuard()`.
+- Job handlers through `ctx.jobs.register()`; the host wraps handlers with enablement checks.
+- Scheduled tasks through `ctx.scheduler.register()`; task code must fan out only to enabled scopes.
+- Proposal appliers through `ctx.proposals.register()`; the host wraps appliers with enablement checks.
+
+Deferred contribution points:
+- Context providers must not contribute when disabled.
+- Activity sources and memory proposal generators must preserve the proposal/intake boundary.
+
+Private/personal modules (e.g. dairy) must default to `can_contribute_context: "opt_in"`
+and not contribute context unless the user has explicitly enabled it in settings. Editor-owned
+plugin documents may write their own domain tables directly; extracting them into Memory,
+Knowledge, ContextBuilder, or FlashCards must go through proposal/intake flows.
+
 ## Ports
 
 Use a `Protocol`/`ABC` when callers need substitution or tests need a fake. Existing examples:

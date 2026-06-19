@@ -62,3 +62,6 @@ export * from "./proposals.js";
 
 // Memory + sessions contracts
 export * from "./memorySessions.js";
+
+// Official Optional Module (plugin) control-plane contracts
+export * from "./plugins.js";

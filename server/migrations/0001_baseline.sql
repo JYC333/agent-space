@@ -1,8 +1,4 @@
 -- server/migrations/0001_baseline.sql
--- GENERATED, then FROZEN — do not edit by hand.
--- Source: pg_dump --schema-only of the canonical initial schema.
--- The schema was frozen during the server cutover. Future changes are added
--- as new NNNN_*.sql files in this directory, not by editing this baseline.
 
 --
 -- PostgreSQL database dump
@@ -1296,6 +1292,52 @@ CREATE TABLE public.notes (
     deleted_at timestamp with time zone,
     CONSTRAINT ck_notes_content_format CHECK (((content_format)::text = ANY ((ARRAY['markdown'::character varying, 'plain'::character varying, 'prosemirror_json'::character varying])::text[]))),
     CONSTRAINT ck_notes_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'archived'::character varying, 'deleted'::character varying])::text[])))
+);
+
+
+--
+-- Name: official_plugin_enablements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.official_plugin_enablements (
+    id character varying(36) NOT NULL,
+    space_id character varying(36),
+    user_id character varying(36),
+    plugin_id character varying(128) NOT NULL,
+    enabled boolean NOT NULL,
+    visible boolean NOT NULL DEFAULT true,
+    settings_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+    enabled_at timestamp with time zone,
+    enabled_by_user_id character varying(36),
+    disabled_at timestamp with time zone,
+    disabled_by_user_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT official_plugin_enablements_plugin_id_non_empty CHECK ((plugin_id)::text <> ''),
+    CONSTRAINT official_plugin_enablements_settings_is_object CHECK (jsonb_typeof(settings_json) = 'object'),
+    CONSTRAINT official_plugin_enablements_scope_check CHECK (
+        (space_id IS NOT NULL AND user_id IS NULL) OR
+        (space_id IS NULL AND user_id IS NOT NULL)
+    )
+);
+
+
+--
+-- Name: official_plugin_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.official_plugin_events (
+    id character varying(36) NOT NULL,
+    space_id character varying(36),
+    plugin_id character varying(128) NOT NULL,
+    event_type character varying(64) NOT NULL,
+    actor_user_id character varying(36),
+    target_user_id character varying(36),
+    metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT official_plugin_events_event_type_non_empty CHECK ((event_type)::text <> ''),
+    CONSTRAINT official_plugin_events_metadata_is_object CHECK (jsonb_typeof(metadata_json) = 'object'),
+    CONSTRAINT official_plugin_events_plugin_id_non_empty CHECK ((plugin_id)::text <> '')
 );
 
 
@@ -2766,6 +2808,22 @@ ALTER TABLE ONLY public.note_collections
 
 ALTER TABLE ONLY public.notes
     ADD CONSTRAINT notes_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: official_plugin_enablements official_plugin_enablements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.official_plugin_enablements
+    ADD CONSTRAINT official_plugin_enablements_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: official_plugin_events official_plugin_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.official_plugin_events
+    ADD CONSTRAINT official_plugin_events_pkey PRIMARY KEY (id);
 
 
 --
@@ -6981,6 +7039,48 @@ CREATE INDEX ix_workspaces_status ON public.workspaces USING btree (status);
 
 
 --
+-- Name: official_plugin_enablements_plugin_space_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX official_plugin_enablements_plugin_space_idx ON public.official_plugin_enablements USING btree (plugin_id, space_id) WHERE (space_id IS NOT NULL);
+
+
+--
+-- Name: official_plugin_enablements_space_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX official_plugin_enablements_space_idx ON public.official_plugin_enablements USING btree (space_id) WHERE (space_id IS NOT NULL);
+
+
+--
+-- Name: official_plugin_enablements_space_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX official_plugin_enablements_space_unique ON public.official_plugin_enablements (plugin_id, space_id) WHERE (space_id IS NOT NULL AND user_id IS NULL);
+
+
+--
+-- Name: official_plugin_enablements_user_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX official_plugin_enablements_user_unique ON public.official_plugin_enablements (plugin_id, user_id) WHERE (space_id IS NULL AND user_id IS NOT NULL);
+
+
+--
+-- Name: official_plugin_events_plugin_space_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX official_plugin_events_plugin_space_idx ON public.official_plugin_events USING btree (plugin_id, space_id, created_at DESC) WHERE (space_id IS NOT NULL);
+
+
+--
+-- Name: official_plugin_events_space_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX official_plugin_events_space_idx ON public.official_plugin_events USING btree (space_id, created_at DESC) WHERE (space_id IS NOT NULL);
+
+
+--
 -- Name: uq_agent_templates_space_key; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -9788,6 +9888,48 @@ ALTER TABLE ONLY public.workspaces
 ALTER TABLE ONLY public.workspaces
     ADD CONSTRAINT workspaces_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
 
+
+-- ── Level 2 Plugin Infrastructure ────────────────────────────────────────────
+-- plugin_installs tracks which plugins are installed on this instance.
+-- Official plugin installs write a row here after installer-managed migrations run.
+-- Future downloaded plugins use the same table after package verification.
+
+CREATE TABLE public.plugin_installs (
+    id                   character varying(36)  NOT NULL DEFAULT gen_random_uuid(),
+    plugin_id            character varying(64)  NOT NULL,
+    installed_version    character varying(32)  NOT NULL,
+    status               character varying(16)  NOT NULL DEFAULT 'active',
+    source               character varying(16)  NOT NULL DEFAULT 'official',
+    installed_at         timestamp with time zone NOT NULL DEFAULT now(),
+    installed_by_user_id character varying(36),
+    package_hash         text,
+    manifest_json        jsonb NOT NULL DEFAULT '{}'::jsonb,
+    CONSTRAINT plugin_installs_pkey PRIMARY KEY (id),
+    CONSTRAINT plugin_installs_plugin_id_unique UNIQUE (plugin_id),
+    CONSTRAINT plugin_installs_plugin_id_nonempty CHECK ((length(trim((plugin_id)::text)) > 0)),
+    CONSTRAINT plugin_installs_status_valid CHECK ((status IN ('active', 'disabled', 'removed'))),
+    CONSTRAINT plugin_installs_source_valid CHECK ((source IN ('built_in', 'official', 'local')))
+);
+
+-- plugin_migrations tracks which migrations a plugin has applied.
+-- Separate from core migrations to allow independent versioning.
+
+CREATE TABLE public.plugin_migrations (
+    id               character varying(36)  NOT NULL DEFAULT gen_random_uuid(),
+    plugin_id        character varying(64)  NOT NULL,
+    plugin_version   character varying(32)  NOT NULL,
+    migration_id     character varying(128) NOT NULL,
+    checksum         text,
+    applied_at       timestamp with time zone NOT NULL DEFAULT now(),
+    status           character varying(16)  NOT NULL DEFAULT 'applied',
+    error_message    text,
+    CONSTRAINT plugin_migrations_pkey PRIMARY KEY (id),
+    CONSTRAINT plugin_migrations_unique UNIQUE (plugin_id, migration_id),
+    CONSTRAINT plugin_migrations_status_valid CHECK ((status IN ('applied', 'failed')))
+);
+
+CREATE INDEX plugin_installs_status_idx ON public.plugin_installs USING btree (status);
+CREATE INDEX plugin_migrations_plugin_id_idx ON public.plugin_migrations USING btree (plugin_id);
 
 --
 -- PostgreSQL database dump complete

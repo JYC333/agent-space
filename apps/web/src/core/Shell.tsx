@@ -7,12 +7,13 @@ import { useTheme } from '../contexts/ThemeContext'
 import { useSpace } from '../contexts/SpaceContext'
 import { SpaceSwitcher } from '../components/SpaceSwitcher'
 import { UserAvatar } from '../components/UserAvatar'
-import { GlobalRail } from '../components/shell/GlobalRail'
+import { GlobalRail, type PluginNavItem } from '../components/shell/GlobalRail'
 import { SceneSidebar, SceneTabs } from '../components/shell/SceneSidebar'
 import { MobileTabBar } from '../components/shell/MobileTabBar'
 import { FloatingQuickCapture } from '../components/FloatingQuickCapture'
 import { routeScopeForPath, sceneForPath, stripSpacePrefix } from './navigation'
 import { moduleForPath } from '../modules/registry'
+import { useEffectiveModules } from '../modules/plugins/useEffectivePlugins'
 
 const RAIL_KEY = 'agent-space:rail-expanded'
 const SCENE_COLLAPSE_KEY = 'agent-space:scene-collapsed'
@@ -143,6 +144,14 @@ export default function Shell() {
   const { currentUser } = useAuth()
   const { activeSpaceId, preferredSpaceId, spaces } = useSpace()
   const location = useLocation()
+  const { modules: effectiveModules, refresh: refreshPlugins } = useEffectiveModules()
+
+  // Re-fetch plugin state whenever PluginsPage enables or disables a module.
+  useEffect(() => {
+    const handler = () => refreshPlugins()
+    window.addEventListener('agent-space:plugin-state-changed', handler)
+    return () => window.removeEventListener('agent-space:plugin-state-changed', handler)
+  }, [refreshPlugins])
 
   const scope = routeScopeForPath(location.pathname)
   const scene = scope === 'home' ? null : sceneForPath(location.pathname)
@@ -157,11 +166,15 @@ export default function Shell() {
 
   const sceneCollapsed = scene ? (collapsedScenes[scene.id] ?? false) : false
   const showSidebar = Boolean(scene) && !sceneCollapsed
-  const title = scene?.title ?? (isHome ? 'Home' : moduleForPath(logicalPath)?.label ?? 'agent-space')
+  const title = scene?.title ?? (isHome ? 'Home' : moduleForPath(logicalPath, effectiveModules)?.label ?? 'agent-space')
   const permissionSpaceId = activeSpaceId ?? preferredSpaceId
   const permissionRole = spaces.find(s => s.id === permissionSpaceId)?.role
   const canManageSpace = permissionRole === 'owner' || permissionRole === 'admin'
   const canManageInstance = Boolean(currentUser?.is_instance_admin)
+
+  const pluginNavItems: PluginNavItem[] = effectiveModules
+    .filter(m => m.source === 'official_plugin' && m.enabled && m.perspectiveType === 'personal')
+    .map(m => ({ id: m.id, label: m.label, path: m.path, icon: m.icon }))
 
   function setSceneCollapsed(collapsed: boolean) {
     if (!scene) return
@@ -176,6 +189,7 @@ export default function Shell() {
         spaceId={preferredSpaceId}
         canManageSpace={canManageSpace}
         canManageInstance={canManageInstance}
+        pluginModules={pluginNavItems}
       />
 
       {showSidebar && scene && (

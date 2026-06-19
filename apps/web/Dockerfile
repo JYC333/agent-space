@@ -1,6 +1,6 @@
 # agent-space Web UI — multi-stage build
 #
-# Build context: apps/web/
+# Build context: repo root
 # Run via docker-compose in ops/compose/ — the compose file selects a stage
 # with `build.target`:
 #   - dev / test  → target: dev   (Vite dev server, hot reload, source mounted)
@@ -12,14 +12,14 @@
 # ---- shared dependency layer ----------------------------------------------
 FROM node:20-slim AS base
 
-WORKDIR /app
-
 # npm retry config — guards against transient ECONNRESET in WSL2/Docker builds
 ENV NPM_CONFIG_FETCH_RETRIES=5 \
     NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000 \
     NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000
 
-COPY package.json package-lock.json ./
+WORKDIR /repo/apps/web
+
+COPY apps/web/package.json apps/web/package-lock.json ./
 RUN npm ci
 
 # ---- dev: Vite dev server -------------------------------------------------
@@ -36,7 +36,8 @@ CMD ["node_modules/.bin/vite"]
 # ---- build: produce the static production bundle --------------------------
 FROM base AS build
 
-COPY . .
+COPY apps/web ./
+COPY plugins /repo/plugins
 RUN npm run build
 
 # ---- prod: serve the built bundle via nginx -------------------------------
@@ -45,7 +46,7 @@ RUN npm run build
 FROM nginx:1.27-alpine AS prod
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+COPY --from=build /repo/apps/web/dist /usr/share/nginx/html
 
 EXPOSE 80
 

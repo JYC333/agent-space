@@ -8,7 +8,7 @@ import {
 } from "@testcontainers/postgresql";
 import { migrate } from "../src/db/migrator";
 
-// Empty-DB migration test. Applies the committed, frozen baseline
+// Empty-DB migration test. Applies the committed consolidated baseline
 // (server/migrations/*.sql) to a fresh Postgres via the server migration
 // runner and asserts it applies cleanly and idempotently.
 //
@@ -69,7 +69,7 @@ async function baselineTableNames(p: Pool): Promise<string[]> {
   return res.rows.map((r) => r.table_name);
 }
 
-describe("server runner applies the frozen baseline schema", () => {
+describe("server runner applies the baseline schema", () => {
   it("uses the single committed baseline migration", () => {
     const migrationFiles = readdirSync(MIGRATIONS_DIR)
       .filter((name) => /^\d+_.+\.sql$/.test(name))

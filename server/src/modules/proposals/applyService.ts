@@ -9,6 +9,7 @@ import {
 import { ProposalRiskLevelError } from "../policy/gateway";
 import {
   createDefaultProposalApplierRegistry,
+  type ProposalApplierContributor,
   type ProposalApplierRegistry,
 } from "./applierRegistry";
 import {
@@ -76,8 +77,11 @@ export class PgProposalApplyService {
     private readonly registry: ProposalApplierRegistry = createDefaultProposalApplierRegistry(),
   ) {}
 
-  static fromConfig(config: ServerConfig): PgProposalApplyService {
-    return new PgProposalApplyService(config);
+  static fromConfig(
+    config: ServerConfig,
+    contributor?: ProposalApplierContributor,
+  ): PgProposalApplyService {
+    return new PgProposalApplyService(config, createDefaultProposalApplierRegistry(contributor));
   }
 
   supportedProposalTypes(): ReadonlySet<string> {

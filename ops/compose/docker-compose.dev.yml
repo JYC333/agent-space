@@ -31,6 +31,7 @@ services:
       - ../../server/migrations:/app/server/migrations:ro
       - ../../server/tsconfig.json:/app/server/tsconfig.json:ro
       - ../../packages/protocol/src:/app/packages/protocol/src:ro
+      - ../../plugins:/app/plugins:ro
       - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/dev}:/aspace
     environment:
       - AGENT_SPACE_HOME=/aspace
@@ -88,21 +89,23 @@ services:
       retries: 3
     command: >
       sh -c "npm --prefix /app/packages/protocol run build -- --watch --preserveWatchOutput &
+             node scripts/build-official-plugins.mjs --watch &
              npm run build -- --watch --preserveWatchOutput &
              node --watch dist/index.js"
     restart: unless-stopped
 
   frontend:
     build:
-      context: ../../apps/web
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: apps/web/Dockerfile
       network: host
       target: dev
     ports:
       - "3000:5173"
     volumes:
-      - ../../apps/web:/app
-      - /app/node_modules
+      - ../../apps/web:/repo/apps/web
+      - ../../plugins:/repo/plugins:ro
+      - /repo/apps/web/node_modules
     environment:
       - CHOKIDAR_USEPOLLING=true
     depends_on:

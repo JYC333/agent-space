@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react'
-import { Settings, Users, Mail, Send, Globe2, ShieldAlert } from 'lucide-react'
+import { Settings, Users, Mail, Send, Globe2, ShieldAlert, Puzzle } from 'lucide-react'
 import { toast } from 'sonner'
 import { SpaceLink as Link } from '../../core/spaceNav'
 import { useAuth } from '../../contexts/AuthContext'
@@ -110,6 +110,18 @@ export default function SpaceSettingsPage() {
       ) : (
         <>
           <SpaceRuntimePolicyPanel />
+
+          <Card>
+            <CardTitle className="flex items-center gap-2">
+              <Puzzle className="size-3.5" /> Optional Modules
+            </CardTitle>
+            <p className="text-sm text-muted-foreground mb-3">
+              Enable or disable official optional modules for this space.
+            </p>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/plugins">Manage Modules</Link>
+            </Button>
+          </Card>
 
           <Card>
             <CardTitle className="flex items-center gap-2">

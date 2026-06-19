@@ -18,6 +18,8 @@ import {
 import { startBackgroundServices } from "./modules/jobs/backgroundServices";
 import { enforceBackupPolicy, BackupPolicyError } from "./modules/backups/guard";
 import { startProviderProxyServer } from "./modules/providers/providerProxyServer";
+import { PluginHost } from "./modules/plugins/host";
+import { BUILT_IN_PLUGINS } from "./modules/plugins/builtInPlugins";
 
 async function main(): Promise<void> {
   let config;
@@ -48,14 +50,17 @@ async function main(): Promise<void> {
     throw err;
   }
 
-  const app = buildServer(config);
+  const pluginHost = new PluginHost(BUILT_IN_PLUGINS);
+
+  const app = buildServer(config, { pluginHost });
   for (const diagnostic of collectConfigDiagnostics(process.env, config)) {
     app.log.warn(`[server] config [${diagnostic.code}]: ${diagnostic.message}`);
   }
   const snapshot = createConfigSnapshot(config);
   app.log.info(
     `[server] starting (${describeConfig(config)}) ` +
-      `config_schema=${snapshot.schema_version} config_hash=${snapshot.content_hash.slice(0, 12)}`,
+      `config_schema=${snapshot.schema_version} config_hash=${snapshot.content_hash.slice(0, 12)}` +
+      ` plugins=${pluginHost.pluginCount}`,
   );
 
   let background: ReturnType<typeof startBackgroundServices> | null = null;
@@ -86,11 +91,15 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  background = startBackgroundServices(config, {
-    info: (message) => app.log.info(message),
-    warn: (message) => app.log.warn(message),
-    error: (message) => app.log.error(message),
-  });
+  background = startBackgroundServices(
+    config,
+    {
+      info: (message) => app.log.info(message),
+      warn: (message) => app.log.warn(message),
+      error: (message) => app.log.error(message),
+    },
+    pluginHost,
+  );
   if (background.worker) {
     app.log.info(`[server] jobs worker active (${background.worker.worker_id})`);
   }

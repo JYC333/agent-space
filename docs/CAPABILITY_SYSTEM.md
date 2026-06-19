@@ -1,5 +1,10 @@
 # Capability System
 
+> **Capability ≠ Official Optional Module.**
+> A Capability is an agent AI skill/behavior descriptor (this document).
+> An Official Optional Module is a product feature package with DB-backed enable/disable state per space/user.
+> They are separate concepts. See `.agent/architecture/OFFICIAL_OPTIONAL_MODULES.md` and ADR 0011.
+
 ## What is a capability?
 
 A capability is a versioned, self-describing unit of agent behaviour.

@@ -6,6 +6,7 @@ import { JobWorker } from "./worker";
 import { registerAgentRunHandler } from "../runs/agentRunHandler";
 import { registerMemoryConsolidationHandler } from "../activity/consolidationJob";
 import { registerDailyCaptureReportHandler } from "../dailyReports/jobHandler";
+import type { PluginHost } from "../plugins/host";
 import { PgRunRepository } from "../runs/repository";
 
 const POLL_INTERVAL_MS = 1_000;
@@ -25,23 +26,29 @@ export interface JobsWorkerHandle {
   stop(): Promise<void>;
 }
 
-export function buildJobHandlerRegistry(config: ServerConfig): JobHandlerRegistry {
+export function buildJobHandlerRegistry(
+  config: ServerConfig,
+  pluginHost?: PluginHost,
+): JobHandlerRegistry {
   const registry = new JobHandlerRegistry();
   registerAgentRunHandler(registry, config);
   registerMemoryConsolidationHandler(registry, config);
   registerDailyCaptureReportHandler(registry, config);
+  // Plugin-contributed job handlers (enablement-gated by the host context).
+  pluginHost?.applyJobHandlers(registry);
   return registry;
 }
 
 export function startJobsWorker(
   config: ServerConfig,
   log?: JobsWorkerLogger,
+  pluginHost?: PluginHost,
 ): JobsWorkerHandle | null {
   if (!config.databaseUrl) return null;
 
   const queue = PgJobQueueRepository.fromConfig(config);
   const runs = PgRunRepository.fromConfig(config);
-  const registry = buildJobHandlerRegistry(config);
+  const registry = buildJobHandlerRegistry(config, pluginHost);
   const claimableJobTypes = registry.registeredJobTypes();
   if (claimableJobTypes.length === 0) {
     throw new Error("Job worker started with zero registered handlers");

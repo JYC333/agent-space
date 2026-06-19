@@ -51,6 +51,10 @@ import { workspaceProfilesModule } from "../modules/workspaceProfiles";
 import { workspacesModule } from "../modules/workspaces";
 import { deploymentModule } from "../modules/deployment";
 import { frontendSupportModule } from "../modules/frontendSupport";
+// Official optional module control plane — registered before optional product modules.
+import { pluginsModule } from "../modules/plugins";
+// Plugin host — activates built-in official plugins after SERVER_MODULES.
+import type { PluginHost } from "../modules/plugins/host";
 import { registerErrorEnvelopeHandler } from "./errorEnvelope";
 import {
   REQUEST_ID_HEADER,
@@ -64,6 +68,8 @@ export interface ModuleContext {
   config: ServerConfig;
   /** Immutable, hash-identified view of the same validated config. */
   snapshot: ConfigSnapshot;
+  /** Built-in official plugin host for modules that own extension registries. */
+  pluginHost?: PluginHost;
 }
 
 /** Contract every server-owned backend module implements. */
@@ -115,13 +121,19 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   backupsModule,
   deploymentModule,
   frontendSupportModule,
+  // Official optional module control plane.
+  // Must appear before optional product modules that depend on the plugin guard.
+  pluginsModule,
+  // Note: official optional product modules (e.g. dairy) are no longer in
+  // SERVER_MODULES. They are loaded and activated via the PluginHost after this list.
 ];
 
 export function registerServerRoutes(
   app: FastifyInstance,
   config: ServerConfig,
+  pluginHost?: PluginHost,
 ): void {
-  const context: ModuleContext = { config, snapshot: createConfigSnapshot(config) };
+  const context: ModuleContext = { config, snapshot: createConfigSnapshot(config), pluginHost };
 
   // Cross-cutting gateway conventions: the error envelope for server-owned route
   // errors, and request-id continuity on every response.
@@ -136,7 +148,12 @@ export function registerServerRoutes(
     module.registerRoutes(app, context);
   }
 
-  // 2. Unknown API catch-all. Must stay last so explicitly owned server routes win.
+  // 2. Plugin-contributed routes. activate() is synchronous by contract.
+  if (pluginHost) {
+    pluginHost.activate(app, config);
+  }
+
+  // 3. Unknown API catch-all. Must stay last so explicitly owned server routes win.
   app.all("/api/v1/*", async (_request, reply) =>
     reply.code(404).send({ detail: "Route not found" }),
   );

@@ -7,6 +7,7 @@ import { runScheduledBackup } from "../backups/service";
 import { IntakeExtractionWorker } from "../intake/extractionWorker";
 import { PgJobQueueRepository } from "./repository";
 import { startJobsWorker, type JobsWorkerHandle } from "./workerRuntime";
+import type { PluginHost } from "../plugins/host";
 
 export interface BackgroundServicesHandle {
   worker: JobsWorkerHandle | null;
@@ -20,9 +21,13 @@ export function startBackgroundServices(
     warn(message: string): void;
     error(message: string): void;
   },
+  pluginHost?: PluginHost,
 ): BackgroundServicesHandle {
-  const worker = startJobsWorker(config, log);
-  const tasks: ScheduledTask[] = [];
+  const worker = startJobsWorker(config, log, pluginHost);
+  const tasks: ScheduledTask[] = [
+    // Plugin-contributed scheduler tasks (fan out to enabled users internally).
+    ...(pluginHost?.getSchedulerTasks() ?? []),
+  ];
 
   if (config.dailyReportSchedulerEnabled && worker) {
     tasks.push({

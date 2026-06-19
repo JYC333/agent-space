@@ -15,6 +15,7 @@ import type { ServerConfig } from "./config";
 import { registerServerRoutes } from "./gateway/routeRegistry";
 import { buildLoggerOptions } from "./gateway/logging";
 import { REQUEST_ID_HEADER } from "./gateway/requestContext";
+import type { PluginHost } from "./modules/plugins/host";
 
 const SERVER_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
 
@@ -28,6 +29,8 @@ export interface BuildServerOptions {
    * serializers + redaction. Tests use this to assert secrets never reach logs.
    */
   logStream?: NodeJS.WritableStream;
+  /** Optional plugin host — activates built-in plugins after SERVER_MODULES. */
+  pluginHost?: PluginHost;
 }
 
 export function buildServer(
@@ -59,7 +62,7 @@ export function buildServer(
     done(null, body);
   });
 
-  registerServerRoutes(app, config);
+  registerServerRoutes(app, config, options.pluginHost);
 
   return app;
 }

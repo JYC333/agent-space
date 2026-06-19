@@ -3,6 +3,20 @@
  *
  * Pure functions only: liveness body and the feature advertisement. They report
  * only the server's own state.
+ *
+ * IMPORTANT DISTINCTION:
+ *   GET /api/v1/server/features (this file) advertises SERVER INFRASTRUCTURE capabilities —
+ *   always-on features baked into the server binary. It is NOT a product feature toggle.
+ *   It does NOT represent optional product module enablement.
+ *
+ *   GET /api/v1/plugins is the OFFICIAL OPTIONAL MODULE control plane — it returns
+ *   descriptors and per-space/user enablement state for optional product features
+ *   such as dairy. These are NOT listed here as always-on features.
+ *
+ *   GET /api/v1/catalog (catalog module) lists CAPABILITY manifests — agent AI skill
+ *   descriptors. Also NOT product plugins.
+ *
+ *   See .agent/architecture/OFFICIAL_OPTIONAL_MODULES.md and ADR 0007.
  */
 
 import { createRequire } from "node:module";
@@ -87,6 +101,10 @@ export function computeFeatures(config: ServerConfig): string[] {
     features.push("notification_webhook_egress");
   }
   if (isProtocolPackageDetected()) features.push("protocol_package_detected");
+  // Advertises that the official optional module control plane is available.
+  // This does NOT mean any specific optional module is enabled — use
+  // GET /api/v1/plugins/effective for per-space/user module enablement state.
+  features.push("official_optional_modules");
   return features;
 }
 

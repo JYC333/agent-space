@@ -15,6 +15,14 @@ function serverServiceBlock(mode: "dev" | "test" | "prod"): string {
   return text.slice(start, nextService === -1 ? undefined : nextService);
 }
 
+function frontendServiceBlock(mode: "dev" | "test" | "prod"): string {
+  const text = composeText(mode);
+  const start = text.indexOf("\n  frontend:");
+  expect(start).toBeGreaterThanOrEqual(0);
+  const nextService = text.indexOf("\n  deployer:", start + 1);
+  return text.slice(start, nextService === -1 ? undefined : nextService);
+}
+
 function composeText(mode: "dev" | "test" | "prod"): string {
   return readFileSync(
     join(repoRoot, "ops", "compose", `docker-compose.${mode}.yml`),
@@ -65,5 +73,28 @@ describe("compose server config", () => {
     expect(readFileSync(join(repoRoot, "server", "Dockerfile"), "utf8")).toContain(
       "COPY server/migrations ./migrations",
     );
+  });
+
+  it("keeps official plugin source out of the production server container", () => {
+    for (const mode of ["dev", "test"] as const) {
+      expect(serverServiceBlock(mode)).toContain("../../plugins:/app/plugins:ro");
+    }
+    expect(serverServiceBlock("prod")).not.toContain("../../plugins:");
+    expect(readFileSync(join(repoRoot, "server", "Dockerfile"), "utf8")).toContain(
+      "COPY plugins /app/plugins",
+    );
+  });
+
+  it("builds the frontend from the repo root so official plugin pages are included", () => {
+    for (const mode of ["dev", "test", "prod"] as const) {
+      const block = frontendServiceBlock(mode);
+      expect(block).toContain("context: ../../");
+      expect(block).toContain("dockerfile: apps/web/Dockerfile");
+    }
+    for (const mode of ["dev", "test"] as const) {
+      const block = frontendServiceBlock(mode);
+      expect(block).toContain("../../apps/web:/repo/apps/web");
+      expect(block).toContain("../../plugins:/repo/plugins:ro");
+    }
   });
 });

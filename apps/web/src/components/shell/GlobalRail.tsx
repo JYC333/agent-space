@@ -1,7 +1,23 @@
 import { Link, useLocation } from 'react-router-dom'
-import { PanelLeftOpen, PanelLeftClose } from 'lucide-react'
+import { PanelLeftOpen, PanelLeftClose, Puzzle, BookOpen, type LucideIcon } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { RAIL_ITEMS, sceneForPath, spacePath, stripSpacePrefix, type RailItem } from '../../core/navigation'
+
+/** Map lucide icon names (kebab-case) used by official plugins to icon components. */
+const PLUGIN_ICON_MAP: Record<string, LucideIcon> = {
+  book: BookOpen,
+}
+function pluginIcon(name: string): LucideIcon {
+  return PLUGIN_ICON_MAP[name] ?? Puzzle
+}
+
+export interface PluginNavItem {
+  id: string
+  label: string
+  /** Logical top-level path, e.g. '/dairy'. Never space-scoped. */
+  path: string
+  icon: string
+}
 
 function ApertureMark({ size = 22 }: { size?: number }) {
   return (
@@ -35,12 +51,15 @@ export function GlobalRail({
   spaceId,
   canManageSpace = false,
   canManageInstance = false,
+  pluginModules = [],
 }: {
   expanded: boolean
   onToggle: () => void
   spaceId: string | null
   canManageSpace?: boolean
   canManageInstance?: boolean
+  /** Enabled official plugin modules with personal scope — shown dynamically below core nav. */
+  pluginModules?: PluginNavItem[]
 }) {
   const { pathname } = useLocation()
   const visibleItems = RAIL_ITEMS.filter(i =>
@@ -92,6 +111,37 @@ export function GlobalRail({
       <div className="flex flex-col gap-0.5 mt-1">
         {main.map(renderItem)}
       </div>
+
+      {pluginModules.length > 0 && (
+        <>
+          <div className="mx-3 my-1.5 border-t border-border/50" />
+          <div className="flex flex-col gap-0.5">
+            {pluginModules.map(m => {
+              const Icon = pluginIcon(m.icon)
+              const active = stripSpacePrefix(pathname) === m.path || pathname.startsWith(`${m.path}/`)
+              return (
+                <Link
+                  key={m.id}
+                  to={m.path}
+                  title={m.label}
+                  aria-label={m.label}
+                  aria-current={active ? 'page' : undefined}
+                  className={cn(
+                    'flex items-center rounded-md transition-colors h-9',
+                    expanded ? 'gap-3 px-2.5 mx-1.5' : 'justify-center mx-auto w-9',
+                    active
+                      ? 'bg-primary/10 text-accent-foreground border border-primary/30'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-accent border border-transparent',
+                  )}
+                >
+                  <Icon className="size-[18px] shrink-0" />
+                  {expanded && <span className="text-[13px] font-medium truncate">{m.label}</span>}
+                </Link>
+              )
+            })}
+          </div>
+        </>
+      )}
 
       <div className="flex-1" />
 

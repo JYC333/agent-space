@@ -46,7 +46,7 @@ function proposalServices(context: ModuleContext): ProposalServices {
   if (servicesFactoryOverride) return servicesFactoryOverride(context);
   return {
     repository: PgProposalRepository.fromConfig(context.config),
-    applyService: PgProposalApplyService.fromConfig(context.config),
+    applyService: PgProposalApplyService.fromConfig(context.config, context.pluginHost),
   };
 }
 

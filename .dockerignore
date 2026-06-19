@@ -1,12 +1,14 @@
 # Root .dockerignore — applies only to builds that use the repo root as their
-# build context. Today that covers the TypeScript server image. The web frontend
-# and deployer images build from their own subdirectory contexts, each with its
-# own .dockerignore, and are unaffected by this file.
+# build context. Today that covers the TypeScript server image and the web
+# frontend image, because official plugin frontend sources live under
+# plugins/official/*/web. The deployer image builds from its own subdirectory
+# context and is unaffected by this file.
 #
 # Keep repo-root build contexts small and free of host/runtime artifacts.
 
 **/node_modules
 **/dist
+**/src-tauri/target
 **/.venv
 .git
 .agent

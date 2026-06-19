@@ -91,7 +91,7 @@ role derived from `POSTGRES_*`; `ops/scripts/lib/local-compose.sh` generates
 separate per-table app role.
 
 Server DB connections and transactions are centralized in
-`server/src/db/`. The server migration runner and frozen baseline under
+`server/src/db/`. The server migration runner and SQL files under
 `server/migrations/` are the runtime schema authority. They are explicit
 ops commands invoked by `ops/scripts/start.sh` before app services start; they
 are not wired into the server service process startup.

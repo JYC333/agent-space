@@ -71,6 +71,7 @@ describe('spacePath / stripSpacePrefix', () => {
     expect(spacePath('team-1', '/proposals')).toBe('/spaces/team-1/proposals')
     expect(spacePath('team-1', '/activity?status=raw')).toBe('/spaces/team-1/activity?status=raw')
     expect(spacePath('team-1', '/agents/abc')).toBe('/spaces/team-1/agents/abc')
+    expect(spacePath('team-1', '/plugins')).toBe('/spaces/team-1/plugins')
   })
 
   it('leaves user-scoped, already-scoped, and missing-space paths untouched', () => {

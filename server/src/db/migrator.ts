@@ -2,8 +2,9 @@
  * server migration runner.
  *
  * The server owns PostgreSQL schema evolution through explicit ops
- * commands. `server/migrations/0001_baseline.sql` is the frozen handoff
- * baseline; future schema changes are added here as new `NNNN_*.sql` files.
+ * commands. `server/migrations/0001_baseline.sql` is the current consolidated
+ * baseline for empty database bootstrap; later applied schema versions are
+ * immutable and must be followed by new `NNNN_*.sql` files.
  *
  * Design:
  * - Migrations are ordered `.sql` files named `NNNN_name.sql` under a directory;

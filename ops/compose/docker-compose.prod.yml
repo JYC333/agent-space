@@ -18,8 +18,9 @@ services:
 
   # Official server — the default production API entrypoint. nginx
   # proxies /api to this service (see apps/web/nginx.conf). Not published
-  # externally — nginx (:80) is the public face. Production migrations are
-  # bundled in the server image; do not bind-mount live migration files.
+  # externally — nginx (:80) is the public face. Production migrations and
+  # official plugin server artifacts are bundled in the server image; do not
+  # bind-mount live migration or plugin source files.
   server:
     build:
       context: ../../
@@ -85,12 +86,13 @@ services:
 
   frontend:
     build:
-      context: ../../apps/web
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: apps/web/Dockerfile
       network: host
       target: prod
     # nginx serves the built static bundle and proxies /api to the server
-    # service (see apps/web/nginx.conf).
+    # service (see apps/web/nginx.conf). Build context is the repo root because
+    # official plugin frontend source lives under plugins/official/*/web.
     ports:
       - "80:80"
     depends_on:

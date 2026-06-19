@@ -66,7 +66,13 @@ export class ProposalApplierRegistry {
   }
 }
 
-export function createDefaultProposalApplierRegistry(): ProposalApplierRegistry {
+export interface ProposalApplierContributor {
+  applyProposalAppliers(registry: ProposalApplierRegistry): void;
+}
+
+export function createDefaultProposalApplierRegistry(
+  contributor?: ProposalApplierContributor,
+): ProposalApplierRegistry {
   const registry = new ProposalApplierRegistry();
   for (const proposalType of ["memory_create", "memory_update", "memory_archive"]) {
     registry.register(proposalType, applyMemoryProposal);
@@ -74,6 +80,7 @@ export function createDefaultProposalApplierRegistry(): ProposalApplierRegistry 
   registerKnowledgeProposalAppliers(registry);
   registerTaskProposalAppliers(registry);
   registerWorkspaceProposalAppliers(registry);
+  contributor?.applyProposalAppliers(registry);
   return registry;
 }
 

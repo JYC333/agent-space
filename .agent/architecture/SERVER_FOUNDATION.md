@@ -58,9 +58,10 @@ Server database access is centralized under `server/src/db/`:
 The migration runner is the schema authority but remains an explicit ops command,
 not a startup hook.
 
-`server/migrations/0001_baseline.sql` is the frozen TypeScript-backend cutover
-baseline. Future schema changes must be added as new ordered SQL migration files;
-do not edit the frozen baseline by hand.
+`server/migrations/0001_baseline.sql` is the current consolidated TypeScript
+server schema baseline for this pre-history phase. Once real deployments have
+applied a migration version, later schema changes must be added as new ordered
+SQL migration files instead of editing that applied file.
 
 ## Configuration
 

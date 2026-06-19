@@ -58,7 +58,7 @@ export function isSpaceType(value: string): value is SpaceTypeValue {
 
 /**
  * Field names that carry raw secret material in request-only payloads. No
- * response contract may contain them (ADR 0010 / ADR 0011 response boundary).
+ * response contract may contain them (ADR 0010 response boundary).
  */
 export const SECRET_RESPONSE_FIELDS = [
   "api_key",

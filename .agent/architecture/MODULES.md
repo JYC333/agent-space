@@ -9,7 +9,7 @@
 | Path | Role |
 |---|---|
 | `server/` | TypeScript API backend and explicit schema migration owner. The gateway module is permanent; unknown API paths return the local 404 catch-all. |
-| `server/migrations/` | Frozen cutover baseline plus forward-only SQL migrations; do not edit the baseline by hand. |
+| `server/migrations/` | Current server schema baseline plus forward-only SQL migrations. In this pre-history phase, `0001_baseline.sql` is the consolidated baseline. |
 | `apps/web/` | Web client. It consumes APIs and shared protocol types; it is not a business-rule authority. |
 | `catalog/` | Built-in definitions, including agent templates and capabilities. |
 | `packages/protocol/` | Shared TypeScript protocol package only. No handlers, persistence, routing, or authority. |
@@ -31,9 +31,19 @@ Current server ownership is summarized in
 | `frontend-support` | Backend read models and aggregation endpoints for UI views. |
 | `support-package` | Import-only package with no HTTP module registration. |
 
+## Module Kinds vs. Official Optional Modules
+
+**ServerModule** (in `gateway/routeRegistry.ts`) is the internal backend code registration unit. All `ServerModule` entries are unconditionally mounted at startup — they are not toggled at the code level.
+
+**PluginHost** activates official plugin package artifacts from `server/dist/official-plugins/<plugin_id>/` after core server modules and before the API catch-all. Source for bundled official plugins lives under `plugins/official/<plugin_id>/`. PluginHost is the startup activation point for official plugin routes, jobs, scheduled tasks, and proposal appliers. Activation is synchronous by contract.
+
+**Official Optional Modules** are a product control-plane layer above `ServerModule` and `PluginHost`. They gate runtime behavior (route responses, job handlers, scheduled tasks, proposal appliers, context contribution) via DB-backed plugin enablement, without per-scope route mounting. See [`OFFICIAL_OPTIONAL_MODULES.md`](OFFICIAL_OPTIONAL_MODULES.md) and ADR 0007.
+
+The `plugins` module (Kind: `kernel`) is the control plane for official optional modules. Built-in official plugin code is activated through `PluginHost` and gated by the plugin guard in route handlers or host-wrapped contribution points.
+
 ## Registered HTTP Modules
 
-All current registered modules are `always_on=True`.
+Core modules are `always_on=True`. Optional product routes are still mounted by PluginHost, but respond with `plugin_disabled` when the plugin is disabled for the space/user.
 
 | Module | Kind | Routes | Public facade | Main ownership / notes |
 |---|---|---|---|---|
@@ -73,6 +83,15 @@ All current registered modules are `always_on=True`.
 | `backups` | infra | `/system/backups*` | empty | Server-owned full-system backup service and scheduled backup ticks. |
 | `deployment` | infra | `/deployments/jobs*` | empty | Deployer client edge; create/detail currently fail closed with 501. |
 | `frontendSupport` | frontend-support | `/home/summary`, `/me/summary`, `/me/timeline`, `/me/pending` | empty | Backend aggregate read models for Home and personal cross-space views. There are no separate `home` or `me` modules. |
+| `plugins` | kernel | `/plugins*` | yes | Official optional module control plane: descriptor registry, DB-backed enablement, plugin guard. Must be registered before PluginHost activation. |
+
+## Plugin-Hosted HTTP Surfaces
+
+These routes are not `ServerModule` entries. They are mounted by `PluginHost` after `SERVER_MODULES` and before the API catch-all.
+
+| Plugin | Kind | Routes | Main ownership / notes |
+|---|---|---|---|
+| `dairy` | product (official_plugin) | `/dairy*` | Personal diary editor, same-day history, reflection job, reminder scheduler. Routes use `ctx.http.pluginGuard()`. dairy entries are editor-owned user documents, not raw ActivityRecord intake; memory/context extraction remains opt-in proposal/intake work. |
 
 ## Code-Only Support Surfaces
 
@@ -89,9 +108,10 @@ All current registered modules are `always_on=True`.
 
 | Concern | Owner | Registration model |
 |---|---|---|
-| HTTP routes | server `gateway/routeRegistry.ts` | `ServerModule` entries mounted under `/api/v1`. |
+| HTTP routes | server `gateway/routeRegistry.ts` + `PluginHost` | `ServerModule` entries mounted under `/api/v1`, then PluginHost mounts official plugin routes, then the catch-all. |
 | Periodic tasks | server `modules/jobs/SchedulerRegistry` | Server startup registers `ScheduledTask`; owning server modules keep tick behavior. |
 | Durable job handlers | server `modules/jobs/JobHandlerRegistry` | server worker runtime registers allowlisted handlers (`agent_run`, `memory_consolidation`, `daily_capture_report`); unregistered types fail fast. |
+| Official plugin routes/jobs/scheduler/proposal appliers | server `modules/plugins/host` | Built-in official plugins register synchronously through `PluginHostContext`; host wraps job handlers and proposal appliers with enablement checks. |
 | Space-created initialization | server space hooks | server modules register space-created hooks; hook runs in caller transaction and must not commit. |
 | Run-finalized side effects | server `runs` finalization service | Post-run finalization and task-board side effects are server-owned. |
 | Proposal application | server proposal applier registry | Target modules own mutation logic; unsupported types fail closed. |

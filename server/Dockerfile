@@ -35,6 +35,8 @@ FROM deps AS build
 COPY server/tsconfig.json ./
 COPY server/src ./src
 COPY server/migrations ./migrations
+COPY server/scripts ./scripts
+COPY plugins /app/plugins
 RUN npm run build
 
 # ---- dev-runtime: full deps + writable dist for compose hot reload ------------
@@ -43,8 +45,10 @@ ENV NODE_ENV=development
 
 COPY catalog /app/catalog
 COPY server/tsconfig.json ./
+COPY server/scripts ./scripts
 COPY server/src ./src
 COPY server/migrations ./migrations
+COPY plugins /app/plugins
 COPY --from=build /app/server/dist ./dist
 
 # CLI login helper processes need a writable HOME before their state is synced

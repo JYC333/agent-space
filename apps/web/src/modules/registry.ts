@@ -7,15 +7,18 @@ export type PerspectiveType = 'space-scoped' | 'personal' | 'neutral'
 /**
  * Where an app entry originates.
  *
- * built_in  — shipped with the core bundle, always present.
- * installed — a capability that was installed into this instance
- *             (exists in the backend capability registry).
- * external  — references a remote tool or external service (reserved).
+ * built_in       — shipped with the core bundle, always present.
+ * official_plugin — an official optional module (developed by agent-space maintainers,
+ *                  installed/enabled via the official plugin control plane).
+ *                  These entries are NOT capabilities. See OFFICIAL_OPTIONAL_MODULES.md.
+ * installed      — reserved for future third-party installable plugin packages.
+ *                  NOT yet implemented. Do not use in MVP.
+ * external       — references a remote tool or external service (reserved).
  *
- * For MVP all entries are built_in. Future capability install/uninstall
- * would add entries with source: 'installed' at runtime.
+ * For current core features all entries are built_in.
+ * Optional features added by agent-space maintainers use official_plugin.
  */
-export type AppSource = 'built_in' | 'installed' | 'external'
+export type AppSource = 'built_in' | 'official_plugin' | 'installed' | 'external'
 
 export interface Module {
   // ── Identity ───────────────────────────────────────────────────────────────
@@ -32,11 +35,21 @@ export interface Module {
    * Backend capability ID this entry is backed by.
    * undefined = no formal capability (core UI feature).
    *
-   * Future: when a capability is installed, its manifest populates this.
-   * The frontend can then query GET /capabilities/:capabilityId to read
-   * enabled state, version, permissions, etc.
+   * NOTE: Capability is an agent AI skill descriptor (catalog/capabilities/).
+   * It is NOT the same as an official optional module. Do not use this field
+   * to represent official optional module enablement — use pluginId for that.
    */
   capabilityId?: string
+
+  /**
+   * Official optional module plugin ID this entry belongs to.
+   * Set for entries with source: 'official_plugin'.
+   *
+   * The frontend overlays enabled/visible state for these entries from
+   * GET /api/v1/plugins/effective rather than from static registry values.
+   * See useEffectivePlugins hook and OFFICIAL_OPTIONAL_MODULES.md.
+   */
+  pluginId?: string
 
   // ── Origin ────────────────────────────────────────────────────────────────
   /** Where this entry comes from. */
@@ -44,12 +57,14 @@ export interface Module {
 
   // ── Runtime state ─────────────────────────────────────────────────────────
   /**
-   * Whether the capability is enabled for the active space.
+   * Whether the module is enabled for the active space/user.
    * - true  → app is interactive and navigable.
    * - false → app appears in the gallery but is grayed out (not clickable).
    *
    * For built_in entries this is always true at static registration time.
-   * Future: overlaid from GET /capabilities response per space.
+   * For official_plugin entries: this is the static default; the runtime value
+   * is overlaid from GET /api/v1/plugins/effective by useEffectivePlugins.
+   * The frontend is NOT the source of truth for enabled state.
    */
   enabled: boolean
 
@@ -102,14 +117,24 @@ export interface Module {
  *   2. Add an entry below with source: 'built_in'
  *   3. Route auto-registers in App.tsx
  *
- * To support INSTALLED capabilities in the future (do not implement yet):
- *   1. Fetch enabled capabilities from GET /api/v1/capabilities
- *   2. For each: find the matching entry by capabilityId (or create a new one)
- *   3. Overlay enabled: capability.enabled, visible: capability.enabled
- *   4. For new entries (not in static registry), push to a runtime registry
- *      and register their routes dynamically
- *   5. The component for installed capabilities would be resolved from the
- *      capability manifest's frontend_bundle field (not implemented, reserved)
+ * To add an OFFICIAL OPTIONAL MODULE entry (bundled in repo, opt-in per space/user):
+ *   1. Create the plugin frontend entry under plugins/official/<pluginId>/web/src/
+ *   2. Add an entry below with source: 'official_plugin', pluginId: '<plugin_id>'
+ *   3. Set enabled: false, visible: true as static defaults
+ *   4. The useEffectivePlugins hook will overlay runtime enabled/visible from backend
+ *   5. Register the descriptor in server/src/modules/plugins/official/<pluginId>.ts
+ *   6. If it contributes backend behavior, add a bundled plugin package under
+ *      plugins/official/<pluginId>/; server loads its build artifact via
+ *      server/src/modules/plugins/builtInPlugins.ts
+ *   7. Add an app-owned adapter under src/plugins/<pluginId>/ that injects frontend host APIs
+ *
+ * To support future INSTALLED third-party plugins (do not implement yet):
+ *   - Reserved for a future plugin package system with sandboxing/SDK.
+ *   - Do NOT implement third-party plugin loading in this registry.
+ *
+ * NOTE: Capabilities (source: 'installed' was previously described as capability-backed)
+ * are agent AI skills, NOT product modules. Do not confuse GET /api/v1/capabilities
+ * (agent skill catalog) with GET /api/v1/plugins/effective (official module control plane).
  *
  * ── State semantics ─────────────────────────────────────────────────────────
  *   planned   = not yet built ("soon" badge, non-interactive, dev concern)
@@ -119,6 +144,21 @@ export interface Module {
  * ───────────────────────────────────────────────────────────────────────────
  */
 export const MODULE_REGISTRY: Module[] = [
+
+  // ── Official optional modules ──────────────────────────────────────────────
+  // These entries have source: 'official_plugin'. Their enabled/visible values
+  // are static defaults; runtime state is overlaid by useEffectivePlugins from
+  // GET /api/v1/plugins/effective. Direct navigation to a disabled plugin route
+  // shows a disabled-module stub, not a generic 404.
+  {
+    id: 'dairy', label: 'Dairy', path: '/dairy',
+    section: 'capture', group: 'daily', icon: 'book',
+    description: 'Personal diary with same-day history across years. Supports AI reflection, daily reminders, and opt-in memory proposals after your review.',
+    source: 'official_plugin', pluginId: 'dairy', capabilityId: undefined,
+    enabled: false, visible: true, planned: false,
+    perspectiveType: 'personal',
+    component: lazy(() => import('../plugins/dairy/DairyPageAdapter')),
+  },
 
   // ── Daily ─────────────────────────────────────────────────────────────────
   {
@@ -341,6 +381,17 @@ export const MODULE_REGISTRY: Module[] = [
     component: lazy(() => import('./workspace_console/WorkspaceConsolePage')),
   },
 
+  // ── Plugin management ─────────────────────────────────────────────────────
+  {
+    id: 'plugins', label: 'Optional Modules', path: '/plugins',
+    section: 'dev', group: 'system', icon: 'puzzle',
+    description: 'Manage official optional modules — enable or disable per-space features.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    component: lazy(() => import('./plugins/PluginsPage')),
+  },
+
   // ── System ────────────────────────────────────────────────────────────────
   {
     id: 'settings', label: 'Settings', path: '/settings',
@@ -417,13 +468,35 @@ export const MODULE_REGISTRY: Module[] = [
   },
 ]
 
+export interface EffectivePluginOverlay {
+  enabled: boolean
+  visible: boolean
+}
+
+export type EffectivePluginOverlayMap = Record<string, EffectivePluginOverlay | undefined>
+
+export function modulesWithEffectivePlugins(
+  modules: readonly Module[],
+  plugins: EffectivePluginOverlayMap,
+): Module[] {
+  return modules.map(module => {
+    if (module.source !== 'official_plugin' || !module.pluginId) return module
+    const state = plugins[module.pluginId]
+    if (!state) return module
+    return { ...module, enabled: state.enabled, visible: state.visible }
+  })
+}
+
 /**
  * Find the registered module that owns a path (used for route metadata lookups).
  * Navigation tiers live in `src/core/navigation.tsx`; the home/space scope split lives in
  * `routeScopeForPath`. The old "perspective" path classifier has been removed.
  */
-export function moduleForPath(pathname: string): Module | undefined {
-  return MODULE_REGISTRY.find(module => {
+export function moduleForPath(
+  pathname: string,
+  modules: readonly Module[] = MODULE_REGISTRY,
+): Module | undefined {
+  return modules.find(module => {
     if (pathname === module.path) return true
     return module.hasSubRoutes && pathname.startsWith(`${module.path}/`)
   })

@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, sep } from "node:path";
 
 const srcDir = join(__dirname, "..", "src");
+const officialPluginsDir = join(__dirname, "..", "..", "plugins", "official");
 
 function tsFiles(dir: string): string[] {
+  if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) return tsFiles(full);
@@ -91,6 +93,40 @@ describe("server import boundaries", () => {
       }
     }
     expect(offenders, `unexpected imports:\n${offenders.join("\n")}`).toEqual([]);
+  });
+
+  it("plugin files do not import from server modules", () => {
+    const pluginsDir = join(srcDir, "plugins");
+    const offenders: string[] = [];
+    for (const file of tsFiles(pluginsDir)) {
+      const text = readFileSync(file, "utf8");
+      for (const match of text.matchAll(importRe)) {
+        const spec = match[1];
+        // Relative imports that traverse into src/modules/ are forbidden from src/plugins/
+        if (spec.startsWith(".") && spec.includes("/modules/")) {
+          offenders.push(`${file}: ${spec} (plugins must not import server modules)`);
+        }
+      }
+    }
+    expect(offenders, `plugin → server-module violations:\n${offenders.join("\n")}`).toEqual([]);
+  });
+
+  it("official plugin package files do not import server internals", () => {
+    const offenders: string[] = [];
+    for (const file of tsFiles(officialPluginsDir)) {
+      const text = readFileSync(file, "utf8");
+      for (const match of text.matchAll(importRe)) {
+        const spec = match[1];
+        if (
+          spec.includes("server/src/") ||
+          spec.includes("apps/web/src/") ||
+          spec.includes("/modules/")
+        ) {
+          offenders.push(`${file}: ${spec} (official plugin packages must use host ports)`);
+        }
+      }
+    }
+    expect(offenders, `official plugin package violations:\n${offenders.join("\n")}`).toEqual([]);
   });
 
   it("does not reference web or subsystem internals anywhere in src", () => {

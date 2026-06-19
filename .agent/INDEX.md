@@ -172,7 +172,7 @@ Load only the module docs relevant to your task.
 | [0004](decisions/0004-context-wrapper.md) | Vendor files are generated adapters, not source of truth |
 | [0005](decisions/0005-desktop-runtime.md) | Windows desktop is not a full runtime |
 | [0006](decisions/0006-open-source-readiness.md) | Private-first, open-source-ready |
-| [0007](decisions/0007-plugin-module-architecture.md) | Plugin module structure for per-deployment feature control |
+| [0007](decisions/0007-plugin-module-architecture.md) | Module architecture (ServerModule registry, MODULE_REGISTRY) and official optional module control plane (PluginHost, dairy) |
 | [0008](decisions/0008-multi-cli-mvp.md) | Multi-CLI MVP |
 | [0009](decisions/0009-anthropic-cli-only-policy.md) | Anthropic CLI-only policy (superseded by ADR 0010) |
 | [0010](decisions/0010-credential-channel-isolation.md) | Credential channel isolation |

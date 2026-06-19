@@ -1073,6 +1073,28 @@ export const providersApi = {
   chat: (data: ChatRequest) => post<ChatResponse>('/providers/chat', data),
 }
 
+// ── Official Optional Modules (plugins) ───────────────────────────────────
+// GET /api/v1/plugins       — list all descriptors + effective state
+// GET /api/v1/plugins/effective — effective map for frontend overlay
+// GET /api/v1/plugins/:id   — single plugin
+// POST /api/v1/plugins/:id/install  — install package + migrations
+// POST /api/v1/plugins/:id/enable   — enable
+// POST /api/v1/plugins/:id/disable  — disable
+// PATCH /api/v1/plugins/:id/settings — patch settings
+export const pluginsApi = {
+  list: () => get<{ items: unknown[] }>('/plugins'),
+  effective: () => get<{ plugins: Record<string, unknown> }>('/plugins/effective'),
+  get: (pluginId: string) => get<unknown>(`/plugins/${encodeURIComponent(pluginId)}`),
+  install: (pluginId: string) =>
+    post<unknown>(`/plugins/${encodeURIComponent(pluginId)}/install`, {}),
+  enable: (pluginId: string, body: { settings?: Record<string, unknown> } = {}) =>
+    post<unknown>(`/plugins/${encodeURIComponent(pluginId)}/enable`, body),
+  disable: (pluginId: string, body: Record<string, never> = {}) =>
+    post<unknown>(`/plugins/${encodeURIComponent(pluginId)}/disable`, body),
+  patchSettings: (pluginId: string, settings: Record<string, unknown>) =>
+    patch<unknown>(`/plugins/${encodeURIComponent(pluginId)}/settings`, { settings }),
+}
+
 export const dailyReportApi = {
   getSettings: () =>
     get<DailyCaptureReportSettingOut>('/daily-capture-report/settings'),
@@ -1085,4 +1107,41 @@ export const dailyReportApi = {
 
   listReports: (limit = 10) =>
     get<DailyReportArtifactItem[]>(`/daily-capture-report/reports?limit=${limit}`),
+}
+
+// ── dairy ─────────────────────────────────────────────────────────────────
+export interface DairyEntry {
+  id: string
+  user_id: string
+  entry_date: string
+  content: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DairyReflection {
+  id: string
+  entry_id: string
+  reflection_date: string
+  content: string
+  ai_model: string | null
+  created_at: string
+}
+
+export const dairyApi = {
+  today: () => get<{ date: string; entry: DairyEntry | null }>('/dairy/today'),
+  listEntries: (params: { limit?: number; before?: string } = {}) => {
+    const q = new URLSearchParams()
+    if (params.limit) q.set('limit', String(params.limit))
+    if (params.before) q.set('before', params.before)
+    return get<{ entries: DairyEntry[] }>(`/dairy/entries${q.size ? '?' + q : ''}`)
+  },
+  saveEntry: (date: string, content: string) =>
+    put<{ entry: DairyEntry }>(`/dairy/entries/${encodeURIComponent(date)}`, { content }),
+  deleteEntry: (date: string) =>
+    del<{ deleted: boolean }>(`/dairy/entries/${encodeURIComponent(date)}`),
+  onThisDay: (date: string) =>
+    get<{ date: string; entries: DairyEntry[] }>(`/dairy/on-this-day?date=${encodeURIComponent(date)}`),
+  reflections: (date: string) =>
+    get<{ entry_date: string; reflections: DairyReflection[] }>(`/dairy/entries/${encodeURIComponent(date)}/reflections`),
 }

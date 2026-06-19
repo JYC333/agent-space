@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -7,8 +8,18 @@ import { VitePWA } from 'vite-plugin-pwa'
 // those requests to the server service inside the compose network. API_URL is
 // only a local-shell override; compose does not inject a backend URL.
 const apiProxyTarget = process.env.API_URL || 'http://server:8010'
+const projectRoot = process.cwd()
+const repoRoot = resolve(projectRoot, '../..')
 
 export default defineConfig({
+  resolve: {
+    alias: [
+      { find: /^react$/, replacement: resolve(projectRoot, 'node_modules/react/index.js') },
+      { find: /^react\/jsx-runtime$/, replacement: resolve(projectRoot, 'node_modules/react/jsx-runtime.js') },
+      { find: /^react\/jsx-dev-runtime$/, replacement: resolve(projectRoot, 'node_modules/react/jsx-dev-runtime.js') },
+    ],
+    dedupe: ['react', 'react-dom'],
+  },
   plugins: [
     react(),
     tailwindcss(),
@@ -54,6 +65,10 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,  // bind 0.0.0.0 so Docker port mapping works
+    fs: {
+      // Official plugin frontend sources live at repo-root/plugins/official/*.
+      allow: [repoRoot],
+    },
     proxy: {
       '/api': {
         target: apiProxyTarget,

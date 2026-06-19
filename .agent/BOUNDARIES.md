@@ -76,7 +76,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 **B23** — The frontend is not an admin-only console. It is the primary user-facing product surface including personal use (capture, review, knowledge reading, assistant chat). Design for non-technical users.
 
-**B24** — Raw user inputs (thoughts, life logs, file imports, chat captures) must enter via `ActivityRecord` first. The frontend must not write to Memory, KnowledgeItem, or FlashCard directly — always via proposals or the activity intake flow. KnowledgeItem rows must not automatically enter Memory or ContextBuilder.
+**B24** — Raw capture inputs (quick thoughts, inbox drops, file imports, chat captures) must enter via `ActivityRecord` first. Editor-owned user documents such as Notes and dairy entries are durable product documents, not raw intake records, and may write their owning domain tables directly. Any extraction from those documents into Memory, KnowledgeItem, ContextBuilder, or FlashCard must still go through the proposal/intake flow. KnowledgeItem rows must not automatically enter Memory or ContextBuilder.
 
 **B25** — The workspace console (file browser, diff viewer) is for workspace operators. It must not be shown as the primary entry point for personal-use features (capture, review, chat).
 
@@ -122,13 +122,19 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 **B33** — Server modules should prefer shared gateway/db/protocol helpers over direct cross-module coupling. Cross-domain imports are allowed only when they express an explicit product boundary recorded in the relevant architecture doc or ADR, and they must not bypass the owning module's public route/service boundary.
 
-**B34** — Every server module's HTTP routes must live in `server/src/modules/<module>/routes.ts` and be mounted through `server/src/gateway/routeRegistry.ts`. Routes must not be registered directly in `server.ts`, `index.ts`, or ad hoc shared API files.
+**B34** — Every server module's HTTP routes must live in `server/src/modules/<module>/routes.ts` and be mounted through `server/src/gateway/routeRegistry.ts`. Official plugin package routes live under `plugins/official/<plugin_id>/server/src/`, are compiled into `server/dist/official-plugins/<plugin_id>/`, and are mounted only through `PluginHost` after core `SERVER_MODULES` and before the catch-all. Routes must not be registered directly in `server.ts`, `index.ts`, or ad hoc shared API files.
 
-**B35** — The server route registry (`server/src/gateway/routeRegistry.ts`) and frontend module registry (`apps/web/src/modules/registry.ts`) are the single sources of truth for which features are active. Do not hardcode route lists or nav items elsewhere.
+**B35** — The server route registry (`server/src/gateway/routeRegistry.ts`), official plugin descriptor registry (`server/src/modules/plugins/registry.ts`), official plugin package loader (`server/src/modules/plugins/builtInPlugins.ts` and `server/src/modules/plugins/packageLoader.ts`), and frontend module registry (`apps/web/src/modules/registry.ts`) are the single sources of truth for which core and official optional features are active. Official plugin frontend page source lives with the plugin package under `plugins/official/<plugin_id>/web/src/`; it must not import `apps/web/src` directly. The frontend registry statically imports an app-owned adapter under `apps/web/src/plugins/<plugin_id>/` that injects host APIs into the plugin page until remote frontend bundles exist. Do not hardcode route lists or nav items elsewhere.
 
 **B36** — Frontend module pages must use `React.lazy()` entry points. A module must not be eagerly imported in `apps/web/src/App.tsx` or `apps/web/src/core/Shell.tsx`. This preserves Vite's ability to produce separate chunks per module for build-time exclusion.
 
 **B37** — `planned: true` modules must have a working stub page (not a blank component, not a 404). The stub must name the feature, state that it is planned, and reference the relevant `.agent/modules/` doc.
+
+**B51** — Official optional modules are gated at the route-handler/contribution level via the plugin guard (`requireOfficialPluginEnabled()` or `ctx.http.pluginGuard()`), not by conditionally registering core server modules. Backend routes for bundled official plugins are mounted by `PluginHost`; behavior is gated by DB-backed plugin enablement state. Plugin job handlers and proposal appliers must fail closed when disabled, and scheduled tasks must fan out only to enabled scopes. Frontend entries with `source: 'official_plugin'` must overlay their `enabled`/`visible` state from `GET /api/v1/plugins/effective`, not from static values.
+
+**B52** — Capability (`catalog/capabilities/`) and Official Optional Module (`/api/v1/plugins`) are distinct concepts and must not be conflated in code, comments, or API design. Capabilities are agent AI skill descriptors; Official Optional Modules are product feature packages. A module may use a capability internally, but they are not the same type.
+
+**B53** — Plugin settings and enablement state must be scoped exactly as declared in the descriptor's `scope` field: `space` uses `(plugin_id, space_id)` and requires space owner/admin for writes; `user` uses `(plugin_id, user_id)` and follows the user across spaces. Space-scoped plugin state for space A must never be readable or writable in the context of space B, and user-scoped plugin state must never be readable or writable by another user. The plugin guard must check both plugin existence and descriptor scope.
 
 ---
 

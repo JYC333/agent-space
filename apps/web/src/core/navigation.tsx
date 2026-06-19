@@ -52,7 +52,7 @@ export const RAIL_ITEMS: RailItem[] = [
   { id: 'evolution',  label: 'Evolution',  to: '/evolution',   icon: GitBranch,   scope: 'home' },
   { id: 'workspaces', label: 'Workspaces', to: '/workspaces',  icon: Folder,      scope: 'space' },
   { id: 'instance-settings', label: 'Instance Settings', to: '/instance-settings', icon: ServerCog, scope: 'home', footer: true, requiresInstanceAdmin: true, activePaths: ['/runtime-tools'] },
-  { id: 'space-settings', label: 'Space Settings', to: '/space-settings', icon: Building2, scope: 'space', footer: true, requiresSpaceAdmin: true, activePaths: ['/network-profiles'] },
+  { id: 'space-settings', label: 'Space Settings', to: '/space-settings', icon: Building2, scope: 'space', footer: true, requiresSpaceAdmin: true, activePaths: ['/network-profiles', '/plugins'] },
   { id: 'settings',   label: 'Settings',   to: '/settings',    icon: Settings,    scope: 'home',  footer: true },
 ]
 
