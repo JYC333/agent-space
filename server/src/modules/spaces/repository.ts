@@ -54,6 +54,11 @@ export interface SpaceFailure {
   detail: string;
 }
 
+export interface SnapshotDefaults {
+  snapshot_retention_days_default: number | null;
+  snapshot_max_count_default: number | null;
+}
+
 export interface SpaceRepository {
   createSpace(userId: string, input: SpaceCreateInput): Promise<SpaceResult | SpaceFailure>;
   listMembers(userId: string, spaceId: string): Promise<SpaceMember[] | SpaceFailure>;
@@ -67,6 +72,12 @@ export interface SpaceRepository {
     userId: string;
     userEmail: string | null;
   }): Promise<InvitationAcceptResult | SpaceFailure>;
+  getSnapshotDefaults(userId: string, spaceId: string): Promise<SnapshotDefaults | SpaceFailure>;
+  updateSnapshotDefaults(
+    userId: string,
+    spaceId: string,
+    data: SnapshotDefaults,
+  ): Promise<SnapshotDefaults | SpaceFailure>;
 }
 
 type SpaceRow = {
@@ -291,6 +302,37 @@ export class PgSpaceRepository implements SpaceRepository {
         space_name: space.rows[0]?.name ?? null,
       };
     });
+  }
+
+  async getSnapshotDefaults(userId: string, spaceId: string): Promise<SnapshotDefaults | SpaceFailure> {
+    const role = await this.activeRole(userId, spaceId);
+    if (!role) return { statusCode: 403, detail: "Not a member of this space" };
+    const res = await this.pool.query<SnapshotDefaults>(
+      `SELECT snapshot_retention_days_default, snapshot_max_count_default
+         FROM spaces WHERE id = $1 LIMIT 1`,
+      [spaceId],
+    );
+    return res.rows[0] ?? { snapshot_retention_days_default: null, snapshot_max_count_default: null };
+  }
+
+  async updateSnapshotDefaults(
+    userId: string,
+    spaceId: string,
+    data: SnapshotDefaults,
+  ): Promise<SnapshotDefaults | SpaceFailure> {
+    const role = await this.activeRole(userId, spaceId);
+    if (!role || (role !== "owner" && role !== "admin")) {
+      return { statusCode: 403, detail: "Requires space owner or admin role" };
+    }
+    await this.pool.query(
+      `UPDATE spaces
+          SET snapshot_retention_days_default = $1,
+              snapshot_max_count_default = $2,
+              updated_at = now()
+        WHERE id = $3`,
+      [data.snapshot_retention_days_default, data.snapshot_max_count_default, spaceId],
+    );
+    return data;
   }
 
   private async activeRole(userId: string, spaceId: string): Promise<string | null> {

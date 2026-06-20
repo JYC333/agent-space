@@ -5,6 +5,7 @@ describe("DeployerSocketClient", () => {
   it("limits submitted deployer jobs to the allowlist", async () => {
     expect([...ALLOWED_DEPLOYER_JOB_TYPES].sort()).toEqual([
       "health_check",
+      "init_agent_space_worktree",
       "rebuild_agent_space",
       "restart_agent_space",
     ]);

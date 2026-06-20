@@ -382,6 +382,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         identity.spaceId,
         p.agentId ?? "",
         p.versionId ?? "",
+        identity.userId,
       );
       return reply.send(agent);
     } catch (error) {

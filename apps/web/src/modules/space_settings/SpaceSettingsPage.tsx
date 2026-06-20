@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react'
-import { Settings, Users, Mail, Send, Globe2, ShieldAlert, Puzzle } from 'lucide-react'
+import { Settings, Users, Mail, Send, Globe2, ShieldAlert, Puzzle, History } from 'lucide-react'
 import { toast } from 'sonner'
 import { SpaceLink as Link } from '../../core/spaceNav'
 import { useAuth } from '../../contexts/AuthContext'
@@ -132,6 +132,18 @@ export default function SpaceSettingsPage() {
             </p>
             <Button asChild variant="outline" size="sm">
               <Link to="/network-profiles">Open Network Profiles</Link>
+            </Button>
+          </Card>
+
+          <Card>
+            <CardTitle className="flex items-center gap-2">
+              <History className="size-3.5" /> Snapshot Rollback
+            </CardTitle>
+            <p className="text-sm text-muted-foreground mb-3">
+              Configure per-workspace retention for code-patch rollback snapshots (days and max count).
+            </p>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/workspace-snapshot-settings">Manage Snapshot Settings</Link>
             </Button>
           </Card>
 

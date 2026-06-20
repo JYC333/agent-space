@@ -31,6 +31,7 @@ export interface ManagedApiNoToolAdapterInput {
   model?: string | null;
   system_prompt?: string | null;
   prompt?: string | null;
+  context_text?: string | null;
   max_tokens?: number | null;
   context_snapshot_id?: string | null;
 }
@@ -91,7 +92,7 @@ function runtimeHostRequest(
     space_id: input.run.space_id,
     model_provider_id: modelProviderId,
     model: input.model ?? null,
-    system_prompt: systemPrompt,
+    system_prompt: composeSystemContext(systemPrompt, input.context_text ?? null),
     prompt: input.prompt ?? input.run.prompt ?? "",
     mode: input.run.mode,
     instruction: input.run.instruction,
@@ -103,6 +104,16 @@ function runtimeHostRequest(
     tool_mode: "disabled",
     tool_bindings: [],
   };
+}
+
+function composeSystemContext(
+  systemPrompt: string | null | undefined,
+  contextText: string | null | undefined,
+): string {
+  return [systemPrompt, contextText]
+    .map((part) => typeof part === "string" ? part.trim() : "")
+    .filter((part) => part.length > 0)
+    .join("\n\n");
 }
 
 function envelopeFromRuntimeHost(

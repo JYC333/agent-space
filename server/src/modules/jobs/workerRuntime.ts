@@ -6,6 +6,7 @@ import { JobWorker } from "./worker";
 import { registerAgentRunHandler } from "../runs/agentRunHandler";
 import { registerMemoryConsolidationHandler } from "../activity/consolidationJob";
 import { registerDailyCaptureReportHandler } from "../dailyReports/jobHandler";
+import { registerContextDigestRefreshHandler } from "../context/digestJob";
 import type { PluginHost } from "../plugins/host";
 import { PgRunRepository } from "../runs/repository";
 
@@ -34,6 +35,7 @@ export function buildJobHandlerRegistry(
   registerAgentRunHandler(registry, config);
   registerMemoryConsolidationHandler(registry, config);
   registerDailyCaptureReportHandler(registry, config);
+  registerContextDigestRefreshHandler(registry, config);
   // Plugin-contributed job handlers (enablement-gated by the host context).
   pluginHost?.applyJobHandlers(registry);
   return registry;

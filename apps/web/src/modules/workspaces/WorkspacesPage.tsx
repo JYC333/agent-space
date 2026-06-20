@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Folder, Plus } from 'lucide-react'
+import { Folder, Plus, Settings } from 'lucide-react'
 import { toast } from 'sonner'
 import { workspacesApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -10,6 +10,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Badge } from '../../components/ui/badge'
 import { EmptyState } from '../../components/ui/empty-state'
+import { SpaceLink as Link } from '../../core/spaceNav'
 
 function fmt(dt: string) {
   return new Date(dt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
@@ -118,10 +119,13 @@ export default function WorkspacesPage() {
         ) : (
           <div className="divide-y divide-border">
             {workspaces.map(ws => (
-              <div key={ws.id} className="flex items-center gap-3 py-3">
+              <div key={ws.id} className="flex items-center gap-3 py-3 group">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-foreground">{ws.name}</span>
+                    <Link
+                      to={`/workspace-console?workspace=${ws.id}`}
+                      className="text-sm font-medium text-foreground hover:underline"
+                    >{ws.name}</Link>
                     <Badge variant={ws.status === 'active' ? 'default' : 'muted'} className="text-[10px] px-1.5 py-0">
                       {ws.status}
                     </Badge>
@@ -134,6 +138,13 @@ export default function WorkspacesPage() {
                     {ws.id} · {ws.kind} · created {fmt(ws.created_at)}
                   </p>
                 </div>
+                <Link
+                  to={`/workspaces/${ws.id}`}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground p-1.5 rounded-md hover:bg-muted"
+                  title="Workspace settings"
+                >
+                  <Settings className="size-3.5" />
+                </Link>
               </div>
             ))}
           </div>

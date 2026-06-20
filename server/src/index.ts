@@ -20,6 +20,7 @@ import { enforceBackupPolicy, BackupPolicyError } from "./modules/backups/guard"
 import { startProviderProxyServer } from "./modules/providers/providerProxyServer";
 import { PluginHost } from "./modules/plugins/host";
 import { BUILT_IN_PLUGINS } from "./modules/plugins/builtInPlugins";
+import { registerSystemCoreWorkspace } from "./modules/workspaces/systemCore";
 
 async function main(): Promise<void> {
   let config;
@@ -90,6 +91,11 @@ async function main(): Promise<void> {
     app.log.error(err, "[server] failed to start");
     process.exit(1);
   }
+
+  void registerSystemCoreWorkspace(config, {
+    info: (msg) => app.log.info(msg),
+    warn: (msg) => app.log.warn(msg),
+  });
 
   background = startBackgroundServices(
     config,

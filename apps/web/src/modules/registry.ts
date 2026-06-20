@@ -380,6 +380,24 @@ export const MODULE_REGISTRY: Module[] = [
     perspectiveType: 'space-scoped',
     component: lazy(() => import('./workspace_console/WorkspaceConsolePage')),
   },
+  {
+    id: 'workspace_settings', label: 'Workspace Settings', path: '/workspaces/:id',
+    section: 'agents', group: 'workspace', icon: 'folder',
+    description: 'Per-workspace settings including snapshot configuration.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: false, planned: false,
+    perspectiveType: 'space-scoped',
+    component: lazy(() => import('./workspaces/WorkspaceSettingsPage')),
+  },
+  {
+    id: 'workspace_snapshot_settings', label: 'Snapshot Settings', path: '/workspace-snapshot-settings',
+    section: 'agents', group: 'workspace', icon: 'history',
+    description: 'Configure code-patch rollback snapshot retention per workspace.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: false, planned: false,
+    perspectiveType: 'space-scoped',
+    component: lazy(() => import('./workspace_snapshot_settings/WorkspaceSnapshotSettingsPage')),
+  },
 
   // ── Plugin management ─────────────────────────────────────────────────────
   {

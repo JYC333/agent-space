@@ -4,6 +4,7 @@ import { loadActionRegistry } from "../policy/actionRegistry";
 import { enforce } from "../policy/service";
 import { ContextCompiler, type CompiledContext } from "./compiler";
 import { buildContextPackage } from "./contextPackage";
+import { resolveReadableScopes } from "./contextRepositoryHelpers";
 import {
   PgRunContextRepository,
   type ContextDigestRow,
@@ -15,7 +16,44 @@ import type { ContextPackage, PolicyCheckRequest } from "@agent-space/protocol" 
 };
 
 const COMPILER_VERSION = "context_digest.v1";
-const STABLE_PREFIX_BUDGET_CHARS = 64_000;
+const STABLE_PREFIX_BUDGET_CHARS = 64_000; // fallback for unknown models
+const STABLE_PREFIX_FRACTION = 0.35; // fraction of model context window allocated to stable prefix
+
+// [regex, context_window_tokens] — first match wins
+const MODEL_CONTEXT_WINDOW_TOKENS: Array<[RegExp, number]> = [
+  [/^claude-(?:opus|sonnet|haiku)-[4-9]/, 200_000],
+  [/^claude-3(?:-5)?-(?:opus|sonnet|haiku)/, 200_000],
+  [/^gpt-4o/, 128_000],
+  [/^gpt-4/, 128_000],
+  [/^gpt-3\.5/, 16_000],
+  [/^o[1-9]/, 128_000],
+  [/^gemini/, 200_000], // cap at 200K for budget purposes
+];
+
+// Priority for stable prefix item selection — lower value = kept first.
+// system_prompt/digest (0-9) > policy (10-19) > user memory (20-29) >
+// workspace/capability (30-39) > agent (40-49) > episodic (50+)
+const STABLE_PREFIX_SCOPE_PRIORITY: Record<string, number> = {
+  system: 20,
+  user: 25,
+  workspace: 30,
+  capability: 32,
+  agent: 40,
+};
+const STABLE_PREFIX_LAYER_PRIORITY: Record<string, number> = {
+  semantic: 0,
+  procedural: 1,
+  episodic: 5,
+};
+
+interface StablePrefixResult {
+  text: string;
+  budgetChars: number;
+  droppedCount: number;
+  droppedIds: string[];
+  truncatedCount: number;
+  truncatedIds: string[];
+}
 
 const PERSONAL_CONTEXT_HEADER =
   "[Personal context granted for this run - reasoning only]";
@@ -34,6 +72,7 @@ export interface ContextPrepareInput {
 
 export interface ContextPrepareResult {
   runtime_prompt: string;
+  runtime_context_text?: string | null;
   context_snapshot_id: string | null;
   context_rendered: boolean;
   target_format?: string | null;
@@ -89,6 +128,9 @@ export class ContextPrepareService {
         const includeSystemScope =
           Object.keys(memoryPolicy).length === 0 ||
           arrayOfStrings(memoryPolicy.readable_scopes).includes("system");
+        // Same scope gate the direct retriever uses (see repository.retrieve), so
+        // digest injection cannot read past the agent's readable_scopes boundary.
+        const readableScopes = resolveReadableScopes(memoryPolicy, includeSystemScope);
         const retrieval = await repo.retrieve({
           spaceId: run.space_id,
           userId,
@@ -131,10 +173,38 @@ export class ContextPrepareService {
           evidenceSelections,
         });
 
-        const { digestBundle, digestTrace } = await loadDigestTrace(repo, run);
-        const stableText = renderStablePrefix(pkg, run, digestBundle);
+        const digestLoad = await loadDigestBundleSafely(repo, run);
+        // Decide which loaded digests are trustworthy enough to inject. Dirty
+        // digests and digests whose claimed source memory no longer fully
+        // revalidates against the live scope are dropped here, so stale content
+        // never reaches the prompt or the snapshot trace. Dropped scopes fall back
+        // to the direct retriever (memory) / direct active policies (policy_bundle).
+        const { bundle: digestBundle, digestMemoryIds: validatedDigestMemoryIds, dropped } =
+          await resolveUsableDigests(repo, run, digestLoad.bundle, readableScopes);
+        const digestTrace = buildDigestTrace(
+          run,
+          digestBundle,
+          dropped,
+          digestLoad.loadError,
+          readableScopes,
+        );
+        const retrievedMemoryIds = new Set(retrieval.memories.map((memory) => memory.id));
+        const digestOnlyMemoryIds = [...validatedDigestMemoryIds]
+          .filter((memoryId) => !retrievedMemoryIds.has(memoryId));
+        await repo.recordContextDigestMemoryAccess({
+          memoryIds: digestOnlyMemoryIds,
+          spaceId: run.space_id,
+          userId,
+          agentId: run.agent_id,
+          runId: run.id,
+          reason: `run_execution:${run.id}:context_digest`,
+        });
+        const stablePrefixResult = renderStablePrefix(pkg, run, digestBundle, validatedDigestMemoryIds);
+        const stableText = stablePrefixResult.text;
         const tailText = renderDynamicTail(pkg, run);
-        const tokenBudget = buildTokenBudget(stableText, tailText);
+        const runtimeTailText = renderDynamicTail(pkg, run, { includePrompt: false });
+        const runtimeContextText = composeRuntimeContextText(stableText, runtimeTailText);
+        const tokenBudget = buildTokenBudget(stableText, tailText, stablePrefixResult);
         const sourceRefs: Record<string, unknown>[] = [...pkg.source_refs];
         sourceRefs.push(...digestSourceRefs(digestBundle));
 
@@ -191,6 +261,9 @@ export class ContextPrepareService {
           policyBundleVersion: digestBundle.policy_bundle
             ? String(digestBundle.policy_bundle.version)
             : null,
+          memoryDigestVersion: digestBundle.agent
+            ? String(digestBundle.agent.version)
+            : null,
           workspaceDigestVersion: digestBundle.workspace
             ? String(digestBundle.workspace.version)
             : null,
@@ -210,11 +283,14 @@ export class ContextPrepareService {
             taskGoal: composedRuntimePrompt,
             sandboxDir: input.sandboxCwd,
             workspacePath: input.workspacePath,
+            stablePrefixText: stableText,
+            dynamicTailText: runtimeTailText,
           });
         }
 
         return {
           runtime_prompt: composedRuntimePrompt,
+          runtime_context_text: runtimeContextText,
           context_snapshot_id: run.context_snapshot_id,
           context_rendered: compiled !== null,
           target_format: compiled?.target ?? null,
@@ -317,77 +393,210 @@ async function enforcePolicyOrThrow(
   );
 }
 
-async function loadDigestTrace(
+async function loadDigestBundleSafely(
   repo: PgRunContextRepository,
   run: RunContextRecord,
-): Promise<{
-  digestBundle: DigestBundle;
-  digestTrace: Record<string, unknown>;
-}> {
+): Promise<{ bundle: DigestBundle; loadError: string | null }> {
   try {
-    const digestBundle = await repo.loadDigestBundle({
+    const bundle = await repo.loadDigestBundle({
       spaceId: run.space_id,
       workspaceId: run.workspace_id,
       agentId: run.agent_id,
     });
-    if (digestUsed(digestBundle)) {
-      return {
-        digestBundle,
-        digestTrace: {
-          digest_used: true,
-          digest_ids: allDigests(digestBundle).map((d) => d.id),
-          digest_types: allDigests(digestBundle).map((d) => d.digest_type),
-          digest_versions: allDigests(digestBundle).map((d) => Number(d.version)),
-          dirty_digest_used: allDigests(digestBundle).some((d) => d.status === "dirty"),
-          fallback_to_memory_retriever: false,
-          digest_fallback_reason: null,
-        },
-      };
-    }
-    return {
-      digestBundle,
-      digestTrace: {
-        digest_used: false,
-        fallback_to_memory_retriever: true,
-        digest_fallback_reason: "no_digest_available",
-      },
-    };
+    return { bundle, loadError: null };
   } catch (error) {
     return {
-      digestBundle: { policy_bundle: null, workspace: null, agent: null },
-      digestTrace: {
-        digest_used: false,
-        fallback_to_memory_retriever: true,
-        digest_fallback_reason: "load_error",
-        digest_load_error: `${error instanceof Error ? error.name : "Error"}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      },
+      bundle: { policy_bundle: null, workspace: null, agent: null },
+      loadError: `${error instanceof Error ? error.name : "Error"}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
     };
   }
+}
+
+interface DroppedDigest {
+  digest_type: "policy_bundle" | "workspace" | "agent";
+  reason: "dirty" | "stale_source_memory" | "scope_not_readable";
+}
+
+/**
+ * Decide which loaded digests are trustworthy enough to inject into the prompt.
+ *
+ * A digest is dropped (its scope then falls back to the direct retriever / direct
+ * active policies) when:
+ *  - (memory digests only) the agent's `readable_scopes` does not include that
+ *    scope — the digest is a derived view of that scope's memory, so injecting it
+ *    would bypass the same read boundary the direct retriever enforces; or
+ *  - it is `dirty` — a pending change means the cached content may be stale; or
+ *  - (memory digests only) any memory id it claims as a source no longer passes
+ *    live revalidation for its scope (archived / superseded / downgraded to
+ *    private or highly_restricted). The content is a blended summary that cannot
+ *    be partially redacted, so the whole digest is dropped.
+ *
+ * Only surviving digests are rendered, traced and source-ref'd, so a stale or
+ * tampered row can never leak old content (or out-of-scope content) into the
+ * prompt or the snapshot trace.
+ */
+async function resolveUsableDigests(
+  repo: PgRunContextRepository,
+  run: RunContextRecord,
+  loaded: DigestBundle,
+  readableScopes: ReadonlySet<string>,
+): Promise<{ bundle: DigestBundle; digestMemoryIds: Set<string>; dropped: DroppedDigest[] }> {
+  const dropped: DroppedDigest[] = [];
+  const digestMemoryIds = new Set<string>();
+
+  let policyBundle: ContextDigestRow | null = null;
+  if (loaded.policy_bundle) {
+    if (loaded.policy_bundle.status === "active") {
+      policyBundle = loaded.policy_bundle;
+    } else {
+      // Dirty policy bundle: fall back to the direct active policies so a pending
+      // policy change cannot suppress the current security/boundary policies.
+      dropped.push({ digest_type: "policy_bundle", reason: "dirty" });
+    }
+  }
+
+  const workspace = await resolveMemoryDigest(
+    repo, run, "workspace", run.workspace_id, loaded.workspace, readableScopes, dropped,
+  );
+  for (const id of workspace.validatedIds) digestMemoryIds.add(id);
+  const agent = await resolveMemoryDigest(
+    repo, run, "agent", run.agent_id, loaded.agent, readableScopes, dropped,
+  );
+  for (const id of agent.validatedIds) digestMemoryIds.add(id);
+
+  return {
+    bundle: { policy_bundle: policyBundle, workspace: workspace.digest, agent: agent.digest },
+    digestMemoryIds,
+    dropped,
+  };
+}
+
+async function resolveMemoryDigest(
+  repo: PgRunContextRepository,
+  run: RunContextRecord,
+  scopeType: "workspace" | "agent",
+  scopeId: string | null,
+  digest: ContextDigestRow | null,
+  readableScopes: ReadonlySet<string>,
+  dropped: DroppedDigest[],
+): Promise<{ digest: ContextDigestRow | null; validatedIds: string[] }> {
+  if (!digest || !scopeId) return { digest: null, validatedIds: [] };
+  if (!readableScopes.has(scopeType)) {
+    // The agent is not allowed to read this scope's memory; the direct retriever
+    // already excludes it, so the derived digest must be excluded too.
+    dropped.push({ digest_type: scopeType, reason: "scope_not_readable" });
+    return { digest: null, validatedIds: [] };
+  }
+  if (digest.status !== "active") {
+    dropped.push({ digest_type: scopeType, reason: "dirty" });
+    return { digest: null, validatedIds: [] };
+  }
+  const parsed = parseDigestSourceMemoryIds(digest.source_memory_ids_json);
+  if (parsed.malformed || (parsed.ids.length === 0 && digest.content?.trim())) {
+    // Malformed source metadata is treated as stale/tampered. A memory digest's
+    // content is a blended artifact, so without a valid complete source list we
+    // cannot prove what it covers.
+    dropped.push({ digest_type: scopeType, reason: "stale_source_memory" });
+    return { digest: null, validatedIds: [] };
+  }
+  const claimed = parsed.ids;
+  const validated = await repo.filterEligibleDigestMemoryIds({
+    spaceId: run.space_id,
+    scopeType,
+    scopeId,
+    memoryIds: claimed,
+  });
+  const validatedSet = new Set(validated);
+  if (!claimed.every((id) => validatedSet.has(id))) {
+    // At least one claimed source memory is no longer eligible — the cached
+    // summary may embed removed/downgraded content. Drop the whole digest.
+    dropped.push({ digest_type: scopeType, reason: "stale_source_memory" });
+    return { digest: null, validatedIds: [] };
+  }
+  return { digest, validatedIds: validated };
+}
+
+function buildDigestTrace(
+  run: RunContextRecord,
+  usable: DigestBundle,
+  dropped: DroppedDigest[],
+  loadError: string | null,
+  readableScopes: ReadonlySet<string>,
+): Record<string, unknown> {
+  if (loadError) {
+    return {
+      digest_used: false,
+      fallback_to_memory_retriever: true,
+      digest_fallback_reason: "load_error",
+      digest_load_error: loadError,
+    };
+  }
+  const missingTypes = expectedDigestTypes(run, readableScopes)
+    .filter((type) => !usable[type]);
+  const used = digestUsed(usable);
+  return {
+    digest_used: used,
+    digest_ids: allDigests(usable).map((d) => d.id),
+    digest_types: allDigests(usable).map((d) => d.digest_type),
+    digest_versions: allDigests(usable).map((d) => Number(d.version)),
+    digest_dropped: dropped,
+    fallback_to_memory_retriever: missingTypes.length > 0,
+    digest_missing_types: missingTypes,
+    digest_fallback_reason: missingTypes.length > 0
+      ? used
+        ? "missing_digest_for_scope"
+        : "no_digest_available"
+      : null,
+  };
+}
+
+function expectedDigestTypes(
+  run: RunContextRecord,
+  readableScopes: ReadonlySet<string>,
+): Array<keyof DigestBundle> {
+  const types: Array<keyof DigestBundle> = ["policy_bundle"];
+  if (run.workspace_id && readableScopes.has("workspace")) types.push("workspace");
+  if (run.agent_id && readableScopes.has("agent")) types.push("agent");
+  return types;
 }
 
 function renderStablePrefix(
   pkg: ContextPackage,
   run: RunContextRecord,
   digestBundle: DigestBundle,
-): string {
-  const parts: string[] = [];
+  digestMemoryIds: Set<string>,
+): StablePrefixResult {
+  interface PrefixItem { priority: number; id: string; text: string; }
+  const items: PrefixItem[] = [];
+
   if (run.system_prompt?.trim()) {
-    parts.push(`[system_prompt]\n${run.system_prompt.trim()}`);
+    items.push({ priority: 0, id: "system_prompt", text: `[system_prompt]\n${run.system_prompt.trim()}` });
   }
-  if (digestUsed(digestBundle)) {
-    for (const digest of allDigests(digestBundle)) {
-      if (digest.content?.trim()) {
-        parts.push(`[digest:${digest.digest_type}:v${digest.version}]\n${digest.content.trim()}`);
-      }
+
+  for (const digest of allDigests(digestBundle)) {
+    if (digest.content?.trim()) {
+      items.push({
+        priority: 5,
+        id: `digest:${digest.id}`,
+        text: `[digest:${digest.digest_type}:v${digest.version}]\n${digest.content.trim()}`,
+      });
     }
-  } else {
+  }
+
+  if (!digestBundle.policy_bundle) {
+    let policyRank = 0;
     for (const policy of pkg.active_policies) {
       const p = recordValue(policy);
       const name = stringValue(p.name) ?? stringValue(p.id) ?? "policy";
       const domain = stringValue(p.domain) ?? "";
-      parts.push(`[policy:${domain}:${name}]\n${JSON.stringify(recordValue(p.policy_json))}`);
+      items.push({
+        priority: 10 + policyRank,
+        id: `policy:${String(p.id ?? "unknown")}`,
+        text: `[policy:${domain}:${name}]\n${JSON.stringify(recordValue(p.policy_json))}`,
+      });
+      policyRank++;
     }
   }
 
@@ -396,25 +605,96 @@ function renderStablePrefix(
       .filter((r) => r.source_type === "memory" && typeof r.source_id === "string")
       .map((r) => r.source_id as string),
   );
-  const sections = [
+  const memorySections = [
     pkg.system_policy,
     pkg.user_memory,
     pkg.workspace_memory,
     pkg.capability_memory,
     pkg.agent_memory,
   ];
-  for (const section of sections) {
+  for (const section of memorySections) {
     for (const memory of section) {
       if (!stableIds.has(memory.id)) continue;
-      const title = memory.title ?? "";
-      const content = memory.content ?? "";
-      parts.push(`[memory:${memory.id}:${title}]\n${content}`);
+      if (digestMemoryIds.has(memory.id)) continue;
+      const scopePri = STABLE_PREFIX_SCOPE_PRIORITY[memory.scope_type as string] ?? 50;
+      const layerPri = STABLE_PREFIX_LAYER_PRIORITY[memory.memory_layer as string] ?? 3;
+      items.push({
+        priority: scopePri + layerPri,
+        id: memory.id,
+        text: `[memory:${memory.id}:${memory.title ?? ""}]\n${memory.content ?? ""}`,
+      });
     }
   }
-  return parts.join("\n\n").slice(0, STABLE_PREFIX_BUDGET_CHARS);
+
+  // Sort by priority (lower = higher importance = keep first), stable on id for determinism.
+  items.sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+
+  const budgetChars = computeStablePrefixBudgetChars(run.model_config_json);
+  const kept: string[] = [];
+  const droppedIds: string[] = [];
+  const truncatedIds: string[] = [];
+  let usedChars = 0;
+
+  for (const item of items) {
+    const sep = kept.length > 0 ? 2 : 0;
+    const fullCost = item.text.length + sep;
+    if (usedChars + fullCost <= budgetChars) {
+      kept.push(item.text);
+      usedChars += fullCost;
+    } else {
+      // Try 50% reduction before dropping entirely.
+      const truncated = fitStablePrefixItem(item.text);
+      const truncCost = truncated.length + sep;
+      if (usedChars + truncCost <= budgetChars) {
+        kept.push(truncated);
+        usedChars += truncCost;
+        truncatedIds.push(item.id);
+      } else {
+        droppedIds.push(item.id);
+      }
+    }
+  }
+
+  return {
+    text: kept.join("\n\n"),
+    budgetChars,
+    droppedCount: droppedIds.length,
+    droppedIds,
+    truncatedCount: truncatedIds.length,
+    truncatedIds,
+  };
 }
 
-function renderDynamicTail(pkg: ContextPackage, run: RunContextRecord): string {
+function computeStablePrefixBudgetChars(modelConfigJson: unknown): number {
+  const config = recordValue(modelConfigJson);
+  const modelName = stringValue(config.model) ?? stringValue(config.model_name);
+  if (modelName) {
+    for (const [pattern, tokens] of MODEL_CONTEXT_WINDOW_TOKENS) {
+      if (pattern.test(modelName)) {
+        return Math.floor(tokens * 4 * STABLE_PREFIX_FRACTION);
+      }
+    }
+  }
+  if (typeof config.context_window === "number" && config.context_window > 0) {
+    return Math.floor(config.context_window * 4 * STABLE_PREFIX_FRACTION);
+  }
+  return STABLE_PREFIX_BUDGET_CHARS;
+}
+
+function fitStablePrefixItem(text: string): string {
+  const targetChars = Math.floor(text.length * 0.5);
+  const slice = text.slice(0, targetChars);
+  const lastNewline = slice.lastIndexOf("\n");
+  const cutAt = lastNewline > 0 && lastNewline > targetChars * 0.75 ? lastNewline : targetChars;
+  return `${text.slice(0, cutAt)}\n\n> [compacted to 50% — stable prefix budget]`;
+}
+
+function renderDynamicTail(
+  pkg: ContextPackage,
+  run: RunContextRecord,
+  options: { includePrompt?: boolean } = {},
+): string {
+  const includePrompt = options.includePrompt !== false;
   const parts: string[] = [];
   const dynamicIds = new Set(
     pkg.dynamic_tail_refs
@@ -425,7 +705,7 @@ function renderDynamicTail(pkg: ContextPackage, run: RunContextRecord): string {
     if (dynamicIds.size > 0 && !dynamicIds.has(memory.id)) continue;
     parts.push(`[episode:${memory.id}:${memory.title ?? ""}]\n${memory.content ?? ""}`);
   }
-  if (run.prompt?.trim()) {
+  if (includePrompt && run.prompt?.trim()) {
     parts.push(`[prompt]\n${run.prompt.trim()}`);
   }
   for (const evidence of pkg.evidence_items) {
@@ -439,9 +719,15 @@ function renderDynamicTail(pkg: ContextPackage, run: RunContextRecord): string {
   return parts.join("\n\n");
 }
 
+function composeRuntimeContextText(stableText: string, tailText: string): string | null {
+  const parts = [stableText.trim(), tailText.trim()].filter((part) => part.length > 0);
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
 function buildTokenBudget(
   stableText: string,
   tailText: string,
+  stableCompaction: StablePrefixResult,
 ): Record<string, unknown> {
   const stableChars = stableText.length;
   const tailChars = tailText.length;
@@ -451,18 +737,29 @@ function buildTokenBudget(
     stable_prefix_chars: stableChars,
     dynamic_tail_chars: tailChars,
     total_chars: totalChars,
-    stable_prefix_budget_chars: STABLE_PREFIX_BUDGET_CHARS,
+    stable_prefix_budget_chars: stableCompaction.budgetChars,
     stable_prefix_pct: stablePct,
     stable_prefix_target_pct: 50,
     compiler_version: COMPILER_VERSION,
   };
+  if (stableCompaction.droppedCount > 0 || stableCompaction.truncatedCount > 0) {
+    budget.stable_prefix_compaction = {
+      applied: true,
+      items_dropped: stableCompaction.droppedCount,
+      dropped_ids: stableCompaction.droppedIds,
+      items_truncated: stableCompaction.truncatedCount,
+      truncated_ids: stableCompaction.truncatedIds,
+    };
+  }
   if (stablePct > 50) {
-    budget.stable_prefix_warning =
-      `stable_prefix occupies ${stablePct}% of total context (target <= 50%); truncation and digest-based compaction are not yet implemented`;
+    budget.stable_prefix_warning = `stable_prefix occupies ${stablePct}% of total context (target <= 50%)`;
   }
   return budget;
 }
 
+// Only ever called with the *usable* bundle (post-resolution), so the claimed
+// source ids it records are already fully revalidated — a stale/tampered digest
+// is dropped before this point and never contributes a (possibly wrong) trace.
 function digestSourceRefs(bundle: DigestBundle): Record<string, unknown>[] {
   return allDigests(bundle).map((digest) => ({
     source_type: "context_digest",
@@ -513,6 +810,20 @@ function recordValue(value: unknown): Record<string, unknown> {
 
 function arrayValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+function parseDigestSourceMemoryIds(
+  value: unknown,
+): { ids: string[]; malformed: boolean } {
+  if (!Array.isArray(value)) return { ids: [], malformed: true };
+  const ids: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || item.length === 0) {
+      return { ids: [], malformed: true };
+    }
+    ids.push(item);
+  }
+  return { ids, malformed: false };
 }
 
 function arrayOfStrings(value: unknown): string[] {

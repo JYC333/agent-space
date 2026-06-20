@@ -154,7 +154,6 @@ export const SCENES: Scene[] = [
     items: [
       { label: 'Workspaces', to: '/workspaces' },
       { label: 'Console',    to: '/workspace-console' },
-      { label: 'Runs',       to: '/runs' },
       { label: 'Artifacts',  to: '/artifacts' },
     ],
   },

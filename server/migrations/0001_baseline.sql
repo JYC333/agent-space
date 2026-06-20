@@ -504,6 +504,25 @@ CREATE TABLE public.cli_credential_space_grants (
 
 
 --
+-- Name: code_patch_snapshots; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.code_patch_snapshots (
+    id character varying(36) NOT NULL,
+    proposal_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    workspace_id character varying(36) NOT NULL,
+    files_json jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    status character varying(32) DEFAULT 'available'::character varying NOT NULL,
+    rolled_back_by_user_id character varying(36),
+    rolled_back_at timestamp with time zone,
+    CONSTRAINT ck_code_patch_snapshots_status CHECK (((status)::text = ANY ((ARRAY['available'::character varying, 'rolled_back'::character varying, 'pruned'::character varying])::text[])))
+);
+
+
+--
 -- Name: context_digests; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1409,6 +1428,43 @@ CREATE TABLE public.personal_memory_grants (
 
 
 --
+-- Name: plugin_installs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.plugin_installs (
+    id                   character varying(36)  NOT NULL DEFAULT gen_random_uuid(),
+    plugin_id            character varying(64)  NOT NULL,
+    installed_version    character varying(32)  NOT NULL,
+    status               character varying(16)  NOT NULL DEFAULT 'active',
+    source               character varying(16)  NOT NULL DEFAULT 'official',
+    installed_at         timestamp with time zone NOT NULL DEFAULT now(),
+    installed_by_user_id character varying(36),
+    package_hash         text,
+    manifest_json        jsonb NOT NULL DEFAULT '{}'::jsonb,
+    CONSTRAINT plugin_installs_plugin_id_nonempty CHECK ((length(trim((plugin_id)::text)) > 0)),
+    CONSTRAINT plugin_installs_source_valid CHECK ((source = ANY (ARRAY['built_in'::character varying, 'official'::character varying, 'local'::character varying]))),
+    CONSTRAINT plugin_installs_status_valid CHECK ((status = ANY (ARRAY['active'::character varying, 'disabled'::character varying, 'removed'::character varying])))
+);
+
+
+--
+-- Name: plugin_migrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.plugin_migrations (
+    id               character varying(36)  NOT NULL DEFAULT gen_random_uuid(),
+    plugin_id        character varying(64)  NOT NULL,
+    plugin_version   character varying(32)  NOT NULL,
+    migration_id     character varying(128) NOT NULL,
+    checksum         text,
+    applied_at       timestamp with time zone NOT NULL DEFAULT now(),
+    status           character varying(16)  NOT NULL DEFAULT 'applied',
+    error_message    text,
+    CONSTRAINT plugin_migrations_status_valid CHECK ((status = ANY (ARRAY['applied'::character varying, 'failed'::character varying])))
+);
+
+
+--
 -- Name: policies; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2088,6 +2144,8 @@ CREATE TABLE public.spaces (
     name character varying(256) NOT NULL,
     type character varying(32) NOT NULL,
     created_by_user_id character varying(36),
+    snapshot_retention_days_default integer,
+    snapshot_max_count_default integer,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_spaces_type CHECK (((type)::text = ANY ((ARRAY['personal'::character varying, 'household'::character varying, 'team'::character varying])::text[])))
@@ -2398,7 +2456,9 @@ CREATE TABLE public.workspaces (
     system_managed boolean NOT NULL,
     registered_from character varying(32),
     metadata_json jsonb,
-    allow_external_root boolean DEFAULT false NOT NULL
+    allow_external_root boolean DEFAULT false NOT NULL,
+    snapshot_retention_days integer,
+    snapshot_max_count integer
 );
 
 
@@ -2568,6 +2628,14 @@ ALTER TABLE ONLY public.cli_credential_profiles
 
 ALTER TABLE ONLY public.cli_credential_space_grants
     ADD CONSTRAINT cli_credential_space_grants_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: code_patch_snapshots code_patch_snapshots_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.code_patch_snapshots
+    ADD CONSTRAINT code_patch_snapshots_pkey PRIMARY KEY (id);
 
 
 --
@@ -2848,6 +2916,38 @@ ALTER TABLE ONLY public.personal_memory_grant_events
 
 ALTER TABLE ONLY public.personal_memory_grants
     ADD CONSTRAINT personal_memory_grants_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: plugin_installs plugin_installs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plugin_installs
+    ADD CONSTRAINT plugin_installs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: plugin_installs plugin_installs_plugin_id_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plugin_installs
+    ADD CONSTRAINT plugin_installs_plugin_id_unique UNIQUE (plugin_id);
+
+
+--
+-- Name: plugin_migrations plugin_migrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plugin_migrations
+    ADD CONSTRAINT plugin_migrations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: plugin_migrations plugin_migrations_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plugin_migrations
+    ADD CONSTRAINT plugin_migrations_unique UNIQUE (plugin_id, migration_id);
 
 
 --
@@ -4141,6 +4241,27 @@ CREATE INDEX ix_cli_credential_space_grants_space_id ON public.cli_credential_sp
 
 
 --
+-- Name: ix_code_patch_snapshots_expires_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_code_patch_snapshots_expires_at ON public.code_patch_snapshots USING btree (expires_at);
+
+
+--
+-- Name: ix_code_patch_snapshots_proposal_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_code_patch_snapshots_proposal_id ON public.code_patch_snapshots USING btree (proposal_id);
+
+
+--
+-- Name: ix_code_patch_snapshots_workspace_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_code_patch_snapshots_workspace_id ON public.code_patch_snapshots USING btree (workspace_id);
+
+
+--
 -- Name: ix_context_digests_digest_type; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4180,6 +4301,13 @@ CREATE INDEX ix_context_digests_space_id ON public.context_digests USING btree (
 --
 
 CREATE INDEX ix_context_digests_status ON public.context_digests USING btree (status);
+
+
+--
+-- Name: uq_context_digests_current_scope; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_context_digests_current_scope ON public.context_digests USING btree (space_id, scope_type, COALESCE(scope_id, ''::character varying), digest_type) WHERE ((status)::text = ANY ((ARRAY['active'::character varying, 'dirty'::character varying])::text[]));
 
 
 --
@@ -7081,6 +7209,20 @@ CREATE INDEX official_plugin_events_space_idx ON public.official_plugin_events U
 
 
 --
+-- Name: plugin_installs_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX plugin_installs_status_idx ON public.plugin_installs USING btree (status);
+
+
+--
+-- Name: plugin_migrations_plugin_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX plugin_migrations_plugin_id_idx ON public.plugin_migrations USING btree (plugin_id);
+
+
+--
 -- Name: uq_agent_templates_space_key; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -9888,48 +10030,6 @@ ALTER TABLE ONLY public.workspaces
 ALTER TABLE ONLY public.workspaces
     ADD CONSTRAINT workspaces_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
 
-
--- ── Level 2 Plugin Infrastructure ────────────────────────────────────────────
--- plugin_installs tracks which plugins are installed on this instance.
--- Official plugin installs write a row here after installer-managed migrations run.
--- Future downloaded plugins use the same table after package verification.
-
-CREATE TABLE public.plugin_installs (
-    id                   character varying(36)  NOT NULL DEFAULT gen_random_uuid(),
-    plugin_id            character varying(64)  NOT NULL,
-    installed_version    character varying(32)  NOT NULL,
-    status               character varying(16)  NOT NULL DEFAULT 'active',
-    source               character varying(16)  NOT NULL DEFAULT 'official',
-    installed_at         timestamp with time zone NOT NULL DEFAULT now(),
-    installed_by_user_id character varying(36),
-    package_hash         text,
-    manifest_json        jsonb NOT NULL DEFAULT '{}'::jsonb,
-    CONSTRAINT plugin_installs_pkey PRIMARY KEY (id),
-    CONSTRAINT plugin_installs_plugin_id_unique UNIQUE (plugin_id),
-    CONSTRAINT plugin_installs_plugin_id_nonempty CHECK ((length(trim((plugin_id)::text)) > 0)),
-    CONSTRAINT plugin_installs_status_valid CHECK ((status IN ('active', 'disabled', 'removed'))),
-    CONSTRAINT plugin_installs_source_valid CHECK ((source IN ('built_in', 'official', 'local')))
-);
-
--- plugin_migrations tracks which migrations a plugin has applied.
--- Separate from core migrations to allow independent versioning.
-
-CREATE TABLE public.plugin_migrations (
-    id               character varying(36)  NOT NULL DEFAULT gen_random_uuid(),
-    plugin_id        character varying(64)  NOT NULL,
-    plugin_version   character varying(32)  NOT NULL,
-    migration_id     character varying(128) NOT NULL,
-    checksum         text,
-    applied_at       timestamp with time zone NOT NULL DEFAULT now(),
-    status           character varying(16)  NOT NULL DEFAULT 'applied',
-    error_message    text,
-    CONSTRAINT plugin_migrations_pkey PRIMARY KEY (id),
-    CONSTRAINT plugin_migrations_unique UNIQUE (plugin_id, migration_id),
-    CONSTRAINT plugin_migrations_status_valid CHECK ((status IN ('applied', 'failed')))
-);
-
-CREATE INDEX plugin_installs_status_idx ON public.plugin_installs USING btree (status);
-CREATE INDEX plugin_migrations_plugin_id_idx ON public.plugin_migrations USING btree (plugin_id);
 
 --
 -- PostgreSQL database dump complete

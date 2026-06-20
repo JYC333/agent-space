@@ -69,6 +69,16 @@ ensure_env() {
   fi
 }
 
+# ── Generate .server.env from .env (strips compose-only vars) ─────────────────
+# .server.env is loaded by the server container via env_file:. It must not
+# contain POSTGRES_* or DATABASE_URL — those are for compose and postgres only.
+generate_server_env() {
+  local server_env="$MODE_ROOT/.server.env"
+  grep -vE '^[[:space:]]*(POSTGRES_(MAJOR|DB|USER|PASSWORD)|DATABASE_URL)[[:space:]]*=' \
+    "$ENV_FILE" > "$server_env"
+  chmod 600 "$server_env"
+}
+
 validate_prod_env() {
   [[ "$MODE" == "prod" ]] || return 0
 
@@ -108,6 +118,7 @@ init_data_dirs
 ensure_env
 validate_prod_env
 local_compose_ensure_server_database_env
+generate_server_env
 
 export DOCKER_GID
 DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 989)

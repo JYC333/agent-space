@@ -56,6 +56,9 @@ function config(): ServerConfig {
     intakeExtractionSchedulerIntervalSeconds: 30,
     agentSpaceEnv: "",
     appVersion: null,
+    enableSystemEvolution: false,
+    systemCoreOwnerEmail: null,
+    systemCoreBaseBranch: "main",
     backupEnabled: false,
     backupIntervalHours: 24,
     backupRetentionCount: 7,
@@ -111,6 +114,7 @@ function memory(over: Partial<ContextMemoryRow> = {}): ContextMemoryRow {
 
 class FakeContextRepo extends PgRunContextRepository {
   readonly accesses: unknown[] = [];
+  readonly digestAccesses: unknown[] = [];
   readonly snapshots: SnapshotUpdateInput[] = [];
   readonly runMarkers: Array<{ runId: string; metadata: PersonalGrantMetadata }> = [];
   readonly evidenceSelections: ContextEvidenceSelection[] = [
@@ -158,7 +162,8 @@ class FakeContextRepo extends PgRunContextRepository {
     has_personal_grant_context: false,
     personal_grant_context_json: null,
     system_prompt: "You are a test agent.",
-    memory_policy_json: { readable_scopes: ["user", "system"] },
+    memory_policy_json: { readable_scopes: ["user", "system", "workspace", "agent"] },
+    model_config_json: null,
   };
   rows: ContextMemoryRow[] = [memory()];
   digest: DigestBundle = {
@@ -195,7 +200,7 @@ class FakeContextRepo extends PgRunContextRepository {
     return this.run;
   }
 
-  override async retrieve() {
+  override async retrieve(): ReturnType<PgRunContextRepository["retrieve"]> {
     return {
       memories: this.rows,
       activePolicies: [
@@ -224,6 +229,21 @@ class FakeContextRepo extends PgRunContextRepository {
 
   override async recordContextMemoryAccess(input: unknown): Promise<void> {
     this.accesses.push(input);
+  }
+
+  override async recordContextDigestMemoryAccess(input: unknown): Promise<void> {
+    this.digestAccesses.push(input);
+  }
+
+  // Ids the live-scope re-validation should reject (stale/tampered digest sources).
+  digestIneligibleIds = new Set<string>();
+  override async filterEligibleDigestMemoryIds(input: {
+    spaceId: string;
+    scopeType: "workspace" | "agent";
+    scopeId: string;
+    memoryIds: readonly string[];
+  }): Promise<string[]> {
+    return input.memoryIds.filter((id) => !this.digestIneligibleIds.has(id));
   }
 
   override async loadLatestSessionSummary(): Promise<SessionSummaryRow | null> {
@@ -348,7 +368,19 @@ describe("ContextPrepareService", () => {
       source_hash: "source-hash",
       content_hash: "content-hash",
     };
-    repo.digest = { policy_bundle: digest, workspace: null, agent: null };
+    const agentDigest: ContextDigestRow = {
+      id: "agent-digest-1",
+      digest_type: "agent",
+      version: 7,
+      status: "active",
+      content: "Agent digest content",
+      source_memory_ids_json: ["agent-mem-1"],
+      source_policy_ids_json: [],
+      source_relation_ids_json: [],
+      source_hash: "agent-source-hash",
+      content_hash: "agent-content-hash",
+    };
+    repo.digest = { policy_bundle: digest, workspace: null, agent: agentDigest };
 
     await new ContextPrepareService(config(), repo).prepare({
       runId: "run-1",
@@ -370,6 +402,723 @@ describe("ContextPrepareService", () => {
       }),
     );
     expect(repo.snapshots[0]?.policyBundleVersion).toBe("3");
+    expect(repo.snapshots[0]?.memoryDigestVersion).toBe("7");
+  });
+
+  it("falls back per missing digest scope instead of suppressing policies globally", async () => {
+    const repo = new FakeContextRepo();
+    repo.run = { ...repo.run!, workspace_id: "ws-1" };
+    repo.digest = {
+      policy_bundle: null,
+      workspace: {
+        id: "workspace-digest",
+        digest_type: "workspace",
+        version: 2,
+        status: "active",
+        content: "Workspace digest content",
+        source_memory_ids_json: ["mem-1"],
+        source_policy_ids_json: [],
+        source_relation_ids_json: [],
+        source_hash: "source-hash",
+        content_hash: "content-hash",
+      },
+      agent: null,
+    };
+
+    await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: "generic",
+      workspacePath: null,
+    });
+
+    const snapshot = repo.snapshots[0]!;
+    expect(snapshot.compiledPrefixText).toContain("[digest:workspace:v2]");
+    expect(snapshot.compiledPrefixText).toContain("[policy:runtime:Policy]");
+    expect(snapshot.workspaceDigestVersion).toBe("2");
+    expect(snapshot.retrievalTrace[0]).toMatchObject({
+      digest_used: true,
+      fallback_to_memory_retriever: true,
+      digest_missing_types: ["policy_bundle", "agent"],
+      digest_fallback_reason: "missing_digest_for_scope",
+    });
+  });
+
+  it("deduplicates memories covered by digest and logs digest-only source memory reads", async () => {
+    const repo = new FakeContextRepo();
+    repo.rows = [
+      memory({
+        id: "shared-mem",
+        title: "Shared direct title",
+        content: "Shared direct content should be replaced by digest.",
+        scope_type: "workspace",
+        workspace_id: "ws-1",
+        visibility: "workspace_shared",
+      }),
+      memory({
+        id: "private-mem",
+        title: "Private memory",
+        content: "Private owner-specific content remains direct.",
+        scope_type: "workspace",
+        workspace_id: "ws-1",
+        visibility: "private",
+      }),
+    ];
+    repo.run = { ...repo.run!, workspace_id: "ws-1" };
+    repo.retrieve = async () => ({
+      memories: repo.rows,
+      activePolicies: [],
+      sourceRefs: repo.rows.map((m) => ({
+        source_type: "memory",
+        source_id: m.id,
+        section: "stable_prefix",
+        stage: "symbol_match",
+      })),
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+    repo.digest = {
+      policy_bundle: null,
+      workspace: {
+        id: "workspace-digest",
+        digest_type: "workspace",
+        version: 4,
+        status: "active",
+        content: "Digest-safe shared memory summary.",
+        source_memory_ids_json: ["shared-mem", "digest-only-mem"],
+        source_policy_ids_json: [],
+        source_relation_ids_json: [],
+        source_hash: "source-hash",
+        content_hash: "content-hash",
+      },
+      agent: null,
+    };
+
+    await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: "generic",
+      workspacePath: null,
+    });
+
+    const snapshot = repo.snapshots[0]!;
+    expect(snapshot.compiledPrefixText).toContain("Digest-safe shared memory summary.");
+    expect(snapshot.compiledPrefixText).not.toContain("Shared direct content should be replaced");
+    expect(snapshot.compiledPrefixText).toContain("Private owner-specific content remains direct.");
+    expect(repo.digestAccesses).toHaveLength(1);
+    expect(repo.digestAccesses[0]).toMatchObject({
+      memoryIds: ["digest-only-mem"],
+      reason: "run_execution:run-1:context_digest",
+    });
+  });
+
+  it("ignores digest source ids that fail live-scope re-validation", async () => {
+    const repo = new FakeContextRepo();
+    repo.rows = [
+      memory({
+        id: "private-mem",
+        title: "Private memory",
+        content: "Private owner-specific content must stay direct.",
+        scope_type: "workspace",
+        workspace_id: "ws-1",
+        visibility: "private",
+      }),
+    ];
+    repo.run = { ...repo.run!, workspace_id: "ws-1" };
+    repo.retrieve = async () => ({
+      memories: repo.rows,
+      activePolicies: [],
+      sourceRefs: repo.rows.map((m) => ({
+        source_type: "memory",
+        source_id: m.id,
+        section: "stable_prefix",
+        stage: "symbol_match",
+      })),
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+    // A stale/tampered digest claims a private memory id it does not legitimately cover.
+    repo.digest = {
+      policy_bundle: null,
+      workspace: {
+        id: "workspace-digest",
+        digest_type: "workspace",
+        version: 4,
+        status: "active",
+        content: "Digest summary.",
+        source_memory_ids_json: ["private-mem"],
+        source_policy_ids_json: [],
+        source_relation_ids_json: [],
+        source_hash: "source-hash",
+        content_hash: "content-hash",
+      },
+      agent: null,
+    };
+    repo.digestIneligibleIds = new Set(["private-mem"]);
+
+    await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: "generic",
+      workspacePath: null,
+    });
+
+    const snapshot = repo.snapshots[0]!;
+    // The whole digest is dropped (its summary may embed the now-ineligible memory).
+    expect(snapshot.compiledPrefixText).not.toContain("Digest summary.");
+    expect(snapshot.workspaceDigestVersion).toBeNull();
+    // Not suppressed by the poisoned digest: the private memory still renders directly.
+    expect(snapshot.compiledPrefixText).toContain("Private owner-specific content must stay direct.");
+    // And it is not falsely audited as a digest-sourced read (empty → real repo no-ops).
+    expect(repo.digestAccesses).toEqual([
+      expect.objectContaining({ memoryIds: [] }),
+    ]);
+    expect(snapshot.retrievalTrace[0]).toMatchObject({
+      digest_used: false,
+      digest_dropped: [{ digest_type: "workspace", reason: "stale_source_memory" }],
+    });
+  });
+
+  it("drops a dirty workspace digest and falls back to the direct retriever", async () => {
+    const repo = new FakeContextRepo();
+    repo.rows = [
+      memory({
+        id: "shared-mem",
+        title: "Shared direct title",
+        content: "Current shared content from the live retriever.",
+        scope_type: "workspace",
+        workspace_id: "ws-1",
+        visibility: "workspace_shared",
+      }),
+    ];
+    repo.run = { ...repo.run!, workspace_id: "ws-1" };
+    repo.retrieve = async () => ({
+      memories: repo.rows,
+      activePolicies: [],
+      sourceRefs: repo.rows.map((m) => ({
+        source_type: "memory",
+        source_id: m.id,
+        section: "stable_prefix",
+        stage: "symbol_match",
+      })),
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+    // A pending memory change has marked the digest dirty; its cached summary is stale.
+    repo.digest = {
+      policy_bundle: null,
+      workspace: {
+        id: "workspace-digest",
+        digest_type: "workspace",
+        version: 6,
+        status: "dirty",
+        content: "Stale digest summary that must not be injected.",
+        source_memory_ids_json: ["shared-mem"],
+        source_policy_ids_json: [],
+        source_relation_ids_json: [],
+        source_hash: "source-hash",
+        content_hash: "content-hash",
+      },
+      agent: null,
+    };
+
+    await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: "generic",
+      workspacePath: null,
+    });
+
+    const snapshot = repo.snapshots[0]!;
+    // Dirty digest content is not injected; the live memory renders directly instead.
+    expect(snapshot.compiledPrefixText).not.toContain("Stale digest summary");
+    expect(snapshot.compiledPrefixText).toContain("Current shared content from the live retriever.");
+    expect(snapshot.workspaceDigestVersion).toBeNull();
+    expect(snapshot.retrievalTrace[0]).toMatchObject({
+      digest_used: false,
+      fallback_to_memory_retriever: true,
+      digest_dropped: [{ digest_type: "workspace", reason: "dirty" }],
+    });
+  });
+
+  it("drops a workspace digest when the agent may not read the workspace scope", async () => {
+    const repo = new FakeContextRepo();
+    // readable_scopes excludes "workspace": the direct retriever already filters
+    // workspace memory out, so the derived workspace digest must not be injected.
+    repo.run = {
+      ...repo.run!,
+      workspace_id: "ws-1",
+      memory_policy_json: { readable_scopes: ["user", "agent"] },
+    };
+    repo.retrieve = async () => ({
+      memories: [],
+      activePolicies: [],
+      sourceRefs: [],
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+    repo.digest = {
+      policy_bundle: null,
+      workspace: {
+        id: "workspace-digest",
+        digest_type: "workspace",
+        version: 3,
+        status: "active",
+        content: "Workspace summary the agent is not allowed to read.",
+        source_memory_ids_json: [],
+        source_policy_ids_json: [],
+        source_relation_ids_json: [],
+        source_hash: "source-hash",
+        content_hash: "content-hash",
+      },
+      agent: null,
+    };
+
+    await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: "generic",
+      workspacePath: null,
+    });
+
+    const snapshot = repo.snapshots[0]!;
+    expect(snapshot.compiledPrefixText).not.toContain("Workspace summary the agent is not allowed to read.");
+    expect(snapshot.workspaceDigestVersion).toBeNull();
+    expect(snapshot.retrievalTrace[0]).toMatchObject({
+      digest_used: false,
+      digest_missing_types: ["policy_bundle", "agent"],
+      digest_dropped: [{ digest_type: "workspace", reason: "scope_not_readable" }],
+    });
+  });
+
+  it("drops an agent digest when the agent may not read the agent scope", async () => {
+    const repo = new FakeContextRepo();
+    repo.run = {
+      ...repo.run!,
+      memory_policy_json: { readable_scopes: ["user", "workspace"] },
+    };
+    repo.retrieve = async () => ({
+      memories: [],
+      activePolicies: [],
+      sourceRefs: [],
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+    repo.digest = {
+      policy_bundle: {
+        id: "policy-digest",
+        digest_type: "policy_bundle",
+        version: 2,
+        status: "active",
+        content: "Policy digest content.",
+        source_memory_ids_json: [],
+        source_policy_ids_json: ["policy-1"],
+        source_relation_ids_json: [],
+        source_hash: "policy-source-hash",
+        content_hash: "policy-content-hash",
+      },
+      workspace: null,
+      agent: {
+        id: "agent-digest",
+        digest_type: "agent",
+        version: 3,
+        status: "active",
+        content: "Agent summary the agent is not allowed to read.",
+        source_memory_ids_json: [],
+        source_policy_ids_json: [],
+        source_relation_ids_json: [],
+        source_hash: "agent-source-hash",
+        content_hash: "agent-content-hash",
+      },
+    };
+
+    await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: "generic",
+      workspacePath: null,
+    });
+
+    const snapshot = repo.snapshots[0]!;
+    expect(snapshot.compiledPrefixText).toContain("Policy digest content.");
+    expect(snapshot.compiledPrefixText).not.toContain("Agent summary the agent is not allowed to read.");
+    expect(snapshot.memoryDigestVersion).toBeNull();
+    expect(snapshot.retrievalTrace[0]).toMatchObject({
+      digest_used: true,
+      fallback_to_memory_retriever: false,
+      digest_missing_types: [],
+      digest_dropped: [{ digest_type: "agent", reason: "scope_not_readable" }],
+    });
+  });
+
+  it("drops a dirty policy_bundle and falls back to direct active policies", async () => {
+    const repo = new FakeContextRepo();
+    repo.run = { ...repo.run!, workspace_id: null };
+    repo.retrieve = async () => ({
+      memories: [],
+      activePolicies: [
+        {
+          id: "policy-1",
+          name: "Boundary",
+          domain: "egress",
+          policy_key: null,
+          enforcement_mode: null,
+          priority: 0,
+          policy_json: { rule: "deny" },
+        },
+      ],
+      sourceRefs: [],
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+    repo.digest = {
+      policy_bundle: {
+        id: "policy-digest",
+        digest_type: "policy_bundle",
+        version: 9,
+        status: "dirty",
+        content: "Stale policy digest that must not suppress current policies.",
+        source_memory_ids_json: [],
+        source_policy_ids_json: ["policy-old"],
+        source_relation_ids_json: [],
+        source_hash: "source-hash",
+        content_hash: "content-hash",
+      },
+      workspace: null,
+      agent: null,
+    };
+
+    await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: "generic",
+      workspacePath: null,
+    });
+
+    const snapshot = repo.snapshots[0]!;
+    expect(snapshot.compiledPrefixText).not.toContain("Stale policy digest");
+    // Current active policies are injected directly instead of the dirty digest.
+    expect(snapshot.compiledPrefixText).toContain("[policy:egress:Boundary]");
+    expect(snapshot.policyBundleVersion).toBeNull();
+    expect(snapshot.retrievalTrace[0]).toMatchObject({
+      digest_dropped: [{ digest_type: "policy_bundle", reason: "dirty" }],
+    });
+  });
+
+  it("drops a memory digest with malformed source metadata", async () => {
+    const repo = new FakeContextRepo();
+    repo.rows = [
+      memory({
+        id: "shared-mem",
+        title: "Shared memory",
+        content: "Current shared content from live retrieval.",
+        scope_type: "workspace",
+        workspace_id: "ws-1",
+        visibility: "workspace_shared",
+      }),
+    ];
+    repo.run = { ...repo.run!, workspace_id: "ws-1" };
+    repo.retrieve = async () => ({
+      memories: repo.rows,
+      activePolicies: [],
+      sourceRefs: repo.rows.map((m) => ({
+        source_type: "memory",
+        source_id: m.id,
+        section: "stable_prefix",
+        stage: "symbol_match",
+      })),
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+    repo.digest = {
+      policy_bundle: null,
+      workspace: {
+        id: "workspace-digest",
+        digest_type: "workspace",
+        version: 5,
+        status: "active",
+        content: "Digest summary with unprovable source metadata.",
+        source_memory_ids_json: ["shared-mem", 42],
+        source_policy_ids_json: [],
+        source_relation_ids_json: [],
+        source_hash: "source-hash",
+        content_hash: "content-hash",
+      },
+      agent: null,
+    };
+
+    await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: "generic",
+      workspacePath: null,
+    });
+
+    const snapshot = repo.snapshots[0]!;
+    expect(snapshot.compiledPrefixText).not.toContain("Digest summary with unprovable");
+    expect(snapshot.compiledPrefixText).toContain("Current shared content from live retrieval.");
+    expect(snapshot.workspaceDigestVersion).toBeNull();
+    expect(snapshot.retrievalTrace[0]).toMatchObject({
+      digest_used: false,
+      digest_dropped: [{ digest_type: "workspace", reason: "stale_source_memory" }],
+    });
+  });
+
+  it("renders digest-backed context into CLI instruction files and runtime text", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aspace-context-"));
+    const sandbox = join(root, "sandbox");
+    const workspace = join(root, "workspace");
+    await mkdir(sandbox, { recursive: true });
+    await mkdir(workspace, { recursive: true });
+
+    const repo = new FakeContextRepo();
+    repo.run = { ...repo.run!, workspace_id: "ws-1" };
+    repo.rows = [
+      memory({
+        id: "shared-mem",
+        title: "Shared direct title",
+        content: "Shared direct content should not reach runtime file.",
+        scope_type: "workspace",
+        workspace_id: "ws-1",
+        visibility: "workspace_shared",
+      }),
+      memory({
+        id: "private-mem",
+        title: "Private memory",
+        content: "Private owner-specific content remains direct.",
+        scope_type: "workspace",
+        workspace_id: "ws-1",
+        visibility: "private",
+      }),
+    ];
+    repo.retrieve = async () => ({
+      memories: repo.rows,
+      activePolicies: [],
+      sourceRefs: repo.rows.map((m) => ({
+        source_type: "memory",
+        source_id: m.id,
+        section: "stable_prefix",
+        stage: "symbol_match",
+      })),
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+    repo.digest = {
+      policy_bundle: null,
+      workspace: {
+        id: "workspace-digest",
+        digest_type: "workspace",
+        version: 5,
+        status: "active",
+        content: "Digest-safe shared memory summary.",
+        source_memory_ids_json: ["shared-mem"],
+        source_policy_ids_json: [],
+        source_relation_ids_json: [],
+        source_hash: "source-hash",
+        content_hash: "content-hash",
+      },
+      agent: null,
+    };
+
+    const result = await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "codex_cli",
+      sandboxCwd: sandbox,
+      targetFormat: "codex_cli",
+      workspacePath: workspace,
+    });
+
+    expect(result.context_rendered).toBe(true);
+    expect(result.instruction_file_path).toBe(join(sandbox, "AGENTS.md"));
+    const rendered = await readFile(result.instruction_file_path!, "utf8");
+    expect(rendered).toContain("Digest-safe shared memory summary.");
+    expect(rendered).toContain("Private owner-specific content remains direct.");
+    expect(rendered).not.toContain("Shared direct content should not reach runtime file.");
+    expect(result.runtime_context_text).toContain("Digest-safe shared memory summary.");
+    expect(result.runtime_context_text).not.toContain("[prompt]\nDo the work");
+  });
+});
+
+describe("ContextPrepareService stable prefix compaction", () => {
+  it("keeps higher-priority (user) memories and drops lower-priority (agent) ones when prefix budget overflows", async () => {
+    const repo = new FakeContextRepo();
+    const userMems = Array.from({ length: 8 }, (_, i) =>
+      memory({ id: `user-mem-${i}`, scope_type: "user", memory_layer: "semantic", content: "u".repeat(5_000), title: `User ${i}` }),
+    );
+    const agentMems = Array.from({ length: 8 }, (_, i) =>
+      memory({ id: `agent-mem-${i}`, scope_type: "agent", memory_layer: "semantic", content: "a".repeat(5_000), title: `Agent ${i}` }),
+    );
+    repo.rows = [...userMems, ...agentMems];
+    const allRefs = [...userMems, ...agentMems].map((m) => ({
+      source_type: "memory",
+      source_id: m.id,
+      section: "stable_prefix",
+      stage: "symbol_match",
+    }));
+    repo.retrieve = async () => ({
+      memories: repo.rows,
+      activePolicies: [],
+      sourceRefs: allRefs,
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+
+    const service = new ContextPrepareService(config(), repo);
+    await service.prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: null,
+      workspacePath: null,
+    });
+
+    const snapshot = repo.snapshots[0]!;
+    expect(snapshot.compiledPrefixText).toContain("[memory:user-mem-0:");
+    expect(snapshot.compiledPrefixText.length).toBeLessThanOrEqual(64_200);
+    const compaction = (snapshot.tokenBudget as Record<string, unknown>).stable_prefix_compaction as Record<string, unknown> | undefined;
+    expect(compaction).toMatchObject({ applied: true });
+    expect(compaction!.items_dropped as number).toBeGreaterThan(0);
+  });
+
+  it("does not set stable_prefix_compaction when all items fit within budget", async () => {
+    const repo = new FakeContextRepo();
+    // single small memory — fits easily
+    repo.rows = [memory({ id: "small-mem", scope_type: "user", content: "Short fact." })];
+    repo.retrieve = async () => ({
+      memories: repo.rows,
+      activePolicies: [],
+      sourceRefs: [{ source_type: "memory", source_id: "small-mem", section: "stable_prefix", stage: "symbol_match" }],
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+
+    await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: null,
+      workspacePath: null,
+    });
+
+    const snapshot = repo.snapshots[0]!;
+    expect((snapshot.tokenBudget as Record<string, unknown>).stable_prefix_compaction).toBeUndefined();
+  });
+
+  it("system_prompt is always included even when other items overflow", async () => {
+    const repo = new FakeContextRepo();
+    repo.run = { ...repo.run!, system_prompt: "SYSTEM" };
+    const bigMems = Array.from({ length: 20 }, (_, i) =>
+      memory({ id: `big-mem-${i}`, scope_type: "agent", content: "x".repeat(5_000) }),
+    );
+    repo.rows = bigMems;
+    repo.retrieve = async () => ({
+      memories: bigMems,
+      activePolicies: [],
+      sourceRefs: bigMems.map((m) => ({ source_type: "memory", source_id: m.id, section: "stable_prefix", stage: "symbol_match" })),
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+
+    await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: null,
+      workspacePath: null,
+    });
+
+    expect(repo.snapshots[0]?.compiledPrefixText).toContain("[system_prompt]\nSYSTEM");
+  });
+
+  it("truncates a borderline item at 50% rather than dropping it when the full item would not fit", async () => {
+    const repo = new FakeContextRepo();
+    // Budget ~ 64K chars. system_prompt (prio 0) gets priority.
+    // user-mem (prio 25) is large: 40K chars. At 100% it won't fit; at 50% (20K) it should fit.
+    // agent-mem (prio 40) is also large and should be dropped after truncated user-mem fills budget.
+    repo.run = { ...repo.run!, system_prompt: "SYS", model_config_json: null };
+    const bigUserMem = memory({ id: "big-user", scope_type: "user", memory_layer: "semantic", content: "u".repeat(40_000) });
+    const bigAgentMem = memory({ id: "big-agent", scope_type: "agent", memory_layer: "semantic", content: "a".repeat(40_000) });
+    repo.rows = [bigUserMem, bigAgentMem];
+    repo.retrieve = async () => ({
+      memories: repo.rows,
+      activePolicies: [],
+      sourceRefs: [bigUserMem, bigAgentMem].map((m) => ({
+        source_type: "memory",
+        source_id: m.id,
+        section: "stable_prefix",
+        stage: "symbol_match",
+      })),
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+
+    await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1", spaceId: "space-1", adapterType: "model_api",
+      sandboxCwd: null, targetFormat: null, workspacePath: null,
+    });
+
+    const snapshot = repo.snapshots[0]!;
+    // User mem should appear (truncated) in prefix
+    expect(snapshot.compiledPrefixText).toContain("big-user");
+    // Truncation marker present
+    expect(snapshot.compiledPrefixText).toContain("[compacted to 50% — stable prefix budget]");
+    const compaction = (snapshot.tokenBudget as Record<string, unknown>).stable_prefix_compaction as Record<string, unknown> | undefined;
+    expect(compaction).toMatchObject({ applied: true, items_truncated: 1 });
+    expect((compaction!.truncated_ids as string[])).toContain("big-user");
+  });
+
+  it("uses a larger stable prefix budget for a known large-context model", async () => {
+    const repo = new FakeContextRepo();
+    // claude-opus-4-8 has 200K token context → budget = 200K × 4 × 0.35 = 280K chars
+    repo.run = { ...repo.run!, model_config_json: { model: "claude-opus-4-8", max_tokens: 4096 } };
+    // Fill with memories that would overflow the default 64K budget but fit inside 280K
+    const mems = Array.from({ length: 10 }, (_, i) =>
+      memory({ id: `mem-${i}`, scope_type: "user", memory_layer: "semantic", content: "m".repeat(8_000) }),
+    );
+    repo.rows = mems;
+    repo.retrieve = async () => ({
+      memories: mems,
+      activePolicies: [],
+      sourceRefs: mems.map((m) => ({ source_type: "memory", source_id: m.id, section: "stable_prefix", stage: "symbol_match" })),
+      retrievalTrace: {},
+      tokenBudget: {},
+    });
+
+    await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1", spaceId: "space-1", adapterType: "model_api",
+      sandboxCwd: null, targetFormat: null, workspacePath: null,
+    });
+
+    const snapshot = repo.snapshots[0]!;
+    const tb = snapshot.tokenBudget as Record<string, unknown>;
+    // Budget should be 280K, not 64K
+    expect(tb.stable_prefix_budget_chars).toBe(200_000 * 4 * 0.35);
+    // All 10 mems (10 × ~8K = 80K) fit inside 280K — no compaction
+    expect(tb.stable_prefix_compaction).toBeUndefined();
+    // All memories should appear
+    for (const m of mems) {
+      expect(snapshot.compiledPrefixText).toContain(m.id);
+    }
   });
 });
 
@@ -440,5 +1189,74 @@ describe("ContextCompiler", () => {
         },
       }),
     ).rejects.toThrow(/refuses to write/);
+  });
+
+  it("reduces a section to 75% when 100% does not fit but 75% does", async () => {
+    const compiler = new ContextCompiler();
+    // task is mandatory; user_context is large enough that 100% does not fit,
+    // while the 75% compacted section still does.
+    const longContent = "w".repeat(700);
+    const result = await compiler.compile({
+      target: "generic",
+      taskGoal: "T",
+      budgetChars: 700,
+      context: {
+        user_memory: [serializeMemoryRow(memory({ content: longContent }), "user-1")],
+        workspace_memory: [],
+        capability_memory: [],
+        agent_memory: [],
+        system_policy: [],
+        recent_session_summary: [],
+        relevant_episodes: [],
+        evidence_items: [],
+        attachments: [],
+        active_policies: [],
+        stable_prefix_refs: [],
+        dynamic_tail_refs: [],
+        source_refs: [],
+        retrieval_trace: {},
+        token_budget: {},
+        personal_context_block: "",
+      },
+    });
+
+    const compacted = (result.budget_trace.compacted as Array<{ section: string; fraction: number }>);
+    expect(compacted.length).toBeGreaterThan(0);
+    expect(compacted[0]!.section).toBe("user_context");
+    expect(compacted[0]!.fraction).toBe(0.75);
+    expect(result.dropped_sections).not.toContain("user_context");
+    // Compacted marker present in output
+    expect(result.task_prompt).toBe("T");
+  });
+
+  it("drops a section entirely when even 50% does not fit within budget", async () => {
+    const compiler = new ContextCompiler();
+    const result = await compiler.compile({
+      target: "generic",
+      taskGoal: "Task",
+      budgetChars: 15, // only task fits (mandatory)
+      context: {
+        user_memory: [serializeMemoryRow(memory({ content: "x".repeat(500) }), "user-1")],
+        workspace_memory: [],
+        capability_memory: [],
+        agent_memory: [],
+        system_policy: [],
+        recent_session_summary: [],
+        relevant_episodes: [],
+        evidence_items: [],
+        attachments: [],
+        active_policies: [],
+        stable_prefix_refs: [],
+        dynamic_tail_refs: [],
+        source_refs: [],
+        retrieval_trace: {},
+        token_budget: {},
+        personal_context_block: "",
+      },
+    });
+
+    expect(result.dropped_sections).toContain("user_context");
+    const compacted = result.budget_trace.compacted as unknown[];
+    expect(compacted).toHaveLength(0);
   });
 });

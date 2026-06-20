@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ServerConfig } from "../../config";
-import { getDbPool } from "../../db/pool";
+import { getDbPool, type Pool } from "../../db/pool";
+import { withTransaction } from "../../db/tx";
 import { loadActionRegistry } from "../policy/actionRegistry";
 import { enforce } from "../policy/service";
+import { disableScopeDigests } from "../context/digestService";
 import { HttpError, type Queryable, type SpaceUserIdentity } from "../routeUtils/common";
 import {
   diffTouchesSecretLikePath,
@@ -61,6 +63,8 @@ export interface WorkspaceRow {
   registered_from: string | null;
   metadata_json: Record<string, unknown> | null;
   allow_external_root: boolean;
+  snapshot_retention_days: number | null;
+  snapshot_max_count: number | null;
   created_at: unknown;
   updated_at: unknown;
 }
@@ -83,6 +87,8 @@ export interface WorkspaceOut {
   system_managed: boolean;
   registered_from: string | null;
   metadata_json: Record<string, unknown> | null;
+  snapshot_retention_days: number | null;
+  snapshot_max_count: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -279,6 +285,8 @@ export class PgWorkspaceRepository {
       "status",
       "visibility",
       "metadata_json",
+      "snapshot_retention_days",
+      "snapshot_max_count",
     ];
     const sets: string[] = [];
     const params: unknown[] = [workspaceId, identity.spaceId];
@@ -300,13 +308,26 @@ export class PgWorkspaceRepository {
   }
 
   async archive(identity: SpaceUserIdentity, workspaceId: string): Promise<boolean> {
-    const result = await this.db.query(
-      `UPDATE workspaces
-          SET status = 'archived', updated_at = $3
-        WHERE id = $1 AND space_id = $2`,
-      [workspaceId, identity.spaceId, new Date().toISOString()],
-    );
-    return (result.rowCount ?? 0) > 0;
+    const now = new Date().toISOString();
+    // Archiving the workspace and retiring its digests must be atomic: if the
+    // digest disable fails, the archive must roll back too, otherwise an
+    // archived workspace would be left with a still-loadable active/dirty
+    // digest. Run both in one transaction when backed by a pool.
+    const run = async (db: Queryable): Promise<boolean> => {
+      const result = await db.query(
+        `UPDATE workspaces
+            SET status = 'archived', updated_at = $3
+          WHERE id = $1 AND space_id = $2`,
+        [workspaceId, identity.spaceId, now],
+      );
+      if ((result.rowCount ?? 0) === 0) return false;
+      await disableScopeDigests(db, identity.spaceId, "workspace", workspaceId);
+      return true;
+    };
+    if (isPool(this.db)) {
+      return withTransaction(this.db, (client) => run(client));
+    }
+    return run(this.db);
   }
 
   async listConsoleWorkspaces(identity: SpaceUserIdentity): Promise<{ items: Array<Record<string, unknown>> }> {
@@ -508,6 +529,8 @@ export function workspaceToOut(row: WorkspaceRow): WorkspaceOut {
     system_managed: Boolean(row.system_managed),
     registered_from: row.registered_from,
     metadata_json: row.metadata_json,
+    snapshot_retention_days: row.snapshot_retention_days,
+    snapshot_max_count: row.snapshot_max_count,
     created_at: dateIso(row.created_at),
     updated_at: dateIso(row.updated_at),
   };
@@ -517,11 +540,16 @@ function workspaceColumns(): string {
   return `id, space_id, created_by_user_id, name, slug, description, workspace_type,
           kind, repo_url, root_path, default_branch, visibility, status,
           protected, system_managed, registered_from, metadata_json,
-          allow_external_root, created_at, updated_at`;
+          allow_external_root, snapshot_retention_days, snapshot_max_count,
+          created_at, updated_at`;
 }
 
 function workspaceSelect(): string {
   return `SELECT ${workspaceColumns()} FROM workspaces`;
+}
+
+function isPool(db: Queryable): db is Pool {
+  return typeof (db as Partial<Pool>).connect === "function";
 }
 
 async function buildTree(root: string, nodePath: string, depth: number, counter: { count: number }): Promise<FileNode> {

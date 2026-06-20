@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, dirname, resolve } from "node:path";
+import {
+  PgSnapshotStore,
+  type SnapshotFile,
+} from "./snapshotStore";
 import type { RunMaterializationItemSummary } from "@agent-space/protocol" with {
   "resolution-mode": "import",
 };
@@ -406,6 +410,15 @@ async function applyCodePatchProposal(context: ProposalApplyContext): Promise<Pr
         now,
       ],
     );
+    // Persist pre-apply snapshot so the user can roll back after accept
+    await new PgSnapshotStore(context.db).create({
+      proposalId: proposal.id,
+      spaceId: proposal.space_id,
+      workspaceId: proposal.workspace_id,
+      files: tx.capturedPreimages(),
+      retentionDays: workspace.snapshot_retention_days,
+      maxCount: workspace.snapshot_max_count,
+    });
   } catch (error) {
     await tx.rollback();
     throw error;
@@ -427,6 +440,14 @@ class CodePatchFileTransaction {
     private readonly root: string,
     private readonly workspaceType: string,
   ) {}
+
+  capturedPreimages(): SnapshotFile[] {
+    return this.preimages.map((p) => ({
+      path: p.path,
+      existed: p.existed,
+      content: p.existed && p.content !== null ? p.content.toString("utf8") : null,
+    }));
+  }
 
   async apply(operations: CodePatchOperation[]): Promise<Array<{ path: string; sha256: string }>> {
     const updated: Array<{ path: string; sha256: string }> = [];

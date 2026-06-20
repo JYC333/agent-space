@@ -1,6 +1,6 @@
 # Proposals
 
-Date: 2026-06-16
+Date: 2026-06-19
 
 Proposals are the product review and application boundary for durable mutations.
 
@@ -20,10 +20,17 @@ Proposals are the product review and application boundary for durable mutations.
   `knowledge_update`, `knowledge_archive`, `knowledge_relation_create`, and
   `knowledge_relation_delete`.
 - The currently registered server apply types are `memory_create`,
-  `memory_update`, and `memory_archive`. Unregistered proposal types fail closed
-  on accept until their owning domain migrates and registers a server applier.
+  `memory_update`, `memory_archive`, and `code_patch`. Unregistered proposal
+  types fail closed on accept until their owning domain migrates and registers a
+  server applier.
 - Accept returns the general `ProposalAcceptOut` response shape.
 - A proposal is never auto-applied.
+- `POST /api/v1/proposals/:proposalId/rollback` restores workspace files to their
+  pre-apply state from a `code_patch_snapshots` record captured at accept time.
+  Rollback is only available while the snapshot is within its retention window and
+  has not already been used. The rollback route is space-scoped (requires the same
+  `spaceId` as the proposal) and writes a `proposal.code_patch.rolled_back`
+  activity record.
 
 ## Application Rules
 
@@ -47,7 +54,9 @@ Proposals are the product review and application boundary for durable mutations.
 - `policy_change`, `follow_up_task`, `agent_config_update`, and other
   non-memory target mutations are not currently registered server appliers. They
   fail closed until their owning domain registers a server applier.
-- `code_patch` remains fail-closed until workspace patch governance migrates.
+- `code_patch` proposals are accepted via the server applier; pre-apply file
+  snapshots are captured automatically and pruned by retention policy (default
+  7 days / 20 max per workspace, configurable per-workspace and per-space).
 - Public post-create execution config changes for Agents must use
   `POST /api/v1/agents/{agent_id}/config-proposals`; direct
   `POST /agents/{agent_id}/versions` does not advance the current version.

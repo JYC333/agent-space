@@ -534,6 +534,7 @@ export class PgAgentRepository {
     spaceId: string,
     agentId: string,
     versionId: string,
+    userId: string,
   ): Promise<AgentOut> {
     const source = await this.getVersion(spaceId, agentId, versionId);
     return withTransaction(this.pool, async (client) => {

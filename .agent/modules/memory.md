@@ -94,16 +94,25 @@ MemoryReadTrace:
 
 - Supported `digest_type` values: `policy_bundle`, `workspace`, `agent`.
 - Digest content is rendered from active `MemoryEntry` + active `Policy` rows only. Unapproved proposal content is never included.
+- Workspace/agent memory digests are shared derived caches, so they include only cache-safe shared memory:
+  workspace digests may include `space_shared` and `workspace_shared` memory for that workspace;
+  agent digests may include `space_shared` memory for that agent. User-specific or per-user gated
+  content (`private`, `restricted`, `selected_users`, `summary_only`, and `highly_restricted`) remains
+  on the per-run retriever path.
 - `ContextDigestService` generates/versions digests deterministically (no LLM required).
 - Source hash versioning: if source IDs + version signals are unchanged, the existing digest is reused. If sources changed, old digest is marked `superseded` and a new version is created.
 - `ContextCompiler` may use active digests in `stable_prefix`; `ContextSnapshot` records full source traceability.
+- Consumption is fail-safe on read: a workspace/agent memory digest is only injected (and source-ref'd) when (1) the run's agent `readable_scopes` includes that scope — the digest is a derived view of that scope's memory, so it is gated by the same boundary as the direct retriever — **and** (2) it is `active` **and** (3) every memory id it claims still passes live revalidation for its scope (same space + scope, active, undeleted, shared, non-`highly_restricted`). A digest failing any check (out-of-scope, `dirty`, or any stale/ineligible claimed source) is dropped and that scope falls back to the direct retriever (memory) / direct active policies (`policy_bundle`). This prevents a pending change, a stale/tampered row, or a read-boundary bypass from leaking content into the prompt.
+- Generation locks the workspace/agent scope row `FOR UPDATE` so it cannot be archived between the active-scope check and the digest insert (serializes against `archive`, which disables digests in the same transaction).
+- Generation **and** dirty-marking take the same per-digest `pg_advisory_xact_lock` key (`policy_bundle:<space>` / `workspace:<space>:<id>` / `agent:<space>:<id>`). Without a shared lock, a refresh that read stale sources could flip a concurrently-marked-dirty digest back to `active` (its `source_hash` still matching the stale read) and resurface it as injectable.
+- Context preparation records `memory_access_logs` for digest source memory that is injected through a digest but was not already logged by the per-run retriever.
 - Digest can be deleted and regenerated. Digest does not create Proposal.
 - Personal Radius / external sources are out of scope.
 
 ### Dirty tracking
 `ProposalApplyService` marks affected digests `dirty` after accepted proposals:
 - `memory_create/update/archive` → marks `workspace` and/or `agent` digest dirty based on the memory's scope.
-- `policy_change` → marks `policy_bundle` digest dirty; also workspace/agent digests if policy `applies_to_json` specifies those scopes.
+- `policy_change` → marks only the `policy_bundle` digest dirty. Workspace/agent digests are memory-only and never embed policy content, so a policy change does not dirty them (invalidating them would just recompute an identical memory hash). Scoped policies are still surfaced per-run at consumption time via `loadDigestBundle`.
 
 ## Related Files
 - `server/src/modules/memory/`

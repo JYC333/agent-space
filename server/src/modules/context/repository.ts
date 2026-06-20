@@ -61,6 +61,7 @@ export interface RunContextRecord {
   personal_grant_context_json: unknown;
   system_prompt: string | null;
   memory_policy_json: unknown;
+  model_config_json: unknown;
 }
 
 export interface PolicyRow {
@@ -144,6 +145,7 @@ export interface SnapshotUpdateInput {
   compilerVersion: string;
   tokenEstimate: number;
   policyBundleVersion?: string | null;
+  memoryDigestVersion?: string | null;
   workspaceDigestVersion?: string | null;
 }
 
@@ -178,7 +180,7 @@ export class PgRunContextRepository {
               r.session_id, r.instructed_by_user_id, r.trigger_origin,
               r.data_exposure_level, r.trust_level,
               r.has_personal_grant_context, r.personal_grant_context_json,
-              av.system_prompt, av.memory_policy_json
+              av.system_prompt, av.memory_policy_json, av.model_config_json
          FROM runs r
          LEFT JOIN agent_versions av
            ON av.id = r.agent_version_id
@@ -392,6 +394,91 @@ export class PgRunContextRepository {
     );
   }
 
+  async recordContextDigestMemoryAccess(input: {
+    memoryIds: readonly string[];
+    spaceId: string;
+    userId: string;
+    agentId: string | null;
+    runId: string;
+    reason: string;
+  }): Promise<void> {
+    const memoryIds = [...new Set(input.memoryIds.filter((id) => id.length > 0))];
+    if (memoryIds.length === 0) return;
+    const now = new Date().toISOString();
+    const logCols =
+      "id, space_id, memory_id, user_id, agent_id, run_id, access_type, reason, accessed_at";
+    const logGroups: string[] = [];
+    const logParams: unknown[] = [];
+    for (const memoryId of memoryIds) {
+      const base = logParams.length;
+      logGroups.push(
+        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, ` +
+          `$${base + 5}, $${base + 6}, 'context_injection', $${base + 7}, $${base + 8})`,
+      );
+      logParams.push(
+        randomUUID(),
+        input.spaceId,
+        memoryId,
+        input.userId,
+        input.agentId,
+        input.runId,
+        input.reason,
+        now,
+      );
+    }
+    await this.db.query(
+      `INSERT INTO memory_access_logs (${logCols}) VALUES ${logGroups.join(", ")}`,
+      logParams,
+    );
+    await this.db.query(
+      `UPDATE memory_entries
+          SET access_count = COALESCE(access_count, 0) + 1,
+              last_accessed_at = $1,
+              last_retrieved_at = $1
+        WHERE space_id = $2
+          AND id = ANY($3::varchar[])`,
+      [now, input.spaceId, memoryIds],
+    );
+  }
+
+  /**
+   * Re-validate the memory ids a digest *claims* as its sources against the
+   * live memory_entries, scoped to the digest's own scope. context_digests only
+   * FKs space_id, so a stale or tampered `source_memory_ids_json` could
+   * otherwise drive false audit logs or suppress direct rendering of private
+   * memory. Only ids that are still in this space + scope, active, undeleted,
+   * shared at the digest tier's visibility, and not `highly_restricted` survive
+   * — mirroring the generator's own eligibility filter (see loadScopeMemories).
+   */
+  async filterEligibleDigestMemoryIds(input: {
+    spaceId: string;
+    scopeType: "workspace" | "agent";
+    scopeId: string;
+    memoryIds: readonly string[];
+  }): Promise<string[]> {
+    const ids = [...new Set(input.memoryIds.filter((id) => id.length > 0))];
+    if (ids.length === 0) return [];
+    const idColumn = input.scopeType === "workspace" ? "workspace_id" : "agent_id";
+    const visibilities =
+      input.scopeType === "workspace"
+        ? ["space_shared", "workspace_shared"]
+        : ["space_shared"];
+    const result = await this.db.query<{ id: string }>(
+      `SELECT id
+         FROM memory_entries
+        WHERE space_id = $1
+          AND scope_type = $2
+          AND ${idColumn} = $3
+          AND status = 'active'
+          AND deleted_at IS NULL
+          AND visibility = ANY($4::varchar[])
+          AND COALESCE(sensitivity_level, 'normal') <> 'highly_restricted'
+          AND id = ANY($5::varchar[])`,
+      [input.spaceId, input.scopeType, input.scopeId, visibilities, ids],
+    );
+    return result.rows.map((row) => row.id);
+  }
+
   async loadLatestSessionSummary(
     spaceId: string,
     sessionId: string | null,
@@ -519,9 +606,10 @@ export class PgRunContextRepository {
               compiler_version = $9,
               token_estimate = $10,
               policy_bundle_version = $11,
-              workspace_digest_version = $12
-        WHERE id = $13
-          AND space_id = $14`,
+              memory_digest_version = $12,
+              workspace_digest_version = $13
+        WHERE id = $14
+          AND space_id = $15`,
       [
         input.compiledPrefixText,
         input.compiledTailText,
@@ -534,6 +622,7 @@ export class PgRunContextRepository {
         input.compilerVersion,
         input.tokenEstimate,
         input.policyBundleVersion ?? null,
+        input.memoryDigestVersion ?? null,
         input.workspaceDigestVersion ?? null,
         input.snapshotId,
         input.spaceId,

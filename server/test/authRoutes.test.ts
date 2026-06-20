@@ -121,6 +121,15 @@ function fakeSpaceRepo(overrides: Partial<SpaceRepository> = {}): SpaceRepositor
     async acceptInvitation() {
       return { space_id: "space-1", role: "member", space_name: "Team" };
     },
+    async getSnapshotDefaults() {
+      return {
+        snapshot_retention_days_default: null,
+        snapshot_max_count_default: null,
+      };
+    },
+    async updateSnapshotDefaults(_userId, _spaceId, data) {
+      return data;
+    },
     ...overrides,
   };
 }

@@ -803,6 +803,7 @@ export class RunOrchestrationService {
         workspacePath: prepared.cleanup?.workspace_root ?? null,
       });
       prepared.prompt = contextResult.runtime_prompt ?? prepared.prompt;
+      prepared.context_text = contextResult.runtime_context_text ?? prepared.context_text;
       if (contextResult.context_rendered) {
         prepared.context_text = null;
         prepared.adapter_config.context_file_already_rendered = true;
@@ -889,6 +890,8 @@ export class RunOrchestrationService {
           model: input.model ?? null,
           system_prompt: input.system_prompt ?? run.system_prompt ?? null,
           prompt: input.prompt ?? null,
+          context_text: input.context_text ?? null,
+          context_snapshot_id: run.context_snapshot_id,
           max_tokens: input.max_tokens ?? null,
         },
         this.adapters.managedApi,

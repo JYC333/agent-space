@@ -6,8 +6,13 @@ import type { ContextCompileTarget, ContextPackage } from "@agent-space/protocol
 
 const DEFAULT_BUDGET_CHARS = 128_000;
 
+// Graduated compaction: try reducing a section to these fractions before dropping it.
+const FRACTION_TIERS = [1.0, 0.75, 0.5] as const;
+
 const SECTION_PRIORITY: Record<string, number> = {
   task: 0,
+  stable_prefix: 1,
+  policy: 1,
   system_policy: 1,
   user_context: 2,
   project_docs: 3,
@@ -16,6 +21,7 @@ const SECTION_PRIORITY: Record<string, number> = {
   agent: 6,
   attachments: 7,
   episodes: 8,
+  dynamic_tail: 8,
   session: 9,
   tools: 10,
   sandbox: 11,
@@ -141,13 +147,23 @@ export class ContextCompiler {
     workspacePath?: string | null;
     touchedFiles?: readonly string[] | null;
     budgetChars?: number | null;
+    stablePrefixText?: string | null;
+    dynamicTailText?: string | null;
   }): Promise<CompiledContext> {
     const target = normalizeTarget(input.target);
     const agentDocs = await loadAgentDocs(
       input.workspacePath ?? null,
       input.touchedFiles ?? [],
     );
-    const sections = buildSections(input.context, input.taskGoal, agentDocs);
+    const sections =
+      input.stablePrefixText !== undefined || input.dynamicTailText !== undefined
+        ? buildPreparedSections(
+            input.taskGoal,
+            agentDocs,
+            input.stablePrefixText ?? "",
+            input.dynamicTailText ?? "",
+          )
+        : buildSections(input.context, input.taskGoal, agentDocs);
     const budgetChars = input.budgetChars ?? DEFAULT_BUDGET_CHARS;
     const { markdown, dropped, trace } = applyBudget(sections, budgetChars);
     const fullMarkdown = VENDOR_FILE_HEADER + markdown;
@@ -252,6 +268,10 @@ function buildSections(
   };
 
   add("task", `# Task\n\n${taskGoal}`);
+  const policiesText = renderPolicies(context.active_policies);
+  if (policiesText.trim()) {
+    add("policy", `# Active Policies\n\n${policiesText}`);
+  }
   add("system_policy", `# System Policy\n\n${renderMemories(context.system_policy, "system")}`);
   add("user_context", `# User Context\n\n${renderMemories(context.user_memory, "user")}`);
 
@@ -292,6 +312,52 @@ function buildSections(
   return sections;
 }
 
+function buildPreparedSections(
+  taskGoal: string,
+  agentDocs: Record<string, string>,
+  stablePrefixText: string,
+  dynamicTailText: string,
+): Array<[string, string, number]> {
+  const sections: Array<[string, string, number]> = [];
+  const add = (name: string, text: string) => {
+    if (!text.trim()) return;
+    sections.push([name, text, SECTION_PRIORITY[name] ?? 99]);
+  };
+
+  add("task", `# Task\n\n${taskGoal}`);
+  add("stable_prefix", `# Stable Context\n\n${stablePrefixText.trim()}`);
+  addAgentDocSections(add, agentDocs);
+  add("dynamic_tail", `# Dynamic Context\n\n${dynamicTailText.trim()}`);
+  return sections;
+}
+
+function addAgentDocSections(
+  add: (name: string, text: string) => void,
+  agentDocs: Record<string, string>,
+): void {
+  const rootDocs = Object.entries(agentDocs)
+    .filter(([key]) => !key.includes("/modules/"))
+    .map(([key, content]) => `### ${key}\n\n${content.trim()}`);
+  if (rootDocs.length > 0) {
+    add("project_docs", `# Project Docs\n\n${rootDocs.join("\n\n---\n\n")}`);
+  }
+  const moduleDocs = Object.entries(agentDocs)
+    .filter(([key]) => key.includes("/modules/"))
+    .map(([key, content]) => `### ${key}\n\n${content.trim()}`);
+  if (moduleDocs.length > 0) {
+    add("project_docs", `# Module Docs\n\n${moduleDocs.join("\n\n---\n\n")}`);
+  }
+}
+
+function fitToFraction(text: string, fraction: number): string {
+  const targetChars = Math.floor(text.length * fraction);
+  const slice = text.slice(0, targetChars);
+  const lastNewline = slice.lastIndexOf("\n");
+  const cutAt = lastNewline > 0 && lastNewline > targetChars * 0.75 ? lastNewline : targetChars;
+  const pct = Math.round(fraction * 100);
+  return `${text.slice(0, cutAt)}\n\n> [compacted to ${pct}% — token budget]`;
+}
+
 function applyBudget(
   sections: Array<[string, string, number]>,
   budgetChars: number,
@@ -322,15 +388,24 @@ function applyBudget(
   let usedOptional = 0;
   const kept = [...mandatory];
   const dropped: string[] = [];
-  for (const section of optional) {
-    const [name, text] = section;
-    const cost = text.length + 8;
-    if (mandatoryChars + usedOptional + cost <= budgetChars) {
-      kept.push(section);
-      usedOptional += cost;
-    } else {
-      dropped.push(name);
+  const compacted: Array<{ section: string; fraction: number; original_chars: number; compacted_chars: number }> = [];
+
+  for (const [name, text, priority] of optional) {
+    let fitted = false;
+    for (const fraction of FRACTION_TIERS) {
+      const candidate = fraction < 1.0 ? fitToFraction(text, fraction) : text;
+      const cost = candidate.length + 8;
+      if (mandatoryChars + usedOptional + cost <= budgetChars) {
+        kept.push([name, candidate, priority]);
+        usedOptional += cost;
+        if (fraction < 1.0) {
+          compacted.push({ section: name, fraction, original_chars: text.length, compacted_chars: candidate.length });
+        }
+        fitted = true;
+        break;
+      }
     }
+    if (!fitted) dropped.push(name);
   }
 
   const sorted = kept.sort((a, b) => a[2] - b[2]);
@@ -349,6 +424,7 @@ function applyBudget(
       mandatory: mandatory.map(([name]) => name),
       capped: cappedTrace,
       dropped,
+      compacted,
     },
   };
 }
@@ -364,6 +440,20 @@ function renderMemories(memories: readonly unknown[], trust: string): string {
       return title
         ? `- **${title}** \`[${trust}]\`: ${content}`
         : `- ${content} \`[${trust}]\``;
+    })
+    .filter((line) => line.length > 0)
+    .join("\n");
+}
+
+function renderPolicies(policies: readonly unknown[]): string {
+  return policies
+    .map((item) => recordValue(item))
+    .map((item) => {
+      const name = stringValue(item.name) ?? stringValue(item.id) ?? "policy";
+      const domain = stringValue(item.domain) ?? "general";
+      const mode = stringValue(item.enforcement_mode);
+      const detail = JSON.stringify(recordValue(item.policy_json));
+      return `- **${name}** \`[${domain}${mode ? `:${mode}` : ""}]\`${detail === "{}" ? "" : `: ${detail}`}`;
     })
     .filter((line) => line.length > 0)
     .join("\n");

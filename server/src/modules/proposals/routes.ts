@@ -17,7 +17,7 @@ interface ProposalServices {
   repository: Pick<PgProposalRepository, "listVisible" | "getVisible">;
   applyService: Pick<
     PgProposalApplyService,
-    "accept" | "reject" | "approveEgressGrantingUser"
+    "accept" | "reject" | "approveEgressGrantingUser" | "rollback"
   >;
 }
 
@@ -105,6 +105,20 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     try {
       const result = await services.applyService.reject(proposalId, identity);
       if (!result) return reply.code(404).send({ detail: "Proposal not found or already decided" });
+      return reply.send(result);
+    } catch (error) {
+      return sendProposalApplyError(request, reply, error);
+    }
+  });
+
+  app.post("/api/v1/proposals/:proposalId/rollback", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    const proposalId = params(request).proposalId ?? "";
+    const services = proposalServices(context);
+    try {
+      const result = await services.applyService.rollback(proposalId, identity);
+      if (!result) return reply.code(404).send({ detail: "Proposal not found or not eligible for rollback" });
       return reply.send(result);
     } catch (error) {
       return sendProposalApplyError(request, reply, error);

@@ -77,6 +77,10 @@ export interface MemoryAcceptResult {
   memoryId: string;
   supersededMemoryId: string | null;
   payloadJson: Record<string, unknown>;
+  scopeType: string;
+  workspaceId: string | null;
+  agentId: string | null;
+  affectedDigestTargets: MemoryDigestTarget[];
 }
 
 export interface AppliedMemoryRow {
@@ -107,6 +111,13 @@ export interface AppliedMemoryRow {
 export interface MemoryApplyResult {
   memory: AppliedMemoryRow;
   supersededMemoryId: string | null;
+  affectedDigestTargets: MemoryDigestTarget[];
+}
+
+export interface MemoryDigestTarget {
+  scopeType: string;
+  workspaceId: string | null;
+  agentId: string | null;
 }
 
 const INSERT_COLUMNS = `id, space_id, scope_type, scope_id, memory_type, content, status,
@@ -114,7 +125,7 @@ const INSERT_COLUMNS = `id, space_id, scope_type, scope_id, memory_type, content
   sensitivity_level, selected_user_ids, last_confirmed_at, workspace_id, namespace,
   title, visibility, confidence, importance, source_id, source_activity_id,
   created_by, approved_by, version, access_count, tags, memory_layer, memory_kind,
-  created_from_proposal_id, root_memory_id, supersedes_memory_id, source_trust`;
+  created_from_proposal_id, root_memory_id, supersedes_memory_id, source_trust, agent_id`;
 
 const RETURNING_COLUMNS = `id, space_id, scope_type, namespace, memory_type, title,
   content, status, visibility, sensitivity_level, owner_user_id, subject_user_id,
@@ -134,6 +145,7 @@ interface NewMemoryFields {
   subjectUserId: string | null;
   selectedUserIds: unknown;
   workspaceId: string | null;
+  agentId: string | null;
   memoryLayer: string | null;
   memoryKind: string | null;
   sourceTrust: string | null;
@@ -190,14 +202,6 @@ export class PgMemoryApplyRepository {
 
     const result = await this.applyByType({ ...proposal, payload_json: payload }, userId);
 
-    // Digest invalidation for workspace/agent scope is not ported yet; fail
-    // closed so the transaction rolls back rather than leaving a stale digest.
-    if (result.memory.scope_type === "workspace" || result.memory.scope_type === "agent") {
-      throw new MemoryApplyUnsupportedError(
-        `${result.memory.scope_type}-scope memory apply is not served by the server authority yet (digest invalidation pending)`,
-      );
-    }
-
     const finalPayload: Record<string, unknown> = { ...payload, resulting_memory_id: result.memory.id };
     await this.markProposalAccepted(proposal.id, proposal.space_id, userId, finalPayload);
 
@@ -205,6 +209,10 @@ export class PgMemoryApplyRepository {
       memoryId: result.memory.id,
       supersededMemoryId: result.supersededMemoryId,
       payloadJson: finalPayload,
+      scopeType: result.memory.scope_type,
+      workspaceId: result.memory.workspace_id,
+      agentId: result.memory.agent_id,
+      affectedDigestTargets: result.affectedDigestTargets,
     };
   }
 
@@ -281,6 +289,7 @@ export class PgMemoryApplyRepository {
       subjectUserId: strOr(payload.subject_user_id),
       selectedUserIds: payload.selected_user_ids ?? null,
       workspaceId: proposal.workspace_id,
+      agentId: strOr(payload.agent_id),
       memoryLayer: memoryLayer(payload),
       memoryKind: strOr(payload.memory_kind),
       sourceTrust: dominantSourceTrust(entries),
@@ -301,7 +310,11 @@ export class PgMemoryApplyRepository {
       targetId: memId.id,
       entries: linkEntries,
     });
-    return { memory: memId, supersededMemoryId: null };
+    return {
+      memory: memId,
+      supersededMemoryId: null,
+      affectedDigestTargets: [digestTargetForMemory(memId)],
+    };
   }
 
   /** Apply a memory_update proposal: new version row, supersede the old. */
@@ -350,6 +363,7 @@ export class PgMemoryApplyRepository {
       subjectUserId: strOr(payload.subject_user_id) ?? old.subject_user_id,
       selectedUserIds: payload.selected_user_ids ?? old.selected_user_ids ?? null,
       workspaceId: proposal.workspace_id ?? old.workspace_id,
+      agentId: strOr(payload.agent_id) ?? old.agent_id,
       memoryLayer: memoryLayer(payload) ?? old.memory_layer,
       memoryKind: strOr(payload.memory_kind) ?? old.memory_kind,
       sourceTrust: dominantSourceTrust(entries) ?? old.source_trust,
@@ -395,7 +409,14 @@ export class PgMemoryApplyRepository {
       oldMemoryId: old.id,
       proposalId: proposal.id,
     });
-    return { memory: newMem, supersededMemoryId: old.id };
+    return {
+      memory: newMem,
+      supersededMemoryId: old.id,
+      affectedDigestTargets: distinctDigestTargets([
+        digestTargetForMemory(old),
+        digestTargetForMemory(newMem),
+      ]),
+    };
   }
 
   /** Apply a memory_archive proposal: mark the target archived (soft delete). */
@@ -428,7 +449,11 @@ export class PgMemoryApplyRepository {
         entries,
       });
     }
-    return { memory: archived ?? mem, supersededMemoryId: null };
+    return {
+      memory: archived ?? mem,
+      supersededMemoryId: null,
+      affectedDigestTargets: [digestTargetForMemory(mem)],
+    };
   }
 
   // ------------------------------------------------------------------
@@ -469,7 +494,7 @@ export class PgMemoryApplyRepository {
          $10, $11::jsonb, NULL, $12, $13,
          $14, $15, 1.0, 0.5, NULL, $16,
          $17, $18, 1, 0, NULL, $19, $20,
-         $6, $21, $22, $23
+         $6, $21, $22, $23, $24
        )
        RETURNING ${RETURNING_COLUMNS}`,
       [
@@ -496,6 +521,7 @@ export class PgMemoryApplyRepository {
         f.rootMemoryId, // $21
         f.supersedesMemoryId, // $22
         f.sourceTrust, // $23
+        f.agentId, // $24
       ],
     );
     return result.rows[0]!;
@@ -550,6 +576,30 @@ function lower(value: string): string {
 function memoryLayer(payload: Record<string, unknown>): string | null {
   const raw = strOr(payload.target_layer) ?? strOr(payload.memory_layer);
   return raw ? raw.toLowerCase() : null;
+}
+
+function digestTargetForMemory(memory: {
+  scope_type: string;
+  workspace_id: string | null;
+  agent_id: string | null;
+}): MemoryDigestTarget {
+  return {
+    scopeType: memory.scope_type,
+    workspaceId: memory.workspace_id,
+    agentId: memory.agent_id,
+  };
+}
+
+function distinctDigestTargets(targets: MemoryDigestTarget[]): MemoryDigestTarget[] {
+  const seen = new Set<string>();
+  const out: MemoryDigestTarget[] = [];
+  for (const target of targets) {
+    const key = `${target.scopeType}:${target.workspaceId ?? ""}:${target.agentId ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(target);
+  }
+  return out;
 }
 
 function provKey(e: ProvenanceEntry): string | null {

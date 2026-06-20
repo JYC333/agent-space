@@ -161,6 +161,8 @@ class FakeTools implements RuntimeToolResolverPort {
 }
 
 class FakeContextPreparer {
+  contextRendered = true;
+  runtimeContextText: string | null = null;
   calls: Array<{
     runId: string;
     spaceId: string;
@@ -181,8 +183,9 @@ class FakeContextPreparer {
     this.calls.push(input);
     return {
       runtime_prompt: "prepared prompt",
+      runtime_context_text: this.runtimeContextText,
       context_snapshot_id: "snapshot-1",
-      context_rendered: true,
+      context_rendered: this.contextRendered,
       target_format: input.targetFormat,
       instruction_file_path: input.sandboxCwd
         ? `${input.sandboxCwd}/AGENTS.md`
@@ -291,6 +294,62 @@ describe("RunOrchestrationService", () => {
       output_text: "done",
       usage_json: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
     });
+  });
+
+  it("passes prepared digest context to managed API system context", async () => {
+    const repo = new FakeRepo();
+    repo.run = run({
+      system_prompt: "You are the space assistant.",
+      prompt: "Original prompt",
+    });
+    const contextPreparer = new FakeContextPreparer();
+    contextPreparer.contextRendered = false;
+    contextPreparer.runtimeContextText = "[digest:policy_bundle:v3]\nUse safe defaults.";
+    const adapterRequests: Array<{ system_prompt?: string | null; prompt?: string | null }> = [];
+    const service = new RunOrchestrationService(config(), repo, {
+      policyEnforcer: allowPolicy,
+      contextPreparer,
+      managedApi: {
+        executeRuntimeHost: async (_config, request) => {
+          adapterRequests.push(request);
+          return {
+            success: true,
+            stdout: "done",
+            stderr: "",
+            output_text: "done",
+            output_json: { adapter_type: "ts_agent_host" },
+            exit_code: 0,
+            error_text: null,
+            error_code: null,
+            started_at: "2026-06-12T10:00:00.000Z",
+            completed_at: "2026-06-12T10:00:01.000Z",
+            model: "gpt-4o-mini",
+            usage: null,
+            events: [],
+            adapter_metadata: { adapter_type: "ts_agent_host" },
+            adapter_log_json: null,
+          };
+        },
+      },
+    });
+
+    await expect(
+      service.executeRun({
+        run_id: "run-1",
+        space_id: "space-1",
+        worker_id: "worker-1",
+        command_source: "job",
+      }),
+    ).resolves.toMatchObject({ run_id: "run-1", status: "succeeded" });
+
+    expect(contextPreparer.calls[0]).toMatchObject({
+      adapterType: "model_api",
+      targetFormat: "generic",
+    });
+    expect(adapterRequests[0]?.prompt).toBe("prepared prompt");
+    expect(adapterRequests[0]?.system_prompt).toContain("You are the space assistant.");
+    expect(adapterRequests[0]?.system_prompt).toContain("[digest:policy_bundle:v3]");
+    expect(adapterRequests[0]?.system_prompt).toContain("Use safe defaults.");
   });
 
   it("prevents duplicate execution before adapter invocation", async () => {

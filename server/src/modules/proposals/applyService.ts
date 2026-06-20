@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdir, writeFile, unlink } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import type { PoolClient } from "../../db/pool";
 import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
@@ -15,6 +17,9 @@ import {
 import {
   PgProposalRepository,
 } from "./repository";
+import { PgSnapshotStore } from "../workspaces/snapshotStore";
+import { PgWorkspaceRepository, workspaceAbsoluteRoot } from "../workspaces/repository";
+import { validatePath } from "../workspaces/pathPolicy";
 import type {
   ProposalAcceptOut,
   ProposalApprovalOut,
@@ -257,6 +262,103 @@ export class PgProposalApplyService {
       return approvalToOut(approval);
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async rollback(
+    proposalId: string,
+    identity: { spaceId: string; userId: string },
+  ): Promise<{ rolled_back_paths: string[] } | null> {
+    const client = await this.connect();
+    try {
+      await client.query("BEGIN");
+
+      const proposal = await client.query<ApplyProposalRow>(
+        `SELECT id, space_id, proposal_type, status, risk_level, preview,
+                payload_json, workspace_id, created_by_user_id, created_by_run_id, title
+           FROM proposals
+          WHERE id = $1 AND space_id = $2 AND proposal_type = 'code_patch' AND status = 'accepted'
+          FOR UPDATE`,
+        [proposalId, identity.spaceId],
+      );
+      const p = proposal.rows[0];
+      if (!p) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+      if (!p.workspace_id) {
+        await client.query("ROLLBACK");
+        throw new ProposalApplyHttpError(422, "code_patch proposal has no workspace_id");
+      }
+
+      const snapshot = await new PgSnapshotStore(client).getByProposal(proposalId, identity.spaceId);
+      if (!snapshot) {
+        await client.query("ROLLBACK");
+        throw new ProposalApplyHttpError(404, "No available snapshot found for this proposal — it may have expired or already been used");
+      }
+
+      const workspace = await new PgWorkspaceRepository(client, this.config)
+        .getWorkspace(identity.spaceId, p.workspace_id, true);
+      if (!workspace) {
+        await client.query("ROLLBACK");
+        throw new ProposalApplyHttpError(404, "Workspace not found");
+      }
+      const root = workspaceAbsoluteRoot(workspace, this.config.workspaceRoot);
+
+      // Restore files to pre-apply state
+      const restoredPaths: string[] = [];
+      for (const file of snapshot.files) {
+        const absPath = validatePath({
+          path: resolve(root, file.path),
+          allowedRoot: root,
+          mode: "write",
+          workspaceType: workspace.workspace_type,
+          forTrustedCodePatchApply: true,
+        });
+        if (file.existed && file.content !== null) {
+          await mkdir(dirname(absPath), { recursive: true });
+          await writeFile(absPath, file.content, "utf8");
+        } else {
+          await unlink(absPath).catch((err: NodeJS.ErrnoException) => {
+            if (err.code !== "ENOENT") throw err;
+          });
+        }
+        restoredPaths.push(file.path);
+      }
+
+      await new PgSnapshotStore(client).markRolledBack(snapshot.id, identity.userId);
+
+      const now = new Date().toISOString();
+      await client.query(
+        `INSERT INTO activity_records (
+           id, space_id, source_run_id, user_id, workspace_id, activity_type,
+           title, content, payload_json, occurred_at, created_at, status, updated_at,
+           source_kind, source_trust, visibility, owner_user_id
+         ) VALUES (
+           $1, $2, NULL, $3, $4, 'proposal.code_patch.rolled_back',
+           $5, $6, $7::jsonb, $8, $8, 'processed', $8,
+           'workspace_event', 'internal_system', 'space_shared', $3
+         )`,
+        [
+          randomUUID(),
+          identity.spaceId,
+          identity.userId,
+          p.workspace_id,
+          p.title ?? "Code patch rolled back",
+          `Rolled back code patch proposal ${proposalId}.`,
+          JSON.stringify({ proposal_id: proposalId, restored_paths: restoredPaths, file_count: restoredPaths.length }),
+          now,
+        ],
+      );
+
+      await client.query("COMMIT");
+      return { rolled_back_paths: restoredPaths };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      if (error instanceof ProposalApplyHttpError) throw error;
       throw error;
     } finally {
       client.release();

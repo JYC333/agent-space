@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Terminal, Folder, GitBranch, Clock, Play, Square,
   Loader, FileDiff, RefreshCw,
@@ -37,6 +38,8 @@ type CenterView =
 
 export default function WorkspaceConsolePage() {
   const { activeSpaceId, activeSpaceName } = useSpace()
+  const [searchParams] = useSearchParams()
+  const preselectedId = searchParams.get('workspace')
 
   // ── Workspace state ──────────────────────────────────────────────────────
   const [workspaces, setWorkspaces]               = useState<WorkspaceInfo[]>([])
@@ -76,7 +79,10 @@ export default function WorkspaceConsolePage() {
       workspaceConsoleApi.listWorkspaces()
         .then(r => {
           setWorkspaces(r.items)
-          if (r.items.length > 0 && !selectedWs) setSelectedWs(r.items[0])
+          if (r.items.length > 0 && !selectedWs) {
+            const target = preselectedId ? (r.items.find(w => w.id === preselectedId) ?? r.items[0]) : r.items[0]
+            setSelectedWs(target)
+          }
         })
         .catch(e => toast.error(errMsg(e)))
     }

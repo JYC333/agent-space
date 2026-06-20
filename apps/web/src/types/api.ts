@@ -24,6 +24,11 @@ export interface SpaceWithMembership {
   updated_at: string
 }
 
+export interface SpaceSnapshotDefaults {
+  snapshot_retention_days_default: number | null
+  snapshot_max_count_default: number | null
+}
+
 export interface SpaceMember {
   user_id: string
   email: string
@@ -1613,6 +1618,8 @@ export interface Workspace {
   system_managed: boolean
   registered_from: string | null
   metadata_json: Record<string, unknown> | null
+  snapshot_retention_days: number | null
+  snapshot_max_count: number | null
   created_at: string
   updated_at: string
 }
@@ -1631,6 +1638,8 @@ export interface WorkspaceCreateBody {
 export type WorkspaceUpdateBody = Partial<Omit<WorkspaceCreateBody, 'workspace_type'>> & {
   status?: WorkspaceStatus
   visibility?: string
+  snapshot_retention_days?: number | null
+  snapshot_max_count?: number | null
 }
 
 export interface Capability {

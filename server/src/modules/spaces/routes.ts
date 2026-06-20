@@ -26,6 +26,22 @@ function params(request: FastifyRequest): Record<string, string | undefined> {
   return request.params as Record<string, string | undefined>;
 }
 
+function jsonBody(request: FastifyRequest): Record<string, unknown> {
+  if (!(request.body instanceof Buffer) || request.body.length === 0) return {};
+  try {
+    const parsed = JSON.parse(request.body.toString("utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch { return {}; }
+}
+
+function integerOrNull(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 function body<T extends object>(request: FastifyRequest): Partial<T> {
   if (!(request.body instanceof Buffer) || request.body.length === 0) return {};
   try {
@@ -148,5 +164,31 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (space === null) return reply.code(404).send({ detail: "Space not found" });
     if (isFailure(space)) return reply.code(space.statusCode).send({ detail: space.detail });
     return reply.send(space);
+  });
+
+  app.get("/api/v1/spaces/:spaceId/snapshot-defaults", async (request, reply) => {
+    const auth = authRepositoryFromConfig(context.config);
+    const spaces = spaceRepositoryFromConfig(context.config);
+    if (!auth || !spaces) return reply.code(502).send({ detail: "Database unavailable" });
+    const user = await auth.getCurrentUser(sessionTokenFromRequest(request));
+    if (isFailure(user)) return reply.code(user.statusCode).send({ detail: user.detail });
+    const result = await spaces.getSnapshotDefaults(user.id, params(request).spaceId ?? "");
+    if (isSpaceFailure(result)) return reply.code(result.statusCode).send({ detail: result.detail });
+    return reply.send(result);
+  });
+
+  app.patch("/api/v1/spaces/:spaceId/snapshot-defaults", async (request, reply) => {
+    const auth = authRepositoryFromConfig(context.config);
+    const spaces = spaceRepositoryFromConfig(context.config);
+    if (!auth || !spaces) return reply.code(502).send({ detail: "Database unavailable" });
+    const user = await auth.getCurrentUser(sessionTokenFromRequest(request));
+    if (isFailure(user)) return reply.code(user.statusCode).send({ detail: user.detail });
+    const body = jsonBody(request);
+    const result = await spaces.updateSnapshotDefaults(user.id, params(request).spaceId ?? "", {
+      snapshot_retention_days_default: integerOrNull(body.snapshot_retention_days_default),
+      snapshot_max_count_default: integerOrNull(body.snapshot_max_count_default),
+    });
+    if (isSpaceFailure(result)) return reply.code(result.statusCode).send({ detail: result.detail });
+    return reply.send(result);
   });
 }

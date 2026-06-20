@@ -240,6 +240,38 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     expect(kinds).toContain("proposal:prop-1");
   });
 
+  it("applies memory_update: reports both old and new digest targets when scope changes", async () => {
+    if (!available || !repo || !pool) return;
+    await insertActiveMemory({
+      id: "mem-ws",
+      scope_type: "workspace",
+      workspace_id: "ws-old",
+      content: "old workspace content",
+    });
+
+    const out = await repo.applyUpdate(
+      proposal({
+        proposal_type: "memory_update",
+        workspace_id: null,
+        payload_json: {
+          target_memory_id: "mem-ws",
+          target_scope: "agent",
+          agent_id: "agent-1",
+          proposed_content: "agent content",
+          provenance_entries: [userConf],
+        },
+      }),
+      USER,
+    );
+
+    expect(out.memory.scope_type).toBe("agent");
+    expect(out.memory.agent_id).toBe("agent-1");
+    expect(out.affectedDigestTargets).toEqual([
+      { scopeType: "workspace", workspaceId: "ws-old", agentId: null },
+      { scopeType: "agent", workspaceId: "ws-old", agentId: "agent-1" },
+    ]);
+  });
+
   it("applies memory_archive: marks target archived and writes provenance", async () => {
     if (!available || !repo || !pool) return;
     await insertActiveMemory({ id: "mem-arch", content: "keep" });
@@ -333,7 +365,7 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     expect(mem.status).toBe("active");
   });
 
-  it("acceptAndApply: fails closed for run/grant egress context and workspace scope", async () => {
+  it("acceptAndApply: fails closed for run/grant egress context", async () => {
     if (!available || !pool) return;
     const runCtx = proposal({
       id: "p-run",
@@ -342,15 +374,23 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     });
     await seedProposal(runCtx);
     await expect(inTx((r) => r.acceptAndApply(runCtx, USER))).rejects.toBeInstanceOf(MemoryApplyUnsupportedError);
+  });
 
+  it("acceptAndApply: returns affected digest target for workspace-scope memory", async () => {
+    if (!available || !pool) return;
     const wsScope = proposal({
       id: "p-ws",
       payload_json: { target_scope: "workspace", proposed_content: "x", provenance_entries: [userConf] },
       workspace_id: "ws-1",
     });
     await seedProposal(wsScope);
-    await expect(inTx((r) => r.acceptAndApply(wsScope, USER))).rejects.toBeInstanceOf(MemoryApplyUnsupportedError);
-    // workspace-scope write rolled back.
-    expect((await pool.query("SELECT count(*)::int AS c FROM memory_entries")).rows[0].c).toBe(0);
+    const result = await inTx((r) => r.acceptAndApply(wsScope, USER));
+    expect(result.scopeType).toBe("workspace");
+    expect(result.workspaceId).toBe("ws-1");
+    expect(result.affectedDigestTargets).toEqual([
+      { scopeType: "workspace", workspaceId: "ws-1", agentId: null },
+    ]);
+    const count = (await pool.query("SELECT count(*)::int AS c FROM memory_entries")).rows[0].c;
+    expect(count).toBe(1);
   });
 });

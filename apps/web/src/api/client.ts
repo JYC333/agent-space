@@ -6,7 +6,7 @@ import type {
   CredentialLoginMethod, CredentialStatus, CliUsageEntry, CliUsageAutoRefreshSettings, LoginEvent,
   NetworkProfileOut, NetworkProfileCreateBody, NetworkProfileUpdateBody, CliCredentialProfileOut,
   CliCredentialAvailableProfileOut,
-  CurrentUser, SpaceWithMembership, SpaceMember, SpaceInvitationOut,
+  CurrentUser, SpaceWithMembership, SpaceMember, SpaceInvitationOut, SpaceSnapshotDefaults,
   Job, JobEvent, ActivityInboxRecord,
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
   TaskArtifact, TaskProposal, Artifact, Proposal, ProposalAcceptOut, AgentOut, AgentCreateBody, AgentUpdateBody, RunCreateBody,
@@ -949,12 +949,14 @@ export const authApi = {
 
 // ── Spaces ────────────────────────────────────────────────────────────────
 export const spacesApi = {
-  create:         (data: { name: string; type: Exclude<SpaceWithMembership['type'], 'personal'> }) => post<SpaceWithMembership>('/spaces', data),
-  get:            (spaceId: string)                              => get<SpaceWithMembership>(`/spaces/${spaceId}`),
-  members:        (spaceId: string)                              => get<SpaceMember[]>(`/spaces/${spaceId}/members`),
-  invite:         (spaceId: string, data: { email: string; role: string }) =>
+  create:               (data: { name: string; type: Exclude<SpaceWithMembership['type'], 'personal'> }) => post<SpaceWithMembership>('/spaces', data),
+  get:                  (spaceId: string)                              => get<SpaceWithMembership>(`/spaces/${spaceId}`),
+  members:              (spaceId: string)                              => get<SpaceMember[]>(`/spaces/${spaceId}/members`),
+  invite:               (spaceId: string, data: { email: string; role: string }) =>
     post<SpaceInvitationOut>(`/spaces/${spaceId}/invitations`, data),
-  acceptInvite:   (token: string)                                => post<{ space_id: string; role: string; space_name: string }>(`/invitations/${token}/accept`),
+  acceptInvite:         (token: string)                                => post<{ space_id: string; role: string; space_name: string }>(`/invitations/${token}/accept`),
+  getSnapshotDefaults:  (spaceId: string)                              => get<SpaceSnapshotDefaults>(`/spaces/${spaceId}/snapshot-defaults`),
+  updateSnapshotDefaults: (spaceId: string, data: SpaceSnapshotDefaults) => patch<SpaceSnapshotDefaults>(`/spaces/${spaceId}/snapshot-defaults`, data),
 }
 
 // ── Providers ─────────────────────────────────────────────────────────────

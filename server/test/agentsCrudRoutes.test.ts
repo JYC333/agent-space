@@ -120,4 +120,147 @@ describe("agents CRUD routes", () => {
       current_version_id: versionId,
     });
   });
+
+  it("does not touch the agent digest when config changes (digests stay peer-level)", async () => {
+    let newVersionId = "";
+    const dirtyUpdates: Array<{ sql: string; params: readonly unknown[] }> = [];
+    const jobs: Array<{ agent_id: unknown; payload: Record<string, unknown> }> = [];
+    const currentVersion = {
+      id: "agent-version-1",
+      agent_id: "agent-1",
+      space_id: "space-1",
+      version_label: "v1",
+      model_provider_id: null,
+      model_name: null,
+      system_prompt: "Old prompt",
+      model_config_json: {},
+      runtime_config_json: { adapter_type: "capability" },
+      context_policy_json: {},
+      memory_policy_json: {},
+      capabilities_json: [],
+      tool_permissions_json: {},
+      runtime_policy_json: { default_adapter_type: "capability" },
+      tool_policy_json: {},
+      output_policy_json: {},
+      schedule_config_json: {},
+      output_schema_json: {},
+      source_proposal_id: null,
+      source_activity_id: null,
+      created_at: "2026-06-17T00:00:00.000Z",
+      published_at: null,
+      archived_at: null,
+    };
+    const agentRow = () => ({
+      id: "agent-1",
+      space_id: "space-1",
+      owner_user_id: "user-1",
+      name: "API Agent",
+      description: "Uses Model API",
+      role_instruction: null,
+      status: "active",
+      agent_kind: "standard",
+      source_template_id: null,
+      source_template_version_id: null,
+      current_version_id: newVersionId || "agent-version-1",
+      visibility: "private",
+      created_at: "2026-06-17T00:00:00.000Z",
+      updated_at: "2026-06-17T00:00:00.000Z",
+      model_provider_id: null,
+      provider_name: null,
+      provider_type: null,
+      model_name: null,
+      system_prompt: "New prompt",
+      runtime_policy_json: { default_adapter_type: "capability" },
+    });
+    const client = {
+      query: vi.fn(async (sql: string, params: readonly unknown[] = []) => {
+        const norm = sql.replace(/\s+/g, " ").trim();
+        if (norm === "BEGIN" || norm === "COMMIT" || norm === "ROLLBACK") {
+          return { rows: [], rowCount: 0 };
+        }
+        if (norm.startsWith("SELECT version_label FROM agent_versions")) {
+          return { rows: [{ version_label: "v1" }], rowCount: 1 };
+        }
+        if (norm.startsWith("INSERT INTO agent_versions")) {
+          newVersionId = String(params[0]);
+          return { rows: [{ id: newVersionId }], rowCount: 1 };
+        }
+        if (norm.startsWith("UPDATE agents SET current_version_id")) {
+          return { rows: [], rowCount: 1 };
+        }
+        if (norm.startsWith("UPDATE context_digests")) {
+          dirtyUpdates.push({ sql, params });
+          return { rows: [], rowCount: 1 };
+        }
+        if (norm.startsWith("INSERT INTO jobs")) {
+          jobs.push({
+            agent_id: params[4],
+            payload: JSON.parse(String(params[7])) as Record<string, unknown>,
+          });
+          return {
+            rows: [{
+              id: params[0],
+              space_id: params[1],
+              user_id: params[2],
+              workspace_id: params[3],
+              agent_id: params[4],
+              job_type: params[5],
+              status: "pending",
+              priority: params[6],
+              payload_json: JSON.parse(String(params[7])),
+              result_json: null,
+              error: null,
+              attempts: 0,
+              max_attempts: params[8],
+              scheduled_at: params[9],
+              claimed_by: null,
+              claimed_at: null,
+              started_at: null,
+              completed_at: null,
+              heartbeat_at: null,
+              created_at: params[10],
+              updated_at: params[10],
+            }],
+            rowCount: 1,
+          };
+        }
+        if (norm.includes("FROM agents a") && norm.includes("LEFT JOIN agent_versions")) {
+          return { rows: [agentRow()], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const pool = {
+      connect: vi.fn(async () => client),
+      query: vi.fn(async (sql: string) => {
+        const norm = sql.replace(/\s+/g, " ").trim();
+        if (norm.includes("FROM agents a") && norm.includes("JOIN agent_versions av")) {
+          return { rows: [currentVersion], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+    };
+    vi.mocked(getDbPool).mockReturnValue(pool as never);
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/agents/agent-1/config",
+      payload: { system_prompt: "New prompt" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      id: "agent-1",
+      current_version_id: newVersionId,
+      system_prompt: "New prompt",
+    });
+    // The agent digest is memory-only; system_prompt and other config are not in
+    // it (they reach a run directly at consumption time). An agent config change
+    // must NOT dirty or enqueue a refresh for the agent digest — doing so would be
+    // a pure no-op refresh. Only agent-scoped memory changes invalidate it.
+    expect(dirtyUpdates).toEqual([]);
+    expect(jobs).toEqual([]);
+  });
 });

@@ -76,6 +76,9 @@ export interface ServerConfig {
   intakeExtractionSchedulerIntervalSeconds: number;
   agentSpaceEnv: string;
   appVersion: string | null;
+  enableSystemEvolution: boolean;
+  systemCoreOwnerEmail: string | null;
+  systemCoreBaseBranch: string;
   backupEnabled: boolean;
   backupIntervalHours: number;
   backupRetentionCount: number;
@@ -146,6 +149,9 @@ const KNOWN_ENV_KEYS = new Set([
   "BACKUP_ROOT",
   "BACKUP_ACCEPT_NO_BACKUP",
   "BACKUP_DATABASE_URL",
+  "ENABLE_SYSTEM_EVOLUTION",
+  "SYSTEM_CORE_OWNER_EMAIL",
+  "SYSTEM_CORE_BASE_BRANCH",
 ]);
 
 export class ConfigError extends Error {
@@ -445,6 +451,9 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
   );
   const agentSpaceEnv = env.AGENT_SPACE_ENV?.trim() || "";
   const appVersion = env.APP_VERSION?.trim() || null;
+  const enableSystemEvolution = parseBool(env.ENABLE_SYSTEM_EVOLUTION, false);
+  const systemCoreOwnerEmail = env.SYSTEM_CORE_OWNER_EMAIL?.trim().toLowerCase() || null;
+  const systemCoreBaseBranch = env.SYSTEM_CORE_BASE_BRANCH?.trim() || "master";
   const backupEnabled = parseBool(env.BACKUP_ENABLED, false);
   const backupIntervalHours = parseBoundedInt(
     env.BACKUP_INTERVAL_HOURS,
@@ -511,6 +520,9 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     backupIncludeLogs,
     backupOnStartup,
     backupRoot,
+    enableSystemEvolution,
+    systemCoreOwnerEmail,
+    systemCoreBaseBranch,
     backupAcceptNoBackup,
     backupDatabaseUrl,
   };

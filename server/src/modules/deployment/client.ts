@@ -6,6 +6,7 @@ export const ALLOWED_DEPLOYER_JOB_TYPES = new Set([
   "rebuild_agent_space",
   "restart_agent_space",
   "health_check",
+  "init_agent_space_worktree",
 ]);
 
 export interface DeployerResult {

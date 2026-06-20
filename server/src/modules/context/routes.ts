@@ -6,8 +6,10 @@ import {
   query,
   resolveIdentity,
   sendRouteError,
+  HttpError,
 } from "../routeUtils/common";
 import { buildContextPackage } from "./contextPackage";
+import { ContextDigestRefreshService } from "./digestService";
 import { PgRunContextRepository } from "./repository";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
@@ -68,4 +70,79 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       return sendRouteError(reply, error);
     }
   });
+
+  app.post("/api/v1/context/digests/refresh", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const body = jsonBody(request);
+      const refresh = ContextDigestRefreshService.fromConfig(context.config);
+      // Two modes:
+      //  - empty body  → refreshAllDirty: incremental, only re-generates digests
+      //    already marked dirty. It does NOT bootstrap a scope's first digest.
+      //  - explicit body {scope_type, digest_type, scope_id?} → generates that one
+      //    digest, creating the first version if none exists (use this to bootstrap).
+      if (Object.keys(body).length === 0) {
+        const digests = await refresh.refreshAllDirty(identity.spaceId);
+        return reply.send({ refreshed_count: digests.length, digests });
+      }
+      const req = parseDigestRefreshRequest(body);
+      const digest = await refresh.refresh(
+        identity.spaceId,
+        req.scope_type,
+        req.scope_id,
+        req.digest_type,
+      );
+      return reply.send({ refreshed_count: 1, digests: [digest] });
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+}
+
+type DigestRefreshRequest = {
+  scope_type: "space" | "workspace" | "agent";
+  scope_id: string | null;
+  digest_type: "policy_bundle" | "workspace" | "agent";
+};
+
+function parseDigestRefreshRequest(body: Record<string, unknown>): DigestRefreshRequest {
+  const allowed = new Set(["scope_type", "scope_id", "digest_type"]);
+  const unknown = Object.keys(body).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) {
+    throw new HttpError(422, `unknown field: ${unknown[0]}`);
+  }
+  const scopeType = optionalString(body.scope_type);
+  const digestType = optionalString(body.digest_type);
+  if (!scopeType || !digestType) {
+    throw new HttpError(422, "scope_type and digest_type must be provided together");
+  }
+  if (!["space", "workspace", "agent"].includes(scopeType)) {
+    throw new HttpError(422, "scope_type must be one of space, workspace, agent");
+  }
+  if (!["policy_bundle", "workspace", "agent"].includes(digestType)) {
+    throw new HttpError(422, "digest_type must be one of policy_bundle, workspace, agent");
+  }
+  const scopeId = optionalString(body.scope_id);
+  if (digestType === "policy_bundle") {
+    if (scopeType !== "space") {
+      throw new HttpError(422, "policy_bundle refresh requires scope_type=space");
+    }
+    if (scopeId) {
+      throw new HttpError(422, "policy_bundle refresh does not accept scope_id");
+    }
+    return { scope_type: "space", scope_id: null, digest_type: "policy_bundle" };
+  }
+  if (digestType === "workspace") {
+    if (scopeType !== "workspace") {
+      throw new HttpError(422, "workspace digest refresh requires scope_type=workspace");
+    }
+    if (!scopeId) throw new HttpError(422, "workspace digest refresh requires scope_id");
+    return { scope_type: "workspace", scope_id: scopeId, digest_type: "workspace" };
+  }
+  if (scopeType !== "agent") {
+    throw new HttpError(422, "agent digest refresh requires scope_type=agent");
+  }
+  if (!scopeId) throw new HttpError(422, "agent digest refresh requires scope_id");
+  return { scope_type: "agent", scope_id: scopeId, digest_type: "agent" };
 }

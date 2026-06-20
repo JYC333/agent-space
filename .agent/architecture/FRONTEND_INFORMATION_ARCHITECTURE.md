@@ -154,6 +154,7 @@ not be navigable.
 | Job Queue | Enabled | Infrastructure debug tool |
 | Workspaces | Enabled | Functional |
 | Workspace Console | Enabled | Functional |
+| Workspace Snapshot Settings | Enabled | Space-admin-only UI for snapshot retention policy (`/workspace-snapshot-settings`); configures `snapshot_retention_days` / `snapshot_max_count` at space and per-workspace level |
 | Settings | Enabled | Functional |
 | Capabilities | Enabled | Developer tool |
 | Providers | Enabled | Functional |

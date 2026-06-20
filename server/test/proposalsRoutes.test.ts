@@ -95,6 +95,9 @@ describe("proposal review routes", () => {
         async approveEgressGrantingUser() {
           throw new Error("approval should not run");
         },
+        async rollback() {
+          throw new Error("rollback should not run");
+        },
       },
     }));
     app = buildServer(proposalsConfig(), { logger: false });
@@ -133,6 +136,9 @@ describe("proposal review routes", () => {
         },
         async approveEgressGrantingUser() {
           throw new Error("approval should not run");
+        },
+        async rollback() {
+          throw new Error("rollback should not run");
         },
       },
     }));
@@ -189,6 +195,9 @@ describe("proposal review routes", () => {
             revoked_at: null,
           };
         },
+        async rollback() {
+          return { rolled_back_paths: ["README.md"] };
+        },
       },
     }));
     app = buildServer(proposalsConfig(), { logger: false });
@@ -236,6 +245,7 @@ describe("proposal review routes", () => {
         async accept() { throw new Error("accept should not run"); },
         async reject() { throw new Error("reject should not run"); },
         async approveEgressGrantingUser() { throw new Error("approval should not run"); },
+        async rollback() { throw new Error("rollback should not run"); },
       },
     }));
     app = buildServer(proposalsConfig(), { logger: false });
@@ -262,6 +272,7 @@ describe("proposal review routes", () => {
         async accept() { throw new UnknownProposalApplierError("code_patch"); },
         async reject() { throw new Error("should not run"); },
         async approveEgressGrantingUser() { throw new Error("should not run"); },
+        async rollback() { throw new Error("should not run"); },
       },
     }));
     app = buildServer(proposalsConfig(), { logger: false });
@@ -283,6 +294,7 @@ describe("proposal review routes", () => {
         },
         async reject() { throw new Error("should not run"); },
         async approveEgressGrantingUser() { throw new Error("should not run"); },
+        async rollback() { throw new Error("should not run"); },
       },
     }));
     app = buildServer(proposalsConfig(), { logger: false });

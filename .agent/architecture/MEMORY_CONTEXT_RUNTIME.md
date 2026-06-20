@@ -300,12 +300,16 @@ Translates `ContextPackage` → CLI instruction file (CLAUDE.md / AGENTS.md / et
 
 ### Section priority and budget enforcement
 
-Sections ordered by priority (lower = more important = last to drop):
+Sections ordered by priority (lower = more important = last to drop). The
+prepared run path uses `stable_prefix` / `dynamic_tail`; the older raw
+`ContextPackage` path uses the per-scope sections below.
 
 | Priority | Section | Mandatory | Per-section cap |
 |----------|---------|-----------|----------------|
 | 0 | task | **yes** | none |
+| 1 | stable_prefix | no | — |
 | 1 | system_policy | no | 16 000 chars |
+| 1 | policy | no | — |
 | 2 | user_context | no | 8 000 chars |
 | 3 | project_docs | no | 24 000 chars |
 | 4 | workspace | no | 12 000 chars |
@@ -313,6 +317,7 @@ Sections ordered by priority (lower = more important = last to drop):
 | 6 | agent | no | 8 000 chars |
 | 7 | attachments | no | 16 000 chars |
 | 8 | episodes | no | 4 000 chars |
+| 8 | dynamic_tail | no | — |
 | 9 | session | no | 2 000 chars |
 | 10 | tools | no | — |
 | 11 | sandbox | no | — |
@@ -324,7 +329,9 @@ Sections ordered by priority (lower = more important = last to drop):
 
 **Per-section caps** truncate oversized sections before they enter the budget loop (with a `[truncated]` trailer). Truncation is recorded in `budget_trace`.
 
-**`budget_trace`** (returned in `CompiledContext`): records mandatory sections, capped sections (with original/capped sizes), and dropped sections.
+**`budget_trace`** (returned in `CompiledContext`): records mandatory sections,
+capped sections (with original/capped sizes), compacted sections, and dropped
+sections.
 
 ### ContextCompiler.budget_trace vs ContextSnapshot token_budget_json
 
@@ -348,8 +355,35 @@ Supported `digest_type` values: `policy_bundle`, `workspace`, `agent`.
 Lifecycle:
 1. Not auto-generated. Must be seeded by explicit `generate_*()` call.
 2. `generate_*()` — idempotent: same source_hash → return existing digest unchanged.
-3. `mark_digest_dirty(...)` — no-op if no active digest. Called by `ProposalApplyService`.
-4. Dirty digests remain available for read (stale but useful). Regeneration is explicit.
+3. `mark_*_dirty(...)` — no-op if no active digest. Called by
+   `ProposalApplyService` inside the proposal-apply transaction.
+4. Generation and dirty-marking take the same per-digest
+   `pg_advisory_xact_lock` key (`policy_bundle:<space>`,
+   `workspace:<space>:<workspace_id>`, `agent:<space>:<agent_id>`) so a refresh
+   cannot reactivate a stale digest after a concurrent change marked it dirty.
+5. Dirty digests are loaded for traceability, but are dropped at prepare time and
+   never injected. Regeneration is explicit.
+
+Workspace/agent digest generation also verifies the target scope is still
+`status='active'` in the same space and locks that row `FOR UPDATE`; explicit
+refreshes/jobs fail closed for archived or missing scopes.
+
+### Digest consumption
+
+`ContextPrepareService` uses a digest only when it is usable:
+
+- `policy_bundle`: status is `active`.
+- `workspace` / `agent`: the run agent's `readable_scopes` includes the digest
+  scope, status is `active`, and every claimed `source_memory_ids_json` id still
+  revalidates against live `memory_entries` for the same space/scope, active,
+  undeleted, shared visibility, and non-`highly_restricted`.
+
+A digest is dropped when it is dirty, out-of-scope for `readable_scopes`, has
+malformed/missing source metadata for non-empty content, or claims any stale or
+ineligible source memory. Dropped digest content does not enter
+`stable_prefix`, `source_refs_json`, snapshot digest version fields, or digest
+memory read logs; the relevant section falls back to direct retrieval / direct
+active policies.
 
 ### Context digest refresh
 
@@ -387,14 +421,18 @@ population and propagates as a run failure. No memory is retrieved or injected
 after a DENY.
 
 Stable prefix strategy:
-- Resolves `ContextDigest` rows for space / workspace / agent via `_load_digest_bundle()`
-- Falls back to direct `MemoryRetriever` when no digest available (records `fallback_reason` in retrieval_trace)
+- Resolves `ContextDigest` rows for space / workspace / agent via
+  `loadDigestBundle()`, then filters them through the usable-digest rules above
+- Falls back to direct `MemoryRetriever` / direct active policies when a digest
+  is missing, dirty, out-of-scope, malformed, or stale
 - SHA-256 hashes stored in `ContextSnapshot.prefix_hash` / `tail_hash`
 - Compiler version: `context_digest.v1`
 
 Stores in `ContextSnapshot`:
-- `source_refs_json` — all source refs (memory IDs, policy IDs, digest IDs)
-- `retrieval_trace_json` — stage-by-stage trace from MemoryRetriever
+- `source_refs_json` — direct source refs plus usable digest refs only
+- `retrieval_trace_json` — stage-by-stage trace from MemoryRetriever plus digest
+  fields (`digest_used`, `digest_types`, `digest_versions`, `digest_dropped`,
+  `digest_missing_types`, `fallback_to_memory_retriever`)
 - `token_budget_json` — run-level stable_prefix / dynamic_tail character metrics (NOT `ContextCompiler.budget_trace`)
 
 ---
@@ -415,8 +453,12 @@ Supported proposal types:
 - `egress_review` → metadata-only update on `PersonalMemoryGrant`
 
 After applying `memory_create` / `memory_update` / `memory_archive`:
-- Calls `ContextDigestService.mark_digest_dirty(...)` for affected workspace/agent/space scope
+- Calls the digest dirty-marker for affected workspace/agent memory scopes
 - Calls `SourceMonitoringService.record_proposal_apply(...)` for provenance tracking
+
+After applying `policy_change`:
+- Marks only the `policy_bundle` digest dirty. Workspace/agent digests are
+  memory-only and never embed policy content.
 
 ---
 
