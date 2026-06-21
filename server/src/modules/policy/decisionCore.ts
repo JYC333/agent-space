@@ -499,6 +499,30 @@ const ruleRuntimeExecuteRiskLevel: Rule = (ctx) => {
   });
 };
 
+const ruleRuntimeSkillRenderEnabled: Rule = (ctx) => {
+  const action = str(ctx.action);
+  if (action !== "runtime_skill.render") return null;
+  if (ctx.enabled_binding !== true) return null;
+  const capabilityEnablementId = str(ctx.capability_enablement_id);
+  if (!capabilityEnablementId) return null;
+  const raw = ctx.risk_level;
+  const riskLevel: RiskLevel =
+    typeof raw === "string" && VALID_RISK_LEVELS.has(raw) ? (raw as RiskLevel) : "medium";
+  // A binding only reaches render from the context prepare path after the
+  // runtime provider proves an enabled capability_enablement row selected it.
+  // Enablement is the review gate where the owner decides whether a high or
+  // critical capability runs; direct calls without that proof fall through to
+  // the action registry default.
+  return makeDecision({
+    decision: "allow",
+    message: `runtime_skill.render allowed for enabled binding (reviewed at capability enablement, risk_level=${riskLevel})`,
+    risk_level: riskLevel,
+    reason_code: "runtime_skill_render_enabled_binding",
+    policy_rule_id: "runtime_skill_render_enabled_binding",
+    audit_code: "runtime_skill_render_enabled_binding",
+  });
+};
+
 const BUILTIN_RULES: readonly Rule[] = [
   ruleSpaceBoundary,
   ruleAgentStatus,
@@ -508,6 +532,7 @@ const BUILTIN_RULES: readonly Rule[] = [
   ruleWorkspaceWritePatch,
   ruleAutomation,
   ruleRuntimeExecuteRiskLevel,
+  ruleRuntimeSkillRenderEnabled,
 ];
 
 // ---------------------------------------------------------------------------

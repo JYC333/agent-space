@@ -13,6 +13,7 @@ import { Badge } from '../../components/ui/badge'
 import { Skeleton } from '../../components/ui/skeleton'
 import { PreviewBadge } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
+import { ArtifactInlineRenderer } from './ArtifactRendererRegistry'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -91,14 +92,7 @@ export default function ArtifactDetailPage() {
               </Link>
             )}
           </div>
-          {a.has_inline_content && (a.content ?? '') !== '' && (
-            <pre className="text-sm whitespace-pre-wrap bg-muted/40 rounded-md p-3 max-h-[480px] overflow-auto border border-border">
-              {a.content}
-            </pre>
-          )}
-          {(!a.has_inline_content || !a.content) && (
-            <p className="text-sm text-muted-foreground">No inline preview — use Export to download.</p>
-          )}
+          <ArtifactInlineRenderer artifact={a} />
         </Card>
       )}
     </div>

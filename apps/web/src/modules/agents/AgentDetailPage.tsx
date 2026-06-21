@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { Loader2, MessageSquare, Ban, Power } from 'lucide-react'
+import { ChevronDown, ChevronRight, Loader2, MessageSquare, Ban, Power } from 'lucide-react'
 import { toast } from 'sonner'
-import { agentsApi, credentialsApi, runtimeToolsApi } from '../../api/client'
-import type { AgentOut, AgentVersionOut, Run, Proposal, CliCredentialAvailableProfileOut, SpaceRuntimeToolPolicyOut } from '../../types/api'
+import { agentsApi, credentialsApi, runtimeToolsApi, sessionsApi } from '../../api/client'
+import type { AgentOut, AgentRuntimeProfileOut, AgentVersionOut, Run, Proposal, CliCredentialAvailableProfileOut, SpaceRuntimeToolPolicyOut, CondenserPresetPromptOut } from '../../types/api'
 import { Button } from '../../components/ui/button'
 import { Card, CardTitle } from '../../components/ui/card'
 import { Badge, StatusBadge } from '../../components/ui/badge'
@@ -14,8 +14,16 @@ import { EmptyState } from '../../components/ui/empty-state'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../components/ui/tabs'
 import { errMsg } from '../../lib/utils'
 import { InputsView, OutputsView, ScheduleView, SafetyView } from './ConfigCards'
-import { modelFields, scheduleSummary } from './policyMap'
+import {
+  buildCondenserConfigContextPolicy,
+  CONDENSER_PROFILE_OPTIONS,
+  modelFields,
+  scheduleSummary,
+  sessionCondenserConfig,
+  type SessionCondenserProfile,
+} from './policyMap'
 import AssistantSettingsPanel from './AssistantSettingsPanel'
+import CondenserPresetPromptPreview from './CondenserPresetPromptPreview'
 import ProviderSelector from '../providers/ProviderSelector'
 
 export default function AgentDetailPage() {
@@ -23,6 +31,8 @@ export default function AgentDetailPage() {
   const [agent, setAgent] = useState<AgentOut | null>(null)
   const [version, setVersion] = useState<AgentVersionOut | null>(null)
   const [versions, setVersions] = useState<AgentVersionOut[]>([])
+  const [runtimeProfiles, setRuntimeProfiles] = useState<AgentRuntimeProfileOut[]>([])
+  const [condenserPresets, setCondenserPresets] = useState<CondenserPresetPromptOut[]>([])
   const [runs, setRuns] = useState<Run[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [loading, setLoading] = useState(true)
@@ -30,13 +40,17 @@ export default function AgentDetailPage() {
 
   const reload = useCallback(async () => {
     if (!agentId) return
-    const [a, vs, rs] = await Promise.all([
+    const [a, vs, rs, rps, presets] = await Promise.all([
       agentsApi.get(agentId),
       agentsApi.listVersions(agentId).catch(() => [] as AgentVersionOut[]),
       agentsApi.listRunsForAgent(agentId).catch(() => [] as Run[]),
+      agentsApi.listRuntimeProfiles(agentId).catch(() => [] as AgentRuntimeProfileOut[]),
+      sessionsApi.condenserPresetPrompts().catch(() => [] as CondenserPresetPromptOut[]),
     ])
     setAgent(a)
     setVersions(vs)
+    setRuntimeProfiles(rps)
+    setCondenserPresets(presets)
     setRuns(rs)
     setVersion(vs.find(v => v.id === a.current_version_id) ?? vs[0] ?? null)
     agentsApi.listProposals(agentId, 'pending').then(setProposals).catch(() => setProposals([]))
@@ -108,7 +122,7 @@ export default function AgentDetailPage() {
           <TabsTrigger value="inputs">Inputs</TabsTrigger>
           <TabsTrigger value="outputs">Outputs</TabsTrigger>
           <TabsTrigger value="schedule">Schedule</TabsTrigger>
-          <TabsTrigger value="model">Model</TabsTrigger>
+          <TabsTrigger value="model">Runtime</TabsTrigger>
           <TabsTrigger value="safety">Review &amp; Safety</TabsTrigger>
           <TabsTrigger value="versions">Versions</TabsTrigger>
           <TabsTrigger value="runs">Runs</TabsTrigger>
@@ -124,7 +138,7 @@ export default function AgentDetailPage() {
           <OverviewTab agent={agent} version={version} runs={runs} proposals={proposals} onSaved={reload} />
         </TabsContent>
         <TabsContent value="inputs">
-          <Card className="space-y-4">{version ? <InputsView version={version} /> : <NoVersion />}</Card>
+          {version ? <InputsTab agentId={agent.id} version={version} presets={condenserPresets} onSaved={reload} /> : <Card><NoVersion /></Card>}
         </TabsContent>
         <TabsContent value="outputs">
           <Card>{version ? <OutputsView version={version} /> : <NoVersion />}</Card>
@@ -133,7 +147,7 @@ export default function AgentDetailPage() {
           {version ? <ScheduleTab agentId={agent.id} version={version} onSaved={reload} /> : <Card><NoVersion /></Card>}
         </TabsContent>
         <TabsContent value="model">
-          {version ? <ModelTab agentId={agent.id} version={version} onSaved={reload} /> : <Card><NoVersion /></Card>}
+          {version ? <ModelTab agentId={agent.id} version={version} profiles={runtimeProfiles} onSaved={reload} /> : <Card><NoVersion /></Card>}
         </TabsContent>
         <TabsContent value="safety">
           <Card>{version ? <SafetyView version={version} /> : <NoVersion />}</Card>
@@ -151,6 +165,130 @@ export default function AgentDetailPage() {
 
 function NoVersion() {
   return <p className="text-sm text-muted-foreground">This agent has no current version configured.</p>
+}
+
+// ── Inputs / context ─────────────────────────────────────────────────────────
+
+function InputsTab({ agentId, version, presets, onSaved }: {
+  agentId: string
+  version: AgentVersionOut
+  presets: CondenserPresetPromptOut[]
+  onSaved: () => Promise<void>
+}) {
+  return (
+    <div className="space-y-4">
+      <Card className="space-y-4">
+        <InputsView version={version} />
+      </Card>
+      <CondenserProfileCard agentId={agentId} version={version} presets={presets} onSaved={onSaved} />
+    </div>
+  )
+}
+
+function CondenserProfileCard({ agentId, version, presets, onSaved }: {
+  agentId: string
+  version: AgentVersionOut
+  presets: CondenserPresetPromptOut[]
+  onSaved: () => Promise<void>
+}) {
+  const current = sessionCondenserConfig(version)
+  const [profile, setProfile] = useState<SessionCondenserProfile>(current.profile)
+  const [customSystem, setCustomSystem] = useState(current.custom_system)
+  const [customInstructions, setCustomInstructions] = useState(current.custom_instructions)
+  const [promptOpen, setPromptOpen] = useState(Boolean(current.custom_system || current.custom_instructions))
+  const [saving, setSaving] = useState(false)
+  const selected = CONDENSER_PROFILE_OPTIONS.find(option => option.value === profile)
+  const changed =
+    profile !== current.profile ||
+    customSystem.trim() !== current.custom_system.trim() ||
+    customInstructions.trim() !== current.custom_instructions.trim()
+
+  useEffect(() => {
+    setProfile(current.profile)
+    setCustomSystem(current.custom_system)
+    setCustomInstructions(current.custom_instructions)
+    setPromptOpen(Boolean(current.custom_system || current.custom_instructions))
+  }, [current.profile, current.custom_system, current.custom_instructions, version.id])
+
+  async function save() {
+    setSaving(true)
+    try {
+      await agentsApi.updateConfig(agentId, {
+        context_policy_json: buildCondenserConfigContextPolicy(version.context_policy_json, {
+          profile,
+          custom_system: customSystem,
+          custom_instructions: customInstructions,
+        }),
+      })
+      toast.success('Session summary settings updated (new version created)')
+      await onSaved()
+    } catch (err) {
+      toast.error(errMsg(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card className="space-y-3">
+      <div>
+        <CardTitle>Session summary</CardTitle>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Controls how older chat turns are condensed for this agent.
+        </p>
+      </div>
+      <label className="space-y-1.5 block">
+        <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Profile</span>
+        <select
+          value={profile}
+          onChange={event => setProfile(event.target.value as SessionCondenserProfile)}
+          className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
+        >
+          {CONDENSER_PROFILE_OPTIONS.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </label>
+      {selected && <p className="text-xs text-muted-foreground">{selected.detail}</p>}
+      <CondenserPresetPromptPreview profile={profile} presets={presets} />
+      <div className="space-y-3">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => setPromptOpen(open => !open)}
+        >
+          {promptOpen ? <ChevronDown className="size-4 mr-1" /> : <ChevronRight className="size-4 mr-1" />}
+          Custom prompt
+        </Button>
+        {promptOpen && (
+          <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
+            <label className="space-y-1.5 block">
+              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Custom system prompt</span>
+              <Textarea
+                value={customSystem}
+                onChange={event => setCustomSystem(event.target.value)}
+                rows={4}
+                placeholder="Leave empty to use the selected profile's system prompt"
+              />
+            </label>
+            <label className="space-y-1.5 block">
+              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Custom summary instructions</span>
+              <Textarea
+                value={customInstructions}
+                onChange={event => setCustomInstructions(event.target.value)}
+                rows={6}
+                placeholder="Leave empty to use the selected profile's instructions"
+              />
+            </label>
+          </div>
+        )}
+      </div>
+      <Button size="sm" onClick={save} disabled={saving || !changed}>
+        {saving ? <Loader2 className="size-4 animate-spin" /> : 'Save summary settings'}
+      </Button>
+    </Card>
+  )
 }
 
 // ── Overview ──────────────────────────────────────────────────────────────────
@@ -368,27 +506,45 @@ function RuntimeVersionSelector({
   )
 }
 
-function ModelTab({ agentId, version, onSaved }: { agentId: string; version: AgentVersionOut; onSaved: () => Promise<void> }) {
-  const m = modelFields(version)
-  const [model, setModel] = useState(m.model ?? version.model_name ?? '')
-  const [temperature, setTemperature] = useState(m.temperature != null ? String(m.temperature) : '')
-  const [maxTokens, setMaxTokens] = useState(m.max_tokens != null ? String(m.max_tokens) : '')
+function ModelTab({
+  agentId,
+  version,
+  profiles,
+  onSaved,
+}: {
+  agentId: string
+  version: AgentVersionOut
+  profiles: AgentRuntimeProfileOut[]
+  onSaved: () => Promise<void>
+}) {
+  const defaultProfile = profiles.find(profile => profile.is_default) ?? profiles[0] ?? null
+  const [selectedProfileId, setSelectedProfileId] = useState(defaultProfile?.id ?? '')
+  const selectedProfile = selectedProfileId
+    ? profiles.find(profile => profile.id === selectedProfileId) ?? null
+    : null
+  const runtimeConfig = (selectedProfile?.runtime_config_json ?? version.runtime_config_json) as Record<string, unknown>
+  const runtimePolicy = (selectedProfile?.runtime_policy_json ?? version.runtime_policy_json) as Record<string, unknown>
+  const fallbackModel = modelFields(version)
+  const [name, setName] = useState(selectedProfile?.name ?? 'Default')
+  const [adapterType, setAdapterType] = useState(
+    selectedProfile?.adapter_type ||
+      (typeof runtimeConfig.adapter_type === 'string' && runtimeConfig.adapter_type) ||
+      (typeof runtimePolicy.default_adapter_type === 'string' && runtimePolicy.default_adapter_type) ||
+      'model_api',
+  )
+  const [model, setModel] = useState(
+    selectedProfile?.model?.provider_id ? selectedProfile.model.model ?? fallbackModel.model ?? version.model_name ?? '' : '',
+  )
   const [providerSelection, setProviderSelection] = useState<{ provider_id: string; model: string } | null>(
-    version.model_provider_id
-      ? { provider_id: version.model_provider_id, model: version.model_name ?? m.model ?? '' }
+    selectedProfile?.model?.provider_id
+      ? { provider_id: selectedProfile.model.provider_id, model: selectedProfile.model.model ?? fallbackModel.model ?? '' }
       : null,
   )
+  const [enabled, setEnabled] = useState(selectedProfile?.enabled ?? true)
+  const [isDefault, setIsDefault] = useState(selectedProfile?.is_default ?? profiles.length === 0)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [saving, setSaving] = useState(false)
-  const hasProvider = Boolean(version.model_provider_id)
-  const runtimeConfig = version.runtime_config_json as Record<string, unknown>
-  const runtimePolicy = version.runtime_policy_json as Record<string, unknown>
-  const adapterType =
-    (typeof runtimeConfig.adapter_type === 'string' && runtimeConfig.adapter_type) ||
-    (typeof runtimePolicy.default_adapter_type === 'string' && runtimePolicy.default_adapter_type) ||
-    'model_api'
   const supportsProviderSelection = adapterType === 'model_api' || adapterType === 'claude_code' || adapterType === 'codex_cli'
-  const providerRequired = adapterType === 'model_api'
   const requireClaudeCompatible = adapterType === 'claude_code'
   const requireOpenAiCompatible = adapterType === 'codex_cli'
   const isCli = adapterType === 'claude_code' || adapterType === 'codex_cli'
@@ -402,13 +558,34 @@ function ModelTab({ agentId, version, onSaved }: { agentId: string; version: Age
   )
 
   useEffect(() => {
+    setSelectedProfileId(defaultProfile?.id ?? '')
+  }, [agentId, defaultProfile?.id])
+
+  useEffect(() => {
+    const cfg = (selectedProfile?.runtime_config_json ?? version.runtime_config_json) as Record<string, unknown>
+    const policy = (selectedProfile?.runtime_policy_json ?? version.runtime_policy_json) as Record<string, unknown>
+    const nextAdapter =
+      selectedProfile?.adapter_type ||
+      (typeof cfg.adapter_type === 'string' && cfg.adapter_type) ||
+      (typeof policy.default_adapter_type === 'string' && policy.default_adapter_type) ||
+      'model_api'
+    setName(selectedProfile?.name ?? 'Default')
+    setAdapterType(nextAdapter)
+    setModel(selectedProfile?.model?.provider_id ? selectedProfile.model.model ?? fallbackModel.model ?? version.model_name ?? '' : '')
+    setProviderSelection(
+      selectedProfile?.model?.provider_id
+        ? { provider_id: selectedProfile.model.provider_id, model: selectedProfile.model.model ?? '' }
+        : null,
+    )
+    setEnabled(selectedProfile?.enabled ?? true)
+    setIsDefault(selectedProfile?.is_default ?? profiles.length === 0)
     setCredentialProfileId(
-      typeof runtimeConfig.credential_profile_id === 'string' ? runtimeConfig.credential_profile_id : '',
+      typeof cfg.credential_profile_id === 'string' ? cfg.credential_profile_id : '',
     )
     setRuntimeToolVersion(
-      typeof runtimeConfig.runtime_tool_version === 'string' ? runtimeConfig.runtime_tool_version : '',
+      typeof cfg.runtime_tool_version === 'string' ? cfg.runtime_tool_version : '',
     )
-  }, [version.id, runtimeConfig.credential_profile_id, runtimeConfig.runtime_tool_version])
+  }, [selectedProfile?.id, version.id])
 
   useEffect(() => {
     if (!isCli) {
@@ -433,51 +610,96 @@ function ModelTab({ agentId, version, onSaved }: { agentId: string; version: Age
   function changeProviderSelection(next: { provider_id: string; model: string } | null) {
     setProviderSelection(next)
     if (next?.model) setModel(next.model)
+    if (!next) setModel('')
   }
 
   async function save() {
     setSaving(true)
     try {
-      const cfg: Record<string, unknown> = { ...(version.model_config_json as Record<string, unknown>) }
       const selectedModel = providerSelection?.model || model.trim()
-      cfg.model = selectedModel || undefined
-      if (temperature.trim()) cfg.temperature = Number(temperature)
-      else delete cfg.temperature
-      if (maxTokens.trim()) cfg.max_tokens = Number(maxTokens)
       const nextRuntimeConfig: Record<string, unknown> = { ...runtimeConfig, adapter_type: adapterType }
       if (isCli && credentialProfileId) nextRuntimeConfig.credential_profile_id = credentialProfileId
       else delete nextRuntimeConfig.credential_profile_id
       if (isCli && runtimeToolVersion) nextRuntimeConfig.runtime_tool_version = runtimeToolVersion
       else delete nextRuntimeConfig.runtime_tool_version
-      // Keep the provider's model binding consistent with the edited model name.
-      const body = supportsProviderSelection
-        ? {
-            model_config_json: cfg,
-            ...(isCli ? { runtime_config_json: nextRuntimeConfig } : {}),
-            model_provider_id: providerSelection?.provider_id ?? null,
-            model_name: providerSelection?.provider_id && selectedModel ? selectedModel : null,
-          }
-        : hasProvider && model.trim()
-          ? { model_config_json: cfg, ...(isCli ? { runtime_config_json: nextRuntimeConfig } : {}), model_name: model.trim() }
-          : { model_config_json: cfg, ...(isCli ? { runtime_config_json: nextRuntimeConfig } : {}) }
-      await agentsApi.updateConfig(agentId, body)
-      toast.success('Model updated (new version created)')
+      const body = {
+        name: name.trim() || 'Default',
+        adapter_type: adapterType,
+        runtime_config_json: nextRuntimeConfig,
+        runtime_policy_json: { ...runtimePolicy, default_adapter_type: adapterType },
+        model_provider_id: supportsProviderSelection ? (providerSelection?.provider_id ?? null) : null,
+        model_name: supportsProviderSelection && providerSelection?.provider_id && selectedModel ? selectedModel : null,
+        credential_profile_id: isCli && credentialProfileId ? credentialProfileId : null,
+        enabled,
+        is_default: isDefault,
+      }
+      if (selectedProfile) await agentsApi.updateRuntimeProfile(agentId, selectedProfile.id, body)
+      else await agentsApi.createRuntimeProfile(agentId, body)
+      toast.success('Runtime profile saved')
       await onSaved()
     } catch (err) { toast.error(errMsg(err)) } finally { setSaving(false) }
   }
 
+  function newProfile() {
+    setSelectedProfileId('')
+    setName('New runtime profile')
+    setAdapterType('model_api')
+    setModel('')
+    setProviderSelection(null)
+    setEnabled(true)
+    setIsDefault(profiles.length === 0)
+    setCredentialProfileId('')
+    setRuntimeToolVersion('')
+  }
+
   return (
     <Card className="space-y-4">
-      <CardTitle>Model</CardTitle>
-      {hasProvider && <p className="text-xs text-muted-foreground -mt-2">Bound to a configured provider. Resolved from the system default at creation.</p>}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <CardTitle>Runtime profiles</CardTitle>
+        <Button size="sm" variant="outline" onClick={newProfile}>New profile</Button>
+      </div>
+      {profiles.length > 0 && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Profile</label>
+          <select
+            value={selectedProfile?.id ?? ''}
+            onChange={e => setSelectedProfileId(e.target.value)}
+            className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
+          >
+            {profiles.map(profile => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name}{profile.is_default ? ' · default' : ''}{profile.enabled ? '' : ' · disabled'} · {profile.adapter_type}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Name</label>
+          <Input value={name} onChange={e => setName(e.target.value)} placeholder="API default" />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Runtime</label>
+          <select
+            value={adapterType}
+            onChange={e => setAdapterType(e.target.value)}
+            className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
+          >
+            <option value="model_api">model_api</option>
+            <option value="claude_code">claude_code</option>
+            <option value="codex_cli">codex_cli</option>
+          </select>
+        </div>
+      </div>
       {supportsProviderSelection && (
         <ProviderSelector
           value={providerSelection}
           onChange={changeProviderSelection}
-          required={providerRequired}
+          required={false}
           requireClaudeCompatible={requireClaudeCompatible}
           requireOpenAiCompatible={requireOpenAiCompatible}
-          emptyLabel={requireClaudeCompatible ? 'Claude Code default' : requireOpenAiCompatible ? 'Codex default' : undefined}
+          emptyLabel={requireClaudeCompatible ? 'Claude Code default' : requireOpenAiCompatible ? 'Codex default' : 'Agent/space default provider'}
         />
       )}
       {isCli && (
@@ -498,27 +720,34 @@ function ModelTab({ agentId, version, onSaved }: { agentId: string; version: Age
       )}
       <div className="space-y-1.5">
         <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Model</label>
-        <Input value={model} onChange={e => setModel(e.target.value)} placeholder="claude-sonnet-4-6" className="font-mono" />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Temperature</label>
-          <Input value={temperature} onChange={e => setTemperature(e.target.value)} placeholder="(default)" />
-        </div>
-        <div className="space-y-1.5">
-          <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Max tokens</label>
-          <Input value={maxTokens} onChange={e => setMaxTokens(e.target.value)} placeholder="8192" />
-        </div>
+        <Input
+          value={model}
+          onChange={e => setModel(e.target.value)}
+          placeholder={providerSelection?.provider_id ? 'claude-sonnet-4-6' : 'Provider default'}
+          className="font-mono"
+          disabled={supportsProviderSelection && !providerSelection?.provider_id}
+        />
       </div>
       <div>
         <button type="button" onClick={() => setShowAdvanced(s => !s)} className="text-xs text-muted-foreground underline">
           {showAdvanced ? 'Hide' : 'Show'} advanced (raw JSON)
         </button>
         {showAdvanced && (
-          <pre className="mt-2 text-xs bg-muted rounded-md p-3 overflow-auto">{JSON.stringify(version.model_config_json, null, 2)}</pre>
+          <pre className="mt-2 text-xs bg-muted rounded-md p-3 overflow-auto">{JSON.stringify({
+            runtime_config_json: runtimeConfig,
+            runtime_policy_json: runtimePolicy,
+          }, null, 2)}</pre>
         )}
       </div>
-      <Button size="sm" onClick={save} disabled={saving}>{saving ? <Loader2 className="size-4 animate-spin" /> : 'Save model'}</Button>
+      <div className="flex flex-wrap gap-4">
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} /> Enabled
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={isDefault} onChange={e => setIsDefault(e.target.checked)} /> Default for this agent
+        </label>
+      </div>
+      <Button size="sm" onClick={save} disabled={saving}>{saving ? <Loader2 className="size-4 animate-spin" /> : 'Save runtime profile'}</Button>
     </Card>
   )
 }

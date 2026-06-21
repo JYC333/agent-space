@@ -106,6 +106,7 @@ export const RunDTOSchema = z.object({
   prompt: z.string().nullish(),
   adapter_type: z.string().nullish(),
   capability_id: IdSchema.nullish(),
+  capabilities_json: z.array(z.string().min(1)).default([]),
   model_provider_id: IdSchema.nullish(),
   required_sandbox_level: z.string(),
   visibility: z.string(),

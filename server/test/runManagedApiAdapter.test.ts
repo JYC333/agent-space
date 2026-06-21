@@ -117,6 +117,60 @@ describe("executeManagedApiNoToolAdapter", () => {
     });
   });
 
+  it("passes native chat messages to runtime-host for managed API runs", async () => {
+    const calls: unknown[] = [];
+    const executor: RuntimeHostExecutor = async (_config, request) => {
+      calls.push(request);
+      return {
+        success: true,
+        stdout: "ok",
+        stderr: "",
+        output_text: "ok",
+        output_json: { adapter_type: "ts_agent_host" },
+        exit_code: 0,
+        error_text: null,
+        error_code: null,
+        started_at: "2026-06-12T10:00:00.000Z",
+        completed_at: "2026-06-12T10:00:01.000Z",
+        model: "gpt-4o-mini",
+        usage: null,
+        events: [],
+        adapter_metadata: { adapter_type: "ts_agent_host" },
+        adapter_log_json: null,
+      };
+    };
+
+    await executeManagedApiNoToolAdapter(
+      config(),
+      {
+        run: run({
+          model_override_json: {
+            chat_context_preamble: "Relevant memory.",
+            messages: [
+              { role: "user", content: "Earlier question" },
+              { role: "assistant", content: "Earlier answer" },
+              { role: "user", content: "Continue" },
+            ],
+          },
+        }),
+        model: "gpt-4o-mini",
+      },
+      { executeRuntimeHost: executor },
+    );
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        system_prompt: "Be concise.\n\nRelevant memory.",
+        prompt: "Say hello",
+        messages: [
+          { role: "user", content: "Earlier question" },
+          { role: "assistant", content: "Earlier answer" },
+          { role: "user", content: "Continue" },
+        ],
+      }),
+    ]);
+  });
+
   // Policy enforcement (runtime.execute / runtime.use_credential) lives upstream
   // in RunOrchestrationService.enforceRuntimePolicy — see
   // runOrchestrationService.test.ts "fails closed before adapter invocation when

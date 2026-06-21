@@ -56,7 +56,27 @@ export interface AgentRecord {
   provider_type?: string | null;
   model_name?: string | null;
   system_prompt?: string | null;
+  runtime_adapter_type?: string | null;
   runtime_policy_json?: unknown;
+}
+
+export interface AgentRuntimeProfileRecord {
+  id: string;
+  space_id: string;
+  agent_id: string;
+  name: string;
+  adapter_type: string;
+  model_provider_id: string | null;
+  provider_name?: string | null;
+  provider_type?: string | null;
+  model_name: string | null;
+  credential_profile_id: string | null;
+  runtime_config_json: Record<string, unknown>;
+  runtime_policy_json: Record<string, unknown>;
+  enabled: boolean;
+  is_default: boolean;
+  created_at: unknown;
+  updated_at: unknown;
 }
 
 export interface AgentVersionRecord {
@@ -125,13 +145,59 @@ export interface AssistantSettingsRecord {
   updated_at: unknown;
 }
 
+export interface AgentRuntimeProfileOut {
+  id: string;
+  space_id: string;
+  agent_id: string;
+  name: string;
+  adapter_type: string;
+  model: {
+    provider_id: string | null;
+    provider_name: string | null;
+    provider_type: string | null;
+    model: string | null;
+  } | null;
+  credential_profile_id: string | null;
+  runtime_config_json: Record<string, unknown>;
+  runtime_policy_json: Record<string, unknown>;
+  enabled: boolean;
+  is_default: boolean;
+  created_at: unknown;
+  updated_at: unknown;
+}
+
 const AGENT_COLUMNS = `
   a.id, a.space_id, a.owner_user_id, a.name, a.description, a.role_instruction,
   a.status, a.agent_kind, a.source_template_id, a.source_template_version_id,
   a.current_version_id, a.visibility, a.created_at, a.updated_at,
-  av.model_provider_id, av.model_name, av.system_prompt, av.runtime_policy_json,
+  COALESCE(arp.model_provider_id, av.model_provider_id) AS model_provider_id,
+  COALESCE(arp.model_name, av.model_name) AS model_name,
+  av.system_prompt,
+  COALESCE(arp.adapter_type, av.runtime_policy_json->>'default_adapter_type') AS runtime_adapter_type,
+  COALESCE(arp.runtime_policy_json, av.runtime_policy_json) AS runtime_policy_json,
   mp.name AS provider_name, mp.provider_type AS provider_type
 `;
+
+const RUNTIME_PROFILE_COLUMNS = `
+  arp.id, arp.space_id, arp.agent_id, arp.name, arp.adapter_type,
+  arp.model_provider_id, arp.model_name, arp.credential_profile_id,
+  arp.runtime_config_json, arp.runtime_policy_json, arp.enabled, arp.is_default,
+  arp.created_at, arp.updated_at,
+  mp.name AS provider_name, mp.provider_type AS provider_type
+`;
+
+const DEFAULT_RUNTIME_PROFILE_JOIN = `
+         LEFT JOIN LATERAL (
+           SELECT runtime_profile_candidate.*
+             FROM agent_runtime_profiles runtime_profile_candidate
+            WHERE runtime_profile_candidate.space_id = a.space_id
+              AND runtime_profile_candidate.agent_id = a.id
+              AND runtime_profile_candidate.enabled = true
+            ORDER BY runtime_profile_candidate.is_default DESC,
+                     runtime_profile_candidate.created_at ASC,
+                     runtime_profile_candidate.id ASC
+            LIMIT 1
+         ) arp ON true`;
 
 const VERSION_COLUMN_NAMES = [
   "id",
@@ -251,7 +317,8 @@ export class PgAgentRepository {
       `SELECT ${AGENT_COLUMNS}
          FROM agents a
          LEFT JOIN agent_versions av ON av.id = a.current_version_id
-         LEFT JOIN model_providers mp ON mp.id = av.model_provider_id
+${DEFAULT_RUNTIME_PROFILE_JOIN}
+         LEFT JOIN model_providers mp ON mp.id = COALESCE(arp.model_provider_id, av.model_provider_id)
         WHERE ${clauses.join(" AND ")}
         ORDER BY a.created_at DESC, a.id DESC
         LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -265,12 +332,141 @@ export class PgAgentRepository {
       `SELECT ${AGENT_COLUMNS}
          FROM agents a
          LEFT JOIN agent_versions av ON av.id = a.current_version_id
-         LEFT JOIN model_providers mp ON mp.id = av.model_provider_id
+${DEFAULT_RUNTIME_PROFILE_JOIN}
+         LEFT JOIN model_providers mp ON mp.id = COALESCE(arp.model_provider_id, av.model_provider_id)
         WHERE a.space_id = $1 AND a.id = $2
         LIMIT 1`,
       [spaceId, agentId],
     );
     return result.rows[0] ? agentOut(result.rows[0]) : null;
+  }
+
+  async listRuntimeProfiles(
+    spaceId: string,
+    agentId: string,
+  ): Promise<AgentRuntimeProfileOut[]> {
+    await this.requireAgent(spaceId, agentId);
+    const result = await this.pool.query<AgentRuntimeProfileRecord>(
+      `SELECT ${RUNTIME_PROFILE_COLUMNS}
+         FROM agent_runtime_profiles arp
+         LEFT JOIN model_providers mp ON mp.id = arp.model_provider_id
+        WHERE arp.space_id = $1 AND arp.agent_id = $2
+        ORDER BY arp.is_default DESC, arp.enabled DESC, arp.created_at ASC, arp.id ASC`,
+      [spaceId, agentId],
+    );
+    return result.rows.map(runtimeProfileOut);
+  }
+
+  async createRuntimeProfile(
+    spaceId: string,
+    agentId: string,
+    input: {
+      name: string;
+      adapterType: string;
+      modelProviderId?: string | null;
+      modelName?: string | null;
+      credentialProfileId?: string | null;
+      runtimeConfigJson?: Record<string, unknown> | null;
+      runtimePolicyJson?: Record<string, unknown> | null;
+      enabled?: boolean;
+      isDefault?: boolean;
+    },
+  ): Promise<AgentRuntimeProfileOut> {
+    await this.requireAgent(spaceId, agentId);
+    const normalized = await this.normalizeRuntimeProfileInput(spaceId, input);
+    return withTransaction(this.pool, async (client) => {
+      if (normalized.isDefault) {
+        await this.clearDefaultRuntimeProfile(client, spaceId, agentId);
+      }
+      const created = await this.insertRuntimeProfile(client, {
+        ...normalized,
+        spaceId,
+        agentId,
+      });
+      return runtimeProfileOut(created);
+    });
+  }
+
+  async updateRuntimeProfile(
+    spaceId: string,
+    agentId: string,
+    profileId: string,
+    patch: {
+      name?: string;
+      adapterType?: string;
+      modelProviderId?: string | null;
+      modelName?: string | null;
+      credentialProfileId?: string | null;
+      runtimeConfigJson?: Record<string, unknown> | null;
+      runtimePolicyJson?: Record<string, unknown> | null;
+      enabled?: boolean;
+      isDefault?: boolean;
+    },
+  ): Promise<AgentRuntimeProfileOut> {
+    const existing = await this.getRuntimeProfile(spaceId, agentId, profileId);
+    if (!existing) throw new HttpError(404, "Runtime profile not found");
+    const normalized = await this.normalizeRuntimeProfileInput(spaceId, {
+      name: patch.name ?? existing.name,
+      adapterType: patch.adapterType ?? existing.adapter_type,
+      modelProviderId: Object.hasOwn(patch, "modelProviderId")
+        ? patch.modelProviderId ?? null
+        : existing.model_provider_id,
+      modelName: Object.hasOwn(patch, "modelName")
+        ? patch.modelName ?? null
+        : existing.model_name,
+      credentialProfileId: Object.hasOwn(patch, "credentialProfileId")
+        ? patch.credentialProfileId ?? null
+        : existing.credential_profile_id,
+      runtimeConfigJson: patch.runtimeConfigJson
+        ? { ...recordValue(existing.runtime_config_json), ...patch.runtimeConfigJson }
+        : recordValue(existing.runtime_config_json),
+      runtimePolicyJson: patch.runtimePolicyJson
+        ? { ...recordValue(existing.runtime_policy_json), ...patch.runtimePolicyJson }
+        : recordValue(existing.runtime_policy_json),
+      enabled: Object.hasOwn(patch, "enabled") ? patch.enabled : existing.enabled,
+      isDefault: Object.hasOwn(patch, "isDefault") ? patch.isDefault : existing.is_default,
+    });
+    return withTransaction(this.pool, async (client) => {
+      if (normalized.isDefault) {
+        await this.clearDefaultRuntimeProfile(client, spaceId, agentId);
+      }
+      const now = new Date().toISOString();
+      const result = await client.query<{ id: string }>(
+        `UPDATE agent_runtime_profiles
+            SET name = $4,
+                adapter_type = $5,
+                model_provider_id = $6,
+                model_name = $7,
+                credential_profile_id = $8,
+                runtime_config_json = $9::jsonb,
+                runtime_policy_json = $10::jsonb,
+                enabled = $11,
+                is_default = $12,
+                updated_at = $13
+          WHERE space_id = $1 AND agent_id = $2 AND id = $3
+          RETURNING id`,
+        [
+          spaceId,
+          agentId,
+          profileId,
+          normalized.name,
+          normalized.adapterType,
+          normalized.modelProviderId,
+          normalized.modelName,
+          normalized.credentialProfileId,
+          JSON.stringify(normalized.runtimeConfigJson),
+          JSON.stringify(normalized.runtimePolicyJson),
+          normalized.enabled,
+          normalized.isDefault,
+          now,
+        ],
+      );
+      const row = result.rows[0];
+      if (!row) throw new HttpError(404, "Runtime profile not found");
+      const updated = await this.getRuntimeProfileWithClient(client, spaceId, agentId, row.id);
+      if (!updated) throw new HttpError(404, "Runtime profile not found");
+      return runtimeProfileOut(updated);
+    });
   }
 
   async create(input: {
@@ -572,7 +768,8 @@ export class PgAgentRepository {
       `SELECT ${AGENT_COLUMNS}
          FROM agents a
          LEFT JOIN agent_versions av ON av.id = a.current_version_id
-         LEFT JOIN model_providers mp ON mp.id = av.model_provider_id
+${DEFAULT_RUNTIME_PROFILE_JOIN}
+         LEFT JOIN model_providers mp ON mp.id = COALESCE(arp.model_provider_id, av.model_provider_id)
         WHERE a.space_id = $1
           AND a.agent_kind = 'system_assistant'
           AND a.status = 'active'
@@ -591,7 +788,8 @@ export class PgAgentRepository {
         `SELECT ${AGENT_COLUMNS}
            FROM agents a
            LEFT JOIN agent_versions av ON av.id = a.current_version_id
-           LEFT JOIN model_providers mp ON mp.id = av.model_provider_id
+${DEFAULT_RUNTIME_PROFILE_JOIN}
+           LEFT JOIN model_providers mp ON mp.id = COALESCE(arp.model_provider_id, av.model_provider_id)
           WHERE a.space_id = $1
             AND a.agent_kind = 'system_assistant'
             AND a.status = 'active'
@@ -852,9 +1050,247 @@ export class PgAgentRepository {
       `UPDATE agents SET current_version_id = $3, updated_at = $4 WHERE space_id = $1 AND id = $2`,
       [input.spaceId, agentId, version.id, now],
     );
+    await this.insertRuntimeProfile(client, {
+      spaceId: input.spaceId,
+      agentId,
+      name: "Default",
+      adapterType: normalizeAdapterType(input.runtimePolicyJson.default_adapter_type),
+      modelProviderId: input.modelProviderId,
+      modelName: input.modelName,
+      credentialProfileId: stringValue(input.runtimeConfigJson.credential_profile_id),
+      runtimeConfigJson: input.runtimeConfigJson,
+      runtimePolicyJson: input.runtimePolicyJson,
+      enabled: true,
+      isDefault: true,
+    });
     const created = await this.getAgentWithClient(client, input.spaceId, agentId);
     if (!created) throw new Error("Agent insert returned no row");
     return created;
+  }
+
+  private async getRuntimeProfile(
+    spaceId: string,
+    agentId: string,
+    profileId: string,
+  ): Promise<AgentRuntimeProfileRecord | null> {
+    return this.getRuntimeProfileWithClient(this.pool, spaceId, agentId, profileId);
+  }
+
+  private async getRuntimeProfileWithClient(
+    db: Queryable,
+    spaceId: string,
+    agentId: string,
+    profileId: string,
+  ): Promise<AgentRuntimeProfileRecord | null> {
+    const result = await db.query<AgentRuntimeProfileRecord>(
+      `SELECT ${RUNTIME_PROFILE_COLUMNS}
+         FROM agent_runtime_profiles arp
+         LEFT JOIN model_providers mp ON mp.id = arp.model_provider_id
+        WHERE arp.space_id = $1 AND arp.agent_id = $2 AND arp.id = $3
+        LIMIT 1`,
+      [spaceId, agentId, profileId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async clearDefaultRuntimeProfile(
+    db: Queryable,
+    spaceId: string,
+    agentId: string,
+  ): Promise<void> {
+    await db.query(
+      `UPDATE agent_runtime_profiles
+          SET is_default = false,
+              updated_at = $3
+        WHERE space_id = $1 AND agent_id = $2 AND is_default = true`,
+      [spaceId, agentId, new Date().toISOString()],
+    );
+  }
+
+  private async insertRuntimeProfile(
+    db: Queryable,
+    input: {
+      spaceId: string;
+      agentId: string;
+      name: string;
+      adapterType: string;
+      modelProviderId: string | null;
+      modelName: string | null;
+      credentialProfileId: string | null;
+      runtimeConfigJson: Record<string, unknown>;
+      runtimePolicyJson: Record<string, unknown>;
+      enabled: boolean;
+      isDefault: boolean;
+    },
+  ): Promise<AgentRuntimeProfileRecord> {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const runtimeConfigJson = normalizedRuntimeConfig(
+      input.runtimeConfigJson,
+      input.adapterType,
+      input.credentialProfileId,
+    );
+    await db.query(
+      `INSERT INTO agent_runtime_profiles (
+         id, space_id, agent_id, name, adapter_type, model_provider_id,
+         model_name, credential_profile_id, runtime_config_json,
+         runtime_policy_json, enabled, is_default, created_at, updated_at
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6,
+         $7, $8, $9::jsonb,
+         $10::jsonb, $11, $12, $13, $13
+       )`,
+      [
+        id,
+        input.spaceId,
+        input.agentId,
+        input.name,
+        input.adapterType,
+        input.modelProviderId,
+        input.modelName,
+        input.credentialProfileId,
+        JSON.stringify(runtimeConfigJson),
+        JSON.stringify(input.runtimePolicyJson),
+        input.enabled,
+        input.isDefault,
+        now,
+      ],
+    );
+    const created = await this.getRuntimeProfileWithClient(db, input.spaceId, input.agentId, id);
+    if (!created) throw new Error("Runtime profile insert returned no row");
+    return created;
+  }
+
+  private async normalizeRuntimeProfileInput(
+    spaceId: string,
+    input: {
+      name: string;
+      adapterType: string;
+      modelProviderId?: string | null;
+      modelName?: string | null;
+      credentialProfileId?: string | null;
+      runtimeConfigJson?: Record<string, unknown> | null;
+      runtimePolicyJson?: Record<string, unknown> | null;
+      enabled?: boolean;
+      isDefault?: boolean;
+    },
+  ): Promise<{
+    name: string;
+    adapterType: string;
+    modelProviderId: string | null;
+    modelName: string | null;
+    credentialProfileId: string | null;
+    runtimeConfigJson: Record<string, unknown>;
+    runtimePolicyJson: Record<string, unknown>;
+    enabled: boolean;
+    isDefault: boolean;
+  }> {
+    const name = input.name.trim();
+    if (!name) throw new HttpError(422, "name is required");
+    const adapterType = normalizeAdapterType(input.adapterType);
+    const modelProviderId = input.modelProviderId ?? null;
+    const modelName = input.modelName ?? null;
+    const credentialProfileId = input.credentialProfileId ?? null;
+    await this.validateRuntimeProfileSelection(
+      spaceId,
+      adapterType,
+      modelProviderId,
+      modelName,
+      credentialProfileId,
+    );
+    const runtimeConfigJson = await this.resolveRuntimeConfig(
+      spaceId,
+      adapterType,
+      normalizedRuntimeConfig(input.runtimeConfigJson ?? {}, adapterType, credentialProfileId),
+    );
+    return {
+      name,
+      adapterType,
+      modelProviderId,
+      modelName,
+      credentialProfileId,
+      runtimeConfigJson,
+      runtimePolicyJson: buildRuntimePolicy(adapterType, input.runtimePolicyJson),
+      enabled: input.enabled ?? true,
+      isDefault: input.isDefault ?? false,
+    };
+  }
+
+  private async validateRuntimeProfileSelection(
+    spaceId: string,
+    adapterType: string,
+    providerId: string | null,
+    modelName: string | null,
+    credentialProfileId: string | null,
+  ): Promise<void> {
+    const spec = BUILTIN_RUNTIME_ADAPTER_SPECS[adapterType as RuntimeAdapterType];
+    if (!spec) throw new HttpError(400, `Unknown adapter_type ${JSON.stringify(adapterType)}`);
+    if (modelName && !providerId) {
+      throw new HttpError(400, "model_provider_id is required when model_name is set");
+    }
+    if (providerId) {
+      const provider = await this.pool.query<{ id: string; config_json: unknown }>(
+        `SELECT p.id, p.config_json
+           FROM model_provider_space_grants g
+           JOIN model_providers p ON p.id = g.provider_id
+          WHERE g.space_id = $1
+            AND g.provider_id = $2
+            AND g.enabled = true
+            AND p.enabled = true`,
+        [spaceId, providerId],
+      );
+      const row = provider.rows[0];
+      if (!row) {
+        throw new HttpError(400, "Model provider is not selectable in this space");
+      }
+      if (adapterType === "claude_code") {
+        const cfg = recordValue(row.config_json) ?? {};
+        const claudeUrl = cfg.claude_compatible_base_url;
+        if (typeof claudeUrl !== "string" || !claudeUrl.trim()) {
+          throw new HttpError(
+            400,
+            "Claude Code provider selection requires claude_compatible_base_url",
+          );
+        }
+      }
+      if (adapterType === "codex_cli") {
+        const cfg = recordValue(row.config_json) ?? {};
+        const openAiUrl = cfg.openai_compatible_base_url;
+        if (typeof openAiUrl !== "string" || !openAiUrl.trim()) {
+          throw new HttpError(
+            400,
+            "Codex CLI provider selection requires openai_compatible_base_url",
+          );
+        }
+      }
+    }
+    if (credentialProfileId) {
+      await this.validateCredentialProfileSelection(spaceId, adapterType, credentialProfileId);
+    }
+  }
+
+  private async validateCredentialProfileSelection(
+    spaceId: string,
+    adapterType: string,
+    credentialProfileId: string,
+  ): Promise<void> {
+    if (!isCliRuntimeTool(adapterType)) {
+      throw new HttpError(400, "credential_profile_id is valid only for CLI runtimes");
+    }
+    const result = await this.pool.query<{ id: string }>(
+      `SELECT p.id
+         FROM cli_credential_space_grants g
+         JOIN cli_credential_profiles p ON p.id = g.profile_id
+        WHERE g.space_id = $1
+          AND g.enabled = true
+          AND p.id = $2
+          AND p.runtime = $3
+        LIMIT 1`,
+      [spaceId, credentialProfileId, adapterType],
+    );
+    if (!result.rows[0]) {
+      throw new HttpError(400, "CLI credential profile is not selectable for this runtime in this space");
+    }
   }
 
   private async insertVersion(
@@ -948,11 +1384,53 @@ export class PgAgentRepository {
       `SELECT ${AGENT_COLUMNS}
          FROM agents a
          LEFT JOIN agent_versions av ON av.id = a.current_version_id
-         LEFT JOIN model_providers mp ON mp.id = av.model_provider_id
+${DEFAULT_RUNTIME_PROFILE_JOIN}
+         LEFT JOIN model_providers mp ON mp.id = COALESCE(arp.model_provider_id, av.model_provider_id)
         WHERE a.space_id = $1 AND a.id = $2
         LIMIT 1`,
       [spaceId, agentId],
     );
     return result.rows[0] ? agentOut(result.rows[0]) : null;
   }
+}
+
+function runtimeProfileOut(row: AgentRuntimeProfileRecord): AgentRuntimeProfileOut {
+  const hasModel =
+    row.model_provider_id !== null ||
+    row.provider_name !== null ||
+    row.provider_type !== null ||
+    row.model_name !== null;
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    agent_id: row.agent_id,
+    name: row.name,
+    adapter_type: row.adapter_type,
+    model: hasModel
+      ? {
+          provider_id: row.model_provider_id,
+          provider_name: row.provider_name ?? null,
+          provider_type: row.provider_type ?? null,
+          model: row.model_name,
+        }
+      : null,
+    credential_profile_id: row.credential_profile_id,
+    runtime_config_json: recordValue(row.runtime_config_json) ?? {},
+    runtime_policy_json: recordValue(row.runtime_policy_json) ?? {},
+    enabled: row.enabled,
+    is_default: row.is_default,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function normalizedRuntimeConfig(
+  input: Record<string, unknown>,
+  adapterType: string,
+  credentialProfileId: string | null,
+): Record<string, unknown> {
+  const config: Record<string, unknown> = { ...input, adapter_type: adapterType };
+  if (credentialProfileId) config.credential_profile_id = credentialProfileId;
+  else delete config.credential_profile_id;
+  return config;
 }

@@ -148,9 +148,13 @@ describe("memory + sessions contracts", () => {
       session_id: "session-1",
       version: 1,
       summary_text: "Session with one message.",
+      source_message_count: 1,
+      source_first_message_id: "message-1",
+      source_last_message_id: "message-1",
       condenser_version: "pattern.v1",
     });
     expect(parsed.version).toBe(1);
+    expect(parsed.source_last_message_id).toBe("message-1");
   });
 
   it("parses session-summary lookup request and result bodies", () => {
@@ -167,6 +171,9 @@ describe("memory + sessions contracts", () => {
           session_id: "session-1",
           version: 1,
           summary_text: "Session summary.",
+          source_message_count: 0,
+          source_first_message_id: null,
+          source_last_message_id: null,
           condenser_version: "pattern.v1",
         },
       }).summary?.id,

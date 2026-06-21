@@ -5,6 +5,7 @@ import {
   type MemoryRow,
 } from "../memory/repository";
 import type { ServerConfig } from "../../config";
+import { registerCapabilityProposalAppliers } from "../capabilities/proposalApplier";
 import { registerKnowledgeProposalAppliers } from "../knowledge/proposalApplier";
 import { registerTaskProposalAppliers } from "../tasks/proposalApplier";
 import { registerWorkspaceProposalAppliers } from "../workspaces";
@@ -86,6 +87,7 @@ export function createDefaultProposalApplierRegistry(
     registry.register(proposalType, applyMemoryProposal);
   }
   registry.register("policy_change", applyPolicyChangeProposal);
+  registerCapabilityProposalAppliers(registry);
   registerKnowledgeProposalAppliers(registry);
   registerTaskProposalAppliers(registry);
   registerWorkspaceProposalAppliers(registry);

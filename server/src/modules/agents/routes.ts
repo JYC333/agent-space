@@ -1,11 +1,15 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { RunJobResult } from "@agent-space/protocol" with { "resolution-mode": "import" };
+import type {
+  MessageOut,
+  RunJobResult,
+} from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { ModuleContext } from "../../gateway/routeRegistry";
 import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
 import { introspectIdentity } from "../auth/identity";
 import { loadProtocol } from "../providers/protocolRuntime";
 import { PgSessionRepository } from "../sessions/repository";
+import { enqueueSessionCondense } from "../sessions/condenseJob";
 import {
   PgRunRepository,
   RunCreateValidationError,
@@ -31,8 +35,11 @@ import {
   ContextPrepareService,
 } from "../context";
 import {
+  buildChatConversationWindow,
   buildChatContext,
   composeChatPrompt,
+  conversationWindowToMessages,
+  renderConversationWindow,
   renderContextPreamble,
 } from "./chatContextBuilder";
 import {
@@ -42,6 +49,7 @@ import {
   jsonBody,
   nullableBodyString,
   optionalArrayBody,
+  optionalBooleanBody,
   optionalRecordBody,
   params,
   recordValue,
@@ -54,11 +62,28 @@ const MAX_MESSAGE_CHARS = 8000;
 
 interface AgentChatServices {
   agents: Pick<PgAgentChatRepository, "getAgentForChat">;
-  sessions: Pick<PgSessionRepository, "getSession" | "createSession" | "addMessage">;
+  sessions: Pick<
+    PgSessionRepository,
+    | "getSession"
+    | "createSession"
+    | "addMessage"
+    | "listRecentMessagesForContext"
+    | "getLatestSummaryForContext"
+  >;
   runs: Pick<PgRunRepository, "getChatRunResult" | "createQueuedRun">;
   orchestration: Pick<RunOrchestrationService, "executeRun">;
   context: Pick<ChatContextCandidateCollector, "fetchCandidates">;
   snapshots: Pick<PgContextSnapshotRepository, "persistChatSnapshot">;
+  // Enqueues the off-request background LLM session condense (pattern.v1 fallback).
+  condense: { enqueue: (input: SessionCondenseEnqueueInput) => Promise<void> };
+}
+
+interface SessionCondenseEnqueueInput {
+  space_id: string;
+  user_id: string;
+  session_id: string;
+  agent_id?: string | null;
+  agent_version_id?: string | null;
 }
 
 interface PreparedChatRun {
@@ -328,6 +353,81 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
+  app.get("/api/v1/agents/:agentId/runtime-profiles", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const profiles = await agentRepository().listRuntimeProfiles(
+        identity.spaceId,
+        params(request).agentId ?? "",
+      );
+      return reply.send(profiles);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/agents/:agentId/runtime-profiles", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const body = jsonBody(request);
+      const profile = await agentRepository().createRuntimeProfile(
+        identity.spaceId,
+        params(request).agentId ?? "",
+        {
+          name: requiredBodyString(body, "name"),
+          adapterType: requiredBodyString(body, "adapter_type"),
+          modelProviderId: nullableBodyString(body, "model_provider_id"),
+          modelName: nullableBodyString(body, "model_name"),
+          credentialProfileId: nullableBodyString(body, "credential_profile_id"),
+          runtimeConfigJson: optionalRecordBody(body, "runtime_config_json"),
+          runtimePolicyJson: optionalRecordBody(body, "runtime_policy_json"),
+          enabled: optionalBooleanBody(body, "enabled"),
+          isDefault: optionalBooleanBody(body, "is_default"),
+        },
+      );
+      return reply.code(201).send(profile);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.patch("/api/v1/agents/:agentId/runtime-profiles/:profileId", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const body = jsonBody(request);
+      const profile = await agentRepository().updateRuntimeProfile(
+        identity.spaceId,
+        params(request).agentId ?? "",
+        params(request).profileId ?? "",
+        {
+          name: Object.hasOwn(body, "name") ? requiredBodyString(body, "name") : undefined,
+          adapterType: Object.hasOwn(body, "adapter_type")
+            ? requiredBodyString(body, "adapter_type")
+            : undefined,
+          modelProviderId: Object.hasOwn(body, "model_provider_id")
+            ? nullableBodyString(body, "model_provider_id")
+            : undefined,
+          modelName: Object.hasOwn(body, "model_name")
+            ? nullableBodyString(body, "model_name")
+            : undefined,
+          credentialProfileId: Object.hasOwn(body, "credential_profile_id")
+            ? nullableBodyString(body, "credential_profile_id")
+            : undefined,
+          runtimeConfigJson: optionalRecordBody(body, "runtime_config_json"),
+          runtimePolicyJson: optionalRecordBody(body, "runtime_policy_json"),
+          enabled: optionalBooleanBody(body, "enabled"),
+          isDefault: optionalBooleanBody(body, "is_default"),
+        },
+      );
+      return reply.send(profile);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
   app.get("/api/v1/agents/:agentId/current-version", async (request, reply) => {
     const identity = await resolveIdentity(context, request, reply);
     if (!identity) return reply;
@@ -411,8 +511,10 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         instruction: stringValue(body.instruction),
         scheduled_at: stringValue(body.scheduled_at),
         parent_run_id: stringValue(body.parent_run_id),
+        runtime_profile_id: stringValue(body.runtime_profile_id),
         adapter_type: stringValue(body.adapter_type),
         capability_id: stringValue(body.capability_id),
+        capabilities_json: optionalArrayBody(body, "capabilities_json"),
         model_provider_id: stringValue(body.model_provider_id),
         model: stringValue(body.model),
       });
@@ -481,6 +583,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         userId: identity.userId,
         sessionId: session.id,
         message: rawMessage,
+        currentMessage: userMessage,
       });
 
       const result = await services.orchestration.executeRun({
@@ -516,6 +619,25 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       );
       if (!assistantMessage) {
         return reply.code(404).send({ detail: "session not found in this space" });
+      }
+      // Best-effort: enqueue the background session condense now that this turn
+      // is durable, so the next turn's conversation window can use the summary.
+      // It runs the LLM condenser off the request path (pattern.v1 fallback);
+      // SessionSummary is regenerable derived context, so an enqueue failure must
+      // never fail the chat turn the user already got a reply for.
+      try {
+        await services.condense.enqueue({
+          space_id: identity.spaceId,
+          user_id: identity.userId,
+          session_id: session.id,
+          agent_id: agent.id,
+          agent_version_id: agent.current_version_id,
+        });
+      } catch (condenseError) {
+        request.log?.warn?.(
+          { err: condenseError, session_id: session.id },
+          "session condense enqueue failed (non-fatal)",
+        );
       }
       return reply.send(
         protocol.ChatTurnResultSchema.parse({
@@ -553,19 +675,38 @@ async function prepareChatRun(
     userId: string;
     sessionId: string;
     message: string;
+    currentMessage: MessageOut;
   },
 ): Promise<PreparedChatRun> {
-  const candidates = await services.context.fetchCandidates({
-    agent_id: input.agentId,
-    space_id: input.spaceId,
-    user_id: input.userId,
-    session_id: input.sessionId,
-    message: input.message,
+  const [candidates, recentMessages, sessionSummary] = await Promise.all([
+    services.context.fetchCandidates({
+      agent_id: input.agentId,
+      space_id: input.spaceId,
+      user_id: input.userId,
+      session_id: input.sessionId,
+      message: input.message,
+    }),
+    services.sessions.listRecentMessagesForContext(
+      input.spaceId,
+      input.userId,
+      input.sessionId,
+      80,
+    ),
+    services.sessions.getLatestSummaryForContext(input.spaceId, input.sessionId),
+  ]);
+  if (!recentMessages) {
+    throw new ChatContextError("session not found in this space", 404);
+  }
+  const conversationWindow = buildChatConversationWindow({
+    messages: recentMessages,
+    currentMessage: input.currentMessage,
+    summary: sessionSummary,
   });
   const bundle = buildChatContext(candidates);
+  const contextPreamble = renderContextPreamble(bundle.items);
   const composedPrompt = composeChatPrompt(
-    renderContextPreamble(bundle.items),
-    input.message,
+    contextPreamble,
+    renderConversationWindow(conversationWindow),
   );
 
   const created = await services.runs.createQueuedRun({
@@ -577,13 +718,18 @@ async function prepareChatRun(
     trigger_origin: "manual",
     session_id: input.sessionId,
     prompt: composedPrompt,
+    model_override_json: {
+      messages: conversationWindowToMessages(conversationWindow),
+      chat_context_preamble: contextPreamble || null,
+      conversation_window_version: conversationWindow.version,
+    },
   });
 
   if (created.context_snapshot_id) {
     await services.snapshots.persistChatSnapshot({
       contextSnapshotId: created.context_snapshot_id,
       spaceId: input.spaceId,
-      tokenEstimate: bundle.token_count,
+      tokenEstimate: bundle.token_count + conversationWindow.token_count,
       // Mirrors the ContextRequest persisted by the legacy prepare-run path
       // (request defaults, not policy-resolved).
       requestJson: {
@@ -594,10 +740,25 @@ async function prepareChatRun(
         workspace_id: null,
         project_id: null,
         run_id: created.id,
+        user_message_id: input.currentMessage.id,
         user_message: input.message,
         manual_context: [],
         max_tokens: 4000,
         max_items: 20,
+        conversation_window: conversationWindow.trace,
+      },
+      retrievalTraceJson: {
+        chat_context: bundle.retrieval_trace,
+        conversation_window: conversationWindow.trace,
+      },
+      tokenBudgetJson: {
+        chat_context: {
+          token_count: bundle.token_count,
+          max_tokens: candidates.max_tokens,
+          max_items: candidates.max_items,
+          truncated: bundle.truncated,
+        },
+        conversation_window: conversationWindow.trace,
       },
       items: bundle.items,
     });
@@ -617,6 +778,9 @@ function agentChatServices(context: ModuleContext): AgentChatServices {
     runs: runRepository,
     context: ChatContextCandidateCollector.fromConfig(context.config),
     snapshots: PgContextSnapshotRepository.fromConfig(context.config),
+    condense: {
+      enqueue: (input) => enqueueSessionCondense(context.config, input),
+    },
     orchestration: new RunOrchestrationService(context.config, runRepository, {
       materializer,
       contextPreparer,

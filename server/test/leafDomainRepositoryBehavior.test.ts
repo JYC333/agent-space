@@ -128,6 +128,29 @@ function proposalRow(params: readonly unknown[]) {
   };
 }
 
+function noteRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "note-1",
+    space_id: "space-1",
+    title: "Project note",
+    content_json: {},
+    content_format: "plain",
+    content_schema_version: 1,
+    plain_text: "Project note body",
+    excerpt: "Project note body",
+    status: "active",
+    primary_project_id: null,
+    collection_id: "collection-1",
+    created_from_activity_id: null,
+    created_by_user_id: "user-1",
+    created_at: "2026-06-16T00:00:00.000Z",
+    updated_at: "2026-06-16T00:00:00.000Z",
+    archived_at: null,
+    deleted_at: null,
+    ...overrides,
+  };
+}
+
 describe("Leaf domain repository behavior", () => {
   it("captures raw input as an activity record", async () => {
     const db = new FakeDb((sql) => {
@@ -221,5 +244,36 @@ describe("Leaf domain repository behavior", () => {
 
     expect(proposal).toMatchObject({ proposal_type: "knowledge_create", status: "pending" });
     expect(proposal.provenance_entries).toBeNull();
+  });
+
+  it("filters notes by collection in both count and row queries", async () => {
+    const seenSql: string[] = [];
+    const db = new FakeDb((sql, params) => {
+      seenSql.push(sql);
+      if (sql.includes("count(DISTINCT n.id)")) {
+        expect(sql).toContain("LEFT JOIN note_collection_items nci_filter");
+        expect(sql).toContain("nci_filter.collection_id = $2");
+        expect(params).toEqual(["space-1", "collection-1"]);
+        return [{ total: "1" }];
+      }
+      if (sql.includes("FROM notes n")) {
+        expect(sql).toContain("LEFT JOIN note_collection_items nci_filter");
+        expect(sql).toContain("nci_filter.collection_id = $2");
+        return [noteRow()];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const out = await new PgKnowledgeRepository(db).listNotes(identity, {
+      status: null,
+      projectId: null,
+      collectionId: "collection-1",
+      q: null,
+      limit: 50,
+      offset: 0,
+    });
+
+    expect(out).toMatchObject({ total: 1 });
+    expect(seenSql).toHaveLength(2);
   });
 });

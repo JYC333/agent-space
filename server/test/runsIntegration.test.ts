@@ -56,7 +56,7 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    "TRUNCATE actors, agents, agent_versions, context_snapshots, runs, run_steps, run_events, run_execution_locks, run_evaluations, run_finalizations, jobs, job_events, artifacts, tasks, task_runs, task_evaluations CASCADE",
+    "TRUNCATE actors, agents, agent_versions, agent_runtime_profiles, context_snapshots, runs, run_steps, run_events, run_execution_locks, run_evaluations, run_finalizations, jobs, job_events, artifacts, tasks, task_runs, task_evaluations CASCADE",
   );
 });
 
@@ -98,6 +98,45 @@ async function seedAgent(
     ],
   );
   return { agentId, versionId };
+}
+
+async function seedRuntimeProfile(
+  agentId: string,
+  overrides: Partial<{
+    id: string;
+    space_id: string;
+    name: string;
+    adapter_type: string;
+    model_provider_id: string | null;
+    model_name: string | null;
+    runtime_config_json: Record<string, unknown>;
+    is_default: boolean;
+  }> = {},
+): Promise<string> {
+  const id = overrides.id ?? randomUUID();
+  const adapterType = overrides.adapter_type ?? "model_api";
+  const now = new Date().toISOString();
+  await pool!.query(
+    `INSERT INTO agent_runtime_profiles (
+       id, space_id, agent_id, name, adapter_type, model_provider_id,
+       model_name, runtime_config_json, runtime_policy_json, enabled,
+       is_default, created_at, updated_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,true,$10,$11,$11)`,
+    [
+      id,
+      overrides.space_id ?? "space-1",
+      agentId,
+      overrides.name ?? "Default",
+      adapterType,
+      overrides.model_provider_id ?? null,
+      overrides.model_name ?? null,
+      JSON.stringify(overrides.runtime_config_json ?? { adapter_type: adapterType }),
+      JSON.stringify({ default_adapter_type: adapterType }),
+      overrides.is_default ?? true,
+      now,
+    ],
+  );
+  return id;
 }
 
 async function seedRun(
@@ -248,6 +287,64 @@ describe("runs repositories against real PostgreSQL", () => {
     expect(run.adapter_type).toBe("claude_code");
     expect(run.workspace_id).toBeNull();
     expect(run.required_sandbox_level).toBe("ephemeral");
+  });
+
+  it("uses a selected agent runtime profile and snapshots its runtime config", async (ctx) => {
+    if (!available) return ctx.skip();
+    const repo = new PgRunRepository(pool!);
+    const { agentId } = await seedAgent({
+      runtime_config_json: { adapter_type: "model_api" },
+    });
+    await seedRuntimeProfile(agentId, {
+      name: "Default API",
+      adapter_type: "model_api",
+      is_default: true,
+    });
+    const profileId = await seedRuntimeProfile(agentId, {
+      name: "CLI review",
+      adapter_type: "codex_cli",
+      runtime_config_json: {
+        adapter_type: "codex_cli",
+        runtime_tool_version: "1.2.3",
+      },
+      is_default: false,
+    });
+
+    const run = await repo.createQueuedRun({
+      agent_id: agentId,
+      space_id: "space-1",
+      user_id: "user-1",
+      mode: "live",
+      run_type: "agent",
+      trigger_origin: "manual",
+      runtime_profile_id: profileId,
+      prompt: "review",
+    });
+
+    expect(run.runtime_profile_id).toBe(profileId);
+    expect(run.adapter_type).toBe("codex_cli");
+    expect(run.required_sandbox_level).toBe("ephemeral");
+    expect(run.runtime_profile_snapshot_json).toMatchObject({
+      id: profileId,
+      name: "CLI review",
+      adapter_type: "codex_cli",
+      runtime_config_json: {
+        adapter_type: "codex_cli",
+        runtime_tool_version: "1.2.3",
+      },
+    });
+
+    await pool!.query(
+      `UPDATE agent_runtime_profiles
+          SET runtime_config_json = '{"adapter_type":"model_api"}'::jsonb
+        WHERE id = $1`,
+      [profileId],
+    );
+    const loaded = await repo.getRun("space-1", run.id);
+    expect(loaded?.runtime_config_json).toMatchObject({
+      adapter_type: "codex_cli",
+      runtime_tool_version: "1.2.3",
+    });
   });
 
   it("appends run events with a DB-computed monotonic event_index", async (ctx) => {

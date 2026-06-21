@@ -165,6 +165,28 @@ CREATE TABLE public.agent_versions (
 
 
 --
+-- Name: agent_runtime_profiles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.agent_runtime_profiles (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    agent_id character varying(36) NOT NULL,
+    name character varying(128) NOT NULL,
+    adapter_type character varying(64) NOT NULL,
+    model_provider_id character varying(36),
+    model_name character varying(256),
+    credential_profile_id character varying(36),
+    runtime_config_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    runtime_policy_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    is_default boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
+
+--
 -- Name: agents; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -339,6 +361,27 @@ CREATE TABLE public.boards (
 
 
 --
+-- Name: capability_enablements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.capability_enablements (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    project_id character varying(36),
+    agent_id character varying(36),
+    user_id character varying(36),
+    capability_key character varying(128) NOT NULL,
+    capability_version_id character varying(36),
+    enabled boolean NOT NULL,
+    config_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_capability_enablements_config_object CHECK ((jsonb_typeof(config_json) = 'object'::text)),
+    CONSTRAINT ck_capability_enablements_single_scope CHECK (((((project_id IS NOT NULL))::integer + ((agent_id IS NOT NULL))::integer + ((user_id IS NOT NULL))::integer) <= 1))
+);
+
+
+--
 -- Name: capability_overlays; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -355,6 +398,26 @@ CREATE TABLE public.capability_overlays (
     metadata_json jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: capability_runtime_bindings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.capability_runtime_bindings (
+    id character varying(36) NOT NULL,
+    space_id character varying(36),
+    capability_key character varying(128) NOT NULL,
+    capability_version_id character varying(36),
+    runtime_adapter_type character varying(64) NOT NULL,
+    render_mode character varying(32) NOT NULL,
+    binding_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_capability_runtime_bindings_binding_object CHECK ((jsonb_typeof(binding_json) = 'object'::text)),
+    CONSTRAINT ck_capability_runtime_bindings_render_mode CHECK (((render_mode)::text = ANY ((ARRAY['render_skill'::character varying, 'inline_prompt'::character varying, 'native_executor'::character varying, 'mcp_tool'::character varying])::text[])))
 );
 
 
@@ -1522,6 +1585,25 @@ CREATE TABLE public.policy_decision_records (
 
 
 --
+-- Name: project_workflow_profiles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.project_workflow_profiles (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    project_id character varying(36) NOT NULL,
+    workflow_template_id character varying(128) NOT NULL,
+    name character varying(256) NOT NULL,
+    enabled boolean NOT NULL,
+    config_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_by_user_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_project_workflow_profiles_config_object CHECK ((jsonb_typeof(config_json) = 'object'::text))
+);
+
+
+--
 -- Name: project_workspaces; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1807,6 +1889,7 @@ CREATE TABLE public.runs (
     space_id character varying(36) NOT NULL,
     agent_id character varying(36) NOT NULL,
     agent_version_id character varying(36) NOT NULL,
+    runtime_profile_id character varying(36),
     context_snapshot_id character varying(36),
     workspace_id character varying(36),
     session_id character varying(36),
@@ -1833,8 +1916,10 @@ CREATE TABLE public.runs (
     task_id character varying(36),
     adapter_type character varying(64),
     capability_id character varying(128),
+    capabilities_json jsonb DEFAULT '[]'::jsonb NOT NULL,
     model_selection_mode character varying(32) DEFAULT 'cli_default'::character varying NOT NULL,
     model_override_json jsonb,
+    runtime_profile_snapshot_json jsonb,
     permission_snapshot_json jsonb,
     required_sandbox_level character varying(32) DEFAULT 'none'::character varying NOT NULL,
     sandbox_path text,
@@ -1938,6 +2023,78 @@ CREATE TABLE public.sessions (
     metadata_json jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: skill_packages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.skill_packages (
+    id character varying(36) NOT NULL,
+    space_id character varying(36),
+    source_id character varying(36) NOT NULL,
+    package_name character varying(256) NOT NULL,
+    version character varying(64),
+    license character varying(128),
+    raw_storage_ref text,
+    manifest_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    normalized_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    risk_level character varying(32) NOT NULL,
+    status character varying(32) NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_skill_packages_manifest_object CHECK ((jsonb_typeof(manifest_json) = 'object'::text)),
+    CONSTRAINT ck_skill_packages_normalized_object CHECK ((jsonb_typeof(normalized_json) = 'object'::text)),
+    CONSTRAINT ck_skill_packages_risk_level CHECK (((risk_level)::text = ANY ((ARRAY['low'::character varying, 'medium'::character varying, 'high'::character varying, 'critical'::character varying])::text[]))),
+    CONSTRAINT ck_skill_packages_status CHECK (((status)::text = ANY ((ARRAY['imported'::character varying, 'reviewed'::character varying, 'rejected'::character varying, 'converted'::character varying, 'archived'::character varying, 'superseded'::character varying])::text[])))
+);
+
+
+--
+-- Name: skill_package_files; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.skill_package_files (
+    id character varying(36) NOT NULL,
+    skill_package_id character varying(36) NOT NULL,
+    path text NOT NULL,
+    kind character varying(64) NOT NULL,
+    content_hash character varying(128),
+    content_type character varying(256),
+    byte_length integer,
+    storage_ref text,
+    included boolean DEFAULT true NOT NULL,
+    executable boolean DEFAULT false NOT NULL,
+    risk_flags_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_skill_package_files_byte_length CHECK (((byte_length IS NULL) OR (byte_length >= 0))),
+    CONSTRAINT ck_skill_package_files_path_nonempty CHECK ((length(path) > 0)),
+    CONSTRAINT ck_skill_package_files_risk_flags_object CHECK ((jsonb_typeof(risk_flags_json) = 'object'::text))
+);
+
+
+--
+-- Name: skill_sources; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.skill_sources (
+    id character varying(36) NOT NULL,
+    space_id character varying(36),
+    source_type character varying(32) NOT NULL,
+    url text,
+    repo character varying(512),
+    path text,
+    ref character varying(256),
+    commit_sha character varying(128),
+    content_hash character varying(128) NOT NULL,
+    fetched_at timestamp with time zone NOT NULL,
+    created_by_user_id character varying(36),
+    metadata_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_skill_sources_content_hash_nonempty CHECK ((length((content_hash)::text) > 0)),
+    CONSTRAINT ck_skill_sources_metadata_object CHECK ((jsonb_typeof(metadata_json) = 'object'::text)),
+    CONSTRAINT ck_skill_sources_source_type CHECK (((source_type)::text = ANY ((ARRAY['github'::character varying, 'registry'::character varying, 'local_workspace'::character varying, 'upload'::character varying, 'builtin'::character varying])::text[])))
 );
 
 
@@ -2503,6 +2660,22 @@ ALTER TABLE ONLY public.agent_versions
 
 
 --
+-- Name: agent_runtime_profiles agent_runtime_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_runtime_profiles
+    ADD CONSTRAINT agent_runtime_profiles_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: agent_runtime_profiles uq_agent_runtime_profiles_agent_name; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_runtime_profiles
+    ADD CONSTRAINT uq_agent_runtime_profiles_agent_name UNIQUE (agent_id, name);
+
+
+--
 -- Name: agents agents_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2567,11 +2740,27 @@ ALTER TABLE ONLY public.boards
 
 
 --
+-- Name: capability_enablements capability_enablements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.capability_enablements
+    ADD CONSTRAINT capability_enablements_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: capability_overlays capability_overlays_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.capability_overlays
     ADD CONSTRAINT capability_overlays_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: capability_runtime_bindings capability_runtime_bindings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.capability_runtime_bindings
+    ADD CONSTRAINT capability_runtime_bindings_pkey PRIMARY KEY (id);
 
 
 --
@@ -2967,6 +3156,14 @@ ALTER TABLE ONLY public.policy_decision_records
 
 
 --
+-- Name: project_workflow_profiles project_workflow_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_workflow_profiles
+    ADD CONSTRAINT project_workflow_profiles_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: project_workspaces project_workspaces_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3092,6 +3289,30 @@ ALTER TABLE ONLY public.session_summaries
 
 ALTER TABLE ONLY public.sessions
     ADD CONSTRAINT sessions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: skill_packages skill_packages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.skill_packages
+    ADD CONSTRAINT skill_packages_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: skill_package_files skill_package_files_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.skill_package_files
+    ADD CONSTRAINT skill_package_files_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: skill_sources skill_sources_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.skill_sources
+    ADD CONSTRAINT skill_sources_pkey PRIMARY KEY (id);
 
 
 --
@@ -3758,6 +3979,34 @@ CREATE INDEX ix_agent_versions_space_id ON public.agent_versions USING btree (sp
 
 
 --
+-- Name: ix_agent_runtime_profiles_agent_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_agent_runtime_profiles_agent_id ON public.agent_runtime_profiles USING btree (agent_id);
+
+
+--
+-- Name: ix_agent_runtime_profiles_credential_profile_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_agent_runtime_profiles_credential_profile_id ON public.agent_runtime_profiles USING btree (credential_profile_id);
+
+
+--
+-- Name: ix_agent_runtime_profiles_model_provider_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_agent_runtime_profiles_model_provider_id ON public.agent_runtime_profiles USING btree (model_provider_id);
+
+
+--
+-- Name: ix_agent_runtime_profiles_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_agent_runtime_profiles_space_id ON public.agent_runtime_profiles USING btree (space_id);
+
+
+--
 -- Name: ix_agents_agent_kind; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3996,6 +4245,41 @@ CREATE INDEX ix_boards_workspace_id ON public.boards USING btree (workspace_id);
 
 
 --
+-- Name: ix_capability_enablements_agent_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_capability_enablements_agent_id ON public.capability_enablements USING btree (agent_id);
+
+
+--
+-- Name: ix_capability_enablements_capability_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_capability_enablements_capability_key ON public.capability_enablements USING btree (capability_key);
+
+
+--
+-- Name: ix_capability_enablements_project_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_capability_enablements_project_id ON public.capability_enablements USING btree (project_id);
+
+
+--
+-- Name: ix_capability_enablements_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_capability_enablements_space_id ON public.capability_enablements USING btree (space_id);
+
+
+--
+-- Name: ix_capability_enablements_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_capability_enablements_user_id ON public.capability_enablements USING btree (user_id);
+
+
+--
 -- Name: ix_capability_overlays_base_version_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4049,6 +4333,62 @@ CREATE INDEX ix_capability_overlays_scope_type ON public.capability_overlays USI
 --
 
 CREATE INDEX ix_capability_overlays_status ON public.capability_overlays USING btree (status);
+
+
+--
+-- Name: ix_capability_runtime_bindings_capability_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_capability_runtime_bindings_capability_key ON public.capability_runtime_bindings USING btree (capability_key);
+
+
+--
+-- Name: ix_capability_runtime_bindings_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_capability_runtime_bindings_space_id ON public.capability_runtime_bindings USING btree (space_id);
+
+
+--
+-- Name: ix_capability_runtime_bindings_version_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_capability_runtime_bindings_version_id ON public.capability_runtime_bindings USING btree (capability_version_id);
+
+
+--
+-- Name: uq_capability_enablements_agent; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_capability_enablements_agent ON public.capability_enablements USING btree (space_id, agent_id, capability_key) WHERE ((agent_id IS NOT NULL) AND (project_id IS NULL) AND (user_id IS NULL));
+
+
+--
+-- Name: uq_capability_enablements_project; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_capability_enablements_project ON public.capability_enablements USING btree (space_id, project_id, capability_key) WHERE ((project_id IS NOT NULL) AND (agent_id IS NULL) AND (user_id IS NULL));
+
+
+--
+-- Name: uq_capability_enablements_space; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_capability_enablements_space ON public.capability_enablements USING btree (space_id, capability_key) WHERE ((project_id IS NULL) AND (agent_id IS NULL) AND (user_id IS NULL));
+
+
+--
+-- Name: uq_capability_enablements_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_capability_enablements_user ON public.capability_enablements USING btree (space_id, user_id, capability_key) WHERE ((user_id IS NOT NULL) AND (project_id IS NULL) AND (agent_id IS NULL));
+
+
+--
+-- Name: uq_capability_runtime_bindings_scope_runtime; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_capability_runtime_bindings_scope_runtime ON public.capability_runtime_bindings USING btree (COALESCE(space_id, '__global__'::character varying), capability_key, COALESCE(capability_version_id, '__none__'::character varying), runtime_adapter_type, render_mode);
 
 
 --
@@ -5886,6 +6226,27 @@ CREATE INDEX ix_policy_decision_records_space_id ON public.policy_decision_recor
 
 
 --
+-- Name: ix_project_workflow_profiles_space_project; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_project_workflow_profiles_space_project ON public.project_workflow_profiles USING btree (space_id, project_id);
+
+
+--
+-- Name: ix_project_workflow_profiles_template; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_project_workflow_profiles_template ON public.project_workflow_profiles USING btree (workflow_template_id);
+
+
+--
+-- Name: uq_project_workflow_profiles_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_project_workflow_profiles_name ON public.project_workflow_profiles USING btree (space_id, project_id, workflow_template_id, name);
+
+
+--
 -- Name: ix_project_workspaces_project_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6369,6 +6730,13 @@ CREATE INDEX ix_runs_project_id ON public.runs USING btree (project_id);
 
 
 --
+-- Name: ix_runs_runtime_profile_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_runs_runtime_profile_id ON public.runs USING btree (runtime_profile_id);
+
+
+--
 -- Name: ix_runs_run_type; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6555,6 +6923,76 @@ CREATE INDEX ix_sessions_user_id ON public.sessions USING btree (user_id);
 --
 
 CREATE INDEX ix_sessions_workspace_id ON public.sessions USING btree (workspace_id);
+
+
+--
+-- Name: ix_skill_packages_risk_level; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_skill_packages_risk_level ON public.skill_packages USING btree (risk_level);
+
+
+--
+-- Name: ix_skill_packages_source_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_skill_packages_source_id ON public.skill_packages USING btree (source_id);
+
+
+--
+-- Name: ix_skill_packages_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_skill_packages_space_id ON public.skill_packages USING btree (space_id);
+
+
+--
+-- Name: ix_skill_packages_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_skill_packages_status ON public.skill_packages USING btree (status);
+
+
+--
+-- Name: ix_skill_package_files_kind; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_skill_package_files_kind ON public.skill_package_files USING btree (kind);
+
+
+--
+-- Name: ix_skill_package_files_package_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_skill_package_files_package_id ON public.skill_package_files USING btree (skill_package_id);
+
+
+--
+-- Name: ux_skill_package_files_package_path; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ux_skill_package_files_package_path ON public.skill_package_files USING btree (skill_package_id, path);
+
+
+--
+-- Name: ix_skill_sources_content_hash; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_skill_sources_content_hash ON public.skill_sources USING btree (content_hash);
+
+
+--
+-- Name: ix_skill_sources_source_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_skill_sources_source_type ON public.skill_sources USING btree (source_type);
+
+
+--
+-- Name: ix_skill_sources_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_skill_sources_space_id ON public.skill_sources USING btree (space_id);
 
 
 --
@@ -7251,6 +7689,13 @@ CREATE UNIQUE INDEX uq_agents_system_assistant_per_space ON public.agents USING 
 
 
 --
+-- Name: uq_agent_runtime_profiles_default_per_agent; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_agent_runtime_profiles_default_per_agent ON public.agent_runtime_profiles USING btree (agent_id) WHERE (is_default = true);
+
+
+--
 -- Name: uq_intake_items_active_canonical_uri; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7405,6 +7850,38 @@ ALTER TABLE ONLY public.agent_versions
 
 ALTER TABLE ONLY public.agent_versions
     ADD CONSTRAINT agent_versions_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: agent_runtime_profiles agent_runtime_profiles_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_runtime_profiles
+    ADD CONSTRAINT agent_runtime_profiles_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_runtime_profiles agent_runtime_profiles_credential_profile_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_runtime_profiles
+    ADD CONSTRAINT agent_runtime_profiles_credential_profile_id_fkey FOREIGN KEY (credential_profile_id) REFERENCES public.cli_credential_profiles(id);
+
+
+--
+-- Name: agent_runtime_profiles agent_runtime_profiles_model_provider_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_runtime_profiles
+    ADD CONSTRAINT agent_runtime_profiles_model_provider_id_fkey FOREIGN KEY (model_provider_id) REFERENCES public.model_providers(id);
+
+
+--
+-- Name: agent_runtime_profiles agent_runtime_profiles_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_runtime_profiles
+    ADD CONSTRAINT agent_runtime_profiles_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
 
 
 --
@@ -7608,11 +8085,27 @@ ALTER TABLE ONLY public.boards
 
 
 --
+-- Name: capability_enablements capability_enablements_capability_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.capability_enablements
+    ADD CONSTRAINT capability_enablements_capability_version_id_fkey FOREIGN KEY (capability_version_id) REFERENCES public.capability_versions(id);
+
+
+--
 -- Name: capability_overlays capability_overlays_proposal_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.capability_overlays
     ADD CONSTRAINT capability_overlays_proposal_id_fkey FOREIGN KEY (proposal_id) REFERENCES public.proposals(id);
+
+
+--
+-- Name: capability_runtime_bindings capability_runtime_bindings_capability_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.capability_runtime_bindings
+    ADD CONSTRAINT capability_runtime_bindings_capability_version_id_fkey FOREIGN KEY (capability_version_id) REFERENCES public.capability_versions(id);
 
 
 --
@@ -9336,6 +9829,14 @@ ALTER TABLE ONLY public.runs
 
 
 --
+-- Name: runs runs_runtime_profile_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.runs
+    ADD CONSTRAINT runs_runtime_profile_id_fkey FOREIGN KEY (runtime_profile_id) REFERENCES public.agent_runtime_profiles(id);
+
+
+--
 -- Name: runs runs_parent_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9453,6 +9954,22 @@ ALTER TABLE ONLY public.sessions
 
 ALTER TABLE ONLY public.sessions
     ADD CONSTRAINT sessions_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES public.workspaces(id);
+
+
+--
+-- Name: skill_packages skill_packages_source_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.skill_packages
+    ADD CONSTRAINT skill_packages_source_id_fkey FOREIGN KEY (source_id) REFERENCES public.skill_sources(id);
+
+
+--
+-- Name: skill_package_files skill_package_files_skill_package_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.skill_package_files
+    ADD CONSTRAINT skill_package_files_skill_package_id_fkey FOREIGN KEY (skill_package_id) REFERENCES public.skill_packages(id) ON DELETE CASCADE;
 
 
 --

@@ -193,17 +193,21 @@ Items from the PilotDeck (P*) and Hermes (H*) review that are deferred, not
 rejected. Each maps to a capability section above. Rejected items are listed
 at the end.
 
-P3 status: the baseline TS context engine has been absorbed into current state
-(run prompt assembly, stable/dynamic split, token budgeting, graduated
-compaction, ContextSnapshot population, and ContextDigest cache). The remaining
-P3 backlog is only the conversation-window layer that is not yet productized.
+P3 status: fully absorbed into current state and no longer a roadmap item. This
+covers the TS context engine, the chat conversation-window baseline, managed-API
+`messages[]` normalization, and the session condenser — both the deterministic
+`pattern.v1` and the LLM `llm.v1` path (background `session_condense` job with
+scenario profiles, `pattern.v1` fallback). For the implementation see
+[MEMORY_CONTEXT_RUNTIME.md](MEMORY_CONTEXT_RUNTIME.md) and
+[SERVER_OWNERSHIP.md](SERVER_OWNERSHIP.md). The only related deferred item is
+tool-call message preservation in conversation windows, tracked under P6/P7
+(it depends on the tool scheduler).
 
 | Item | Description | Maps to |
 |---|---|---|
 | H3 | Provider privacy/compliance policy: data-collection deny, provider allow/deny, required parameter rules. Add as space-scoped policy/provider-routing rules, not global config. | Capability 3 (Policy and Governance) |
 | P2 | Per-session chat concurrency guard. Add only if real chat ordering issues appear during dogfooding. | Capability 1 (Dogfooding Stabilization) |
-| P3 residual | Conversation-window context: model-message projection from chat/session turns, explicit overflow recovery beyond current section truncation/drop, and any needed budget-trace persistence. Baseline prompt assembly, token budgeting, graduated compaction, ContextSnapshot population, and digest cache are no longer backlog items. | Capability 4 (Memory, Context, Intake) |
-| P6/P7 | Self-hosted TS agent loop (AgentSession/TurnRunner/AgentLoop), tool scheduler (sequential/concurrent with observability), MCP client integration. `RuntimeToolBinding` remains the authorization surface until then. | Capability 2 (Runtime and Adapter Safety) |
+| P6/P7 | Self-hosted TS agent loop (AgentSession/TurnRunner/AgentLoop), tool scheduler (sequential/concurrent with observability) including tool-call (`tool_use`/`tool_result`) message preservation in conversation windows, MCP client integration. `RuntimeToolBinding` remains the authorization surface until then. | Capability 2 (Runtime and Adapter Safety) |
 | P8 | Channel adapters: IM/email/channel ingestion with external-session mapping. Requires stable intake/evidence provenance and proposal boundaries first. | Capability 5 (Automation and Triggers) |
 | P9 | Always-On governance: trigger budgets and cooldowns. Future automation/policy vocabulary. | Capability 5 (Automation and Triggers) |
 

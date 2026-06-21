@@ -148,6 +148,52 @@ describe("runtime host internal route", () => {
     ]);
   });
 
+  it("forwards native messages to the provider when supplied", async () => {
+    const calls: string[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    __setProviderCommandStoreForTests(fakeStore(calls));
+    __setProviderHttpClientForTests({
+      async fetch(_url, init) {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "native output" } }],
+            model: "gpt-4o-mini",
+            usage: { prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-host/execute",
+      headers: { "x-agent-space-internal-token": "internal-token" },
+      payload: requestBody({
+        prompt: "fallback prompt",
+        messages: [
+          { role: "user", content: "Earlier question" },
+          { role: "assistant", content: "Earlier answer" },
+          { role: "user", content: "Continue" },
+        ],
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ success: true, output_text: "native output" });
+    expect(bodies[0]).toMatchObject({
+      messages: [
+        { role: "system", content: "Be direct." },
+        { role: "user", content: "Earlier question" },
+        { role: "assistant", content: "Earlier answer" },
+        { role: "user", content: "Continue" },
+      ],
+    });
+    expect(JSON.stringify(bodies[0])).not.toContain("fallback prompt");
+  });
+
   it("fails closed for tool execution until the tool scheduler is implemented", async () => {
     const calls: string[] = [];
     __setProviderCommandStoreForTests(fakeStore(calls));

@@ -28,6 +28,7 @@ export function runToOut(
     space_id: run.space_id,
     agent_id: run.agent_id,
     agent_version_id: run.agent_version_id,
+    runtime_profile_id: run.runtime_profile_id ?? null,
     context_snapshot_id: run.context_snapshot_id ?? null,
     workspace_id: run.workspace_id ?? null,
     session_id: run.session_id ?? null,
@@ -50,6 +51,7 @@ export function runToOut(
     usage_json: run.usage_json ?? null,
     adapter_type: run.adapter_type ?? null,
     capability_id: run.capability_id ?? null,
+    capabilities_json: Array.isArray(run.capabilities_json) ? run.capabilities_json : [],
     model_provider_id: run.model_provider_id ?? null,
     resolved_model: buildResolvedModel(run, provider),
     required_sandbox_level: run.required_sandbox_level,
@@ -251,6 +253,7 @@ function computeExpired(
 
 function normalizeSource(value: string | null): string {
   return value === "request" ||
+    value === "runtime_profile" ||
     value === "agent_default" ||
     value === "runtime_default" ||
     value === "space_default"

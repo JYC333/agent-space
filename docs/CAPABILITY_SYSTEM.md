@@ -101,6 +101,31 @@ Manifests define capability code and metadata; they are **not** the local trust/
 
 This is not a marketplace or remote install system.
 
+## Capability / Workflow / Open Skill Framework
+
+The product control plane for canonical capability definitions, capability
+packs, workflow templates, imported Open Skill packages, project workflow
+profiles, and runtime skill bindings is the `capabilities` server module.
+`catalog` remains the raw on-disk manifest reader.
+
+Key distinctions:
+
+| Concept | Meaning |
+|---|---|
+| Open Skill | External portable source package, usually `SKILL.md`; untrusted by default. |
+| NormalizedSkill | Internal intermediate representation produced from imported skill content. |
+| CapabilityDefinition | Agent-space canonical ability object and source of truth. |
+| CapabilityPack | Grouping of related capabilities, workflow templates, artifact types, docs/tests/examples. |
+| WorkflowTemplate | Reusable process/mode that composes capabilities. |
+| ProjectWorkflowProfile | Project-scoped configuration of a workflow template. |
+| Runtime Skill | Generated Claude/Codex/model_api adapter content; not source of truth. |
+| Product Plugin | Optional product feature package; separate from capabilities. |
+
+Open Skill import must not execute scripts, install dependencies, load
+third-party server code, write active memory, or auto-enable capabilities.
+Imported skills are normalized and risk-scanned before any conversion into
+agent-space capability candidates.
+
 ## Built-in capabilities
 
 | ID | Purpose |
@@ -113,7 +138,12 @@ Capability execution is not active today. `adapter_type="capability"` remains a
 planned runtime adapter type and is disabled by default. Current server routes expose
 capability manifest metadata for catalog and UI use.
 
+Runtime-specific Claude Code, Codex, and `model_api` skill files are generated
+render targets. Agent-space capability definitions and profiles remain the
+source of truth.
+
 ## Related code
 
 - `server/src/modules/catalog/`
+- `server/src/modules/capabilities/`
 - `server/src/modules/runtimeAdapters/specs.ts`

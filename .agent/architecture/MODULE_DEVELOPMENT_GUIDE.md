@@ -48,6 +48,11 @@ Support packages are documented in `MODULES.md`.
 
 Routes must live in module route files, not in `server.ts` or a shared API directory.
 
+For capability/workflow/open-skill work, keep the ownership split explicit:
+`catalog` reads raw on-disk manifests, `capabilities` owns the product control
+plane, `runtimeAdapters` owns runtime adapter type metadata, `runs` owns
+execution, and generated runtime skill files are adapter artifacts.
+
 ## Public Facades And Imports
 
 Prefer importing package facades:
@@ -101,6 +106,7 @@ Keep facades narrow so tests and peer modules do not couple to internal helpers.
 | Proposal apply behavior | Put mutation logic in the target module and register it with the server proposal applier registry. |
 | Runtime adapter | Register adapter/spec in `server/src/modules/runtimeAdapters`; adapters return `RuntimeAdapterResult` and use server runtime services. |
 | Model API runtime | Use `model_api` for no-tools provider-backed execution; it calls server providers and does not use CLI credentials, terminal, local-host, or sandbox capabilities. |
+| Capability/workflow/open-skill control plane | Add or change `server/src/modules/capabilities`; do not widen `catalog` into remote import, marketplace, or execution ownership. |
 
 ## Adding An Official Optional Module
 

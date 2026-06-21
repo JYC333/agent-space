@@ -877,6 +877,16 @@ export interface Message {
   created_at: string
 }
 
+export type CondenserPresetProfile = 'adaptive' | 'general' | 'coding' | 'project'
+
+export interface CondenserPresetPromptOut {
+  profile: CondenserPresetProfile
+  system: string
+  instructions: string
+  shared_system_rules: string
+  effective_system: string
+}
+
 /** One synchronous Personal Assistant chat turn result (`ChatTurnOut`). */
 export interface ChatTurnOut {
   session_id: string
@@ -989,7 +999,7 @@ export interface RunResolvedModel {
   provider_name: string | null
   provider_type: string | null
   model: string | null
-  source: 'request' | 'agent_default' | 'space_default' | 'none'
+  source: 'request' | 'runtime_profile' | 'agent_default' | 'runtime_default' | 'space_default' | 'none'
   used_by_adapter: boolean
   adapter_model_support: 'uses_model' | 'not_applicable' | 'unsupported' | 'unknown'
   disclosure_note?: string | null
@@ -1000,6 +1010,7 @@ export interface Run {
   space_id: string
   agent_id: string
   agent_version_id: string
+  runtime_profile_id?: string | null
   context_snapshot_id: string | null
   workspace_id: string | null
   session_id: string | null
@@ -1023,6 +1034,7 @@ export interface Run {
   usage_json: Record<string, unknown> | null
   adapter_type?: string | null
   capability_id?: string | null
+  capabilities_json?: string[]
   model_provider_id?: string | null
   resolved_model?: RunResolvedModel | null
   visibility?: ObjectVisibility
@@ -1103,10 +1115,12 @@ export interface Artifact {
   preview: boolean
   storage_ref: string | null
   storage_path: string | null
+  metadata_json?: Record<string, unknown> | null
   has_inline_content: boolean
   visibility?: ObjectVisibility
   owner_user_id?: string | null
   content?: string | null
+  project_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -1186,6 +1200,10 @@ export type ProposalAcceptOut = {
   proposal: Proposal
   result_type: 'knowledge_relation'
   result: { knowledge_relation: KnowledgeRelation }
+} | {
+  proposal: Proposal
+  result_type: 'capability_overlay'
+  result: Record<string, unknown>
 }
 
 export interface PersonalMemoryGrantSafeMemoryFilter {
@@ -1475,6 +1493,36 @@ export interface AgentVersionOut {
   archived_at: string | null
 }
 
+export interface AgentRuntimeProfileOut {
+  id: string
+  space_id: string
+  agent_id: string
+  name: string
+  adapter_type: string
+  model: AgentModelSummary | null
+  credential_profile_id: string | null
+  runtime_config_json: Record<string, unknown>
+  runtime_policy_json: Record<string, unknown>
+  enabled: boolean
+  is_default: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentRuntimeProfileCreateBody {
+  name: string
+  adapter_type: string
+  model_provider_id?: string | null
+  model_name?: string | null
+  credential_profile_id?: string | null
+  runtime_config_json?: Record<string, unknown> | null
+  runtime_policy_json?: Record<string, unknown> | null
+  enabled?: boolean
+  is_default?: boolean
+}
+
+export type AgentRuntimeProfileUpdateBody = Partial<AgentRuntimeProfileCreateBody>
+
 export interface AgentTemplateOut {
   id: string
   key: string
@@ -1557,6 +1605,10 @@ export interface CreateAgentFromTemplateBody {
   space_id?: string | null
   name?: string | null
   description?: string | null
+  default_model_provider_id?: string | null
+  default_model?: string | null
+  adapter_type?: string | null
+  runtime_config_json?: Record<string, unknown> | null
   model_config_json?: Record<string, unknown> | null
   schedule_config_json?: Record<string, unknown> | null
   system_prompt?: string | null
@@ -1575,7 +1627,17 @@ export interface AgentCreateBody {
   default_model_provider_id?: string | null
   default_model?: string | null
   adapter_type?: string | null
+  model_config_json?: Record<string, unknown> | null
   runtime_config_json?: Record<string, unknown> | null
+  context_policy_json?: Record<string, unknown> | null
+  memory_policy_json?: Record<string, unknown> | null
+  capabilities_json?: unknown[] | null
+  tool_permissions_json?: Record<string, unknown> | null
+  runtime_policy_json?: Record<string, unknown> | null
+  tool_policy_json?: Record<string, unknown> | null
+  output_policy_json?: Record<string, unknown> | null
+  schedule_config_json?: Record<string, unknown> | null
+  output_schema_json?: Record<string, unknown> | null
 }
 
 export interface AgentUpdateBody {
@@ -1595,9 +1657,17 @@ export interface RunCreateBody {
   trigger_origin?: string
   session_id?: string | null
   workspace_id?: string | null
+  project_id?: string | null
   prompt?: string | null
   instruction?: string | null
   scheduled_at?: string | null
+  parent_run_id?: string | null
+  runtime_profile_id?: string | null
+  adapter_type?: string | null
+  capability_id?: string | null
+  capabilities_json?: string[]
+  model_provider_id?: string | null
+  model?: string | null
 }
 
 export interface Workspace {
@@ -1652,6 +1722,179 @@ export interface Capability {
   created_at: string
   updated_at: string
 }
+
+export type CapabilitySourceKind = 'builtin' | 'imported_skill' | 'generated' | 'official'
+export type CapabilityStatus = 'draft' | 'proposed' | 'testing' | 'available' | 'enabled' | 'disabled' | 'archived'
+export type SkillRiskLevel = 'low' | 'medium' | 'high' | 'critical'
+export type SkillPackageStatus = 'imported' | 'reviewed' | 'rejected' | 'converted' | 'archived' | 'superseded'
+export type RuntimeRenderMode = 'render_skill' | 'inline_prompt' | 'native_executor' | 'mcp_tool'
+
+export interface CapabilityRuntimeBinding {
+  id: string
+  capability_id: string
+  runtime_adapter_type: string
+  render_mode: RuntimeRenderMode
+  binding_json: Record<string, unknown>
+  enabled: boolean
+}
+
+export interface CapabilityDefinition {
+  id: string
+  namespace: string
+  name: string
+  description: string
+  version: string
+  source_kind: CapabilitySourceKind
+  input_schema_json: Record<string, unknown>
+  output_artifact_types: string[]
+  permissions: Record<string, unknown>
+  supported_execution_modes: string[]
+  default_runtime_bindings: CapabilityRuntimeBinding[]
+  status: CapabilityStatus
+}
+
+export interface CapabilityPackDescriptor {
+  id: string
+  name: string
+  description: string
+  version: string
+  capability_ids: string[]
+  workflow_template_ids: string[]
+  artifact_types: string[]
+  source_kind: CapabilitySourceKind
+  status: CapabilityStatus
+}
+
+export interface WorkflowTemplate {
+  id: string
+  name: string
+  description: string
+  category: string
+  capability_ids: string[]
+  input_schema_json: Record<string, unknown>
+  default_config_json: Record<string, unknown>
+  output_artifact_types: string[]
+  proposal_policy: Record<string, unknown>
+  recommended_runtime_adapters: string[]
+}
+
+export interface ProjectWorkflowProfile {
+  id: string
+  space_id: string
+  project_id: string
+  workflow_template_id: string
+  name: string
+  enabled: boolean
+  config_json: Record<string, unknown>
+  created_by_user_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkflowRunDraftRequest {
+  agent_id?: string | null
+  runtime_profile_id?: string | null
+  prompt?: string | null
+  instruction?: string | null
+  workspace_id?: string | null
+  session_id?: string | null
+  adapter_type?: string | null
+  model_provider_id?: string | null
+  model?: string | null
+  config_json?: Record<string, unknown>
+}
+
+export interface WorkflowRunDraftResponse {
+  workflow_template: WorkflowTemplate
+  workflow_profile: ProjectWorkflowProfile | null
+  capability_ids: string[]
+  output_artifact_types: string[]
+  config_json: Record<string, unknown>
+  run_create_body: RunCreateBody & { agent_id: string | null }
+  warnings: string[]
+}
+
+export interface NormalizedSkill {
+  spec_kind?: string | null
+  spec_version?: string | null
+  skill_root?: string | null
+  package_hash?: string | null
+  diagnostics?: string[]
+  name: string
+  description: string
+  version: string
+  license: string | null
+  instructions_markdown: string
+  resources: Record<string, unknown>[]
+  requested_permissions: string[]
+  execution_profile: Record<string, unknown>
+  vendor_extensions: Record<string, unknown>
+  trust_analysis: Record<string, unknown>
+}
+
+export interface SkillSource {
+  id: string
+  source_type: 'github' | 'registry' | 'local_workspace' | 'upload' | 'builtin'
+  url: string | null
+  repo: string | null
+  path: string | null
+  ref: string | null
+  commit_sha: string | null
+  content_hash: string
+  fetched_at: string
+  metadata_json: Record<string, unknown>
+}
+
+export interface SkillPackageFilePreview {
+  path: string
+  kind: string
+  content_hash?: string | null
+  content_type?: string | null
+  byte_length?: number | null
+  included: boolean
+  executable: boolean
+  risk_flags_json: Record<string, unknown>
+}
+
+export interface SkillPackageFile extends SkillPackageFilePreview {
+  id: string
+  skill_package_id: string
+  storage_ref: string | null
+  created_at: string
+}
+
+export interface SkillPackage {
+  id: string
+  source_id: string
+  package_name: string
+  version: string | null
+  license: string | null
+  raw_storage_ref: string | null
+  manifest_json: Record<string, unknown>
+  normalized_json: Record<string, unknown>
+  risk_level: SkillRiskLevel
+  status: SkillPackageStatus
+  created_at: string
+  updated_at: string
+  source?: SkillSource
+  package_files?: SkillPackageFile[]
+}
+
+export interface SkillImportPreviewResponse {
+  source: Partial<Omit<SkillSource, 'id' | 'fetched_at'>>
+  normalized_skill: NormalizedSkill
+  package_root: string
+  package_hash: string
+  package_files: SkillPackageFilePreview[]
+  risk_level: SkillRiskLevel
+  requested_permissions: string[]
+  files_detected: string[]
+  warnings: string[]
+  persistable: boolean
+}
+
+export type SkillImportApprovalProposalResponse = Proposal
+export type SkillConvertToCapabilityResponse = Proposal
 
 export interface ContextPackage {
   user_memory: Memory[]

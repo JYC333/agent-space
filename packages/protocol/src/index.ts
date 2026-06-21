@@ -65,3 +65,8 @@ export * from "./memorySessions.js";
 
 // Official Optional Module (plugin) control-plane contracts
 export * from "./plugins.js";
+
+// Capability / workflow / Open Skill framework contracts
+export * from "./capabilities.js";
+export * from "./workflows.js";
+export * from "./skills.js";

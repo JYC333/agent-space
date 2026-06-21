@@ -107,15 +107,22 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       if (requestedVersion && requestedVersion !== version.id && requestedVersion !== version.version) {
         throw new HttpError(404, "Agent template version not found");
       }
-      const provider = await defaultProviderForSpace(context, identity.spaceId);
-      if (!provider) throw new HttpError(400, "No enabled default model provider is configured for this space");
       const modelConfig = {
         ...version.model_config_json,
         ...objectValue(body.model_config_json),
       };
-      const model = optionalString(modelConfig.model) ?? provider.default_model;
+      const provider = await defaultProviderForSpace(context, identity.spaceId);
+      const providerId = optionalString(body.default_model_provider_id) ?? provider?.id ?? null;
+      const model = optionalString(body.default_model) ??
+        optionalString(modelConfig.model) ??
+        provider?.default_model ??
+        null;
       const runtimePolicy = version.runtime_policy_json;
-      const adapterType = optionalString(runtimePolicy.default_adapter_type) ?? "model_api";
+      const runtimeConfig = optionalObject(body.runtime_config_json) ?? {};
+      const adapterType = optionalString(body.adapter_type) ??
+        optionalString(runtimeConfig.adapter_type) ??
+        optionalString(runtimePolicy.default_adapter_type) ??
+        "model_api";
       const agent = await PgAgentRepository.fromConfig(context.config).create({
         spaceId: identity.spaceId,
         userId: identity.userId,
@@ -125,11 +132,11 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
           : optionalString(body.description),
         visibility: "private",
         systemPrompt: optionalString(body.system_prompt) ?? version.system_prompt,
-        defaultModelProviderId: provider.id,
+        defaultModelProviderId: providerId,
         defaultModel: model,
         adapterType,
         modelConfigJson: modelConfig,
-        runtimeConfigJson: {},
+        runtimeConfigJson: runtimeConfig,
         contextPolicyJson: optionalObject(body.context_policy_json) ?? version.context_policy_json,
         memoryPolicyJson: optionalObject(body.memory_policy_json) ?? version.memory_policy_json,
         runtimePolicyJson: runtimePolicy,
@@ -137,6 +144,8 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         outputPolicyJson: optionalObject(body.output_policy_json) ?? version.output_policy_json,
         scheduleConfigJson: optionalObject(body.schedule_config_json) ?? version.schedule_defaults_json,
         outputSchemaJson: optionalObject(body.output_schema_json) ?? version.output_schema_json,
+        sourceTemplateId: template.id,
+        sourceTemplateVersionId: version.id,
       });
       return reply.code(201).send(agent);
     } catch (error) {

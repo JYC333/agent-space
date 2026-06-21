@@ -1,4 +1,5 @@
 import type {
+  CanonicalMessage,
   CanonicalUsage,
   RunAdapterResultEnvelope,
   RuntimeHostExecuteRequest,
@@ -87,13 +88,23 @@ function runtimeHostRequest(
 ): RuntimeHostExecuteRequest {
   const systemPrompt =
     input.system_prompt ?? input.run.system_prompt ?? input.run.instruction ?? null;
+  const override = recordOrEmpty(input.run.model_override_json);
+  const messages = canonicalMessages(override.messages);
+  const chatContextPreamble = typeof override.chat_context_preamble === "string"
+    ? override.chat_context_preamble
+    : null;
   return {
     run_id: input.run.id,
     space_id: input.run.space_id,
     model_provider_id: modelProviderId,
     model: input.model ?? null,
-    system_prompt: composeSystemContext(systemPrompt, input.context_text ?? null),
+    system_prompt: composeSystemContext(
+      systemPrompt,
+      input.context_text ?? null,
+      messages ? chatContextPreamble : null,
+    ),
     prompt: input.prompt ?? input.run.prompt ?? "",
+    ...(messages ? { messages } : {}),
     mode: input.run.mode,
     instruction: input.run.instruction,
     project_id: input.run.project_id,
@@ -108,12 +119,32 @@ function runtimeHostRequest(
 
 function composeSystemContext(
   systemPrompt: string | null | undefined,
-  contextText: string | null | undefined,
+  ...contextParts: Array<string | null | undefined>
 ): string {
-  return [systemPrompt, contextText]
+  return [systemPrompt, ...contextParts]
     .map((part) => typeof part === "string" ? part.trim() : "")
     .filter((part) => part.length > 0)
     .join("\n\n");
+}
+
+function canonicalMessages(value: unknown): CanonicalMessage[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const messages: CanonicalMessage[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const record = item as Record<string, unknown>;
+    if (typeof record.role !== "string" || record.role.trim().length === 0) {
+      return null;
+    }
+    if (record.content !== null && typeof record.content !== "string") {
+      return null;
+    }
+    messages.push({
+      role: record.role,
+      content: record.content ?? "",
+    });
+  }
+  return messages;
 }
 
 function envelopeFromRuntimeHost(

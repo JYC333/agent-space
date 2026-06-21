@@ -5,6 +5,7 @@ import { checkInternalToken } from "../../gateway/internalAuth";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
 import { introspectIdentity } from "../auth/identity";
 import { loadProtocol } from "../providers/protocolRuntime";
+import { listCondenserPresetPrompts } from "./condenser";
 import { PgSessionRepository } from "./repository";
 
 interface SessionServices {
@@ -78,6 +79,12 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       parsed.offset,
     );
     return reply.send(page);
+  });
+
+  app.get("/api/v1/sessions/condenser-preset-prompts", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    return reply.send(listCondenserPresetPrompts());
   });
 
   app.get("/api/v1/sessions/:sessionId", async (request, reply) => {

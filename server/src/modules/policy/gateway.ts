@@ -274,6 +274,12 @@ const PROPOSAL_TYPE_RISK: Record<string, RiskLevel> = {
   knowledge_archive: "medium",
   knowledge_relation_create: "medium",
   knowledge_relation_delete: "medium",
+  skill_import_approve: "medium",
+  capability_install: "high",
+  capability_update: "high",
+  capability_enable: "high",
+  capability_disable: "medium",
+  runtime_skill_binding_update: "high",
 };
 
 export const SUPPORTED_PROPOSAL_TYPES: ReadonlySet<string> = new Set(

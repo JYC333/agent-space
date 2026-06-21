@@ -22,13 +22,13 @@ Rules:
 | Runtime adapters | `RuntimeAdapterSpec` catalog, adapter-type semantics, execution-plane reads, runtime-tool binding reads, server runtime-host/tool integration | `one_shot_docker` and managed API tool execution |
 | Agents | Agent CRUD (`/agents*`), current-version/version list/read/restore, config updates as immutable `agent_versions`, default Assistant ensure/read, Assistant settings, agent-scoped run list/read subresources, catalog-backed agent template list/version reads, and create-from-template | Template catalog persistence remains catalog-file-backed; DB-backed template authoring is not implemented |
 | Runs | Run creation via agent subresources, top-level run list/detail/status/trace, activity/artifact/proposal child read surfaces, execute/stop commands, internal execute port, deterministic post-run evaluation/finalization, `agent_run` worker dispatch, run execution evidence writes, native context.prepare consumption, and server worktree/ephemeral sandbox preparation for CLI runs | — |
-| Jobs / schedulers | Generic durable `jobs` queue (`/jobs*`), unified worker registry (`agent_run`, `memory_consolidation`, `daily_capture_report`), in-process schedulers (daily capture report, automation, memory access-log retention, intake extraction polling, backup), stuck-job reclaim, stale running-run recovery at worker startup, and non-overlapping scheduler task execution | — |
+| Jobs / schedulers | Generic durable `jobs` queue (`/jobs*`), unified worker registry (`agent_run`, `memory_consolidation`, `daily_capture_report`, `context_digest_refresh`, `session_condense`), in-process schedulers (daily capture report, automation, memory access-log retention, intake extraction polling, backup), stuck-job reclaim, stale running-run recovery at worker startup, and non-overlapping scheduler task execution | — |
 | Automations | `/spaces/{id}/automations*`, schedule/manual fire with policy preflight, automation run records | — |
 | Daily capture report | `/daily-capture-report/*` settings, manual run, report listing, scheduler enqueue of `daily_capture_report` jobs | — |
 | Backups | `/system/backups` list/manual trigger, scheduled backup ticks, prod backup policy guard, and backup lock/stale-lock handling | — |
 | Policy | Sensitive-action enforcement, proposal-apply policy gate, durable policy audit | — |
 | Proposals | External proposal review/read routes, accept/reject/egress-approval/rollback commands, proposal-apply orchestration, and the server applier registry for registered memory, knowledge, task follow-up, and code-patch types | Target-module appliers that are not registered; unregistered proposal types fail closed |
-| Sessions | Public list/get/create session commands, list/add messages, latest-summary read, and session reflection proposal creation | Summary condense/create writes |
+| Sessions | Public list/get/create session commands, list/add messages, latest-summary read, condenser preset-prompt reads, summary condense/create writes (`condenseSession`: `llm.v1` via the `session_condense` job with scenario profiles plus per-agent prompt overrides, deterministic `pattern.v1` fallback), and session reflection proposal creation | — |
 | Assistant chat | External Personal Assistant chat turn orchestration and queued run creation for server context chat turns | — |
 | Context | Native chat-path candidate collection (`modules/context`: memory/knowledge/source/activity reads), frontend context preview build route, budget/dedup loop, selected-item snapshot persistence, full-run context package assembly, context evidence selection/`used_in_context` link recording for existing evidence, memory context-injection logs, `context_snapshots` population, and vendor runtime file rendering to sandboxes | Digest refresh jobs |
 | Memory read/write boundary | `/memory` list/get/search, read-access logging, public memory create/update/archive proposal creation, batch activity consolidation via `POST /memory/consolidation/run` | Memory quality/evolution jobs (digest refresh, evolver, source-monitoring producers) |
@@ -73,7 +73,6 @@ TypeScript backend cutover failed:
 
 - DB-persisted API-key storage; the API-key routes return the canonical
   feature-gated response while the schema has no `api_keys` table;
-- summary condense/create writes;
 - memory digest refresh, evolver, source-monitoring producers, and quality loops;
 - non-memory/non-knowledge/non-task/non-code-patch proposal target appliers;
 - deployer host/sidecar process internals and deferred deployment job persistence.

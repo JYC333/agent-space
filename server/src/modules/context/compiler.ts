@@ -14,6 +14,7 @@ const SECTION_PRIORITY: Record<string, number> = {
   stable_prefix: 1,
   policy: 1,
   system_policy: 1,
+  runtime_skills: 2,
   user_context: 2,
   project_docs: 3,
   workspace: 4,
@@ -39,9 +40,13 @@ const PER_SECTION_CAPS: Record<string, number> = {
   attachments: 16_000,
   episodes: 4_000,
   session: 2_000,
+  // runtime_skills is mandatory (never dropped), so it must be capped or a large
+  // imported SKILL.md inline rendering would push the compiled context past the
+  // overall budget instead of compacting.
+  runtime_skills: 24_000,
 };
 
-const MANDATORY_SECTIONS = new Set(["task"]);
+const MANDATORY_SECTIONS = new Set(["task", "runtime_skills"]);
 
 const ROOT_DOCS = [
   "INDEX.md",
@@ -149,6 +154,7 @@ export class ContextCompiler {
     budgetChars?: number | null;
     stablePrefixText?: string | null;
     dynamicTailText?: string | null;
+    runtimeSkillText?: string | null;
   }): Promise<CompiledContext> {
     const target = normalizeTarget(input.target);
     const agentDocs = await loadAgentDocs(
@@ -162,6 +168,7 @@ export class ContextCompiler {
             agentDocs,
             input.stablePrefixText ?? "",
             input.dynamicTailText ?? "",
+            input.runtimeSkillText ?? "",
           )
         : buildSections(input.context, input.taskGoal, agentDocs);
     const budgetChars = input.budgetChars ?? DEFAULT_BUDGET_CHARS;
@@ -206,7 +213,7 @@ export class ContextCompiler {
   }
 }
 
-async function assertSandboxOnly(
+export async function assertSandboxOnly(
   sandboxDir: string,
   workspacePath: string | null,
 ): Promise<void> {
@@ -317,6 +324,7 @@ function buildPreparedSections(
   agentDocs: Record<string, string>,
   stablePrefixText: string,
   dynamicTailText: string,
+  runtimeSkillText: string,
 ): Array<[string, string, number]> {
   const sections: Array<[string, string, number]> = [];
   const add = (name: string, text: string) => {
@@ -327,6 +335,7 @@ function buildPreparedSections(
   add("task", `# Task\n\n${taskGoal}`);
   add("stable_prefix", `# Stable Context\n\n${stablePrefixText.trim()}`);
   addAgentDocSections(add, agentDocs);
+  add("runtime_skills", runtimeSkillText.trim());
   add("dynamic_tail", `# Dynamic Context\n\n${dynamicTailText.trim()}`);
   return sections;
 }

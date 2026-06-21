@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ExternalLink, RefreshCw, Plus } from 'lucide-react'
+import { RefreshCw, Plus } from 'lucide-react'
 import { providersApi, type ModelProviderOut } from '../../api/client'
+import { SpaceLink as Link } from '../../core/spaceNav'
 
 interface ProviderSelectorProps {
   value: { provider_id: string; model: string } | null
@@ -13,17 +14,14 @@ interface ProviderSelectorProps {
   emptyLabel?: string
 }
 
-/** Opens the Providers page in a new tab so the in-progress form is preserved. */
 function ManageProvidersLink({ label = 'Manage providers' }: { label?: string }) {
   return (
-    <a
-      href="/providers"
-      target="_blank"
-      rel="noopener noreferrer"
+    <Link
+      to="/providers"
       className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
     >
-      <Plus className="size-3" /> {label} <ExternalLink className="size-3" />
-    </a>
+      <Plus className="size-3" /> {label}
+    </Link>
   )
 }
 
@@ -94,14 +92,12 @@ export default function ProviderSelector({
             : 'No selectable model providers for this runtime.'}
         </p>
         <div className="flex items-center gap-3">
-          <a
-            href="/providers"
-            target="_blank"
-            rel="noopener noreferrer"
+          <Link
+            to="/providers"
             className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:opacity-90"
           >
-            <Plus className="size-3.5" /> Define a provider <ExternalLink className="size-3" />
-          </a>
+            <Plus className="size-3.5" /> Define a provider
+          </Link>
           <button type="button" onClick={loadProviders} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
             <RefreshCw className="size-3" /> Refresh
           </button>

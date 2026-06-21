@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { ContextCompiler } from "../src/modules/context/compiler";
 import { ContextPrepareService } from "../src/modules/context/prepareService";
+import type {
+  RuntimeSkillCandidate,
+  RuntimeSkillProvider,
+  RuntimeSkillRunContext,
+} from "../src/modules/capabilities/runtimeSkillProvider";
 import {
   PgRunContextRepository,
   type ContextDigestRow,
@@ -156,12 +161,14 @@ class FakeContextRepo extends PgRunContextRepository {
     project_id: null,
     session_id: "session-1",
     instructed_by_user_id: "user-1",
+    capability_id: null,
     trigger_origin: "manual",
     data_exposure_level: "model_provider",
     trust_level: "trusted",
     has_personal_grant_context: false,
     personal_grant_context_json: null,
     system_prompt: "You are a test agent.",
+    capabilities_json: [],
     memory_policy_json: { readable_scopes: ["user", "system", "workspace", "agent"] },
     model_config_json: null,
   };
@@ -279,6 +286,65 @@ class FakeContextRepo extends PgRunContextRepository {
   }): Promise<void> {
     this.runMarkers.push({ runId: input.runId, metadata: input.metadata });
   }
+}
+
+class FakeRuntimeSkillProvider implements RuntimeSkillProvider {
+  readonly calls: Array<{
+    adapter_type: string | null;
+    capability_id?: string | null;
+    capabilities_json?: unknown;
+  }> = [];
+
+  constructor(private readonly candidates: RuntimeSkillCandidate[]) {}
+
+  async loadCandidatesForRun(input: RuntimeSkillRunContext): Promise<RuntimeSkillCandidate[]> {
+    this.calls.push(input);
+    return this.candidates.filter(
+      (candidate) => candidate.runtime_adapter_type === input.adapter_type,
+    );
+  }
+}
+
+function runtimeSkillCandidate(over: Partial<RuntimeSkillCandidate> = {}): RuntimeSkillCandidate {
+  const capability = {
+    id: "research-summary",
+    namespace: "open_skill",
+    name: "Research Summary",
+    description: "Summarize imported research material.",
+    version: "1.0.0",
+    source_kind: "imported_skill" as const,
+    input_schema_json: {},
+    output_artifact_types: ["report"],
+    permissions: { risk_level: "low" },
+    supported_execution_modes: ["manual"],
+    default_runtime_bindings: [],
+    status: "available" as const,
+  };
+  return {
+    binding_id: "binding-1",
+    capability_id: capability.id,
+    capability_version_id: "cap-version-1",
+    capability_enablement_id: "cap-enable-1",
+    runtime_adapter_type: "codex_cli",
+    render_mode: "render_skill",
+    binding_json: {},
+    enablement_config_json: { workflow: "research" },
+    capability,
+    normalized_skill: {
+      name: "research-summary",
+      description: "Summarize imported research material.",
+      version: "1.0.0",
+      license: null,
+      instructions_markdown: "Read the package resources and produce a concise research summary.",
+      resources: [],
+      requested_permissions: [],
+      execution_profile: {},
+      vendor_extensions: {},
+      trust_analysis: { risk_level: "low" },
+    },
+    risk_level: "low",
+    ...over,
+  };
 }
 
 describe("ContextPrepareService", () => {
@@ -954,6 +1020,144 @@ describe("ContextPrepareService", () => {
     expect(result.runtime_context_text).toContain("Digest-safe shared memory summary.");
     expect(result.runtime_context_text).not.toContain("[prompt]\nDo the work");
   });
+
+  it("renders enabled runtime skills into the sandbox and records binding trace metadata", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aspace-runtime-skill-"));
+    const sandbox = join(root, "sandbox");
+    const workspace = join(root, "workspace");
+    await mkdir(sandbox, { recursive: true });
+    await mkdir(workspace, { recursive: true });
+
+    const repo = new FakeContextRepo();
+    repo.run = {
+      ...repo.run!,
+      capability_id: "research-summary",
+      capabilities_json: ["research-summary"],
+    };
+    const provider = new FakeRuntimeSkillProvider([runtimeSkillCandidate()]);
+
+    const result = await new ContextPrepareService(
+      config(),
+      repo,
+      new ContextCompiler(),
+      provider,
+    ).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "codex_cli",
+      sandboxCwd: sandbox,
+      targetFormat: "codex_cli",
+      workspacePath: workspace,
+    });
+
+    expect(provider.calls[0]).toMatchObject({
+      adapter_type: "codex_cli",
+      capability_id: "research-summary",
+      capabilities_json: ["research-summary"],
+    });
+    expect(result.runtime_skill_binding_ids).toEqual(["binding-1"]);
+    expect(result.runtime_skill_file_paths).toEqual([
+      join(sandbox, ".agent-space/generated-skills/codex/research-summary/SKILL.md"),
+      join(sandbox, ".agent-space/generated-skills/codex/research-summary/agents/openai.yaml"),
+    ]);
+    const skillMarkdown = await readFile(result.runtime_skill_file_paths![0]!, "utf8");
+    expect(skillMarkdown).toContain("# Research Summary");
+    expect(skillMarkdown).toContain("Read the package resources");
+    const agentsMd = await readFile(result.instruction_file_path!, "utf8");
+    expect(agentsMd).toContain("# Runtime Skills");
+    expect(agentsMd).toContain(".agent-space/generated-skills/codex/research-summary/SKILL.md");
+    expect(repo.snapshots[0]?.sourceRefs).toContainEqual(
+      expect.objectContaining({
+        source_type: "runtime_skill_binding",
+        binding_id: "binding-1",
+        capability_id: "research-summary",
+        raw_content_in_trace: false,
+      }),
+    );
+    expect(repo.snapshots[0]?.retrievalTrace[0]).toMatchObject({
+      runtime_skill_rendering: {
+        rendered_count: 1,
+        bindings: [
+          expect.objectContaining({
+            binding_id: "binding-1",
+            files_count: 2,
+            prompt_block_rendered: false,
+          }),
+        ],
+      },
+    });
+  });
+
+  it("renders an enabled high-risk binding because enablement is the review gate", async () => {
+    const repo = new FakeContextRepo();
+    repo.run = {
+      ...repo.run!,
+      capability_id: "research-summary",
+      capabilities_json: ["research-summary"],
+    };
+    const provider = new FakeRuntimeSkillProvider([
+      runtimeSkillCandidate({
+        risk_level: "high",
+        capability: {
+          ...runtimeSkillCandidate().capability,
+          permissions: { risk_level: "high" },
+        },
+      }),
+    ]);
+
+    const result = await new ContextPrepareService(
+      config(),
+      repo,
+      new ContextCompiler(),
+      provider,
+    ).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "codex_cli",
+      sandboxCwd: null,
+      targetFormat: "codex_cli",
+      workspacePath: null,
+    });
+
+    // The owner already decided to enable this high-risk capability through the
+    // capability_enable proposal, so render honors that decision instead of
+    // re-gating and hard-failing the run.
+    expect(result.runtime_skill_binding_ids).toEqual(["binding-1"]);
+    expect(repo.snapshots).toHaveLength(1);
+    expect(repo.snapshots[0]?.retrievalTrace[0]).toMatchObject({
+      runtime_skill_rendering: {
+        rendered_count: 1,
+        bindings: [expect.objectContaining({ binding_id: "binding-1", risk_level: "high" })],
+      },
+    });
+  });
+
+  it("refuses to write runtime skill files into the real workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aspace-runtime-skill-ws-"));
+    const workspace = join(root, "workspace");
+    await mkdir(workspace, { recursive: true });
+
+    const repo = new FakeContextRepo();
+    repo.run = {
+      ...repo.run!,
+      capability_id: "research-summary",
+      capabilities_json: ["research-summary"],
+    };
+    const provider = new FakeRuntimeSkillProvider([runtimeSkillCandidate()]);
+
+    // targetFormat is null so the compiler is skipped: the writer must enforce
+    // the sandbox boundary itself rather than relying on the compiler's check.
+    await expect(
+      new ContextPrepareService(config(), repo, new ContextCompiler(), provider).prepare({
+        runId: "run-1",
+        spaceId: "space-1",
+        adapterType: "codex_cli",
+        sandboxCwd: workspace,
+        targetFormat: null,
+        workspacePath: workspace,
+      }),
+    ).rejects.toThrow(/refuses to write/);
+  });
 });
 
 describe("ContextPrepareService stable prefix compaction", () => {
@@ -1258,5 +1462,100 @@ describe("ContextCompiler", () => {
     expect(result.dropped_sections).toContain("user_context");
     const compacted = result.budget_trace.compacted as unknown[];
     expect(compacted).toHaveLength(0);
+  });
+
+  it("keeps runtime skill instructions under prepared-context budget pressure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aspace-context-"));
+    const sandbox = join(root, "sandbox");
+    await mkdir(sandbox, { recursive: true });
+
+    const compiler = new ContextCompiler();
+    const result = await compiler.compile({
+      target: "codex_cli",
+      taskGoal: "Use the generated skill",
+      sandboxDir: sandbox,
+      budgetChars: 220,
+      stablePrefixText: "stable ".repeat(120),
+      dynamicTailText: "dynamic ".repeat(120),
+      runtimeSkillText: [
+        "# Runtime Skills",
+        "",
+        "## Research Summary",
+        "",
+        "Generated files:",
+        "- .agent-space/generated-skills/codex/research-summary/SKILL.md",
+      ].join("\n"),
+      context: {
+        user_memory: [],
+        workspace_memory: [],
+        capability_memory: [],
+        agent_memory: [],
+        system_policy: [],
+        recent_session_summary: [],
+        relevant_episodes: [],
+        evidence_items: [],
+        attachments: [],
+        active_policies: [],
+        stable_prefix_refs: [],
+        dynamic_tail_refs: [],
+        source_refs: [],
+        retrieval_trace: {},
+        token_budget: {},
+        personal_context_block: "",
+      },
+    });
+
+    const instructionText = await readFile(join(sandbox, "AGENTS.md"), "utf8");
+    expect(instructionText).toContain("# Runtime Skills");
+    expect(instructionText).toContain(
+      ".agent-space/generated-skills/codex/research-summary/SKILL.md",
+    );
+    expect(result.dropped_sections).not.toContain("runtime_skills");
+    expect(result.budget_trace.mandatory).toEqual(
+      expect.arrayContaining(["task", "runtime_skills"]),
+    );
+  });
+
+  it("caps an oversized runtime skill section instead of letting it bypass the budget", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aspace-context-"));
+    const sandbox = join(root, "sandbox");
+    await mkdir(sandbox, { recursive: true });
+
+    const compiler = new ContextCompiler();
+    const result = await compiler.compile({
+      target: "codex_cli",
+      taskGoal: "Use the generated skill",
+      sandboxDir: sandbox,
+      budgetChars: 128_000,
+      stablePrefixText: "stable",
+      dynamicTailText: "dynamic",
+      // A large imported SKILL.md rendered as an inline prompt block.
+      runtimeSkillText: ["# Runtime Skills", "", "## Big Skill", "", "BODY ".repeat(20_000)].join("\n"),
+      context: {
+        user_memory: [],
+        workspace_memory: [],
+        capability_memory: [],
+        agent_memory: [],
+        system_policy: [],
+        recent_session_summary: [],
+        relevant_episodes: [],
+        evidence_items: [],
+        attachments: [],
+        active_policies: [],
+        stable_prefix_refs: [],
+        dynamic_tail_refs: [],
+        source_refs: [],
+        retrieval_trace: {},
+        token_budget: {},
+        personal_context_block: "",
+      },
+    });
+
+    const instructionText = await readFile(join(sandbox, "AGENTS.md"), "utf8");
+    expect(instructionText).toContain("[truncated - section exceeded per-section cap]");
+    expect(result.dropped_sections).not.toContain("runtime_skills");
+    // Section was ~100KB of body; the per-section cap bounds it well under budget.
+    expect(instructionText.length).toBeLessThan(30_000);
+    expect(result.total_chars).toBeLessThanOrEqual(result.budget_chars);
   });
 });

@@ -42,6 +42,23 @@ CREATE TABLE public.agent_versions (
     created_at timestamp with time zone NOT NULL
 );
 
+CREATE TABLE public.agent_runtime_profiles (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    agent_id character varying(36) NOT NULL,
+    name character varying(128) NOT NULL,
+    adapter_type character varying(64) NOT NULL,
+    model_provider_id character varying(36),
+    model_name character varying(256),
+    credential_profile_id character varying(36),
+    runtime_config_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    runtime_policy_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    is_default boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
 -- Minimal model_providers: the columns run-create model-config resolution reads
 -- (space default provider lookup). SOURCE OF TRUTH: server/migrations.
 CREATE TABLE public.model_providers (
@@ -249,6 +266,7 @@ CREATE TABLE public.runs (
     space_id character varying(36) NOT NULL,
     agent_id character varying(36) NOT NULL,
     agent_version_id character varying(36) NOT NULL,
+    runtime_profile_id character varying(36),
     context_snapshot_id character varying(36),
     workspace_id character varying(36),
     session_id character varying(36),
@@ -274,8 +292,10 @@ CREATE TABLE public.runs (
     task_id character varying(36),
     adapter_type character varying(64),
     capability_id character varying(128),
+    capabilities_json jsonb DEFAULT '[]'::jsonb NOT NULL,
     model_selection_mode character varying(32) DEFAULT 'cli_default'::character varying NOT NULL,
     model_override_json jsonb,
+    runtime_profile_snapshot_json jsonb,
     permission_snapshot_json jsonb,
     required_sandbox_level character varying(32) DEFAULT 'none'::character varying NOT NULL,
     sandbox_path text,
@@ -349,6 +369,12 @@ ALTER TABLE ONLY public.actors
 
 ALTER TABLE ONLY public.agent_versions
     ADD CONSTRAINT agent_versions_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.agent_runtime_profiles
+    ADD CONSTRAINT agent_runtime_profiles_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.agent_runtime_profiles
+    ADD CONSTRAINT uq_agent_runtime_profiles_agent_name UNIQUE (agent_id, name);
 
 ALTER TABLE ONLY public.agents
     ADD CONSTRAINT agents_pkey PRIMARY KEY (id);
@@ -480,6 +506,16 @@ CREATE INDEX ix_run_steps_task_id ON public.run_steps USING btree (task_id);
 
 CREATE INDEX ix_run_steps_workspace_id ON public.run_steps USING btree (workspace_id);
 
+CREATE INDEX ix_agent_runtime_profiles_agent_id ON public.agent_runtime_profiles USING btree (agent_id);
+
+CREATE INDEX ix_agent_runtime_profiles_credential_profile_id ON public.agent_runtime_profiles USING btree (credential_profile_id);
+
+CREATE INDEX ix_agent_runtime_profiles_model_provider_id ON public.agent_runtime_profiles USING btree (model_provider_id);
+
+CREATE INDEX ix_agent_runtime_profiles_space_id ON public.agent_runtime_profiles USING btree (space_id);
+
+CREATE UNIQUE INDEX uq_agent_runtime_profiles_default_per_agent ON public.agent_runtime_profiles USING btree (agent_id) WHERE (is_default = true);
+
 CREATE INDEX ix_runs_agent_id ON public.runs USING btree (agent_id);
 
 CREATE INDEX ix_runs_agent_version_id ON public.runs USING btree (agent_version_id);
@@ -497,6 +533,8 @@ CREATE INDEX ix_runs_model_provider_id ON public.runs USING btree (model_provide
 CREATE INDEX ix_runs_parent_run_id ON public.runs USING btree (parent_run_id);
 
 CREATE INDEX ix_runs_project_id ON public.runs USING btree (project_id);
+
+CREATE INDEX ix_runs_runtime_profile_id ON public.runs USING btree (runtime_profile_id);
 
 CREATE INDEX ix_runs_run_type ON public.runs USING btree (run_type);
 

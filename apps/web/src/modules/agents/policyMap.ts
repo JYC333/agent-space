@@ -63,6 +63,51 @@ export interface ScheduleSummary {
   manualRunAllowed: boolean
 }
 
+export type SessionCondenserProfile = 'adaptive' | 'general' | 'coding' | 'project'
+
+export interface SessionCondenserConfig {
+  profile: SessionCondenserProfile
+  custom_system: string
+  custom_instructions: string
+}
+
+export const CONDENSER_PROFILE_OPTIONS: {
+  value: SessionCondenserProfile
+  label: string
+  detail: string
+}[] = [
+  {
+    value: 'adaptive',
+    label: 'Adaptive',
+    detail: 'Mixed personal, coding, and project conversations',
+  },
+  {
+    value: 'general',
+    label: 'General',
+    detail: 'Personal assistant and everyday conversation',
+  },
+  {
+    value: 'coding',
+    label: 'Coding',
+    detail: 'Code, files, commands, errors, and implementation state',
+  },
+  {
+    value: 'project',
+    label: 'Project',
+    detail: 'Scope, decisions, milestones, blockers, owners, and next steps',
+  },
+]
+
+function asCondenserProfile(value: unknown): SessionCondenserProfile {
+  return value === 'general' || value === 'coding' || value === 'project' || value === 'adaptive'
+    ? value
+    : 'adaptive'
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
 // ── Input contexts ────────────────────────────────────────────────────────────
 
 const INPUT_CONTEXT_LABELS: Record<string, string> = {
@@ -127,6 +172,54 @@ export function buildContextPolicy(base: Record<string, unknown>, enabled: strin
   const allowed = asArr(base.allowed_input_contexts)
   const clamped = enabled.filter(id => allowed.includes(id))
   return { ...base, default_input_contexts: clamped }
+}
+
+export function sessionCondenserProfile(version: { context_policy_json?: unknown }): SessionCondenserProfile {
+  return sessionCondenserConfig(version).profile
+}
+
+export function sessionCondenserConfig(version: { context_policy_json?: unknown }): SessionCondenserConfig {
+  const policy = asObj(version.context_policy_json)
+  const condenser = asObj(policy.condenser)
+  return {
+    profile: asCondenserProfile(condenser.profile),
+    custom_system: asString(condenser.custom_system),
+    custom_instructions: asString(condenser.custom_instructions),
+  }
+}
+
+export function buildCondenserProfileContextPolicy(
+  base: Record<string, unknown>,
+  profile: SessionCondenserProfile,
+): Record<string, unknown> {
+  const condenser = asObj(base.condenser)
+  return {
+    ...base,
+    condenser: {
+      ...condenser,
+      profile,
+    },
+  }
+}
+
+export function buildCondenserConfigContextPolicy(
+  base: Record<string, unknown>,
+  config: SessionCondenserConfig,
+): Record<string, unknown> {
+  const condenser: Record<string, unknown> = {
+    ...asObj(base.condenser),
+    profile: config.profile,
+  }
+  const customSystem = config.custom_system.trim()
+  const customInstructions = config.custom_instructions.trim()
+  if (customSystem) condenser.custom_system = customSystem
+  else delete condenser.custom_system
+  if (customInstructions) condenser.custom_instructions = customInstructions
+  else delete condenser.custom_instructions
+  return {
+    ...base,
+    condenser,
+  }
 }
 
 // ── Output types ──────────────────────────────────────────────────────────────

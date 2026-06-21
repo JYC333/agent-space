@@ -22,6 +22,7 @@ const profile = {
   readonly: true,
   notes: "",
   source_exists: true,
+  logged_in: true,
   file_count: 2,
 };
 
@@ -54,6 +55,7 @@ describe("cli credential contracts", () => {
         source_path: profile.source_path,
         exists: true,
         non_empty: true,
+        logged_in: true,
         file_count: 3,
         target_path: profile.target_path,
         readonly: true,

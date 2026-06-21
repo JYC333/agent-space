@@ -177,6 +177,7 @@ policy:
 capability:
   docs:
     - .agent/modules/capability.md
+    - .agent/architecture/CAPABILITY_WORKFLOW_SKILL_SYSTEM.md
     - .agent/modules/context-compiler.md
     - .agent/BOUNDARIES.md
   code_roots:

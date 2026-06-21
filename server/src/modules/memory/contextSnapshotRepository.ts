@@ -20,6 +20,8 @@ export interface ChatSnapshotPersistInput {
   spaceId: string;
   tokenEstimate: number;
   requestJson: Record<string, unknown>;
+  retrievalTraceJson?: Record<string, unknown> | null;
+  tokenBudgetJson?: Record<string, unknown> | null;
   items: readonly ChatContextCandidateItem[];
 }
 
@@ -49,7 +51,9 @@ export class PgContextSnapshotRepository {
     await this.db.query(
       `UPDATE context_snapshots
           SET token_estimate = $1,
-              request_json = $2::jsonb
+              request_json = $2::jsonb,
+              retrieval_trace_json = COALESCE($5::jsonb, retrieval_trace_json),
+              token_budget_json = COALESCE($6::jsonb, token_budget_json)
         WHERE id = $3
           AND space_id = $4`,
       [
@@ -57,6 +61,8 @@ export class PgContextSnapshotRepository {
         JSON.stringify(input.requestJson),
         input.contextSnapshotId,
         input.spaceId,
+        jsonOrNull(input.retrievalTraceJson),
+        jsonOrNull(input.tokenBudgetJson),
       ],
     );
 
@@ -96,4 +102,8 @@ export class PgContextSnapshotRepository {
       params,
     );
   }
+}
+
+function jsonOrNull(value: Record<string, unknown> | null | undefined): string | null {
+  return value === null || value === undefined ? null : JSON.stringify(value);
 }

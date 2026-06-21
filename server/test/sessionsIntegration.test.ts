@@ -160,17 +160,54 @@ describe("PgSessionRepository against real Postgres", () => {
     expect(await repo.listMessages(SPACE, "user-2", owned.id, 100, 0)).toBeNull();
   });
 
+  it("returns recent messages for context in chronological order", async () => {
+    if (!available || !repo) return;
+    const created = await repo.createSession(SPACE, USER, {});
+    await repo.addMessage(SPACE, USER, created.id, {
+      role: "user",
+      content: "one",
+    });
+    await repo.addMessage(SPACE, USER, created.id, {
+      role: "assistant",
+      content: "two",
+    });
+    await repo.addMessage(SPACE, USER, created.id, {
+      role: "user",
+      content: "three",
+    });
+
+    const recent = await repo.listRecentMessagesForContext(
+      SPACE,
+      USER,
+      created.id,
+      2,
+    );
+    expect(recent?.map((msg) => msg.content)).toEqual(["two", "three"]);
+    expect(
+      await repo.listRecentMessagesForContext(SPACE, "user-2", created.id, 2),
+    ).toBeNull();
+  });
+
   it("returns the latest active session summary scoped to the session space", async () => {
     if (!available || !repo || !pool) return;
     const created = await repo.createSession(SPACE, USER, {});
+    const first = await repo.addMessage(SPACE, USER, created.id, {
+      role: "user",
+      content: "first",
+    });
+    const last = await repo.addMessage(SPACE, USER, created.id, {
+      role: "assistant",
+      content: "last",
+    });
     await pool.query(
       `INSERT INTO session_summaries
          (id, space_id, session_id, user_id, version, status, summary_text,
-          source_message_count, condenser_version, created_at)
+          source_message_count, source_first_message_id, source_last_message_id,
+          condenser_version, created_at)
        VALUES
-         ('summary-v1', $1, $2, $3, 1, 'superseded', 'old summary', 0, 'pattern.v1', now()),
-         ('summary-v2', $1, $2, $3, 2, 'active', 'latest summary', 0, 'pattern.v1', now())`,
-      [SPACE, created.id, USER],
+         ('summary-v1', $1, $2, $3, 1, 'superseded', 'old summary', 0, NULL, NULL, 'pattern.v1', now()),
+         ('summary-v2', $1, $2, $3, 2, 'active', 'latest summary', 2, $4, $5, 'pattern.v1', now())`,
+      [SPACE, created.id, USER, first?.id, last?.id],
     );
 
     expect(await repo.getLatestSummaryForContext(SPACE, created.id)).toEqual({
@@ -178,8 +215,205 @@ describe("PgSessionRepository against real Postgres", () => {
       session_id: created.id,
       version: 2,
       summary_text: "latest summary",
+      source_message_count: 2,
+      source_first_message_id: first?.id,
+      source_last_message_id: last?.id,
       condenser_version: "pattern.v1",
     });
     expect(await repo.getLatestSummaryForContext("space-2", created.id)).toBeNull();
+  });
+
+  it("condenseSession is a no-op until enough messages age past the recent tail", async () => {
+    if (!available || !repo) return;
+    const created = await repo.createSession(SPACE, USER, {});
+    // keepRecent=4, condenseBatch=2: nothing aged out yet with 3 messages.
+    for (let i = 0; i < 3; i += 1) {
+      await repo.addMessage(SPACE, USER, created.id, {
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `message ${i}`,
+      });
+    }
+    const noop = await repo.condenseSession(SPACE, USER, created.id, {
+      keepRecent: 4,
+      condenseBatch: 2,
+    });
+    expect(noop).toBeNull();
+    expect(await repo.getLatestSummaryForContext(SPACE, created.id)).toBeNull();
+  });
+
+  it("condenseSession writes one active summary covering aged-out messages", async () => {
+    if (!available || !repo) return;
+    const created = await repo.createSession(SPACE, USER, {});
+    const ids: string[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      const msg = await repo.addMessage(SPACE, USER, created.id, {
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `message about deployment number ${i}`,
+      });
+      ids.push(msg!.id);
+    }
+
+    // keepRecent=4 → summarize the oldest 4 (ids[0..3]).
+    const summary = await repo.condenseSession(SPACE, USER, created.id, {
+      keepRecent: 4,
+      condenseBatch: 2,
+    });
+    expect(summary).not.toBeNull();
+    expect(summary!.version).toBe(1);
+    expect(summary!.source_message_count).toBe(4);
+    expect(summary!.source_first_message_id).toBe(ids[0]);
+    expect(summary!.source_last_message_id).toBe(ids[3]);
+    expect(summary!.condenser_version).toBe("pattern.v1");
+
+    const latest = await repo.getLatestSummaryForContext(SPACE, created.id);
+    expect(latest).toEqual(summary);
+  });
+
+  it("condenseSession supersedes the prior summary and bumps the version", async () => {
+    if (!available || !repo || !pool) return;
+    const created = await repo.createSession(SPACE, USER, {});
+    for (let i = 0; i < 6; i += 1) {
+      await repo.addMessage(SPACE, USER, created.id, {
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `first batch message ${i}`,
+      });
+    }
+    const v1 = await repo.condenseSession(SPACE, USER, created.id, {
+      keepRecent: 2,
+      condenseBatch: 2,
+    });
+    expect(v1!.version).toBe(1);
+    expect(v1!.source_message_count).toBe(4);
+
+    // Add 4 more so 4 new messages age past the recent tail.
+    for (let i = 0; i < 4; i += 1) {
+      await repo.addMessage(SPACE, USER, created.id, {
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `second batch message ${i}`,
+      });
+    }
+    const v2 = await repo.condenseSession(SPACE, USER, created.id, {
+      keepRecent: 2,
+      condenseBatch: 2,
+    });
+    expect(v2!.version).toBe(2);
+    expect(v2!.source_message_count).toBe(8);
+
+    // Exactly one active summary remains (partial unique active index holds).
+    const active = await pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM session_summaries
+        WHERE session_id = $1 AND status = 'active'`,
+      [created.id],
+    );
+    expect(active.rows[0]?.n).toBe("1");
+    expect(await repo.getLatestSummaryForContext(SPACE, created.id)).toEqual(v2);
+  });
+
+  it("condenseSession excludes whitespace-only messages from the count and slice", async () => {
+    if (!available || !repo) return;
+    const created = await repo.createSession(SPACE, USER, {});
+    const real1 = await repo.addMessage(SPACE, USER, created.id, {
+      role: "user",
+      content: "real one",
+    });
+    await repo.addMessage(SPACE, USER, created.id, { role: "assistant", content: "   " });
+    const real2 = await repo.addMessage(SPACE, USER, created.id, {
+      role: "user",
+      content: "real two",
+    });
+    await repo.addMessage(SPACE, USER, created.id, { role: "assistant", content: "\n\t " });
+    await repo.addMessage(SPACE, USER, created.id, { role: "user", content: "real three" });
+    await repo.addMessage(SPACE, USER, created.id, { role: "assistant", content: "real four" });
+
+    // 4 non-whitespace messages, keepRecent=2 → summarize the oldest 2 of them.
+    const summary = await repo.condenseSession(SPACE, USER, created.id, {
+      keepRecent: 2,
+      condenseBatch: 2,
+    });
+    expect(summary).not.toBeNull();
+    // The two blank messages must not inflate the count or shift the range.
+    expect(summary!.source_message_count).toBe(2);
+    expect(summary!.source_first_message_id).toBe(real1!.id);
+    expect(summary!.source_last_message_id).toBe(real2!.id);
+  });
+
+  it("condenseSession uses the LLM summarizer (llm.v1) with the scenario profile", async () => {
+    if (!available || !repo) return;
+    const created = await repo.createSession(SPACE, USER, {});
+    for (let i = 0; i < 8; i += 1) {
+      await repo.addMessage(SPACE, USER, created.id, {
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `message ${i}`,
+      });
+    }
+    let seenSystem = "";
+    const summary = await repo.condenseSession(SPACE, USER, created.id, {
+      keepRecent: 4,
+      condenseBatch: 2,
+      profile: "coding",
+      summarize: async (prompt) => {
+        seenSystem = prompt.system;
+        return "LLM running summary.";
+      },
+    });
+    expect(summary!.condenser_version).toBe("llm.v1");
+    expect(summary!.summary_text).toBe("LLM running summary.");
+    expect(summary!.source_message_count).toBe(4);
+    expect(seenSystem).toContain("coding assistant");
+
+    const latest = await repo.getLatestSummaryForContext(SPACE, created.id);
+    expect(latest!.condenser_version).toBe("llm.v1");
+    expect(latest!.summary_text).toBe("LLM running summary.");
+  });
+
+  it("condenseSession falls back to pattern.v1 when the summarizer fails or is empty", async () => {
+    if (!available || !repo) return;
+    const created = await repo.createSession(SPACE, USER, {});
+    for (let i = 0; i < 8; i += 1) {
+      await repo.addMessage(SPACE, USER, created.id, {
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `message ${i}`,
+      });
+    }
+    const thrown = await repo.condenseSession(SPACE, USER, created.id, {
+      keepRecent: 4,
+      condenseBatch: 2,
+      summarize: async () => {
+        throw new Error("provider down");
+      },
+    });
+    expect(thrown!.condenser_version).toBe("pattern.v1");
+    expect(thrown!.summary_text).toContain("Earlier conversation condensed");
+
+    // Empty LLM text also falls back (next batch).
+    for (let i = 8; i < 12; i += 1) {
+      await repo.addMessage(SPACE, USER, created.id, {
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `message ${i}`,
+      });
+    }
+    const empty = await repo.condenseSession(SPACE, USER, created.id, {
+      keepRecent: 4,
+      condenseBatch: 2,
+      summarize: async () => "   ",
+    });
+    expect(empty!.condenser_version).toBe("pattern.v1");
+  });
+
+  it("condenseSession refuses a session the user cannot see", async () => {
+    if (!available || !repo) return;
+    const created = await repo.createSession(SPACE, USER, {});
+    for (let i = 0; i < 8; i += 1) {
+      await repo.addMessage(SPACE, USER, created.id, {
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `message ${i}`,
+      });
+    }
+    expect(
+      await repo.condenseSession(SPACE, "user-2", created.id, {
+        keepRecent: 2,
+        condenseBatch: 2,
+      }),
+    ).toBeNull();
   });
 });

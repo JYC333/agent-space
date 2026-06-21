@@ -14,6 +14,8 @@ describe('SceneSidebar changes by scene', () => {
     expect(screen.getByText('My agents')).toBeInTheDocument()
     expect(screen.getByText('Runs')).toBeInTheDocument()
     expect(screen.getByText('Templates')).toBeInTheDocument()
+    expect(screen.getByText('Capabilities')).toBeInTheDocument()
+    expect(screen.queryByText('Projects')).toBeNull()
     expect(screen.queryByText('Raw')).toBeNull()
   })
 

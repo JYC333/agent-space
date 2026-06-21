@@ -21,7 +21,7 @@ describe('navigation model', () => {
     expect(labels).not.toContain('my view')
     expect(labels).not.toContain('personalview')
     expect(labels).toEqual(expect.arrayContaining([
-      'home', 'inbox', 'review', 'knowledge', 'tasks', 'agents', 'evolution', 'workspaces', 'instance settings', 'settings',
+      'home', 'inbox', 'review', 'knowledge', 'tasks', 'projects', 'agents', 'evolution', 'workspaces', 'instance settings', 'settings',
     ]))
   })
 
@@ -53,6 +53,7 @@ describe('navigation model', () => {
   it('selects a scene per route, ignoring the /spaces/:id prefix', () => {
     expect(sceneForPath('/spaces/x/activity')?.id).toBe('inbox')
     expect(sceneForPath('/spaces/x/proposals')?.id).toBe('review')
+    expect(sceneForPath('/spaces/x/projects')).toBeNull()
     expect(sceneForPath('/spaces/x/agents')?.id).toBe('agents')
     expect(sceneForPath('/spaces/x/sessions')?.id).toBe('agents')
     expect(sceneForPath('/spaces/x/workspaces')?.id).toBe('workspaces')

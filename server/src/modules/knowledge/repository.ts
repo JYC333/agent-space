@@ -460,7 +460,7 @@ export class PgKnowledgeRepository {
     const total = await this.db.query<{ total: string }>(
       `SELECT count(DISTINCT n.id)::text AS total
          FROM notes n
-         LEFT JOIN note_collection_items nci ON nci.note_id = n.id
+         LEFT JOIN note_collection_items nci_filter ON nci_filter.note_id = n.id
         ${built.where}`,
       built.params,
     );

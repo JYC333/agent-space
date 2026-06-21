@@ -70,6 +70,16 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 **B21** — Capabilities are code-defined (manifest + code + prompts + tests), not only prompt-defined. A capability without tests or a manifest is incomplete.
 
+**B21A** — Open Skill imports are untrusted source material. Import may fetch and
+normalize package metadata, `SKILL.md`, and bounded same-repository package
+file inventory, but it must not execute scripts, install dependencies, load
+server/plugin code, write active memory, or auto-enable a capability. Vendor
+runtime declarations such as `allowed-tools` are permission requests only.
+
+**B21B** — Runtime skill files for Claude Code, Codex, `model_api`, and future
+runtimes are generated adapter artifacts. Agent-space CapabilityDefinition and
+profile records remain the source of truth.
+
 ---
 
 ## Frontend / UI Boundaries
@@ -133,6 +143,12 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 **B51** — Official optional modules are gated at the route-handler/contribution level via the plugin guard (`requireOfficialPluginEnabled()` or `ctx.http.pluginGuard()`), not by conditionally registering core server modules. Backend routes for bundled official plugins are mounted by `PluginHost`; behavior is gated by DB-backed plugin enablement state. Plugin job handlers and proposal appliers must fail closed when disabled, and scheduled tasks must fan out only to enabled scopes. Frontend entries with `source: 'official_plugin'` must overlay their `enabled`/`visible` state from `GET /api/v1/plugins/effective`, not from static values.
 
 **B52** — Capability (`catalog/capabilities/`) and Official Optional Module (`/api/v1/plugins`) are distinct concepts and must not be conflated in code, comments, or API design. Capabilities are agent AI skill descriptors; Official Optional Modules are product feature packages. A module may use a capability internally, but they are not the same type.
+
+**B52A** — Open Skill, Capability, Capability Pack, Workflow Template, Runtime
+Skill, and Product Plugin are distinct concepts. External Open Skill packages
+can be normalized into capability candidates; Capability Packs group
+capabilities and workflow templates; Runtime Skills are generated runtime
+bindings; Product Plugins are optional product feature packages.
 
 **B53** — Plugin settings and enablement state must be scoped exactly as declared in the descriptor's `scope` field: `space` uses `(plugin_id, space_id)` and requires space owner/admin for writes; `user` uses `(plugin_id, user_id)` and follows the user across spaces. Space-scoped plugin state for space A must never be readable or writable in the context of space B, and user-scoped plugin state must never be readable or writable by another user. The plugin guard must check both plugin existence and descriptor scope.
 

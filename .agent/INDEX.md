@@ -52,6 +52,7 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 | [architecture/PRODUCT_AND_BOUNDARIES.md](architecture/PRODUCT_AND_BOUNDARIES.md) | Product identity, current enforcement points, architecture fitness checks |
 | [architecture/NON_GOALS_AND_DISABLED_SURFACES.md](architecture/NON_GOALS_AND_DISABLED_SURFACES.md) | Disabled surfaces, allowed surfaces, non-goals |
 | [architecture/ROADMAP_AND_FUTURE_RISKS.md](architecture/ROADMAP_AND_FUTURE_RISKS.md) | Capability line roadmap, future risks |
+| [architecture/CAPABILITY_WORKFLOW_SKILL_SYSTEM.md](architecture/CAPABILITY_WORKFLOW_SKILL_SYSTEM.md) | Capability definitions, packs, workflows, Open Skill import, runtime skill rendering |
 | [architecture/LOCAL_FIRST_COMPATIBILITY.md](architecture/LOCAL_FIRST_COMPATIBILITY.md) | Data classification, offline write rules, sync schema guidelines |
 
 ### Security and Access Boundaries
@@ -176,6 +177,7 @@ Load only the module docs relevant to your task.
 | [0008](decisions/0008-multi-cli-mvp.md) | Multi-CLI MVP |
 | [0009](decisions/0009-anthropic-cli-only-policy.md) | Anthropic CLI-only policy (superseded by ADR 0010) |
 | [0010](decisions/0010-credential-channel-isolation.md) | Credential channel isolation |
+| [0011](decisions/0011-capability-workflow-open-skill-system.md) | Capability, Workflow, and Open Skill framework |
 
 ---
 

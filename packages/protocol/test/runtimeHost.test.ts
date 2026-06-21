@@ -19,6 +19,16 @@ describe("runtime host contract", () => {
 
     expect(value.tool_mode).toBe("disabled");
     expect(value.tool_bindings).toEqual([]);
+    expect(
+      RuntimeHostExecuteRequestSchema.parse({
+        ...value,
+        messages: [
+          { role: "user", content: "Earlier question" },
+          { role: "assistant", content: "Earlier answer" },
+          { role: "user", content: "Continue" },
+        ],
+      }).messages?.map((message) => message.role),
+    ).toEqual(["user", "assistant", "user"]);
     expect(RuntimeHostToolModeSchema.parse("authorized_bindings")).toBe(
       "authorized_bindings",
     );

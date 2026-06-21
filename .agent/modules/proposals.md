@@ -68,9 +68,11 @@ The public proposal review/apply surface is owned by the server:
   `ProposalApplierRegistry`.
 - The currently registered appliers are: `memory_create`, `memory_update`,
   `memory_archive`, `knowledge_create`, `knowledge_update`, `knowledge_archive`,
-  `knowledge_relation_create`, `knowledge_relation_delete`, `follow_up_task`, and
-  `code_patch`. Unregistered proposal types fail closed until their owning domain
-  registers an applier.
+  `knowledge_relation_create`, `knowledge_relation_delete`, `follow_up_task`,
+  `code_patch`, `skill_import_approve`, `capability_install`,
+  `capability_update`, `capability_enable`, `capability_disable`, and
+  `runtime_skill_binding_update`. Unregistered proposal types fail closed until
+  their owning domain registers an applier.
 - Non-registered target-module appliers remain explicit fail-closed work; the
   server public route does not fall back to any external proposal port.
 - Proposal creation entrypoints remain in their product modules

@@ -18,6 +18,7 @@ import { systemModule } from "../modules/system";
 import { authModule } from "../modules/auth";
 import { spacesModule } from "../modules/spaces";
 import { catalogModule } from "../modules/catalog";
+import { capabilitiesModule } from "../modules/capabilities";
 import { streamingModule } from "../modules/streaming";
 import { notificationsModule } from "../modules/notifications";
 import { jobsModule } from "../modules/jobs";
@@ -88,6 +89,7 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   authModule,
   spacesModule,
   catalogModule,
+  capabilitiesModule,
   streamingModule,
   notificationsModule,
   runtimeToolsModule,

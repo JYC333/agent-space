@@ -15,6 +15,7 @@ export interface RunRecord {
   space_id: string;
   agent_id: string;
   agent_version_id: string;
+  runtime_profile_id?: string | null;
   system_prompt?: string | null;
   context_snapshot_id?: string | null;
   run_type?: string;
@@ -29,9 +30,11 @@ export interface RunRecord {
   scheduled_at?: string | null;
   adapter_type: string | null;
   capability_id?: string | null;
+  capabilities_json?: unknown;
   model_provider_id: string | null;
   runtime_config_json?: unknown;
   model_override_json?: unknown;
+  runtime_profile_snapshot_json?: unknown;
   required_sandbox_level: string;
   trigger_origin: string;
   instructed_by_user_id?: string | null;
@@ -204,10 +207,13 @@ export interface RunCreateInput {
   instruction?: string | null;
   scheduled_at?: string | null;
   parent_run_id?: string | null;
+  runtime_profile_id?: string | null;
   adapter_type?: string | null;
   capability_id?: string | null;
+  capabilities_json?: unknown[] | null;
   model_provider_id?: string | null;
   model?: string | null;
+  model_override_json?: Record<string, unknown> | null;
 }
 
 export class RunCreateValidationError extends Error {

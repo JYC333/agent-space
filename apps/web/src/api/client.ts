@@ -1,5 +1,5 @@
 import type {
-  Memory, Session, Message, Task,
+  Memory, Session, Message, Task, CondenserPresetPromptOut,
   Capability, ContextPackage, Feature, Workspace, WorkspaceCreateBody, WorkspaceUpdateBody, Page,
   CapabilitiesReloadResult, ReflectResult, ApiError,
   RuntimeToolDefinition, RuntimeToolInstallResult, RuntimeToolStatus, RuntimeToolLatest, SpaceRuntimeToolPolicyOut,
@@ -10,6 +10,7 @@ import type {
   Job, JobEvent, ActivityInboxRecord,
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
   TaskArtifact, TaskProposal, Artifact, Proposal, ProposalAcceptOut, AgentOut, AgentCreateBody, AgentUpdateBody, RunCreateBody,
+  AgentRuntimeProfileCreateBody, AgentRuntimeProfileOut, AgentRuntimeProfileUpdateBody,
   AgentTemplateOut, AgentTemplateVersionOut, CreateAgentFromTemplateBody,
   AgentVersionOut, AgentConfigUpdateBody, ChatTurnOut,
   SpaceAssistantSettingsOut, SpaceAssistantSettingsUpdate,
@@ -26,6 +27,8 @@ import type {
   EvolutionSummaryOut, EvolutionTarget, EvolutionTargetCreateBody, EvolutionTargetUpdateBody, EvolutionSignal, EvolutionSignalCreateBody,
   EvolutionRunListItem, EvolutionRunResult, EvolutionProposal, EvolutionValidationResult,
   Project, ProjectCreate, ProjectUpdate, ProjectWorkspaceLinkCreate, ProjectWorkspaceLinkOut, ProjectSummary,
+  CapabilityDefinition, CapabilityPackDescriptor, WorkflowTemplate, ProjectWorkflowProfile, WorkflowRunDraftRequest, WorkflowRunDraftResponse,
+  SkillImportPreviewResponse, SkillPackage, SkillImportApprovalProposalResponse, SkillConvertToCapabilityResponse,
   SourceConnector, SourceConnection, SourceConnectionCreate, IntakeItem, ExtractionJob,
   ExtractedEvidence, EvidenceLink, WorkspaceIntakeProfile, WorkspaceSourceBinding,
   SummaryRunRequest, SummaryRunOut,
@@ -238,6 +241,8 @@ export const sourcesApi = {
 export const sessionsApi = {
   list:       (params: Record<string, string> = {}) =>
     get<Page<Session>>('/sessions?' + new URLSearchParams(params)),
+  condenserPresetPrompts: () =>
+    get<CondenserPresetPromptOut[]>('/sessions/condenser-preset-prompts'),
   create:     (data: Partial<Session>)              => post<Session>('/sessions', data),
   get:        (id: string)                          => get<Session>(`/sessions/${id}`),
   messages:   (id: string)                          => get<Message[]>(`/sessions/${id}/messages`),
@@ -491,6 +496,12 @@ export const agentsApi = {
   // Config edit: appends a new immutable AgentVersion and repoints current_version_id.
   updateConfig: (agentId: string, data: AgentConfigUpdateBody) =>
     post<AgentOut>(`/agents/${agentId}/config`, data),
+  listRuntimeProfiles: (agentId: string) =>
+    get<AgentRuntimeProfileOut[]>(`/agents/${agentId}/runtime-profiles`),
+  createRuntimeProfile: (agentId: string, data: AgentRuntimeProfileCreateBody) =>
+    post<AgentRuntimeProfileOut>(`/agents/${agentId}/runtime-profiles`, data),
+  updateRuntimeProfile: (agentId: string, profileId: string, data: AgentRuntimeProfileUpdateBody) =>
+    patch<AgentRuntimeProfileOut>(`/agents/${agentId}/runtime-profiles/${profileId}`, data),
   currentVersion: (agentId: string) => get<AgentVersionOut>(`/agents/${agentId}/current-version`),
   // Per-space system-managed default Assistant (the Chat identity). ensure is idempotent.
   getDefaultAssistant: () => get<AgentOut>('/agents/default-assistant'),
@@ -558,6 +569,52 @@ export const capabilitiesApi = {
   list:   ()            => get<Capability[]>('/capabilities'),
   get:    (id: string)  => get<Capability>(`/capabilities/${id}`),
   reload: ()            => post<CapabilitiesReloadResult>('/capabilities/reload'),
+}
+
+export const capabilitiesFrameworkApi = {
+  listCapabilityDefinitions: () =>
+    get<CapabilityDefinition[]>('/capability-definitions'),
+  getCapabilityDefinition: (id: string) =>
+    get<CapabilityDefinition>(`/capability-definitions/${encodeURIComponent(id)}`),
+  listCapabilityPacks: () =>
+    get<CapabilityPackDescriptor[]>('/capability-packs'),
+  getCapabilityPack: (id: string) =>
+    get<CapabilityPackDescriptor>(`/capability-packs/${encodeURIComponent(id)}`),
+  listWorkflowTemplates: () =>
+    get<WorkflowTemplate[]>('/workflow-templates'),
+  getWorkflowTemplate: (id: string) =>
+    get<WorkflowTemplate>(`/workflow-templates/${encodeURIComponent(id)}`),
+  previewSkillImport: (data: { url: string }) =>
+    post<SkillImportPreviewResponse>('/skill-sources/import-preview', data),
+  importSkill: (data: { url: string }) =>
+    post<SkillPackage>('/skill-sources/import', data),
+  listSkillPackages: () =>
+    get<Page<SkillPackage>>('/skill-packages'),
+  getSkillPackage: (id: string) =>
+    get<SkillPackage>(`/skill-packages/${encodeURIComponent(id)}`),
+  createSkillReviewProposal: (skillPackageId: string) =>
+    post<SkillImportApprovalProposalResponse>(`/skill-packages/${encodeURIComponent(skillPackageId)}/review-proposal`),
+  convertSkillToCapability: (skillPackageId: string, data: { capability_id?: string; namespace?: string; enable_for_project_id?: string | null; create_runtime_bindings?: boolean } = {}) =>
+    post<SkillConvertToCapabilityResponse>(`/skill-packages/${encodeURIComponent(skillPackageId)}/convert-to-capability`, data),
+  createCapabilityEnableProposal: (capabilityId: string, data: { capability_version_id?: string; project_id?: string; agent_id?: string; user_id?: string; config_json?: Record<string, unknown> } = {}) =>
+    post<Proposal>(`/capability-definitions/${encodeURIComponent(capabilityId)}/enable-proposal`, data),
+  createCapabilityDisableProposal: (capabilityId: string, data: { capability_version_id?: string; project_id?: string; agent_id?: string; user_id?: string } = {}) =>
+    post<Proposal>(`/capability-definitions/${encodeURIComponent(capabilityId)}/disable-proposal`, data),
+}
+
+export const projectWorkflowProfilesApi = {
+  list: (projectId: string) =>
+    get<ProjectWorkflowProfile[]>(`/projects/${encodeURIComponent(projectId)}/workflow-profiles`),
+  create: (projectId: string, data: { workflow_template_id: string; name: string; enabled?: boolean; config_json?: Record<string, unknown> }) =>
+    post<ProjectWorkflowProfile>(`/projects/${encodeURIComponent(projectId)}/workflow-profiles`, data),
+  update: (projectId: string, profileId: string, data: { name?: string; enabled?: boolean; config_json?: Record<string, unknown> }) =>
+    patch<ProjectWorkflowProfile>(`/projects/${encodeURIComponent(projectId)}/workflow-profiles/${encodeURIComponent(profileId)}`, data),
+  disable: (projectId: string, profileId: string) =>
+    del<ProjectWorkflowProfile>(`/projects/${encodeURIComponent(projectId)}/workflow-profiles/${encodeURIComponent(profileId)}`),
+  buildTemplateRunDraft: (projectId: string, workflowTemplateId: string, data: WorkflowRunDraftRequest = {}) =>
+    post<WorkflowRunDraftResponse>(`/projects/${encodeURIComponent(projectId)}/workflow-templates/${encodeURIComponent(workflowTemplateId)}/run-draft`, data),
+  buildRunDraft: (projectId: string, profileId: string, data: WorkflowRunDraftRequest = {}) =>
+    post<WorkflowRunDraftResponse>(`/projects/${encodeURIComponent(projectId)}/workflow-profiles/${encodeURIComponent(profileId)}/run-draft`, data),
 }
 
 // ── Context ───────────────────────────────────────────────────────────────

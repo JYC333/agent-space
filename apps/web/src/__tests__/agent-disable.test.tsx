@@ -1,23 +1,40 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import type { AgentOut } from '../types/api'
+import userEvent from '@testing-library/user-event'
+import type { AgentOut, AgentVersionOut } from '../types/api'
 
-const { getMock, updateMock, listVersionsMock, listRunsMock, listProposalsMock } = vi.hoisted(() => ({
+const {
+  getMock,
+  updateMock,
+  updateConfigMock,
+  listVersionsMock,
+  listRunsMock,
+  listProposalsMock,
+  listRuntimeProfilesMock,
+  condenserPresetPromptsMock,
+} = vi.hoisted(() => ({
   getMock: vi.fn(),
   updateMock: vi.fn(),
+  updateConfigMock: vi.fn(),
   listVersionsMock: vi.fn(),
   listRunsMock: vi.fn(),
   listProposalsMock: vi.fn(),
+  listRuntimeProfilesMock: vi.fn(),
+  condenserPresetPromptsMock: vi.fn(),
 }))
 
 vi.mock('../api/client', () => ({
   agentsApi: {
     get: getMock,
     update: updateMock,
-    updateConfig: vi.fn(),
+    updateConfig: updateConfigMock,
     listVersions: listVersionsMock,
     listRunsForAgent: listRunsMock,
+    listRuntimeProfiles: listRuntimeProfilesMock,
     listProposals: listProposalsMock,
+  },
+  sessionsApi: {
+    condenserPresetPrompts: condenserPresetPromptsMock,
   },
 }))
 
@@ -47,11 +64,45 @@ function agent(overrides: Partial<AgentOut> = {}): AgentOut {
   }
 }
 
+function version(overrides: Partial<AgentVersionOut> = {}): AgentVersionOut {
+  return {
+    id: 'v1', agent_id: 'a1', space_id: 's1', version_label: 'v1',
+    model_provider_id: null, model_name: null, system_prompt: null,
+    model_config_json: {}, runtime_config_json: {},
+    context_policy_json: { allowed_input_contexts: ['memory'], default_input_contexts: ['memory'] },
+    memory_policy_json: {}, capabilities_json: [],
+    tool_permissions_json: {}, runtime_policy_json: {}, tool_policy_json: {},
+    output_policy_json: {}, schedule_config_json: {}, output_schema_json: {},
+    source_proposal_id: null, source_activity_id: null,
+    created_at: '', published_at: null, archived_at: null,
+    ...overrides,
+  }
+}
+
 describe('AgentDetailPage — disable/enable toggle', () => {
   beforeEach(() => {
-    getMock.mockReset(); updateMock.mockReset()
+    getMock.mockReset(); updateMock.mockReset(); updateConfigMock.mockReset()
+    condenserPresetPromptsMock.mockReset()
     listVersionsMock.mockResolvedValue([]); listRunsMock.mockResolvedValue([]); listProposalsMock.mockResolvedValue([])
+    listRuntimeProfilesMock.mockResolvedValue([])
+    condenserPresetPromptsMock.mockResolvedValue([
+      {
+        profile: 'general',
+        system: 'General system preset.',
+        instructions: 'General summary instructions.',
+        shared_system_rules: 'Be strictly factual.',
+        effective_system: 'General system preset. Be strictly factual.',
+      },
+      {
+        profile: 'coding',
+        system: 'Coding system preset.',
+        instructions: 'Coding summary instructions.',
+        shared_system_rules: 'Be strictly factual.',
+        effective_system: 'Coding system preset. Be strictly factual.',
+      },
+    ])
     updateMock.mockResolvedValue(agent())
+    updateConfigMock.mockResolvedValue(agent())
   })
 
   it('disables an active agent through agentsApi.update', async () => {
@@ -84,5 +135,42 @@ describe('AgentDetailPage — disable/enable toggle', () => {
     getMock.mockResolvedValue(agent({ agent_kind: 'standard' }))
     render(<AgentDetailPage />)
     expect(await screen.findByRole('link', { name: /open chat/i })).toBeInTheDocument()
+  })
+
+  it('saves session summary profile and prompt overrides into context policy', async () => {
+    const user = userEvent.setup()
+    getMock.mockResolvedValue(agent())
+    listVersionsMock.mockResolvedValue([
+      version({
+        context_policy_json: {
+          allowed_input_contexts: ['memory'],
+          default_input_contexts: ['memory'],
+          condenser: { profile: 'general', keep_tail_ratio: 0.35 },
+        },
+      }),
+    ])
+    render(<AgentDetailPage />)
+
+    await user.click(await screen.findByRole('tab', { name: /inputs/i }))
+    expect(await screen.findByText(/general system preset/i)).toBeInTheDocument()
+    await user.selectOptions(await screen.findByLabelText(/profile/i), 'coding')
+    expect(await screen.findByText(/coding system preset/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /custom prompt/i }))
+    await user.type(screen.getByLabelText(/custom system prompt/i), 'Summarize for this agent.')
+    await user.type(screen.getByLabelText(/custom summary instructions/i), 'Keep decisions and next actions.')
+    await user.click(screen.getByRole('button', { name: /save summary settings/i }))
+
+    await waitFor(() => expect(updateConfigMock).toHaveBeenCalledWith('a1', {
+      context_policy_json: {
+        allowed_input_contexts: ['memory'],
+        default_input_contexts: ['memory'],
+        condenser: {
+          profile: 'coding',
+          keep_tail_ratio: 0.35,
+          custom_system: 'Summarize for this agent.',
+          custom_instructions: 'Keep decisions and next actions.',
+        },
+      },
+    }))
   })
 })

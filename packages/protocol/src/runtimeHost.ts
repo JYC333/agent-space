@@ -9,7 +9,11 @@
 
 import { z } from "zod";
 import { IdSchema, ISODateTimeSchema, SecretResponseGuards } from "./common.js";
-import { CanonicalModelEventSchema, CanonicalUsageSchema } from "./model.js";
+import {
+  CanonicalMessageSchema,
+  CanonicalModelEventSchema,
+  CanonicalUsageSchema,
+} from "./model.js";
 
 export const RuntimeHostToolModeSchema = z.enum(["disabled", "authorized_bindings"]);
 export type RuntimeHostToolMode = z.infer<typeof RuntimeHostToolModeSchema>;
@@ -38,6 +42,7 @@ export const RuntimeHostExecuteRequestSchema = z.object({
   model: z.string().nullish(),
   system_prompt: z.string().nullish(),
   prompt: z.string(),
+  messages: z.array(CanonicalMessageSchema).min(1).optional(),
   mode: z.string().min(1),
   instruction: z.string().nullish(),
   project_id: IdSchema.nullish(),

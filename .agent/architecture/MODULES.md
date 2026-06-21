@@ -50,7 +50,8 @@ Core modules are `always_on=True`. Optional product routes are still mounted by 
 | `system` | infra | `/health`, `/server/health`, `/server/features`, `/features` | empty | Server health and feature descriptors. |
 | `auth` | kernel | `/auth/*`, `/me`, `/me/spaces` | yes | Users, auth accounts, sessions, feature-gated API keys, Google auth. |
 | `spaces` | kernel | `/spaces`, `/invitations` | hook registry | Spaces, memberships, invitations, space-created hook dispatch. |
-| `catalog` | capability | `/server/catalog*`, `/capabilities*` | yes | Read-only on-disk catalog. Owns catalog-backed capability/template surfaces; there is no separate capability route module. |
+| `catalog` | capability | `/server/catalog*`, `/capabilities*` | yes | Read-only on-disk catalog. Owns legacy catalog-backed capability/template manifest surfaces. |
+| `capabilities` | capability | `/capability-definitions*`, `/capability-packs*`, `/workflow-templates*`, `/projects/{projectId}/workflow-profiles*`, `/skill-sources*`, `/skill-packages*` | yes | Capability/workflow/open-skill control plane: canonical definitions, packs, workflow templates, imported skill packages, project workflow profiles, and runtime skill bindings. Does not execute native capabilities. |
 | `streaming` | infra | `/runs/{runId}/events/stream` | empty | Run event SSE stream. |
 | `notifications` | infra | `/server/notifications/webhooks/*` | empty | Notification webhook egress policy and dispatch boundary. |
 | `runtimeTools` | infra | `/runtime-tools*` | empty | Controlled runtime CLI installer/status/catalog. |
@@ -121,10 +122,11 @@ These routes are not `ServerModule` entries. They are mounted by `PluginHost` af
 
 ## Current Boundary Status
 
-- The route registry is the HTTP source of truth. No registered capability,
-  credentials, Home, personal-view, or workspace-console server modules currently
-  exist; those routes are owned by `catalog`, `providers`, `frontendSupport`, and
-  `workspaces` as listed above.
+- The route registry is the HTTP source of truth. Credential, Home, personal-view,
+  and workspace-console routes are owned by `providers`, `frontendSupport`, and
+  `workspaces` as listed above. The legacy `/capabilities*` manifest surface is
+  owned by `catalog`; the capability/workflow/open-skill control plane is owned
+  by `capabilities`.
 - The server boundary guard restricts bare runtime package imports and forbids
   web, sandbox, deployer, ops, migration-tooling, and ORM internals from
   `server/src`.

@@ -109,6 +109,44 @@ describe("engine + registry default", () => {
     const d = engineCheck(registry, { action: "runtime.execute" });
     expect(d.decision).toBe("allow");
   });
+  it("runtime_skill.render requires enablement proof before allowing render", () => {
+    const d = engineCheck(registry, {
+      action: "runtime_skill.render",
+      risk_level: "medium",
+    });
+    expect(d.decision).toBe("require_approval");
+    expect(d.policy_rule_id).toBe("registry_default");
+  });
+  it("runtime_skill.render allows enabled bindings (review happens at enablement)", () => {
+    const d = engineCheck(registry, {
+      action: "runtime_skill.render",
+      risk_level: "medium",
+      enabled_binding: true,
+      capability_enablement_id: "enable-1",
+    });
+    expect(d.decision).toBe("allow");
+    expect(d.policy_rule_id).toBe("runtime_skill_render_enabled_binding");
+  });
+  it("runtime_skill.render allows enabled bindings even without a context risk_level", () => {
+    const d = engineCheck(registry, {
+      action: "runtime_skill.render",
+      enabled_binding: true,
+      capability_enablement_id: "enable-1",
+    });
+    expect(d.decision).toBe("allow");
+    expect(d.policy_rule_id).toBe("runtime_skill_render_enabled_binding");
+  });
+  it("runtime_skill.render allows enabled high-risk bindings (enablement was the review gate)", () => {
+    const d = engineCheck(registry, {
+      action: "runtime_skill.render",
+      risk_level: "high",
+      enabled_binding: true,
+      capability_enablement_id: "enable-1",
+    });
+    expect(d.decision).toBe("allow");
+    expect(d.policy_rule_id).toBe("runtime_skill_render_enabled_binding");
+    expect(d.risk_level).toBe("high");
+  });
   it("runtime.use_credential same-space manual allows", () => {
     const d = engineCheck(registry, {
       action: "runtime.use_credential",

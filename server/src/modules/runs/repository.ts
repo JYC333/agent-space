@@ -73,6 +73,23 @@ export {
   type RunTerminalUpdate,
 } from "./runRepositoryTypes";
 
+interface RuntimeProfileForRun {
+  id: string;
+  space_id: string;
+  agent_id: string;
+  name: string;
+  adapter_type: string;
+  model_provider_id: string | null;
+  model_name: string | null;
+  credential_profile_id: string | null;
+  runtime_config_json: unknown;
+  runtime_policy_json: unknown;
+  enabled: boolean;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export class PgRunRepository {
   constructor(private readonly db: Queryable) {}
 
@@ -158,6 +175,13 @@ export class PgRunRepository {
         );
       }
     }
+    const runtimeProfile = input.runtime_profile_id
+      ? await this.requireRuntimeProfileForRun(
+          input.space_id,
+          input.agent_id,
+          input.runtime_profile_id,
+        )
+      : await this.getDefaultRuntimeProfileForRun(input.space_id, input.agent_id);
     // Resolve adapter type + model provider from the agent version and space
     // defaults when the caller did not pass them explicitly. The chat path
     // passes neither, so without this the run is created with a null provider
@@ -166,6 +190,7 @@ export class PgRunRepository {
       input.space_id,
       agent.current_version_id,
       input,
+      runtimeProfile,
     );
     const requiredSandboxLevel = requiredSandboxLevelForRun(
       resolved.adapterType,
@@ -192,6 +217,7 @@ export class PgRunRepository {
 
     const now = new Date().toISOString();
     const contextSnapshotId = randomUUID();
+    const capabilitiesJson = normalizeRunCapabilitiesJson(input.capabilities_json);
     await this.db.query(
       `INSERT INTO context_snapshots (
           id, space_id, source_refs_json, compiled_summary, token_estimate,
@@ -207,37 +233,54 @@ export class PgRunRepository {
           space_id: input.space_id,
           user_id: input.user_id,
           agent_version_id: agent.current_version_id,
+          runtime_profile_id: runtimeProfile?.id ?? null,
           session_id: input.session_id ?? null,
           workspace_id: input.workspace_id ?? null,
           project_id: input.project_id ?? null,
           user_message: input.prompt ?? input.instruction ?? null,
           manual_context: [],
+          capabilities_json: capabilitiesJson,
         }),
         now,
       ],
     );
 
     const runId = randomUUID();
+    const modelOverride = {
+      ...(input.model_override_json ?? {}),
+      ...(resolved.modelName || resolved.modelProviderId
+        ? { model: resolved.modelName, source: resolved.source }
+        : {}),
+    };
+    const modelOverrideJson = Object.keys(modelOverride).length > 0
+      ? JSON.stringify(modelOverride)
+      : null;
+    const runtimeProfileSnapshotJson = runtimeProfile
+      ? JSON.stringify(runtimeProfileSnapshot(runtimeProfile))
+      : null;
     const result = await this.db.query<RunRecord>(
       `INSERT INTO runs (
-          id, space_id, agent_id, agent_version_id, context_snapshot_id,
+          id, space_id, agent_id, agent_version_id, runtime_profile_id,
+          context_snapshot_id,
           workspace_id, session_id, parent_run_id, instructed_by_user_id,
           run_type, trigger_origin, status, mode, prompt, instruction,
           scheduled_at, created_at, updated_at, adapter_type, capability_id,
-          model_provider_id, model_override_json, required_sandbox_level,
-          usage_accuracy, visibility, project_id, source
+          capabilities_json, model_provider_id, model_override_json, runtime_profile_snapshot_json,
+          required_sandbox_level, usage_accuracy, visibility, project_id, source
        )
        VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9,
-          $10, $11, 'queued', $12, $13, $14, $15, $16, $16,
-          $17, $18, $19, $20::jsonb, $22, 'estimated',
-          'space_shared', $21, 'managed'
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+          $11, $12, 'queued', $13, $14, $15, $16, $17, $17,
+          $18, $19, $20::jsonb, $21, $22::jsonb, $23::jsonb, $24, 'estimated',
+          'space_shared', $25, 'managed'
        )
-       RETURNING id, space_id, agent_id, agent_version_id, context_snapshot_id,
+       RETURNING id, space_id, agent_id, agent_version_id, runtime_profile_id,
+                 context_snapshot_id,
                  run_type, status, mode, prompt, instruction, workspace_id,
                  session_id, parent_run_id, project_id, scheduled_at,
-                 adapter_type, capability_id, model_provider_id,
-                 model_override_json, required_sandbox_level, trigger_origin,
+                 adapter_type, capability_id, capabilities_json, model_provider_id,
+                 model_override_json, runtime_profile_snapshot_json,
+                 required_sandbox_level, trigger_origin,
                  instructed_by_user_id, error_message, error_json, output_json,
                  usage_json, started_at, ended_at, created_at, updated_at,
                  visibility`,
@@ -246,6 +289,7 @@ export class PgRunRepository {
         input.space_id,
         input.agent_id,
         agent.current_version_id,
+        runtimeProfile?.id ?? null,
         contextSnapshotId,
         input.workspace_id ?? null,
         input.session_id ?? null,
@@ -260,12 +304,12 @@ export class PgRunRepository {
         now,
         resolved.adapterType,
         input.capability_id ?? null,
+        JSON.stringify(capabilitiesJson),
         resolved.modelProviderId,
-        resolved.modelName || resolved.modelProviderId
-          ? JSON.stringify({ model: resolved.modelName, source: resolved.source })
-          : null,
-        input.project_id ?? null,
+        modelOverrideJson,
+        runtimeProfileSnapshotJson,
         requiredSandboxLevel,
+        input.project_id ?? null,
       ],
     );
     const row = result.rows[0];
@@ -294,15 +338,73 @@ export class PgRunRepository {
     return result.rows[0] ?? null;
   }
 
+  private async requireRuntimeProfileForRun(
+    spaceId: string,
+    agentId: string,
+    runtimeProfileId: string,
+  ): Promise<RuntimeProfileForRun> {
+    const profile = await this.getRuntimeProfileForRun(spaceId, agentId, runtimeProfileId);
+    if (!profile) {
+      throw new RunCreateValidationError(
+        `Runtime profile '${runtimeProfileId}' not found for Agent '${agentId}' in this space`,
+        404,
+      );
+    }
+    if (!profile.enabled) {
+      throw new RunCreateValidationError(
+        `Runtime profile '${runtimeProfileId}' is disabled`,
+        409,
+      );
+    }
+    return profile;
+  }
+
+  private async getDefaultRuntimeProfileForRun(
+    spaceId: string,
+    agentId: string,
+  ): Promise<RuntimeProfileForRun | null> {
+    const result = await this.db.query<RuntimeProfileForRun>(
+      `SELECT id, space_id, agent_id, name, adapter_type, model_provider_id,
+              model_name, credential_profile_id, runtime_config_json,
+              runtime_policy_json, enabled, is_default, created_at, updated_at
+         FROM agent_runtime_profiles
+        WHERE space_id = $1
+          AND agent_id = $2
+          AND enabled = true
+        ORDER BY is_default DESC, created_at ASC, id ASC
+        LIMIT 1`,
+      [spaceId, agentId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async getRuntimeProfileForRun(
+    spaceId: string,
+    agentId: string,
+    runtimeProfileId: string,
+  ): Promise<RuntimeProfileForRun | null> {
+    const result = await this.db.query<RuntimeProfileForRun>(
+      `SELECT id, space_id, agent_id, name, adapter_type, model_provider_id,
+              model_name, credential_profile_id, runtime_config_json,
+              runtime_policy_json, enabled, is_default, created_at, updated_at
+         FROM agent_runtime_profiles
+        WHERE space_id = $1 AND agent_id = $2 AND id = $3
+        LIMIT 1`,
+      [spaceId, agentId, runtimeProfileId],
+    );
+    return result.rows[0] ?? null;
+  }
+
   /**
    * Resolve adapter type + model provider + model for a new run. Priority:
-   * explicit request → agent version default → space default provider (for
-   * adapters that require a provider).
+   * runtime profile → legacy explicit request → agent version default →
+   * space default provider (for adapters that require a provider).
    */
   private async resolveRunModelConfig(
     spaceId: string,
     versionId: string,
     input: RunCreateInput,
+    runtimeProfile: RuntimeProfileForRun | null,
   ): Promise<{
     adapterType: string;
     modelProviderId: string | null;
@@ -312,9 +414,12 @@ export class PgRunRepository {
     const version = await this.loadAgentVersionForResolution(spaceId, versionId);
     const runtimeConfig = recordValue(version?.runtime_config_json);
     const runtimePolicy = recordValue(version?.runtime_policy_json);
-    // preview_run_adapter_type: request → runtime_config.adapter_type →
-    // runtime_policy.default_adapter_type → model_api.
+    const profileRuntimeConfig = recordValue(runtimeProfile?.runtime_config_json);
+    const profileRuntimePolicy = recordValue(runtimeProfile?.runtime_policy_json);
     const adapterType =
+      trimmed(runtimeProfile?.adapter_type) ||
+      trimmed(profileRuntimeConfig.adapter_type) ||
+      trimmed(profileRuntimePolicy.default_adapter_type) ||
       trimmed(input.adapter_type) ||
       trimmed(runtimeConfig.adapter_type) ||
       trimmed(runtimePolicy.default_adapter_type) ||
@@ -322,10 +427,19 @@ export class PgRunRepository {
     const mode =
       BUILTIN_RUNTIME_ADAPTER_SPECS[adapterType as RuntimeAdapterType]?.model
         .model_provider_mode ?? "none";
-    const requestModel = trimmed(input.model) || null;
+    const requestModel = runtimeProfile ? null : trimmed(input.model) || null;
+    const profileModel = trimmed(runtimeProfile?.model_name) || null;
     const versionModel = trimmed(version?.model_name) || null;
 
-    if (input.model_provider_id) {
+    if (runtimeProfile?.model_provider_id) {
+      return {
+        adapterType,
+        modelProviderId: runtimeProfile.model_provider_id,
+        modelName: profileModel ?? versionModel,
+        source: "runtime_profile",
+      };
+    }
+    if (!runtimeProfile && input.model_provider_id) {
       return {
         adapterType,
         modelProviderId: input.model_provider_id,
@@ -337,7 +451,7 @@ export class PgRunRepository {
       return {
         adapterType,
         modelProviderId: version.model_provider_id,
-        modelName: requestModel ?? versionModel,
+        modelName: requestModel ?? profileModel ?? versionModel,
         source: "agent_default",
       };
     }
@@ -345,7 +459,7 @@ export class PgRunRepository {
       return {
         adapterType,
         modelProviderId: version.model_provider_id,
-        modelName: requestModel ?? versionModel,
+        modelName: requestModel ?? profileModel ?? versionModel,
         source: "agent_default",
       };
     }
@@ -355,7 +469,7 @@ export class PgRunRepository {
         return {
           adapterType,
           modelProviderId: fallback.id,
-          modelName: requestModel ?? versionModel ?? fallback.default_model,
+          modelName: requestModel ?? profileModel ?? versionModel ?? fallback.default_model,
           source: fallback.source,
         };
       }
@@ -363,8 +477,8 @@ export class PgRunRepository {
     return {
       adapterType,
       modelProviderId: null,
-      modelName: requestModel,
-      source: requestModel ? "request" : "none",
+      modelName: requestModel ?? profileModel,
+      source: runtimeProfile && profileModel ? "runtime_profile" : requestModel ? "request" : "none",
     };
   }
 
@@ -484,12 +598,14 @@ export class PgRunRepository {
   async getRun(spaceId: string, runId: string): Promise<RunRecord | null> {
     const result = await this.db.query<RunRecord>(
       `SELECT r.id, r.space_id, r.agent_id, r.agent_version_id,
+              r.runtime_profile_id,
               av.system_prompt AS system_prompt,
               r.context_snapshot_id, r.run_type, r.status, r.mode, r.prompt,
               r.instruction, r.workspace_id, r.session_id, r.parent_run_id,
               r.project_id, r.scheduled_at, r.adapter_type, r.capability_id,
-              r.model_provider_id, r.model_override_json, r.required_sandbox_level,
-              av.runtime_config_json,
+              r.capabilities_json, r.model_provider_id, r.model_override_json, r.required_sandbox_level,
+              r.runtime_profile_snapshot_json,
+              COALESCE(r.runtime_profile_snapshot_json->'runtime_config_json', av.runtime_config_json) AS runtime_config_json,
               r.trigger_origin, r.instructed_by_user_id, r.error_message,
               r.error_json, r.output_json, r.usage_json, r.started_at,
               r.ended_at, r.created_at, r.updated_at, r.visibility
@@ -519,10 +635,12 @@ export class PgRunRepository {
     const limitIndex = params.length - 1;
     const offsetIndex = params.length;
     const result = await this.db.query<RunRecord>(
-      `SELECT id, space_id, agent_id, agent_version_id, context_snapshot_id,
+      `SELECT id, space_id, agent_id, agent_version_id, runtime_profile_id,
+              context_snapshot_id,
               run_type, status, mode, prompt, instruction, workspace_id,
               session_id, parent_run_id, project_id, scheduled_at, adapter_type,
-              capability_id, model_provider_id, model_override_json,
+              capability_id, capabilities_json, model_provider_id, model_override_json,
+              runtime_profile_snapshot_json,
               required_sandbox_level, trigger_origin, instructed_by_user_id,
               error_message, error_json, output_json, usage_json, started_at,
               ended_at, created_at, updated_at, visibility
@@ -1032,13 +1150,15 @@ export class PgRunRepository {
                 updated_at = $3,
                 required_sandbox_level = COALESCE($4, required_sandbox_level)
           WHERE space_id = $1 AND id = $2 AND status = 'queued'
-          RETURNING id, space_id, agent_id, agent_version_id, run_type, status, mode,
+          RETURNING id, space_id, agent_id, agent_version_id, runtime_profile_id,
+                    runtime_profile_snapshot_json, run_type, status, mode,
                     prompt, instruction, workspace_id, session_id, project_id,
-                    adapter_type, model_provider_id,
+                    adapter_type, capability_id, capabilities_json, model_provider_id,
                     required_sandbox_level, trigger_origin, instructed_by_user_id, error_message,
                     started_at, ended_at
        )
-       SELECT u.*, av.runtime_config_json
+       SELECT u.*,
+              COALESCE(u.runtime_profile_snapshot_json->'runtime_config_json', av.runtime_config_json) AS runtime_config_json
          FROM updated u
          LEFT JOIN agent_versions av
            ON av.id = u.agent_version_id
@@ -1247,4 +1367,29 @@ export class PgRunRepository {
   async releaseExecutionLock(runId: string): Promise<void> {
     await this.db.query("DELETE FROM run_execution_locks WHERE run_id = $1", [runId]);
   }
+}
+
+function normalizeRunCapabilitiesJson(value: unknown[] | null | undefined): string[] {
+  if (value === undefined || value === null) return [];
+  const result = value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0);
+  if (result.length !== value.length) {
+    throw new RunCreateValidationError("capabilities_json must contain non-empty strings");
+  }
+  return [...new Set(result)];
+}
+
+function runtimeProfileSnapshot(profile: RuntimeProfileForRun): Record<string, unknown> {
+  return {
+    id: profile.id,
+    name: profile.name,
+    adapter_type: profile.adapter_type,
+    model_provider_id: profile.model_provider_id,
+    model_name: profile.model_name,
+    credential_profile_id: profile.credential_profile_id,
+    runtime_config_json: recordValue(profile.runtime_config_json),
+    runtime_policy_json: recordValue(profile.runtime_policy_json),
+    is_default: profile.is_default,
+  };
 }

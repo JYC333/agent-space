@@ -7,7 +7,7 @@ import type {
 import type { ServerConfig } from "../../config";
 import { resolveProviderCommandStore } from "../providers/providerCommandStore";
 import {
-  completeProviderText,
+  completeProviderMessages,
   ProviderInvocationError,
 } from "../providers/providerInvocation";
 
@@ -112,14 +112,19 @@ export async function executeRuntimeHost(
   }
 
   try {
-    const result = await completeProviderText(
+    const result = await completeProviderMessages(
       resolveProviderCommandStore(config),
       input.space_id,
       {
         provider_id: input.model_provider_id,
         model: input.model,
         system: input.system_prompt ?? "",
-        user: input.prompt,
+        messages: input.messages?.length
+          ? input.messages.map((message) => ({
+              role: message.role,
+              content: message.content ?? "",
+            }))
+          : [{ role: "user", content: input.prompt }],
         max_tokens: input.max_tokens,
         task: "runtime_host",
       },

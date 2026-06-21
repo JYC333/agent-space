@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/spaceNav'
-import { Bot, Loader2, Plus, LayoutTemplate, MessageSquare } from 'lucide-react'
+import { Bot, Loader2, Plus, LayoutTemplate, MessageSquare, Settings2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { agentsApi } from '../../api/client'
 import type { AgentOut } from '../../types/api'
@@ -20,22 +20,40 @@ import { errMsg } from '../../lib/utils'
 function PersonalAssistantCard() {
   const navigate = useNavigate()
   const [assistant, setAssistant] = useState<AgentOut | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [busyAction, setBusyAction] = useState<'chat' | 'configure' | null>(null)
 
   useEffect(() => {
     // Resolve the existing assistant for its real name (404 until first created).
     agentsApi.getDefaultAssistant().then(setAssistant).catch(() => setAssistant(null))
   }, [])
 
+  async function resolveAssistant() {
+    const agent = assistant ?? await agentsApi.ensureDefaultAssistant()
+    setAssistant(agent)
+    return agent
+  }
+
   async function openAssistant() {
-    setBusy(true)
+    setBusyAction('chat')
     try {
-      const agent = assistant ?? await agentsApi.ensureDefaultAssistant()
+      const agent = await resolveAssistant()
       navigate(`/agents/${agent.id}/chat`)
     } catch (err) {
       toast.error(errMsg(err))
     } finally {
-      setBusy(false)
+      setBusyAction(null)
+    }
+  }
+
+  async function configureAssistant() {
+    setBusyAction('configure')
+    try {
+      const agent = await resolveAssistant()
+      navigate(`/agents/${agent.id}`)
+    } catch (err) {
+      toast.error(errMsg(err))
+    } finally {
+      setBusyAction(null)
     }
   }
 
@@ -54,9 +72,18 @@ function PersonalAssistantCard() {
             </p>
           </div>
         </div>
-        <Button size="sm" disabled={busy} onClick={openAssistant}>
-          {busy ? <Loader2 className="size-4 animate-spin" /> : 'Open chat'}
-        </Button>
+        <div className="flex shrink-0 gap-2">
+          <Button size="sm" variant="outline" disabled={busyAction !== null} onClick={configureAssistant}>
+            {busyAction === 'configure'
+              ? <Loader2 className="size-4 animate-spin" />
+              : <><Settings2 className="size-3.5 mr-1" />Configure</>}
+          </Button>
+          <Button size="sm" disabled={busyAction !== null} onClick={openAssistant}>
+            {busyAction === 'chat'
+              ? <Loader2 className="size-4 animate-spin" />
+              : <><MessageSquare className="size-3.5 mr-1" />Open chat</>}
+          </Button>
+        </div>
       </div>
     </Card>
   )

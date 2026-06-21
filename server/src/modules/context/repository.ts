@@ -54,12 +54,14 @@ export interface RunContextRecord {
   project_id: string | null;
   session_id: string | null;
   instructed_by_user_id: string | null;
+  capability_id: string | null;
   trigger_origin: string | null;
   data_exposure_level: string | null;
   trust_level: string | null;
   has_personal_grant_context: boolean;
   personal_grant_context_json: unknown;
   system_prompt: string | null;
+  capabilities_json: unknown;
   memory_policy_json: unknown;
   model_config_json: unknown;
 }
@@ -177,10 +179,12 @@ export class PgRunContextRepository {
     const result = await this.db.query<RunContextRecord>(
       `SELECT r.id, r.space_id, r.agent_id, r.agent_version_id,
               r.context_snapshot_id, r.prompt, r.workspace_id, r.project_id,
-              r.session_id, r.instructed_by_user_id, r.trigger_origin,
+              r.session_id, r.instructed_by_user_id, r.capability_id, r.trigger_origin,
               r.data_exposure_level, r.trust_level,
               r.has_personal_grant_context, r.personal_grant_context_json,
-              av.system_prompt, av.memory_policy_json, av.model_config_json
+              av.system_prompt,
+              COALESCE(NULLIF(r.capabilities_json, '[]'::jsonb), av.capabilities_json) AS capabilities_json,
+              av.memory_policy_json, av.model_config_json
          FROM runs r
          LEFT JOIN agent_versions av
            ON av.id = r.agent_version_id

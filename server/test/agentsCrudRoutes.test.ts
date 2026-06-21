@@ -4,6 +4,7 @@ import { loadConfig } from "../src/config";
 import { getDbPool } from "../src/db/pool";
 import { buildServer } from "../src/server";
 import { __setAgentChatIdentityForTests } from "../src/modules/agents";
+import { __setAuthIdentityForTests } from "../src/modules/auth/identity";
 
 vi.mock("../src/db/pool", () => ({
   getDbPool: vi.fn(),
@@ -14,10 +15,12 @@ let app: FastifyInstance | undefined;
 beforeEach(() => {
   vi.clearAllMocks();
   __setAgentChatIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+  __setAuthIdentityForTests({ spaceId: "space-1", userId: "user-1" });
 });
 
 afterEach(async () => {
   __setAgentChatIdentityForTests(null);
+  __setAuthIdentityForTests(null);
   await app?.close();
   app = undefined;
 });
@@ -47,6 +50,7 @@ describe("agents CRUD routes", () => {
   it("creates an agent and returns its initial immutable version", async () => {
     let agentId = "";
     let versionId = "";
+    let runtimeProfileId = "";
     const client = {
       query: vi.fn(async (sql: string, params: readonly unknown[] = []) => {
         if (sql.startsWith("INSERT INTO agents")) {
@@ -56,6 +60,33 @@ describe("agents CRUD routes", () => {
         if (sql.startsWith("INSERT INTO agent_versions")) {
           versionId = String(params[0]);
           return { rows: [{ id: versionId }], rowCount: 1 };
+        }
+        if (sql.startsWith("INSERT INTO agent_runtime_profiles")) {
+          runtimeProfileId = String(params[0]);
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes("FROM agent_runtime_profiles arp")) {
+          return {
+            rows: [{
+              id: runtimeProfileId,
+              space_id: "space-1",
+              agent_id: agentId,
+              name: "Default",
+              adapter_type: "capability",
+              model_provider_id: null,
+              provider_name: null,
+              provider_type: null,
+              model_name: null,
+              credential_profile_id: null,
+              runtime_config_json: { adapter_type: "capability" },
+              runtime_policy_json: { default_adapter_type: "capability" },
+              enabled: true,
+              is_default: true,
+              created_at: "2026-06-17T00:00:00.000Z",
+              updated_at: "2026-06-17T00:00:00.000Z",
+            }],
+            rowCount: 1,
+          };
         }
         if (sql.includes("FROM agents a")) {
           return {
@@ -119,6 +150,189 @@ describe("agents CRUD routes", () => {
       adapter_type: "capability",
       current_version_id: versionId,
     });
+  });
+
+  it("creates an agent from a template with the unified create payload", async () => {
+    let agentId = "";
+    let versionId = "";
+    let runtimeProfileId = "";
+    let sourceTemplateId: unknown = null;
+    let sourceTemplateVersionId: unknown = null;
+    let insertedRuntimeConfig: Record<string, unknown> = {};
+    let insertedContextPolicy: Record<string, unknown> = {};
+    let insertedScheduleConfig: Record<string, unknown> = {};
+    const client = {
+      query: vi.fn(async (sql: string, params: readonly unknown[] = []) => {
+        const norm = sql.replace(/\s+/g, " ").trim();
+        if (norm === "BEGIN" || norm === "COMMIT" || norm === "ROLLBACK") {
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.startsWith("INSERT INTO agents")) {
+          agentId = String(params[0]);
+          sourceTemplateId = params[8];
+          sourceTemplateVersionId = params[9];
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.startsWith("INSERT INTO agent_versions")) {
+          versionId = String(params[0]);
+          insertedRuntimeConfig = JSON.parse(String(params[8])) as Record<string, unknown>;
+          insertedContextPolicy = JSON.parse(String(params[9])) as Record<string, unknown>;
+          insertedScheduleConfig = JSON.parse(String(params[16])) as Record<string, unknown>;
+          return { rows: [{ id: versionId }], rowCount: 1 };
+        }
+        if (sql.startsWith("INSERT INTO agent_runtime_profiles")) {
+          runtimeProfileId = String(params[0]);
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes("FROM agent_runtime_profiles arp")) {
+          return {
+            rows: [{
+              id: runtimeProfileId,
+              space_id: "space-1",
+              agent_id: agentId,
+              name: "Default",
+              adapter_type: "capability",
+              model_provider_id: null,
+              provider_name: null,
+              provider_type: null,
+              model_name: null,
+              credential_profile_id: null,
+              runtime_config_json: insertedRuntimeConfig,
+              runtime_policy_json: { default_adapter_type: "capability" },
+              enabled: true,
+              is_default: true,
+              created_at: "2026-06-17T00:00:00.000Z",
+              updated_at: "2026-06-17T00:00:00.000Z",
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("FROM agents a")) {
+          return {
+            rows: [
+              {
+                id: agentId,
+                space_id: "space-1",
+                owner_user_id: "user-1",
+                name: "Reviewer",
+                description: "Prefilled and edited",
+                role_instruction: null,
+                status: "active",
+                agent_kind: "standard",
+                source_template_id: sourceTemplateId,
+                source_template_version_id: sourceTemplateVersionId,
+                current_version_id: versionId,
+                visibility: "private",
+                created_at: "2026-06-17T00:00:00.000Z",
+                updated_at: "2026-06-17T00:00:00.000Z",
+                model_provider_id: null,
+                provider_name: null,
+                provider_type: null,
+                model_name: null,
+                system_prompt: "Review carefully.",
+                runtime_policy_json: { default_adapter_type: "capability" },
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const pool = {
+      connect: vi.fn(async () => client),
+      query: vi.fn(async () => ({ rows: [], rowCount: 0 })),
+    };
+    vi.mocked(getDbPool).mockReturnValue(pool as never);
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/agent-templates/coding_reviewer/agents",
+      payload: {
+        name: "Reviewer",
+        description: "Prefilled and edited",
+        system_prompt: "Review carefully.",
+        adapter_type: "capability",
+        runtime_config_json: { adapter_type: "capability" },
+        context_policy_json: {
+          allowed_input_contexts: ["selected_workspace"],
+          default_input_contexts: ["selected_workspace"],
+          condenser: { profile: "coding" },
+        },
+        schedule_config_json: { enabled: false, cron: null },
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({
+      id: agentId,
+      name: "Reviewer",
+      adapter_type: "capability",
+      source_template_id: "coding_reviewer",
+      source_template_version_id: "coding_reviewer:v1",
+    });
+    expect(insertedRuntimeConfig).toMatchObject({ adapter_type: "capability" });
+    expect(insertedContextPolicy).toMatchObject({ condenser: { profile: "coding" } });
+    expect(insertedScheduleConfig).toEqual({ enabled: false, cron: null });
+  });
+
+  it("lists runtime profiles for an agent", async () => {
+    const query = vi.fn(async (sql: string) => {
+      const norm = sql.replace(/\s+/g, " ").trim();
+      if (norm.startsWith("SELECT id FROM agents WHERE space_id = $1 AND id = $2")) {
+        return { rows: [{ id: "agent-1" }], rowCount: 1 };
+      }
+      if (norm.includes("FROM agent_runtime_profiles arp")) {
+        return {
+          rows: [{
+            id: "runtime-profile-1",
+            space_id: "space-1",
+            agent_id: "agent-1",
+            name: "Default",
+            adapter_type: "model_api",
+            model_provider_id: "provider-1",
+            provider_name: "OpenAI",
+            provider_type: "openai",
+            model_name: "gpt-5-mini",
+            credential_profile_id: null,
+            runtime_config_json: { adapter_type: "model_api" },
+            runtime_policy_json: { default_adapter_type: "model_api" },
+            enabled: true,
+            is_default: true,
+            created_at: "2026-06-20T00:00:00.000Z",
+            updated_at: "2026-06-20T00:00:00.000Z",
+          }],
+          rowCount: 1,
+        };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    vi.mocked(getDbPool).mockReturnValue({ query } as never);
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/agents/agent-1/runtime-profiles",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([
+      expect.objectContaining({
+        id: "runtime-profile-1",
+        agent_id: "agent-1",
+        name: "Default",
+        adapter_type: "model_api",
+        model: expect.objectContaining({
+          provider_id: "provider-1",
+          provider_name: "OpenAI",
+          model: "gpt-5-mini",
+        }),
+        enabled: true,
+        is_default: true,
+      }),
+    ]);
   });
 
   it("does not touch the agent digest when config changes (digests stay peer-level)", async () => {

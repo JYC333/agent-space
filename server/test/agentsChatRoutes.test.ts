@@ -61,6 +61,15 @@ function services(overrides: AgentChatServiceOverrides = {}): AgentChatServices 
       async addMessage() {
         throw new Error("addMessage should be overridden");
       },
+      async listRecentMessagesForContext() {
+        return [];
+      },
+      async getLatestSummaryForContext() {
+        return null;
+      },
+    },
+    condense: {
+      async enqueue() {},
     },
     context: {
       async fetchCandidates() {
@@ -122,6 +131,7 @@ function services(overrides: AgentChatServiceOverrides = {}): AgentChatServices 
     orchestration: { ...base.orchestration, ...overrides.orchestration },
     context: { ...base.context, ...overrides.context },
     snapshots: { ...base.snapshots, ...overrides.snapshots },
+    condense: { ...base.condense, ...overrides.condense },
   };
 }
 
@@ -129,8 +139,14 @@ describe("agents chat-turn route", () => {
   it("orchestrates a successful chat turn and persists user then assistant messages", async () => {
     __setAgentChatIdentityForTests({ spaceId: "space-1", userId: "user-1" });
     const messages: Array<Record<string, unknown>> = [];
+    const condenseCalls: Array<Record<string, unknown>> = [];
     __setAgentChatServicesFactoryForTests(() =>
       services({
+        condense: {
+          async enqueue(input) {
+            condenseCalls.push({ ...input, afterMessages: messages.length });
+          },
+        },
         sessions: {
           async getSession() {
             throw new Error("getSession should not run");
@@ -159,6 +175,21 @@ describe("agents chat-turn route", () => {
               metadata_json: input.metadata ?? null,
               created_at: "2026-06-14T10:00:00.000Z",
             };
+          },
+          async listRecentMessagesForContext() {
+            return messages.map((entry, index) => ({
+              id: `message-${index + 1}`,
+              session_id: String(entry.sessionId),
+              space_id: "space-1",
+              user_id: "user-1",
+              role: String(entry.role),
+              content: String(entry.content),
+              metadata_json: null,
+              created_at: "2026-06-14T10:00:00.000Z",
+            }));
+          },
+          async getLatestSummaryForContext() {
+            return null;
           },
         },
         context: {
@@ -240,6 +271,18 @@ describe("agents chat-turn route", () => {
         metadata: { run_id: "run-1" },
       }),
     ]);
+    // Condense is enqueued once, after both messages are durable, with the
+    // agent identity so the job can resolve the scenario profile.
+    expect(condenseCalls).toEqual([
+      {
+        space_id: "space-1",
+        user_id: "user-1",
+        session_id: "session-1",
+        agent_id: "agent-1",
+        agent_version_id: "agent-version-1",
+        afterMessages: 2,
+      },
+    ]);
   });
 
   it("returns ok=false on run failure and does not persist an assistant message", async () => {
@@ -275,6 +318,12 @@ describe("agents chat-turn route", () => {
               metadata_json: input.metadata ?? null,
               created_at: "2026-06-14T10:00:00.000Z",
             };
+          },
+          async listRecentMessagesForContext() {
+            return [];
+          },
+          async getLatestSummaryForContext() {
+            return null;
           },
         },
         orchestration: {
@@ -351,6 +400,12 @@ describe("agents chat-turn route", () => {
               created_at: "2026-06-14T10:00:00.000Z",
             };
           },
+          async listRecentMessagesForContext() {
+            return [];
+          },
+          async getLatestSummaryForContext() {
+            return null;
+          },
         },
         runs: {
           async getChatRunResult() {
@@ -393,6 +448,12 @@ describe("agents chat-turn route", () => {
           async addMessage() {
             wrote = true;
             throw new Error("addMessage should not run");
+          },
+          async listRecentMessagesForContext() {
+            throw new Error("listRecentMessagesForContext should not run");
+          },
+          async getLatestSummaryForContext() {
+            throw new Error("getLatestSummaryForContext should not run");
           },
         },
       }),
@@ -463,6 +524,42 @@ describe("agents chat-turn route", () => {
               content: input.content,
               metadata_json: input.metadata ?? null,
               created_at: "2026-06-14T10:00:00.000Z",
+            };
+          },
+          async listRecentMessagesForContext() {
+            return [
+              {
+                id: "message-prev",
+                session_id: "session-1",
+                space_id: "space-1",
+                user_id: "user-1",
+                role: "assistant",
+                content: "Previous assistant answer.",
+                metadata_json: null,
+                created_at: "2026-06-14T09:59:00.000Z",
+              },
+              ...messages.map((entry, index) => ({
+                id: `message-${index + 1}`,
+                session_id: String(entry.sessionId),
+                space_id: "space-1",
+                user_id: "user-1",
+                role: String(entry.role),
+                content: String(entry.content),
+                metadata_json: null,
+                created_at: "2026-06-14T10:00:00.000Z",
+              })),
+            ];
+          },
+          async getLatestSummaryForContext() {
+            return {
+              id: "summary-1",
+              session_id: "session-1",
+              version: 1,
+              summary_text: "Earlier context summary.",
+              source_message_count: 0,
+              source_first_message_id: null,
+              source_last_message_id: null,
+              condenser_version: "pattern.v1",
             };
           },
         },
@@ -562,11 +659,42 @@ describe("agents chat-turn route", () => {
       trigger_origin: "manual",
     });
     expect(String(observed.queuedRun?.prompt)).toContain("remember this");
+    expect(String(observed.queuedRun?.prompt)).toContain("Earlier context summary.");
+    expect(String(observed.queuedRun?.prompt)).toContain("Previous assistant answer.");
+    expect(observed.queuedRun?.model_override_json).toMatchObject({
+      chat_context_preamble: expect.stringContaining("remember this"),
+      conversation_window_version: "conversation_window.v1",
+      messages: [
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("Earlier context summary."),
+        }),
+        expect.objectContaining({
+          role: "assistant",
+          content: "Previous assistant answer.",
+        }),
+        expect.objectContaining({
+          role: "user",
+          content: "Hi",
+        }),
+      ],
+    });
     expect(observed.executedRunId).toBe("run-1");
     expect(observed.persisted).toMatchObject({
       contextSnapshotId: "snapshot-1",
       spaceId: "space-1",
-      tokenEstimate: 3,
+    });
+    expect(Number(observed.persisted?.tokenEstimate)).toBeGreaterThan(3);
+    expect(observed.persisted?.requestJson).toMatchObject({
+      conversation_window: {
+        version: "conversation_window.v1",
+        summary: { summary_id: "summary-1" },
+      },
+    });
+    expect(observed.persisted?.retrievalTraceJson).toMatchObject({
+      conversation_window: {
+        version: "conversation_window.v1",
+      },
     });
     expect(messages).toEqual([
       expect.objectContaining({ role: "user", content: "Hi" }),

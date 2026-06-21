@@ -22,6 +22,7 @@ import { Textarea } from '../../components/ui/textarea'
 import { Select } from '../../components/ui/select'
 import { Skeleton } from '../../components/ui/skeleton'
 import { EmptyState } from '../../components/ui/empty-state'
+import { ResearchWorkflowPanel } from '../capabilities/ResearchWorkflowPanel'
 import {
   Dialog,
   DialogContent,
@@ -344,6 +345,15 @@ export default function ProjectDetailPage() {
   }
 
   const existingIds = new Set(links.map(l => l.workspace_id))
+  const workflowWorkspaceOptions = links.map(link => {
+    const ws = workspaceMap[link.workspace_id]
+    return {
+      id: link.workspace_id,
+      name: ws?.name ?? link.workspace_id,
+      role: link.role,
+      root_path: ws?.root_path ?? null,
+    }
+  })
 
   return (
     <div className="p-6 space-y-6">
@@ -426,6 +436,17 @@ export default function ProjectDetailPage() {
             </Button>
           </Card>
         )}
+      </section>
+
+      {/* Research workflows */}
+      <section className="space-y-2">
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Research workflows</h2>
+        <ResearchWorkflowPanel
+          projectId={project.id}
+          projectName={project.name}
+          workspaceOptions={workflowWorkspaceOptions}
+          onRunCreated={loadAll}
+        />
       </section>
 
       {/* Linked workspaces */}

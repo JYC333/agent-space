@@ -80,12 +80,19 @@ Materialization records errors in `run.output_json.materialization_errors` when 
 
 ## Run model config (resolved_model)
 
-Each Run may snapshot model provider + model name at creation. `RunOut.resolved_model` exposes a safe summary:
+Each Run may snapshot its selected Agent runtime profile plus model provider
+and model name at creation. `RunOut.resolved_model` exposes a safe summary:
 
-- `provider_id`, `provider_name`, `provider_type`, `model`, `source` (`request` | `agent_default` | `space_default` | `none`)
+- `provider_id`, `provider_name`, `provider_type`, `model`, `source` (`runtime_profile` | `request` | `agent_default` | `runtime_default` | `space_default` | `none`)
 - `used_by_adapter` — whether the selected runtime adapter consumes model config
 - `adapter_model_support` — `uses_model` | `not_applicable` | `unsupported` | `unknown`
 - `disclosure_note` — user-facing text when a model was recorded but not used (e.g. capability adapters)
+
+`runs.runtime_profile_id` records which `AgentRuntimeProfile` was selected.
+`runs.runtime_profile_snapshot_json` stores the selected profile's adapter,
+provider/model, credential profile, runtime config, and runtime policy at run
+creation. Execution uses that snapshot before falling back to the immutable
+`AgentVersion`, so later runtime profile edits affect only future runs.
 
 Adapters that consume model config today depend on runtime requirements.
 `claude_code` and `codex_cli` may receive model hints only when the underlying

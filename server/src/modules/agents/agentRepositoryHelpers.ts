@@ -26,7 +26,7 @@ export const DEFAULT_RUNTIME_POLICY = {
 export const DEFAULT_RUNTIME_CONFIG = { risk_level: "medium", max_run_time_seconds: 300 };
 
 export function agentOut(row: AgentRecord): AgentOut {
-  const adapterType = normalizeAdapterType(runtimePolicy(row).default_adapter_type);
+  const adapterType = normalizeAdapterType(row.runtime_adapter_type ?? runtimePolicy(row).default_adapter_type);
   const spec = BUILTIN_RUNTIME_ADAPTER_SPECS[adapterType as RuntimeAdapterType];
   const requiresModelProvider = spec?.model.model_provider_mode === "required";
   const hasModel =

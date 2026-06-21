@@ -1,8 +1,17 @@
 import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join, resolve, relative } from "node:path";
 import type { ServerConfig } from "../../config";
+import {
+  PgRuntimeSkillProvider,
+  renderRuntimeSkillCandidate,
+  type RenderedRuntimeSkill,
+  type RuntimeSkillCandidate,
+  type RuntimeSkillProvider,
+} from "../capabilities/runtimeSkillProvider";
 import { loadActionRegistry } from "../policy/actionRegistry";
 import { enforce } from "../policy/service";
-import { ContextCompiler, type CompiledContext } from "./compiler";
+import { assertSandboxOnly, ContextCompiler, type CompiledContext } from "./compiler";
 import { buildContextPackage } from "./contextPackage";
 import { resolveReadableScopes } from "./contextRepositoryHelpers";
 import {
@@ -77,6 +86,8 @@ export interface ContextPrepareResult {
   context_rendered: boolean;
   target_format?: string | null;
   instruction_file_path?: string | null;
+  runtime_skill_file_paths?: string[];
+  runtime_skill_binding_ids?: string[];
   total_chars?: number;
   budget_chars?: number;
   dropped_sections?: string[];
@@ -102,6 +113,7 @@ export class ContextPrepareService {
     private readonly config: ServerConfig,
     private readonly repository = PgRunContextRepository.fromConfig(config),
     private readonly compiler = new ContextCompiler(),
+    private readonly runtimeSkillProvider: RuntimeSkillProvider | null = PgRuntimeSkillProvider.fromConfig(config),
   ) {}
 
   async prepare(input: ContextPrepareInput): Promise<ContextPrepareResult> {
@@ -199,19 +211,27 @@ export class ContextPrepareService {
           runId: run.id,
           reason: `run_execution:${run.id}:context_digest`,
         });
+        const runtimeSkills = await this.renderRuntimeSkillsForRun(run, input.adapterType);
         const stablePrefixResult = renderStablePrefix(pkg, run, digestBundle, validatedDigestMemoryIds);
         const stableText = stablePrefixResult.text;
-        const tailText = renderDynamicTail(pkg, run);
-        const runtimeTailText = renderDynamicTail(pkg, run, { includePrompt: false });
+        const runtimeSkillText = renderRuntimeSkillContextSection(runtimeSkills);
+        const tailText = appendRuntimeSkillText(renderDynamicTail(pkg, run), runtimeSkillText);
+        const compilerDynamicTailText = renderDynamicTail(pkg, run, { includePrompt: false });
+        const runtimeTailText = appendRuntimeSkillText(
+          compilerDynamicTailText,
+          runtimeSkillText,
+        );
         const runtimeContextText = composeRuntimeContextText(stableText, runtimeTailText);
         const tokenBudget = buildTokenBudget(stableText, tailText, stablePrefixResult);
         const sourceRefs: Record<string, unknown>[] = [...pkg.source_refs];
         sourceRefs.push(...digestSourceRefs(digestBundle));
+        sourceRefs.push(...runtimeSkillSourceRefs(runtimeSkills));
 
         const retrievalTrace: Record<string, unknown> = {
           ...recordValue(pkg.retrieval_trace),
           token_budget: tokenBudget,
           ...digestTrace,
+          runtime_skill_rendering: runtimeSkillTrace(runtimeSkills),
         };
 
         const grant = await repo.resolvePersonalGrantForRun(run);
@@ -284,9 +304,13 @@ export class ContextPrepareService {
             sandboxDir: input.sandboxCwd,
             workspacePath: input.workspacePath,
             stablePrefixText: stableText,
-            dynamicTailText: runtimeTailText,
+            dynamicTailText: compilerDynamicTailText,
+            runtimeSkillText,
           });
         }
+        const runtimeSkillFilePaths = input.sandboxCwd
+          ? await writeRuntimeSkillFiles(input.sandboxCwd, input.workspacePath, runtimeSkills)
+          : [];
 
         return {
           runtime_prompt: composedRuntimePrompt,
@@ -295,6 +319,8 @@ export class ContextPrepareService {
           context_rendered: compiled !== null,
           target_format: compiled?.target ?? null,
           instruction_file_path: compiled?.instruction_file_path ?? null,
+          runtime_skill_file_paths: runtimeSkillFilePaths,
+          runtime_skill_binding_ids: runtimeSkills.map((skill) => skill.binding_id),
           total_chars: compiled?.total_chars,
           budget_chars: compiled?.budget_chars,
           dropped_sections: compiled?.dropped_sections,
@@ -375,6 +401,64 @@ export class ContextPrepareService {
       metadata_json: {
         workspace_id: run.workspace_id,
         project_id: run.project_id,
+      },
+    });
+  }
+
+  private async renderRuntimeSkillsForRun(
+    run: RunContextRecord,
+    adapterType: string | null,
+  ): Promise<RenderedRuntimeSkill[]> {
+    if (!this.runtimeSkillProvider || !adapterType) return [];
+    const candidates = await this.runtimeSkillProvider.loadCandidatesForRun({
+      space_id: run.space_id,
+      run_id: run.id,
+      adapter_type: adapterType,
+      capability_id: run.capability_id,
+      agent_id: run.agent_id,
+      project_id: run.project_id,
+      instructed_by_user_id: run.instructed_by_user_id,
+      capabilities_json: run.capabilities_json,
+    });
+    const rendered: RenderedRuntimeSkill[] = [];
+    for (const candidate of candidates) {
+      await this.enforceRuntimeSkillRender(run, candidate);
+      const item = renderRuntimeSkillCandidate(candidate);
+      if (item) rendered.push(item);
+    }
+    return rendered;
+  }
+
+  private async enforceRuntimeSkillRender(
+    run: RunContextRecord,
+    candidate: RuntimeSkillCandidate,
+  ): Promise<void> {
+    await enforcePolicyOrThrow(this.config, {
+      action: "runtime_skill.render",
+      force_record: false,
+      actor_type: "run",
+      actor_id: run.id,
+      space_id: run.space_id,
+      resource_type: "runtime_skill_binding",
+      resource_id: candidate.binding_id,
+      run_id: run.id,
+      context: {
+        adapter_type: candidate.runtime_adapter_type,
+        render_mode: candidate.render_mode,
+        capability_id: candidate.capability_id,
+        capability_version_id: candidate.capability_version_id,
+        capability_enablement_id: candidate.capability_enablement_id,
+        enabled_binding: true,
+        risk_level: candidate.risk_level,
+      },
+      metadata_json: {
+        binding_id: candidate.binding_id,
+        capability_id: candidate.capability_id,
+        capability_version_id: candidate.capability_version_id,
+        capability_enablement_id: candidate.capability_enablement_id,
+        adapter_type: candidate.runtime_adapter_type,
+        render_mode: candidate.render_mode,
+        risk_level: candidate.risk_level,
       },
     });
   }
@@ -722,6 +806,114 @@ function renderDynamicTail(
 function composeRuntimeContextText(stableText: string, tailText: string): string | null {
   const parts = [stableText.trim(), tailText.trim()].filter((part) => part.length > 0);
   return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+function renderRuntimeSkillContextSection(skills: RenderedRuntimeSkill[]): string {
+  if (skills.length === 0) return "";
+  const parts = ["# Runtime Skills"];
+  for (const skill of skills) {
+    const rendered = skill.rendered;
+    const lines = [
+      `## ${skill.capability.name}`,
+      "",
+      `Capability ID: ${skill.capability_id}`,
+      `Binding ID: ${skill.binding_id}`,
+      `Version ID: ${skill.capability_version_id}`,
+      `Adapter: ${skill.runtime_adapter_type}`,
+      `Render mode: ${skill.render_mode}`,
+    ];
+    if (rendered.files.length > 0) {
+      lines.push(
+        "",
+        "Generated files:",
+        ...rendered.files.map((file) => `- ${file.path}`),
+        "",
+        "Use these generated adapter files as run-scoped skill instructions. They are not source of truth.",
+      );
+    }
+    if (rendered.prompt_block?.trim()) {
+      lines.push("", rendered.prompt_block.trim());
+    }
+    parts.push(lines.join("\n"));
+  }
+  return parts.join("\n\n");
+}
+
+function appendRuntimeSkillText(base: string, runtimeSkillText: string): string {
+  const parts = [base.trim(), runtimeSkillText.trim()].filter((part) => part.length > 0);
+  return parts.join("\n\n");
+}
+
+function runtimeSkillSourceRefs(skills: RenderedRuntimeSkill[]): Record<string, unknown>[] {
+  return skills.map((skill) => ({
+    source_type: "runtime_skill_binding",
+    source_id: skill.binding_id,
+    binding_id: skill.binding_id,
+    capability_id: skill.capability_id,
+    capability_version_id: skill.capability_version_id,
+    capability_enablement_id: skill.capability_enablement_id,
+    runtime_adapter_type: skill.runtime_adapter_type,
+    render_mode: skill.render_mode,
+    risk_level: skill.risk_level,
+    section: "runtime_skills",
+    root_path: skill.rendered.root_path,
+    file_paths: skill.rendered.files.map((file) => file.path),
+    file_hashes: skill.rendered.files.map((file) => ({
+      path: file.path,
+      content_hash: sha256(file.content),
+    })),
+    prompt_block_hash: skill.rendered.prompt_block ? sha256(skill.rendered.prompt_block) : null,
+    raw_content_in_trace: false,
+  }));
+}
+
+function runtimeSkillTrace(skills: RenderedRuntimeSkill[]): Record<string, unknown> {
+  return {
+    rendered_count: skills.length,
+    bindings: skills.map((skill) => ({
+      binding_id: skill.binding_id,
+      capability_id: skill.capability_id,
+      capability_version_id: skill.capability_version_id,
+      runtime_adapter_type: skill.runtime_adapter_type,
+      render_mode: skill.render_mode,
+      risk_level: skill.risk_level,
+      files_count: skill.rendered.files.length,
+      prompt_block_rendered: Boolean(skill.rendered.prompt_block),
+    })),
+  };
+}
+
+async function writeRuntimeSkillFiles(
+  sandboxCwd: string,
+  workspacePath: string | null | undefined,
+  skills: RenderedRuntimeSkill[],
+): Promise<string[]> {
+  // Self-contained boundary: never write generated vendor files into the real
+  // workspace, even if the caller reaches here without the compiler having run.
+  await assertSandboxOnly(sandboxCwd, workspacePath ?? null);
+  const written: string[] = [];
+  const sandboxRoot = resolve(sandboxCwd);
+  for (const skill of skills) {
+    for (const file of skill.rendered.files) {
+      const target = resolveSandboxRelativePath(sandboxRoot, file.path);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, file.content, "utf8");
+      written.push(target);
+    }
+  }
+  return written;
+}
+
+function resolveSandboxRelativePath(sandboxRoot: string, filePath: string): string {
+  if (!filePath.trim() || filePath.startsWith("/") || filePath.includes("\0")) {
+    throw new Error(`Runtime skill file path must be a relative sandbox path: ${filePath}`);
+  }
+  const target = resolve(join(sandboxRoot, filePath));
+  const rel = relative(sandboxRoot, target);
+  if (rel === "" || rel.startsWith("..") || rel.startsWith("/") || rel.includes(`..${"/"}`)) {
+    throw new Error(`Runtime skill file path escapes sandbox: ${filePath}`);
+  }
+  return target;
 }
 
 function buildTokenBudget(

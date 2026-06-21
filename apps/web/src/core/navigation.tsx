@@ -1,5 +1,5 @@
 import {
-  Home, Inbox, CheckCircle, BookOpen, ListTodo, Bot, Folder, Settings,
+  Home, Inbox, CheckCircle, BookOpen, ListTodo, Bot, Folder, FolderKanban, Settings,
   GitBranch, Building2, ServerCog,
   type LucideIcon,
 } from 'lucide-react'
@@ -48,6 +48,7 @@ export const RAIL_ITEMS: RailItem[] = [
   { id: 'review',     label: 'Review',     to: '/proposals',   icon: CheckCircle, scope: 'space', mobile: true },
   { id: 'knowledge',  label: 'Knowledge',  to: '/knowledge',   icon: BookOpen,    scope: 'space' },
   { id: 'tasks',      label: 'Tasks',      to: '/tasks',       icon: ListTodo,    scope: 'space', mobile: true },
+  { id: 'projects',   label: 'Projects',   to: '/projects',    icon: FolderKanban, scope: 'space' },
   { id: 'agents',     label: 'Agents',     to: '/agents',      icon: Bot,         scope: 'space' },
   { id: 'evolution',  label: 'Evolution',  to: '/evolution',   icon: GitBranch,   scope: 'home' },
   { id: 'workspaces', label: 'Workspaces', to: '/workspaces',  icon: Folder,      scope: 'space' },
@@ -143,6 +144,7 @@ export const SCENES: Scene[] = [
       { label: 'Templates',  to: '/agents/templates' },
       { label: 'Runs',       to: '/runs' },
       { label: 'Automations', to: '/automations' },
+      { label: 'Capabilities', to: '/capabilities' },
     ],
   },
   {

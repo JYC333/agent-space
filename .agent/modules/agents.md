@@ -20,6 +20,7 @@ See `runtime-adapters.md` for the full adapter registry and license notes.
 
 - `Agent` ORM model and CRUD
 - `AgentVersion` model (immutable execution config snapshot per `Run`)
+- `AgentRuntimeProfile` model (named runtime/model/credential binding options under an Agent)
 - `AgentTemplate` / `AgentTemplateVersion` — reusable factories (NOT runtime objects)
 - `AgentTemplateService` — author templates + copy-on-create `create_agent_from_template`
 - `Run` rows created through `RunService` (queued work, lifecycle, delegation links)
@@ -34,7 +35,8 @@ AgentTemplate            — reusable factory; scope=system|space|user; NOT a ru
     → AgentTemplateVersion   — immutable config snapshot (published versions are immutable)
         ⇒ (copy-on-create)
 Agent                    — the runtime instance
-    → AgentVersion           — immutable runtime config snapshot; the ONLY thing execution reads
+    → AgentVersion           — immutable prompt/policy/base config snapshot
+    → AgentRuntimeProfile    — mutable named runtime binding; snapshotted onto each Run
 ```
 
 Rules (clean model — no old paths):
@@ -111,6 +113,35 @@ Rules (clean model — no old paths):
   model provider first. Template detail shows the model as "System default model"; the created
   agent shows the concrete resolved model.
 
+## Agent Runtime Profiles
+
+`AgentRuntimeProfile` is the mutable runtime binding layer under an Agent. It
+lets one Agent keep the same identity, prompt, capability policy, and safety
+ceiling while offering named runtime choices such as "Model API default",
+"Codex CLI", or "Claude Code".
+
+Rules:
+
+- Creating an Agent also creates one default runtime profile from the initial
+  `AgentVersion` runtime/model values.
+- Runtime profiles store adapter type, optional ModelProvider/model, optional
+  CLI credential profile, runtime config, runtime policy, enabled state, and
+  default state.
+- Run creation accepts `runtime_profile_id`; when omitted it selects the first
+  enabled profile with `is_default=true`, falling back to the oldest enabled
+  profile. If no enabled profile exists, legacy `AgentVersion` runtime/model
+  resolution is used.
+- A disabled selected profile fails run creation. Editing a profile affects
+  future runs only.
+- Each new Run stores `runs.runtime_profile_id` and
+  `runs.runtime_profile_snapshot_json`. Execution reads runtime config from
+  that snapshot before falling back to the `AgentVersion`, so historical runs
+  remain auditable after profile edits.
+- Product workflow UIs should select `agent_id + runtime_profile_id`. Naked
+  per-run `adapter_type` / `model_provider_id` / `model` fields are kept only
+  as compatibility inputs for older callers and should not be the primary
+  frontend model.
+
 ## Does Not Own
 
 - Memory content (memory module)
@@ -148,8 +179,21 @@ AgentVersion:
   Note: AgentVersion is append-only. Agent.current_version_id is updated on save.
         Existing runs keep their agent_version_id and remain reproducible.
 
+AgentRuntimeProfile:
+  id, agent_id, space_id
+  name
+  adapter_type                 — model_api, claude_code, codex_cli, capability, ...
+  model_provider_id            — optional ModelProvider binding
+  model_name                   — optional model id for the selected provider
+  credential_profile_id        — optional CLI credential profile binding
+  runtime_config_json          — resolved runtime config, including CLI tool version when relevant
+  runtime_policy_json          — runtime policy/default adapter metadata
+  enabled, is_default
+  Note: mutable product configuration. Runs snapshot the profile at creation.
+
 Run:
-  id, space_id, agent_id, agent_version_id
+  id, space_id, agent_id, agent_version_id, runtime_profile_id
+  runtime_profile_snapshot_json — immutable selected runtime profile snapshot for this run
   status (queued|running|succeeded|failed|cancelled|degraded|waiting_for_review)
   mode (live|dry_run)
   parent_run_id               — user-created run lineage (follow-up, retry, continuation)
@@ -162,8 +206,9 @@ Run:
 **Queued run creation**
 
 1. HTTP (`POST /agents/{id}/runs`, task board endpoints, or agent helpers) → `RunService.create_run`
-2. Worker picks up `agent_run` jobs → `RunOrchestrationService` selects adapters from policy
-3. Adapters execute with sandbox routing managed outside the agents module
+2. Run creation resolves the selected/default runtime profile, validates it, and snapshots it on the Run
+3. Worker picks up `agent_run` jobs → `RunOrchestrationService` selects adapters from policy and run snapshot
+4. Adapters execute with sandbox routing managed outside the agents module
 
 **Run lineage (parent_run_id)**
 
@@ -251,7 +296,7 @@ remains; every card is backed by an API call.
   `POST /agent-templates/{id}/agents` and navigates to the new Agent detail page.
 - **Agent Detail** (`AgentDetailPage.tsx`, `/agents/:id`) — tabbed view: **Overview**
   (identity/role edit, provenance, current version, last run, pending proposals), **Inputs**,
-  **Outputs**, **Schedule** (editable), **Model** (editable), **Review & Safety**, **Versions**
+  **Outputs**, **Schedule** (editable), **Runtime** (runtime profiles), **Review & Safety**, **Versions**
   (history + restore), **Runs** (real run history with useful empty state).
 - **Policy → product mapping** (`policyMap.ts`, rendered by `ConfigCards.tsx`) is the single
   source of truth that translates `context_policy_json` → input cards (capture inbox / approved
@@ -260,8 +305,9 @@ remains; every card is backed by an API call.
   outputs always shown as review-required; `tool_policy_json` + `memory_policy_json` → the
   "this agent can / cannot" safety statements and a derived review posture (Strict/Balanced/
   Draft-friendly, read-only since the backend has no editable review_mode);
-  `schedule_config_json` → manual/daily/interval/cron summary; `model_config_json` → model form.
-  Raw JSON appears only behind an explicit **Advanced** disclosure (Model tab, Versions view).
+  `schedule_config_json` → manual/daily/interval/cron summary; runtime profiles → adapter/model/
+  credential choices. Raw JSON appears only behind an explicit **Advanced** disclosure (Runtime
+  tab, Versions view).
 
 Out of scope for this slice (not built): full scheduled reflection execution, full task/idea/wiki
 product pages, marketplace/sharing/import/export, template inheritance, runtime use of templates,
@@ -303,7 +349,8 @@ not seeded initially (future scope): `coding_task_agent`, `research_scout`, `sou
 `weekly_planner`, `finance_reviewer`, `health_reviewer`, `task_manager`.
 
 There is **no** single global "default agent" that runs implicitly. Every `Run` targets an
-explicit `Agent`, and runtime config always loads from `Agent.current_version_id` → `AgentVersion`.
+explicit `Agent`, and execution config resolves from the Run's snapshotted runtime profile plus
+`Agent.current_version_id` → `AgentVersion`.
 The per-space default Assistant Agent (`agent_kind="system_assistant"`, system-owned, one active
 per space) is resolved/created on demand by the server agents module
 (`GET`/`POST /api/v1/agents/default-assistant`) from the internal `personal_assistant` seed spec —
@@ -333,6 +380,7 @@ need a native, no-credential execution path.
 - Context snapshots captured at run creation stay immutable
 - No vendor adapter is the source of truth for memory, policy, or audit
 - `agent_version_id` on `Run` is immutable per row — historical runs stay reproducible after edits to `Agent`
+- `runtime_profile_snapshot_json` on `Run` is immutable per row — historical runs keep the selected runtime binding after profile edits
 - `AgentVersion` is append-only — prior rows are not rewritten in place
 - Public post-create execution config mutation is proposal-only. Direct public
   AgentVersion creation must not advance `Agent.current_version_id`.

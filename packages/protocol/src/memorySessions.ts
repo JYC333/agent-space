@@ -89,6 +89,9 @@ export const SessionSummaryForContextSchema = z
     version: z.number().int().positive(),
     summary_text: z.string(),
     condenser_version: z.string(),
+    source_message_count: z.number().int().nonnegative().nullish(),
+    source_first_message_id: IdSchema.nullish(),
+    source_last_message_id: IdSchema.nullish(),
     ...SecretResponseGuards,
   })
   .passthrough();

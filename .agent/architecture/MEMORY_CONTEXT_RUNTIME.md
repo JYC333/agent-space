@@ -108,9 +108,9 @@ Responsibilities:
 3. Resolves context attachments (file, file_range, git_diff, staged_diff, folder_tree, recent_commits)
 4. Security-scans attachments via `scan_attachment()` / `scan_content()`
 5. Loads latest `SessionSummary` for the session when `session_id` is provided
-   through the sessions-owned `SessionSummaryPort`
-   (`get_session_summary_port(...).get_latest_for_context(...)`; current
-   implementation delegates to `SessionCondenser`)
+   through the sessions-owned read
+   (`PgSessionRepository.getLatestSummaryForContext(...)`), consuming only the
+   `SessionSummaryForContext` DTO boundary
 6. Partitions memories into sections: user_memory, workspace_memory, capability_memory, agent_memory, system_policy, relevant_episodes
 7. Produces `ContextPackage` with stable_prefix_refs / dynamic_tail_refs split
 
@@ -167,13 +167,28 @@ decisions are local to `build()` and stored only in `ContextBundle` / `ContextSn
 {
   "sources": ["memory", "knowledge_item", "workspace", "activity_record"],
   "max_tokens": 4000,
-  "max_items": 20
+  "max_items": 20,
+  "condenser": {
+    "profile": "coding",
+    "custom_system": "Optional per-agent condenser system prompt override",
+    "custom_instructions": "Optional per-agent condenser user instructions override"
+  }
 }
 ```
 
 - `sources` — allowed source types; absent / empty → all types allowed (permissive default)
 - `max_tokens` — overrides the per-request budget when set
 - `max_items` — overrides the per-request item cap when set
+- `condenser.profile` — scenario profile for the `llm.v1` session condenser
+  (`adaptive` default / `general` / `coding` / `project`); read by the
+  `session_condense` job, unknown / absent → `adaptive` (see §5)
+- `condenser.custom_system` / `condenser.custom_instructions` — optional
+  per-agent overrides for the selected profile's condenser prompt; blank/absent
+  values use the built-in profile prompt. Shared factuality and same-language
+  guardrails are always appended server-side.
+- The frontend reads built-in profile prompts through
+  `GET /api/v1/sessions/condenser-preset-prompts`; it does not duplicate the
+  preset prompt text.
 
 Supported `item_type` values in a `ContextBundle` / `ContextSnapshotItem`:
 
@@ -210,18 +225,109 @@ max_items caps stop collection once either limit is reached (`truncated=True`).
 const collector = new ChatContextCandidateCollector(repo);
 const candidates = await collector.fetchCandidates(request);
 const bundle = buildChatContext(candidates);
+const conversationWindow = buildChatConversationWindow({
+  messages: recentSessionMessages,
+  currentMessage,
+  summary: latestSessionSummary,
+});
 
 await contextSnapshotRepository.persistChatSnapshot({
   contextSnapshotId,
   spaceId,
-  tokenEstimate: bundle.token_count,
-  requestJson,
+  tokenEstimate: bundle.token_count + conversationWindow.token_count,
+  requestJson: { ...request, conversation_window: conversationWindow.trace },
+  retrievalTraceJson: {
+    chat_context: bundle.retrieval_trace,
+    conversation_window: conversationWindow.trace,
+  },
+  tokenBudgetJson: {
+    chat_context: { token_count: bundle.token_count },
+    conversation_window: conversationWindow.trace,
+  },
   items: bundle.items,
 });
 ```
 
 Snapshot persistence owns its SQL statement boundaries; callers own larger
 workflow orchestration.
+
+### Conversation window projection
+
+The Personal Assistant chat route projects session history into each queued run
+before execution:
+
+1. The current user message is appended to `messages`.
+2. The route loads the latest active `SessionSummary` and a bounded recent
+   message slice (`listRecentMessagesForContext`, currently 80 newest rows,
+   returned chronological).
+3. `buildChatConversationWindow()` renders a deterministic window:
+   - active summary first, capped to 1200 approximate tokens;
+   - recent turns after the summary's `source_last_message_id`;
+   - when a summary is present, **all** turns after the watermark are candidates
+     (bounded only by the token budget), so a lagging condenser watermark never
+     leaves a gap between the summary and the raw tail; the `maxRecentMessages`
+     cap (12) applies only when there is no summary, to bound an unsummarized
+     history;
+   - current user message always as the final turn.
+4. Window budget is 6000 approximate tokens. If it overflows, the builder first
+   drops messages already covered by summary, then applies the recent-message
+   cap (no-summary case only), then compacts/drops older raw turns while
+   preserving the current user message.
+5. Managed API runtimes (`model_api`, `ts_agent_host`) receive the conversation
+   window as native `messages[]` through the runtime-host contract. CLI
+   runtimes continue to use the rendered prompt fallback, because vendor CLI
+   adapters still execute through instruction files plus a single prompt.
+   The structure is persisted in `ContextSnapshot.request_json`,
+   `retrieval_trace_json`, and `token_budget_json`.
+
+The prompt shape is:
+
+```text
+[Context from your space ...]
+
+[Conversation window - use this for continuity. Recent turns override older summaries.]
+
+[Condensed earlier conversation]
+...
+
+[Recent session turns]
+assistant:
+...
+
+[Current user message]
+user:
+...
+```
+
+The managed API message shape is:
+
+```json
+[
+  {
+    "role": "user",
+    "content": "[Condensed earlier conversation]\n..."
+  },
+  {
+    "role": "assistant",
+    "content": "..."
+  },
+  {
+    "role": "user",
+    "content": "<current user message>"
+  }
+]
+```
+
+The selected chat context preamble is appended to the managed API
+`system_prompt`, while the fallback `runs.prompt` still contains the fully
+rendered prompt for audit and CLI compatibility.
+
+`conversationWindowToMessages` normalizes the native `messages[]` for managed
+chat providers (e.g. Anthropic Messages): empty turns are dropped, leading
+non-`user` turns are dropped so the list is user-led (reachable when there is no
+summary and the budget loop drops the oldest user turn), consecutive same-role
+turns are merged so roles alternate, and roles collapse to `user`/`assistant`
+only. The list always contains at least one `user` turn.
 
 ### ContextSnapshot additions
 
@@ -230,6 +336,8 @@ workflow orchestration.
 - `session_id` — FK to `sessions.id` (from `ContextRequest.session_id`)
 - `run_id` — FK to `runs.id` (from `ContextRequest.run_id`; avoids circular FK via ALTER TABLE)
 - `request_json` — serialised `ContextRequest` for full audit reproducibility
+- `retrieval_trace_json` / `token_budget_json` — chat context and
+  conversation-window traces, including overflow recovery decisions.
 
 All three FKs use `use_alter=True` because `context_snapshots` is created before the
 referenced tables in the baseline migration.
@@ -241,20 +349,25 @@ referenced tables in the baseline migration.
 - Source chunking pipeline
 - Full workspace file search
 - Frontend context picker UI
+- Tool-call message preservation in conversation windows. Current chat
+  execution is tool-disabled; tool result messages are future scheduler scope.
 
 ---
 
 ## 5. SessionSummary and Session Condensing
 
 Context assembly consumes the context-safe `SessionSummaryForContext` DTO from
-the sessions module. Summary condense/create writes are deferred; context code
-must continue to consume the DTO boundary instead of reaching into session
-internals.
+the sessions module. Condense/create writes are owned by the sessions module
+(`PgSessionRepository.condenseSession`, which owns session internals). The agent
+chat route **enqueues a background `session_condense` job** after each turn (it
+does not condense inline — chat responses must not block on the condenser's LLM
+call); the job runs the condenser off the request path. Context code still
+consumes only the DTO boundary and never writes summaries itself.
 
 ### Design invariants
 
 - `SessionSummary` is **derived context**, not active memory. It is never a `MemoryEntry`.
-- `SessionCondenser.condense()` **never** creates a `Proposal` or `MemoryEntry`.
+- `condenseSession()` **never** creates a `Proposal` or `MemoryEntry`; it writes only `session_summaries` rows.
 - Multiple summaries per session are versioned; old ones become `status="superseded"`.
 - `version` is unique per session (`uq_session_summaries_session_version` constraint).
 - **At most one active summary per session** — enforced by partial unique index `ix_session_summaries_one_active_per_session` on `(session_id) WHERE status = 'active'`.
@@ -275,22 +388,69 @@ internals.
 | `summary_json` | Structured metadata: role_counts, top_keywords, source_range, condenser_version |
 | `token_estimate_before` | Approximate token count of source messages (chars ÷ 4) |
 | `token_estimate_after` | Approximate token count of summary_text (chars ÷ 4) |
-| `condenser_version` | `pattern.v1` (pattern-based; LLM condensing is deferred) |
+| `condenser_version` | `pattern.v1` (deterministic) or `llm.v1` (LLM-generated) |
 
 **Indexes:** `(session_id, status)`, `(space_id, session_id, status)`, partial unique `(session_id) WHERE status = 'active'`.
 
-### SessionCondenser
+### Session condenser
 
 ```
-SessionCondenser(db).condense(session_id, space_id) -> SessionSummary
-SessionCondenser(db).get_latest(session_id, space_id) -> SessionSummary | None
+PgSessionRepository.condenseSession(space_id, user_id, session_id, options?) -> SessionSummaryForContext | null
+PgSessionRepository.getLatestSummaryForContext(space_id, session_id) -> SessionSummaryForContext | null
 ```
 
-- Queries messages filtered by **both** `session_id` and `space_id`.
-- Fills all source range fields (`source_first_message_id`, `source_last_message_id`, `source_message_count`).
-- Populates `summary_json` with structured metadata (role counts, top keywords, condenser_version, source range).
-- Estimates `token_estimate_before` (source chars ÷ 4) and `token_estimate_after` (summary chars ÷ 4).
-- Uses pattern-based heuristics (no LLM). Future: LLM-based condensing with `condenser_version="llm.v1"`.
+- Pure builders live in `server/src/modules/sessions/condenser.ts`
+  (`buildPatternSummary`, `buildCondensePrompt`, `buildLlmSummary`); the
+  repository owns only the DB read/write and the fallback chain around them.
+- Queries messages filtered by **both** `session_id` and `space_id`, non-empty
+  content (`content ~ '\S'`), chronological.
+- Summarizes every message older than the recent raw tail
+  (`keepRecent`, default 12). It is a **no-op** (returns the current active
+  summary or `null`) when nothing has aged out, or when fewer than
+  `condenseBatch` (default 8) new messages have aged past the last summary's
+  cover-range — this bounds version churn so a long chat does not mint a summary
+  every turn.
+- **Two condenser versions, with a fallback chain** (`condenseSession` picks per
+  call):
+  - `llm.v1` — when an LLM summarizer is supplied (the `session_condense` job
+    supplies one via the `session_condense` provider task). `buildCondensePrompt`
+    selects a **scenario profile** (`adaptive` default / `general` / `coding` /
+    `project`) from `AgentVersion.context_policy_json.condenser.profile` and
+    applies optional per-agent prompt overrides from
+    `condenser.custom_system/custom_instructions`, feeding the prior summary plus
+    only the newly aged-out turns (incremental, to bound token cost). The model
+    writes a real running summary.
+  - `pattern.v1` — deterministic fallback (role counts + keyword + highlight
+    digest, no model call). Used when no summarizer is supplied, no provider is
+    configured for the `session_condense` task, or the LLM call fails / returns
+    empty. The condenser therefore **never hard-fails for lack of a provider**.
+- Writes a new active version and supersedes the prior active row
+  (supersede-then-insert keeps at most one active row at every moment, so the
+  partial unique active index holds without an explicit transaction). The new
+  `version` exceeds every existing version (active or superseded), so an orphan
+  row left by an interrupted condense cannot collide.
+- Fills all source range fields (`source_first_message_id`,
+  `source_last_message_id`, `source_message_count` — always the full covered
+  range, even when only the delta was fed to the LLM), populates `summary_json`
+  with structured metadata, and estimates `token_estimate_before` /
+  `token_estimate_after` (chars ÷ 4).
+- Concurrency for the same session is out of scope (P2). A racing writer fails
+  closed via the version unique constraint / partial unique active index rather
+  than creating a second active summary; the chat route treats the condense
+  **enqueue** failure as non-fatal (the user already has their reply), and the
+  job runner retries the job itself.
+- The first summary appears once a session reaches `keepRecent + condenseBatch`
+  (default 20) non-empty messages. Before that the conversation window keeps the
+  last `maxRecentMessages` (12) raw turns and drops older ones via the recent cap
+  (recorded as `messages_dropped_for_recent_limit` in the window trace) — this is
+  the bounded-window design, not a silent loss. Once a summary exists, the window
+  shows **all** turns after its watermark (budget-bounded), so there is no gap
+  between the summary and the raw tail even while the watermark lags by a batch.
+- The `pattern.v1` path re-summarizes the full older range from scratch (cost is
+  O(n) in session length, run at most once per `condenseBatch` messages),
+  acceptable at personal-assistant scale. The `llm.v1` path is incremental: it
+  feeds only the prior summary plus the newly aged-out turns, so its per-condense
+  input stays bounded.
 
 ---
 
@@ -488,7 +648,11 @@ After applying `policy_change`:
 - **Automation triggers**: `Automation` and `AutomationRun` support manual and schedule-triggered fire. Scheduled automations can carry same-space `AutomationCredentialGrant` pre-authorization. No external event trigger is implemented.
 - **Vector/embedding search**: MemoryRetriever embedding stage is a stub that delegates to keyword.
 - **Cross-space federation**: PersonalMemoryGrant exists but FederatedAccess / PublishProjection are not yet built.
-- **LLM-based condensing**: SessionCondenser is pattern-based (`condenser_version="pattern.v1"`). Future: `condenser_version="llm.v1"`.
+- **Session condensing**: implemented. The `session_condense` background job runs
+  the LLM condenser (`condenser_version="llm.v1"`, scenario profiles plus
+  per-agent prompt overrides) with the deterministic `pattern.v1` as fallback.
+  Tool-call message preservation in the conversation window remains future
+  scheduler scope (P6/P7).
 - **ContextCompiler budget_trace persistence**: `CompiledContext.budget_trace` is not yet persisted into `ContextSnapshot`. Future work may add it under `token_budget_json["compiler_budget_trace"]`.
 
 ---

@@ -426,6 +426,16 @@ export interface ProviderTextCompletionInput {
   task?: string | null;
 }
 
+export interface ProviderMessagesCompletionInput {
+  provider_id: string;
+  model?: string | null;
+  system?: string | null;
+  messages: ChatMessage[];
+  max_tokens?: number;
+  /** Auxiliary-task name; resolves a ProviderTaskPolicy chain when present. */
+  task?: string | null;
+}
+
 /**
  * Auxiliary-task completion. When the space holds an enabled
  * ProviderTaskPolicy for `task`, its chain is walked first (each entry with
@@ -437,11 +447,26 @@ export async function completeProviderText(
   spaceId: string,
   input: ProviderTextCompletionInput,
 ): Promise<{ text: string; model: string; usage: Record<string, unknown> }> {
+  return completeProviderMessages(store, spaceId, {
+    provider_id: input.provider_id,
+    model: input.model,
+    system: input.system,
+    messages: [{ role: "user", content: input.user }],
+    max_tokens: input.max_tokens,
+    task: input.task,
+  });
+}
+
+export async function completeProviderMessages(
+  store: ProviderCommandStore,
+  spaceId: string,
+  input: ProviderMessagesCompletionInput,
+): Promise<{ text: string; model: string; usage: Record<string, unknown> }> {
   const chatBody = (providerId: string, model: string | null | undefined): ProviderChatRequestBody => ({
     provider_id: providerId,
     model,
     system: input.system,
-    messages: [{ role: "user", content: input.user }],
+    messages: input.messages,
     max_tokens: input.max_tokens,
   });
 

@@ -103,7 +103,7 @@ accept/reject, intake, projects, providers, runtime, recent. Writes default to t
 Two stable tiers plus per-scene context (`src/core/navigation.tsx`, `src/components/shell/`):
 
 - **Global Rail** (`RAIL_ITEMS`) — narrow, icon-only desktop rail of major destinations, Home
-  first and stable: Home · Inbox · Review · Knowledge · Tasks · Agents · Workspaces · Settings.
+  first and stable: Home · Inbox · Review · Knowledge · Tasks · Projects · Agents · Workspaces · Settings.
   Collapsible/expandable. On mobile this becomes the bottom tab bar (`MOBILE_TAB_ITEMS`).
 - **Scene Sidebar** (`SCENES`) — second-level navigation for the current scene, changes by
   scene (Inbox / Review / Agents / Workspaces). Collapsible; when collapsed the expand
@@ -156,7 +156,7 @@ not be navigable.
 | Workspace Console | Enabled | Functional |
 | Workspace Snapshot Settings | Enabled | Space-admin-only UI for snapshot retention policy (`/workspace-snapshot-settings`); configures `snapshot_retention_days` / `snapshot_max_count` at space and per-workspace level |
 | Settings | Enabled | Functional |
-| Capabilities | Enabled | Developer tool |
+| Capabilities | Enabled | Capability/skill control-plane; developer-heavy but user-visible for review |
 | Providers | Enabled | Functional |
 | Runtime (CLI Adapters) | Enabled | Functional |
 | **Home** (user-scoped) | Enabled | Cross-space command center at `/home`; **not** a Space, not in the switcher |
@@ -214,6 +214,12 @@ The frontend is ready for personal dogfooding. The core product loop is usable:
 - Capture → Activity Inbox → Consolidate → Proposals → Accept/Reject → Memory/Task
 - Sessions, Runs, Artifacts, Memory, Workspaces, Settings are functional.
 - Auth, space context, and RequireAuth wrapper are correctly wired.
+- Project detail pages include a Research workflow panel that creates
+  optional project-scoped saved workflow presets, builds run drafts directly
+  from templates or saved presets, and queues normal agent runs. Runtime profile
+  selection is hidden when an Agent has only one enabled default runtime. The
+  Capabilities page is the imported skill/package review surface, and Artifacts
+  render structured Research outputs when possible.
 
 **Non-blocking follow-ups (discovered during use):**
 
