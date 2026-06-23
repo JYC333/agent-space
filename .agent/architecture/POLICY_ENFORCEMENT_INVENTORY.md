@@ -156,30 +156,43 @@ simulations: they perform no action, mutate no state, and create no
 permission manifest that routes risk and enables unknown-action fail-closed behaviour.
 
 **Registry structure**: The registry has three lifecycle states, distinguished by `lifecycle_status`:
-- **WIRED_DIRECT** (21): `lifecycle_status=WIRED_DIRECT` — have a preferred `PolicyGateway.enforce()` or `enforceProposalApply()` call site.
+- **WIRED_DIRECT** (28): `lifecycle_status=WIRED_DIRECT` — have a preferred `PolicyGateway.enforce()` or `enforceProposalApply()` call site.
   Actions: `runtime.execute`, `runtime.use_credential`, `context.inject_memory`, `context.render_for_runtime`,
-  `workspace.write_patch`, `workspace.read`, `artifact.persist`, `proposal.create`, `proposal.apply`,
-  `agent.config_update`,
+  `workspace.write_patch`, `artifact.persist`, `proposal.create`, `proposal.apply`,
+  `agent.config_update`, `workspace.read`, `runtime_skill.render`,
   `automation.create`, `automation.update`, `automation.fire`,
   `intake.connection_manage`, `intake.item_create`, `intake.item_update`,
   `evidence.create`, `evidence.update`, `evidence.link`,
-  `workspace_intake.configure`, `context.select_evidence`.
-- **WIRED_VIA_PROPOSAL** (9): `lifecycle_status=WIRED_VIA_PROPOSAL` — enforced exclusively via the `proposal.apply`
+  `workspace_intake.configure`, `context.select_evidence`,
+  `retrieval.search`, `retrieval.brief`, `memory.retrieval.search`,
+  `memory.retrieval.brief`, `project_public_summary.search`,
+  `project_public_summary.brief`.
+- **WIRED_VIA_PROPOSAL** (25): `lifecycle_status=WIRED_VIA_PROPOSAL` — enforced exclusively via the `proposal.apply`
   gate (`PolicyGateway.enforceProposalApply()`).
   Actions: `memory.create`, `memory.update`, `memory.archive`, `policy.change`,
   `knowledge.create`, `knowledge.update`, `knowledge.archive`,
-  `knowledge.relation_create`, `knowledge.relation_delete`.
-- **RESERVED** (12): `lifecycle_status=RESERVED` — registered for vocabulary completeness and fail-closed
+  `knowledge.relation_create`, `knowledge.relation_delete`,
+  `claim.create`, `claim.update`, `claim.archive`, `claim.relation_create`,
+  `claim.relation_delete`, `object_relation.create`, `object_relation.delete`,
+  `memory_maintenance_packet`, `retrieval_maintenance_packet`,
+  `retrieval_diagnostics_packet`, `skill.import`, `skill.convert`,
+  `capability.enable`, `capability.disable`, `capability.update`,
+  `runtime_skill.binding_update`.
+- **RESERVED** (11): `lifecycle_status=RESERVED` — registered for vocabulary completeness and fail-closed
   defence-in-depth, but not wired to business code yet. `PolicyGateway` always denies reserved actions.
   `current_enforcement_point="not_implemented"` is a human-readable marker.
   Actions: `context.use_personal_grant`, `workspace.apply_patch`, `artifact.export`,
-  `proposal.approve`, `memory.read_private`, `memory.promote_shared`, `capability.enable`, `capability.update`,
+  `proposal.approve`, `memory.read_private`, `memory.promote_shared`, `runtime_skill.execute`,
   `tool_binding.enable`, `evidence.export`, `deployment.propose`, `deployment.execute`.
 
 **record_failure_mode** (`RecordFailureMode` in `packages/protocol/src/policy.ts`): Each action definition carries a typed `record_failure_mode` field:
 - `BEST_EFFORT` (default) — if `PolicyDecisionRecord` persistence fails, log a warning and continue.
 - `FAIL_CLOSED` — preferred enforcement raises `PolicyAuditPersistError` if durable persistence fails; the sensitive action must not proceed.
-  Actions with `FAIL_CLOSED`: `runtime.use_credential`, `workspace.write_patch`, `artifact.persist`, `proposal.apply`, `policy.change`.
+  Actions with `FAIL_CLOSED`: `runtime.use_credential`, `workspace.write_patch`, `artifact.persist`, `proposal.apply`,
+  `policy.change`, `skill.import`, `skill.convert`, `capability.enable`, `capability.disable`,
+  `capability.update`, `runtime_skill.binding_update`, `automation.create`, `automation.fire`,
+  `automation.update`, `retrieval.search`, `retrieval.brief`, `memory.retrieval.search`, `memory.retrieval.brief`,
+  `project_public_summary.search`, `project_public_summary.brief`.
   Dynamic escalation to `FAIL_CLOSED` also occurs for:
   - `trigger_origin="automation"` + `audit_required=True` on the action — **regardless of ALLOW/DENY/REQUIRE_APPROVAL**.
   - CRITICAL risk level + `audit_required=True` on the action — **regardless of ALLOW/DENY/REQUIRE_APPROVAL**.
@@ -216,6 +229,19 @@ fail closed via `unknown_policy_action` DENY if ever passed to `PolicyEngine` or
 | `automation.create` | `server/src/modules/automations/service.ts` | **Uses server `enforce()`**. Runtime preflight and policy preflight simulation must pass before the Automation row is written. `membership_role`, `agent_id`, `trigger_type` in `context`. **fail_closed** — persistence failure blocks creation. |
 | `automation.update` | `server/src/modules/automations/service.ts` | **Uses server `enforce()`**. `membership_role`, `agent_id` in `context`. **fail_closed**. |
 | `automation.fire` | `server/src/modules/automations/service.ts` | **Uses server `enforce()`**. Runtime preflight and policy preflight simulation rerun. `membership_role`, `agent_id`, `trigger_origin="automation"` in `context`. Creates a queued Run, an `agent_run` job, and an AutomationRun record; scheduled fire advances the schedule in the same transaction as the Run/Job/AutomationRun writes. **fail_closed**. |
+| `retrieval.search` / `retrieval.brief` | `server/src/modules/retrievalTool/service.ts` | Uses `enforce()` before managed-run Knowledge search/brief execution. Domain must be enabled, an instructed-user viewer must exist, and audit is pointer-only. **fail_closed**. |
+| `memory.retrieval.search` / `memory.retrieval.brief` | `server/src/modules/retrievalTool/service.ts`, `server/src/modules/runs/managedRetrievalTools.ts` | Uses `enforce()` before explicitly opted-in managed-run Memory retrieval. Disabled-domain calls are denied/audited before returning a model-visible domain-not-enabled tool result. **fail_closed**. |
+| `project_public_summary.search` / `project_public_summary.brief` | `server/src/modules/retrievalTool/service.ts`, `server/src/modules/runs/managedRetrievalTools.ts` | Uses `enforce()` before explicitly opted-in Project public-summary retrieval. Disabled-domain calls are denied/audited before returning a model-visible domain-not-enabled tool result. **fail_closed**. |
+
+### Non-PolicyGateway revalidation guards
+
+These guards are policy-relevant but are not separate action-registry entries.
+They enforce object visibility/type boundaries before data is attached or
+rendered.
+
+| Guard | File | Boundary |
+|-------|------|----------|
+| Context artifact attachment | `server/src/modules/agents/routes.ts`, `server/src/modules/context/routes.ts`, `server/src/modules/context/repository.ts`, `server/src/modules/context/prepareService.ts` | `context_artifact_ids` are capped at 8, de-duplicated, restricted to attachable artifact types, checked against artifact visibility and project access, rendered as `bounded_summary` packs with `raw_artifact_content_included=false`, and revalidated at prepare time before runtime context injection. Unsupported/hidden/project-inaccessible artifacts become blocked attachment refs, not silent context content. |
 
 ### WIRED_VIA_PROPOSAL action inventory
 
@@ -237,18 +263,51 @@ is the actual fail_closed audit and approval boundary for all of these actions.
 | `knowledge.archive` | `proposal.apply` gate | `knowledge_archive` archives an item. No direct PolicyGateway call site. |
 | `knowledge.relation_create` | `proposal.apply` gate | `knowledge_relation_create` creates a same-space database-backed relation. No direct PolicyGateway call site. |
 | `knowledge.relation_delete` | `proposal.apply` gate | `knowledge_relation_delete` archives a relation. No direct PolicyGateway call site. |
+| `claim.create` | `proposal.apply` gate | `claim_create` creates a global Claim atom. No direct PolicyGateway call site. |
+| `claim.update` | `proposal.apply` gate | `claim_update` updates a global Claim atom. No direct PolicyGateway call site. |
+| `claim.archive` | `proposal.apply` gate | `claim_archive` archives a global Claim atom. No direct PolicyGateway call site. |
+| `claim.relation_create` | `proposal.apply` gate | `claim_relation_create` creates a database-backed ClaimRelation. No direct PolicyGateway call site. |
+| `claim.relation_delete` | `proposal.apply` gate | `claim_relation_delete` archives a ClaimRelation. No direct PolicyGateway call site. |
+| `object_relation.create` | `proposal.apply` gate | `object_relation_create` creates an FK-backed ObjectRelation. No direct PolicyGateway call site. |
+| `object_relation.delete` | `proposal.apply` gate | `object_relation_delete` archives an ObjectRelation. No direct PolicyGateway call site. |
+| `memory_maintenance_packet` | `proposal.apply` gate | Private packets remain creator-only. Explicit `visibility = space_shared` + `review_scope = space_ops` packets are reviewable only when `space_retrieval_settings.brain_ops_review_mode` permits the reviewer role. No canonical Memory writes and no direct PolicyGateway call site. |
+| `retrieval_maintenance_packet` | `proposal.apply` gate | Private packets remain creator-only. Explicit `visibility = space_shared` + `review_scope = space_ops` packets are reviewable only when `space_retrieval_settings.brain_ops_review_mode` permits the reviewer role. May create child Knowledge relation proposals for supported findings. No direct PolicyGateway call site. |
+| `retrieval_diagnostics_packet` | `proposal.apply` gate | Private packets remain creator-only. Explicit `visibility = space_shared` + `review_scope = space_ops` packets are reviewable only when `space_retrieval_settings.brain_ops_review_mode` permits the reviewer role. No canonical Knowledge or Memory writes and no direct PolicyGateway call site. |
+
+### Context artifact attachment structural guard
+
+`context_artifact_ids` are not a PolicyGateway action. They are structurally
+guarded by `server/src/modules/context/repository.ts` and prevalidated at
+managed-run creation:
+
+- attachable type allowlist: `retrieval_brief`, `retrieval_eval_report`,
+  `retrieval_explain_report`, `retrieval_maintenance_report`,
+  `memory_maintenance_report`;
+- visibility: `space_shared`/`public_template`, creator/owner-visible private
+  rows, and `workspace_shared` only when `artifacts.workspace_id` matches the
+  caller's workspace context;
+- project gate: project-scoped artifacts require project visibility;
+- content mode: bounded summary only, with raw artifact content excluded from
+  the runtime context pack.
 
 ### Knowledge policy and proposal boundary
 
 Knowledge durable writes are implemented through `ProposalApplyService` and
 protected by `proposal.apply`. The action registry marks `knowledge.create`,
 `knowledge.update`, `knowledge.archive`, `knowledge.relation_create`, and
-`knowledge.relation_delete` as `WIRED_VIA_PROPOSAL`.
+`knowledge.relation_delete` as `WIRED_VIA_PROPOSAL`. The same proposal-gated
+boundary protects Claim/ObjectRelation writes through `claim.create`,
+`claim.update`, `claim.archive`, `claim.relation_create`,
+`claim.relation_delete`, `object_relation.create`, and
+`object_relation.delete`.
 
 `SUPPORTED_PROPOSAL_TYPES` includes `knowledge_create`, `knowledge_update`,
 `knowledge_archive`, `knowledge_relation_create`, and
-`knowledge_relation_delete`. Unsupported proposal types still deny at the
-`proposal.apply` gate with `unsupported_proposal_type`.
+`knowledge_relation_delete`, plus `claim_create`, `claim_update`,
+`claim_archive`, `claim_relation_create`, `claim_relation_delete`,
+`object_relation_create`, and `object_relation_delete`. Unsupported proposal
+types still deny at the `proposal.apply` gate with
+`unsupported_proposal_type`.
 
 Knowledge read and proposal-creation endpoints enforce MVP visibility before
 creating proposals: `space_shared` and `workspace_shared` are readable to

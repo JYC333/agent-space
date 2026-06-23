@@ -155,9 +155,10 @@ not be navigable.
 | Workspaces | Enabled | Functional |
 | Workspace Console | Enabled | Functional |
 | Workspace Snapshot Settings | Enabled | Space-admin-only UI for snapshot retention policy (`/workspace-snapshot-settings`); configures `snapshot_retention_days` / `snapshot_max_count` at space and per-workspace level |
+| Retrieval Settings | Enabled | Space-scoped UI for `space_retrieval_settings`, `space_retrieval_prompts`, and retrieval `provider_task_policies` (`/retrieval-settings`); members can view retrieval models and the advanced collapsed rewrite prompt, while owner/admin users can edit default search mode, retrieval embedding dimensions/models, native rerank model, query-rewrite chat model and prompt, rerank/rewrite availability, rewrite/cache/trace defaults, and default result budget |
 | Settings | Enabled | Functional |
 | Capabilities | Enabled | Capability/skill control-plane; developer-heavy but user-visible for review |
-| Providers | Enabled | Functional |
+| Providers | Enabled | Functional; provider cards and create/edit forms show capability labels for Chat, Embeddings, and Native rerank so retrieval-only providers are not confused with ordinary chat providers |
 | Runtime (CLI Adapters) | Enabled | Functional |
 | **Home** (user-scoped) | Enabled | Cross-space command center at `/home`; **not** a Space, not in the switcher |
 | **Today** (Space) | Enabled | Space-scoped dashboard at `/spaces/:spaceId/today` for the active Space |

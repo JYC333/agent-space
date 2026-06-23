@@ -158,7 +158,7 @@ export default function KnowledgeRelationProposalForm({ currentItemId, onProposa
               >
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-sm font-medium">{item.title}</span>
-                  <Badge variant="secondary">{item.item_type}</Badge>
+                  <Badge variant="secondary">{item.knowledge_kind}</Badge>
                   <ScopeBadge visibility={item.visibility} />
                 </div>
                 <p className="text-xs text-muted-foreground font-mono select-all">{item.id}</p>
@@ -172,7 +172,7 @@ export default function KnowledgeRelationProposalForm({ currentItemId, onProposa
             <p className="text-xs text-muted-foreground mb-1">Selected target</p>
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-sm font-medium">{selected.title}</span>
-              <Badge variant="secondary">{selected.item_type}</Badge>
+              <Badge variant="secondary">{selected.knowledge_kind}</Badge>
               <ScopeBadge visibility={selected.visibility} />
             </div>
             <p className="text-xs font-mono select-all text-muted-foreground mt-1">{selected.id}</p>

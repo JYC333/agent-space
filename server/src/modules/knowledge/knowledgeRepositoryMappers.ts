@@ -8,13 +8,18 @@ import {
   stringArray,
 } from "../routeUtils/common";
 import type {
+  ClaimRelationRow,
+  ClaimRow,
+  ClaimSourceRow,
   EntityLinkRow,
   KnowledgeItemRow,
   KnowledgeRelationRow,
   NoteCollectionRow,
   NoteRow,
+  ObjectRelationRow,
   SourceRow,
 } from "./knowledgeRepositoryRows";
+import { isKnowledgeRetrievalProjectedRelation } from "./retrievalObjectTypes";
 
 export function knowledgeSummaryOut(row: KnowledgeItemRow): Record<string, unknown> {
   return {
@@ -22,7 +27,7 @@ export function knowledgeSummaryOut(row: KnowledgeItemRow): Record<string, unkno
     space_id: row.space_id,
     project_id: row.project_id,
     workspace_id: row.workspace_id,
-    item_type: row.item_type,
+    knowledge_kind: row.knowledge_kind,
     slug: row.slug,
     title: row.title,
     content_preview: row.excerpt ?? (row.plain_text ?? row.content).slice(0, 280),
@@ -68,6 +73,77 @@ export function knowledgeItemOut(row: KnowledgeItemRow, sourceRefs: Record<strin
 
 export function relationOut(row: KnowledgeRelationRow): Record<string, unknown> {
   return normalizeDates({ ...row });
+}
+
+export function claimSummaryOut(row: ClaimRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    subject_object_id: row.subject_object_id,
+    subject_text: row.subject_text,
+    claim_kind: row.claim_kind,
+    claim_text: row.claim_text,
+    normalized_claim_hash: row.normalized_claim_hash,
+    confidence: row.confidence,
+    confidence_method: row.confidence_method,
+    resolution_state: row.resolution_state,
+    status: row.status,
+    visibility: row.visibility,
+    title: row.title,
+    excerpt: row.excerpt,
+    primary_project_id: row.primary_project_id,
+    workspace_id: row.workspace_id,
+    updated_at: dateIso(row.updated_at) ?? new Date(0).toISOString(),
+  };
+}
+
+export function claimOut(row: ClaimRow, sources: Record<string, unknown>[]): Record<string, unknown> {
+  return {
+    ...claimSummaryOut(row),
+    holder_object_id: row.holder_object_id,
+    holder_type: row.holder_type,
+    holder_id: row.holder_id,
+    valid_from: dateIso(row.valid_from),
+    valid_until: dateIso(row.valid_until),
+    observed_at: dateIso(row.observed_at),
+    metadata: objectValue(row.metadata_json),
+    sources,
+    owner_user_id: row.owner_user_id,
+    created_by_user_id: row.created_by_user_id,
+    created_by_agent_id: row.created_by_agent_id,
+    created_by_run_id: row.created_by_run_id,
+    created_from_proposal_id: row.created_from_proposal_id,
+    approved_by_user_id: row.approved_by_user_id,
+    created_at: dateIso(row.created_at),
+    archived_at: dateIso(row.archived_at),
+  };
+}
+
+export function claimSourceOut(row: ClaimSourceRow): Record<string, unknown> {
+  const out = normalizeDates({ ...row });
+  delete out.source_policy_snapshot_json;
+  delete out.metadata_json;
+  return {
+    ...out,
+    source_policy_snapshot: objectValue(row.source_policy_snapshot_json),
+    metadata: objectValue(row.metadata_json),
+  };
+}
+
+export function claimRelationOut(row: ClaimRelationRow): Record<string, unknown> {
+  return normalizeDates({ ...row });
+}
+
+export function objectRelationOut(row: ObjectRelationRow): Record<string, unknown> {
+  const out = normalizeDates({ ...row });
+  delete out.from_object_type;
+  delete out.to_object_type;
+  delete out.metadata_json;
+  return {
+    ...out,
+    retrieval_projected: isKnowledgeRetrievalProjectedRelation(row.from_object_type, row.to_object_type),
+    metadata: objectValue(row.metadata_json),
+  };
 }
 
 export function sourceSummaryOut(row: SourceRow): Record<string, unknown> {
@@ -154,6 +230,15 @@ export function canReadKnowledge(row: KnowledgeItemRow, userId: string): boolean
 }
 
 export function canMutateKnowledge(row: KnowledgeItemRow, userId: string): boolean {
+  if (row.visibility === "space_shared" || row.visibility === "workspace_shared") return true;
+  return row.owner_user_id === userId || row.created_by_user_id === userId;
+}
+
+export function canReadClaim(row: ClaimRow, userId: string): boolean {
+  return canReadByVisibility(row.visibility, userId, [row.owner_user_id, row.created_by_user_id]);
+}
+
+export function canMutateClaim(row: ClaimRow, userId: string): boolean {
   if (row.visibility === "space_shared" || row.visibility === "workspace_shared") return true;
   return row.owner_user_id === userId || row.created_by_user_id === userId;
 }

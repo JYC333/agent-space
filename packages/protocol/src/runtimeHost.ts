@@ -11,6 +11,7 @@ import { z } from "zod";
 import { IdSchema, ISODateTimeSchema, SecretResponseGuards } from "./common.js";
 import {
   CanonicalMessageSchema,
+  CanonicalToolDefinitionSchema,
   CanonicalModelEventSchema,
   CanonicalUsageSchema,
 } from "./model.js";
@@ -52,6 +53,7 @@ export const RuntimeHostExecuteRequestSchema = z.object({
   max_tokens: z.number().int().positive().optional(),
   tool_mode: RuntimeHostToolModeSchema.default("disabled"),
   tool_bindings: z.array(RuntimeHostToolBindingSchema).default([]),
+  tools: z.array(CanonicalToolDefinitionSchema).optional(),
 });
 export type RuntimeHostExecuteRequest = z.infer<typeof RuntimeHostExecuteRequestSchema>;
 

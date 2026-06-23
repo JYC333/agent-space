@@ -1,14 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
 import { toast } from 'sonner'
-import { knowledgeApi } from '../../api/client'
+import { knowledgeApi, objectSchemaApi } from '../../api/client'
 import { errMsg } from '../../lib/utils'
 import type {
   KnowledgeContentFormat,
   KnowledgeCreateProposalBody,
-  KnowledgeItemType,
+  KnowledgeItemKind,
   KnowledgeVisibility,
   Proposal,
+  SpaceObjectKindOut,
 } from '../../types/api'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
@@ -20,7 +21,7 @@ import { Textarea } from '../../components/ui/textarea'
 import KnowledgeProposalNotice from './KnowledgeProposalNotice'
 import {
   KNOWLEDGE_FORMATS,
-  KNOWLEDGE_ITEM_TYPES,
+  KNOWLEDGE_ITEM_KINDS,
   KNOWLEDGE_VISIBILITIES,
   parseOptionalConfidence,
   parseSourceRefs,
@@ -29,7 +30,7 @@ import {
 } from './utils'
 
 interface CreateForm {
-  item_type: KnowledgeItemType
+  knowledge_kind: KnowledgeItemKind
   title: string
   content: string
   content_format: KnowledgeContentFormat
@@ -43,11 +44,12 @@ interface CreateForm {
   source_run_id: string
   source_artifact_id: string
   source_refs: string
+  object_kind_fields: string
   rationale: string
 }
 
 const EMPTY_CREATE_FORM: CreateForm = {
-  item_type: 'concept',
+  knowledge_kind: 'concept',
   title: '',
   content: '',
   content_format: 'markdown',
@@ -61,6 +63,7 @@ const EMPTY_CREATE_FORM: CreateForm = {
   source_run_id: '',
   source_artifact_id: '',
   source_refs: '',
+  object_kind_fields: '',
   rationale: '',
 }
 
@@ -70,8 +73,27 @@ interface KnowledgeCreateProposalFormProps {
 
 export default function KnowledgeCreateProposalForm({ hasOperationalSpace }: KnowledgeCreateProposalFormProps) {
   const [form, setForm] = useState<CreateForm>(EMPTY_CREATE_FORM)
+  const [objectKinds, setObjectKinds] = useState<SpaceObjectKindOut[]>([])
   const [lastProposal, setLastProposal] = useState<Proposal | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (!hasOperationalSpace) {
+      setObjectKinds([])
+      return
+    }
+    objectSchemaApi.listKinds({ base_object_type: 'knowledge_item', status: 'active', limit: 100 })
+      .then(page => setObjectKinds(page.items.filter(kind => isKnowledgeItemKind(kind.key))))
+      .catch(() => setObjectKinds([]))
+  }, [hasOperationalSpace])
+
+  const kindOptions = useMemo(() => {
+    const labels = new Map(objectKinds.map(kind => [kind.key, kind.label]))
+    return KNOWLEDGE_ITEM_KINDS.map(kind => ({
+      value: kind,
+      label: labels.get(kind) ? `${labels.get(kind)} (${kind})` : kind,
+    }))
+  }, [objectKinds])
 
   function setField<K extends keyof CreateForm>(key: K, value: CreateForm[K]) {
     setForm(f => ({ ...f, [key]: value }))
@@ -98,8 +120,21 @@ export default function KnowledgeCreateProposalForm({ hasOperationalSpace }: Kno
       toast.error(errMsg(e))
       return
     }
+    let objectKindFields: Record<string, unknown> | undefined
+    if (form.object_kind_fields.trim()) {
+      try {
+        const parsed = JSON.parse(form.object_kind_fields) as unknown
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('object_kind_fields must be a JSON object')
+        }
+        objectKindFields = parsed as Record<string, unknown>
+      } catch (e) {
+        toast.error(errMsg(e))
+        return
+      }
+    }
     const body: KnowledgeCreateProposalBody = {
-      item_type: form.item_type,
+      knowledge_kind: form.knowledge_kind,
       title: form.title.trim(),
       content: form.content,
       content_format: form.content_format,
@@ -113,6 +148,7 @@ export default function KnowledgeCreateProposalForm({ hasOperationalSpace }: Kno
       source_run_id: form.source_run_id.trim() || null,
       source_artifact_id: form.source_artifact_id.trim() || null,
       source_refs: sourceRefs,
+      ...(objectKindFields ? { object_kind_fields: objectKindFields } : {}),
       rationale: form.rationale.trim() || null,
     }
     setSubmitting(true)
@@ -140,8 +176,8 @@ export default function KnowledgeCreateProposalForm({ hasOperationalSpace }: Kno
           <Input value={form.title} onChange={e => setField('title', e.target.value)} placeholder="Short title..." />
         </div>
         <div>
-          <Label>Item type</Label>
-          <Select value={form.item_type} onChange={v => setField('item_type', v as KnowledgeItemType)} options={KNOWLEDGE_ITEM_TYPES.map(t => ({ value: t, label: t }))} />
+          <Label>Knowledge kind</Label>
+          <Select value={form.knowledge_kind} onChange={v => setField('knowledge_kind', v as KnowledgeItemKind)} options={kindOptions} />
         </div>
         <div>
           <Label>Content format</Label>
@@ -206,6 +242,10 @@ export default function KnowledgeCreateProposalForm({ hasOperationalSpace }: Kno
             <Label>source_refs JSON</Label>
             <Textarea value={form.source_refs} onChange={e => setField('source_refs', e.target.value)} placeholder='optional, e.g. [{"kind":"doc","id":"..."}]' />
           </div>
+          <div className="md:col-span-2">
+            <Label>object_kind_fields JSON</Label>
+            <Textarea value={form.object_kind_fields} onChange={e => setField('object_kind_fields', e.target.value)} placeholder='optional, e.g. {"risk":"low"}' />
+          </div>
         </div>
       </div>
 
@@ -217,4 +257,8 @@ export default function KnowledgeCreateProposalForm({ hasOperationalSpace }: Kno
       {lastProposal && <div className="mt-4"><KnowledgeProposalNotice proposal={lastProposal} /></div>}
     </Card>
   )
+}
+
+function isKnowledgeItemKind(value: string): value is KnowledgeItemKind {
+  return (KNOWLEDGE_ITEM_KINDS as readonly string[]).includes(value)
 }

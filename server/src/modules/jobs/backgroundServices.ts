@@ -5,6 +5,8 @@ import { scanDailyReportsAndEnqueue } from "../dailyReports/scheduler";
 import { scanAutomationsAndFire } from "../automations/scheduler";
 import { runScheduledBackup } from "../backups/service";
 import { IntakeExtractionWorker } from "../intake/extractionWorker";
+import { runDueMemoryMaintenanceJobs } from "../memory/maintenanceJobs";
+import { withDbTransaction } from "../routeUtils/common";
 import { PgJobQueueRepository } from "./repository";
 import { startJobsWorker, type JobsWorkerHandle } from "./workerRuntime";
 import type { PluginHost } from "../plugins/host";
@@ -60,6 +62,19 @@ export function startBackgroundServices(
       run: async () => {
         const deleted = await pruneMemoryAccessLogs(config);
         if (deleted > 0) log?.info(`[scheduler] memory_access_log pruned ${deleted} row(s)`);
+      },
+      runOnStart: false,
+    });
+  }
+
+  if (config.memoryMaintenanceSchedulerEnabled && config.databaseUrl) {
+    tasks.push({
+      name: "memory_maintenance_scheduler",
+      intervalSeconds: config.memoryMaintenanceSchedulerIntervalSeconds,
+      run: async () => {
+        const processed = await withDbTransaction(getDbPool(config.databaseUrl!), (client) =>
+          runDueMemoryMaintenanceJobs(client, config.memoryMaintenanceSchedulerBatchLimit));
+        if (processed > 0) log?.info(`[scheduler] memory_maintenance advanced ${processed} job(s)`);
       },
       runOnStart: false,
     });

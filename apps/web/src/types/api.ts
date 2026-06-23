@@ -1,7 +1,7 @@
 // API response shapes shared with the server HTTP contracts.
 
 export type SpaceType      = 'personal' | 'household' | 'team'
-export type MemberRole     = 'owner' | 'admin' | 'member' | 'viewer'
+export type MemberRole     = 'owner' | 'admin' | 'reviewer' | 'member' | 'guest' | 'viewer'
 export type InviteStatus   = 'pending' | 'accepted' | 'revoked' | 'expired'
 
 export interface CurrentUser {
@@ -54,9 +54,8 @@ export type MemoryStatus     = 'active' | 'archived' | 'proposed' | 'rejected' |
 export type MemoryVisibility = 'private' | 'space_shared' | 'workspace_shared' | 'selected_users' | 'summary_only' | 'restricted' | 'public_template'
 export type ObjectVisibility = 'private' | 'space_shared' | 'restricted' | string
 export type ProposalStatus   = 'pending' | 'accepted' | 'rejected'
-export type KnowledgeItemType =
+export type KnowledgeItemKind =
   | 'concept'
-  | 'claim'
   | 'lesson'
   | 'procedure'
   | 'decision'
@@ -82,6 +81,583 @@ export type KnowledgeRelationType =
   | 'summarizes'
   | 'updates'
 export type KnowledgeRelationStatus = 'candidate' | 'active' | 'rejected' | 'archived'
+export type RetrievalObjectType = 'knowledge_item' | 'note' | 'source' | 'claim' | 'memory_entry' | 'project_public_summary'
+export const SPACE_OBJECT_KIND_KEYS_BY_BASE_OBJECT_TYPE = {
+  knowledge_item: ['concept', 'lesson', 'procedure', 'decision', 'question', 'answer', 'summary'],
+  note: ['note'],
+  source: ['activity_record', 'chat_capture', 'webpage', 'article', 'paper', 'pdf', 'file', 'email', 'manual_reference', 'external_note'],
+  claim: ['fact', 'hypothesis', 'belief', 'preference', 'commitment', 'question', 'interpretation', 'instruction', 'metric', 'relationship', 'event'],
+  memory_entry: ['preference', 'semantic', 'episodic', 'procedural', 'project'],
+  project_public_summary: ['project_public_summary'],
+} as const satisfies Record<RetrievalObjectType, readonly string[]>
+export type SpaceObjectKindStatus = 'draft' | 'active' | 'deprecated' | 'archived'
+export type SpaceObjectKindRelationHintDirection = 'from' | 'to' | 'either'
+export type SpaceObjectKindRelationHintRelationType =
+  | 'related_to'
+  | 'explains'
+  | 'depends_on'
+  | 'prerequisite_of'
+  | 'part_of'
+  | 'example_of'
+  | 'applies_to'
+  | 'supports'
+  | 'contradicts'
+  | 'derived_from'
+  | 'summarizes'
+  | 'updates'
+  | 'references'
+  | 'source_for'
+  | 'about'
+  | 'supersedes'
+  | 'refines'
+  | 'same_as'
+export type RetrievalSearchMode = 'exact' | 'lexical' | 'hybrid' | 'hybrid_rerank'
+export type RetrievalEvidenceKind =
+  | 'alias_hit'
+  | 'exact_title_match'
+  | 'slug_match'
+  | 'source_url_match'
+  | 'lexical_match'
+  | 'vector_match'
+  | 'graph_neighbor'
+  | 'weak_match'
+export interface RetrievalEvidence {
+  kind: RetrievalEvidenceKind
+  field?: string
+  matched_text?: string
+  source?: string
+  confidence?: number
+  [key: string]: unknown
+}
+export interface RetrievalSearchRequest {
+  query: string
+  object_types?: RetrievalObjectType[]
+  object_kinds?: string[]
+  max_results?: number
+  include_trace?: boolean
+  mode?: RetrievalSearchMode
+  rewrite?: boolean
+  use_cache?: boolean
+  adaptive_return?: boolean
+}
+export interface RetrievalSearchResult {
+  object_type: RetrievalObjectType
+  object_id: string
+  object_kind?: string | null
+  object_kind_label?: string | null
+  title: string
+  snippet: string | null
+  score: number
+  evidence: RetrievalEvidence
+  create_safety?: 'exists' | 'probable_duplicate' | 'unknown'
+  matched_fields: string[]
+  source_refs?: Array<Record<string, unknown>>
+  trace?: Record<string, unknown>
+}
+export interface RetrievalSearchResponse {
+  items: RetrievalSearchResult[]
+  total: number
+  rewrite_items?: RetrievalSearchResult[]
+  rewrite_total?: number
+  trace?: Record<string, unknown>
+}
+export interface RetrievalCitation {
+  source_index: number
+  object_type: RetrievalObjectType
+  object_id: string
+  object_kind?: string | null
+  object_kind_label?: string | null
+  title: string
+  quote?: string | null
+  [key: string]: unknown
+}
+export interface RetrievalGapItem {
+  object_type: RetrievalObjectType
+  object_id: string
+  object_kind?: string | null
+  object_kind_label?: string | null
+  title: string
+  reason: string
+  [key: string]: unknown
+}
+export interface RetrievalGapAnalysis {
+  stale: RetrievalGapItem[]
+  thin: RetrievalGapItem[]
+  low_coverage: boolean
+  uncited_claims: string[]
+  contradictions: string[]
+  missing_topics: string[]
+  [key: string]: unknown
+}
+export interface RetrievalBrief {
+  answer: string | null
+  synthesized: boolean
+  citations: RetrievalCitation[]
+  gap_analysis: RetrievalGapAnalysis
+  [key: string]: unknown
+}
+export interface RetrievalBriefRequest {
+  query: string
+  object_types?: RetrievalObjectType[]
+  object_kinds?: string[]
+  max_results?: number
+  include_trace?: boolean
+  mode?: RetrievalSearchMode
+  adaptive_return?: boolean
+  persist_artifact?: boolean
+}
+
+export interface SpaceObjectKindOut {
+  id: string
+  space_id: string
+  key: string
+  label: string
+  description: string | null
+  base_object_type: RetrievalObjectType
+  status: SpaceObjectKindStatus
+  version: number
+  field_schema: Record<string, unknown>
+  extraction_policy: Record<string, unknown>
+  retrieval_policy: Record<string, unknown>
+  ui_config: Record<string, unknown>
+  relation_hints?: Array<SpaceObjectKindRelationHintRequest & { id: string }>
+  created_by_user_id?: string | null
+  created_from_proposal_id?: string | null
+  updated_from_proposal_id?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SpaceObjectKindRelationHintRequest {
+  endpoint_object_type: RetrievalObjectType
+  endpoint_object_kind_id?: string | null
+  relation_type: SpaceObjectKindRelationHintRelationType
+  direction?: SpaceObjectKindRelationHintDirection
+  confidence_default?: number
+  required?: boolean
+}
+
+export interface ObjectSchemaManifestRelationHint {
+  endpoint_object_type: RetrievalObjectType
+  endpoint_object_kind_key?: string | null
+  relation_type: SpaceObjectKindRelationHintRelationType
+  direction?: SpaceObjectKindRelationHintDirection
+  confidence_default?: number
+  required?: boolean
+}
+
+export interface ObjectSchemaManifestKind {
+  key: string
+  label: string
+  description?: string | null
+  base_object_type: RetrievalObjectType
+  status?: SpaceObjectKindStatus
+  version?: number
+  field_schema?: Record<string, unknown>
+  extraction_policy?: Record<string, unknown>
+  retrieval_policy?: Record<string, unknown>
+  ui_config?: Record<string, unknown>
+  relation_hints?: ObjectSchemaManifestRelationHint[]
+}
+
+export interface ObjectSchemaExportManifest {
+  format: 'agent_space.object_schema.v1'
+  exported_at: string
+  object_schema_version: number
+  object_kinds: ObjectSchemaManifestKind[]
+  metadata?: Record<string, unknown>
+}
+
+export interface ObjectSchemaImportRequest {
+  manifest: ObjectSchemaExportManifest
+  rationale?: string
+}
+
+export interface ObjectSchemaImportResponse {
+  created_proposal_count: number
+  skipped_count: number
+  proposal_ids: string[]
+  skipped: Array<Record<string, unknown>>
+  warnings: string[]
+}
+
+export interface ObjectSchemaSuggestionScanRequest {
+  base_object_types?: RetrievalObjectType[]
+  limit?: number
+  persist_artifact?: boolean
+  review_scope?: 'private' | 'space_ops'
+}
+
+export interface ObjectSchemaSuggestionFinding {
+  id: string
+  kind: 'missing_object_kind' | 'deprecated_kind_usage' | 'unused_active_kind'
+  base_object_type: RetrievalObjectType
+  object_kind: string
+  title: string
+  reason: string
+  confidence_tier: 'high' | 'medium' | 'low'
+  visible_usage_count: number
+  proposed_action: Record<string, unknown> | null
+  evidence_refs: Array<Record<string, unknown>>
+  markers: Record<string, unknown>
+}
+
+export interface ObjectSchemaSuggestionReport {
+  findings: ObjectSchemaSuggestionFinding[]
+  counts: Record<string, number>
+  scanned: {
+    visible_usage_rows: number
+    registry_rows: number
+  }
+  truncated: boolean
+  access_safety: Record<string, unknown>
+}
+
+export interface ObjectSchemaSuggestionScanResponse {
+  report: ObjectSchemaSuggestionReport
+  finding_count: number
+  artifact_id?: string
+}
+
+export interface SpaceObjectKindPage {
+  items: SpaceObjectKindOut[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface SpaceObjectKindCreateProposalRequest {
+  key: string
+  label: string
+  description?: string | null
+  base_object_type: RetrievalObjectType
+  status?: 'draft' | 'active'
+  field_schema?: Record<string, unknown>
+  extraction_policy?: Record<string, unknown>
+  retrieval_policy?: Record<string, unknown>
+  ui_config?: Record<string, unknown>
+  relation_hints?: SpaceObjectKindRelationHintRequest[]
+  rationale?: string
+}
+
+export interface SpaceObjectKindUpdateProposalRequest {
+  label?: string
+  description?: string | null
+  status?: 'active'
+  field_schema?: Record<string, unknown>
+  extraction_policy?: Record<string, unknown>
+  retrieval_policy?: Record<string, unknown>
+  ui_config?: Record<string, unknown>
+  relation_hints?: SpaceObjectKindRelationHintRequest[]
+  rationale?: string
+}
+export interface RetrievalBriefResponse {
+  brief: RetrievalBrief
+  items: RetrievalSearchResult[]
+  total: number
+  trace?: Record<string, unknown>
+  artifact_id?: string
+  artifact_error?: string
+}
+// ── Brain Think / Ask Brain (Slice A) ──────────────────────────────────────
+export type BrainThinkDomain = 'knowledge' | 'memory' | 'project'
+export interface BrainThinkRequest {
+  query: string
+  domains?: BrainThinkDomain[]
+  max_results_per_domain?: number
+  mode?: RetrievalSearchMode
+  include_trace?: boolean
+  adaptive_return?: boolean
+  persist?: boolean
+  combine?: boolean
+  combine_include_memory?: boolean
+  include_claim_trajectory?: boolean
+}
+export interface BrainThinkClaimTrajectorySignal {
+  kind: string
+  from_claim_id: string
+  to_claim_id: string
+  summary: string
+  confidence_tier: 'high' | 'medium' | 'low'
+}
+export interface BrainThinkClaimTrajectory {
+  claim_id: string
+  subject_object_id: string | null
+  subject_text: string | null
+  signals: BrainThinkClaimTrajectorySignal[]
+}
+export interface BrainThinkDomainSection {
+  domain: BrainThinkDomain
+  object_types: RetrievalObjectType[]
+  brief: RetrievalBrief | null
+  items: RetrievalSearchResult[]
+  total: number
+  artifact_id?: string
+  artifact_error?: string
+  error_code?: string
+}
+export interface BrainThinkGapSummary {
+  stale_count: number
+  thin_count: number
+  low_coverage_domains: BrainThinkDomain[]
+  uncited_claim_count: number
+  contradiction_count: number
+  missing_topic_count: number
+}
+export interface BrainThinkProvenanceItem {
+  domain: BrainThinkDomain
+  object_type: RetrievalObjectType
+  object_id: string
+  title: string
+}
+export type BrainThinkFollowUpKind = 'claim_candidate_packet' | 'maintenance_scan'
+export interface BrainThinkFollowUp {
+  kind: BrainThinkFollowUpKind
+  label: string
+  reason?: string
+  source_artifact_ids: string[]
+}
+export interface BrainThinkResponse {
+  generated_at: string
+  space_id: string
+  query: string
+  requested_domains: BrainThinkDomain[]
+  domains: BrainThinkDomainSection[]
+  synthesized: boolean
+  combined_answer: string | null
+  gap_summary: BrainThinkGapSummary
+  provenance: BrainThinkProvenanceItem[]
+  claim_trajectories: BrainThinkClaimTrajectory[]
+  follow_ups: BrainThinkFollowUp[]
+  session_artifact_id?: string
+  session_artifact_error?: string
+  canonical_write_performed: false
+}
+
+export interface RetrievalDiagnosticsReportRequest {
+  window_days?: number
+  limit?: number
+  report_label?: string
+  include_maintenance_reports?: boolean
+  compare_previous_window?: boolean
+  create_packet?: boolean
+  review_scope?: 'private' | 'space_ops'
+}
+export interface RetrievalDiagnosticsReportResponse {
+  artifact_id: string
+  counts: Record<string, number>
+  diagnostic_codes: string[]
+  proposal_id?: string
+}
+export type RetrievalCalibrationMechanic =
+  | 'visible_edge_backlink'
+  | 'candidate_owned_salience'
+  | 'richer_dedup'
+  | 'autocut'
+  | 'semantic_results_cache'
+export type RetrievalCalibrationDecisionValue = 'adopt' | 'defer' | 'reject'
+export type RetrievalRankingMechanicState = 'disabled' | 'adopted' | 'shipped'
+export interface RetrievalRuntimeMechanicConfig {
+  state: RetrievalRankingMechanicState
+  calibration_artifact_id?: string | null
+  shipped_at?: string | null
+  eval_gate: {
+    status: 'not_run' | 'passed' | 'failed'
+    metric?: string | null
+    value?: number | null
+    threshold: number
+    checked_at?: string | null
+  }
+}
+export interface RetrievalRuntimeRankingConfig {
+  version: 1
+  eval_gate: {
+    min_primary_metric_delta: number
+    required_evidence_artifacts: number
+  }
+  mechanics: Record<RetrievalCalibrationMechanic, RetrievalRuntimeMechanicConfig>
+}
+export interface RetrievalCalibrationDecision {
+  mechanic: RetrievalCalibrationMechanic
+  decision: RetrievalCalibrationDecisionValue
+  access_safety_proof: string
+  eval_delta?: Record<string, number>
+  evidence_artifact_ids?: string[]
+  rationale?: string
+  guardrails?: string[]
+}
+export interface RetrievalCalibrationDecisionRequest {
+  report_label?: string
+  suite?: string
+  decisions: RetrievalCalibrationDecision[]
+  review_scope?: 'private' | 'space_ops'
+}
+export interface RetrievalCalibrationDecisionResponse {
+  artifact_id: string
+  decision_count: number
+}
+export interface RetrievalMaintenanceScanRequest {
+  persist_report?: boolean
+  create_packet?: boolean
+  review_scope?: 'private' | 'space_ops'
+}
+export interface RetrievalMaintenanceScanResponse {
+  counts: Record<string, number>
+  scanned: number
+  truncated: boolean
+  artifact_id?: string
+  proposal_id?: string
+}
+// Slice E — claim contradiction discovery scan.
+export interface ClaimContradictionScanRequest {
+  subject_object_id?: string
+  limit?: number
+  max_findings?: number
+  review_scope?: 'private' | 'space_ops'
+  create_packet?: boolean
+  llm_judge_enabled?: boolean
+}
+export interface ClaimContradictionScanResponse {
+  report: { findings: unknown[]; counts: Record<string, number>; truncated: boolean }
+  artifact_id?: string
+  candidate_packet_proposal_id?: string
+  candidate_packet_artifact_id?: string
+  candidate_count?: number
+}
+
+// Slice F — candidate-relation discovery scan.
+export interface RelationDiscoveryScanRequest {
+  source_object_types?: ('knowledge_item' | 'note' | 'activity' | 'artifact')[]
+  limit?: number
+  max_candidates?: number
+  review_scope?: 'private' | 'space_ops'
+  include_unresolved_item_candidates?: boolean
+  llm_extraction_enabled?: boolean
+  llm_max_sources?: number
+  create_packet?: boolean
+}
+export interface RelationDiscoveryScanResponse {
+  report: { candidates: unknown[]; counts: Record<string, number>; sources_scanned: number; truncated: boolean }
+  artifact_id?: string
+  proposal_id?: string
+  candidate_count: number
+  proposal_candidate_count: number
+  review_only_candidate_count: number
+}
+
+export interface RetrievalExplainRequest {
+  query: string
+  object_type: RetrievalObjectType
+  object_id: string
+  object_types?: RetrievalObjectType[]
+  max_results?: number
+  mode?: RetrievalSearchMode
+  rewrite?: boolean
+  use_cache?: boolean
+  adaptive_return?: boolean
+  persist_artifact?: boolean
+}
+export interface RetrievalExplainResponse {
+  target: {
+    object_type: RetrievalObjectType
+    object_id: string
+    title: string
+    visible: true
+    returned: boolean
+    rank?: number
+    score?: number
+    score_bucket?: string
+  }
+  match: {
+    matched_fields: string[]
+    evidence_kind?: RetrievalEvidenceKind
+    evidence_field?: string
+    evidence_source?: string
+    evidence_confidence?: number
+    create_safety?: 'exists' | 'probable_duplicate' | 'unknown'
+  }
+  trace: {
+    arms: Record<string, number>
+    dropped: number
+    dropped_reasons: Record<string, number>
+    mode?: RetrievalSearchMode
+    intent?: string
+    rerank?: Record<string, unknown>
+    rewrite?: Record<string, unknown>
+    graph?: Record<string, unknown>
+    relational?: Record<string, unknown>
+    synthesis?: Record<string, unknown>
+  }
+  diagnostic_codes: string[]
+  artifact_id?: string
+}
+export interface SpaceRetrievalSettings {
+  space_id: string
+  default_search_mode: RetrievalSearchMode
+  rerank_enabled: boolean
+  query_rewrite_enabled: boolean
+  query_rewrite_default: boolean
+  use_query_cache: boolean
+  include_trace: boolean
+  external_egress_enabled: boolean
+  retrieval_tool_mode: RetrievalToolMode
+  brain_ops_review_mode: BrainOpsReviewMode
+  brain_ops_scan_mode: BrainOpsScanMode
+  embedding_dimensions: number
+  max_results_default: number
+  ranking_config: RetrievalRuntimeRankingConfig
+  created_at: string
+  updated_at: string
+}
+export type RetrievalToolMode = 'off' | 'manual_tool_only' | 'preflight_search' | 'preflight_brief'
+export type BrainOpsReviewMode = 'private_only' | 'admins' | 'members'
+export type BrainOpsScanMode = 'admins' | 'members'
+export type SpaceRetrievalSettingsUpdate = Partial<Pick<
+  SpaceRetrievalSettings,
+  | 'default_search_mode'
+  | 'rerank_enabled'
+  | 'query_rewrite_enabled'
+  | 'query_rewrite_default'
+  | 'use_query_cache'
+  | 'include_trace'
+  | 'external_egress_enabled'
+  | 'retrieval_tool_mode'
+  | 'brain_ops_review_mode'
+  | 'brain_ops_scan_mode'
+  | 'embedding_dimensions'
+  | 'max_results_default'
+  | 'ranking_config'
+>>
+export type RetrievalPromptTask = 'query_rewrite'
+export interface SpaceRetrievalPrompt {
+  space_id: string
+  task: RetrievalPromptTask
+  system_prompt: string
+  user_template: string
+  default_system_prompt: string
+  default_user_template: string
+  created_at: string
+  updated_at: string
+}
+export type SpaceRetrievalPromptUpdate = Partial<Pick<
+  SpaceRetrievalPrompt,
+  | 'system_prompt'
+  | 'user_template'
+>>
+export type RetrievalFeedbackSignal = 'opened' | 'dwell' | 'used' | 'explicit_relevant' | 'accepted' | 'pinned'
+export interface RetrievalFeedbackRequest {
+  query: string
+  object_type: RetrievalObjectType
+  object_id: string
+  signal_type: RetrievalFeedbackSignal
+  dwell_ms?: number
+  metadata?: {
+    source?: 'result_open' | 'dwell_timer' | 'explicit_action'
+  }
+}
+export interface RetrievalFeedbackResponse {
+  ok: true
+}
 export type ActivityStatus     = 'raw' | 'processed' | 'proposals_generated' | 'archived'
 export type ActivitySourceType =
   | 'user_capture'
@@ -581,12 +1157,115 @@ export interface Memory {
   project_id?: string | null
 }
 
+export type MemoryMaintenanceFindingKind =
+  | 'duplicate'
+  | 'stale'
+  | 'thin'
+  | 'lifecycle_drift'
+  | 'archived_state_drift'
+  | 'project_drift'
+  | 'source_policy_drift'
+  | 'contradiction'
+
+export interface MemoryMaintenanceObject {
+  object_type: 'memory_entry'
+  object_id: string
+  title: string | null
+}
+
+export interface MemoryMaintenanceFinding {
+  kind: MemoryMaintenanceFindingKind
+  objects: MemoryMaintenanceObject[]
+  reason: string
+  cluster_key?: string
+  cluster_label?: string
+  confidence_tier?: 'high' | 'medium' | 'low'
+  proposed_action?: Record<string, unknown> | null
+}
+
+export interface MemoryMaintenanceScanRequest {
+  persist_report?: boolean
+  create_packet?: boolean
+  limit?: number
+  stale_after_days?: number
+  thin_content_chars?: number
+  max_findings?: number
+  review_scope?: 'private' | 'space_ops'
+  project_id?: string | null
+  scan_mode?: 'recent' | 'full'
+  cursor?: string
+  job_id?: string
+}
+
+export interface MemoryMaintenanceReport {
+  findings: MemoryMaintenanceFinding[]
+  counts: Record<string, number>
+  candidate_limit: number
+  candidates_examined: number
+  scanned: number
+  truncated: boolean
+  scan_mode?: 'recent' | 'full'
+  next_cursor?: string | null
+  job_id?: string
+  job_status?: 'pending' | 'running' | 'completed' | 'failed'
+  artifact_id?: string
+  proposal_id?: string
+  access_safety?: Record<string, unknown>
+}
+
+export interface MemoryMaintenanceJob {
+  id: string
+  space_id: string
+  owner_user_id: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  review_scope: 'private' | 'space_ops'
+  scan_options: Record<string, unknown>
+  cursor: string | null
+  total_scanned: number
+  total_findings: number
+  last_report_artifact_id?: string | null
+  last_packet_proposal_id?: string | null
+  error_message: string | null
+  created_at: string
+  updated_at: string
+  completed_at?: string | null
+}
+
+export interface MemoryMaintenanceJobRunResponse {
+  job: MemoryMaintenanceJob
+  report: MemoryMaintenanceReport | null
+}
+
+export interface MemoryAccessLogEntry {
+  id: string
+  space_id: string
+  memory_id: string
+  user_id?: string | null
+  agent_id?: string | null
+  run_id?: string | null
+  access_type: string
+  reason?: string | null
+  accessed_at: string
+  memory_title: string | null
+  memory_scope: string | null
+  memory_visibility: string | null
+  project_id?: string | null
+}
+
+export interface MemoryAccessLogListResponse {
+  items: MemoryAccessLogEntry[]
+  limit: number
+  offset: number
+  returned: number
+  has_more: boolean
+}
+
 export interface KnowledgeItemSummary {
   id: string
   space_id: string
   project_id: string | null
   workspace_id: string | null
-  item_type: KnowledgeItemType
+  knowledge_kind: KnowledgeItemKind
   slug: string | null
   title: string
   content_preview: string
@@ -644,7 +1323,7 @@ export interface KnowledgeRelation {
 }
 
 export interface KnowledgeCreateProposalBody {
-  item_type: KnowledgeItemType
+  knowledge_kind: KnowledgeItemKind
   title: string
   slug?: string | null
   aliases?: string[]
@@ -662,6 +1341,7 @@ export interface KnowledgeCreateProposalBody {
   source_activity_id?: string | null
   source_run_id?: string | null
   source_artifact_id?: string | null
+  object_kind_fields?: Record<string, unknown>
   rationale?: string | null
 }
 
@@ -675,6 +1355,7 @@ export interface KnowledgeUpdateProposalBody {
   content_schema_version?: number
   tags: string[]
   confidence?: number | null
+  object_kind_fields?: Record<string, unknown>
   rationale?: string | null
   verification_status?: KnowledgeVerificationStatus
   reflection_status?: KnowledgeReflectionStatus
@@ -982,6 +1663,7 @@ export interface TaskRunCreateBody {
   workspace_id?: string | null
   prompt?: string | null
   instruction?: string | null
+  context_artifact_ids?: string[]
   set_task_in_progress?: boolean
 }
 
@@ -1121,6 +1803,7 @@ export interface Artifact {
   owner_user_id?: string | null
   content?: string | null
   project_id?: string | null
+  workspace_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -1202,8 +1885,39 @@ export type ProposalAcceptOut = {
   result: { knowledge_relation: KnowledgeRelation }
 } | {
   proposal: Proposal
+  result_type: 'claim'
+  result: { claim: Record<string, unknown> }
+} | {
+  proposal: Proposal
+  result_type: 'claim_relation'
+  result: { claim_relation: Record<string, unknown> }
+} | {
+  proposal: Proposal
+  result_type: 'object_relation'
+  result: { object_relation: Record<string, unknown> }
+} | {
+  proposal: Proposal
   result_type: 'capability_overlay'
   result: Record<string, unknown>
+} | {
+  proposal: Proposal
+  result_type: 'retrieval_maintenance_packet'
+  result: {
+    report_artifact_id?: string | null
+    generated_child_proposal_ids?: string[]
+    generated_child_proposal_count?: number
+  }
+} | {
+  proposal: Proposal
+  result_type: 'claim_candidate_packet'
+  result: {
+    packet_artifact_id?: string | null
+    generated_child_proposal_ids?: string[]
+    generated_child_proposal_count?: number
+    skipped_child_proposal_count?: number
+    skipped_child_proposals?: Record<string, unknown>[]
+    canonical_write_performed?: boolean
+  }
 }
 
 export interface PersonalMemoryGrantSafeMemoryFilter {
@@ -1668,6 +2382,7 @@ export interface RunCreateBody {
   capabilities_json?: string[]
   model_provider_id?: string | null
   model?: string | null
+  context_artifact_ids?: string[]
 }
 
 export interface Workspace {
@@ -1905,6 +2620,147 @@ export interface ContextPackage {
   relevant_episodes: Memory[]
   recent_session_summary: Record<string, unknown>[]
   attachments: Record<string, unknown>[]
+}
+
+export type ContextArtifactRevocationScope = 'workspace' | 'project'
+
+export interface ContextArtifactRevocation {
+  id: string
+  space_id: string
+  artifact_id: string
+  scope_type: ContextArtifactRevocationScope
+  scope_id: string
+  reason: string | null
+  created_by_user_id: string | null
+  created_at: string
+}
+
+export interface ContextArtifactRevocationCreateRequest {
+  artifact_id: string
+  scope_type: ContextArtifactRevocationScope
+  scope_id: string
+  reason?: string | null
+}
+
+export interface ContextArtifactRevocationListResponse {
+  items: ContextArtifactRevocation[]
+}
+
+export type BrainOpsCountMap = Record<string, number>
+
+export interface BrainOpsArtifactSummary {
+  artifact_id: string
+  artifact_type: string
+  title: string
+  created_at: string
+  surface: string | null
+  diagnostic_codes: string[]
+  finding_count: number | null
+}
+
+export interface BrainOpsPacketSummary {
+  proposal_id: string
+  proposal_type: string
+  status: string
+  title: string
+  created_at: string
+  report_artifact_id: string | null
+}
+
+export interface BrainOpsSummary {
+  generated_at: string
+  space_id: string
+  owner_user_id: string
+  window_days: number
+  index_freshness: {
+    object_counts: BrainOpsCountMap
+    stale_projection_count: number
+    source_connected_object_count: number
+    oldest_indexed_at: string | null
+    newest_indexed_at: string | null
+    newest_source_updated_at: string | null
+  }
+  embedding_backlog: {
+    total_chunks: number
+    embedded_chunks: number
+    missing_embedding_chunks: number
+    claimed_chunks: number
+    attempted_chunks: number
+    missing_by_object_type: BrainOpsCountMap
+  }
+  source_policy_warnings: {
+    active_source_connections: number
+    missing_consent_version_count: number
+    reader_restricted_source_count: number
+    external_egress_disabled_source_count: number
+    derived_writes_disabled_source_count: number
+    warning_counts: BrainOpsCountMap
+  }
+  maintenance: {
+    recent_report_count: number
+    finding_counts: BrainOpsCountMap
+    pending_packet_count: number
+    recent_packets: BrainOpsPacketSummary[]
+  }
+  diagnostics: {
+    recent_report_count: number
+    diagnostic_code_counts: BrainOpsCountMap
+    latest_report_artifact_id: string | null
+    latest_generated_at: string | null
+    trend_metric_deltas: Record<string, number>
+    insufficient_trend_sample: boolean
+  }
+  recent_context_briefs: BrainOpsArtifactSummary[]
+  retrieval_feedback: {
+    recent_event_count: number
+    signal_counts: BrainOpsCountMap
+    surface_counts: BrainOpsCountMap
+    window_days: number
+  }
+  memory_provenance: {
+    recent_access_count: number
+    context_injection_count: number
+    maintenance_scan_count: number
+    inspector_available: boolean
+  }
+}
+
+export type BrainOpsDrilldownSection =
+  | 'index_freshness'
+  | 'embedding_backlog'
+  | 'source_warnings'
+  | 'maintenance_reports'
+  | 'diagnostics_reports'
+  | 'explain_reports'
+  | 'recent_briefs'
+
+export interface BrainOpsDrilldownObject {
+  object_type: string
+  object_id: string
+  title: string
+  indexed_at: string | null
+  source_updated_at: string | null
+  missing_chunk_count: number | null
+}
+
+export interface BrainOpsSourceWarningDetail {
+  source_connection_id: string
+  name: string
+  owner_user_id: string
+  status: string
+  warnings: string[]
+}
+
+export interface BrainOpsDrilldown {
+  generated_at: string
+  space_id: string
+  section: BrainOpsDrilldownSection
+  limit: number
+  truncated: boolean
+  objects: BrainOpsDrilldownObject[]
+  sources: BrainOpsSourceWarningDetail[]
+  artifacts: BrainOpsArtifactSummary[]
+  packets: BrainOpsPacketSummary[]
 }
 
 export interface Feature {
@@ -2378,6 +3234,7 @@ export interface ProjectSummary {
 
 // ── Automations ─────────────────────────────────────────────────────────────
 export type AutomationTriggerType = 'manual' | 'schedule'
+export type AutomationTargetType = 'agent_run' | 'knowledge_retrieval_maintenance' | 'brain_ops_dream_cycle_v2'
 
 export interface AutomationOut {
   id: string
@@ -2418,4 +3275,58 @@ export interface AutomationFireResult {
   automation_run_id: string
   trigger_origin: string
   preflight_executable: boolean
+  target_type?: AutomationTargetType
+  artifact_id?: string | null
+  proposal_id?: string | null
+  artifact_ids?: Record<string, string | null>
+  proposal_ids?: Record<string, string | null>
+  finding_count?: number
+  scanned?: number
+  truncated?: boolean
+  degraded?: boolean
+  warnings?: Array<{ stage: string; error_code: string; message: string }>
+}
+
+export interface BrainOpsDreamCycleV2Request {
+  window_days?: number
+  artifact_limit?: number
+  create_packets?: boolean
+  review_scope?: 'private' | 'space_ops'
+  include_memory_maintenance?: boolean
+  memory_limit?: number
+  memory_stale_after_days?: number
+  memory_thin_content_chars?: number
+  memory_max_findings?: number
+  max_claim_candidates?: number
+}
+
+export interface BrainOpsDreamCycleV2Response {
+  artifact_id: string
+  review_scope: 'private' | 'space_ops'
+  retrieval_maintenance: Record<string, unknown>
+  diagnostics: Record<string, unknown>
+  memory_maintenance: Record<string, unknown>
+  claim_candidates: Record<string, unknown>
+  source_health: Record<string, unknown>
+  projection_freshness: Record<string, unknown>
+  embedding_backlog: Record<string, unknown>
+  degraded: boolean
+  warnings: Array<{ stage: string; error_code: string; message: string }>
+  canonical_write_performed: false
+}
+
+export interface ClaimCandidatePacketCreateRequest {
+  source_artifact_ids: string[]
+  max_candidates?: number
+  review_scope?: 'private' | 'space_ops'
+  promote_private_sources_to_space_ops?: boolean
+  private_source_promotion_confirmed?: boolean
+}
+
+export interface ClaimCandidatePacketCreateResponse {
+  artifact_id: string
+  proposal_id: string
+  candidate_count: number
+  source_artifact_count: number
+  generated_child_proposal_count: number
 }

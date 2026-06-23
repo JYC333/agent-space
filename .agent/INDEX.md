@@ -53,6 +53,10 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 | [architecture/NON_GOALS_AND_DISABLED_SURFACES.md](architecture/NON_GOALS_AND_DISABLED_SURFACES.md) | Disabled surfaces, allowed surfaces, non-goals |
 | [architecture/ROADMAP_AND_FUTURE_RISKS.md](architecture/ROADMAP_AND_FUTURE_RISKS.md) | Capability line roadmap, future risks |
 | [architecture/CAPABILITY_WORKFLOW_SKILL_SYSTEM.md](architecture/CAPABILITY_WORKFLOW_SKILL_SYSTEM.md) | Capability definitions, packs, workflows, Open Skill import, runtime skill rendering |
+| [architecture/RETRIEVAL_AND_BRAIN_LAYER.md](architecture/RETRIEVAL_AND_BRAIN_LAYER.md) | Current-state architecture for knowledge retrieval + the gbrain-inspired brain layer: engine/adapter boundary, recall arms (exact/lexical/multi-hop graph/vector+ANN, max-pool, RRF, intent ranking), gated LLM stages (rerank/rewrite/synthesis), Context Brief + gap analysis, maintenance scans, explicit artifact-backed context attachments, Brain Ops read models/page, egress governance, agent tool surface, invariants, Brain Shape Registry posture, and consolidated deferred work |
+| [architecture/SCHEMA_PACKS_AND_OBJECT_SHAPE.md](architecture/SCHEMA_PACKS_AND_OBJECT_SHAPE.md) | Current posture for fixed canonical `object_type`, implemented per-space `object_kind` registry foundation, object schema config, future retrieval/UI/relation/import slices, invariants, data model, and runtime integration |
+| [architecture/CLAIM_FACT_ATOM_MODEL.md](architecture/CLAIM_FACT_ATOM_MODEL.md) | Current-state model for `space_objects`, global claims/facts/takes, claim evidence, claim relations, and FK-backed `object_relations` |
+| [architecture/SOURCE_CONNECTOR_CONSENT.md](architecture/SOURCE_CONNECTOR_CONSENT.md) | Source/connector consent and policy model for future ingestion-heavy brain work: owner/subject/readers/agents, egress class, retention, trust, proposal-gated derived writes |
 | [architecture/LOCAL_FIRST_COMPATIBILITY.md](architecture/LOCAL_FIRST_COMPATIBILITY.md) | Data classification, offline write rules, sync schema guidelines |
 
 ### Security and Access Boundaries
@@ -71,6 +75,7 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 | [architecture/MODULE_DEVELOPMENT_GUIDE.md](architecture/MODULE_DEVELOPMENT_GUIDE.md) | How to add/change backend modules and extension hooks |
 | [architecture/DATABASE_AND_TRANSACTIONS.md](architecture/DATABASE_AND_TRANSACTIONS.md) | UnitOfWork, transaction ownership, external call boundary, PostgreSQL rules |
 | [architecture/MEMORY_MODEL.md](architecture/MEMORY_MODEL.md) | Memory scopes, visibility, access control |
+| [architecture/MEMORY_MAINTENANCE.md](architecture/MEMORY_MAINTENANCE.md) | Current Memory maintenance scan, report/packet, durable job, scheduler, and first UI surface |
 | [architecture/PROPOSALS.md](architecture/PROPOSALS.md) | Proposal types, lifecycle, apply flow |
 | [architecture/TASK_BOARD_MODEL.md](architecture/TASK_BOARD_MODEL.md) | Task, Board, TaskRun, TaskArtifact, TaskProposal ORM |
 | [architecture/ARTIFACTS.md](architecture/ARTIFACTS.md) | Artifact lifecycle, storage paths, export |
@@ -98,8 +103,9 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 |---|---|
 | [architecture/MEMORY_ACTIVITY_PROVENANCE.md](architecture/MEMORY_ACTIVITY_PROVENANCE.md) | Activity-first capture, provenance chain, trust gate, memory write boundaries |
 | [architecture/MEMORY_MODEL.md](architecture/MEMORY_MODEL.md) | Memory scopes, visibility, access control |
+| [architecture/SHARED_SPACE_MEMORY_ISOLATION.md](architecture/SHARED_SPACE_MEMORY_ISOLATION.md) | Design proposal: shared system assistant + per-user memory isolation in multi-member spaces (personal vs space tier, promotion-gated sharing) |
 | [architecture/PROPOSALS.md](architecture/PROPOSALS.md) | Proposal types, lifecycle, apply flow |
-| [architecture/MEMORY_EVOLUTION_PLAN.md](architecture/MEMORY_EVOLUTION_PLAN.md) | Planned memory-quality work (gbrain absorption): weighted claims, hybrid retrieval, synthesis + gap loop, consolidation cycle |
+| [architecture/MEMORY_EVOLUTION_PLAN.md](architecture/MEMORY_EVOLUTION_PLAN.md) | Planned Memory-quality work after Knowledge-first retrieval: duplicate signals, ranking, synthesis + gap loop, consolidation cycle |
 
 ### Workspace / Sandbox / Artifact
 

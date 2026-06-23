@@ -12,6 +12,12 @@ Artifacts are durable outputs produced by runs. They let users inspect generated
   - `GET /api/v1/artifacts/{artifact_id}`
   - `GET /api/v1/artifacts/{artifact_id}/export`
 - Artifact reads are scoped by space identity and artifact visibility.
+- `workspace_shared` artifacts require `artifacts.workspace_id`. Non-owner
+  list/read/export access must provide matching workspace context and pass the
+  Project-inherited workspace ACL: personal-space workspaces are readable inside
+  the personal space; shared-space workspaces are readable through linked
+  Projects where the user is the project owner or an active project member.
+  Workspaces with no readable linked Project fail closed for non-owner reads.
 - Export returns inline artifact content when present, or a file download from
   managed artifact storage when `storage_path` is present.
 

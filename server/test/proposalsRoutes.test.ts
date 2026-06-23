@@ -302,4 +302,34 @@ describe("proposal review routes", () => {
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ detail: { code: "policy_denied" } });
   });
+
+  it("maps applier errors with statusCode without converting them to 500", async () => {
+    class PrivatePacketError extends Error {
+      readonly statusCode = 403;
+    }
+
+    __setProposalIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setProposalServicesFactoryForTests(() => ({
+      repository: {
+        async listVisible() { throw new Error("should not run"); },
+        async getVisible() { throw new Error("should not run"); },
+      },
+      applyService: {
+        async accept() {
+          throw new PrivatePacketError("memory maintenance packet is private to its creator");
+        },
+        async reject() { throw new Error("should not run"); },
+        async approveEgressGrantingUser() { throw new Error("should not run"); },
+        async rollback() { throw new Error("should not run"); },
+      },
+    }));
+    app = buildServer(proposalsConfig(), { logger: false });
+
+    const res = await app.inject({ method: "POST", url: "/api/v1/proposals/proposal-1/accept" });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({
+      detail: "memory maintenance packet is private to its creator",
+    });
+  });
 });

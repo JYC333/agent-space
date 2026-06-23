@@ -130,7 +130,91 @@ function fakeSpaceRepo(overrides: Partial<SpaceRepository> = {}): SpaceRepositor
     async updateSnapshotDefaults(_userId, _spaceId, data) {
       return data;
     },
+    async getRetrievalSettings(_userId, spaceId) {
+      return {
+        space_id: spaceId,
+        default_search_mode: "hybrid",
+        rerank_enabled: false,
+        query_rewrite_enabled: false,
+        query_rewrite_default: false,
+        use_query_cache: true,
+        include_trace: false,
+        external_egress_enabled: true,
+        retrieval_tool_mode: "off",
+        brain_ops_review_mode: "private_only",
+        brain_ops_scan_mode: "admins",
+        embedding_dimensions: 2560,
+        max_results_default: 50,
+        ranking_config: rankingConfig(),
+        created_at: "2026-06-15T12:00:00.000Z",
+        updated_at: "2026-06-15T12:00:00.000Z",
+      };
+    },
+    async updateRetrievalSettings(_userId, spaceId, data) {
+      return {
+        space_id: spaceId,
+        default_search_mode: data.default_search_mode ?? "hybrid",
+        rerank_enabled: data.rerank_enabled ?? false,
+        query_rewrite_enabled: data.query_rewrite_enabled ?? false,
+        query_rewrite_default: data.query_rewrite_default ?? false,
+        use_query_cache: data.use_query_cache ?? true,
+        include_trace: data.include_trace ?? false,
+        external_egress_enabled: data.external_egress_enabled ?? true,
+        retrieval_tool_mode: data.retrieval_tool_mode ?? "off",
+        brain_ops_review_mode: data.brain_ops_review_mode ?? "private_only",
+        brain_ops_scan_mode: data.brain_ops_scan_mode ?? "admins",
+        embedding_dimensions: data.embedding_dimensions ?? 2560,
+        max_results_default: data.max_results_default ?? 50,
+        ranking_config: data.ranking_config ?? rankingConfig(),
+        created_at: "2026-06-15T12:00:00.000Z",
+        updated_at: "2026-06-15T12:00:00.000Z",
+      };
+    },
+    async getRetrievalPrompt(_userId, spaceId, task) {
+      return {
+        space_id: spaceId,
+        task,
+        system_prompt: "default system",
+        user_template: "Query: {query}",
+        default_system_prompt: "default system",
+        default_user_template: "Query: {query}",
+        created_at: "2026-06-15T12:00:00.000Z",
+        updated_at: "2026-06-15T12:00:00.000Z",
+      };
+    },
+    async updateRetrievalPrompt(_userId, spaceId, task, data) {
+      return {
+        space_id: spaceId,
+        task,
+        system_prompt: data.system_prompt ?? "default system",
+        user_template: data.user_template ?? "Query: {query}",
+        default_system_prompt: "default system",
+        default_user_template: "Query: {query}",
+        created_at: "2026-06-15T12:00:00.000Z",
+        updated_at: "2026-06-15T12:00:00.000Z",
+      };
+    },
     ...overrides,
+  };
+}
+
+function rankingConfig() {
+  const mechanic = {
+    state: "disabled" as const,
+    calibration_artifact_id: null,
+    shipped_at: null,
+    eval_gate: { status: "not_run" as const, metric: null, value: null, threshold: 0, checked_at: null },
+  };
+  return {
+    version: 1 as const,
+    eval_gate: { min_primary_metric_delta: 0, required_evidence_artifacts: 1 },
+    mechanics: {
+      visible_edge_backlink: mechanic,
+      candidate_owned_salience: mechanic,
+      richer_dedup: mechanic,
+      autocut: mechanic,
+      semantic_results_cache: mechanic,
+    },
   };
 }
 
@@ -397,6 +481,101 @@ describe("native server auth routes", () => {
     });
     expect(accepted.statusCode).toBe(200);
     expect(accepted.json()).toEqual({ space_id: "space-1", role: "member", space_name: "Team" });
+  });
+
+  it("serves space retrieval settings locally", async () => {
+    __setAuthRepositoryForTests(fakeRepo());
+    __setSpaceRepositoryForTests(fakeSpaceRepo());
+    app = server();
+
+    const current = await app.inject({
+      method: "GET",
+      url: "/api/v1/spaces/space-1/retrieval-settings",
+    });
+    expect(current.statusCode).toBe(200);
+    expect(current.json()).toMatchObject({
+      space_id: "space-1",
+      default_search_mode: "hybrid",
+      rerank_enabled: false,
+      query_rewrite_enabled: false,
+      query_rewrite_default: false,
+      use_query_cache: true,
+      include_trace: false,
+      external_egress_enabled: true,
+      brain_ops_review_mode: "private_only",
+      brain_ops_scan_mode: "admins",
+      embedding_dimensions: 2560,
+      max_results_default: 50,
+    });
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/spaces/space-1/retrieval-settings",
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify({
+        default_search_mode: "hybrid_rerank",
+        rerank_enabled: true,
+        query_rewrite_enabled: true,
+        query_rewrite_default: true,
+        use_query_cache: false,
+        include_trace: true,
+        external_egress_enabled: false,
+        brain_ops_review_mode: "members",
+        brain_ops_scan_mode: "members",
+        embedding_dimensions: 768,
+        max_results_default: 12,
+      }),
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({
+      default_search_mode: "hybrid_rerank",
+      rerank_enabled: true,
+      query_rewrite_enabled: true,
+      query_rewrite_default: true,
+      use_query_cache: false,
+      include_trace: true,
+      external_egress_enabled: false,
+      brain_ops_review_mode: "members",
+      brain_ops_scan_mode: "members",
+      embedding_dimensions: 768,
+      max_results_default: 12,
+    });
+  });
+
+  it("serves space retrieval prompt settings locally", async () => {
+    __setAuthRepositoryForTests(fakeRepo());
+    __setSpaceRepositoryForTests(fakeSpaceRepo());
+    app = server();
+
+    const current = await app.inject({
+      method: "GET",
+      url: "/api/v1/spaces/space-1/retrieval-prompts/query_rewrite",
+    });
+    expect(current.statusCode).toBe(200);
+    expect(current.json()).toMatchObject({
+      space_id: "space-1",
+      task: "query_rewrite",
+      system_prompt: "default system",
+      user_template: "Query: {query}",
+      default_system_prompt: "default system",
+      default_user_template: "Query: {query}",
+    });
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/spaces/space-1/retrieval-prompts/query_rewrite",
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify({
+        system_prompt: "custom system",
+        user_template: "Rewrite: {query}",
+      }),
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({
+      task: "query_rewrite",
+      system_prompt: "custom system",
+      user_template: "Rewrite: {query}",
+    });
   });
 
   it("serves logout locally and clears the session cookie", async () => {

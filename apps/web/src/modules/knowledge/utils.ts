@@ -1,15 +1,14 @@
 import type {
   KnowledgeContentFormat,
+  KnowledgeItemKind,
   KnowledgeItemStatus,
-  KnowledgeItemType,
   KnowledgeRelationStatus,
   KnowledgeRelationType,
   KnowledgeVisibility,
 } from '../../types/api'
 
-export const KNOWLEDGE_ITEM_TYPES: KnowledgeItemType[] = [
+export const KNOWLEDGE_ITEM_KINDS: KnowledgeItemKind[] = [
   'concept',
-  'claim',
   'lesson',
   'procedure',
   'decision',

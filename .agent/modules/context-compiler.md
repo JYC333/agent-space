@@ -12,6 +12,9 @@ Translate a ContextPackage into a CLI-specific instruction file written to the s
 - Vendor file header marking files as generated, not source of truth
 - SOUL.md generation from agent-scoped identity memories
 - Sandbox hook scripts (PostToolUse docs-sync reminders)
+- Explicit artifact-backed context attachments selected by
+  `context_artifact_ids`; the compiler consumes resolved attachments and does
+  not run retrieval itself.
 
 ## Target → File Mapping
 
@@ -52,6 +55,48 @@ ContextCompiler.compile(context, target, task_goal, sandbox_dir,
 {sandbox_dir}/SOUL.md    (if agent identity present)
 {sandbox_dir}/.claude/settings.json + hooks/check-docs-sync.sh
 ```
+
+## Explicit artifact attachments
+
+`POST /api/v1/context/build` and managed run creation accept
+`context_artifact_ids` (max 8). `PgRunContextRepository.selectArtifactAttachments`
+resolves the selected artifacts for the current Space/User and only allows
+bounded evidence packs from these artifact types:
+
+- `retrieval_brief`
+- `retrieval_eval_report`
+- `retrieval_explain_report`
+- `retrieval_maintenance_report`
+- `memory_maintenance_report`
+
+The repository verifies artifact visibility and project access, renders a
+bounded summary, preserves a domain label, and marks the pack as
+`content_mode = "bounded_summary"` with
+`raw_artifact_content_included = false`. Missing, hidden, unsupported, or
+project-inaccessible artifacts become blocked attachment entries with rejection
+reasons. Approved and blocked entries are recorded in `ContextPackage.attachments`
+and `ContextSnapshot.source_refs_json` / `retrieval_trace_json`; approved
+artifact evidence-pack refs are also included in
+`ContextSnapshot.included_evidence_refs_json` so audit consumers that track
+"what entered context" do not miss explicit artifact packs.
+
+`ContextPrepareService` appends approved attachments to the dynamic tail used by
+managed runs. The stable prefix/digest layer does not consume attachments, and
+retrieval results are never silently injected without explicit artifact ids.
+Run creation performs an early visibility/type/project check for selected
+artifact ids, but prepare-time revalidation remains authoritative because
+artifact visibility can change while a run is queued. `/context/build` validates
+the response with `ContextPackageSchema` before returning it.
+Past snapshots are immutable audit records; future-run removal is represented by
+not selecting the artifact id for the next context build.
+
+Attachment content is intentionally a summary surface. `retrieval_explain_report`
+attachments render selected aggregate fields such as diagnostic codes, target
+type/status/returned state, score/rank, matched fields, and short reasons; they
+do not stringify the stored target/match JSON. `retrieval_brief` attachments can
+include the saved brief query/answer because selection is explicit and
+owner/user-visible, so callers should treat attached brief metadata as
+model-visible context.
 
 ## ContextDigest cache layer
 

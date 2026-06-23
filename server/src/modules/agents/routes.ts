@@ -34,6 +34,7 @@ import {
   ChatContextError,
   ContextPrepareService,
 } from "../context";
+import { PgRunContextRepository } from "../context/repository";
 import {
   buildChatConversationWindow,
   buildChatContext,
@@ -497,6 +498,10 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const body = jsonBody(request);
     const repository = PgRunRepository.fromConfig(context.config);
     try {
+      const contextArtifactIds = optionalStringArrayBody(body, "context_artifact_ids");
+      const workspaceId = stringValue(body.workspace_id);
+      const projectId = stringValue(body.project_id);
+      await validateContextArtifactAttachments(context, identity, contextArtifactIds ?? [], workspaceId, projectId);
       const run = await repository.createQueuedRun({
         agent_id: agentId,
         space_id: identity.spaceId,
@@ -505,8 +510,8 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         run_type: stringValue(body.run_type) ?? "agent",
         trigger_origin: stringValue(body.trigger_origin) ?? "manual",
         session_id: stringValue(body.session_id),
-        workspace_id: stringValue(body.workspace_id),
-        project_id: stringValue(body.project_id),
+        workspace_id: workspaceId,
+        project_id: projectId,
         prompt: stringValue(body.prompt),
         instruction: stringValue(body.instruction),
         scheduled_at: stringValue(body.scheduled_at),
@@ -517,6 +522,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         capabilities_json: optionalArrayBody(body, "capabilities_json"),
         model_provider_id: stringValue(body.model_provider_id),
         model: stringValue(body.model),
+        context_artifact_ids: contextArtifactIds,
       });
       return reply.code(201).send(runToOut(run));
     } catch (error) {
@@ -656,6 +662,46 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       }
       return sendDomainError(reply, error);
     }
+  });
+}
+
+async function validateContextArtifactAttachments(
+  context: ModuleContext,
+  identity: { spaceId: string; userId: string },
+  artifactIds: readonly string[],
+  workspaceId?: string | null,
+  projectId?: string | null,
+): Promise<void> {
+  if (artifactIds.length === 0) return;
+  const selections = await PgRunContextRepository
+    .fromConfig(context.config)
+    .selectArtifactAttachments({
+      spaceId: identity.spaceId,
+      userId: identity.userId,
+      workspaceId: workspaceId ?? null,
+      projectId: projectId ?? null,
+      artifactIds,
+    });
+  const blocked = selections.find((selection) => (recordValue(selection.item) ?? {}).approved === false);
+  if (!blocked) return;
+  const reason = stringValue((recordValue(blocked.item) ?? {}).rejection_reason) ?? "artifact is not attachable";
+  throw new RunCreateValidationError(`context_artifact_ids invalid: ${reason}`, 422);
+}
+
+function optionalStringArrayBody(
+  body: Record<string, unknown>,
+  key: string,
+): string[] | null | undefined {
+  const value = optionalArrayBody(body, key);
+  if (value === undefined || value === null) return value;
+  if (value.length > 8) {
+    throw new RunCreateValidationError(`${key} must contain at most 8 items`, 422);
+  }
+  return value.map((item) => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new RunCreateValidationError(`${key} must contain non-empty strings`, 422);
+    }
+    return item.trim();
   });
 }
 

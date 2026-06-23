@@ -10,6 +10,7 @@ import {
   BUILTIN_RUNTIME_ADAPTER_SPECS,
   type RuntimeAdapterType,
 } from "../runtimeAdapters/specs";
+import { assertProjectInSpace } from "../projects/access";
 import {
   addOptionalFilter,
   extractErrorMessage,
@@ -218,6 +219,7 @@ export class PgRunRepository {
     const now = new Date().toISOString();
     const contextSnapshotId = randomUUID();
     const capabilitiesJson = normalizeRunCapabilitiesJson(input.capabilities_json);
+    const contextArtifactIds = normalizeContextArtifactIds(input.context_artifact_ids);
     await this.db.query(
       `INSERT INTO context_snapshots (
           id, space_id, source_refs_json, compiled_summary, token_estimate,
@@ -239,6 +241,7 @@ export class PgRunRepository {
           project_id: input.project_id ?? null,
           user_message: input.prompt ?? input.instruction ?? null,
           manual_context: [],
+          context_artifact_ids: contextArtifactIds,
           capabilities_json: capabilitiesJson,
         }),
         now,
@@ -310,6 +313,153 @@ export class PgRunRepository {
         runtimeProfileSnapshotJson,
         requiredSandboxLevel,
         input.project_id ?? null,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("Run insert returned no row");
+    await this.db.query(
+      `UPDATE context_snapshots SET run_id = $3 WHERE space_id = $1 AND id = $2`,
+      [input.space_id, contextSnapshotId, row.id],
+    );
+    return row;
+  }
+
+  async createRunningSystemRun(input: {
+    space_id: string;
+    user_id: string;
+    agent_id: string;
+    workspace_id?: string | null;
+    project_id?: string | null;
+    prompt?: string | null;
+    instruction?: string | null;
+    trigger_origin: "automation" | "job" | "system";
+    capability_id?: string | null;
+    capabilities_json?: unknown[] | null;
+    source?: "managed" | "scheduled" | "webhook" | "manual_import" | "remote_import" | "ide_assist" | null;
+    started_at?: string | null;
+  }): Promise<RunRecord> {
+    validateRunCreateInput({
+      agent_id: input.agent_id,
+      space_id: input.space_id,
+      user_id: input.user_id,
+      mode: "live",
+      run_type: "system",
+      trigger_origin: input.trigger_origin,
+    });
+    const agent = await this.getAgentForRun(input.space_id, input.agent_id);
+    if (!agent) {
+      throw new RunCreateValidationError(
+        `Agent '${input.agent_id}' not found in this space`,
+        404,
+      );
+    }
+    if (agent.status !== "active") {
+      throw new RunCreateValidationError(
+        `Agent '${input.agent_id}' is not active`,
+        409,
+      );
+    }
+    if (!agent.current_version_id) {
+      throw new RunCreateValidationError(
+        `Agent '${input.agent_id}' has no current version. Create an AgentVersion first.`,
+        400,
+      );
+    }
+    const versionOk = await this.agentVersionBelongsToAgent(
+      input.space_id,
+      input.agent_id,
+      agent.current_version_id,
+    );
+    if (!versionOk) {
+      throw new RunCreateValidationError(
+        `AgentVersion '${agent.current_version_id}' does not belong to Agent '${input.agent_id}'`,
+        400,
+      );
+    }
+    await this.assertOptionalSpaceRef("workspaces", input.workspace_id, input.space_id, "Workspace");
+    await this.assertOptionalSpaceRef("projects", input.project_id, input.space_id, "Project");
+
+    const now = input.started_at ?? new Date().toISOString();
+    const contextSnapshotId = randomUUID();
+    const capabilitiesJson = normalizeRunCapabilitiesJson(input.capabilities_json);
+    await this.db.query(
+      `INSERT INTO context_snapshots (
+          id, space_id, source_refs_json, compiled_summary, token_estimate,
+          agent_id, session_id, request_json, created_at
+       )
+       VALUES ($1, $2, '[]'::jsonb, NULL, NULL, $3, NULL, $4::jsonb, $5)`,
+      [
+        contextSnapshotId,
+        input.space_id,
+        input.agent_id,
+        JSON.stringify({
+          space_id: input.space_id,
+          user_id: input.user_id,
+          agent_version_id: agent.current_version_id,
+          runtime_profile_id: null,
+          session_id: null,
+          workspace_id: input.workspace_id ?? null,
+          project_id: input.project_id ?? null,
+          user_message: input.prompt ?? input.instruction ?? null,
+          manual_context: [],
+          capabilities_json: capabilitiesJson,
+          system_run: true,
+        }),
+        now,
+      ],
+    );
+
+    const runId = randomUUID();
+    const modelOverrideJson = JSON.stringify({
+      source: "system_run",
+      adapter_type: "capability",
+    });
+    const result = await this.db.query<RunRecord>(
+      `INSERT INTO runs (
+          id, space_id, agent_id, agent_version_id, runtime_profile_id,
+          context_snapshot_id,
+          workspace_id, session_id, parent_run_id, instructed_by_user_id,
+          run_type, trigger_origin, status, mode, prompt, instruction,
+          scheduled_at, started_at, created_at, updated_at, adapter_type,
+          capability_id, capabilities_json, model_provider_id, model_override_json,
+          runtime_profile_snapshot_json, required_sandbox_level, usage_accuracy,
+          visibility, project_id, source
+       )
+       VALUES (
+          $1, $2, $3, $4, NULL, $5, $6, NULL, NULL, $7,
+          'system', $8, 'running', 'live', $9, $10,
+          NULL, $11, $11, $11, 'capability',
+          $12, $13::jsonb, NULL, $14::jsonb,
+          NULL, 'none', 'estimated',
+          'space_shared', $15, $16
+       )
+       RETURNING id, space_id, agent_id, agent_version_id, runtime_profile_id,
+                 context_snapshot_id,
+                 run_type, status, mode, prompt, instruction, workspace_id,
+                 session_id, parent_run_id, project_id, scheduled_at,
+                 adapter_type, capability_id, capabilities_json, model_provider_id,
+                 model_override_json, runtime_profile_snapshot_json,
+                 required_sandbox_level, trigger_origin,
+                 instructed_by_user_id, error_message, error_json, output_json,
+                 usage_json, started_at, ended_at, created_at, updated_at,
+                 visibility`,
+      [
+        runId,
+        input.space_id,
+        input.agent_id,
+        agent.current_version_id,
+        contextSnapshotId,
+        input.workspace_id ?? null,
+        input.user_id,
+        input.trigger_origin,
+        input.prompt ?? null,
+        input.instruction ?? null,
+        now,
+        input.capability_id ?? null,
+        JSON.stringify(capabilitiesJson),
+        modelOverrideJson,
+        input.project_id ?? null,
+        input.source ?? "managed",
       ],
     );
     const row = result.rows[0];
@@ -583,8 +733,9 @@ export class PgRunRepository {
     label: string,
   ): Promise<void> {
     if (!id) return;
+    const deletedPredicate = table === "projects" ? " AND deleted_at IS NULL" : "";
     const result = await this.db.query<{ id: string }>(
-      `SELECT id FROM ${table} WHERE space_id = $1 AND id = $2`,
+      `SELECT id FROM ${table} WHERE space_id = $1 AND id = $2${deletedPredicate}`,
       [spaceId, id],
     );
     if (result.rows.length === 0) {
@@ -621,6 +772,7 @@ export class PgRunRepository {
   }
 
   async listRuns(filters: RunListFilters): Promise<RunRecord[]> {
+    await assertProjectInSpace(this.db, filters.space_id, filters.project_id);
     const clauses = [
       "space_id = $1",
       "(visibility = 'space_shared' OR (visibility IN ('private', 'restricted') AND instructed_by_user_id = $2))",
@@ -1367,6 +1519,20 @@ export class PgRunRepository {
   async releaseExecutionLock(runId: string): Promise<void> {
     await this.db.query("DELETE FROM run_execution_locks WHERE run_id = $1", [runId]);
   }
+}
+
+function normalizeContextArtifactIds(value: string[] | null | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    const id = typeof item === "string" ? item.trim() : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= 8) break;
+  }
+  return out;
 }
 
 function normalizeRunCapabilitiesJson(value: unknown[] | null | undefined): string[] {

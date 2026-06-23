@@ -230,16 +230,28 @@ content are never stored.
 Managed API adapters do not detect a local executable. They are considered
 installed when implemented:
 
-- `model_api` and `ts_agent_host` execute a single provider-backed no-tool turn
-  through server `runs` and `POST /internal/runtime-host/execute` when
-  runs authority is the server. The provider key is released inside the server
-  providers/credentials broker over the internal channel and is never passed
-  through ambient environment variables.
+- `model_api` and `ts_agent_host` execute provider-backed turns through server
+  `runs` and `POST /internal/runtime-host/execute` when runs authority is the
+  server. The provider key is released inside the server providers/credentials
+  broker over the internal channel and is never passed through ambient
+  environment variables.
+- Runs default to `tool_mode: disabled`. Managed runs can expose authorized
+  internal retrieval tools through the runtime host when enabled per space
+  (`space_retrieval_settings.retrieval_tool_mode`) or per run. Knowledge tools
+  are `retrieval.search` / `retrieval.brief`; Memory and Project public-summary
+  tools are exposed only by explicit domain opt-in as
+  `memory.retrieval.search`, `memory.retrieval.brief`,
+  `project_public_summary.search`, and `project_public_summary.brief`. Each tool
+  call passes a policy-gateway action before search/brief execution; preflight
+  modes append explicit retrieval evidence before the model turn rather than
+  silently injecting ContextBuilder state. The provider invocation layer maps the
+  canonical tool schema to OpenAI-compatible function calls or Anthropic Messages
+  `tool_use` / `tool_result` blocks. The runtime host reports an unsupported
+  provider with the `runtime_tool_provider_unsupported` code, and the managed-run
+  tool loop degrades to a single no-tool turn rather than failing the run.
 
-The current server host implementation supports provider-backed no-tool turns and
-fails closed for tool execution (`runtime_tools_not_implemented`). MCP/tool
-scheduling is deferred to the extended server runtime stage; CLI adapters remain
-the tool-bearing agent loop path for the near term.
+General MCP/tool scheduling is deferred to the extended server runtime stage;
+CLI adapters remain the broad tool-bearing agent loop path for the near term.
 
 ## Permission Bypass
 

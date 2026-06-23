@@ -409,18 +409,6 @@ export class PgContextDigestService {
   }
 
   /**
-   * Load the memories that belong in a workspace/agent digest.
-   *
-   * The digest is a cache-SHARED bundle, so the visibility filter is a privacy
-   * gate, not a scoping mechanism: only non-private memories (space_shared /
-   * workspace_shared; agent: space_shared only) and non-`highly_restricted` rows
-   * are eligible. Private / per-user-gated memory is never folded into the shared
-   * digest — it is rendered directly per run instead. Scoping is done separately
-   * by `scope_type` + the matching id column, so a space-scoped memory
-   * (`scope_type='space'`) is intentionally in no digest tier and relies on the
-   * prepare-side fallback retriever.
-   */
-  /**
    * Verify the digest's target scope still exists and is active in this space.
    *
    * Locks the scope row `FOR UPDATE` so it cannot be archived between this check
@@ -451,6 +439,19 @@ export class PgContextDigestService {
     }
   }
 
+  /**
+   * Load the memories that belong in a workspace/agent digest.
+   *
+   * The digest is a cache-SHARED bundle, so the visibility filter is a privacy
+   * gate, not a scoping mechanism: only non-private memories (space_shared /
+   * workspace_shared; agent: space_shared only), project-free memories, and
+   * non-`highly_restricted` rows are eligible. Private / per-user-gated memory
+   * and project-scoped memory are never folded into the shared digest — they are
+   * rendered directly per run instead. Scoping is done separately by
+   * `scope_type` + the matching id column, so a space-scoped memory
+   * (`scope_type='space'`) is intentionally in no digest tier and relies on the
+   * prepare-side fallback retriever.
+   */
   private async loadScopeMemories(
     spaceId: string,
     scopeType: string,
@@ -466,6 +467,7 @@ export class PgContextDigestService {
           AND ${idColumn} = $3
           AND status = 'active'
           AND deleted_at IS NULL
+          AND project_id IS NULL
           AND visibility = ANY($4::varchar[])
           AND COALESCE(sensitivity_level, 'normal') <> 'highly_restricted'
         ORDER BY importance DESC, created_at ASC

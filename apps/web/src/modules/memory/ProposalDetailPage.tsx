@@ -54,7 +54,16 @@ export default function ProposalDetailPage() {
   const canDecide =
     p &&
     p.status === 'pending' &&
-    (p.proposal_type.startsWith('memory_') || p.proposal_type === 'code_patch' || p.proposal_type === 'egress_review')
+    (
+      p.proposal_type.startsWith('memory_') ||
+      p.proposal_type.startsWith('knowledge_') ||
+      p.proposal_type.startsWith('claim_') ||
+      p.proposal_type.startsWith('object_relation_') ||
+      p.proposal_type === 'code_patch' ||
+      p.proposal_type === 'egress_review' ||
+      p.proposal_type === 'retrieval_maintenance_packet' ||
+      p.proposal_type === 'claim_candidate_packet'
+    )
 
   async function decide(action: 'accept' | 'reject') {
     if (!p) return
@@ -69,6 +78,23 @@ export default function ProposalDetailPage() {
         } else if (out.result_type === 'code_patch_apply') {
           const n = out.result.updated_paths.length
           toast.success(`Accepted — ${n} file${n === 1 ? '' : 's'} updated.`)
+        } else if (out.result_type === 'knowledge_item') {
+          toast.success('Accepted — knowledge item created.')
+        } else if (out.result_type === 'knowledge_relation') {
+          toast.success('Accepted — knowledge relation created.')
+        } else if (out.result_type === 'claim') {
+          toast.success('Accepted — claim updated.')
+        } else if (out.result_type === 'claim_relation') {
+          toast.success('Accepted — claim relation created.')
+        } else if (out.result_type === 'object_relation') {
+          toast.success('Accepted — object relation created.')
+        } else if (out.result_type === 'retrieval_maintenance_packet') {
+          const n = out.result.generated_child_proposal_count ?? out.result.generated_child_proposal_ids?.length ?? 0
+          toast.success(`Accepted — ${n} child proposal${n === 1 ? '' : 's'} created.`)
+        } else if (out.result_type === 'claim_candidate_packet') {
+          const n = out.result.generated_child_proposal_count ?? out.result.generated_child_proposal_ids?.length ?? 0
+          const skipped = out.result.skipped_child_proposal_count ?? 0
+          toast.success(`Accepted — ${n} child proposal${n === 1 ? '' : 's'} created${skipped ? `, ${skipped} skipped` : ''}.`)
         } else {
           toast.success('Proposal accepted.')
         }
@@ -168,6 +194,14 @@ export default function ProposalDetailPage() {
             review_deadline {fmt(p.review_deadline)} · expires {fmt(p.expires_at)}
           </p>
           <p className="text-sm whitespace-pre-wrap">{p.proposed_content}</p>
+          {p.proposal_type === 'retrieval_maintenance_packet' && (
+            <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+              <p className="font-medium">Maintenance packet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Accepting this packet creates child Knowledge relation proposals where supported. Review the linked maintenance report artifact from the producing run or Artifacts page for full findings.
+              </p>
+            </div>
+          )}
           <p className="text-xs text-muted-foreground italic">Rationale: {p.rationale}</p>
           <p className="text-xs text-muted-foreground">{fmt(p.created_at)}</p>
           {p.status === 'accepted' && p.resulting_memory_id && (

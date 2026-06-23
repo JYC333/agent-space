@@ -11,6 +11,15 @@ import {
   type CandidateRow,
   type ContextPolicy,
 } from "./candidateRepository";
+import {
+  retrievalEgressAllowed,
+  type RetrievalEgressPolicy,
+} from "../retrievalEgress/egressPolicy";
+import {
+  sourceEgressPoliciesForSnapshots,
+  sourcePolicyAllowsRead,
+  type SourcePolicySnapshot,
+} from "../retrieval/sourcePolicy";
 
 /**
  * Native server chat context candidate collection.
@@ -27,6 +36,7 @@ const ALL_SOURCES: readonly string[] = [
   "knowledge_item",
   "source",
   "activity_record",
+  "project_public_summary",
   "task",
   "project",
   "workspace",
@@ -77,17 +87,27 @@ export class ChatContextCandidateCollector {
     const { allowed, maxTokens, maxItems } = resolvePolicy(policy);
 
     const items: ChatContextCandidateItem[] = [];
+    const promptGate = this.llmPromptGate(request);
 
-    // Priority order is stable. manual_context, workspace, and project never
-    // fire on the chat path (the request carries no such fields), so only the
-    // four DB-backed source selectors run.
+    // Priority order is stable. manual_context, workspace, and the raw `project`
+    // source never fire on the chat path (the request carries no such fields),
+    // so only the DB-backed space-scoped selectors run. `project_public_summary`
+    // is the sanitized space-public discovery layer (not concrete project
+    // memory), so it can fire here to let the assistant surface cross-project
+    // inspiration.
     if (allowed.has("memory")) {
       const rows = await this.repo.selectMemories(
         request.space_id,
         request.user_id,
         Math.min(maxItems, MEMORY_SOURCE_CAP),
       );
-      pushItems(items, rows, "memory", 0.8, "approved_memory");
+      pushItems(
+        items,
+        await promptGate("memory", rows),
+        "memory",
+        0.8,
+        "approved_memory",
+      );
     }
     if (allowed.has("knowledge_item")) {
       const rows = await this.repo.selectKnowledgeItems(
@@ -95,18 +115,44 @@ export class ChatContextCandidateCollector {
         message,
         maxItems,
       );
-      pushItems(items, rows, "knowledge_item", 0.7, "knowledge_item");
+      pushItems(
+        items,
+        await promptGate("knowledge_item", rows),
+        "knowledge_item",
+        0.7,
+        "knowledge_item",
+      );
     }
     if (allowed.has("source")) {
       const rows = await this.repo.selectSources(request.space_id, maxItems);
-      pushItems(items, rows, "source", 0.6, "source");
+      pushItems(items, await promptGate("source", rows), "source", 0.6, "source");
     }
     if (allowed.has("activity_record")) {
       const rows = await this.repo.selectActivityRecords(
         request.space_id,
         maxItems,
       );
-      pushItems(items, rows, "activity_record", 0.5, "recent_activity");
+      pushItems(
+        items,
+        await promptGate("activity_record", rows),
+        "activity_record",
+        0.5,
+        "recent_activity",
+      );
+    }
+    if (allowed.has("project_public_summary")) {
+      const rows = await this.repo.selectProjectPublicSummaries(
+        request.space_id,
+        message,
+        maxItems,
+      );
+      pushItems(
+        items,
+        await promptGate("project_public_summary", rows),
+        "project_public_summary",
+        0.4,
+        "project_public_summary",
+      );
     }
 
     return {
@@ -118,6 +164,126 @@ export class ChatContextCandidateCollector {
       items,
     };
   }
+
+  private llmPromptGate(request: ChatContextCandidatesRequest) {
+    const sourcePolicyCache = new Map<string, SourcePolicySnapshot>();
+    let viewerSpaceRolePromise: Promise<string | null> | null = null;
+    let externalEgressEnabledPromise: Promise<boolean> | null = null;
+
+    const viewerSpaceRole = () => {
+      viewerSpaceRolePromise ??= this.repo.loadViewerSpaceRole(
+        request.space_id,
+        request.user_id,
+      );
+      return viewerSpaceRolePromise;
+    };
+    const externalEgressEnabled = () => {
+      externalEgressEnabledPromise ??= this.repo.loadExternalEgressEnabled(
+        request.space_id,
+      );
+      return externalEgressEnabledPromise;
+    };
+    const snapshotsFor = async (
+      sourceConnectionIds: readonly string[],
+    ): Promise<Map<string, SourcePolicySnapshot>> => {
+      const missing = sourceConnectionIds.filter((id) => !sourcePolicyCache.has(id));
+      if (missing.length > 0) {
+        const loaded = await this.repo.loadSourcePolicySnapshots(
+          request.space_id,
+          missing,
+        );
+        for (const [id, snapshot] of loaded) sourcePolicyCache.set(id, snapshot);
+      }
+      const out = new Map<string, SourcePolicySnapshot>();
+      for (const id of sourceConnectionIds) {
+        const snapshot = sourcePolicyCache.get(id);
+        if (snapshot) out.set(id, snapshot);
+      }
+      return out;
+    };
+
+    return async (
+      objectType: string,
+      rows: readonly CandidateRow[],
+    ): Promise<CandidateRow[]> => {
+      const sourceConnectionIds = uniqueSourceConnectionIds(rows);
+      const externalAllowed = await externalEgressEnabled();
+      if (!externalAllowed) {
+        return rows.filter((row) =>
+          retrievalEgressAllowed(
+            {
+              object_type: objectType,
+              object_id: row.item_id,
+              source_connection_ids: row.source_connection_ids,
+            },
+            { externalEgressEnabled: false },
+          ),
+        );
+      }
+      if (sourceConnectionIds.length === 0) return [...rows];
+
+      const [role, snapshots] = await Promise.all([
+        viewerSpaceRole(),
+        snapshotsFor(sourceConnectionIds),
+      ]);
+      const egressPolicy: RetrievalEgressPolicy = {
+        externalEgressEnabled: externalAllowed,
+        sourcePolicies: sourceEgressPoliciesForSnapshots(snapshots),
+      };
+      return rows.filter((row) =>
+        sourcePolicyAllowsChatCandidate(row, objectType, {
+          snapshots,
+          role,
+          egressPolicy,
+          request,
+        }),
+      );
+    };
+  }
+}
+
+function sourcePolicyAllowsChatCandidate(
+  row: CandidateRow,
+  objectType: string,
+  context: {
+    snapshots: ReadonlyMap<string, SourcePolicySnapshot>;
+    role: string | null;
+    egressPolicy: RetrievalEgressPolicy;
+    request: ChatContextCandidatesRequest;
+  },
+): boolean {
+  const sourceConnectionIds = row.source_connection_ids;
+  if (sourceConnectionIds.length === 0) return true;
+  const readAllowed = sourceConnectionIds.every((sourceConnectionId) => {
+    const snapshot = context.snapshots.get(sourceConnectionId);
+    return snapshot
+      ? sourcePolicyAllowsRead(snapshot, {
+          viewerUserId: context.request.user_id,
+          agentId: context.request.agent_id,
+          viewerSpaceRole: context.role,
+        })
+      : false;
+  });
+  if (!readAllowed) return false;
+  return retrievalEgressAllowed(
+    {
+      object_type: objectType,
+      object_id: row.item_id,
+      source_connection_ids: sourceConnectionIds,
+    },
+    context.egressPolicy,
+  );
+}
+
+function uniqueSourceConnectionIds(rows: readonly CandidateRow[]): string[] {
+  const out: string[] = [];
+  for (const row of rows) {
+    for (const id of row.source_connection_ids) {
+      const normalized = id.trim();
+      if (normalized && !out.includes(normalized)) out.push(normalized);
+    }
+  }
+  return out;
 }
 
 function resolvePolicy(policy: ContextPolicy): {

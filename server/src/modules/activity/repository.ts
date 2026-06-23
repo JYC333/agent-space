@@ -16,6 +16,7 @@ import {
   type Queryable,
 } from "../routeUtils/common";
 import { proposalToOut, type ProposalRow } from "../proposals/repository";
+import { assertProjectInSpace } from "../projects/access";
 import type { ProposalOut } from "@agent-space/protocol" with { "resolution-mode": "import" };
 
 export interface ActivityRow {
@@ -146,6 +147,8 @@ export class PgActivityRepository {
     }
     const sourceType = normalizeSourceType(requiredString(body.source_type, "source_type"));
     const content = requiredString(body.content, "content");
+    const projectId = optionalString(body.project_id);
+    await assertProjectInSpace(this.db, identity.spaceId, projectId);
     const now = new Date().toISOString();
     const result = await this.db.query<ActivityRow>(
       `INSERT INTO activity_records (
@@ -170,7 +173,7 @@ export class PgActivityRepository {
         optionalString(body.workspace_id),
         optionalString(body.agent_id),
         optionalString(body.source_task_id),
-        optionalString(body.project_id),
+        projectId,
         optionalString(body.source_url),
         sourceType,
         optionalString(body.title),
@@ -189,6 +192,7 @@ export class PgActivityRepository {
     identity: SpaceUserIdentity,
     filters: ActivityListFilters,
   ): Promise<Record<string, unknown>[]> {
+    await assertProjectInSpace(this.db, identity.spaceId, filters.projectId);
     const built = buildActivityWhere(identity, filters);
     const result = await this.db.query<ActivityRow>(
       `SELECT ${ACTIVITY_COLUMNS}
@@ -456,7 +460,7 @@ export class PgActivityRepository {
       title: "Summary knowledge",
       payload: {
         operation: "create",
-        item_type: "summary",
+        knowledge_kind: "summary",
         title: "Input summary",
         content: summary,
         content_format: "markdown",

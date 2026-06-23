@@ -221,6 +221,22 @@ export default function IntakePage() {
     }
   }
 
+  async function saveConnectionGovernance(
+    connection: SourceConnection,
+    body: { consent: Record<string, unknown>; policy: Record<string, unknown> },
+  ) {
+    setBusy(`governance:${connection.id}`)
+    try {
+      await intakeApi.updateConnection(connection.id, body)
+      toast.success('Connection governance updated')
+      await load()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function itemAction(item: IntakeItem, action: string) {
     setBusy(`item:${item.id}:${action}`)
     try {
@@ -408,6 +424,7 @@ export default function IntakePage() {
             connectorName={connectorName}
             onScanConnection={scanConnection}
             onUpdateConnection={updateConnection}
+            onSaveGovernance={saveConnectionGovernance}
           />
           <ItemsSection
             items={items}

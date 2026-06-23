@@ -100,6 +100,8 @@ export interface Module {
   hasSubRoutes?: boolean
   /** Whether this route operates against personal aggregation, a concrete space, or no perspective. */
   perspectiveType: PerspectiveType
+  /** Hide direct UI entry points unless the active Space role is owner/admin. Routes still guard themselves. */
+  requiresSpaceAdmin?: boolean
   component: LazyExoticComponent<ComponentType>
 }
 
@@ -313,6 +315,24 @@ export const MODULE_REGISTRY: Module[] = [
     hasSubRoutes: true,
     component: lazy(() => import('./memory/MemoryModule')),
   },
+  {
+    id: 'ask_brain', label: 'Ask Brain', path: '/ask-brain',
+    section: 'knowledge', group: 'knowledge', icon: 'sparkles', accent: true,
+    description: 'Ask one question and get a cited, gap-aware answer across Knowledge, Memory, and Project summaries.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    component: lazy(() => import('./brain_think/BrainThinkPage')),
+  },
+  {
+    id: 'brain_ops', label: 'Brain Ops', path: '/brain-ops',
+    section: 'knowledge', group: 'knowledge', icon: 'brain-circuit',
+    description: 'Inspect retrieval health, diagnostics, maintenance, feedback, and memory provenance aggregates.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    component: lazy(() => import('./brain_ops/BrainOpsPage')),
+  },
 
   // ── Agents (execution & infrastructure) ─────────────────────────────────────
   {
@@ -398,6 +418,15 @@ export const MODULE_REGISTRY: Module[] = [
     perspectiveType: 'space-scoped',
     component: lazy(() => import('./workspace_snapshot_settings/WorkspaceSnapshotSettingsPage')),
   },
+  {
+    id: 'retrieval_settings', label: 'Retrieval Settings', path: '/retrieval-settings',
+    section: 'dev', group: 'system', icon: 'search',
+    description: 'Configure retrieval search mode, rewrite, rerank, cache, trace, and result defaults.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: false, planned: false,
+    perspectiveType: 'space-scoped',
+    component: lazy(() => import('./retrieval_settings/RetrievalSettingsPage')),
+  },
 
   // ── Plugin management ─────────────────────────────────────────────────────
   {
@@ -423,7 +452,7 @@ export const MODULE_REGISTRY: Module[] = [
   {
     id: 'space_settings', label: 'Space Settings', path: '/space-settings',
     section: 'dev', group: 'system', icon: 'settings',
-    description: 'Manage members and space-level network settings.',
+    description: 'Manage members and space-level system settings.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: false, planned: false,
     perspectiveType: 'space-scoped',
@@ -469,7 +498,7 @@ export const MODULE_REGISTRY: Module[] = [
   {
     id: 'automations', label: 'Automations', path: '/automations',
     section: 'agents', group: 'agents', icon: 'clock',
-    description: 'Schedule agents to run on a cron, or trigger them manually.',
+    description: 'Schedule agent runs and Knowledge maintenance scans, or trigger them manually.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',

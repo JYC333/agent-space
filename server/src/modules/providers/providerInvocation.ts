@@ -27,6 +27,10 @@
  */
 
 import type {
+  CanonicalToolCall,
+  CanonicalToolDefinition,
+} from "@agent-space/protocol" with { "resolution-mode": "import" };
+import type {
   InvocationTarget,
   PoolKeyCandidate,
   ProviderCommandStore,
@@ -34,10 +38,26 @@ import type {
 } from "./providerCommandStore";
 import { classifyProviderFailure, type ProviderResilienceDecision } from "./providerResilience";
 import { fetchWithNetworkProfile, type ResolvedNetworkProfile } from "../networkProfiles";
+import {
+  anthropicMessages,
+  anthropicToolCalls,
+  anthropicTools,
+  openAiMessages,
+  openAiToolCalls,
+  openAiTools,
+} from "./providerToolAdapters";
+import {
+  retrievalEgressAllowed,
+  retrievalProviderEgressDestination,
+  type RetrievalEgressPolicy,
+} from "../retrievalEgress/egressPolicy";
 
 export interface ChatMessage {
   role: string;
-  content: string;
+  content: string | null;
+  tool_calls?: CanonicalToolCall[];
+  tool_call_id?: string;
+  name?: string;
 }
 
 export interface ProviderChatRequestBody {
@@ -47,6 +67,8 @@ export interface ProviderChatRequestBody {
   system?: string | null;
   temperature?: number;
   max_tokens?: number;
+  tools?: CanonicalToolDefinition[] | null;
+  egressPolicy?: RetrievalEgressPolicy | null;
 }
 
 export interface ProviderChatResponseBody {
@@ -54,6 +76,8 @@ export interface ProviderChatResponseBody {
   provider: string;
   model: string;
   usage: Record<string, unknown>;
+  tool_calls?: CanonicalToolCall[];
+  finish_reason?: string | null;
 }
 
 export class ProviderInvocationError extends Error {
@@ -61,6 +85,8 @@ export class ProviderInvocationError extends Error {
     readonly statusCode: number,
     message: string,
     readonly resilience?: ProviderResilienceDecision,
+    /** Stable code so callers can branch (e.g. degrade) without string-matching. */
+    readonly code?: string,
   ) {
     super(message);
     this.name = "ProviderInvocationError";
@@ -100,6 +126,9 @@ function bareModelName(providerType: string, model: string): string {
   if (providerType === "ollama" && model.startsWith("ollama/")) {
     return model.slice("ollama/".length);
   }
+  if (providerType === "zeroentropy" && model.startsWith("zeroentropy/")) {
+    return model.slice("zeroentropy/".length);
+  }
   if (["openai", "other"].includes(providerType) && model.startsWith("openai/")) {
     return model.slice("openai/".length);
   }
@@ -110,6 +139,7 @@ function defaultModelFor(providerType: string): string {
   if (providerType === "anthropic") return "claude-3-5-sonnet-latest";
   if (providerType === "openrouter") return "openai/gpt-4o-mini";
   if (providerType === "ollama") return "llama3";
+  if (providerType === "zeroentropy") return "zembed-1";
   return "gpt-4o-mini";
 }
 
@@ -150,10 +180,13 @@ function anthropicMessagesUrl(provider: ProviderInfo): string {
   return `${versioned}/messages`;
 }
 
-function openAiMessages(body: ProviderChatRequestBody): ChatMessage[] {
-  return body.system
-    ? [{ role: "system", content: body.system }, ...body.messages]
-    : body.messages;
+function providerSupportsRuntimeTools(providerType: string): boolean {
+  return (
+    providerType === "openai" ||
+    providerType === "openrouter" ||
+    providerType === "other" ||
+    providerType === "anthropic"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +206,7 @@ async function completeOpenAiCompatible(
     );
   }
   const model = bareModelName(provider.provider_type, resolveModel(provider, body.model));
+  const tools = openAiTools(body.tools);
   const response = await httpClient(networkProfile).fetch(`${openAiBase(provider)}/chat/completions`, {
     method: "POST",
     headers: {
@@ -184,18 +218,33 @@ async function completeOpenAiCompatible(
       messages: openAiMessages(body),
       temperature: body.temperature,
       max_tokens: body.max_tokens,
+      ...(tools ? { tools, tool_choice: "auto" } : {}),
     }),
   });
   const data = (await parseJsonResponse(response)) as {
-    choices?: Array<{ message?: { content?: string } }>;
+    choices?: Array<{
+      finish_reason?: string | null;
+      message?: {
+        content?: string | null;
+        tool_calls?: Array<{
+          id?: string;
+          type?: string;
+          function?: { name?: string; arguments?: string };
+        }>;
+      };
+    }>;
     model?: string;
     usage?: Record<string, unknown>;
   };
+  const choice = data.choices?.[0];
+  const toolCalls = openAiToolCalls(choice?.message?.tool_calls, body.tools);
   return {
-    content: data.choices?.[0]?.message?.content ?? "",
+    content: choice?.message?.content ?? "",
     provider: provider.provider_type,
     model: data.model ?? model,
     usage: data.usage ?? {},
+    tool_calls: toolCalls,
+    finish_reason: choice?.finish_reason ?? null,
   };
 }
 
@@ -212,6 +261,7 @@ async function completeAnthropic(
     );
   }
   const model = bareModelName("anthropic", resolveModel(provider, body.model));
+  const tools = anthropicTools(body.tools);
   const response = await httpClient(networkProfile).fetch(anthropicMessagesUrl(provider), {
     method: "POST",
     headers: {
@@ -222,21 +272,33 @@ async function completeAnthropic(
     body: JSON.stringify({
       model,
       system: body.system ?? undefined,
-      messages: body.messages.filter((m) => m.role !== "system"),
+      messages: anthropicMessages(body),
       temperature: body.temperature,
-      max_tokens: body.max_tokens ?? 1024,
+      // Tool-use turns need headroom for the tool_use block plus a follow-up
+      // answer, so default higher when tools are offered.
+      max_tokens: body.max_tokens ?? (tools ? 2048 : 1024),
+      ...(tools ? { tools, tool_choice: { type: "auto" } } : {}),
     }),
   });
   const data = (await parseJsonResponse(response)) as {
-    content?: Array<{ type?: string; text?: string }>;
+    content?: Array<{
+      type?: string;
+      text?: string;
+      id?: string;
+      name?: string;
+      input?: unknown;
+    }>;
     model?: string;
     usage?: Record<string, unknown>;
+    stop_reason?: string | null;
   };
   return {
     content: data.content?.map((c) => c.text ?? "").join("") ?? "",
     provider: "anthropic",
     model: data.model ?? model,
     usage: data.usage ?? {},
+    tool_calls: anthropicToolCalls(data.content, body.tools),
+    finish_reason: data.stop_reason ?? null,
   };
 }
 
@@ -256,7 +318,9 @@ async function completeOllama(
     body: JSON.stringify({
       model,
       stream: false,
-      messages: openAiMessages(body),
+      messages: body.system
+        ? [{ role: "system", content: body.system }, ...body.messages.map((m) => ({ role: m.role, content: m.content ?? "" }))]
+        : body.messages.map((m) => ({ role: m.role, content: m.content ?? "" })),
       options: {
         temperature: body.temperature,
         num_predict: body.max_tokens,
@@ -281,11 +345,46 @@ function attemptOnce(
   body: ProviderChatRequestBody,
 ): Promise<ProviderChatResponseBody> {
   const provider = target.provider;
+  if (body.tools?.length && !providerSupportsRuntimeTools(provider.provider_type)) {
+    throw new ProviderInvocationError(
+      400,
+      `provider_type '${provider.provider_type}' does not support runtime-host tools yet; use an OpenAI-compatible or Anthropic provider, or disable retrieval tools for this run`,
+      { failure_class: "permanent", actions: ["fail"] },
+      "runtime_tool_provider_unsupported",
+    );
+  }
   if (provider.provider_type === "anthropic") {
     return completeAnthropic(provider, target.network_profile, apiKey, body);
   }
   if (provider.provider_type === "ollama") return completeOllama(provider, target.network_profile, body);
   return completeOpenAiCompatible(provider, target.network_profile, apiKey, body);
+}
+
+function providerTargetEgressAllowed(
+  target: InvocationTarget,
+  policy: RetrievalEgressPolicy | null | undefined,
+): boolean {
+  if (!policy) return true;
+  return retrievalEgressAllowed(
+    {
+      object_type: "model_provider",
+      object_id: target.provider.id,
+      source_connection_ids: policy.payloadSourceConnectionIds,
+    },
+    {
+      ...policy,
+      destination: retrievalProviderEgressDestination(target.provider),
+    },
+  );
+}
+
+function providerEgressDeniedError(target: InvocationTarget): ProviderInvocationError {
+  return new ProviderInvocationError(
+    403,
+    `retrieval egress policy blocks provider '${target.provider.id}' (${target.provider.provider_type})`,
+    undefined,
+    "retrieval_egress_denied",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +495,10 @@ export async function completeProviderChat(
 
   let lastError: unknown = null;
   for (const [index, target] of chain.entries()) {
+    if (!providerTargetEgressAllowed(target, body.egressPolicy)) {
+      lastError = providerEgressDeniedError(target);
+      continue;
+    }
     try {
       // Fallback providers serve THEIR OWN default model: an explicit model
       // name from the request only binds to the provider it was meant for.
@@ -424,6 +527,7 @@ export interface ProviderTextCompletionInput {
   max_tokens?: number;
   /** Auxiliary-task name; resolves a ProviderTaskPolicy chain when present. */
   task?: string | null;
+  egressPolicy?: RetrievalEgressPolicy | null;
 }
 
 export interface ProviderMessagesCompletionInput {
@@ -432,8 +536,10 @@ export interface ProviderMessagesCompletionInput {
   system?: string | null;
   messages: ChatMessage[];
   max_tokens?: number;
+  tools?: CanonicalToolDefinition[] | null;
   /** Auxiliary-task name; resolves a ProviderTaskPolicy chain when present. */
   task?: string | null;
+  egressPolicy?: RetrievalEgressPolicy | null;
 }
 
 /**
@@ -454,6 +560,7 @@ export async function completeProviderText(
     messages: [{ role: "user", content: input.user }],
     max_tokens: input.max_tokens,
     task: input.task,
+    egressPolicy: input.egressPolicy,
   });
 }
 
@@ -461,13 +568,21 @@ export async function completeProviderMessages(
   store: ProviderCommandStore,
   spaceId: string,
   input: ProviderMessagesCompletionInput,
-): Promise<{ text: string; model: string; usage: Record<string, unknown> }> {
+): Promise<{
+  text: string;
+  model: string;
+  usage: Record<string, unknown>;
+  tool_calls?: CanonicalToolCall[];
+  finish_reason?: string | null;
+}> {
   const chatBody = (providerId: string, model: string | null | undefined): ProviderChatRequestBody => ({
     provider_id: providerId,
     model,
     system: input.system,
     messages: input.messages,
     max_tokens: input.max_tokens,
+    tools: input.tools,
+    egressPolicy: input.egressPolicy,
   });
 
   const taskChain = input.task ? await store.getTaskChain(spaceId, input.task) : null;
@@ -476,7 +591,13 @@ export async function completeProviderMessages(
     for (const entry of taskChain) {
       try {
         const result = await completeProviderChat(store, spaceId, chatBody(entry.provider_id, entry.model));
-        return { text: result.content, model: result.model, usage: result.usage };
+        return {
+          text: result.content,
+          model: result.model,
+          usage: result.usage,
+          tool_calls: result.tool_calls,
+          finish_reason: result.finish_reason,
+        };
       } catch (error) {
         lastError = error;
         if (
@@ -496,7 +617,509 @@ export async function completeProviderMessages(
   }
 
   const result = await completeProviderChat(store, spaceId, chatBody(input.provider_id, input.model));
-  return { text: result.content, model: result.model, usage: result.usage };
+  return {
+    text: result.content,
+    model: result.model,
+    usage: result.usage,
+    tool_calls: result.tool_calls,
+    finish_reason: result.finish_reason,
+  };
+}
+
+export interface ProviderEmbeddingInput {
+  /** Caller's own provider; used as the safety net after any task chain. */
+  provider_id?: string | null;
+  model?: string | null;
+  inputs: string[];
+  /** Normalized embedding dimension intent; provider adapters map or validate it. */
+  dimensions?: number | null;
+  /** Retrieval embedding input type for providers that distinguish queries from documents. */
+  inputType?: "query" | "document";
+  /** Auxiliary task whose ProviderTaskPolicy chain is tried first (e.g. retrieval_embedding). */
+  task?: string;
+  egressPolicy?: RetrievalEgressPolicy | null;
+}
+
+export interface ProviderEmbeddingResult {
+  vectors: number[][];
+  model: string;
+}
+
+export interface ProviderRerankInput {
+  /** Caller's own provider; used as the safety net after any task chain. */
+  provider_id?: string | null;
+  model?: string | null;
+  query: string;
+  documents: string[];
+  /** Provider-side top_n; defaults to all documents. */
+  topN?: number | null;
+  /** Auxiliary task whose ProviderTaskPolicy chain is tried first. */
+  task?: string;
+  egressPolicy?: RetrievalEgressPolicy | null;
+}
+
+export interface ProviderRerankResult {
+  scores: Array<{ index: number; score: number }>;
+  model: string;
+  usage: Record<string, unknown>;
+}
+
+/**
+ * Auxiliary embeddings completion. Mirrors `completeProviderText`'s task-chain
+ * resilience: the `task` policy chain is tried first, then the caller's
+ * provider as a safety net. Supports OpenAI-compatible `/embeddings`, Ollama
+ * `/api/embed`, and ZeroEntropy `/models/embed`; provider types without an
+ * embeddings endpoint fail closed.
+ */
+export async function completeProviderEmbedding(
+  store: ProviderCommandStore,
+  spaceId: string,
+  input: ProviderEmbeddingInput,
+): Promise<ProviderEmbeddingResult> {
+  if (input.inputs.length === 0) return { vectors: [], model: "" };
+  const taskChain = input.task ? await store.getTaskChain(spaceId, input.task) : null;
+  if (taskChain) {
+    let lastError: unknown = null;
+    for (const entry of taskChain) {
+      try {
+        return await completeProviderEmbeddingWithFallback(
+          store,
+          spaceId,
+          entry.provider_id,
+          entry.model,
+          input.inputs,
+          input.dimensions,
+          input.inputType,
+          input.egressPolicy,
+        );
+      } catch (error) {
+        lastError = error;
+        if (
+          error instanceof ProviderInvocationError &&
+          error.resilience?.failure_class === "permanent"
+        ) {
+          throw error;
+        }
+      }
+    }
+    if (taskChain.some((entry) => entry.provider_id === input.provider_id)) {
+      throw lastError instanceof Error
+        ? lastError
+        : new ProviderInvocationError(502, "Embedding invocation failed");
+    }
+  }
+
+  return completeProviderEmbeddingWithFallback(
+    store,
+    spaceId,
+    input.provider_id ?? null,
+    input.model,
+    input.inputs,
+    input.dimensions,
+    input.inputType,
+    input.egressPolicy,
+  );
+}
+
+async function completeProviderEmbeddingWithFallback(
+  store: ProviderCommandStore,
+  spaceId: string,
+  providerId: string | null | undefined,
+  model: string | null | undefined,
+  inputs: string[],
+  dimensions?: number | null,
+  inputType?: "query" | "document",
+  egressPolicy?: RetrievalEgressPolicy | null,
+): Promise<ProviderEmbeddingResult> {
+  const target = await store.getInvocationTarget(spaceId, providerId);
+  const chain: InvocationTarget[] = [target];
+  for (const fallbackId of target.fallback_provider_ids) {
+    try {
+      chain.push(await store.getInvocationTarget(spaceId, fallbackId));
+    } catch {
+      // A missing/disabled fallback provider is skipped, matching chat behavior.
+    }
+  }
+
+  let lastError: unknown = null;
+  for (const [index, candidate] of chain.entries()) {
+    if (!providerTargetEgressAllowed(candidate, egressPolicy)) {
+      lastError = providerEgressDeniedError(candidate);
+      continue;
+    }
+    try {
+      return await invokeEmbeddingProviderWithPool(
+        store,
+        candidate,
+        index === 0 ? model : null,
+        inputs,
+        dimensions,
+        inputType,
+      );
+    } catch (error) {
+      lastError = error;
+      if (
+        error instanceof ProviderInvocationError &&
+        error.resilience?.failure_class === "permanent"
+      ) {
+        throw error;
+      }
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new ProviderInvocationError(502, "Embedding invocation failed");
+}
+
+async function invokeEmbeddingProviderWithPool(
+  store: ProviderCommandStore,
+  target: InvocationTarget,
+  model: string | null | undefined,
+  inputs: string[],
+  dimensions?: number | null,
+  inputType?: "query" | "document",
+): Promise<ProviderEmbeddingResult> {
+  if (target.candidates.length === 0) {
+    throw new ProviderInvocationError(
+      503,
+      `ModelProvider '${target.provider.id}' has no available credential (all keys cooling down)`,
+    );
+  }
+
+  let lastError: unknown = null;
+  for (const candidate of target.candidates) {
+    let retriedSameKey = false;
+    for (;;) {
+      try {
+        const result = await embedOnce(target, candidate.api_key, model, inputs, dimensions, inputType);
+        if (candidate.member_id) {
+          await store.recordPoolOutcome(candidate.member_id, { kind: "success" });
+        }
+        return result;
+      } catch (error) {
+        lastError = error;
+        if (!(error instanceof ProviderInvocationError) || !error.resilience) {
+          throw error;
+        }
+        const decision = error.resilience;
+        if (decision.failure_class === "permanent") {
+          await recordFailure(store, candidate, decision);
+          throw error;
+        }
+        if (
+          (decision.failure_class === "rate_limit" || decision.failure_class === "transient") &&
+          !retriedSameKey
+        ) {
+          retriedSameKey = true;
+          continue;
+        }
+        await recordFailure(store, candidate, decision);
+        if (decision.failure_class === "transient") {
+          throw error;
+        }
+        break;
+      }
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new ProviderInvocationError(502, "Embedding invocation failed");
+}
+
+async function embedOnce(
+  target: InvocationTarget,
+  apiKey: string | null,
+  model: string | null | undefined,
+  inputs: string[],
+  dimensions?: number | null,
+  inputType?: "query" | "document",
+): Promise<ProviderEmbeddingResult> {
+  const provider = target.provider;
+  const resolvedModel = bareModelName(provider.provider_type, resolveModel(provider, model));
+
+  if (provider.provider_type === "ollama") {
+    const base = provider.base_url?.replace(/\/+$/, "");
+    if (!base) throw new ProviderInvocationError(400, "base_url is required for provider_type 'ollama'");
+    const response = await httpClient(target.network_profile).fetch(`${base}/api/embed`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: resolvedModel, input: inputs }),
+    });
+    const data = (await parseJsonResponse(response)) as { embeddings?: number[][]; model?: string };
+    return { vectors: data.embeddings ?? [], model: data.model ?? resolvedModel };
+  }
+
+  if (provider.provider_type === "zeroentropy") {
+    if (!apiKey) {
+      throw new ProviderInvocationError(400, `ModelProvider '${provider.id}' has no API key credential`);
+    }
+    const base = provider.base_url?.replace(/\/+$/, "");
+    if (!base) throw new ProviderInvocationError(400, "base_url is required for provider_type 'zeroentropy'");
+    const body: Record<string, unknown> = {
+      model: resolvedModel,
+      input: inputs,
+      input_type: inputType ?? "document",
+      encoding_format: "float",
+    };
+    if (typeof dimensions === "number" && Number.isInteger(dimensions) && dimensions > 0) {
+      body.dimensions = dimensions;
+    }
+    const response = await httpClient(target.network_profile).fetch(`${base}/models/embed`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+    });
+    const data = (await parseJsonResponse(response)) as {
+      results?: Array<{ embedding?: number[] }>;
+    };
+    return {
+      vectors: (data.results ?? []).map((row) => row.embedding ?? []),
+      model: resolvedModel,
+    };
+  }
+
+  if (["openai", "openrouter", "other"].includes(provider.provider_type)) {
+    if (!apiKey) {
+      throw new ProviderInvocationError(400, `ModelProvider '${provider.id}' has no API key credential`);
+    }
+    const body: Record<string, unknown> = { model: resolvedModel, input: inputs };
+    if (typeof dimensions === "number" && Number.isInteger(dimensions) && dimensions > 0) {
+      body.dimensions = dimensions;
+    }
+    const response = await httpClient(target.network_profile).fetch(`${openAiBase(provider)}/embeddings`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+    });
+    const data = (await parseJsonResponse(response)) as {
+      data?: Array<{ embedding: number[]; index?: number }>;
+      model?: string;
+    };
+    const sorted = [...(data.data ?? [])].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+    return { vectors: sorted.map((row) => row.embedding), model: data.model ?? resolvedModel };
+  }
+
+  throw new ProviderInvocationError(
+    400,
+    `provider_type '${provider.provider_type}' does not support embeddings`,
+  );
+}
+
+/**
+ * Auxiliary native rerank completion. This is intentionally separate from chat
+ * completions because rerank providers expose a different request/response
+ * contract and may not support generation.
+ */
+export async function completeProviderRerank(
+  store: ProviderCommandStore,
+  spaceId: string,
+  input: ProviderRerankInput,
+): Promise<ProviderRerankResult> {
+  if (input.documents.length === 0) return { scores: [], model: "", usage: {} };
+  const taskChain = input.task ? await store.getTaskChain(spaceId, input.task) : null;
+  if (taskChain) {
+    let lastError: unknown = null;
+    for (const entry of taskChain) {
+      try {
+        return await completeProviderRerankWithFallback(
+          store,
+          spaceId,
+          entry.provider_id,
+          entry.model,
+          input.query,
+          input.documents,
+          input.topN,
+          input.egressPolicy,
+        );
+      } catch (error) {
+        lastError = error;
+        if (
+          error instanceof ProviderInvocationError &&
+          error.resilience?.failure_class === "permanent"
+        ) {
+          throw error;
+        }
+      }
+    }
+    if (taskChain.some((entry) => entry.provider_id === input.provider_id)) {
+      throw lastError instanceof Error
+        ? lastError
+        : new ProviderInvocationError(502, "Rerank invocation failed");
+    }
+  }
+
+  return completeProviderRerankWithFallback(
+    store,
+    spaceId,
+    input.provider_id ?? null,
+    input.model,
+    input.query,
+    input.documents,
+    input.topN,
+    input.egressPolicy,
+  );
+}
+
+async function completeProviderRerankWithFallback(
+  store: ProviderCommandStore,
+  spaceId: string,
+  providerId: string | null | undefined,
+  model: string | null | undefined,
+  query: string,
+  documents: string[],
+  topN?: number | null,
+  egressPolicy?: RetrievalEgressPolicy | null,
+): Promise<ProviderRerankResult> {
+  const target = await store.getInvocationTarget(spaceId, providerId);
+  const chain: InvocationTarget[] = [target];
+  for (const fallbackId of target.fallback_provider_ids) {
+    try {
+      chain.push(await store.getInvocationTarget(spaceId, fallbackId));
+    } catch {
+      // A missing/disabled fallback provider is skipped, matching chat behavior.
+    }
+  }
+
+  let lastError: unknown = null;
+  for (const [index, candidate] of chain.entries()) {
+    if (!providerTargetEgressAllowed(candidate, egressPolicy)) {
+      lastError = providerEgressDeniedError(candidate);
+      continue;
+    }
+    try {
+      return await invokeRerankProviderWithPool(
+        store,
+        candidate,
+        index === 0 ? model : null,
+        query,
+        documents,
+        topN,
+      );
+    } catch (error) {
+      lastError = error;
+      if (
+        error instanceof ProviderInvocationError &&
+        error.resilience?.failure_class === "permanent"
+      ) {
+        throw error;
+      }
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new ProviderInvocationError(502, "Rerank invocation failed");
+}
+
+async function invokeRerankProviderWithPool(
+  store: ProviderCommandStore,
+  target: InvocationTarget,
+  model: string | null | undefined,
+  query: string,
+  documents: string[],
+  topN?: number | null,
+): Promise<ProviderRerankResult> {
+  if (target.candidates.length === 0) {
+    throw new ProviderInvocationError(
+      503,
+      `ModelProvider '${target.provider.id}' has no available credential (all keys cooling down)`,
+    );
+  }
+
+  let lastError: unknown = null;
+  for (const candidate of target.candidates) {
+    let retriedSameKey = false;
+    for (;;) {
+      try {
+        const result = await rerankOnce(target, candidate.api_key, model, query, documents, topN);
+        if (candidate.member_id) {
+          await store.recordPoolOutcome(candidate.member_id, { kind: "success" });
+        }
+        return result;
+      } catch (error) {
+        lastError = error;
+        if (!(error instanceof ProviderInvocationError) || !error.resilience) {
+          throw error;
+        }
+        const decision = error.resilience;
+        if (decision.failure_class === "permanent") {
+          await recordFailure(store, candidate, decision);
+          throw error;
+        }
+        if (
+          (decision.failure_class === "rate_limit" || decision.failure_class === "transient") &&
+          !retriedSameKey
+        ) {
+          retriedSameKey = true;
+          continue;
+        }
+        await recordFailure(store, candidate, decision);
+        if (decision.failure_class === "transient") {
+          throw error;
+        }
+        break;
+      }
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new ProviderInvocationError(502, "Rerank invocation failed");
+}
+
+async function rerankOnce(
+  target: InvocationTarget,
+  apiKey: string | null,
+  model: string | null | undefined,
+  query: string,
+  documents: string[],
+  topN?: number | null,
+): Promise<ProviderRerankResult> {
+  const provider = target.provider;
+
+  if (provider.provider_type === "zeroentropy") {
+    if (!apiKey) {
+      throw new ProviderInvocationError(400, `ModelProvider '${provider.id}' has no API key credential`);
+    }
+    const base = provider.base_url?.replace(/\/+$/, "");
+    if (!base) throw new ProviderInvocationError(400, "base_url is required for provider_type 'zeroentropy'");
+    const resolvedModel = bareModelName("zeroentropy", model?.trim() || "zerank-2");
+    const response = await httpClient(target.network_profile).fetch(`${base}/models/rerank`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: resolvedModel,
+        query,
+        documents,
+        top_n:
+          typeof topN === "number" && Number.isInteger(topN) && topN > 0
+            ? Math.min(topN, documents.length)
+            : documents.length,
+      }),
+    });
+    const data = (await parseJsonResponse(response)) as {
+      results?: Array<{ index?: number; relevance_score?: number }>;
+      total_bytes?: number;
+      total_tokens?: number;
+      e2e_latency?: number;
+      inference_latency?: number;
+    };
+    return {
+      scores: (data.results ?? [])
+        .map((entry) => ({ index: Number(entry.index), score: Number(entry.relevance_score) }))
+        .filter((entry) => Number.isInteger(entry.index) && Number.isFinite(entry.score)),
+      model: resolvedModel,
+      usage: {
+        total_bytes: data.total_bytes,
+        total_tokens: data.total_tokens,
+        e2e_latency: data.e2e_latency,
+        inference_latency: data.inference_latency,
+      },
+    };
+  }
+
+  throw new ProviderInvocationError(
+    400,
+    `provider_type '${provider.provider_type}' does not support native rerank`,
+  );
 }
 
 export async function listProviderModels(

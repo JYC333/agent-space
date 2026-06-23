@@ -11,6 +11,9 @@ interface ProviderSelectorProps {
   required?: boolean
   requireClaudeCompatible?: boolean
   requireOpenAiCompatible?: boolean
+  providerFilter?: (provider: ModelProviderOut) => string | null
+  defaultModelForProvider?: (provider: ModelProviderOut) => string | null | undefined
+  disabled?: boolean
   emptyLabel?: string
 }
 
@@ -31,6 +34,9 @@ export default function ProviderSelector({
   required = false,
   requireClaudeCompatible = false,
   requireOpenAiCompatible = false,
+  providerFilter,
+  defaultModelForProvider,
+  disabled = false,
   emptyLabel,
 }: ProviderSelectorProps) {
   const [providers, setProviders] = useState<ModelProviderOut[]>([])
@@ -54,8 +60,10 @@ export default function ProviderSelector({
     if (requireOpenAiCompatible && !provider.openai_compatible_base_url) {
       return 'no OpenAI-compatible URL'
     }
+    const customReason = providerFilter?.(provider) ?? null
+    if (customReason) return customReason
     return null
-  }, [requireClaudeCompatible, requireOpenAiCompatible])
+  }, [providerFilter, requireClaudeCompatible, requireOpenAiCompatible])
 
   const isSelectable = useCallback((provider: ModelProviderOut) => (
     incompatibleReason(provider) === null
@@ -115,18 +123,22 @@ export default function ProviderSelector({
             <button type="button" onClick={loadProviders} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
               <RefreshCw className="size-3" /> Refresh
             </button>
-            <ManageProvidersLink label="Add" />
+            {!disabled && <ManageProvidersLink label="Add" />}
           </div>
         </div>
         <select
+          disabled={disabled}
           value={value?.provider_id ?? ''}
           onChange={e => {
             const id = e.target.value
             if (!id) { onChange(null); return }
             const p = providers.find(x => x.id === id)
-            onChange({ provider_id: id, model: p?.default_model ?? '' })
+            onChange({
+              provider_id: id,
+              model: p ? (defaultModelForProvider?.(p) ?? p.default_model ?? '') : '',
+            })
           }}
-          className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
+          className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
         >
           <option value="" disabled={required}>{emptyLabel ?? (required ? 'Select a provider…' : 'System default')}</option>
           {providers.map(p => {
@@ -147,18 +159,20 @@ export default function ProviderSelector({
           <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Model</label>
           {models.length > 0 ? (
             <select
+              disabled={disabled}
               value={value.model}
               onChange={e => onChange({ ...value, model: e.target.value })}
-              className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm font-mono"
+              className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm font-mono disabled:cursor-not-allowed disabled:opacity-60"
             >
               {models.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
           ) : (
             <input
+              disabled={disabled}
               value={value.model}
               onChange={e => onChange({ ...value, model: e.target.value })}
               placeholder="model name"
-              className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm font-mono"
+              className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm font-mono disabled:cursor-not-allowed disabled:opacity-60"
             />
           )}
         </div>

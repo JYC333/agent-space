@@ -48,6 +48,7 @@ import {
   type ProviderRow,
 } from "./providerCommandHelpers";
 import {
+  ProviderCommandForbiddenError,
   ProviderCommandNotFoundError,
   ProviderCommandValidationError,
   type CliCredentialAuditInput,
@@ -64,6 +65,7 @@ import {
 } from "./providerCommandTypes";
 
 export {
+  ProviderCommandForbiddenError,
   ProviderCommandNotFoundError,
   ProviderCommandValidationError,
   type CliCredentialAuditInput,
@@ -106,6 +108,24 @@ function grantOut(row: {
     created_at: row.created_at.toISOString(),
     updated_at: row.updated_at.toISOString(),
   };
+}
+
+const TASK_PROVIDER_TYPES: Record<string, ReadonlySet<string>> = {
+  retrieval_embedding: new Set(["openai", "openrouter", "ollama", "zeroentropy", "other"]),
+  retrieval_rerank: new Set(["zeroentropy"]),
+  retrieval_query_rewrite: new Set(["openai", "anthropic", "openrouter", "ollama", "other"]),
+  retrieval_synthesis: new Set(["openai", "anthropic", "openrouter", "ollama", "other"]),
+};
+
+function validateTaskProviderCompatibility(
+  task: string,
+  provider: ProviderRow,
+): void {
+  const allowed = TASK_PROVIDER_TYPES[task];
+  if (!allowed || allowed.has(provider.provider_type)) return;
+  throw new ProviderCommandValidationError(
+    `Provider '${provider.id}' (${provider.provider_type}) is not compatible with task '${task}'`,
+  );
 }
 
 class PgProviderCommandStore implements ProviderCommandStore {
@@ -970,12 +990,17 @@ class PgProviderCommandStore implements ProviderCommandStore {
 
   async putTaskPolicy(
     spaceId: string,
+    userId: string,
     task: string,
     chain: ProviderTaskChainEntry[],
     enabled = true,
   ): Promise<unknown> {
+    if (!(await this.canAdminSpace(userId, spaceId))) {
+      throw new ProviderCommandForbiddenError("Requires space owner or admin role");
+    }
     for (const entry of chain) {
-      await this.requireProvider(spaceId, entry.provider_id);
+      const provider = await this.requireProvider(spaceId, entry.provider_id);
+      validateTaskProviderCompatibility(task, provider);
     }
     const now = new Date();
     await this.pool.query(
@@ -996,7 +1021,10 @@ class PgProviderCommandStore implements ProviderCommandStore {
     };
   }
 
-  async deleteTaskPolicy(spaceId: string, task: string): Promise<void> {
+  async deleteTaskPolicy(spaceId: string, userId: string, task: string): Promise<void> {
+    if (!(await this.canAdminSpace(userId, spaceId))) {
+      throw new ProviderCommandForbiddenError("Requires space owner or admin role");
+    }
     const result = await this.pool.query(
       `DELETE FROM provider_task_policies WHERE space_id = $1 AND task = $2`,
       [spaceId, task],

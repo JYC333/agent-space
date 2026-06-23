@@ -5,6 +5,7 @@ import type { ReadStream } from "node:fs";
 import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
 import type { Queryable } from "../proposals/repository";
+import { workspaceProjectReadAccessSql } from "../workspaces/access";
 
 export interface ArtifactOut {
   id: string;
@@ -26,6 +27,7 @@ export interface ArtifactOut {
   created_at: string;
   updated_at: string;
   project_id: string | null;
+  workspace_id: string | null;
 }
 
 export interface ArtifactPage {
@@ -54,12 +56,14 @@ interface ArtifactRow {
   created_at: unknown;
   updated_at: unknown;
   project_id: string | null;
+  workspace_id: string | null;
 }
 
 export interface ArtifactListFilters {
   artifactType?: string | null;
   runId?: string | null;
   projectId?: string | null;
+  workspaceId?: string | null;
   limit: number;
   offset: number;
 }
@@ -97,6 +101,13 @@ export class PgArtifactRepository {
       );
       if ((project.rowCount ?? 0) === 0) throw new ArtifactValidationError("Project not found");
     }
+    if (filters.workspaceId) {
+      const workspace = await this.db.query(
+        `SELECT id FROM workspaces WHERE id = $1 AND space_id = $2`,
+        [filters.workspaceId, spaceId],
+      );
+      if ((workspace.rowCount ?? 0) === 0) throw new ArtifactValidationError("Workspace not found");
+    }
     const built = buildWhere(spaceId, userId, filters);
     const total = await this.db.query<{ total: string | number }>(
       `SELECT count(a.id)::text AS total FROM artifacts a ${built.whereSql}`,
@@ -123,13 +134,16 @@ export class PgArtifactRepository {
     userId: string,
     artifactId: string,
     includeContent = false,
+    workspaceId?: string | null,
   ): Promise<ArtifactOut | null> {
+    const params: unknown[] = [artifactId, spaceId, userId];
+    const workspaceParam = workspaceId ? `$${params.push(workspaceId)}` : null;
     const result = await this.db.query<ArtifactRow>(
       `${artifactSelectSql()}
         WHERE a.id = $1
           AND a.space_id = $2
-          AND ${visibleSql("$3")}`,
-      [artifactId, spaceId, userId],
+          AND ${visibleSql("$3", workspaceParam)}`,
+      params,
     );
     const row = result.rows[0];
     return row ? artifactToOut(row, includeContent) : null;
@@ -139,8 +153,9 @@ export class PgArtifactRepository {
     spaceId: string,
     userId: string,
     artifactId: string,
+    workspaceId?: string | null,
   ): Promise<ArtifactExport | null> {
-    const artifact = await this.getVisible(spaceId, userId, artifactId, true);
+    const artifact = await this.getVisible(spaceId, userId, artifactId, true, workspaceId);
     if (!artifact) return null;
     const filename = exportFilename(artifact.title);
     const mediaType = artifact.mime_type ?? "application/octet-stream";
@@ -190,21 +205,29 @@ function buildWhere(
   filters: ArtifactListFilters,
 ): { whereSql: string; params: unknown[] } {
   const params: unknown[] = [spaceId, userId];
-  const clauses = [`a.space_id = $1`, visibleSql("$2")];
   const add = (value: unknown): string => {
     params.push(value);
     return `$${params.length}`;
   };
+  const workspaceParam = filters.workspaceId ? add(filters.workspaceId) : null;
+  const clauses = [`a.space_id = $1`, visibleSql("$2", workspaceParam)];
   if (filters.artifactType) clauses.push(`a.artifact_type = ${add(filters.artifactType)}`);
   if (filters.runId) clauses.push(`a.run_id = ${add(filters.runId)}`);
   if (filters.projectId) clauses.push(`a.project_id = ${add(filters.projectId)}`);
+  if (workspaceParam) clauses.push(`a.workspace_id = ${workspaceParam}`);
   return { whereSql: `WHERE ${clauses.join(" AND ")}`, params };
 }
 
-function visibleSql(userParam: string): string {
+function visibleSql(userParam: string, workspaceParam: string | null): string {
+  const workspaceVisible = workspaceParam
+    ? `(a.visibility = 'workspace_shared'
+        AND a.workspace_id = ${workspaceParam}
+        AND ${workspaceProjectReadAccessSql({ spaceExpr: "a.space_id", workspaceExpr: "a.workspace_id", userExpr: userParam })})`
+    : "false";
   return `(
-    a.visibility IN ('space_shared', 'workspace_shared', 'public_template')
-    OR a.owner_user_id IS NULL
+    a.visibility IN ('space_shared', 'public_template')
+    OR ${workspaceVisible}
+    OR (a.owner_user_id IS NULL AND a.visibility NOT IN ('workspace_shared', 'restricted', 'selected_users'))
     OR a.owner_user_id = ${userParam}
   )`;
 }
@@ -213,7 +236,7 @@ function artifactSelectSql(): string {
   return `SELECT a.id, a.space_id, a.run_id, a.proposal_id, a.artifact_type,
                  a.title, a.content, a.storage_ref, a.storage_path, a.mime_type,
                  a.exportable, a.preview, a.metadata_json, a.visibility,
-                 a.owner_user_id, a.created_at, a.updated_at, a.project_id
+                 a.owner_user_id, a.created_at, a.updated_at, a.project_id, a.workspace_id
             FROM artifacts a`;
 }
 
@@ -238,6 +261,7 @@ function artifactToOut(row: ArtifactRow, includeContent: boolean): ArtifactOut {
     created_at: dateValue(row.created_at) ?? new Date(0).toISOString(),
     updated_at: dateValue(row.updated_at) ?? new Date(0).toISOString(),
     project_id: row.project_id,
+    workspace_id: row.workspace_id,
   };
 }
 

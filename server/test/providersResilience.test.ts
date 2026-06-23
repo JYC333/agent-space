@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   __setProviderHttpClientForTests,
   completeProviderChat,
+  completeProviderEmbedding,
+  completeProviderRerank,
   completeProviderText,
   orderPoolMembers,
   ProviderInvocationError,
@@ -95,6 +97,7 @@ interface Attempt {
   url: string;
   key: string | null;
   model: string | null;
+  body: Record<string, unknown>;
 }
 
 /** Scripted provider HTTP client: pops one response per fetch call. */
@@ -108,15 +111,24 @@ function scriptedHttp(script: Array<{ status: number; body?: unknown }>): Attemp
         url,
         key: headers.authorization?.replace("Bearer ", "") ?? headers["x-api-key"] ?? null,
         model: body.model ?? null,
+        body,
       });
       const step = script.shift() ?? { status: 500, body: { error: "script exhausted" } };
       const payload =
         step.body ??
-        {
-          choices: [{ message: { content: "ok" } }],
-          model: body.model,
-          usage: {},
-        };
+        (String(url).endsWith("/embeddings")
+          ? {
+              data: (body.input ?? []).map((_input: string, index: number) => ({
+                embedding: [index + 1],
+                index,
+              })),
+              model: body.model,
+            }
+          : {
+              choices: [{ message: { content: "ok" } }],
+              model: body.model,
+              usage: {},
+            });
       return new Response(JSON.stringify(payload), {
         status: step.status,
         headers: { "content-type": "application/json" },
@@ -284,6 +296,176 @@ describe("provider invocation resilience", () => {
     expect(result.text).toBe("ok");
     expect(attempts.map((a) => a.key)).toEqual(["kc", "kc", "kn"]);
     expect(attempts[0].model).toBe("chain-model");
+  });
+
+  it("embedding rotates keys using the same quota taxonomy as chat", async () => {
+    const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
+    const store = makeStore(
+      {
+        p1: target("p1", [
+          { member: "m1", key: "k1" },
+          { member: "m2", key: "k2" },
+        ]),
+      },
+      outcomes,
+    );
+    const attempts = scriptedHttp([
+      { status: 429, body: { error: { message: "You exceeded your current quota" } } },
+      { status: 200 },
+    ]);
+
+    const result = await completeProviderEmbedding(store, "space-1", {
+      provider_id: "p1",
+      model: "embed-model",
+      inputs: ["alpha"],
+    });
+
+    expect(result.vectors).toEqual([[1]]);
+    expect(attempts.map((a) => a.key)).toEqual(["k1", "k2"]);
+    expect(attempts.map((a) => a.url)).toEqual([
+      "https://api.p1.test/v1/embeddings",
+      "https://api.p1.test/v1/embeddings",
+    ]);
+    expect(outcomes[0]).toEqual({
+      member: "m1",
+      outcome: {
+        kind: "failure",
+        failure_class: "quota_exhausted",
+        cooldown_seconds: 24 * 60 * 60,
+        unhealthy: false,
+      },
+    });
+    expect(outcomes[1]).toEqual({ member: "m2", outcome: { kind: "success" } });
+  });
+
+  it("embedding falls back to provider fallback with the fallback provider default model", async () => {
+    const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
+    const store = makeStore(
+      {
+        p1: target("p1", [{ member: "m1", key: "k1" }], { fallback_provider_ids: ["p2"] }),
+        p2: target("p2", [{ member: "m2", key: "k2" }]),
+      },
+      outcomes,
+    );
+    const attempts = scriptedHttp([{ status: 402 }, { status: 200 }]);
+
+    await completeProviderEmbedding(store, "space-1", {
+      provider_id: "p1",
+      model: "explicit-embed-model",
+      inputs: ["alpha"],
+    });
+
+    expect(attempts[0]).toMatchObject({ key: "k1", model: "explicit-embed-model" });
+    expect(attempts[1]).toMatchObject({ key: "k2", model: "default-of-p2" });
+  });
+
+  it("embedding uses the default provider when no task policy or provider id is supplied", async () => {
+    const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
+    const store = makeStore(
+      {
+        default: target("default", [{ member: "md", key: "kd" }]),
+      },
+      outcomes,
+    );
+    const attempts = scriptedHttp([{ status: 200 }]);
+
+    await completeProviderEmbedding(store, "space-1", {
+      inputs: ["alpha"],
+      task: "retrieval_embedding",
+    });
+
+    expect(attempts[0]).toMatchObject({ key: "kd", model: "default-of-default" });
+    expect(outcomes).toEqual([{ member: "md", outcome: { kind: "success" } }]);
+  });
+
+  it("embedding supports ZeroEntropy /models/embed with input_type and dimensions", async () => {
+    const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
+    const store = makeStore(
+      {
+        ze: target("ze", [{ member: "mz", key: "kz" }], {
+          provider_type: "zeroentropy",
+          base_url: "https://api.zeroentropy.dev/v1",
+          default_model: "zembed-1",
+        }),
+      },
+      outcomes,
+    );
+    const attempts = scriptedHttp([
+      { status: 200, body: { results: [{ embedding: [0.1, 0.2] }] } },
+    ]);
+
+    const result = await completeProviderEmbedding(store, "space-1", {
+      provider_id: "ze",
+      inputs: ["alpha"],
+      dimensions: 2560,
+      inputType: "query",
+      task: "retrieval_embedding",
+    });
+
+    expect(result).toEqual({ vectors: [[0.1, 0.2]], model: "zembed-1" });
+    expect(attempts[0]).toMatchObject({
+      url: "https://api.zeroentropy.dev/v1/models/embed",
+      key: "kz",
+      model: "zembed-1",
+    });
+    expect(attempts[0]?.body).toMatchObject({
+      input: ["alpha"],
+      input_type: "query",
+      dimensions: 2560,
+      encoding_format: "float",
+    });
+  });
+
+  it("rerank supports ZeroEntropy /models/rerank with a task-specific default model", async () => {
+    const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
+    const store = makeStore(
+      {
+        ze: target("ze", [{ member: "mz", key: "kz" }], {
+          provider_type: "zeroentropy",
+          base_url: "https://api.zeroentropy.dev/v1",
+          default_model: "zembed-1",
+        }),
+      },
+      outcomes,
+    );
+    const attempts = scriptedHttp([
+      {
+        status: 200,
+        body: {
+          results: [
+            { index: 1, relevance_score: 0.9 },
+            { index: 0, relevance_score: 0.2 },
+          ],
+          total_tokens: 14,
+        },
+      },
+    ]);
+
+    const result = await completeProviderRerank(store, "space-1", {
+      provider_id: "ze",
+      query: "alpha",
+      documents: ["doc a", "doc b"],
+      task: "retrieval_rerank",
+    });
+
+    expect(result).toMatchObject({
+      scores: [
+        { index: 1, score: 0.9 },
+        { index: 0, score: 0.2 },
+      ],
+      model: "zerank-2",
+      usage: { total_tokens: 14 },
+    });
+    expect(attempts[0]).toMatchObject({
+      url: "https://api.zeroentropy.dev/v1/models/rerank",
+      key: "kz",
+      model: "zerank-2",
+    });
+    expect(attempts[0]?.body).toMatchObject({
+      query: "alpha",
+      documents: ["doc a", "doc b"],
+      top_n: 2,
+    });
   });
 });
 

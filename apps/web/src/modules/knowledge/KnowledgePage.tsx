@@ -3,13 +3,13 @@ import { toast } from 'sonner'
 import { knowledgeApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
-import type { KnowledgeItemSummary } from '../../types/api'
+import type { KnowledgeItemSummary, RetrievalSearchResult } from '../../types/api'
 import KnowledgeCreateProposalForm from './KnowledgeCreateProposalForm'
 import KnowledgeList, { type KnowledgeFilters } from './KnowledgeList'
 import KnowledgeSectionHeader from './KnowledgeSectionHeader'
 
 const DEFAULT_FILTERS: KnowledgeFilters = {
-  itemType: '',
+  knowledgeKind: '',
   status: 'active',
   visibility: '',
   q: '',
@@ -26,18 +26,35 @@ export default function KnowledgePage() {
   const [loading, setLoading] = useState(true)
   const [filters, setFilters] = useState<KnowledgeFilters>(DEFAULT_FILTERS)
   const [appliedQ, setAppliedQ] = useState('')
+  const [searchResults, setSearchResults] = useState<RetrievalSearchResult[] | null>(null)
 
   const load = useCallback(async () => {
     if (!activeSpaceId) {
       setItems([])
       setTotal(0)
+      setSearchResults(null)
       setLoading(false)
       return
     }
     setLoading(true)
     try {
+      const useRetrievalSearch =
+        appliedQ &&
+        !filters.knowledgeKind &&
+        filters.status === 'active' &&
+        !filters.visibility
+      if (useRetrievalSearch) {
+        const r = await knowledgeApi.search({
+          query: appliedQ,
+          object_types: ['knowledge_item'],
+        })
+        setSearchResults(r.items)
+        setItems([])
+        setTotal(r.total)
+        return
+      }
       const r = await knowledgeApi.list({
-        item_type: filters.itemType || undefined,
+        knowledge_kind: filters.knowledgeKind || undefined,
         status: filters.status || undefined,
         visibility: filters.visibility || undefined,
         q: appliedQ || undefined,
@@ -45,20 +62,33 @@ export default function KnowledgePage() {
       })
       setItems(r.items)
       setTotal(r.total)
+      setSearchResults(null)
     } catch (e) {
       toast.error(errMsg(e))
       setItems([])
       setTotal(0)
+      setSearchResults(null)
     } finally {
       setLoading(false)
     }
-  }, [activeSpaceId, filters.itemType, filters.status, filters.visibility, appliedQ])
+  }, [activeSpaceId, filters.knowledgeKind, filters.status, filters.visibility, appliedQ])
 
   useEffect(() => { load() }, [load])
 
   function resetFilters() {
     setFilters(DEFAULT_FILTERS)
     setAppliedQ('')
+  }
+
+  function recordSearchResultOpen(result: RetrievalSearchResult) {
+    if (!appliedQ) return
+    void knowledgeApi.feedback({
+      query: appliedQ,
+      object_type: 'knowledge_item',
+      object_id: result.object_id,
+      signal_type: 'opened',
+      metadata: { source: 'result_open' },
+    }).catch(() => undefined)
   }
 
   return (
@@ -78,6 +108,8 @@ export default function KnowledgePage() {
         onFiltersChange={setFilters}
         onSearch={() => setAppliedQ(filters.q.trim())}
         onReset={resetFilters}
+        searchResults={searchResults}
+        onSearchResultOpen={recordSearchResultOpen}
       />
     </div>
   )

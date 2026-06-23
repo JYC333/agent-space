@@ -72,6 +72,55 @@ describe("proposal review contracts", () => {
       result: { updated_paths: ["README.md"] },
     });
     expect(parsed.result_type).toBe("code_patch_apply");
+
+    expect(
+      ProposalAcceptOutSchema.parse({
+        proposal: { ...proposal(), status: "accepted", proposal_type: "claim_create" },
+        result_type: "claim",
+        result: { claim: { id: "claim-1" } },
+      }).result_type,
+    ).toBe("claim");
+
+    expect(
+      ProposalAcceptOutSchema.parse({
+        proposal: { ...proposal(), status: "accepted", proposal_type: "object_relation_create" },
+        result_type: "object_relation",
+        result: { object_relation: { id: "relation-1" } },
+      }).result_type,
+    ).toBe("object_relation");
+
+    expect(
+      ProposalAcceptOutSchema.parse({
+        proposal: { ...proposal(), status: "accepted", proposal_type: "object_kind_create" },
+        result_type: "object_kind",
+        result: { object_kind: { id: "kind-1" } },
+      }).result_type,
+    ).toBe("object_kind");
+
+    expect(
+      ProposalAcceptOutSchema.parse({
+        proposal: { ...proposal(), status: "accepted", proposal_type: "memory_maintenance_packet" },
+        result_type: "memory_maintenance_packet",
+        result: {
+          report_artifact_id: "artifact-1",
+          generated_child_proposal_ids: [],
+          canonical_write_performed: false,
+        },
+      }).result_type,
+    ).toBe("memory_maintenance_packet");
+
+    expect(
+      ProposalAcceptOutSchema.parse({
+        proposal: { ...proposal(), status: "accepted", proposal_type: "claim_candidate_packet" },
+        result_type: "claim_candidate_packet",
+        result: {
+          packet_artifact_id: "artifact-claim-candidates",
+          generated_child_proposal_ids: ["proposal-child-1"],
+          generated_child_proposal_count: 1,
+          canonical_write_performed: false,
+        },
+      }).result_type,
+    ).toBe("claim_candidate_packet");
   });
 
   it("parses proposal dispatch requests", () => {

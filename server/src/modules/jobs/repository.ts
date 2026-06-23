@@ -56,7 +56,7 @@ export interface EnqueueJobInput {
   job_type: string;
   payload: Record<string, unknown>;
   space_id: string;
-  user_id: string;
+  user_id: string | null;
   workspace_id?: string | null;
   agent_id?: string | null;
   priority?: number;

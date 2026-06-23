@@ -14,6 +14,7 @@ export const PROVIDER_TYPE_VALUES = [
   "anthropic",
   "openrouter",
   "ollama",
+  "zeroentropy",
   "other",
 ] as const;
 export type ProviderTypeValue = (typeof PROVIDER_TYPE_VALUES)[number];

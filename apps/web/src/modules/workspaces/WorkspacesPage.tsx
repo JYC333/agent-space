@@ -41,11 +41,11 @@ export default function WorkspacesPage() {
     scanned.current = true
 
     workspacesApi.scan()
-      .then(({ created, deleted }) => {
+      .then(({ created, marked_stale }) => {
         if (created.length > 0)
           toast.info(`Discovered ${created.length} new workspace${created.length > 1 ? 's' : ''}: ${created.map(w => w.name).join(', ')}`)
-        if (deleted.length > 0)
-          toast.info(`Removed ${deleted.length} workspace${deleted.length > 1 ? 's' : ''} whose folder was deleted: ${deleted.join(', ')}`)
+        if (marked_stale.length > 0)
+          toast.info(`Marked ${marked_stale.length} workspace${marked_stale.length > 1 ? 's' : ''} stale because the folder was not found: ${marked_stale.join(', ')}`)
       })
       .catch(() => {/* non-fatal */})
       .finally(() => load())

@@ -4,6 +4,7 @@ import type { ContextPackage } from "@agent-space/protocol" with {
 import { serializeMemoryRow } from "../memory/repository";
 import type {
   ContextEvidenceSelection,
+  ContextArtifactAttachmentSelection,
   ContextMemoryRow,
   PolicyRow,
   SessionSummaryRow,
@@ -20,6 +21,7 @@ export function buildContextPackage(input: {
   workspaceId: string | null;
   sessionSummary: SessionSummaryRow | null;
   evidenceSelections?: readonly ContextEvidenceSelection[];
+  artifactAttachments?: readonly ContextArtifactAttachmentSelection[];
 }): ContextPackage {
   const userMemory = input.memories.filter((m) => m.scope_type === "user");
   const workspaceMemory = input.memories.filter((m) => m.scope_type === "workspace");
@@ -79,10 +81,22 @@ export function buildContextPackage(input: {
   const evidenceRefs = evidenceSelections.map((selection) => selection.ref);
   sourceRefs.push(...evidenceRefs);
   dynamicTailRefs.push(...evidenceRefs);
+  const artifactAttachments = input.artifactAttachments ?? [];
+  const artifactRefs = artifactAttachments.map((selection) => selection.ref);
+  sourceRefs.push(...artifactRefs);
+  dynamicTailRefs.push(...artifactRefs);
   retrievalTrace.evidence_selection = {
     selected_count: evidenceSelections.length,
     evidence_refs: evidenceRefs,
     selection_owner: "ts_context_prepare",
+    selection_status: "selected",
+  };
+  retrievalTrace.artifact_attachment = {
+    requested_count: artifactAttachments.length,
+    attached_count: artifactAttachments.filter((selection) => selection.item.approved !== false).length,
+    blocked_count: artifactAttachments.filter((selection) => selection.item.approved === false).length,
+    artifact_refs: artifactRefs,
+    attachment_owner: "explicit_user_selection",
     selection_status: "selected",
   };
 
@@ -101,7 +115,7 @@ export function buildContextPackage(input: {
     recent_session_summary: recentSessionSummary,
     relevant_episodes: serialize(relevantEpisodes, false),
     evidence_items: evidenceSelections.map((selection) => selection.item),
-    attachments: [],
+    attachments: artifactAttachments.map((selection) => selection.item),
     active_policies: input.activePolicies.map((policy) => ({
       id: policy.id,
       name: policy.name,

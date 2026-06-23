@@ -8,7 +8,14 @@ import {
   type MemoryRow,
   type Queryable,
 } from "../memory/repository";
-import { recordValue } from "./contextPackage";
+import { HttpError } from "../routeUtils/common";
+import { canAccessProject } from "../memory/projectAccess";
+import { workspaceProjectReadAccessSql } from "../workspaces/access";
+import {
+  loadSourcePolicySnapshots,
+  loadViewerSpaceRole,
+  sourcePolicyAllowsRead,
+} from "../retrieval";
 import {
   addArrayFilter,
   clampMaxItems,
@@ -60,6 +67,7 @@ export interface RunContextRecord {
   trust_level: string | null;
   has_personal_grant_context: boolean;
   personal_grant_context_json: unknown;
+  request_json: unknown;
   system_prompt: string | null;
   capabilities_json: unknown;
   memory_policy_json: unknown;
@@ -124,6 +132,48 @@ export interface ContextEvidenceSelection {
   ref: Record<string, unknown>;
 }
 
+export interface ContextArtifactAttachmentSelection {
+  item: Record<string, unknown>;
+  ref: Record<string, unknown>;
+}
+
+export type ContextArtifactRevocationScope = "workspace" | "project";
+
+export interface ContextArtifactRevocationRecord {
+  id: string;
+  space_id: string;
+  artifact_id: string;
+  scope_type: ContextArtifactRevocationScope;
+  scope_id: string;
+  reason: string | null;
+  created_by_user_id: string | null;
+  created_at: string;
+}
+
+interface ContextArtifactRow {
+  id: string;
+  artifact_type: string;
+  title: string;
+  content: string | null;
+  metadata_json: unknown;
+  visibility: string;
+  owner_user_id: string | null;
+  project_id: string | null;
+  workspace_id: string | null;
+  created_at: unknown;
+}
+
+const CONTEXT_ATTACHABLE_ARTIFACT_TYPES = new Set([
+  "retrieval_brief",
+  "retrieval_eval_report",
+  "retrieval_explain_report",
+  "retrieval_maintenance_report",
+  "memory_maintenance_report",
+]);
+
+const MAX_CONTEXT_ARTIFACT_ATTACHMENTS = 8;
+const MAX_ATTACHMENT_CONTENT_CHARS = 6_000;
+
 interface PersonalGrantRow {
   id: string;
   granting_user_id: string;
@@ -182,6 +232,7 @@ export class PgRunContextRepository {
               r.session_id, r.instructed_by_user_id, r.capability_id, r.trigger_origin,
               r.data_exposure_level, r.trust_level,
               r.has_personal_grant_context, r.personal_grant_context_json,
+              cs.request_json,
               av.system_prompt,
               COALESCE(NULLIF(r.capabilities_json, '[]'::jsonb), av.capabilities_json) AS capabilities_json,
               av.memory_policy_json, av.model_config_json
@@ -190,6 +241,9 @@ export class PgRunContextRepository {
            ON av.id = r.agent_version_id
           AND av.space_id = r.space_id
           AND av.agent_id = r.agent_id
+         LEFT JOIN context_snapshots cs
+           ON cs.id = r.context_snapshot_id
+          AND cs.space_id = r.space_id
         WHERE r.space_id = $1 AND r.id = $2
         LIMIT 1`,
       [spaceId, runId],
@@ -197,7 +251,7 @@ export class PgRunContextRepository {
     return result.rows[0] ?? null;
   }
 
-  async retrieve(input: {
+  async retrieve(params: {
     spaceId: string;
     userId: string;
     workspaceId: string | null;
@@ -207,6 +261,11 @@ export class PgRunContextRepository {
     agentMemoryPolicy: Record<string, unknown> | null;
     includeSystemScope: boolean;
     maxMemories?: number;
+    // The run/caller's project. Activates project cutting:
+    //   undefined -> no project filtering (legacy behavior)
+    //   null      -> caller has no project: only project-free memory
+    //   "P"       -> project P's memory (only if the user can access P) + project-free
+    projectId?: string | null;
   }): Promise<{
     memories: ContextMemoryRow[];
     activePolicies: PolicyRow[];
@@ -214,6 +273,9 @@ export class PgRunContextRepository {
     retrievalTrace: Record<string, unknown>;
     tokenBudget: Record<string, unknown>;
   }> {
+    const { projectId, ...base } = params;
+    const projectFilter = await this.resolveProjectFilter(base.spaceId, base.userId, projectId);
+    const input = { ...base, projectFilter };
     const readableScopes = resolveReadableScopes(
       input.agentMemoryPolicy,
       input.includeSystemScope,
@@ -231,6 +293,9 @@ export class PgRunContextRepository {
       ],
       cross_space_blocked: true,
       private_other_user_blocked: true,
+      project_filter: projectFilter
+        ? { active: true, allowed_project_id: projectFilter.allowedProjectId }
+        : { active: false },
     };
 
     const seenIds = new Set<string>();
@@ -451,8 +516,9 @@ export class PgRunContextRepository {
    * FKs space_id, so a stale or tampered `source_memory_ids_json` could
    * otherwise drive false audit logs or suppress direct rendering of private
    * memory. Only ids that are still in this space + scope, active, undeleted,
-   * shared at the digest tier's visibility, and not `highly_restricted` survive
-   * — mirroring the generator's own eligibility filter (see loadScopeMemories).
+   * shared at the digest tier's visibility, project-free, and not
+   * `highly_restricted` survive — mirroring the generator's own eligibility
+   * filter (see loadScopeMemories).
    */
   async filterEligibleDigestMemoryIds(input: {
     spaceId: string;
@@ -475,6 +541,7 @@ export class PgRunContextRepository {
           AND ${idColumn} = $3
           AND status = 'active'
           AND deleted_at IS NULL
+          AND project_id IS NULL
           AND visibility = ANY($4::varchar[])
           AND COALESCE(sensitivity_level, 'normal') <> 'highly_restricted'
           AND id = ANY($5::varchar[])`,
@@ -503,6 +570,7 @@ export class PgRunContextRepository {
 
   async selectEvidenceForContext(input: {
     spaceId: string;
+    userId: string;
     workspaceId: string | null;
     projectId: string | null;
     runId: string | null;
@@ -514,7 +582,10 @@ export class PgRunContextRepository {
     if (input.workspaceId) {
       targets.push({ type: "workspace", id: input.workspaceId });
     }
-    if (input.projectId) {
+    if (
+      input.projectId &&
+      (await canAccessProject(this.db, input.spaceId, input.projectId, input.userId))
+    ) {
       targets.push({ type: "project", id: input.projectId });
     }
     if (input.runId) {
@@ -569,6 +640,357 @@ export class PgRunContextRepository {
       selections.push(evidenceSelectionFromRow(row));
     }
     return selections;
+  }
+
+  async selectArtifactAttachments(input: {
+    spaceId: string;
+    userId: string;
+    workspaceId?: string | null;
+    projectId?: string | null;
+    artifactIds: readonly string[];
+    ignoreRevocations?: boolean;
+  }): Promise<ContextArtifactAttachmentSelection[]> {
+    const ids = normalizeContextArtifactIds(input.artifactIds);
+    if (ids.length === 0) return [];
+    const result = await this.db.query<ContextArtifactRow>(
+      `SELECT a.id, a.artifact_type, a.title, a.content, a.metadata_json, a.visibility,
+              a.owner_user_id, a.project_id, a.workspace_id, a.created_at
+         FROM artifacts a
+        WHERE a.space_id = $1
+          AND a.id = ANY($2::varchar[])
+          AND (
+            a.visibility IN ('space_shared', 'public_template')
+            OR (
+              a.visibility = 'workspace_shared'
+              AND a.workspace_id IS NOT NULL
+              AND a.workspace_id = $4
+              AND ${workspaceProjectReadAccessSql({ spaceExpr: "a.space_id", workspaceExpr: "a.workspace_id", userExpr: "$3" })}
+            )
+            OR (a.owner_user_id IS NULL AND a.visibility NOT IN ('workspace_shared', 'restricted', 'selected_users'))
+            OR a.owner_user_id = $3
+          )`,
+      [input.spaceId, ids, input.userId, input.workspaceId ?? null],
+    );
+    const byId = new Map(result.rows.map((row) => [row.id, row]));
+    const revocations = input.ignoreRevocations
+      ? new Map<string, ContextArtifactRevocationRecord>()
+      : await this.activeArtifactRevocationsForContext({
+          spaceId: input.spaceId,
+          artifactIds: ids,
+          workspaceId: input.workspaceId ?? null,
+          projectId: input.projectId ?? null,
+        });
+    const selections: ContextArtifactAttachmentSelection[] = [];
+    for (const id of ids) {
+      const row = byId.get(id);
+      if (!row) {
+        selections.push(blockedArtifactAttachment("artifact not found or not visible"));
+        continue;
+      }
+      if (!CONTEXT_ATTACHABLE_ARTIFACT_TYPES.has(row.artifact_type)) {
+        selections.push(blockedArtifactAttachment("artifact type is not attachable to context"));
+        continue;
+      }
+      if (row.project_id && !(await canAccessProject(this.db, input.spaceId, row.project_id, input.userId))) {
+        selections.push(blockedArtifactAttachment("artifact project is not visible"));
+        continue;
+      }
+      const revocation = revocations.get(row.id);
+      if (revocation) {
+        selections.push(blockedArtifactAttachment(revocationReason(revocation)));
+        continue;
+      }
+      const sourcePolicy = await this.artifactSourcePolicyContext(
+        input.spaceId,
+        input.userId,
+        row.metadata_json,
+        row.owner_user_id !== input.userId,
+      );
+      // A source-derived artifact (e.g. a Context Brief) records the source
+      // connection ids it synthesized from. When a NON-creator attaches it, the
+      // bounded answer/citations could include source content the attaching
+      // viewer's current source policy no longer permits, so re-gate before
+      // attachment (G3). The owner attaching their own artifact is unaffected;
+      // persisted run snapshots stay immutable — only future attachment is gated.
+      if (row.owner_user_id !== input.userId && sourcePolicy.denies) {
+        selections.push(blockedArtifactAttachment("source policy no longer permits this evidence for the current viewer"));
+        continue;
+      }
+      selections.push(artifactAttachmentFromRow(row, sourcePolicy.snapshot));
+    }
+    return selections;
+  }
+
+  async listArtifactRevocations(input: {
+    spaceId: string;
+    userId: string;
+    workspaceId?: string | null;
+    projectId?: string | null;
+    artifactIds?: readonly string[];
+  }): Promise<ContextArtifactRevocationRecord[]> {
+    const scopes = await this.accessibleRevocationScopes(input);
+    if (scopes.length === 0) return [];
+    const params: unknown[] = [input.spaceId];
+    const scopePredicates = scopes.map((scope) => {
+      params.push(scope.scope_type);
+      const typeIndex = params.length;
+      params.push(scope.scope_id);
+      const idIndex = params.length;
+      return `(scope_type = $${typeIndex} AND scope_id = $${idIndex})`;
+    });
+    const ids = normalizeArtifactRevocationIds(input.artifactIds ?? []);
+    let artifactPredicate = "";
+    if (ids.length > 0) {
+      params.push(ids);
+      artifactPredicate = `AND artifact_id = ANY($${params.length}::varchar[])`;
+    }
+    const result = await this.db.query<ContextArtifactRevocationRecord>(
+      `SELECT id, space_id, artifact_id, scope_type, scope_id, reason,
+              created_by_user_id, created_at
+         FROM context_artifact_revocations
+        WHERE space_id = $1
+          AND deleted_at IS NULL
+          AND (${scopePredicates.join(" OR ")})
+          ${artifactPredicate}
+        ORDER BY created_at DESC, id DESC`,
+      params,
+    );
+    return result.rows;
+  }
+
+  async createArtifactRevocation(input: {
+    spaceId: string;
+    userId: string;
+    artifactId: string;
+    scopeType: ContextArtifactRevocationScope;
+    scopeId: string;
+    reason?: string | null;
+  }): Promise<ContextArtifactRevocationRecord> {
+    await this.assertRevocationScopeAccess(input.spaceId, input.userId, input.scopeType, input.scopeId);
+    const workspaceId = input.scopeType === "workspace" ? input.scopeId : null;
+    const projectId = input.scopeType === "project" ? input.scopeId : null;
+    const selections = await this.selectArtifactAttachments({
+      spaceId: input.spaceId,
+      userId: input.userId,
+      workspaceId,
+      projectId,
+      artifactIds: [input.artifactId],
+      ignoreRevocations: true,
+    });
+    const blocked = selections.find((selection) => selection.item.approved === false);
+    if (blocked) {
+      const reason = typeof blocked.item.rejection_reason === "string"
+        ? blocked.item.rejection_reason
+        : "artifact is not attachable";
+      throw new HttpError(422, `context artifact cannot be revoked: ${reason}`);
+    }
+    const now = new Date().toISOString();
+    const result = await this.db.query<ContextArtifactRevocationRecord>(
+      `INSERT INTO context_artifact_revocations (
+          id, space_id, artifact_id, scope_type, scope_id, reason,
+          created_by_user_id, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (space_id, artifact_id, scope_type, scope_id)
+       WHERE deleted_at IS NULL
+       DO UPDATE SET
+          reason = EXCLUDED.reason,
+          created_by_user_id = EXCLUDED.created_by_user_id,
+          created_at = EXCLUDED.created_at
+       RETURNING id, space_id, artifact_id, scope_type, scope_id, reason,
+                 created_by_user_id, created_at`,
+      [
+        randomUUID(),
+        input.spaceId,
+        input.artifactId,
+        input.scopeType,
+        input.scopeId,
+        normalizeRevocationReason(input.reason),
+        input.userId,
+        now,
+      ],
+    );
+    return result.rows[0]!;
+  }
+
+  async deleteArtifactRevocation(input: {
+    spaceId: string;
+    userId: string;
+    artifactId: string;
+    scopeType: ContextArtifactRevocationScope;
+    scopeId: string;
+  }): Promise<boolean> {
+    await this.assertRevocationScopeAccess(input.spaceId, input.userId, input.scopeType, input.scopeId);
+    const result = await this.db.query(
+      `UPDATE context_artifact_revocations
+          SET deleted_at = $6,
+              deleted_by_user_id = $2
+        WHERE space_id = $1
+          AND artifact_id = $3
+          AND scope_type = $4
+          AND scope_id = $5
+          AND deleted_at IS NULL`,
+      [
+        input.spaceId,
+        input.userId,
+        input.artifactId,
+        input.scopeType,
+        input.scopeId,
+        new Date().toISOString(),
+      ],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  private async activeArtifactRevocationsForContext(input: {
+    spaceId: string;
+    artifactIds: readonly string[];
+    workspaceId: string | null;
+    projectId: string | null;
+  }): Promise<Map<string, ContextArtifactRevocationRecord>> {
+    const scopes: Array<{ scope_type: ContextArtifactRevocationScope; scope_id: string }> = [];
+    if (input.projectId) scopes.push({ scope_type: "project", scope_id: input.projectId });
+    if (input.workspaceId) scopes.push({ scope_type: "workspace", scope_id: input.workspaceId });
+    if (scopes.length === 0 || input.artifactIds.length === 0) return new Map();
+    const params: unknown[] = [input.spaceId, [...input.artifactIds]];
+    const scopePredicates = scopes.map((scope) => {
+      params.push(scope.scope_type);
+      const typeIndex = params.length;
+      params.push(scope.scope_id);
+      const idIndex = params.length;
+      return `(scope_type = $${typeIndex} AND scope_id = $${idIndex})`;
+    });
+    const result = await this.db.query<ContextArtifactRevocationRecord>(
+      `SELECT id, space_id, artifact_id, scope_type, scope_id, reason,
+              created_by_user_id, created_at
+         FROM context_artifact_revocations
+        WHERE space_id = $1
+          AND artifact_id = ANY($2::varchar[])
+          AND deleted_at IS NULL
+          AND (${scopePredicates.join(" OR ")})
+        ORDER BY CASE WHEN scope_type = 'project' THEN 0 ELSE 1 END,
+                 created_at DESC, id DESC`,
+      params,
+    );
+    const byArtifactId = new Map<string, ContextArtifactRevocationRecord>();
+    for (const row of result.rows) {
+      if (!byArtifactId.has(row.artifact_id)) byArtifactId.set(row.artifact_id, row);
+    }
+    return byArtifactId;
+  }
+
+  private async accessibleRevocationScopes(input: {
+    spaceId: string;
+    userId: string;
+    workspaceId?: string | null;
+    projectId?: string | null;
+  }): Promise<Array<{ scope_type: ContextArtifactRevocationScope; scope_id: string }>> {
+    const scopes: Array<{ scope_type: ContextArtifactRevocationScope; scope_id: string }> = [];
+    if (input.workspaceId) {
+      await this.assertRevocationScopeAccess(input.spaceId, input.userId, "workspace", input.workspaceId);
+      scopes.push({ scope_type: "workspace", scope_id: input.workspaceId });
+    }
+    if (input.projectId) {
+      await this.assertRevocationScopeAccess(input.spaceId, input.userId, "project", input.projectId);
+      scopes.push({ scope_type: "project", scope_id: input.projectId });
+    }
+    return scopes;
+  }
+
+  private async assertRevocationScopeAccess(
+    spaceId: string,
+    userId: string,
+    scopeType: ContextArtifactRevocationScope,
+    scopeId: string,
+  ): Promise<void> {
+    const accessible = scopeType === "project"
+      ? await canAccessProject(this.db, spaceId, scopeId, userId)
+      : await this.canAccessWorkspace(spaceId, scopeId, userId);
+    if (!accessible) {
+      throw new HttpError(403, `${scopeType} scope is not accessible`);
+    }
+  }
+
+  private async canAccessWorkspace(
+    spaceId: string,
+    workspaceId: string,
+    userId: string,
+  ): Promise<boolean> {
+    const result = await this.db.query<{ one: number }>(
+      `SELECT 1 AS one
+         FROM workspaces w
+        WHERE w.space_id = $1
+          AND w.id = $2
+          AND ${workspaceProjectReadAccessSql({ spaceExpr: "w.space_id", workspaceExpr: "w.id", userExpr: "$3" })}
+        LIMIT 1`,
+      [spaceId, workspaceId, userId],
+    );
+    return result.rows.length > 0;
+  }
+
+  /**
+   * Build the policy preview shown for artifact attachments, and report whether
+   * current source read policy denies the attaching viewer. Fail closed when a
+   * named connection has no readable snapshot.
+   */
+  private async artifactSourcePolicyContext(
+    spaceId: string,
+    userId: string,
+    metadataJson: unknown,
+    enforceForAttachment: boolean,
+  ): Promise<{ denies: boolean; snapshot: Record<string, unknown> }> {
+    const metadata = recordValue(metadataJson);
+    const ids = sourceConnectionIdsFromArtifactMetadata(metadataJson);
+    const baseSnapshot = sourcePolicySnapshot(metadata, {
+      sourceConnectionIds: ids,
+      sourcePolicySnapshots: {},
+      readerGate: {
+        evaluated: ids.length > 0,
+        enforced_for_attachment: enforceForAttachment,
+        allowed: true,
+        allowed_count: 0,
+        denied_count: 0,
+        missing_count: 0,
+      },
+    });
+    if (ids.length === 0) return { denies: false, snapshot: baseSnapshot };
+    const [snapshots, viewerSpaceRole] = await Promise.all([
+      loadSourcePolicySnapshots(this.db, spaceId, ids),
+      loadViewerSpaceRole(this.db, spaceId, userId),
+    ]);
+    const sourcePolicySnapshots: Record<string, unknown> = {};
+    let allowedCount = 0;
+    let deniedCount = 0;
+    let missingCount = 0;
+    for (const [id, snapshot] of snapshots.entries()) {
+      sourcePolicySnapshots[id] = snapshot;
+    }
+    for (const id of ids) {
+      const snapshot = snapshots.get(id);
+      const allowed = snapshot
+        ? sourcePolicyAllowsRead(snapshot, { viewerUserId: userId, viewerSpaceRole })
+        : false;
+      if (allowed) allowedCount += 1;
+      else deniedCount += 1;
+      if (!snapshot) missingCount += 1;
+    }
+    const denies = deniedCount > 0;
+    return {
+      denies,
+      snapshot: sourcePolicySnapshot(metadata, {
+        sourceConnectionIds: ids,
+        sourcePolicySnapshots,
+        readerGate: {
+          evaluated: true,
+          enforced_for_attachment: enforceForAttachment,
+          allowed: !denies,
+          allowed_count: allowedCount,
+          denied_count: deniedCount,
+          missing_count: missingCount,
+          viewer_space_role: viewerSpaceRole,
+        },
+      }),
+    };
   }
 
   async loadDigestBundle(input: {
@@ -759,6 +1181,23 @@ export class PgRunContextRepository {
     );
   }
 
+  /**
+   * Resolve the project cut for the per-run retriever. `undefined` projectId
+   * means no project filtering. Otherwise only project-free memory plus the
+   * caller's bound project survive, and the bound project is only admitted when
+   * the instructing user can actually access it.
+   */
+  private async resolveProjectFilter(
+    spaceId: string,
+    userId: string,
+    projectId: string | null | undefined,
+  ): Promise<{ allowedProjectId: string | null } | undefined> {
+    if (projectId === undefined) return undefined;
+    if (projectId === null) return { allowedProjectId: null };
+    const accessible = await canAccessProject(this.db, spaceId, projectId, userId);
+    return { allowedProjectId: accessible ? projectId : null };
+  }
+
   private async symbolMatch(input: {
     spaceId: string;
     userId: string;
@@ -767,6 +1206,7 @@ export class PgRunContextRepository {
     capabilityId?: string | null;
     readableScopes: ReadonlySet<string>;
     includeSystemScope: boolean;
+    projectFilter?: { allowedProjectId: string | null };
   }): Promise<ContextMemoryRow[]> {
     if (input.readableScopes.size === 0) return [];
     const result = await this.db.query<ContextMemoryRow>(
@@ -805,6 +1245,7 @@ export class PgRunContextRepository {
     seedIds: Set<string>;
     readableScopes: ReadonlySet<string>;
     includeSystemScope: boolean;
+    projectFilter?: { allowedProjectId: string | null };
   }): Promise<{ rows: ContextMemoryRow[]; hopsUsed: number }> {
     let frontier = new Set(input.seedIds);
     const allFound: ContextMemoryRow[] = [];
@@ -849,6 +1290,7 @@ export class PgRunContextRepository {
     query: string | null;
     readableScopes: ReadonlySet<string>;
     includeSystemScope: boolean;
+    projectFilter?: { allowedProjectId: string | null };
   }): Promise<ContextMemoryRow[]> {
     if (!input.query?.trim() || input.readableScopes.size === 0) return [];
     const result = await this.db.query<ContextMemoryRow>(
@@ -876,6 +1318,7 @@ export class PgRunContextRepository {
     ids: string[];
     includeSystemScope: boolean;
     maxMemories: number;
+    projectFilter?: { allowedProjectId: string | null };
   }): Promise<ContextMemoryRow[]> {
     if (input.ids.length === 0) return [];
     const rows = hardFilterRows(
@@ -1058,4 +1501,314 @@ export class PgRunContextRepository {
       [randomUUID(), input.spaceId, input.evidenceId, input.runId, now],
     );
   }
+}
+
+function normalizeContextArtifactIds(ids: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids) {
+    const value = typeof id === "string" ? id.trim() : "";
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+    if (out.length >= MAX_CONTEXT_ARTIFACT_ATTACHMENTS) break;
+  }
+  return out;
+}
+
+function normalizeArtifactRevocationIds(ids: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids) {
+    const value = typeof id === "string" ? id.trim() : "";
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+    if (out.length >= 100) break;
+  }
+  return out;
+}
+
+function normalizeRevocationReason(reason: string | null | undefined): string | null {
+  if (typeof reason !== "string") return null;
+  const trimmed = reason.trim();
+  return trimmed ? trimmed.slice(0, 512) : null;
+}
+
+function revocationReason(revocation: ContextArtifactRevocationRecord): string {
+  const base = `artifact is revoked for this ${revocation.scope_type} context`;
+  return revocation.reason ? `${base}: ${revocation.reason}` : base;
+}
+
+function blockedArtifactAttachment(reason: string): ContextArtifactAttachmentSelection {
+  return {
+    item: {
+      attachment_type: "artifact_evidence_pack",
+      label: "Blocked artifact evidence pack",
+      approved: false,
+      rejection_reason: reason,
+    },
+    ref: {
+      source_type: "artifact",
+      source_id: null,
+      section: "dynamic_tail",
+      attachment_type: "artifact_evidence_pack",
+      included: false,
+      rejection_reason: reason,
+    },
+  };
+}
+
+function artifactAttachmentFromRow(
+  row: ContextArtifactRow,
+  attachmentSourcePolicySnapshot?: Record<string, unknown>,
+): ContextArtifactAttachmentSelection {
+  const metadata = recordValue(row.metadata_json);
+  const rendered = renderArtifactEvidencePack(row, metadata);
+  const domainLabel = artifactDomainLabel(row.artifact_type, metadata);
+  const sourcePolicy = attachmentSourcePolicySnapshot ?? sourcePolicySnapshot(metadata);
+  const ref = {
+    source_type: "artifact",
+    source_id: row.id,
+    artifact_type: row.artifact_type,
+    title: row.title,
+    domain_label: domainLabel,
+    visibility: row.visibility,
+    owner_user_id: row.owner_user_id,
+    project_id: row.project_id,
+    workspace_id: row.workspace_id,
+    section: "dynamic_tail",
+    attachment_type: "artifact_evidence_pack",
+    included: true,
+    content_mode: "bounded_summary",
+    raw_artifact_content_included: false,
+    created_at: isoOrNull(row.created_at),
+    egress_policy_snapshot: recordValue(metadata.egress_policy_snapshot),
+    source_policy_snapshot: sourcePolicy,
+  };
+  return {
+    item: {
+      attachment_type: "artifact_evidence_pack",
+      artifact_id: row.id,
+      artifact_type: row.artifact_type,
+      label: row.title,
+      domain_label: domainLabel,
+      approved: true,
+      resolved_content: truncateText(rendered, MAX_ATTACHMENT_CONTENT_CHARS),
+      policy_snapshot: {
+        visibility: row.visibility,
+        owner_user_id: row.owner_user_id,
+        project_id: row.project_id,
+        workspace_id: row.workspace_id,
+        content_mode: "bounded_summary",
+        raw_artifact_content_included: false,
+      },
+      source_policy_snapshot: sourcePolicy,
+    },
+    ref,
+  };
+}
+
+function renderArtifactEvidencePack(row: ContextArtifactRow, metadata: Record<string, unknown>): string {
+  const lines = [
+    `Artifact: ${row.title}`,
+    `Artifact ID: ${row.id}`,
+    `Artifact type: ${row.artifact_type}`,
+    `Domain: ${artifactDomainLabel(row.artifact_type, metadata)}`,
+  ];
+
+  if (row.artifact_type === "retrieval_brief") {
+    appendLine(lines, "Surface", stringValue(metadata.surface));
+    appendLine(lines, "Query", stringValue(metadata.query));
+    appendLine(lines, "Answer", stringValue(metadata.answer));
+    const citations = arrayValue(metadata.citations).slice(0, 8).map((item) => {
+      const citation = recordValue(item);
+      return `- ${stringValue(citation.title) ?? stringValue(citation.ref_id) ?? "citation"}`;
+    });
+    if (citations.length > 0) lines.push("Citations:", ...citations);
+    const gaps = recordValue(metadata.gap_analysis);
+    const gapCodes = [
+      ...arrayValue(gaps.deterministic_signals).map((item) => stringValue(recordValue(item).kind)).filter(isString),
+      ...arrayValue(gaps.llm_signals).map((item) => stringValue(recordValue(item).kind)).filter(isString),
+    ];
+    if (gapCodes.length > 0) lines.push(`Gap signals: ${gapCodes.slice(0, 12).join(", ")}`);
+    return lines.join("\n");
+  }
+
+  if (row.artifact_type === "retrieval_eval_report") {
+    appendLine(lines, "Source", stringValue(metadata.source));
+    appendLine(lines, "Suite", stringValue(metadata.suite));
+    lines.push(`Diagnostic codes: ${stringArray(metadata.diagnostic_codes).join(", ") || "none"}`);
+    lines.push(`Metrics: ${JSON.stringify(recordValue(metadata.metrics))}`);
+    lines.push(`Counts: ${JSON.stringify(recordValue(metadata.counts))}`);
+    return lines.join("\n");
+  }
+
+  if (row.artifact_type === "retrieval_explain_report") {
+    lines.push(`Diagnostic codes: ${stringArray(metadata.diagnostic_codes).join(", ") || "none"}`);
+    appendRetrievalExplainSummary(lines, metadata);
+    return lines.join("\n");
+  }
+
+  if (row.artifact_type === "retrieval_maintenance_report" || row.artifact_type === "memory_maintenance_report") {
+    lines.push(`Counts: ${JSON.stringify(recordValue(metadata.counts))}`);
+    const findings = arrayValue(metadata.findings).slice(0, 10).map((item) => {
+      const finding = recordValue(item);
+      return `- ${stringValue(finding.kind) ?? "finding"}: ${stringValue(finding.reason) ?? ""}`.trim();
+    });
+    if (findings.length > 0) lines.push("Findings:", ...findings);
+    return lines.join("\n");
+  }
+
+  const parsedContent = parseJsonObject(row.content);
+  if (parsedContent) lines.push(`Summary: ${JSON.stringify(parsedContent).slice(0, 2000)}`);
+  return lines.join("\n");
+}
+
+function appendRetrievalExplainSummary(lines: string[], metadata: Record<string, unknown>): void {
+  const target = recordValue(metadata.target);
+  const match = recordValue(metadata.match);
+  appendLine(lines, "Target type", stringValue(target.object_type) ?? stringValue(target.type));
+  appendLine(lines, "Target visibility", stringValue(target.visibility));
+  appendLine(lines, "Target status", stringValue(target.status));
+  const returned = boolValue(target.returned);
+  if (returned !== null) lines.push(`Target returned: ${returned ? "yes" : "no"}`);
+
+  const rank = numberValue(match.rank);
+  if (rank !== null) lines.push(`Match rank: ${rank}`);
+  const score = numberValue(match.score);
+  if (score !== null) lines.push(`Match score: ${Number(score.toFixed(4))}`);
+  const sourceTypes = stringArray(match.source_types);
+  if (sourceTypes.length > 0) lines.push(`Match source types: ${sourceTypes.slice(0, 8).join(", ")}`);
+  const matchedFields = stringArray(match.matched_fields);
+  if (matchedFields.length > 0) lines.push(`Matched fields: ${matchedFields.slice(0, 8).join(", ")}`);
+  const reasons = stringArray(match.reasons);
+  if (reasons.length > 0) lines.push("Match reasons:", ...reasons.slice(0, 6).map((reason) => `- ${reason}`));
+}
+
+function artifactDomainLabel(type: string, metadata: Record<string, unknown>): string {
+  if (type === "memory_maintenance_report") return "memory.maintenance";
+  if (type === "retrieval_maintenance_report") return "knowledge.retrieval.maintenance";
+  if (type === "retrieval_eval_report") {
+    return stringValue(metadata.suite) === "retrieval_quality_feedback_loop"
+      ? "knowledge.retrieval.diagnostics"
+      : "knowledge.retrieval.eval";
+  }
+  if (type === "retrieval_explain_report") return "knowledge.retrieval.explain";
+  if (type === "retrieval_brief") return stringValue(metadata.surface) ?? "retrieval.brief";
+  return type;
+}
+
+function sourceConnectionIdsFromArtifactMetadata(metadataJson: unknown): string[] {
+  const metadata = recordValue(metadataJson);
+  const ids = new Set<string>();
+  for (const value of arrayValue(metadata.source_connection_ids)) {
+    if (typeof value === "string" && value.trim()) ids.add(value.trim());
+  }
+  for (const sourceRef of arrayValue(metadata.source_refs)) {
+    const id = recordValue(sourceRef).source_connection_id;
+    if (typeof id === "string" && id.trim()) ids.add(id.trim());
+  }
+  // Fall back to per-item source refs for briefs that predate the aggregated list.
+  for (const ref of arrayValue(metadata.item_refs)) {
+    for (const sourceRef of arrayValue(recordValue(ref).source_refs)) {
+      const id = recordValue(sourceRef).source_connection_id;
+      if (typeof id === "string" && id.trim()) ids.add(id.trim());
+    }
+  }
+  return [...ids];
+}
+
+function sourcePolicySnapshot(
+  metadata: Record<string, unknown>,
+  options: {
+    sourceConnectionIds?: readonly string[];
+    sourcePolicySnapshots?: Record<string, unknown>;
+    readerGate?: Record<string, unknown>;
+  } = {},
+): Record<string, unknown> {
+  const egress = recordValue(metadata.egress_policy_snapshot);
+  const settings = recordValue(metadata.settings_snapshot);
+  const sourceRefs = arrayValue(metadata.source_refs);
+  const sourceConnectionIds = options.sourceConnectionIds
+    ? [...options.sourceConnectionIds]
+    : sourceConnectionIdsFromArtifactMetadata(metadata);
+  return {
+    egress_policy_snapshot: egress,
+    settings_snapshot: settings,
+    source_ref_count: sourceRefs.length,
+    source_connection_ids: sourceConnectionIds,
+    source_connection_count: sourceConnectionIds.length,
+    source_policy_snapshots: options.sourcePolicySnapshots ?? {},
+    current_reader_gate: options.readerGate ?? {
+      evaluated: sourceConnectionIds.length > 0,
+      enforced_for_attachment: false,
+      allowed: true,
+      allowed_count: 0,
+      denied_count: 0,
+      missing_count: 0,
+    },
+  };
+}
+
+function appendLine(lines: string[], label: string, value: string | null): void {
+  if (value) lines.push(`${label}: ${value}`);
+}
+
+function parseJsonObject(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    return recordValue(JSON.parse(value) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+function truncateText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars - 32)}\n[truncated for context attachment]`;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringArray(value: unknown): string[] {
+  return arrayValue(value).filter(isString);
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function numberValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function boolValue(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function isoOrNull(value: unknown): string | null {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  if (typeof value === "string" && value.trim()) {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+  return null;
 }

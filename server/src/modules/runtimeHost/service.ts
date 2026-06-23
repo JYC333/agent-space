@@ -38,18 +38,31 @@ function modelEvents({
   text,
   usage,
   startedAt,
+  toolCalls,
+  finishReason,
 }: {
   model: string;
   text: string;
   usage: CanonicalUsage | null;
   startedAt: string;
+  toolCalls?: Array<{ id: string; name: string; arguments_json: string }>;
+  finishReason?: string | null;
 }): CanonicalModelEvent[] {
   const events: CanonicalModelEvent[] = [
     { type: "model.message_start", model, occurred_at: startedAt },
   ];
   if (text) events.push({ type: "model.text_delta", delta: text });
+  for (const [index, call] of (toolCalls ?? []).entries()) {
+    events.push({
+      type: "model.tool_call_delta",
+      index,
+      id: call.id,
+      name: call.name,
+      arguments_delta: call.arguments_json,
+    });
+  }
   if (usage) events.push({ type: "model.usage", usage });
-  events.push({ type: "model.message_stop", finish_reason: "stop" });
+  events.push({ type: "model.message_stop", finish_reason: finishReason ?? "stop" });
   return events;
 }
 
@@ -101,13 +114,22 @@ export async function executeRuntimeHost(
   const startedAt = nowIso();
   const toolMode = input.tool_mode ?? "disabled";
   const toolBindings = input.tool_bindings ?? [];
+  const tools = input.tools ?? [];
 
-  if (toolMode !== "disabled" || toolBindings.length > 0) {
+  if (toolMode !== "disabled" && toolMode !== "authorized_bindings") {
     return failureResponse(
       input,
       startedAt,
       "runtime_tools_not_implemented",
       "server runtime host tool execution is not enabled yet.",
+    );
+  }
+  if (toolMode === "disabled" && (toolBindings.length > 0 || tools.length > 0)) {
+    return failureResponse(
+      input,
+      startedAt,
+      "runtime_tools_disabled",
+      "Runtime-host tools were provided while tool_mode is disabled.",
     );
   }
 
@@ -122,15 +144,20 @@ export async function executeRuntimeHost(
         messages: input.messages?.length
           ? input.messages.map((message) => ({
               role: message.role,
-              content: message.content ?? "",
+              content: message.content,
+              tool_calls: message.tool_calls,
+              tool_call_id: message.tool_call_id,
+              name: message.name,
             }))
           : [{ role: "user", content: input.prompt }],
         max_tokens: input.max_tokens,
         task: "runtime_host",
+        tools: toolMode === "authorized_bindings" ? tools : undefined,
       },
     );
     const completedAt = nowIso();
     const usage = normalizeUsage(result.usage);
+    const toolCalls = result.tool_calls ?? [];
     return {
       success: true,
       stdout: result.text,
@@ -140,6 +167,7 @@ export async function executeRuntimeHost(
         adapter_type: "ts_agent_host",
         model: result.model,
         usage,
+        ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
       },
       exit_code: 0,
       error_code: null,
@@ -153,12 +181,15 @@ export async function executeRuntimeHost(
         text: result.text,
         usage,
         startedAt,
+        toolCalls,
+        finishReason: result.finish_reason,
       }),
       adapter_metadata: {
         adapter_type: "ts_agent_host",
         run_id: input.run_id,
         model_provider_id: input.model_provider_id,
-        tool_mode: "disabled",
+        tool_mode: toolMode,
+        tool_count: tools.length,
       },
       adapter_log_json: {
         events_source: "provider_text_completion",
@@ -169,7 +200,9 @@ export async function executeRuntimeHost(
       return failureResponse(
         input,
         startedAt,
-        "provider_invocation_failed",
+        // Preserve a specific code (e.g. runtime_tool_provider_unsupported) so the
+        // managed-run tool loop can degrade to a no-tool turn instead of failing.
+        error.code ?? "provider_invocation_failed",
         error.message,
       );
     }

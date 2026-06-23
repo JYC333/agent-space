@@ -377,6 +377,10 @@ export type MemoryProposalCreateResult = z.infer<
  * appear as user memory hits; pass it (or an explicit `scope=system`) to include
  * them.
  */
+// Memory search is identity-scoped: the surface intentionally has no space_id /
+// user_id fields. The server derives both from the authenticated identity, so a
+// request can never search another space or impersonate another user
+// (SECURITY_AND_ACCESS_BOUNDARIES §2).
 export const MemorySearchRequestSchema = z
   .object({
     query: z.string(),
@@ -384,8 +388,6 @@ export const MemorySearchRequestSchema = z
     namespace: z.string().nullish(),
     type: z.string().nullish(),
     limit: z.number().int().nonnegative().default(10),
-    space_id: IdSchema.nullish(),
-    user_id: IdSchema.nullish(),
     workspace_id: IdSchema.nullish(),
     include_system: z.boolean().default(false),
   })
@@ -435,6 +437,151 @@ export const MemoryReadTraceSchema = z
   .passthrough();
 export type MemoryReadTrace = z.infer<typeof MemoryReadTraceSchema>;
 
+export const MemoryMaintenanceFindingKindSchema = z.enum([
+  "duplicate",
+  "stale",
+  "thin",
+  "lifecycle_drift",
+  "archived_state_drift",
+  "project_drift",
+  "source_policy_drift",
+  "contradiction",
+]);
+export type MemoryMaintenanceFindingKind = z.infer<typeof MemoryMaintenanceFindingKindSchema>;
+
+export const MemoryMaintenanceObjectSchema = z
+  .object({
+    object_type: z.literal("memory_entry"),
+    object_id: IdSchema,
+    title: z.string().nullable(),
+  })
+  .strict();
+export type MemoryMaintenanceObject = z.infer<typeof MemoryMaintenanceObjectSchema>;
+
+export const MemoryMaintenanceFindingSchema = z
+  .object({
+    kind: MemoryMaintenanceFindingKindSchema,
+    objects: z.array(MemoryMaintenanceObjectSchema),
+    reason: z.string(),
+    cluster_key: z.string().trim().min(1).max(160).optional(),
+    cluster_label: z.string().trim().min(1).max(240).optional(),
+    confidence_tier: z.enum(["high", "medium", "low"]).optional(),
+    proposed_action: z.record(z.unknown()).nullable().optional(),
+  })
+  .strict();
+export type MemoryMaintenanceFinding = z.infer<typeof MemoryMaintenanceFindingSchema>;
+
+export const MemoryMaintenanceScanRequestSchema = z
+  .object({
+    persist_report: z.boolean().default(true),
+    create_packet: z.boolean().default(false),
+    limit: z.number().int().positive().max(1000).default(500),
+    stale_after_days: z.number().int().positive().max(3650).default(180),
+    thin_content_chars: z.number().int().positive().max(1000).default(80),
+    max_findings: z.number().int().positive().max(200).default(100),
+    review_scope: z.enum(["private", "space_ops"]).default("private"),
+    project_id: IdSchema.nullish(),
+    scan_mode: z.enum(["recent", "full"]).default("recent"),
+    cursor: z.string().trim().min(1).max(256).optional(),
+    job_id: IdSchema.optional(),
+  })
+  .strict();
+export type MemoryMaintenanceScanRequest = z.infer<typeof MemoryMaintenanceScanRequestSchema>;
+
+export const MemoryMaintenanceJobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
+export type MemoryMaintenanceJobStatus = z.infer<typeof MemoryMaintenanceJobStatusSchema>;
+
+export const MemoryMaintenanceReportSchema = z
+  .object({
+    findings: z.array(MemoryMaintenanceFindingSchema),
+    counts: z.record(z.number().int().nonnegative()),
+    candidate_limit: z.number().int().positive(),
+    candidates_examined: z.number().int().nonnegative(),
+    scanned: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    scan_mode: z.enum(["recent", "full"]).optional(),
+    next_cursor: z.string().nullable().optional(),
+    job_id: IdSchema.optional(),
+    job_status: MemoryMaintenanceJobStatusSchema.optional(),
+    artifact_id: IdSchema.optional(),
+    proposal_id: IdSchema.optional(),
+    access_safety: z.record(z.unknown()).optional(),
+    ...SecretResponseGuards,
+  })
+  .strict();
+export type MemoryMaintenanceReport = z.infer<typeof MemoryMaintenanceReportSchema>;
+
+export const MemoryMaintenanceJobCreateRequestSchema = MemoryMaintenanceScanRequestSchema.omit({
+  cursor: true,
+  job_id: true,
+}).extend({
+  scan_mode: z.literal("full").default("full"),
+});
+export type MemoryMaintenanceJobCreateRequest = z.infer<typeof MemoryMaintenanceJobCreateRequestSchema>;
+
+export const MemoryMaintenanceJobSchema = z
+  .object({
+    id: IdSchema,
+    space_id: IdSchema,
+    owner_user_id: IdSchema,
+    status: MemoryMaintenanceJobStatusSchema,
+    review_scope: z.enum(["private", "space_ops"]),
+    scan_options: z.record(z.unknown()),
+    cursor: z.string().nullable(),
+    total_scanned: z.number().int().nonnegative(),
+    total_findings: z.number().int().nonnegative(),
+    last_report_artifact_id: IdSchema.nullish(),
+    last_packet_proposal_id: IdSchema.nullish(),
+    error_message: z.string().nullable(),
+    created_at: ISODateTimeSchema,
+    updated_at: ISODateTimeSchema,
+    completed_at: ISODateTimeSchema.nullish(),
+    ...SecretResponseGuards,
+  })
+  .strict();
+export type MemoryMaintenanceJob = z.infer<typeof MemoryMaintenanceJobSchema>;
+
+export const MemoryMaintenanceJobRunResponseSchema = z
+  .object({
+    job: MemoryMaintenanceJobSchema,
+    report: MemoryMaintenanceReportSchema.nullable(),
+    ...SecretResponseGuards,
+  })
+  .strict();
+export type MemoryMaintenanceJobRunResponse = z.infer<typeof MemoryMaintenanceJobRunResponseSchema>;
+
+export const MemoryAccessLogEntrySchema = z
+  .object({
+    id: IdSchema,
+    space_id: IdSchema,
+    memory_id: IdSchema,
+    user_id: IdSchema.nullish(),
+    agent_id: IdSchema.nullish(),
+    run_id: IdSchema.nullish(),
+    access_type: z.string(),
+    reason: z.string().nullish(),
+    accessed_at: ISODateTimeSchema,
+    memory_title: z.string().nullable(),
+    memory_scope: z.string().nullable(),
+    memory_visibility: z.string().nullable(),
+    project_id: IdSchema.nullish(),
+    ...SecretResponseGuards,
+  })
+  .strict();
+export type MemoryAccessLogEntry = z.infer<typeof MemoryAccessLogEntrySchema>;
+
+export const MemoryAccessLogListResponseSchema = z
+  .object({
+    items: z.array(MemoryAccessLogEntrySchema),
+    limit: z.number().int().positive(),
+    offset: z.number().int().nonnegative(),
+    returned: z.number().int().nonnegative(),
+    has_more: z.boolean(),
+    ...SecretResponseGuards,
+  })
+  .strict();
+export type MemoryAccessLogListResponse = z.infer<typeof MemoryAccessLogListResponseSchema>;
+
 export const ContextSourceRefSchema = z
   .object({
     source_type: z.string(),
@@ -457,8 +604,62 @@ export const ContextBuildRequestSchema = z.object({
   run_id: IdSchema.nullish(),
   query: z.string().nullish(),
   agent_id: IdSchema.nullish(),
+  context_artifact_ids: z.array(IdSchema).max(8).default([]),
 });
 export type ContextBuildRequest = z.infer<typeof ContextBuildRequestSchema>;
+
+export const ContextArtifactRevocationScopeSchema = z.enum(["workspace", "project"]);
+export type ContextArtifactRevocationScope = z.infer<typeof ContextArtifactRevocationScopeSchema>;
+
+export const ContextArtifactRevocationSchema = z
+  .object({
+    id: IdSchema,
+    space_id: IdSchema,
+    artifact_id: IdSchema,
+    scope_type: ContextArtifactRevocationScopeSchema,
+    scope_id: IdSchema,
+    reason: z.string().nullish(),
+    created_by_user_id: IdSchema.nullish(),
+    created_at: ISODateTimeSchema,
+    ...SecretResponseGuards,
+  })
+  .strict();
+export type ContextArtifactRevocation = z.infer<typeof ContextArtifactRevocationSchema>;
+
+export const ContextArtifactRevocationCreateRequestSchema = z
+  .object({
+    artifact_id: IdSchema,
+    scope_type: ContextArtifactRevocationScopeSchema,
+    scope_id: IdSchema,
+    reason: z.string().max(512).nullish(),
+  })
+  .strict();
+export type ContextArtifactRevocationCreateRequest = z.infer<typeof ContextArtifactRevocationCreateRequestSchema>;
+
+export const ContextArtifactRevocationListResponseSchema = z
+  .object({
+    items: z.array(ContextArtifactRevocationSchema),
+    ...SecretResponseGuards,
+  })
+  .strict();
+export type ContextArtifactRevocationListResponse = z.infer<typeof ContextArtifactRevocationListResponseSchema>;
+
+export const ContextArtifactAttachmentSchema = z
+  .object({
+    attachment_type: z.literal("artifact_evidence_pack"),
+    artifact_id: IdSchema.optional(),
+    artifact_type: z.string().optional(),
+    label: z.string(),
+    domain_label: z.string().optional(),
+    approved: z.boolean(),
+    resolved_content: z.string().optional(),
+    rejection_reason: z.string().optional(),
+    policy_snapshot: TraceSafeObjectSchema.optional(),
+    source_policy_snapshot: TraceSafeObjectSchema.optional(),
+    ...SecretResponseGuards,
+  })
+  .strict();
+export type ContextArtifactAttachment = z.infer<typeof ContextArtifactAttachmentSchema>;
 
 export const ContextPackageSchema = z
   .object({
@@ -470,7 +671,7 @@ export const ContextPackageSchema = z
     recent_session_summary: z.array(SessionSummaryForContextSchema).default([]),
     relevant_episodes: z.array(MemoryOutSchema).default([]),
     evidence_items: z.array(TraceSafeObjectSchema).default([]),
-    attachments: z.array(TraceSafeObjectSchema).default([]),
+    attachments: z.array(ContextArtifactAttachmentSchema.or(TraceSafeObjectSchema)).default([]),
     active_policies: z.array(TraceSafeObjectSchema).default([]),
     stable_prefix_refs: z.array(ContextSourceRefSchema).default([]),
     dynamic_tail_refs: z.array(ContextSourceRefSchema).default([]),

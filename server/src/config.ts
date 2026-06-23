@@ -72,8 +72,15 @@ export interface ServerConfig {
   memoryAccessLogRetentionEnabled: boolean;
   memoryAccessLogRetentionDays: number;
   memoryAccessLogPruneIntervalSeconds: number;
+  memoryMaintenanceSchedulerEnabled: boolean;
+  memoryMaintenanceSchedulerIntervalSeconds: number;
+  memoryMaintenanceSchedulerBatchLimit: number;
   intakeExtractionSchedulerEnabled: boolean;
   intakeExtractionSchedulerIntervalSeconds: number;
+  /** Legacy env gate parsed for older env files; route enablement is space-scoped. */
+  retrievalRerankEnabled: boolean;
+  /** Legacy env gate parsed for older env files; route enablement is space-scoped. */
+  retrievalQueryRewriteEnabled: boolean;
   agentSpaceEnv: string;
   appVersion: string | null;
   enableSystemEvolution: boolean;
@@ -137,6 +144,9 @@ const KNOWN_ENV_KEYS = new Set([
   "SERVER_MEMORY_ACCESS_LOG_RETENTION_ENABLED",
   "SERVER_MEMORY_ACCESS_LOG_RETENTION_DAYS",
   "SERVER_MEMORY_ACCESS_LOG_PRUNE_INTERVAL_SECONDS",
+  "SERVER_MEMORY_MAINTENANCE_SCHEDULER_ENABLED",
+  "SERVER_MEMORY_MAINTENANCE_SCHEDULER_INTERVAL_SECONDS",
+  "SERVER_MEMORY_MAINTENANCE_SCHEDULER_BATCH_LIMIT",
   "SERVER_INTAKE_EXTRACTION_SCHEDULER_ENABLED",
   "SERVER_INTAKE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS",
   "AGENT_SPACE_ENV",
@@ -438,6 +448,24 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     300,
     86_400,
   );
+  const memoryMaintenanceSchedulerEnabled = parseBool(
+    env.SERVER_MEMORY_MAINTENANCE_SCHEDULER_ENABLED,
+    true,
+  );
+  const memoryMaintenanceSchedulerIntervalSeconds = parseBoundedInt(
+    env.SERVER_MEMORY_MAINTENANCE_SCHEDULER_INTERVAL_SECONDS,
+    900,
+    "SERVER_MEMORY_MAINTENANCE_SCHEDULER_INTERVAL_SECONDS",
+    60,
+    86_400,
+  );
+  const memoryMaintenanceSchedulerBatchLimit = parseBoundedInt(
+    env.SERVER_MEMORY_MAINTENANCE_SCHEDULER_BATCH_LIMIT,
+    5,
+    "SERVER_MEMORY_MAINTENANCE_SCHEDULER_BATCH_LIMIT",
+    1,
+    100,
+  );
   const intakeExtractionSchedulerEnabled = parseBool(
     env.SERVER_INTAKE_EXTRACTION_SCHEDULER_ENABLED,
     true,
@@ -449,6 +477,11 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     5,
     3600,
   );
+  // Legacy compatibility for pre-space-setting local env files. The active
+  // retrieval LLM-stage gate is `space_retrieval_settings`; these keys remain
+  // deliberately absent from KNOWN_ENV_KEYS.
+  const retrievalRerankEnabled = parseBool(env.SERVER_RETRIEVAL_RERANK_ENABLED, false);
+  const retrievalQueryRewriteEnabled = parseBool(env.SERVER_RETRIEVAL_QUERY_REWRITE_ENABLED, false);
   const agentSpaceEnv = env.AGENT_SPACE_ENV?.trim() || "";
   const appVersion = env.APP_VERSION?.trim() || null;
   const enableSystemEvolution = parseBool(env.ENABLE_SYSTEM_EVOLUTION, false);
@@ -510,8 +543,13 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     memoryAccessLogRetentionEnabled,
     memoryAccessLogRetentionDays,
     memoryAccessLogPruneIntervalSeconds,
+    memoryMaintenanceSchedulerEnabled,
+    memoryMaintenanceSchedulerIntervalSeconds,
+    memoryMaintenanceSchedulerBatchLimit,
     intakeExtractionSchedulerEnabled,
     intakeExtractionSchedulerIntervalSeconds,
+    retrievalRerankEnabled,
+    retrievalQueryRewriteEnabled,
     agentSpaceEnv,
     appVersion,
     backupEnabled,

@@ -42,10 +42,19 @@ class FakeDb implements Queryable {
   artifacts: unknown[][] = [];
   proposals: unknown[][] = [];
 
+  constructor(private readonly projectIds = new Set(["project-1"])) {}
+
   async query<Row = Record<string, unknown>>(
     sql: string,
     params: readonly unknown[] = [],
   ): Promise<QueryResult<Row>> {
+    if (sql.includes("FROM projects")) {
+      const id = String(params[0] ?? "");
+      return {
+        rows: (this.projectIds.has(id) ? [{ id }] : []) as Row[],
+        rowCount: null,
+      };
+    }
     if (sql.includes("INSERT INTO artifacts")) {
       this.artifacts.push([...params]);
       return { rows: [], rowCount: 1 };
@@ -92,6 +101,7 @@ describe("RunMaterializationService", () => {
               title: "Report",
               content: "ok",
               mime_type: "text/markdown",
+              visibility: "private",
               metadata_json: { section: "summary" },
             },
           ],
@@ -156,8 +166,14 @@ describe("RunMaterializationService", () => {
 
     expect(db.artifacts[2][5]).toBe("ok");
     expect(db.artifacts[2][7]).toBe("text/markdown");
+    expect(db.artifacts[0][12]).toBe("space_shared");
+    expect(db.artifacts[1][12]).toBe("space_shared");
+    expect(db.artifacts[2][12]).toBe("private");
+    expect(db.artifacts[2][13]).toBe("user-1");
 
     const proposalPayload = JSON.parse(db.proposals[0][9] as string) as Record<string, unknown>;
+    expect(proposalPayload.project_id).toBe("project-1");
+    expect(db.proposals[0][16]).toBe("project-1");
     expect(proposalPayload.patch).toEqual({
       operations: [
         {
@@ -173,6 +189,137 @@ describe("RunMaterializationService", () => {
       'proposal:output_proposal_materialization_error:unsupported proposal_type "deployment_job"',
       "activity:output_activity_materialization_error:Activity materialization is intentionally deferred in the server backend.",
     ]);
+  });
+
+  it("does not materialize proposals for projects outside the run space", async () => {
+    const db = new FakeDb();
+    const config = loadConfig({
+      SERVER_DATABASE_URL: "postgresql://server@localhost:5432/agent_space",
+    });
+    const service = new RunMaterializationService(
+      config,
+      db,
+      undefined,
+      async () => ({ status: "allow" }),
+    );
+
+    const result = await service.materializeAdapterResult({
+      run: run(),
+      adapterResult: {
+        adapter_type: "model_api",
+        adapter_kind: "managed_api",
+        success: true,
+        output_text: "",
+        output_json: {
+          proposed_changes: [
+            {
+              proposal_type: "memory_create",
+              payload_json: {
+                project_id: "project-other",
+                proposed_content: "do not persist",
+              },
+            },
+          ],
+        },
+        exit_code: 0,
+        error_code: null,
+        error_message: null,
+        started_at: "2026-06-12T10:00:00.000Z",
+        completed_at: "2026-06-12T10:00:01.000Z",
+        usage: null,
+      },
+    });
+
+    expect(result.items).toMatchObject([
+      {
+        kind: "proposal",
+        status: "failed",
+        error_code: "output_proposal_materialization_error",
+        error_message: "Project not found",
+      },
+    ]);
+    expect(result.errors).toEqual([
+      "proposal:output_proposal_materialization_error:Project not found",
+    ]);
+    expect(db.proposals).toHaveLength(0);
+  });
+
+  it("materializes claim/object packets only from structured proposal payloads", async () => {
+    const db = new FakeDb();
+    const config = loadConfig({
+      SERVER_DATABASE_URL: "postgresql://server@localhost:5432/agent_space",
+    });
+    const service = new RunMaterializationService(
+      config,
+      db,
+      undefined,
+      async () => ({ status: "allow" }),
+    );
+
+    const result = await service.materializeAdapterResult({
+      run: run(),
+      adapterResult: {
+        adapter_type: "model_api",
+        adapter_kind: "managed_api",
+        success: true,
+        output_text: "",
+        output_json: {
+          proposed_changes: [
+            {
+              proposal_type: "claim_create",
+              title: "Create claim",
+              payload_json: {
+                operation: "claim_create",
+                claim_kind: "fact",
+                subject_text: "Retrieval",
+                claim_text: "The retrieval embedding dimension is 2560.",
+                sources: [
+                  {
+                    source_ref_type: "external_pointer",
+                    source_ref_id: "pointer-1",
+                    source_connection_id: "connection-1",
+                    evidence_role: "supports",
+                  },
+                ],
+              },
+            },
+            {
+              proposal_type: "claim_create",
+              title: "Flat claim should fail",
+              claim_kind: "fact",
+              subject_text: "Retrieval",
+              claim_text: "This must not be accepted from the envelope.",
+            },
+          ],
+        },
+        exit_code: 0,
+        error_code: null,
+        error_message: null,
+        started_at: "2026-06-12T10:00:00.000Z",
+        completed_at: "2026-06-12T10:00:01.000Z",
+        usage: null,
+      },
+    });
+
+    expect(result.items).toMatchObject([
+      { kind: "proposal", status: "succeeded" },
+      {
+        kind: "proposal",
+        status: "failed",
+        error_code: "output_proposal_materialization_error",
+        error_message: "claim_create requires structured payload_json or payload",
+      },
+    ]);
+    expect(db.proposals).toHaveLength(1);
+    const payload = JSON.parse(db.proposals[0][9] as string) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      operation: "claim_create",
+      proposal_type: "claim_create",
+      source_run_id: "run-1",
+      created_by_run_id: "run-1",
+      project_id: "project-1",
+      claim_text: "The retrieval embedding dimension is 2560.",
+    });
   });
 
   it("returns a finalization materialization item for terminal runs", async () => {

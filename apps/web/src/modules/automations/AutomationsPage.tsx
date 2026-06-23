@@ -1,8 +1,8 @@
 import { useState, useEffect, useId } from 'react'
-import { Clock, Plus, Loader2, Play, Pause, Archive, ShieldCheck } from 'lucide-react'
+import { Archive, BrainCircuit, Clock, Loader2, Pause, Play, Plus, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { automationsApi, agentsApi } from '../../api/client'
-import type { AutomationOut, AutomationTriggerType, AgentOut } from '../../types/api'
+import type { AutomationOut, AutomationTargetType, AutomationTriggerType, AgentOut } from '../../types/api'
 import { useSpace } from '../../contexts/SpaceContext'
 import { Card, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
@@ -32,6 +32,34 @@ function cfgString(cfg: Record<string, unknown> | null, key: string): string {
   return typeof v === 'string' ? v : ''
 }
 
+function cfgBool(cfg: Record<string, unknown> | null, key: string): boolean {
+  return cfg?.[key] === true
+}
+
+function cfgBoolDefault(cfg: Record<string, unknown> | null, key: string, fallback: boolean): boolean {
+  const value = cfg?.[key]
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function automationTarget(auto: AutomationOut): AutomationTargetType {
+  const target = cfgString(auto.config_json, 'target_type') || cfgString(auto.config_json, 'target')
+  if (target === 'knowledge_retrieval_maintenance') return 'knowledge_retrieval_maintenance'
+  if (target === 'brain_ops_dream_cycle_v2') return 'brain_ops_dream_cycle_v2'
+  return 'agent_run'
+}
+
+function shortTargetLabel(target: AutomationTargetType): string {
+  if (target === 'knowledge_retrieval_maintenance') return 'knowledge maintenance'
+  if (target === 'brain_ops_dream_cycle_v2') return 'brain ops dream cycle'
+  return 'agent run'
+}
+
+function defaultName(target: AutomationTargetType): string {
+  if (target === 'knowledge_retrieval_maintenance') return 'Knowledge maintenance scan'
+  if (target === 'brain_ops_dream_cycle_v2') return 'Brain Ops Dream Cycle'
+  return 'Automation'
+}
+
 function AddAutomationForm({ agents, onAdded, canCreate }: {
   agents: AgentOut[]
   onAdded: () => void
@@ -40,15 +68,27 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
   const [expanded, setExpanded] = useState(false)
   const [name, setName] = useState('')
   const [agentId, setAgentId] = useState('')
+  const [targetType, setTargetType] = useState<AutomationTargetType>('agent_run')
   const [triggerType, setTriggerType] = useState<AutomationTriggerType>('schedule')
   const [cron, setCron] = useState('0 9 * * *')
   const [timezone, setTimezone] = useState(BROWSER_TZ)
   const [prompt, setPrompt] = useState('')
+  const [createPacket, setCreatePacket] = useState(false)
+  const [includeMemoryMaintenance, setIncludeMemoryMaintenance] = useState(true)
   const [saving, setSaving] = useState(false)
 
   function reset() {
-    setName(''); setAgentId(''); setTriggerType('schedule')
-    setCron('0 9 * * *'); setTimezone(BROWSER_TZ); setPrompt(''); setExpanded(false)
+    setName(''); setAgentId(''); setTargetType('agent_run'); setTriggerType('schedule')
+    setCron('0 9 * * *'); setTimezone(BROWSER_TZ); setPrompt(''); setCreatePacket(false); setIncludeMemoryMaintenance(true); setExpanded(false)
+  }
+
+  function handleTargetChange(next: AutomationTargetType) {
+    setTargetType(next)
+    if (next === 'brain_ops_dream_cycle_v2') {
+      setCreatePacket(true)
+      setIncludeMemoryMaintenance(true)
+    }
+    if (next === 'knowledge_retrieval_maintenance') setCreatePacket(false)
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -57,17 +97,24 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
     if (!agentId) { toast.error('Pick an agent for this automation'); return }
     if (triggerType === 'schedule' && !cron.trim()) { toast.error('A cron expression is required'); return }
 
-    const config: Record<string, unknown> = {}
+    const config: Record<string, unknown> = { target_type: targetType }
     if (triggerType === 'schedule') { config.cron = cron.trim(); config.timezone = timezone.trim() || 'UTC' }
-    if (prompt.trim()) config.prompt = prompt.trim()
+    if (targetType === 'agent_run' && prompt.trim()) config.prompt = prompt.trim()
+    if (targetType === 'knowledge_retrieval_maintenance') {
+      config.create_packet = createPacket
+    }
+    if (targetType === 'brain_ops_dream_cycle_v2') {
+      config.create_packets = createPacket
+      config.include_memory_maintenance = includeMemoryMaintenance
+    }
 
     setSaving(true)
     try {
       await automationsApi.create({
-        name: name.trim() || 'Automation',
+        name: name.trim() || defaultName(targetType),
         agent_id: agentId,
         trigger_type: triggerType,
-        config_json: Object.keys(config).length ? config : undefined,
+        config_json: config,
       })
       toast.success('Automation created')
       reset()
@@ -99,11 +146,28 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
         {agents.length === 0 && (
           <p className="text-xs text-muted-foreground">No agents yet — create one on the Agents page first.</p>
         )}
+        {targetType !== 'agent_run' && (
+          <p className="text-xs text-muted-foreground">Used for run attribution only. Pick an active agent with a current version; the scan does not run the agent runtime.</p>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        <label className={fieldLabel}>Target</label>
+        <select value={targetType} onChange={e => handleTargetChange(e.target.value as AutomationTargetType)} className={selectCls}>
+          <option value="agent_run">Agent run</option>
+          <option value="knowledge_retrieval_maintenance">Knowledge maintenance scan</option>
+          <option value="brain_ops_dream_cycle_v2">Brain Ops Dream Cycle</option>
+        </select>
       </div>
 
       <div className="space-y-1.5">
         <label className={fieldLabel}>Name</label>
-        <Input value={name} onChange={e => setName(e.target.value)} placeholder="Daily summary" className="text-sm" />
+        <Input
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder={targetType === 'agent_run' ? 'Daily summary' : defaultName(targetType)}
+          className="text-sm"
+        />
       </div>
 
       <div className="space-y-1.5">
@@ -133,19 +197,51 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
             <label className={fieldLabel}>Timezone</label>
             <Input value={timezone} onChange={e => setTimezone(e.target.value)} placeholder="UTC" className="font-mono text-sm" />
           </div>
-          <div className="flex items-start gap-2 text-xs text-muted-foreground p-2 rounded-md bg-amber-500/10">
-            <ShieldCheck className="size-3.5 mt-0.5 shrink-0 text-amber-600" />
-            <span>Creating a schedule pre-authorizes this automation to run unattended with the agent's configured credentials. Archiving it revokes that authorization.</span>
-          </div>
+          {targetType === 'agent_run' ? (
+            <div className="flex items-start gap-2 text-xs text-muted-foreground p-2 rounded-md bg-amber-500/10">
+              <ShieldCheck className="size-3.5 mt-0.5 shrink-0 text-amber-600" />
+              <span>Creating a schedule pre-authorizes this automation to run unattended with the agent's configured credentials. Archiving it revokes that authorization.</span>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2 text-xs text-muted-foreground p-2 rounded-md bg-accent">
+              <ShieldCheck className="size-3.5 mt-0.5 shrink-0" />
+              <span>Scheduled operations run as the owner/admin actor and save private operational reports. They do not use model credentials.</span>
+            </div>
+          )}
         </>
       )}
 
-      <div className="space-y-1.5">
-        <label className={fieldLabel}>Prompt (optional)</label>
-        <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={3}
-          placeholder="What should the agent do on each run?"
-          className="flex w-full rounded-md border border-border bg-input px-3 py-2 text-sm" />
-      </div>
+      {targetType === 'agent_run' ? (
+        <div className="space-y-1.5">
+          <label className={fieldLabel}>Prompt (optional)</label>
+          <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={3}
+            placeholder="What should the agent do on each run?"
+            className="flex w-full rounded-md border border-border bg-input px-3 py-2 text-sm" />
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={createPacket}
+              onChange={e => setCreatePacket(e.target.checked)}
+              className="mt-1"
+            />
+            <span>{targetType === 'brain_ops_dream_cycle_v2' ? 'Create Dream Cycle review packets after saving reports.' : 'Create a maintenance proposal packet after saving the private report.'}</span>
+          </label>
+          {targetType === 'brain_ops_dream_cycle_v2' && (
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={includeMemoryMaintenance}
+                onChange={e => setIncludeMemoryMaintenance(e.target.checked)}
+                className="mt-1"
+              />
+              <span>Include Memory maintenance scan.</span>
+            </label>
+          )}
+        </div>
+      )}
 
       <div className="flex gap-2">
         <Button type="submit" size="sm" disabled={saving}>{saving ? <Loader2 className="size-3.5 animate-spin" /> : 'Create'}</Button>
@@ -163,6 +259,7 @@ function AutomationCard({ auto, agentName, onChanged }: {
   const [busy, setBusy] = useState(false)
   const isSchedule = auto.trigger_type === 'schedule'
   const archived = auto.status === 'archived'
+  const target = automationTarget(auto)
 
   async function act(fn: () => Promise<unknown>, ok: string) {
     setBusy(true)
@@ -176,6 +273,9 @@ function AutomationCard({ auto, agentName, onChanged }: {
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2 flex-wrap">
           <CardTitle>{auto.name}</CardTitle>
+          <Badge variant="muted" className="text-[10px]">
+            {shortTargetLabel(target)}
+          </Badge>
           <Badge variant={isSchedule ? 'default' : 'muted'} className="text-[10px]">{auto.trigger_type}</Badge>
           {auto.status === 'active' && <Badge variant="muted" className="text-[10px]">active</Badge>}
           {auto.status === 'paused' && <Badge variant="muted" className="text-[10px]">paused</Badge>}
@@ -194,12 +294,26 @@ function AutomationCard({ auto, agentName, onChanged }: {
       {cfgString(auto.config_json, 'prompt') && (
         <p className="text-xs mb-3 line-clamp-2"><span className="text-muted-foreground">Prompt: </span>{cfgString(auto.config_json, 'prompt')}</p>
       )}
+      {target !== 'agent_run' && (
+        <p className="text-xs mb-3 flex items-center gap-1.5 text-muted-foreground">
+          <BrainCircuit className="size-3.5" />
+          {target === 'brain_ops_dream_cycle_v2'
+            ? `Dream Cycle report${cfgBool(auto.config_json, 'create_packets') ? ' + review packets' : ''} · memory ${cfgBoolDefault(auto.config_json, 'include_memory_maintenance', true) ? 'on' : 'off'}`
+            : `Private report${cfgBool(auto.config_json, 'create_packet') ? ' + proposal packet' : ''}`}
+        </p>
+      )}
 
       {!archived && (
         <div className="flex gap-2">
           <Button size="sm" variant="outline" disabled={busy}
-            onClick={() => act(() => automationsApi.fire(auto.id, { prompt: cfgString(auto.config_json, 'prompt') || undefined }), 'Run queued')}>
-            <Play className="size-3.5 mr-1" /> Run now
+            onClick={() => act(
+              () => automationsApi.fire(
+                auto.id,
+                target === 'agent_run' ? { prompt: cfgString(auto.config_json, 'prompt') || undefined } : {},
+              ),
+              target === 'agent_run' ? 'Run queued' : 'Scan completed',
+            )}>
+            <Play className="size-3.5 mr-1" /> {target === 'agent_run' ? 'Run now' : 'Scan now'}
           </Button>
           {auto.status === 'active' ? (
             <Button size="sm" variant="outline" disabled={busy}
@@ -256,7 +370,7 @@ export default function AutomationsPage() {
         </div>
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Automations</h1>
-          <p className="text-sm text-muted-foreground">Schedule an agent to run on a cron, or keep it manual-only.</p>
+          <p className="text-sm text-muted-foreground">Schedule agent runs or Knowledge maintenance scans, or keep them manual-only.</p>
           <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
         </div>
       </div>
@@ -272,7 +386,7 @@ export default function AutomationsPage() {
             <Card>
               <p className="text-sm text-muted-foreground p-4">
                 {activeSpaceId
-                  ? 'No automations yet. Create one to run an agent on a schedule.'
+                  ? 'No automations yet. Create one to run an agent or Knowledge maintenance scan.'
                   : 'Select an operational space to manage automations.'}
               </p>
             </Card>

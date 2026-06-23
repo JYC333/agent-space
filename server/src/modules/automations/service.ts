@@ -6,6 +6,14 @@ import { HttpError } from "../routeUtils/common";
 import { enforce } from "../policy";
 import { loadActionRegistry } from "../policy/actionRegistry";
 import { computeDecision } from "../policy/gateway";
+import { runBrainOpsDreamCycleV2 } from "../brainOps/dreamCycle";
+import {
+  RetrievalMaintenanceService,
+  createRetrievalMaintenanceProposalPacket,
+  persistRetrievalMaintenanceReportArtifact,
+} from "../retrieval";
+import { readSpaceRetrievalSettings } from "../retrieval/settings";
+import { knowledgeRetrievalRegistry } from "../knowledge/retrievalAdapter";
 import { PgRunRepository } from "../runs/repository";
 import { BUILTIN_RUNTIME_ADAPTER_SPECS, type RuntimeAdapterType } from "../runtimeAdapters";
 import { computeNextRunAt, InvalidScheduleError } from "./schedule";
@@ -18,6 +26,15 @@ import {
 
 const VALID_TRIGGER_TYPES = new Set(["manual", "schedule"]);
 const VALID_STATUSES = new Set(["active", "paused", "archived"]);
+const AUTOMATION_TARGET_AGENT_RUN = "agent_run";
+const AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE = "knowledge_retrieval_maintenance";
+const AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2 = "brain_ops_dream_cycle_v2";
+const AUTOMATION_SCHEDULE_HANDLED = Symbol("automation_schedule_handled");
+const VALID_AUTOMATION_TARGETS = new Set([
+  AUTOMATION_TARGET_AGENT_RUN,
+  AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE,
+  AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2,
+]);
 const CREATE_KEYS = new Set([
   "name",
   "agent_id",
@@ -99,16 +116,21 @@ export class AutomationService {
         throw error;
       }
     }
+    const targetType = automationTargetType(configJson);
     await this.enforceAction("automation.create", input.spaceId, input.ownerUserId, {
       agent_id: agentId,
       trigger_type: triggerType,
+      target_type: targetType,
     });
-    const preflightSnapshot = await this.runPreflight(
-      input.spaceId,
+    const preflightSnapshot = await this.runTargetPreflight({
+      targetType,
+      spaceId: input.spaceId,
+      actorUserId: input.ownerUserId,
       agentId,
       workspaceId,
-      triggerType === "schedule",
-    );
+      automationPreAuthorized: triggerType === "schedule",
+      configJson,
+    });
     return this.repo.create({
       spaceId: input.spaceId,
       ownerUserId: input.ownerUserId,
@@ -147,9 +169,22 @@ export class AutomationService {
         throw error;
       }
     }
+    const nextTargetType = automationTargetType(configJson ?? existing.config_json);
     await this.enforceAction("automation.update", input.spaceId, input.actorUserId, {
       agent_id: existing.agent_id,
+      target_type: nextTargetType,
     }, input.automationId);
+    if (nextTargetType !== AUTOMATION_TARGET_AGENT_RUN) {
+      await this.runTargetPreflight({
+        targetType: nextTargetType,
+        spaceId: input.spaceId,
+        actorUserId: input.actorUserId,
+        agentId: existing.agent_id,
+        workspaceId: existing.workspace_id,
+        automationPreAuthorized: existing.trigger_type === "schedule",
+        configJson: configJson ?? existing.config_json,
+      });
+    }
     return this.repo.update(input.spaceId, input.automationId, {
       name: optionalString(input.body.name, "name", 256) ?? undefined,
       description:
@@ -178,26 +213,48 @@ export class AutomationService {
     if (!VALID_TRIGGER_TYPES.has(triggerType)) {
       throw new HttpError(422, `Unsupported trigger_type ${JSON.stringify(triggerType)}`);
     }
+    const targetType = automationTargetType(auto.config_json);
     const preAuthorized = await this.repo.hasActiveGrant(input.spaceId, auto.id);
     await this.enforceAction("automation.fire", input.spaceId, input.actorUserId, {
       agent_id: auto.agent_id,
       trigger_type: triggerType,
       trigger_origin: "automation",
       automation_pre_authorized: preAuthorized,
+      target_type: targetType,
     }, auto.id);
-    const preflightSnapshot = await this.runPreflight(
-      input.spaceId,
-      auto.agent_id,
-      auto.workspace_id,
-      preAuthorized,
-    );
+    const preflightSnapshot = await this.runTargetPreflight({
+      targetType,
+      spaceId: input.spaceId,
+      actorUserId: input.actorUserId,
+      agentId: auto.agent_id,
+      workspaceId: auto.workspace_id,
+      automationPreAuthorized: preAuthorized,
+      configJson: auto.config_json,
+    });
 
     if (!this.config.databaseUrl) {
       throw new HttpError(502, "SERVER_DATABASE_URL is required");
     }
+    if (targetType === AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE) {
+      const result = await this.executeMaintenanceFire(auto, input, triggerType, preflightSnapshot);
+      if (triggerType === "manual") {
+        await this.repo.recordFire(input.spaceId, auto.id);
+      }
+      return result;
+    }
+    if (targetType === AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2) {
+      const result = await this.executeDreamCycleFire(auto, input, triggerType, preflightSnapshot);
+      if (triggerType === "manual") {
+        await this.repo.recordFire(input.spaceId, auto.id);
+      }
+      return result;
+    }
     const result = await withTransaction(getDbPool(this.config.databaseUrl), async (client) => {
       return this.persistFire(client, auto, input, triggerType, preflightSnapshot);
     });
+    if (triggerType === "manual") {
+      await this.repo.recordFire(input.spaceId, auto.id);
+    }
     return {
       run_id: result.runId,
       automation_run_id: result.automationRunId,
@@ -213,6 +270,7 @@ export class AutomationService {
     let fired = 0;
     for (const auto of due) {
       try {
+        const targetType = automationTargetType(auto.config_json);
         const fireInput = {
           spaceId: auto.space_id,
           automationId: auto.id,
@@ -225,21 +283,37 @@ export class AutomationService {
           trigger_type: "schedule",
           trigger_origin: "automation",
           automation_pre_authorized: preAuthorized,
+          target_type: targetType,
         }, auto.id);
-        const preflightSnapshot = await this.runPreflight(
-          auto.space_id,
-          auto.agent_id,
-          auto.workspace_id,
-          preAuthorized,
-        );
-        await withTransaction(pool, async (client) => {
-          const automations = new PgAutomationRepository(client);
-          await this.persistFire(client, auto, fireInput, "schedule", preflightSnapshot);
-          await automations.advanceSchedule(auto);
+        const preflightSnapshot = await this.runTargetPreflight({
+          targetType,
+          spaceId: auto.space_id,
+          actorUserId: auto.owner_user_id,
+          agentId: auto.agent_id,
+          workspaceId: auto.workspace_id,
+          automationPreAuthorized: preAuthorized,
+          configJson: auto.config_json,
         });
+        if (targetType === AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE) {
+          await this.executeMaintenanceFire(auto, fireInput, "schedule", preflightSnapshot, {
+            advanceSchedule: true,
+          });
+        } else if (targetType === AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2) {
+          await this.executeDreamCycleFire(auto, fireInput, "schedule", preflightSnapshot, {
+            advanceSchedule: true,
+          });
+        } else {
+          await withTransaction(pool, async (client) => {
+            const automations = new PgAutomationRepository(client);
+            await this.persistFire(client, auto, fireInput, "schedule", preflightSnapshot);
+            await automations.advanceSchedule(auto);
+          });
+        }
         fired += 1;
-      } catch {
-        await this.repo.advanceSchedule(auto);
+      } catch (error) {
+        if (!scheduleWasHandled(error)) {
+          await this.repo.advanceSchedule(auto);
+        }
       }
     }
     return fired;
@@ -287,6 +361,271 @@ export class AutomationService {
       preflightSnapshot,
     });
     return { runId: run.id, automationRunId };
+  }
+
+  private async executeMaintenanceFire(
+    auto: AutomationRow,
+    input: {
+      spaceId: string;
+      actorUserId: string;
+    },
+    triggerType: string,
+    preflightSnapshot: Record<string, unknown>,
+    options: { advanceSchedule?: boolean } = {},
+  ): Promise<Record<string, unknown>> {
+    if (!this.config.databaseUrl) {
+      throw new HttpError(502, "SERVER_DATABASE_URL is required");
+    }
+    const pool = getDbPool(this.config.databaseUrl);
+    const started = await withTransaction(pool, async (client) => {
+      const runs = new PgRunRepository(client);
+      const automations = new PgAutomationRepository(client);
+      const run = await runs.createRunningSystemRun({
+        space_id: input.spaceId,
+        user_id: input.actorUserId,
+        agent_id: auto.agent_id,
+        workspace_id: auto.workspace_id,
+        trigger_origin: "automation",
+        prompt: "Run Knowledge retrieval maintenance scan.",
+        instruction: "Persist an owner-private maintenance report and optionally create a review packet.",
+        capability_id: "knowledge.retrieval.maintenance",
+        capabilities_json: ["knowledge.retrieval.maintenance"],
+        source: triggerType === "schedule" ? "scheduled" : "managed",
+      });
+      const automationRunId = await automations.createAutomationRun({
+        automationId: auto.id,
+        runId: run.id,
+        triggeredByUserId: input.actorUserId,
+        triggerType,
+        preflightSnapshot,
+      });
+      return { runId: run.id, automationRunId };
+    });
+
+    try {
+      const report = await new RetrievalMaintenanceService(
+        pool,
+        knowledgeRetrievalRegistry,
+      ).scan(input.spaceId, input.actorUserId);
+      const settings = await readSpaceRetrievalSettings(pool, input.spaceId);
+      const createPacket = shouldCreateMaintenancePacket(auto.config_json);
+      const persisted = await withTransaction(pool, async (client) => {
+        const contextInput = {
+          spaceId: input.spaceId,
+          ownerUserId: input.actorUserId,
+          runId: started.runId,
+          report,
+          source: "automation_knowledge_retrieval_maintenance",
+          settingsSnapshot: {
+            default_search_mode: settings.defaultSearchMode,
+            rerank_enabled: settings.rerankEnabled,
+            query_rewrite_enabled: settings.queryRewriteEnabled,
+            use_query_cache: settings.useQueryCache,
+            include_trace: settings.includeTrace,
+            external_egress_enabled: settings.externalEgressEnabled,
+            retrieval_tool_mode: settings.retrievalToolMode,
+            embedding_dimensions: settings.embeddingDimensions,
+            max_results_default: settings.maxResultsDefault,
+          },
+        };
+        const artifactId = await persistRetrievalMaintenanceReportArtifact(client, contextInput);
+        const proposalId = createPacket
+          ? await createRetrievalMaintenanceProposalPacket(client, {
+              ...contextInput,
+              artifactId,
+            })
+          : undefined;
+        await new PgRunRepository(client).markRunTerminal({
+          run_id: started.runId,
+          space_id: input.spaceId,
+          status: "succeeded",
+          output_text: `Knowledge retrieval maintenance scan completed with ${report.findings.length} finding(s).`,
+          output_json: {
+            automation_target: AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE,
+            retrieval_maintenance_report: {
+              artifact_id: artifactId,
+              proposal_id: proposalId ?? null,
+              finding_count: report.findings.length,
+              scanned: report.scanned,
+              counts: report.counts,
+              truncated: report.truncated,
+            },
+          },
+          exit_code: 0,
+          completed_at: new Date().toISOString(),
+        });
+        if (options.advanceSchedule) {
+          await new PgAutomationRepository(client).advanceSchedule(auto);
+        }
+        return { artifactId, proposalId };
+      });
+      return {
+        run_id: started.runId,
+        automation_run_id: started.automationRunId,
+        trigger_origin: "automation",
+        preflight_executable: Boolean(preflightSnapshot.executable),
+        target_type: AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE,
+        artifact_id: persisted.artifactId,
+        proposal_id: persisted.proposalId ?? null,
+        finding_count: report.findings.length,
+        scanned: report.scanned,
+        truncated: report.truncated,
+      };
+    } catch (error) {
+      await withTransaction(pool, async (client) => {
+        await new PgRunRepository(client).markRunTerminal({
+          run_id: started.runId,
+          space_id: input.spaceId,
+          status: "failed",
+          output_text: "Knowledge retrieval maintenance scan failed.",
+          output_json: {
+            automation_target: AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE,
+          },
+          error_json: {
+            error_code: "retrieval_maintenance_automation_failed",
+            error_text: error instanceof Error ? error.message : "Maintenance scan failed",
+          },
+          exit_code: 1,
+          completed_at: new Date().toISOString(),
+        });
+        if (options.advanceSchedule) {
+          await new PgAutomationRepository(client).advanceSchedule(auto);
+        }
+      });
+      if (options.advanceSchedule) {
+        throw markScheduleHandled(error);
+      }
+      throw error;
+    }
+  }
+
+  private async executeDreamCycleFire(
+    auto: AutomationRow,
+    input: {
+      spaceId: string;
+      actorUserId: string;
+    },
+    triggerType: string,
+    preflightSnapshot: Record<string, unknown>,
+    options: { advanceSchedule?: boolean } = {},
+  ): Promise<Record<string, unknown>> {
+    if (!this.config.databaseUrl) {
+      throw new HttpError(502, "SERVER_DATABASE_URL is required");
+    }
+    const pool = getDbPool(this.config.databaseUrl);
+    const started = await withTransaction(pool, async (client) => {
+      const runs = new PgRunRepository(client);
+      const automations = new PgAutomationRepository(client);
+      const run = await runs.createRunningSystemRun({
+        space_id: input.spaceId,
+        user_id: input.actorUserId,
+        agent_id: auto.agent_id,
+        workspace_id: auto.workspace_id,
+        trigger_origin: "automation",
+        prompt: "Run Brain Ops Dream Cycle Lite v2.",
+        instruction: "Persist aggregate Brain Ops reports and review packets without direct canonical writes.",
+        capability_id: "brain_ops.dream_cycle_lite_v2",
+        capabilities_json: ["brain_ops.dream_cycle_lite_v2"],
+        source: triggerType === "schedule" ? "scheduled" : "managed",
+      });
+      const automationRunId = await automations.createAutomationRun({
+        automationId: auto.id,
+        runId: run.id,
+        triggeredByUserId: input.actorUserId,
+        triggerType,
+        preflightSnapshot,
+      });
+      return { runId: run.id, automationRunId };
+    });
+
+    try {
+      const request = dreamCycleRequestFromConfig(auto.config_json);
+      const result = await withTransaction(pool, async (client) => {
+        const dreamResult = await runBrainOpsDreamCycleV2(client, {
+          spaceId: input.spaceId,
+          userId: input.actorUserId,
+          request,
+          runId: started.runId,
+        });
+        const terminalStatus = dreamResult.degraded ? "degraded" : "succeeded";
+        await new PgRunRepository(client).markRunTerminal({
+          run_id: started.runId,
+          space_id: input.spaceId,
+          status: terminalStatus,
+          output_text: dreamResult.degraded
+            ? "Brain Ops Dream Cycle Lite v2 completed with warnings."
+            : "Brain Ops Dream Cycle Lite v2 completed.",
+          output_json: {
+            automation_target: AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2,
+            brain_ops_dream_cycle_v2: dreamResult,
+          },
+          exit_code: 0,
+          completed_at: new Date().toISOString(),
+        });
+        if (options.advanceSchedule) {
+          await new PgAutomationRepository(client).advanceSchedule(auto);
+        }
+        return dreamResult;
+      });
+      return {
+        run_id: started.runId,
+        automation_run_id: started.automationRunId,
+        trigger_origin: "automation",
+        preflight_executable: Boolean(preflightSnapshot.executable),
+        target_type: AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2,
+        artifact_id: result.artifact_id,
+        proposal_id: result.claim_candidates.proposal_id,
+        artifact_ids: {
+          dream_cycle_report: result.artifact_id,
+          retrieval_maintenance: result.retrieval_maintenance.artifact_id,
+          diagnostics: result.diagnostics.artifact_id,
+          memory_maintenance: result.memory_maintenance.artifact_id,
+          claim_candidates: result.claim_candidates.artifact_id,
+        },
+        proposal_ids: {
+          retrieval_maintenance: result.retrieval_maintenance.proposal_id,
+          diagnostics: result.diagnostics.proposal_id,
+          memory_maintenance: result.memory_maintenance.proposal_id,
+          claim_candidates: result.claim_candidates.proposal_id,
+        },
+        finding_count:
+          result.retrieval_maintenance.finding_count +
+          result.memory_maintenance.finding_count,
+        scanned:
+          result.retrieval_maintenance.scanned +
+          result.memory_maintenance.scanned,
+        truncated:
+          result.retrieval_maintenance.truncated ||
+          result.memory_maintenance.truncated,
+        degraded: result.degraded,
+        warnings: result.warnings,
+      };
+    } catch (error) {
+      await withTransaction(pool, async (client) => {
+        await new PgRunRepository(client).markRunTerminal({
+          run_id: started.runId,
+          space_id: input.spaceId,
+          status: "failed",
+          output_text: "Brain Ops Dream Cycle Lite v2 failed.",
+          output_json: {
+            automation_target: AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2,
+          },
+          error_json: {
+            error_code: "brain_ops_dream_cycle_v2_automation_failed",
+            error_text: error instanceof Error ? error.message : "Dream cycle failed",
+          },
+          exit_code: 1,
+          completed_at: new Date().toISOString(),
+        });
+        if (options.advanceSchedule) {
+          await new PgAutomationRepository(client).advanceSchedule(auto);
+        }
+      });
+      if (options.advanceSchedule) {
+        throw markScheduleHandled(error, "Dream cycle failed");
+      }
+      throw error;
+    }
   }
 
   private async enforceAction(
@@ -473,6 +812,239 @@ export class AutomationService {
     }
     return snapshot;
   }
+
+  private async runTargetPreflight(input: {
+    targetType: AutomationTargetType;
+    spaceId: string;
+    actorUserId: string;
+    agentId: string;
+    workspaceId: string | null | undefined;
+    automationPreAuthorized: boolean;
+    configJson: Record<string, unknown> | null | undefined;
+  }): Promise<Record<string, unknown>> {
+    if (input.targetType === AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE) {
+      return this.runMaintenancePreflight(
+        input.spaceId,
+        input.actorUserId,
+        input.agentId,
+        shouldCreateMaintenancePacket(input.configJson),
+      );
+    }
+    if (input.targetType === AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2) {
+      return this.runDreamCyclePreflight(
+        input.spaceId,
+        input.actorUserId,
+        input.agentId,
+        dreamCycleRequestFromConfig(input.configJson),
+      );
+    }
+    return this.runPreflight(
+      input.spaceId,
+      input.agentId,
+      input.workspaceId,
+      input.automationPreAuthorized,
+    );
+  }
+
+  private async runMaintenancePreflight(
+    spaceId: string,
+    actorUserId: string,
+    agentId: string,
+    createPacket: boolean,
+  ): Promise<Record<string, unknown>> {
+    const membershipRole = await this.repo.getMembershipRole(spaceId, actorUserId);
+    const errors: string[] = [];
+    let hasPermissionError = false;
+    if (membershipRole !== "owner" && membershipRole !== "admin") {
+      hasPermissionError = true;
+      errors.push("Knowledge retrieval maintenance automation requires space owner or admin authority");
+    }
+    const agent = await this.repo.getAgentPreflight(spaceId, agentId);
+    if (!agent) {
+      errors.push("Knowledge retrieval maintenance automation requires an existing attribution Agent");
+    } else {
+      if (agent.status !== "active") {
+        errors.push(`Knowledge retrieval maintenance attribution Agent is not active (status=${agent.status})`);
+      }
+      if (!agent.current_version_id) {
+        errors.push("Knowledge retrieval maintenance attribution Agent has no current version");
+      } else if (!agent.version_id) {
+        errors.push("Knowledge retrieval maintenance attribution Agent current version was not found");
+      }
+    }
+    const snapshot = {
+      executable: errors.length === 0,
+      target_type: AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE,
+      maintenance_preflight: {
+        executable: errors.length === 0,
+        scope: "knowledge",
+        attribution_agent_id: agentId,
+        attribution_agent_status: agent?.status ?? null,
+        attribution_agent_version_id: agent?.current_version_id ?? null,
+        persist_report: true,
+        create_packet: createPacket,
+        membership_role: membershipRole ?? "guest",
+        errors,
+        warnings: this.config.databaseUrl ? [] : ["SERVER_DATABASE_URL is not configured"],
+      },
+    };
+    if (errors.length) {
+      throw new HttpError(hasPermissionError ? 403 : 422, errors.join("; "));
+    }
+    return snapshot;
+  }
+
+  private async runDreamCyclePreflight(
+    spaceId: string,
+    actorUserId: string,
+    agentId: string,
+    request: ReturnType<typeof dreamCycleRequestFromConfig>,
+  ): Promise<Record<string, unknown>> {
+    const membershipRole = await this.repo.getMembershipRole(spaceId, actorUserId);
+    const errors: string[] = [];
+    let hasPermissionError = false;
+    if (membershipRole !== "owner" && membershipRole !== "admin") {
+      hasPermissionError = true;
+      errors.push("Brain Ops Dream Cycle automation requires space owner or admin authority");
+    }
+    if (request.review_scope === "space_ops" && this.config.databaseUrl) {
+      const settings = await readSpaceRetrievalSettings(getDbPool(this.config.databaseUrl), spaceId);
+      if (settings.brainOpsReviewMode === "private_only") {
+        errors.push("Brain Ops Dream Cycle space_ops review requires Brain Ops review mode to allow admins");
+      }
+    }
+    const agent = await this.repo.getAgentPreflight(spaceId, agentId);
+    if (!agent) {
+      errors.push("Brain Ops Dream Cycle automation requires an existing attribution Agent");
+    } else {
+      if (agent.status !== "active") {
+        errors.push(`Brain Ops Dream Cycle attribution Agent is not active (status=${agent.status})`);
+      }
+      if (!agent.current_version_id) {
+        errors.push("Brain Ops Dream Cycle attribution Agent has no current version");
+      } else if (!agent.version_id) {
+        errors.push("Brain Ops Dream Cycle attribution Agent current version was not found");
+      }
+    }
+    const snapshot = {
+      executable: errors.length === 0,
+      target_type: AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2,
+      dream_cycle_preflight: {
+        executable: errors.length === 0,
+        scope: "brain_ops",
+        attribution_agent_id: agentId,
+        attribution_agent_status: agent?.status ?? null,
+        attribution_agent_version_id: agent?.current_version_id ?? null,
+        persist_report: true,
+        create_packets: request.create_packets,
+        review_scope: request.review_scope,
+        include_memory_maintenance: request.include_memory_maintenance,
+        membership_role: membershipRole ?? "guest",
+        errors,
+        warnings: this.config.databaseUrl ? [] : ["SERVER_DATABASE_URL is not configured"],
+      },
+    };
+    if (errors.length) {
+      throw new HttpError(hasPermissionError ? 403 : 422, errors.join("; "));
+    }
+    return snapshot;
+  }
+}
+
+type AutomationTargetType =
+  | typeof AUTOMATION_TARGET_AGENT_RUN
+  | typeof AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE
+  | typeof AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2;
+type ScheduleHandledError = Error & { [AUTOMATION_SCHEDULE_HANDLED]?: true };
+
+function automationTargetType(configJson: Record<string, unknown> | null | undefined): AutomationTargetType {
+  const record = recordValue(configJson);
+  const raw =
+    stringValue(record.target_type) ??
+    stringValue(record.target) ??
+    stringValue(record.kind) ??
+    AUTOMATION_TARGET_AGENT_RUN;
+  const normalized = raw === "knowledge_maintenance_scan"
+    ? AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE
+    : raw;
+  if (!VALID_AUTOMATION_TARGETS.has(normalized)) {
+    throw new HttpError(422, `Unsupported automation target_type ${JSON.stringify(raw)}`);
+  }
+  return normalized as AutomationTargetType;
+}
+
+function shouldCreateMaintenancePacket(configJson: Record<string, unknown> | null | undefined): boolean {
+  return recordValue(configJson).create_packet === true;
+}
+
+function dreamCycleRequestFromConfig(configJson: Record<string, unknown> | null | undefined): {
+  window_days: number;
+  artifact_limit: number;
+  create_packets: boolean;
+  review_scope: "private" | "space_ops";
+  include_memory_maintenance: boolean;
+  memory_limit: number;
+  memory_stale_after_days: number;
+  memory_thin_content_chars: number;
+  memory_max_findings: number;
+  max_claim_candidates: number;
+} {
+  const config = recordValue(configJson);
+  const reviewScope = optionalStringLiteral(config.review_scope, "review_scope", ["private", "space_ops"]) ?? "private";
+  return {
+    window_days: optionalPositiveInt(config.window_days, "window_days", 14, 90),
+    artifact_limit: optionalPositiveInt(config.artifact_limit, "artifact_limit", 50, 200),
+    create_packets: optionalBoolean(config.create_packets, "create_packets", true),
+    review_scope: reviewScope,
+    include_memory_maintenance: optionalBoolean(config.include_memory_maintenance, "include_memory_maintenance", true),
+    memory_limit: optionalPositiveInt(config.memory_limit, "memory_limit", 500, 1000),
+    memory_stale_after_days: optionalPositiveInt(config.memory_stale_after_days, "memory_stale_after_days", 180, 3650),
+    memory_thin_content_chars: optionalPositiveInt(config.memory_thin_content_chars, "memory_thin_content_chars", 80, 1000),
+    memory_max_findings: optionalPositiveInt(config.memory_max_findings, "memory_max_findings", 100, 200),
+    max_claim_candidates: optionalPositiveInt(config.max_claim_candidates, "max_claim_candidates", 40, 100),
+  };
+}
+
+function optionalPositiveInt(value: unknown, field: string, fallback: number, max: number): number {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > max) {
+    throw new HttpError(422, `config_json.${field} must be a positive integer no greater than ${max}`);
+  }
+  return value;
+}
+
+function optionalBoolean(value: unknown, field: string, fallback: boolean): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "boolean") throw new HttpError(422, `config_json.${field} must be a boolean`);
+  return value;
+}
+
+function optionalStringLiteral<T extends string>(
+  value: unknown,
+  field: string,
+  allowed: readonly T[],
+): T | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || !allowed.includes(value as T)) {
+    throw new HttpError(422, `config_json.${field} must be one of ${allowed.join(", ")}`);
+  }
+  return value as T;
+}
+
+function markScheduleHandled(error: unknown, fallbackMessage = "Maintenance scan failed"): Error {
+  const marked: ScheduleHandledError = error instanceof Error
+    ? (error as ScheduleHandledError)
+    : (new Error(fallbackMessage) as ScheduleHandledError);
+  marked[AUTOMATION_SCHEDULE_HANDLED] = true;
+  return marked;
+}
+
+function scheduleWasHandled(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      (error as Partial<ScheduleHandledError>)[AUTOMATION_SCHEDULE_HANDLED],
+  );
 }
 
 function rejectExtraKeys(body: Record<string, unknown>, allowed: Set<string>): void {

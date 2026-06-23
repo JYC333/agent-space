@@ -16,12 +16,106 @@ const PROVIDER_TYPES: { value: ProviderType; label: string }[] = [
   { value: 'anthropic', label: 'Anthropic-compatible' },
   { value: 'openrouter', label: 'OpenRouter' },
   { value: 'ollama', label: 'Ollama' },
-  { value: 'other', label: 'Other' },
+  { value: 'zeroentropy', label: 'ZeroEntropy retrieval' },
+  { value: 'other', label: 'Other OpenAI-compatible' },
 ]
 
-const API_KEY_REQUIRED = new Set(['openai', 'anthropic', 'openrouter'])
+const API_KEY_REQUIRED = new Set(['openai', 'anthropic', 'openrouter', 'zeroentropy'])
 
-type ProviderPresetId = 'custom' | 'minimax'
+interface ProviderCapability {
+  key: string
+  label: string
+  detail: string
+  variant: 'default' | 'secondary' | 'muted' | 'outline'
+}
+
+function providerCapabilities(providerType: ProviderType | string): ProviderCapability[] {
+  const capabilities: ProviderCapability[] = []
+  if (['openai', 'anthropic', 'openrouter', 'ollama', 'other'].includes(providerType)) {
+    capabilities.push({
+      key: 'chat',
+      label: 'Chat',
+      detail: 'Can be used for normal assistant/model calls and query rewrite.',
+      variant: 'default',
+    })
+  }
+  if (['openai', 'openrouter', 'ollama', 'zeroentropy', 'other'].includes(providerType)) {
+    capabilities.push({
+      key: 'embeddings',
+      label: 'Embeddings',
+      detail: 'Can be used by retrieval vector search.',
+      variant: 'secondary',
+    })
+  }
+  if (providerType === 'zeroentropy') {
+    capabilities.push({
+      key: 'native_rerank',
+      label: 'Native rerank',
+      detail: 'Can be used by retrieval hybrid rerank.',
+      variant: 'outline',
+    })
+  }
+  return capabilities
+}
+
+function modelFieldCopy(providerType: ProviderType | string): {
+  defaultLabel: string
+  availableLabel: string
+  defaultPlaceholder: string
+  availablePlaceholder: string
+  help: string
+} {
+  if (providerType === 'zeroentropy') {
+    return {
+      defaultLabel: 'Default embedding model',
+      availableLabel: 'Available retrieval models',
+      defaultPlaceholder: 'zembed-1',
+      availablePlaceholder: 'zembed-1, zerank-2, zerank-1, zerank-1-small',
+      help: 'Use zembed-* for embeddings and zerank-* for native rerank in Retrieval Settings.',
+    }
+  }
+  return {
+    defaultLabel: 'Default chat model',
+    availableLabel: 'Available chat models',
+    defaultPlaceholder: providerType === 'anthropic' ? 'claude-3-5-sonnet-latest' : 'gpt-4o',
+    availablePlaceholder: providerType === 'anthropic'
+      ? 'claude-3-5-sonnet-latest, claude-3-5-haiku-latest'
+      : 'gpt-4o, gpt-4o-mini',
+    help: 'Comma-separated model names shown in provider and task selectors.',
+  }
+}
+
+function ProviderCapabilityBadges({ providerType }: { providerType: ProviderType | string }) {
+  const capabilities = providerCapabilities(providerType)
+  if (capabilities.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {capabilities.map(capability => (
+        <Badge key={capability.key} variant={capability.variant} className="text-[10px]">
+          {capability.label}
+        </Badge>
+      ))}
+    </div>
+  )
+}
+
+function ProviderCapabilityNotice({ providerType }: { providerType: ProviderType | string }) {
+  const capabilities = providerCapabilities(providerType)
+  const copy = modelFieldCopy(providerType)
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-muted/60 px-3 py-2">
+      <ProviderCapabilityBadges providerType={providerType} />
+      <p className="text-xs text-muted-foreground">{copy.help}</p>
+      {capabilities.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {capabilities.map(capability => `${capability.label}: ${capability.detail}`).join(' ')}
+        </p>
+      )}
+    </div>
+  )
+}
+
+type ProviderPresetId = 'custom' | 'minimax' | 'zeroentropy'
 
 interface ProviderPreset {
   id: ProviderPresetId
@@ -36,6 +130,15 @@ interface ProviderPreset {
 }
 
 const PROVIDER_PRESETS: ProviderPreset[] = [
+  {
+    id: 'zeroentropy',
+    label: 'ZeroEntropy',
+    name: 'ZeroEntropy',
+    providerType: 'zeroentropy',
+    baseUrl: 'https://api.zeroentropy.dev/v1',
+    defaultModel: 'zembed-1',
+    availableModels: ['zembed-1', 'zerank-2', 'zerank-1', 'zerank-1-small'],
+  },
   {
     id: 'minimax',
     label: 'MiniMax',
@@ -63,6 +166,7 @@ function defaultBaseUrl(providerType: ProviderType): string {
   if (providerType === 'anthropic') return 'https://api.anthropic.com'
   if (providerType === 'openrouter') return 'https://openrouter.ai/api/v1'
   if (providerType === 'ollama') return 'http://localhost:11434'
+  if (providerType === 'zeroentropy') return 'https://api.zeroentropy.dev/v1'
   return ''
 }
 
@@ -170,6 +274,8 @@ function AddProviderForm({ onAdded, canCreate, expanded, setExpanded }: {
     }
   }
 
+  const modelCopy = modelFieldCopy(providerType)
+
   if (!expanded) {
     return (
       <Button variant="outline" size="sm" onClick={() => setExpanded(true)} disabled={!canCreate}>
@@ -198,6 +304,7 @@ function AddProviderForm({ onAdded, canCreate, expanded, setExpanded }: {
         <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">API protocol</label>
         <ProviderTypeSelect value={providerType} onChange={v => { setPresetId('custom'); setProviderType(v) }} />
       </div>
+      <ProviderCapabilityNotice providerType={providerType} />
       <div className="space-y-1.5">
         <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Display name</label>
         <Input value={name} onChange={e => setName(e.target.value)} placeholder="My OpenAI" className="text-sm" />
@@ -225,13 +332,13 @@ function AddProviderForm({ onAdded, canCreate, expanded, setExpanded }: {
         <Input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-…" className="font-mono text-sm" />
       </div>
       <div className="space-y-1.5">
-        <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Default model</label>
-        <Input value={defaultModel} onChange={e => setDefaultModel(e.target.value)} placeholder="gpt-4o" className="font-mono text-sm" />
+        <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">{modelCopy.defaultLabel}</label>
+        <Input value={defaultModel} onChange={e => setDefaultModel(e.target.value)} placeholder={modelCopy.defaultPlaceholder} className="font-mono text-sm" />
       </div>
       <div className="space-y-1.5">
-        <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Available models</label>
-        <Input value={availableModels} onChange={e => setAvailableModels(e.target.value)} placeholder="gpt-4o, gpt-4o-mini" className="font-mono text-sm" />
-        <p className="text-xs text-muted-foreground">Comma-separated</p>
+        <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">{modelCopy.availableLabel}</label>
+        <Input value={availableModels} onChange={e => setAvailableModels(e.target.value)} placeholder={modelCopy.availablePlaceholder} className="font-mono text-sm" />
+        <p className="text-xs text-muted-foreground">{modelCopy.help}</p>
       </div>
       <label className="flex items-center gap-2 text-[13px]">
         <input type="checkbox" checked={isDefault} onChange={e => setIsDefault(e.target.checked)} className="accent-primary" />
@@ -274,6 +381,7 @@ function ProviderCard({
   const [grantSpaceId, setGrantSpaceId] = useState('')
   const [granting, setGranting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  const modelCopy = modelFieldCopy(config.provider_type)
 
   async function handleSave() {
     if (!editBaseUrl.trim()) {
@@ -321,6 +429,7 @@ function ProviderCard({
     return (
       <Card>
         <div className="space-y-3 p-4">
+          <ProviderCapabilityNotice providerType={config.provider_type} />
           <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Name" />
           <Input value={editBaseUrl} onChange={e => setEditBaseUrl(e.target.value)} placeholder="Base URL" className="font-mono text-sm" />
           <Input value={editClaudeCompatibleBaseUrl} onChange={e => setEditClaudeCompatibleBaseUrl(e.target.value)} placeholder="Claude-compatible URL" className="font-mono text-sm" />
@@ -330,8 +439,15 @@ function ProviderCard({
             <NetworkProfileSelector value={editNetworkProfileId} onChange={setEditNetworkProfileId} />
           </div>
           <Input type="password" value={editApiKey} onChange={e => setEditApiKey(e.target.value)} placeholder="Replace API key (optional)" className="font-mono text-sm" />
-          <Input value={editDefaultModel} onChange={e => setEditDefaultModel(e.target.value)} placeholder="Default model" className="font-mono text-sm" />
-          <Input value={editModels} onChange={e => setEditModels(e.target.value)} placeholder="Available models" className="font-mono text-sm" />
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">{modelCopy.defaultLabel}</label>
+            <Input value={editDefaultModel} onChange={e => setEditDefaultModel(e.target.value)} placeholder={modelCopy.defaultPlaceholder} className="font-mono text-sm" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">{modelCopy.availableLabel}</label>
+            <Input value={editModels} onChange={e => setEditModels(e.target.value)} placeholder={modelCopy.availablePlaceholder} className="font-mono text-sm" />
+            <p className="text-xs text-muted-foreground">{modelCopy.help}</p>
+          </div>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={editEnabled} onChange={e => setEditEnabled(e.target.checked)} />
             Enabled
@@ -361,6 +477,9 @@ function ProviderCard({
         </div>
         <span className="text-[10px] font-mono text-muted-foreground">{config.provider_type}</span>
       </div>
+      <div className="mb-3">
+        <ProviderCapabilityBadges providerType={config.provider_type} />
+      </div>
       {config.base_url && (
         <p className="text-xs font-mono text-muted-foreground mb-2 truncate">{config.base_url}</p>
       )}
@@ -374,13 +493,16 @@ function ProviderCard({
         Network: <span className="font-mono">{config.network_profile_id ? `profile:${config.network_profile_id.slice(0, 8)}` : 'direct'}</span>
       </p>
       {config.default_model && (
-        <p className="text-xs mb-2">Default: <span className="font-mono">{config.default_model}</span></p>
+        <p className="text-xs mb-2">{modelCopy.defaultLabel}: <span className="font-mono">{config.default_model}</span></p>
       )}
       <div className="flex flex-wrap gap-1 mb-3">
         {config.available_models.map(m => (
           <Badge key={m} variant="muted" className="text-[10px] font-mono">{m}</Badge>
         ))}
       </div>
+      {config.provider_type === 'zeroentropy' && (
+        <p className="text-xs text-muted-foreground mb-3">{modelCopy.help}</p>
+      )}
       {testResult && (
         <div className={`text-xs mb-3 p-2 rounded-md ${testResult.success ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-500'}`}>
           {testResult.success ? <CheckCircle className="size-3 inline mr-1" /> : <AlertCircle className="size-3 inline mr-1" />}
@@ -464,7 +586,7 @@ export default function ModelProvidersPage() {
         </div>
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Model Providers</h1>
-          <p className="text-sm text-muted-foreground">Configure OpenAI, Anthropic, OpenRouter, Ollama, or custom endpoints.</p>
+          <p className="text-sm text-muted-foreground">Configure chat, embedding, rerank, and runtime-compatible endpoints.</p>
           <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
         </div>
       </div>
@@ -480,7 +602,7 @@ export default function ModelProvidersPage() {
             <Card>
               <p className="text-sm text-muted-foreground p-4">
                 {activeSpaceId
-                  ? 'No model providers configured. Add OpenAI-compatible, Anthropic-compatible, OpenRouter, Ollama, or Other before running agents.'
+                  ? 'No model providers configured. Add chat providers for agents or retrieval providers for embeddings/rerank.'
                   : 'Select an operational space to configure providers.'}
               </p>
             </Card>

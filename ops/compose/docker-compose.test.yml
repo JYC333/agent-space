@@ -1,7 +1,7 @@
 services:
   postgres:
     container_name: agent-space-test-postgres
-    image: postgres:${POSTGRES_MAJOR:-18}
+    image: pgvector/pgvector:pg${POSTGRES_MAJOR:-18}
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-agent_space}
       - POSTGRES_USER=${POSTGRES_USER:-agent_space}

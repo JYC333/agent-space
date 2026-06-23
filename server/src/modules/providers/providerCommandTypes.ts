@@ -20,6 +20,15 @@ export class ProviderCommandNotFoundError extends Error {
   }
 }
 
+export class ProviderCommandForbiddenError extends Error {
+  readonly statusCode = 403;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderCommandForbiddenError";
+  }
+}
+
 export interface ModelProviderCreateInput {
   name: string;
   provider_type: string;
@@ -167,9 +176,10 @@ export interface ProviderCommandStore {
   listTaskPolicies(spaceId: string): Promise<unknown[]>;
   putTaskPolicy(
     spaceId: string,
+    userId: string,
     task: string,
     chain: ProviderTaskChainEntry[],
     enabled?: boolean,
   ): Promise<unknown>;
-  deleteTaskPolicy(spaceId: string, task: string): Promise<void>;
+  deleteTaskPolicy(spaceId: string, userId: string, task: string): Promise<void>;
 }

@@ -16,10 +16,10 @@ class FakeDb implements Queryable {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async query<Row = Record<string, unknown>>(
     sql: string,
-    _params: readonly unknown[] = [],
+    params: readonly unknown[] = [],
   ): Promise<{ rows: Row[]; rowCount: number | null }> {
     const table = tableOf(sql);
-    const rows = (this.rowsByTable[table] ?? []) as Row[];
+    const rows = filterRows(table, this.rowsByTable[table] ?? [], params) as Row[];
     return { rows, rowCount: rows.length };
   }
 }
@@ -27,10 +27,41 @@ class FakeDb implements Queryable {
 function tableOf(sql: string): string {
   if (sql.includes("FROM agents")) return "policy";
   if (sql.includes("FROM memory_entries")) return "memory_entries";
+  if (sql.includes("FROM provenance_links")) return "provenance_links";
+  if (sql.includes("FROM source_connections")) return "source_connections";
+  if (sql.includes("FROM space_memberships")) return "space_memberships";
+  if (sql.includes("FROM space_retrieval_settings")) return "space_retrieval_settings";
+  if (sql.includes("FROM spaces")) return "spaces";
+  if (sql.includes("FROM project_public_summaries")) return "project_public_summaries";
+  if (sql.includes("FROM projects")) return "projects";
+  if (sql.includes("FROM project_members")) return "project_members";
   if (sql.includes("FROM knowledge_items")) return "knowledge_items";
   if (sql.includes("FROM sources")) return "sources";
   if (sql.includes("FROM activity_records")) return "activity_records";
   return "unknown";
+}
+
+function filterRows(
+  table: string,
+  rows: Record<string, unknown>[],
+  params: readonly unknown[],
+): Record<string, unknown>[] {
+  if (table === "provenance_links") {
+    const targetType = typeof params[1] === "string" ? params[1] : null;
+    const targetIds = Array.isArray(params[2]) ? params[2] : [];
+    return rows.filter((row) =>
+      (!targetType || row.target_type === targetType) &&
+      targetIds.includes(row.target_id),
+    );
+  }
+  if (table === "source_connections") {
+    const ids = Array.isArray(params[1]) ? params[1] : [];
+    return rows.filter((row) => ids.includes(row.id));
+  }
+  if (table === "space_memberships") {
+    return rows.filter((row) => row.user_id === params[1] && row.status === "active");
+  }
+  return rows;
 }
 
 function memoryRow(over: Record<string, unknown>): Record<string, unknown> {
@@ -52,6 +83,32 @@ function memoryRow(over: Record<string, unknown>): Record<string, unknown> {
     deleted_at: null,
     importance: 0.9,
     confidence: 0.9,
+    project_id: null,
+    ...over,
+  };
+}
+
+function sourceConnection(over: Record<string, unknown> = {}): Record<string, unknown> {
+  const id = typeof over.id === "string" ? over.id : "source-1";
+  const ownerUserId = typeof over.owner_user_id === "string" ? over.owner_user_id : "source-owner";
+  return {
+    id,
+    owner_user_id: ownerUserId,
+    consent_json: {
+      schema_version: 1,
+      owner_user_id: ownerUserId,
+      allowed_reader_user_ids: ["user-1"],
+      allowed_agent_ids: [],
+      allow_space_admins: false,
+      allow_local_provider_egress: true,
+      allow_external_model_egress: true,
+      ...(typeof over.consent_json === "object" && over.consent_json ? over.consent_json : {}),
+    },
+    policy_json: {
+      schema_version: 1,
+      source_egress_class: "external_provider_allowed",
+      ...(typeof over.policy_json === "object" && over.policy_json ? over.policy_json : {}),
+    },
     ...over,
   };
 }
@@ -109,6 +166,26 @@ describe("ChatContextCandidateCollector", () => {
     expect(result.allowed_sources).toEqual([...result.allowed_sources].sort());
   });
 
+  it("surfaces approved project public summaries for cross-project inspiration", async () => {
+    const db = new FakeDb({
+      policy: [{ context_policy_json: {} }],
+      project_public_summaries: [
+        { project_id: "project-1", title: "Aster", summary_text: "Cross-project discovery brief." },
+      ],
+    });
+    const result = await collector(db).fetchCandidates(request);
+
+    const summary = result.items.find((i) => i.item_type === "project_public_summary");
+    expect(summary).toMatchObject({
+      item_id: "project-1",
+      title: "Aster",
+      excerpt: "Cross-project discovery brief.",
+      score: 0.4,
+      reason: "project_public_summary",
+    });
+    expect(result.allowed_sources).toContain("project_public_summary");
+  });
+
   it("honors the context_policy_json sources allow-list and caps", async () => {
     const db = new FakeDb({
       policy: [
@@ -138,11 +215,143 @@ describe("ChatContextCandidateCollector", () => {
         memoryRow({ id: "mine", owner_user_id: "user-1" }),
         // Private memory owned by another user — must be filtered out.
         memoryRow({ id: "theirs", owner_user_id: "user-2", subject_user_id: "user-2" }),
+        // Owner-only restricted memory of another user (the multi-member-space
+        // personal tier) — also filtered out.
+        memoryRow({
+          id: "theirs-restricted",
+          owner_user_id: "user-2",
+          subject_user_id: "user-2",
+          visibility: "restricted",
+          selected_user_ids: null,
+        }),
       ],
     });
     const result = await collector(db).fetchCandidates(request);
 
     expect(result.items.map((i) => i.item_id)).toEqual(["mine"]);
+  });
+
+  it("applies project ACL to memory candidates", async () => {
+    const db = new FakeDb({
+      policy: [{ context_policy_json: { sources: ["memory"] } }],
+      spaces: [{ type: "household" }],
+      projects: [
+        { id: "project-accessible", owner_user_id: "user-1" },
+        { id: "project-hidden", owner_user_id: "user-2" },
+      ],
+      project_members: [],
+      memory_entries: [
+        memoryRow({ id: "free", project_id: null, title: "Free" }),
+        memoryRow({ id: "allowed", project_id: "project-accessible", title: "Allowed" }),
+        memoryRow({ id: "hidden", project_id: "project-hidden", title: "Hidden" }),
+      ],
+    });
+    const result = await collector(db).fetchCandidates(request);
+
+    expect(result.items.map((i) => i.item_id)).toEqual(["free", "allowed"]);
+  });
+
+  it("filters source-backed knowledge items denied by source read policy", async () => {
+    const db = new FakeDb({
+      policy: [{ context_policy_json: { sources: ["knowledge_item"] } }],
+      knowledge_items: [
+        { id: "k-allowed", title: "Allowed", content: "allowed knowledge" },
+        { id: "k-denied", title: "Denied", content: "denied knowledge" },
+      ],
+      provenance_links: [
+        { target_type: "knowledge", target_id: "k-allowed", source_connection_id: "source-allowed" },
+        { target_type: "knowledge", target_id: "k-denied", source_connection_id: "source-denied" },
+      ],
+      source_connections: [
+        sourceConnection({ id: "source-allowed" }),
+        sourceConnection({
+          id: "source-denied",
+          consent_json: {
+            schema_version: 1,
+            owner_user_id: "source-owner",
+            allowed_reader_user_ids: ["someone-else"],
+            allowed_agent_ids: [],
+            allow_space_admins: false,
+            allow_local_provider_egress: true,
+            allow_external_model_egress: true,
+          },
+        }),
+      ],
+    });
+
+    const result = await collector(db).fetchCandidates(request);
+
+    expect(result.items.map((i) => i.item_id)).toEqual(["k-allowed"]);
+  });
+
+  it("filters source-backed knowledge items denied by external egress policy", async () => {
+    const db = new FakeDb({
+      policy: [{ context_policy_json: { sources: ["knowledge_item"] } }],
+      knowledge_items: [
+        { id: "k-local-only", title: "Local only", content: "local only knowledge" },
+        { id: "k-external", title: "External", content: "external knowledge" },
+      ],
+      provenance_links: [
+        { target_type: "knowledge", target_id: "k-local-only", source_connection_id: "source-local" },
+        { target_type: "knowledge", target_id: "k-external", source_connection_id: "source-external" },
+      ],
+      source_connections: [
+        sourceConnection({
+          id: "source-local",
+          consent_json: {
+            schema_version: 1,
+            owner_user_id: "source-owner",
+            allowed_reader_user_ids: ["user-1"],
+            allowed_agent_ids: [],
+            allow_space_admins: false,
+            allow_local_provider_egress: true,
+            allow_external_model_egress: false,
+          },
+          policy_json: {
+            schema_version: 1,
+            source_egress_class: "local_provider_allowed",
+          },
+        }),
+        sourceConnection({ id: "source-external" }),
+      ],
+    });
+
+    const result = await collector(db).fetchCandidates(request);
+
+    expect(result.items.map((i) => i.item_id)).toEqual(["k-external"]);
+  });
+
+  it("applies the space external egress switch to non-source chat candidates", async () => {
+    const db = new FakeDb({
+      policy: [{ context_policy_json: { sources: ["memory"] } }],
+      memory_entries: [memoryRow({ id: "m1", owner_user_id: "user-1" })],
+      space_retrieval_settings: [{ external_egress_enabled: false }],
+    });
+
+    const result = await collector(db).fetchCandidates(request);
+
+    expect(result.items).toEqual([]);
+  });
+
+  it("applies the space external egress switch to source-backed chat candidates", async () => {
+    const db = new FakeDb({
+      policy: [{ context_policy_json: { sources: ["source"] } }],
+      sources: [
+        {
+          id: "source-object",
+          title: "Source",
+          summary: "source summary",
+          raw_text: null,
+          metadata_json: { source_connection_id: "source-external" },
+        },
+      ],
+      source_connections: [sourceConnection({ id: "source-external" })],
+      space_retrieval_settings: [{ external_egress_enabled: false }],
+    });
+
+    const result = await collector(db).fetchCandidates(request);
+
+    expect(result.items).toEqual([]);
   });
 
   it("marks context_policy_applied false when no current version resolves", async () => {

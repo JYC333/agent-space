@@ -14,9 +14,10 @@ interface SelectProps {
   className?: string
   size?: 'sm' | 'md'
   dropUp?: boolean
+  disabled?: boolean
 }
 
-export function Select({ options, value, onChange, className, size = 'md', dropUp = false }: SelectProps) {
+export function Select({ options, value, onChange, className, size = 'md', dropUp = false, disabled = false }: SelectProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const selected = options.find(o => o.value === value)
@@ -35,11 +36,12 @@ export function Select({ options, value, onChange, className, size = 'md', dropU
     <div className={cn('relative', className)} ref={ref}>
       <button
         type="button"
+        disabled={disabled}
         onClick={() => setOpen(o => !o)}
         className={cn(
           'flex w-full items-center justify-between gap-1.5 rounded-md border border-border',
           'bg-input px-3 text-sm text-foreground transition-colors',
-          'hover:bg-accent focus:outline-none focus:ring-1 focus:ring-ring',
+          'hover:bg-accent focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60',
           h,
         )}
       >
@@ -47,7 +49,7 @@ export function Select({ options, value, onChange, className, size = 'md', dropU
         <ChevronDown size={13} className="shrink-0 text-muted-foreground" />
       </button>
 
-      {open && (
+      {open && !disabled && (
         <div className={cn(
           'absolute z-50 min-w-full overflow-hidden rounded-lg border border-border bg-card shadow-md',
           dropUp ? 'bottom-full mb-1' : 'mt-1',

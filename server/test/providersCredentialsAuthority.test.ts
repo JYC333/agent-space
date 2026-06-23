@@ -138,10 +138,10 @@ function fakeStore(): ProviderCommandStore {
     async listTaskPolicies(_spaceId) {
       return [];
     },
-    async putTaskPolicy(_spaceId, task, chain, enabled) {
+    async putTaskPolicy(_spaceId, _userId, task, chain, enabled) {
       return { task, chain, enabled: enabled ?? true, updated_at: "2026-06-11T12:00:00.000Z" };
     },
-    async deleteTaskPolicy(_spaceId, _task) {
+    async deleteTaskPolicy(_spaceId, _userId, _task) {
     },
     async resolveCredentialApiKey(_spaceId, _credentialId) {
       return "sk-test-credential";

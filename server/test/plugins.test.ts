@@ -186,7 +186,7 @@ const USER_1 = "user-1-test";
 const USER_2 = "user-2-test";
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:18").start();
+  container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
   pool = new Pool({ connectionString: container.getConnectionUri() });
   db = pool;
   await pool.query(SCHEMA);

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   ContextBuildRequestSchema,
   ContextBuildResultSchema,
+  ContextArtifactRevocationCreateRequestSchema,
+  ContextArtifactRevocationListResponseSchema,
   ContextCompileRequestSchema,
   ContextCompileResultSchema,
   ContextEngineEventSchema,
@@ -20,6 +22,9 @@ import {
   MemorySearchRequestSchema,
   MemoryPageSchema,
   MemoryOutSchema,
+  MemoryAccessLogListResponseSchema,
+  MemoryMaintenanceReportSchema,
+  MemoryMaintenanceScanRequestSchema,
   MemoryProposalCommandSchema,
   MemoryProposalCreateResultSchema,
   MemoryReadRequestSchema,
@@ -117,6 +122,73 @@ describe("memory + sessions contracts", () => {
         content: "hello",
       }).role,
     ).toBe("user");
+  });
+
+  it("parses explicit context artifact attachments without raw secret fields", () => {
+    const request = ContextBuildRequestSchema.parse({
+      space_id: "space-1",
+      query: "alpha",
+      context_artifact_ids: ["artifact-1"],
+    });
+    expect(request.context_artifact_ids).toEqual(["artifact-1"]);
+
+    const pkg = ContextPackageSchema.parse({
+      user_memory: [],
+      workspace_memory: [],
+      capability_memory: [],
+      agent_memory: [],
+      system_policy: [],
+      relevant_episodes: [],
+      recent_session_summary: [],
+      attachments: [
+        {
+          attachment_type: "artifact_evidence_pack",
+          artifact_id: "artifact-1",
+          artifact_type: "retrieval_brief",
+          label: "Context Brief",
+          domain_label: "knowledge_brief",
+          approved: true,
+          resolved_content: "bounded summary",
+          policy_snapshot: {
+            content_mode: "bounded_summary",
+            raw_artifact_content_included: false,
+          },
+          source_policy_snapshot: {
+            source_ref_count: 1,
+          },
+        },
+      ],
+    });
+    expect(pkg.attachments[0]).toMatchObject({
+      attachment_type: "artifact_evidence_pack",
+      approved: true,
+    });
+  });
+
+  it("parses context artifact revocation contracts", () => {
+    const request = ContextArtifactRevocationCreateRequestSchema.parse({
+      artifact_id: "artifact-1",
+      scope_type: "project",
+      scope_id: "project-1",
+      reason: "superseded",
+    });
+    expect(request.scope_type).toBe("project");
+
+    const response = ContextArtifactRevocationListResponseSchema.parse({
+      items: [
+        {
+          id: "revocation-1",
+          space_id: "space-1",
+          artifact_id: "artifact-1",
+          scope_type: "workspace",
+          scope_id: "workspace-1",
+          reason: null,
+          created_by_user_id: "user-1",
+          created_at: "2026-06-26T10:00:00.000Z",
+        },
+      ],
+    });
+    expect(response.items[0]?.artifact_id).toBe("artifact-1");
   });
 
   it("parses memory DTOs without exposing secret response fields", () => {
@@ -501,11 +573,99 @@ describe("memory + sessions contracts", () => {
       scope: "user",
       type: "fact",
       limit: 5,
-      space_id: "space-1",
-      user_id: "user-1",
       workspace_id: "ws-1",
     });
     expect(full.type).toBe("fact");
+    // The surface is identity-scoped: no space_id / user_id fields exist.
+    expect("space_id" in full).toBe(false);
+    expect("user_id" in full).toBe(false);
+  });
+
+  it("parses memory maintenance scan requests and reports", () => {
+    const req = MemoryMaintenanceScanRequestSchema.parse({ create_packet: true, project_id: "project-1" });
+    expect(req).toMatchObject({
+      persist_report: true,
+      create_packet: true,
+      limit: 500,
+      stale_after_days: 180,
+      thin_content_chars: 80,
+      max_findings: 100,
+      review_scope: "private",
+      project_id: "project-1",
+    });
+
+    const report = MemoryMaintenanceReportSchema.parse({
+      findings: [
+        {
+          kind: "duplicate",
+          objects: [
+            { object_type: "memory_entry", object_id: "memory-1", title: "A" },
+            { object_type: "memory_entry", object_id: "memory-2", title: "A" },
+          ],
+          reason: "same normalized title",
+        },
+      ],
+      counts: {
+        duplicate: 1,
+        stale: 0,
+        thin: 0,
+        lifecycle_drift: 0,
+      },
+      candidate_limit: 500,
+      candidates_examined: 2,
+      scanned: 2,
+      truncated: false,
+      artifact_id: "artifact-1",
+      proposal_id: "proposal-1",
+      access_safety: {
+        owner_private: true,
+        raw_content_included: false,
+      },
+    });
+    expect(report.findings[0]?.objects.map((object) => object.object_id)).toEqual([
+      "memory-1",
+      "memory-2",
+    ]);
+    expect(() =>
+      MemoryMaintenanceReportSchema.parse({
+        ...report,
+        findings: [
+          {
+            kind: "duplicate",
+            objects: [{ object_type: "memory_entry", object_id: "memory-1", title: "A" }],
+            reason: "bad",
+            raw_content: "must not be part of the wire shape",
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("parses memory access-log inspector responses", () => {
+    const parsed = MemoryAccessLogListResponseSchema.parse({
+      items: [
+        {
+          id: "access-log-1",
+          space_id: "space-1",
+          memory_id: "memory-1",
+          user_id: "user-1",
+          agent_id: null,
+          run_id: null,
+          access_type: "maintenance_scan",
+          reason: "memory maintenance scan",
+          accessed_at: "2026-06-26T10:00:00.000Z",
+          memory_title: "Visible memory",
+          memory_scope: "user",
+          memory_visibility: "private",
+          project_id: null,
+        },
+      ],
+      limit: 50,
+      offset: 0,
+      returned: 1,
+      has_more: false,
+    });
+    expect(parsed.items[0]?.access_type).toBe("maintenance_scan");
   });
 
   it("parses chat run-create port request and result", () => {

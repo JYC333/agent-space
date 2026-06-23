@@ -43,8 +43,11 @@ export {
   __setProviderHttpClientForTests,
   buildProviderModelName,
   completeProviderChat,
+  completeProviderEmbedding,
+  completeProviderRerank,
   completeProviderText,
   ProviderInvocationError,
+  type ProviderRerankResult,
   type ProviderHttpClient,
 } from "./providerInvocation";
 export { classifyProviderFailure } from "./providerResilience";

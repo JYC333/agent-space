@@ -60,8 +60,32 @@ export * from "./policy.js";
 // Proposal review contracts
 export * from "./proposals.js";
 
+// Knowledge retrieval contracts
+export * from "./knowledgeRetrieval.js";
+
+// Knowledge object and proposal packet contracts
+export * from "./knowledge.js";
+
+// Project public summary contracts
+export * from "./projects.js";
+
 // Memory + sessions contracts
 export * from "./memorySessions.js";
+
+// Brain Ops read-model contracts
+export * from "./brainOps.js";
+
+// Brain Think / Ask Brain unified entry-point contracts
+export * from "./brainThink.js";
+
+// Claim trajectory + contradiction loop contracts (Slice E)
+export * from "./claimBrainLoop.js";
+
+// Candidate-relation discovery pipeline contracts (Slice F)
+export * from "./relationDiscovery.js";
+
+// Object schema / Brain Shape Registry contracts (Slice G1)
+export * from "./objectSchema.js";
 
 // Official Optional Module (plugin) control-plane contracts
 export * from "./plugins.js";

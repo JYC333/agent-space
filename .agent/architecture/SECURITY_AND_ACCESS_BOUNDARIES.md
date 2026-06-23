@@ -48,6 +48,10 @@ Rules:
   schema.
 - Cross-space access fails closed (404) unless the route is an intentional exception
   documented in section 8.
+- Durable object `project_id` associations are not read grants. List filters and writes
+  that accept `project_id` validate that the project exists in the current space
+  (`assertProjectInSpace`) before using it; missing, deleted, or cross-space projects
+  return HTTP 422.
 
 ---
 
@@ -140,6 +144,98 @@ Additional invariants:
   active-memory path accessible without policy enforcement.
 - `MemoryProposalApplier.apply_create()` and `apply_update()` block grant-derived proposals
   from applying to non-personal target spaces without prior egress approval.
+
+### Project-level memory access (retrieval surfaces)
+
+Memory rows may carry a `project_id`. The **memory retrieval** surfaces
+(`POST /memory/retrieval/search` and `POST /memory/create-safety`) enforce
+project membership inside the memory adapter's `revalidate` gate, in addition to
+`canReadMemory` + summary-only redaction:
+
+- Personal space (single member): the sole member can access every project.
+- Shared (team/household) space: the project `owner_user_id`, or a user with an
+  `active` row in `project_members`. Everyone else fails closed.
+- `project_id = null` memory is not project-gated. A missing/deleted/cross-space
+  project fails closed.
+
+The gate covers **all user-facing memory read surfaces**: the retrieval surfaces
+(adapter `revalidate`) and the legacy `PgMemoryReadRepository` paths (`GET /memory`,
+`GET /memory/{id}`, `POST /memory/search`, batched after `canReadMemory`).
+Membership is managed via the projects module
+(`GET/POST /api/v1/projects/{id}/members`, `DELETE …/members/{userId}`; add/remove
+require the project owner or a space owner/admin).
+Proposal apply preserves the same association: memory proposals carry
+`proposals.project_id` through to `memory_entries.project_id`, after validating the
+project still exists in the proposal space. Missing/deleted/cross-space projects
+fail closed before any active memory row is created.
+
+### Project public summaries (high-level discovery)
+
+`project_public_summaries` is a separate discovery layer, not a bypass around
+project memory ACL. Approved rows are intentionally readable within the current
+space and indexed as retrieval object type `project_public_summary` so projects
+can inspire each other at a high level.
+
+Public-summary writes require project writer authority: the project
+`owner_user_id`, a space `owner`/`admin`, or an active project member role of
+`owner`/`member`. A project member role of `viewer` can read concrete project
+memory through the memory ACL but cannot mutate project metadata or public
+summary rows.
+
+**Publish governance.** A bare write stages `review_status = draft`. Flipping
+the row to a space-public state (`approved`) or removing it (`archived`)
+requires project-**owner**-level authority — the project `owner_user_id` or a
+space `owner`/`admin` (`assertProjectOwnerLevel`). A project `member`/writer can
+stage a draft but cannot self-approve, so the owner reviews before content
+becomes space-public. The draft generator only ever writes `draft`.
+
+**Database-level consistency.** `projects` has a composite candidate key
+`UNIQUE (space_id, id)`; `project_public_summaries` and `project_members` carry
+a composite FK `(space_id, project_id) → projects(space_id, id)`. A summary or
+ACL row cannot be associated with a project in another space even via raw SQL.
+
+**Project metadata visibility.** `projects.settings_json` is free-form
+configuration and may hold private operational detail; `GET /projects` and
+`GET /projects/{id}` redact it to `null` for non-writers. `name`,
+`description`, and `current_focus` remain space-visible descriptive metadata.
+
+The summary payload must stay redacted: `summary_text`, `topics_json`, and
+`highlights_json` are high-level fields; `source_refs_json` is pointer metadata
+only. It must not embed raw private memory, memo/document excerpts, artifact
+payloads, workspace file content, or other concrete project content. The
+Projects search route only permits `project_public_summary`, so it cannot be
+used to probe Knowledge or Memory retrieval projections.
+
+The draft generator
+(`POST /api/v1/projects/{id}/public-summary/draft`) follows the same writer
+authority rule and writes only `review_status = 'draft'`. Its prompt version is
+`project_public_summary.prompt.v1`; provider routing uses auxiliary task
+`project_public_summary` unless the request supplies a model provider. The
+generator bounds and filters the source context before the model call: no
+workspace files, no artifact file bodies, no `highly_restricted` memory, and no
+sensitive/restricted memory content. Model-returned source refs are accepted
+only when they match source IDs that were actually supplied to the prompt. The
+generator writes a best-effort `policy_decision_records` audit row
+(`action = project.public_summary.generate`, `decision = allow`) recording that
+authorized project context was sent to a provider — pointer metadata only
+(counts, provider id, model, prompt version), never project content.
+
+Approved summaries are also a candidate source for the shared system assistant:
+the chat candidate collector includes a `project_public_summary` source so the
+assistant can surface cross-project inspiration. Only the sanitized,
+space-public summary is read; concrete project memory remains behind the
+`project_members` ACL.
+
+**Runtime:** project-scoped memory is cut before runtime/chat prompt assembly.
+The per-run `ContextBuilder` retriever enforces the project cut (a run bound to
+project P injects P's memory only if `instructed_by_user_id` can access P, plus
+project-free memory; a no-project run injects project-free memory only). Chat /
+assistant context candidates apply the same project-membership ACL after
+`canReadMemory`, so concrete project memory is only available for projects the
+viewer can access. Shared `ContextDigest` generation and consumption exclude
+`project_id IS NOT NULL` memory; project memory only flows through gateable
+per-run/chat retrieval. Memory retrieval search is current-space only;
+cross-space memory retrieval is not implemented.
 
 ---
 

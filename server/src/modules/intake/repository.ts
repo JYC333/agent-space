@@ -48,6 +48,13 @@ import {
   type WorkspaceBindingRow,
   type WorkspaceProfileRow,
 } from "./intakeRepositoryRows";
+import {
+  enforceSourceDerivedImportTarget,
+  enforceSourceRetentionPolicy,
+  normalizeSourceConnectionCreateGovernance,
+  normalizeSourceConnectionReadGovernance,
+  normalizeSourceConnectionUpdateGovernance,
+} from "./sourceConsent";
 
 export class PgIntakeRepository {
   constructor(
@@ -87,6 +94,7 @@ export class PgIntakeRepository {
     );
     if (!connector.rows[0]) throw new HttpError(404, "Source connector not found");
     const now = new Date().toISOString();
+    const governance = normalizeSourceConnectionCreateGovernance(identity, body);
     const result = await this.db.query<SourceConnectionRow>(
       `INSERT INTO source_connections (
          id, space_id, connector_id, owner_user_id, credential_id, name, endpoint_url,
@@ -106,11 +114,11 @@ export class PgIntakeRepository {
         requiredString(body.name, "name"),
         optionalString(body.endpoint_url),
         optionalString(body.fetch_frequency) ?? "manual",
-        optionalString(body.capture_policy) ?? "metadata_only",
-        optionalString(body.trust_level) ?? "normal",
+        governance.capturePolicy,
+        governance.trustLevel,
         JSON.stringify(Array.isArray(body.topic_hints) ? body.topic_hints : null),
-        JSON.stringify(objectValue(body.consent)),
-        JSON.stringify(objectValue(body.policy)),
+        JSON.stringify(governance.consent),
+        JSON.stringify(governance.policy),
         JSON.stringify(objectValue(body.config)),
         now,
       ],
@@ -127,8 +135,10 @@ export class PgIntakeRepository {
   }
 
   async updateConnection(identity: SpaceUserIdentity, connectionId: string, body: Record<string, unknown>) {
-    if (!(await this.getConnection(identity, connectionId))) throw new HttpError(404, "Source connection not found");
+    const existing = await this.getConnectionRow(identity, connectionId);
+    if (!existing) throw new HttpError(404, "Source connection not found");
     const now = new Date().toISOString();
+    const governance = normalizeSourceConnectionUpdateGovernance(identity, existing, body);
     const result = await this.db.query<SourceConnectionRow>(
       `UPDATE source_connections SET
          name = COALESCE($3, name),
@@ -153,14 +163,14 @@ export class PgIntakeRepository {
         Object.hasOwn(body, "credential_id"),
         optionalString(body.credential_id),
         optionalString(body.fetch_frequency),
-        optionalString(body.capture_policy),
-        optionalString(body.trust_level),
+        governance.capturePolicy,
+        governance.trustLevel,
         Object.hasOwn(body, "topic_hints"),
         JSON.stringify(Array.isArray(body.topic_hints) ? body.topic_hints : null),
-        Object.hasOwn(body, "consent"),
-        JSON.stringify(optionalObject(body.consent)),
-        Object.hasOwn(body, "policy"),
-        JSON.stringify(optionalObject(body.policy)),
+        governance.consent !== null,
+        JSON.stringify(governance.consent),
+        governance.policy !== null,
+        JSON.stringify(governance.policy),
         Object.hasOwn(body, "config"),
         JSON.stringify(optionalObject(body.config)),
         now,
@@ -227,9 +237,12 @@ export class PgIntakeRepository {
     const url = requiredString(body.url, "url");
     const canonical = normalizeUrl(url);
     const connectionId = optionalString(body.connection_id);
-    if (connectionId && !(await this.getConnection(identity, connectionId))) {
+    const connection = connectionId ? await this.getConnectionRow(identity, connectionId) : null;
+    if (connectionId && !connection) {
       throw new HttpError(404, "Source connection not found");
     }
+    const retention = body.queue_content === true ? "full_text" : "metadata_only";
+    if (connection) enforceSourceRetentionPolicy(normalizeSourceConnectionReadGovernance(connection).policy, retention);
     const existing = await this.db.query<IntakeItemRow>(
       `SELECT ${ITEM_COLUMNS} FROM intake_items WHERE space_id = $1 AND deleted_at IS NULL AND (canonical_uri = $2 OR source_uri = $2) LIMIT 1`,
       [identity.spaceId, canonical],
@@ -256,7 +269,7 @@ export class PgIntakeRepository {
           canonical,
           sourceDomain(canonical),
           body.queue_content === true ? "content_queued" : "metadata_only",
-          body.queue_content === true ? "summary_only" : "metadata_only",
+          retention,
           JSON.stringify({ created_by: "manual_url" }),
           now,
         ],
@@ -275,7 +288,8 @@ export class PgIntakeRepository {
     const action = requiredString(body.action, "action");
     if (action === "queue_content" || action === "archive_snapshot") {
       const contentState = action === "queue_content" ? "content_queued" : "snapshot_queued";
-      const retention = action === "queue_content" ? "summary_only" : "full_snapshot";
+      const retention = action === "queue_content" ? "full_text" : "full_snapshot";
+      await this.enforceItemRetentionPolicy(identity, item, retention);
       await this.db.query(
         `UPDATE intake_items SET content_state = $3, retention_policy = $4, updated_at = $5 WHERE space_id = $1 AND id = $2`,
         [identity.spaceId, itemId, contentState, retention, new Date().toISOString()],
@@ -615,6 +629,12 @@ export class PgIntakeRepository {
       : { rows: [] as IntakeItemRow[] };
     if (evidenceRows.rows.length !== evidenceIds.length || itemRows.rows.length !== intakeItemIds.length) throw new HttpError(404, "Summary input not found");
     const summary = buildSummary(evidenceRows.rows, itemRows.rows, optionalString(body.summary_goal));
+    if (body.create_memory_proposal === true || body.create_memory_proposals === true) {
+      await this.enforceSummaryImportTargetPolicy(identity, evidenceRows.rows, itemRows.rows, "memory_proposal");
+    }
+    if (body.create_knowledge_proposal === true || body.create_knowledge_proposals === true) {
+      await this.enforceSummaryImportTargetPolicy(identity, evidenceRows.rows, itemRows.rows, "knowledge");
+    }
     const artifactId = randomUUID();
     const now = new Date().toISOString();
     await this.db.query(
@@ -649,10 +669,76 @@ export class PgIntakeRepository {
     return { run_id: `summary:${artifactId}`, artifact_id: artifactId, proposal_ids: proposalIds, status: "succeeded", summary_preview: summary.slice(0, 500) };
   }
 
+  private async enforceItemRetentionPolicy(identity: SpaceUserIdentity, item: IntakeItemRow, retention: "metadata_only" | "summary_only" | "full_text" | "full_snapshot") {
+    if (!item.connection_id) return;
+    const connection = await this.getConnectionRow(identity, item.connection_id);
+    if (!connection) throw new HttpError(404, "Source connection not found");
+    enforceSourceRetentionPolicy(normalizeSourceConnectionReadGovernance(connection).policy, retention);
+  }
+
+  private async enforceSummaryImportTargetPolicy(
+    identity: SpaceUserIdentity,
+    evidenceRows: EvidenceRow[],
+    itemRows: IntakeItemRow[],
+    target: "knowledge" | "memory_proposal",
+  ) {
+    const itemsById = new Map<string, IntakeItemRow>();
+    for (const row of itemRows) {
+      if (row.id) itemsById.set(row.id, row);
+    }
+    const evidenceItemIds = [
+      ...new Set(
+        evidenceRows
+          .map((row) => row.intake_item_id)
+          .filter((id): id is string => typeof id === "string" && id.length > 0 && !itemsById.has(id)),
+      ),
+    ];
+    if (evidenceItemIds.length) {
+      const evidenceItems = await this.db.query<IntakeItemRow>(
+        `SELECT ${ITEM_COLUMNS} FROM intake_items WHERE space_id = $1 AND id::text = ANY($2::text[]) AND deleted_at IS NULL`,
+        [identity.spaceId, evidenceItemIds],
+      );
+      if (evidenceItems.rows.length !== evidenceItemIds.length) throw new HttpError(404, "Summary source item not found");
+      for (const row of evidenceItems.rows) {
+        itemsById.set(row.id, row);
+      }
+    }
+
+    const connectionIds = [
+      ...new Set(
+        [...itemsById.values()]
+          .map((row) => row.connection_id)
+          .filter((id): id is string => typeof id === "string" && id.length > 0),
+      ),
+    ];
+    if (!connectionIds.length) return;
+
+    const connections = await this.db.query<SourceConnectionRow>(
+      `SELECT ${CONNECTION_COLUMNS} FROM source_connections WHERE space_id = $1 AND id::text = ANY($2::text[]) AND deleted_at IS NULL`,
+      [identity.spaceId, connectionIds],
+    );
+    if (connections.rows.length !== connectionIds.length) throw new HttpError(404, "Source connection not found");
+    const connectionsById = new Map(connections.rows.map((row) => [row.id, row]));
+    for (const item of itemsById.values()) {
+      if (!item.connection_id) continue;
+      const connection = connectionsById.get(item.connection_id);
+      if (!connection) throw new HttpError(404, "Source connection not found");
+      enforceSourceDerivedImportTarget(normalizeSourceConnectionReadGovernance(connection).policy, target);
+    }
+  }
+
   private async getItemRow(identity: SpaceUserIdentity, itemId: string) {
     const result = await this.db.query<IntakeItemRow>(
       `SELECT ${ITEM_COLUMNS} FROM intake_items WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
       [identity.spaceId, itemId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async getConnectionRow(identity: SpaceUserIdentity, connectionId: string) {
+    const result = await this.db.query<SourceConnectionRow>(
+      `SELECT ${CONNECTION_COLUMNS} FROM source_connections WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
+      [identity.spaceId, connectionId],
     );
     return result.rows[0] ?? null;
   }
@@ -688,7 +774,7 @@ export class PgIntakeRepository {
     const payload = proposalType === "knowledge_create"
       ? {
           operation: "create",
-          item_type: "summary",
+          knowledge_kind: "summary",
           title,
           content: summary,
           content_format: "markdown",

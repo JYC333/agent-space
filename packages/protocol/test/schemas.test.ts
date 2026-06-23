@@ -120,7 +120,7 @@ describe("DTO schema validation", () => {
       KnowledgeItemDTOSchema.parse({
         id: "k1",
         space_id: "s1",
-        item_type: "doc",
+        knowledge_kind: "concept",
         title: "T",
         content: "C",
         status: "active",

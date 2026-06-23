@@ -26,6 +26,11 @@ export interface AutomationRow {
 export interface AutomationRepositoryPort {
   get(spaceId: string, automationId: string): Promise<AutomationRow | null>;
   getMembershipRole(spaceId: string, userId: string): Promise<string | null>;
+  getAgentPreflight(spaceId: string, agentId: string): Promise<{
+    status: string;
+    current_version_id: string | null;
+    version_id: string | null;
+  } | null>;
   create(input: {
     spaceId: string;
     ownerUserId: string;
@@ -49,6 +54,7 @@ export interface AutomationRepositoryPort {
   ): Promise<AutomationRow>;
   listDue(nowIso: string): Promise<AutomationRow[]>;
   advanceSchedule(automation: AutomationRow): Promise<void>;
+  recordFire(spaceId: string, automationId: string): Promise<void>;
   hasActiveGrant(spaceId: string, automationId: string): Promise<boolean>;
   createAutomationRun(input: {
     automationId: string;
@@ -100,6 +106,27 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
       [spaceId, userId],
     );
     return result.rows[0]?.role ?? null;
+  }
+
+  async getAgentPreflight(
+    spaceId: string,
+    agentId: string,
+  ): Promise<{ status: string; current_version_id: string | null; version_id: string | null } | null> {
+    const result = await this.db.query<{
+      status: string;
+      current_version_id: string | null;
+      version_id: string | null;
+    }>(
+      `SELECT a.status,
+              a.current_version_id,
+              av.id AS version_id
+         FROM agents a
+         LEFT JOIN agent_versions av ON av.id = a.current_version_id AND av.space_id = a.space_id
+        WHERE a.space_id = $1 AND a.id = $2
+        LIMIT 1`,
+      [spaceId, agentId],
+    );
+    return result.rows[0] ?? null;
   }
 
   async create(input: {
@@ -251,6 +278,17 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
               updated_at = $3
         WHERE id = $1 AND space_id = $2`,
       [automation.id, automation.space_id, now, nextRunAt],
+    );
+  }
+
+  async recordFire(spaceId: string, automationId: string): Promise<void> {
+    const now = new Date().toISOString();
+    await this.db.query(
+      `UPDATE automations
+          SET last_fired_at = $3,
+              updated_at = $3
+        WHERE id = $1 AND space_id = $2`,
+      [automationId, spaceId, now],
     );
   }
 

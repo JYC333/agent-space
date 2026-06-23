@@ -35,6 +35,35 @@ import {
   provenanceEntriesFromPayload,
   type ProvenanceEntry,
 } from "./sourceMonitoring";
+import { RetrievalProjectionService } from "../retrieval";
+import { memoryRetrievalRegistry } from "./retrievalAdapter";
+import { assertProjectInSpace } from "../projects/access";
+
+// The memory retrieval projection is a derived index. A projection failure must
+// not roll back an accepted canonical memory write, but the reindex runs inside
+// the apply transaction, so a thrown query would otherwise abort it. We isolate
+// the reindex in a SAVEPOINT: on failure we roll back only the projection work
+// and let the canonical apply commit. Mirrors the Knowledge apply hook.
+async function reindexMemoryWithinApply(
+  db: Queryable,
+  spaceId: string,
+  memoryIds: readonly string[],
+): Promise<void> {
+  await db.query("SAVEPOINT memory_retrieval_reindex");
+  try {
+    const projection = new RetrievalProjectionService(db, memoryRetrievalRegistry);
+    for (const memoryId of memoryIds) {
+      await projection.reindex(spaceId, "memory_entry", memoryId);
+    }
+    await db.query("RELEASE SAVEPOINT memory_retrieval_reindex");
+  } catch (error) {
+    await db.query("ROLLBACK TO SAVEPOINT memory_retrieval_reindex").catch(() => undefined);
+    await db.query("RELEASE SAVEPOINT memory_retrieval_reindex").catch(() => undefined);
+    process.stderr.write(
+      `[memory.retrieval] reindex failed during proposal apply: ${String((error as Error)?.message ?? error)}\n`,
+    );
+  }
+}
 
 export class MemoryApplyError extends Error {
   readonly statusCode = 422;
@@ -48,6 +77,11 @@ export class MemoryApplyUnsupportedError extends Error {
 }
 
 const MEMORY_APPLY_TYPES = new Set(["memory_create", "memory_update", "memory_archive"]);
+
+// Visibilities controlled by a single owner. For these, a memory with no
+// explicit owner is attributed to the acting/creating user; with no
+// `selected_user_ids` a `restricted` row is then owner-only.
+const OWNER_SCOPED_VISIBILITIES = new Set(["private", "restricted", "selected_users"]);
 
 // Payload markers that make a proposal grant-derived (mirror of the legacy
 // `is_grant_derived_proposal` rule); plus any run context, which requires the
@@ -69,8 +103,10 @@ export interface ApplyProposal {
   title: string | null;
   payload_json: Record<string, unknown> | null;
   workspace_id: string | null;
+  visibility?: string | null;
   created_by_user_id: string | null;
   created_by_run_id?: string | null;
+  project_id: string | null;
 }
 
 export interface MemoryAcceptResult {
@@ -98,6 +134,7 @@ export interface AppliedMemoryRow {
   subject_user_id: string | null;
   selected_user_ids: unknown;
   workspace_id: string | null;
+  project_id: string | null;
   source_trust: string | null;
   source_activity_id: string | null;
   root_memory_id: string | null;
@@ -125,12 +162,13 @@ const INSERT_COLUMNS = `id, space_id, scope_type, scope_id, memory_type, content
   sensitivity_level, selected_user_ids, last_confirmed_at, workspace_id, namespace,
   title, visibility, confidence, importance, source_id, source_activity_id,
   created_by, approved_by, version, access_count, tags, memory_layer, memory_kind,
-  created_from_proposal_id, root_memory_id, supersedes_memory_id, source_trust, agent_id`;
+  created_from_proposal_id, root_memory_id, supersedes_memory_id, source_trust, agent_id,
+  project_id`;
 
 const RETURNING_COLUMNS = `id, space_id, scope_type, namespace, memory_type, title,
   content, status, visibility, sensitivity_level, owner_user_id, subject_user_id,
-  selected_user_ids, workspace_id, source_trust, source_activity_id, root_memory_id,
-  supersedes_memory_id, memory_layer, memory_kind, version, agent_id`;
+  selected_user_ids, workspace_id, project_id, source_trust, source_activity_id,
+  root_memory_id, supersedes_memory_id, memory_layer, memory_kind, version, agent_id`;
 
 /** Columns + values needed for one new active memory version. */
 interface NewMemoryFields {
@@ -145,6 +183,7 @@ interface NewMemoryFields {
   subjectUserId: string | null;
   selectedUserIds: unknown;
   workspaceId: string | null;
+  projectId: string | null;
   agentId: string | null;
   memoryLayer: string | null;
   memoryKind: string | null;
@@ -201,6 +240,16 @@ export class PgMemoryApplyRepository {
     }
 
     const result = await this.applyByType({ ...proposal, payload_json: payload }, userId);
+
+    // Best-effort derived retrieval reindex. acceptAndApply runs inside the
+    // proposal apply transaction (the caller owns BEGIN/COMMIT), so the reindex
+    // is SAVEPOINT-isolated and a projection failure never rolls back the
+    // accepted canonical write. Reindexing the superseded/archived row drops its
+    // stale projection (loadCanonical returns null for non-active rows).
+    const reindexIds = result.supersededMemoryId
+      ? [result.memory.id, result.supersededMemoryId]
+      : [result.memory.id];
+    await reindexMemoryWithinApply(this.db, proposal.space_id, reindexIds);
 
     const finalPayload: Record<string, unknown> = { ...payload, resulting_memory_id: result.memory.id };
     await this.markProposalAccepted(proposal.id, proposal.space_id, userId, finalPayload);
@@ -265,15 +314,21 @@ export class PgMemoryApplyRepository {
   /** Apply a memory_create proposal: one new active memory + provenance. */
   async applyCreate(proposal: ApplyProposal, userId: string): Promise<MemoryApplyResult> {
     const payload = proposal.payload_json ?? {};
-    const vis = lower(strOr(payload.target_visibility) ?? strOr(payload.visibility) ?? "space_shared");
+    const explicitVisibility = strOr(payload.target_visibility) ?? strOr(payload.visibility);
+    const vis = lower(explicitVisibility ?? (await this.defaultDerivedVisibility(proposal.space_id)));
     const sens = lower(strOr(payload.sensitivity_level) ?? "normal");
     const content = strOr(payload.proposed_content) ?? strOr(payload.content) ?? "";
     const memType = strOr(payload.memory_type) ?? "semantic";
     const scope = strOr(payload.target_scope) ?? strOr(payload.scope_type) ?? "user";
     const namespace = strOr(payload.target_namespace) ?? strOr(payload.namespace) ?? "user.default";
 
+    // Owner-scoped visibilities (incl. the multi-member-space `restricted`
+    // default) attribute the memory to the proposal's creating user, not the
+    // accepting user.
+    const acting = String(proposal.created_by_user_id ?? userId);
     const entries = provenanceEntriesFromPayload(payload);
-    const ownerUserId = this.resolveOwner(strOr(payload.owner_user_id), vis, userId);
+    const ownerUserId = this.resolveOwner(strOr(payload.owner_user_id), vis, acting);
+    const projectId = await this.resolveProjectId(proposal, payload, null);
 
     await this.assertPrivatePlacement(proposal.space_id, vis);
 
@@ -289,6 +344,7 @@ export class PgMemoryApplyRepository {
       subjectUserId: strOr(payload.subject_user_id),
       selectedUserIds: payload.selected_user_ids ?? null,
       workspaceId: proposal.workspace_id,
+      projectId,
       agentId: strOr(payload.agent_id),
       memoryLayer: memoryLayer(payload),
       memoryKind: strOr(payload.memory_kind),
@@ -348,6 +404,7 @@ export class PgMemoryApplyRepository {
       vis,
       userId,
     );
+    const projectId = await this.resolveProjectId(proposal, payload, old.project_id);
 
     await this.assertPrivatePlacement(proposal.space_id, vis);
 
@@ -363,6 +420,7 @@ export class PgMemoryApplyRepository {
       subjectUserId: strOr(payload.subject_user_id) ?? old.subject_user_id,
       selectedUserIds: payload.selected_user_ids ?? old.selected_user_ids ?? null,
       workspaceId: proposal.workspace_id ?? old.workspace_id,
+      projectId,
       agentId: strOr(payload.agent_id) ?? old.agent_id,
       memoryLayer: memoryLayer(payload) ?? old.memory_layer,
       memoryKind: strOr(payload.memory_kind) ?? old.memory_kind,
@@ -460,21 +518,43 @@ export class PgMemoryApplyRepository {
 
   private resolveOwner(owner: string | null, visibility: string, actingUserId: string): string | null {
     let ownerUserId = owner;
-    if (visibility === "private" && ownerUserId == null) ownerUserId = actingUserId;
+    // Owner-scoped visibilities attribute to the acting user when no owner is
+    // given, so a `restricted` memory with no `selected_user_ids` is owner-only.
+    if (OWNER_SCOPED_VISIBILITIES.has(visibility) && ownerUserId == null) {
+      ownerUserId = actingUserId;
+    }
     if (visibility === "private" && ownerUserId == null) {
       throw new MemoryApplyError("owner_user_id is required for private visibility");
     }
     return ownerUserId;
   }
 
-  /** Hard invariant of `check_private_memory_placement`: private → personal space. */
-  private async assertPrivatePlacement(spaceId: string, visibility: string): Promise<void> {
-    if (visibility !== "private") return;
+  private async spaceType(spaceId: string): Promise<string> {
     const res = await this.db.query<{ type: string }>(
       `SELECT type FROM spaces WHERE id = $1`,
       [spaceId],
     );
-    const spaceType = res.rows[0]?.type ?? "unknown";
+    return res.rows[0]?.type ?? "unknown";
+  }
+
+  /**
+   * Default visibility for a `memory_create` with no explicit visibility. A
+   * single-member personal space keeps `space_shared` (equivalent to owner-only
+   * there). A multi-member household/team space defaults to `restricted`
+   * owner-only, so one member's assistant/intake-derived memory is not
+   * auto-shared — sharing it with the space is an explicit promotion
+   * (`memory_update` to `space_shared`). See SHARED_SPACE_MEMORY_ISOLATION.md.
+   * `private` is intentionally not used here because it is barred outside
+   * personal spaces by the placement invariant.
+   */
+  private async defaultDerivedVisibility(spaceId: string): Promise<string> {
+    return (await this.spaceType(spaceId)) === "personal" ? "space_shared" : "restricted";
+  }
+
+  /** Hard invariant of `check_private_memory_placement`: private → personal space. */
+  private async assertPrivatePlacement(spaceId: string, visibility: string): Promise<void> {
+    if (visibility !== "private") return;
+    const spaceType = await this.spaceType(spaceId);
     if (spaceType !== "personal") {
       throw new MemoryApplyError(
         `visibility='private' is only permitted in personal spaces; space '${spaceId}' has type '${spaceType}'`,
@@ -494,7 +574,7 @@ export class PgMemoryApplyRepository {
          $10, $11::jsonb, NULL, $12, $13,
          $14, $15, 1.0, 0.5, NULL, $16,
          $17, $18, 1, 0, NULL, $19, $20,
-         $6, $21, $22, $23, $24
+         $6, $21, $22, $23, $24, $25
        )
        RETURNING ${RETURNING_COLUMNS}`,
       [
@@ -522,9 +602,25 @@ export class PgMemoryApplyRepository {
         f.supersedesMemoryId, // $22
         f.sourceTrust, // $23
         f.agentId, // $24
+        f.projectId, // $25
       ],
     );
     return result.rows[0]!;
+  }
+
+  private async resolveProjectId(
+    proposal: ApplyProposal,
+    payload: Record<string, unknown>,
+    fallbackProjectId: string | null,
+  ): Promise<string | null> {
+    const projectId = proposal.project_id ?? strOr(payload.project_id) ?? fallbackProjectId;
+    try {
+      await assertProjectInSpace(this.db, proposal.space_id, projectId);
+    } catch (error) {
+      if (error instanceof Error) throw new MemoryApplyError(error.message);
+      throw error;
+    }
+    return projectId;
   }
 
   private async getActive(memoryId: string, spaceId: string): Promise<AppliedMemoryRow | null> {

@@ -12,6 +12,7 @@ import { Button } from '../../components/ui/button'
 import { Skeleton } from '../../components/ui/skeleton'
 import { EmptyState } from '../../components/ui/empty-state'
 import KnowledgeSectionHeader from './KnowledgeSectionHeader'
+import RetrievalBriefPanel from './RetrievalBriefPanel'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -117,6 +118,8 @@ export default function KnowledgeOverviewPage() {
           </Card>
 
           {/* Compact status sections */}
+          <RetrievalBriefPanel hasOperationalSpace={Boolean(activeSpaceId)} />
+
           <div className="grid gap-3 lg:grid-cols-2">
             <SectionCard title="Recent notes" to="/knowledge/notes" actionLabel="All notes">
               {recent(notes, 5).length === 0 ? (
@@ -133,7 +136,7 @@ export default function KnowledgeOverviewPage() {
                 <EmptyText>No canonical wiki items yet.</EmptyText>
               ) : (
                 recent(wiki, 5).map(w => (
-                  <RowLink key={w.id} to={`/knowledge/wiki/${w.id}`} title={w.title} meta={fmt(w.updated_at)} badge={w.item_type} />
+                  <RowLink key={w.id} to={`/knowledge/wiki/${w.id}`} title={w.title} meta={fmt(w.updated_at)} badge={w.knowledge_kind} />
                 ))
               )}
             </SectionCard>

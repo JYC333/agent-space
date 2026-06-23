@@ -1,0 +1,19 @@
+{
+  "docs": [
+    {
+      "id": "eval-memory-1",
+      "title": "Coffee preferences",
+      "content": "Prefers oat milk flat white in the morning."
+    },
+    {
+      "id": "eval-memory-2",
+      "title": "Standup schedule",
+      "content": "Daily standup is at 9:30 in the team channel."
+    }
+  ],
+  "cases": [
+    { "query": "Coffee preferences", "expected": ["eval-memory-1"] },
+    { "query": "oat milk flat white", "expected": ["eval-memory-1"] },
+    { "query": "Standup schedule", "expected": ["eval-memory-2"] }
+  ]
+}

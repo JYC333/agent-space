@@ -1,5 +1,6 @@
 import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
+import { assertProjectInSpace } from "../projects/access";
 import type { ProposalOut, ProposalPage } from "@agent-space/protocol" with { "resolution-mode": "import" };
 
 export interface QueryResult<Row> {
@@ -65,6 +66,7 @@ export class PgProposalRepository {
     userId: string,
     filters: ProposalListFilters,
   ): Promise<ProposalPage> {
+    await assertProjectInSpace(this.db, spaceId, filters.projectId);
     const built = buildVisibleWhere(spaceId, userId, filters);
     const totalResult = await this.db.query<{ total: string | number }>(
       `SELECT count(p.id)::text AS total

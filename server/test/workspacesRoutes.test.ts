@@ -37,7 +37,13 @@ describe("workspace routes", () => {
       offset: 0,
     });
     await expectJson("GET", "/api/v1/workspace-console/workspaces", {
-      items: [{ id: "workspace-1", name: "Workspace", root_path: "/workspace", kind: "project" }],
+      items: [{
+        id: "workspace-1",
+        name: "Workspace",
+        path: "/workspace",
+        type: "project",
+        description: null,
+      }],
     });
     await expectJson("GET", "/api/v1/workspace-console/workspaces/workspace-1/file?path=README.md", {
       path: "README.md",
@@ -96,7 +102,13 @@ function fakeRepository(): Pick<
     },
     async listConsoleWorkspaces() {
       return {
-        items: [{ id: "workspace-1", name: "Workspace", root_path: "/workspace", kind: "project" }],
+        items: [{
+          id: "workspace-1",
+          name: "Workspace",
+          path: "/workspace",
+          type: "project",
+          description: null,
+        }],
       };
     },
     async getTree() {

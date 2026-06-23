@@ -37,6 +37,8 @@ Canonical explicit reads (GET /memory/{id}, search hits) also append `MemoryRead
 
 Long-lived writes should continue to go through the **proposal → approval** flow where applicable. Proposal payloads carry `owner_user_id`, `subject_user_id`, `visibility`, `sensitivity_level`, and `selected_user_ids` alongside existing fields; acceptance must not conflate approving user, owner, and subject.
 
+When a `memory_create` carries no explicit visibility, the default is **space-type-aware**: a `personal` space defaults to `space_shared` (sole member), while a multi-member `household`/`team` space defaults to `restricted` owner-only (`owner_user_id` = the creating user, empty `selected_user_ids`). This keeps one member's assistant/intake-derived memory private to them; sharing it with the space is an explicit promotion (a `memory_update` to `space_shared`). See [SHARED_SPACE_MEMORY_ISOLATION.md](SHARED_SPACE_MEMORY_ISOLATION.md). The hard placement invariant still holds: `visibility=private` is only permitted in personal spaces.
+
 ## Implementation map
 
 - Central rule: `server/src/modules/memory/memoryReadAuth.ts` — `canReadMemory`, `userInSelectedIds`, `summaryOnlyRedactContent`.

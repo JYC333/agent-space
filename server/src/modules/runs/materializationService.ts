@@ -17,6 +17,8 @@ import {
   type RunFinalizationRecord,
   type RunRecord,
 } from "./repository";
+import { assertProjectInSpace } from "../projects/access";
+import { loadProtocol } from "../providers/protocolRuntime";
 
 export interface RunMaterializationResult {
   items: RunMaterializationItemSummary[];
@@ -40,8 +42,25 @@ const SUPPORTED_PROPOSAL_TYPES = new Set([
   "knowledge_archive",
   "knowledge_relation_create",
   "knowledge_relation_delete",
+  "claim_create",
+  "claim_update",
+  "claim_archive",
+  "claim_relation_create",
+  "claim_relation_delete",
+  "object_relation_create",
+  "object_relation_delete",
   "follow_up_task",
   "code_patch",
+]);
+
+const STRUCTURED_PACKET_PROPOSAL_TYPES = new Set([
+  "claim_create",
+  "claim_update",
+  "claim_archive",
+  "claim_relation_create",
+  "claim_relation_delete",
+  "object_relation_create",
+  "object_relation_delete",
 ]);
 
 export class RunMaterializationService {
@@ -267,6 +286,8 @@ export class RunMaterializationService {
         storagePath: null,
         mimeType: stringValue(spec.mime_type) ?? "text/plain; charset=utf-8",
         preview: booleanValue(spec.preview) ?? input.run.mode === "dry_run",
+        visibility: normalizeArtifactVisibility(stringValue(spec.visibility)),
+        workspaceId: stringValue(spec.workspace_id) ?? input.run.workspace_id,
         metadata: {
           source: "adapter_output",
           adapter_type: input.adapterType,
@@ -297,8 +318,17 @@ export class RunMaterializationService {
       if (!SUPPORTED_PROPOSAL_TYPES.has(proposalType)) {
         throw new Error(`unsupported proposal_type ${JSON.stringify(proposalType)}`);
       }
-      const payload = proposalPayload(spec, proposalType, input.run);
+      const payload = proposalPayload(spec, proposalType, input.run, STRUCTURED_PACKET_PROPOSAL_TYPES.has(proposalType));
       if (proposalType === "code_patch") validateCodePatchPayload(payload);
+      if (STRUCTURED_PACKET_PROPOSAL_TYPES.has(proposalType)) {
+        await validateClaimObjectProposalPacket(proposalType, payload);
+      }
+      const projectId = stringValue(spec.project_id)
+        ?? stringValue(payload.project_id)
+        ?? input.run.project_id;
+      await assertProjectInSpace(this.db, input.run.space_id, projectId);
+      if (projectId) payload.project_id = projectId;
+      else delete payload.project_id;
 
       const policy = await this.policyEnforcer({
         action: "proposal.create",
@@ -336,7 +366,7 @@ export class RunMaterializationService {
         preview: booleanValue(spec.preview) ?? input.run.mode === "dry_run",
         visibility: normalizeVisibility(stringValue(spec.visibility)),
         workspaceId: stringValue(spec.workspace_id) ?? input.run.workspace_id,
-        projectId: stringValue(spec.project_id) ?? input.run.project_id,
+        projectId,
       });
       return {
         kind: "proposal",
@@ -361,6 +391,8 @@ export class RunMaterializationService {
     storagePath: string | null;
     mimeType: string;
     preview: boolean;
+    visibility?: string;
+    workspaceId?: string | null;
     metadata: Record<string, unknown>;
   }): Promise<string> {
     const id = randomUUID();
@@ -371,13 +403,13 @@ export class RunMaterializationService {
          storage_ref, storage_path, mime_type, exportable, export_formats_json,
          canonical_format, preview, relevant_period_start, relevant_period_end,
          created_at, updated_at, metadata_json, visibility, owner_user_id,
-         source_execution_plane_id, trust_level, project_id
+         source_execution_plane_id, trust_level, project_id, workspace_id
        ) VALUES (
          $1, $2, $3, NULL, $4, $5, $6,
          NULL, $7, $8, true, $9::jsonb,
          NULL, $10, NULL, NULL,
-         $11, $11, $12::jsonb, 'space_shared', $13,
-         NULL, 'medium', $14
+         $11, $11, $12::jsonb, $13, $14,
+         NULL, 'medium', $15, $16
        )`,
       [
         id,
@@ -392,8 +424,10 @@ export class RunMaterializationService {
         input.preview,
         now,
         JSON.stringify(sanitizeEvidenceJson(input.metadata)),
+        input.visibility ?? "space_shared",
         input.run.instructed_by_user_id ?? null,
         input.run.project_id ?? null,
+        input.workspaceId ?? input.run.workspace_id ?? null,
       ],
     );
     return id;
@@ -516,18 +550,45 @@ function proposalPayload(
   spec: Record<string, unknown>,
   proposalType: string,
   run: RunRecord,
+  requireStructuredPayload = false,
 ): Record<string, unknown> {
   const explicit = recordValue(spec.payload_json);
+  const alternate = recordValue(spec.payload);
   const payload = Object.keys(explicit).length > 0
     ? { ...explicit }
-    : Object.keys(recordValue(spec.payload)).length > 0
-      ? { ...recordValue(spec.payload) }
-      : stripProposalEnvelope(spec);
+    : Object.keys(alternate).length > 0
+      ? { ...alternate }
+      : requireStructuredPayload
+        ? null
+        : stripProposalEnvelope(spec);
+  if (!payload) {
+    throw new Error(`${proposalType} requires structured payload_json or payload`);
+  }
   payload.source_run_id = stringValue(payload.source_run_id) ?? run.id;
   payload.created_by_run_id = stringValue(payload.created_by_run_id) ?? run.id;
   payload.proposal_type = stringValue(payload.proposal_type) ?? proposalType;
   if (run.project_id && payload.project_id === undefined) payload.project_id = run.project_id;
   return payload;
+}
+
+async function validateClaimObjectProposalPacket(
+  proposalType: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const protocol = await loadProtocol();
+  const parsed = protocol.ClaimObjectProposalPayloadSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(`invalid structured ${proposalType} packet: ${formatZodIssues(parsed.error.issues)}`);
+  }
+  if (parsed.data.operation !== proposalType) {
+    throw new Error(`structured packet operation ${JSON.stringify(parsed.data.operation)} does not match proposal_type ${JSON.stringify(proposalType)}`);
+  }
+}
+
+function formatZodIssues(issues: Array<{ path: Array<string | number>; message: string }>): string {
+  return issues
+    .map((issue) => `${issue.path.length > 0 ? issue.path.join(".") : "(root)"}: ${issue.message}`)
+    .join("; ");
 }
 
 function stripProposalEnvelope(spec: Record<string, unknown>): Record<string, unknown> {
@@ -574,6 +635,12 @@ function normalizeUrgency(value: string | null): string {
 
 function normalizeVisibility(value: string | null): string {
   return value && ["space_shared", "workspace_shared", "selected_users", "restricted"].includes(value)
+    ? value
+    : "space_shared";
+}
+
+function normalizeArtifactVisibility(value: string | null): string {
+  return value && ["private", "space_shared", "workspace_shared", "selected_users", "restricted"].includes(value)
     ? value
     : "space_shared";
 }

@@ -147,6 +147,81 @@ describe("engine + registry default", () => {
     expect(d.policy_rule_id).toBe("runtime_skill_render_enabled_binding");
     expect(d.risk_level).toBe("high");
   });
+  it("retrieval tool policy allows enabled domains with an instructed viewer", () => {
+    const { decision } = computeDecision(
+      registry,
+      req("memory.retrieval.search", {
+        space_id: "s1",
+        context: {
+          domain: "memory",
+          domain_enabled: true,
+          instructed_by_user_id: "u1",
+        },
+      }),
+    );
+    expect(decision.decision).toBe("allow");
+    expect(decision.policy_rule_id).toBe("retrieval_tool_call_allowed");
+    expect(decision.resource_type).toBe("retrieval_tool");
+  });
+  it("retrieval tool policy denies disabled domains", () => {
+    const { decision } = computeDecision(
+      registry,
+      req("memory.retrieval.search", {
+        space_id: "s1",
+        context: {
+          domain: "memory",
+          domain_enabled: false,
+          instructed_by_user_id: "u1",
+        },
+      }),
+    );
+    expect(decision.decision).toBe("deny");
+    expect(decision.audit_code).toBe("retrieval_tool_domain_not_enabled");
+  });
+  it("retrieval tool policy requires an instructed viewer", () => {
+    const { decision } = computeDecision(
+      registry,
+      req("retrieval.search", {
+        space_id: "s1",
+        context: {
+          domain: "knowledge",
+          domain_enabled: true,
+        },
+      }),
+    );
+    expect(decision.decision).toBe("deny");
+    expect(decision.audit_code).toBe("retrieval_tool_missing_viewer");
+  });
+  it("retrieval tool policy reserves source and egress denial hooks", () => {
+    const sourceDenied = computeDecision(
+      registry,
+      req("retrieval.brief", {
+        space_id: "s1",
+        context: {
+          domain: "knowledge",
+          domain_enabled: true,
+          instructed_by_user_id: "u1",
+          source_policy_denied: true,
+        },
+      }),
+    ).decision;
+    const egressDenied = computeDecision(
+      registry,
+      req("project_public_summary.brief", {
+        space_id: "s1",
+        context: {
+          domain: "project_public_summary",
+          domain_enabled: true,
+          instructed_by_user_id: "u1",
+          egress_policy_denied: true,
+        },
+      }),
+    ).decision;
+    expect(sourceDenied.decision).toBe("deny");
+    expect(sourceDenied.audit_code).toBe("retrieval_tool_source_policy_denied");
+    expect(egressDenied.decision).toBe("deny");
+    expect(egressDenied.audit_code).toBe("retrieval_tool_egress_policy_denied");
+  });
   it("runtime.use_credential same-space manual allows", () => {
     const d = engineCheck(registry, {
       action: "runtime.use_credential",
@@ -286,6 +361,17 @@ describe("proposal.apply gate", () => {
     const d = checkProposalApplyPolicy(base, "owner", SUPPORTED_PROPOSAL_TYPES);
     expect(d.decision).toBe("allow");
     expect(d.audit_code).toBe("approved_owner");
+  });
+  it("claim and object relation proposal types are supported", () => {
+    expect(SUPPORTED_PROPOSAL_TYPES.has("claim_create")).toBe(true);
+    expect(SUPPORTED_PROPOSAL_TYPES.has("object_relation_create")).toBe(true);
+    expect(SUPPORTED_PROPOSAL_TYPES.has("object_kind_create")).toBe(true);
+    expect(SUPPORTED_PROPOSAL_TYPES.has("object_kind_update")).toBe(true);
+    expect(SUPPORTED_PROPOSAL_TYPES.has("memory_maintenance_packet")).toBe(true);
+    expect(effectiveProposalRisk("claim_create", null)).toBe("medium");
+    expect(effectiveProposalRisk("object_relation_create", "low")).toBe("medium");
+    expect(effectiveProposalRisk("object_kind_create", "low")).toBe("high");
+    expect(effectiveProposalRisk("memory_maintenance_packet", null)).toBe("medium");
   });
   it("reviewer cannot approve high-risk code_patch", () => {
     const d = checkProposalApplyPolicy(

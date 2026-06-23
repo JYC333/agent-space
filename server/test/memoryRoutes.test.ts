@@ -193,7 +193,7 @@ describe("memory read routes", () => {
     expect(missing.json()).toEqual({ detail: "Memory not found" });
   });
 
-  it("searches with body space/user overrides honored", async () => {
+  it("ignores body space_id/user_id and scopes search to the authenticated identity", async () => {
     __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
     __setMemoryServicesFactoryForTests(() => ({
       repository: {
@@ -216,6 +216,7 @@ describe("memory read routes", () => {
     }));
     app = buildServer(memoryConfig(), { logger: false });
 
+    // A hostile body tries to read another space as another user; both are ignored.
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/memory/search",
@@ -223,8 +224,23 @@ describe("memory read routes", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual([
-      expect.objectContaining({ id: "user-9-search", space_id: "space-2", title: "server" }),
+      expect.objectContaining({ id: "user-1-search", space_id: "space-1", title: "server" }),
     ]);
+  });
+
+  it("rejects a memory retrieval brief for non-memory object types", async () => {
+    __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    app = buildServer(memoryConfig(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/retrieval/brief",
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify({ query: "alpha", object_types: ["knowledge_item"] }),
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json().detail).toContain("memory_entry");
   });
 
   it("creates a memory_create proposal without mutating memory directly", async () => {

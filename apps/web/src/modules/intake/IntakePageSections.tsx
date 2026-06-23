@@ -1,14 +1,17 @@
-import type { FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import {
   Archive,
   Bookmark,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   FileText,
   Folder,
   Link2,
   Play,
   Radio,
   RefreshCw,
+  ShieldCheck,
   Sparkles,
   XCircle,
 } from 'lucide-react'
@@ -272,6 +275,10 @@ export function ConnectionsSection(props: {
   connectorName: (connection: SourceConnection) => string
   onScanConnection: (connection: SourceConnection) => void
   onUpdateConnection: (connection: SourceConnection, status: 'active' | 'paused' | 'archived') => void
+  onSaveGovernance: (
+    connection: SourceConnection,
+    body: { consent: Record<string, unknown>; policy: Record<string, unknown> },
+  ) => void
 }) {
   return (
     <section className="space-y-3">
@@ -331,6 +338,11 @@ export function ConnectionsSection(props: {
                     </Button>
                   </div>
                 </div>
+                <SourceGovernanceEditor
+                  connection={connection}
+                  busy={props.busy === `governance:${connection.id}`}
+                  onSave={body => props.onSaveGovernance(connection, body)}
+                />
               </Card>
             )
           })}
@@ -338,6 +350,220 @@ export function ConnectionsSection(props: {
       )}
     </section>
   )
+}
+
+const RETENTION_OPTIONS = [
+  { value: 'metadata_only', label: 'metadata only' },
+  { value: 'summary_only', label: 'summary only' },
+  { value: 'full_text', label: 'full text' },
+  { value: 'full_snapshot', label: 'full snapshot' },
+  { value: 'archived', label: 'archived' },
+]
+
+const EGRESS_OPTIONS = [
+  { value: 'internal_only', label: 'internal only' },
+  { value: 'local_provider_allowed', label: 'local provider allowed' },
+  { value: 'external_provider_allowed', label: 'external provider allowed' },
+]
+
+const TRUST_OPTIONS = [
+  { value: 'trusted', label: 'trusted' },
+  { value: 'normal', label: 'normal' },
+  { value: 'untrusted', label: 'untrusted' },
+]
+
+const DERIVED_WRITE_OPTIONS = [
+  { value: 'proposal_required', label: 'proposal required' },
+  { value: 'disabled', label: 'disabled' },
+]
+
+const IMPORT_TARGET_OPTIONS = [
+  { value: 'activity', label: 'Activity' },
+  { value: 'source_artifact', label: 'Source artifact' },
+  { value: 'knowledge', label: 'Knowledge proposal' },
+  { value: 'memory_proposal', label: 'Memory proposal' },
+]
+
+function SourceGovernanceEditor(props: {
+  connection: SourceConnection
+  busy: boolean
+  onSave: (body: { consent: Record<string, unknown>; policy: Record<string, unknown> }) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [retention, setRetention] = useState('metadata_only')
+  const [egressClass, setEgressClass] = useState('internal_only')
+  const [trust, setTrust] = useState('normal')
+  const [derivedWrite, setDerivedWrite] = useState('proposal_required')
+  const [allowLocalProvider, setAllowLocalProvider] = useState(false)
+  const [allowExternalProvider, setAllowExternalProvider] = useState(false)
+  const [allowSpaceAdmins, setAllowSpaceAdmins] = useState(true)
+  const [targets, setTargets] = useState<string[]>(['activity', 'source_artifact'])
+  const [subjects, setSubjects] = useState('')
+  const [readers, setReaders] = useState('')
+  const [agents, setAgents] = useState('')
+
+  useEffect(() => {
+    const consent = props.connection.consent_json ?? {}
+    const policy = props.connection.policy_json ?? {}
+    setRetention(stringFrom(policy.retention_policy, props.connection.capture_policy === 'auto_extract_all_text' ? 'full_text' : 'metadata_only'))
+    setEgressClass(stringFrom(policy.source_egress_class, 'internal_only'))
+    setTrust(stringFrom(policy.import_trust_level, props.connection.trust_level))
+    setDerivedWrite(stringFrom(policy.derived_write_policy, 'proposal_required'))
+    setAllowLocalProvider(consent.allow_local_provider_egress === true)
+    setAllowExternalProvider(consent.allow_external_model_egress === true)
+    setAllowSpaceAdmins(consent.allow_space_admins !== false)
+    setTargets(stringList(policy.allowed_import_targets, ['activity', 'source_artifact']))
+    setSubjects(stringList(consent.subject_user_ids, [props.connection.owner_user_id]).join(', '))
+    setReaders(stringList(consent.allowed_reader_user_ids, [props.connection.owner_user_id]).join(', '))
+    setAgents(stringList(consent.allowed_agent_ids, []).join(', '))
+  }, [
+    props.connection.id,
+    props.connection.capture_policy,
+    props.connection.consent_json,
+    props.connection.owner_user_id,
+    props.connection.policy_json,
+    props.connection.trust_level,
+  ])
+
+  function toggleTarget(target: string, checked: boolean) {
+    setTargets(current => {
+      if (checked) return Array.from(new Set([...current, target]))
+      return current.filter(item => item !== target)
+    })
+  }
+
+  function save() {
+    props.onSave({
+      consent: {
+        ...props.connection.consent_json,
+        subject_user_ids: csvList(subjects),
+        allowed_reader_user_ids: csvList(readers),
+        allowed_agent_ids: csvList(agents),
+        allow_space_admins: allowSpaceAdmins,
+        allow_local_provider_egress: allowLocalProvider,
+        allow_external_model_egress: allowExternalProvider,
+      },
+      policy: {
+        ...props.connection.policy_json,
+        source_egress_class: egressClass,
+        retention_policy: retention,
+        import_trust_level: trust,
+        derived_write_policy: derivedWrite,
+        allowed_import_targets: targets,
+        revalidation: { required: true, viewer_scoped: true },
+      },
+    })
+  }
+
+  return (
+    <div className="mt-4 border-t border-border pt-3">
+      <button
+        type="button"
+        onClick={() => setOpen(value => !value)}
+        className="flex w-full items-center justify-between gap-2 text-xs text-muted-foreground hover:text-foreground"
+      >
+        <span className="inline-flex items-center gap-1.5">
+          <ShieldCheck className="size-3.5" />
+          Governance
+        </span>
+        {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+      </button>
+      {open && (
+        <div className="mt-3 space-y-3 rounded-md border border-border bg-muted/20 p-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Retention</Label>
+              <Select options={RETENTION_OPTIONS} value={retention} onChange={setRetention} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Source egress</Label>
+              <Select options={EGRESS_OPTIONS} value={egressClass} onChange={setEgressClass} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Trust</Label>
+              <Select options={TRUST_OPTIONS} value={trust} onChange={setTrust} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Derived writes</Label>
+              <Select options={DERIVED_WRITE_OPTIONS} value={derivedWrite} onChange={setDerivedWrite} />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Allowed import targets</Label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {IMPORT_TARGET_OPTIONS.map(option => (
+                <label key={option.value} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={targets.includes(option.value)}
+                    onChange={event => toggleTarget(option.value, event.target.checked)}
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <TextListField label="Subjects" value={subjects} onChange={setSubjects} />
+            <TextListField label="Readers" value={readers} onChange={setReaders} />
+            <TextListField label="Agents" value={agents} onChange={setAgents} />
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-3">
+            <CheckboxRow label="Space admins" checked={allowSpaceAdmins} onChange={setAllowSpaceAdmins} />
+            <CheckboxRow label="Local provider egress" checked={allowLocalProvider} onChange={setAllowLocalProvider} />
+            <CheckboxRow label="External model egress" checked={allowExternalProvider} onChange={setAllowExternalProvider} />
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            Reader, agent, and source-egress fields are stored for future read-path gates. Retention and proposal-target policy are enforced by current intake paths.
+          </p>
+          <Button type="button" size="sm" onClick={save} disabled={props.busy}>
+            {props.busy ? 'Saving...' : 'Save governance'}
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TextListField(props: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{props.label}</Label>
+      <Input
+        value={props.value}
+        onChange={event => props.onChange(event.target.value)}
+        placeholder="user-id, user-id"
+        className="font-mono text-xs"
+      />
+    </div>
+  )
+}
+
+function CheckboxRow(props: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <input type="checkbox" checked={props.checked} onChange={event => props.onChange(event.target.checked)} />
+      {props.label}
+    </label>
+  )
+}
+
+function stringFrom(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim() ? value : fallback
+}
+
+function stringList(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback
+  const strings = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+  return strings.length ? strings : fallback
+}
+
+function csvList(value: string): string[] {
+  return value.split(',').map(item => item.trim()).filter(Boolean)
 }
 
 export function ItemsSection(props: {

@@ -1,0 +1,262 @@
+import { join } from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Pool } from "pg";
+import {
+  PostgreSqlContainer,
+  type StartedPostgreSqlContainer,
+} from "@testcontainers/postgresql";
+import { migrate } from "../src/db/migrator";
+import { BrainOpsService } from "../src/modules/brainOps";
+import { RetrievalMaintenanceService, RetrievalProjectionService, RetrievalSearchService } from "../src/modules/retrieval";
+import { knowledgeRetrievalRegistry } from "../src/modules/knowledge/retrievalAdapter";
+import { insertKnowledgeItem } from "./support/knowledgeFixtures";
+
+// Closes Slice-1 audit gaps end-to-end over real Postgres:
+//   G4 — a connector-ingested object lands a provenance_link → intake_item →
+//        source_connection, so the projection carries source_connection_ids and
+//        search fails closed for a non-allowed reader.
+//   G1 — the maintenance scan applies the same source read policy and never
+//        surfaces a source-restricted object to a non-allowed operator.
+//   G5 — Brain Ops drill-down object lists apply the same source read policy.
+// Both knowledge items are canonically space_shared, so ONLY the source policy
+// differentiates the restricted object — isolating the gate under test.
+
+const MIGRATIONS_DIR = join(process.cwd(), "migrations");
+const SPACE = "11111111-1111-4111-8111-111111111111";
+const OWNER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // source owner — allowed reader
+const READER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"; // space member — NOT an allowed reader
+const SOURCE = "source-restricted-1";
+const CONNECTOR = "connector-1";
+const INTAKE = "intake-restricted-1";
+const LONG = "This page has more than enough searchable content to clear the thin threshold comfortably here.";
+
+let container: StartedPostgreSqlContainer | undefined;
+let pool: Pool | undefined;
+let available = false;
+
+beforeAll(async () => {
+  try {
+    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+    pool = new Pool({ connectionString: container.getConnectionUri(), max: 3 });
+    await migrate(pool, MIGRATIONS_DIR);
+    available = true;
+  } catch (err) {
+    console.warn(
+      `[retrieval-source-policy-db] skipped — Docker/Postgres unavailable: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}, 180_000);
+
+afterAll(async () => {
+  await pool?.end();
+  await container?.stop();
+});
+
+beforeEach(async () => {
+  if (!available || !pool) return;
+  await pool.query(
+    `TRUNCATE retrieval_objects, retrieval_aliases, retrieval_chunks, retrieval_edges,
+              knowledge_items, space_object_kinds, space_objects, provenance_links, intake_items,
+              source_connections, source_connectors, users, spaces CASCADE`,
+  );
+  await pool.query(`INSERT INTO spaces (id, name, type, created_at, updated_at) VALUES ($1, 'SP', 'personal', now(), now())`, [SPACE]);
+  for (const id of [OWNER, READER]) {
+    await pool.query(`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ($1, 'U', 'active', now(), now())`, [id]);
+  }
+  const memberships: Array<[string, string, string]> = [["mem-owner", OWNER, "owner"], ["mem-reader", READER, "member"]];
+  for (const [id, user, role] of memberships) {
+    await pool.query(
+      `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'active', now(), now())`,
+      [id, SPACE, user, role],
+    );
+  }
+}, 30_000);
+
+async function seedRestrictedAndOpen(): Promise<void> {
+  // Restricted source: only OWNER may read (no allowed readers, admins denied).
+  await pool!.query(
+    `INSERT INTO source_connectors (id, connector_key, display_name, connector_type, ingestion_mode, status, capabilities_json, created_at, updated_at)
+     VALUES ($1, 'rss', 'RSS', 'external_feed', 'pull', 'active', '{}'::jsonb, now(), now())`,
+    [CONNECTOR],
+  );
+  await pool!.query(
+    `INSERT INTO source_connections (
+       id, space_id, connector_id, owner_user_id, name, status, fetch_frequency,
+       capture_policy, trust_level, consent_json, policy_json, config_json, created_at, updated_at
+     ) VALUES (
+       $1, $2, $3, $4, 'Private feed', 'active', 'manual',
+       'auto_extract_relevant', 'normal', $5::jsonb, $6::jsonb, '{}'::jsonb, now(), now()
+     )`,
+    [
+      SOURCE, SPACE, CONNECTOR, OWNER,
+      JSON.stringify({
+        schema_version: 1,
+        owner_user_id: OWNER,
+        allowed_reader_user_ids: [],
+        allowed_agent_ids: [],
+        allow_space_admins: false,
+        allow_local_provider_egress: true,
+        allow_external_model_egress: false,
+      }),
+      JSON.stringify({ schema_version: 1, source_egress_class: "local_provider_allowed" }),
+    ],
+  );
+
+  await pool!.query(
+    `INSERT INTO space_object_kinds (
+       id, space_id, key, label, base_object_type, status, created_at, updated_at
+     ) VALUES
+       ('kind-concept', $1, 'concept', 'Concept', 'knowledge_item', 'active', now(), now()),
+       ('kind-decision', $1, 'decision', 'Decision', 'knowledge_item', 'active', now(), now())`,
+    [SPACE],
+  );
+
+  await insertKnowledgeItem(pool!, {
+    id: "restricted-doc",
+    spaceId: SPACE,
+    title: "Alpha Restricted",
+    content: `Restricted alpha. ${LONG}`,
+    slug: "restricted-doc",
+    knowledgeKind: "concept",
+  });
+  await insertKnowledgeItem(pool!, {
+    id: "open-doc",
+    spaceId: SPACE,
+    title: "Alpha Open",
+    content: `Open alpha. ${LONG}`,
+    slug: "open-doc",
+    knowledgeKind: "decision",
+  });
+
+  // Connector linkage: intake_item carries the connection id; a provenance_link
+  // ties the knowledge object to it (source_type = intake_item).
+  await pool!.query(
+    `INSERT INTO intake_items (
+       id, space_id, connection_id, item_type, title, first_seen_at, last_seen_at,
+       status, read_status, content_state, retention_policy, created_at, updated_at
+     ) VALUES (
+       $1, $2, $3, 'feed_entry', 'Restricted alpha', now(), now(),
+       'selected', 'unread', 'content_saved', 'full_text', now(), now()
+     )`,
+    [INTAKE, SPACE, SOURCE],
+  );
+  await pool!.query(
+    `INSERT INTO provenance_links (id, space_id, target_type, target_id, source_type, source_id, source_trust, created_at)
+     VALUES ($1, $2, 'knowledge', 'restricted-doc', 'intake_item', $3, 'trusted_external', now())`,
+    ["prov-1", SPACE, INTAKE],
+  );
+
+  await new RetrievalProjectionService(pool!, knowledgeRetrievalRegistry).reindexAll(SPACE);
+}
+
+describe("Retrieval source policy closure (real Postgres)", () => {
+  it("G4: projects source_connection_ids from the connector provenance chain", async () => {
+    if (!available || !pool) return;
+    await seedRestrictedAndOpen();
+    const row = await pool.query<{ source_connection_ids_json: unknown }>(
+      `SELECT source_connection_ids_json FROM retrieval_objects WHERE space_id = $1 AND object_id = 'restricted-doc'`,
+      [SPACE],
+    );
+    expect(row.rows[0]?.source_connection_ids_json).toEqual([SOURCE]);
+  });
+
+  it("G4: search fails closed for a non-allowed reader and open for the owner", async () => {
+    if (!available || !pool) return;
+    await seedRestrictedAndOpen();
+    const service = new RetrievalSearchService(pool, knowledgeRetrievalRegistry);
+
+    const ownerResults = await service.search({ spaceId: SPACE, viewerUserId: OWNER, query: "alpha" });
+    expect(ownerResults.items.map((i) => i.object_id).sort()).toEqual(["open-doc", "restricted-doc"]);
+
+    const readerResults = await service.search({ spaceId: SPACE, viewerUserId: READER, query: "alpha", includeTrace: true });
+    const readerIds = readerResults.items.map((i) => i.object_id);
+    expect(readerIds).toContain("open-doc");
+    expect(readerIds).not.toContain("restricted-doc");
+    expect(JSON.stringify(readerResults.trace)).not.toContain("source_policy_denied");
+  });
+
+  it("G2: object_kind filters do not reveal source-restricted kind distributions", async () => {
+    if (!available || !pool) return;
+    await seedRestrictedAndOpen();
+    const service = new RetrievalSearchService(pool, knowledgeRetrievalRegistry);
+
+    const ownerConcept = await service.search({
+      spaceId: SPACE,
+      viewerUserId: OWNER,
+      query: "alpha",
+      objectTypes: ["knowledge_item"],
+      objectKinds: ["concept"],
+      includeTrace: true,
+    });
+    expect(ownerConcept.items).toHaveLength(1);
+    expect(ownerConcept.items[0]).toMatchObject({
+      object_id: "restricted-doc",
+      object_kind: "concept",
+      object_kind_label: "Concept",
+    });
+
+    const readerConcept = await service.search({
+      spaceId: SPACE,
+      viewerUserId: READER,
+      query: "alpha",
+      objectTypes: ["knowledge_item"],
+      objectKinds: ["concept"],
+      includeTrace: true,
+    });
+    expect(readerConcept.items).toHaveLength(0);
+    const serializedTrace = JSON.stringify(readerConcept.trace);
+    expect(serializedTrace).not.toContain("concept");
+    expect(serializedTrace).not.toContain("restricted-doc");
+    expect(serializedTrace).not.toContain("Alpha Restricted");
+    expect(serializedTrace).not.toContain("source_policy_denied");
+  });
+
+  it("G1: maintenance scan hides the source-restricted object from a non-allowed operator", async () => {
+    if (!available || !pool) return;
+    await seedRestrictedAndOpen();
+    const service = new RetrievalMaintenanceService(pool, knowledgeRetrievalRegistry);
+
+    const ownerReport = await service.scan(SPACE, OWNER);
+    const ownerIds = ownerReport.findings.flatMap((f) => f.objects.map((o) => o.object_id));
+    expect(ownerIds).toContain("restricted-doc"); // owner is an allowed reader
+
+    const readerReport = await service.scan(SPACE, READER);
+    const readerIds = readerReport.findings.flatMap((f) => f.objects.map((o) => o.object_id));
+    expect(readerIds).toContain("open-doc");
+    expect(readerIds).not.toContain("restricted-doc"); // source-restricted ⇒ never surfaced
+  });
+
+  it("G5: Brain Ops drill-down hides the source-restricted object from a non-allowed operator", async () => {
+    if (!available || !pool) return;
+    await seedRestrictedAndOpen();
+    const service = new BrainOpsService(pool);
+
+    const ownerDrilldown = await service.getDrilldown({
+      spaceId: SPACE,
+      userId: OWNER,
+      section: "embedding_backlog",
+      limit: 10,
+      registry: knowledgeRetrievalRegistry,
+      includeAllSources: false,
+      now: new Date("2026-06-25T12:00:00.000Z"),
+    });
+    const ownerIds = ownerDrilldown.objects.map((object) => object.object_id);
+    expect(ownerIds).toContain("restricted-doc");
+
+    const readerDrilldown = await service.getDrilldown({
+      spaceId: SPACE,
+      userId: READER,
+      section: "embedding_backlog",
+      limit: 10,
+      registry: knowledgeRetrievalRegistry,
+      includeAllSources: false,
+      now: new Date("2026-06-25T12:00:00.000Z"),
+    });
+    const readerIds = readerDrilldown.objects.map((object) => object.object_id);
+    expect(readerIds).toContain("open-doc");
+    expect(readerIds).not.toContain("restricted-doc");
+  });
+});

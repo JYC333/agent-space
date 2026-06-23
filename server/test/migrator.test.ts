@@ -19,7 +19,7 @@ let available = false;
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("postgres:18").start();
+    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
     pool = new Pool({ connectionString: container.getConnectionUri(), max: 5 });
     available = true;
   } catch (err) {

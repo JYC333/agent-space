@@ -100,6 +100,7 @@ function proposal(overrides: Partial<ApplyProposal> = {}): ApplyProposal {
     proposal_type: "policy_change",
     title: "Change policy",
     workspace_id: null,
+    project_id: null,
     created_by_user_id: "user-1",
     payload_json: {
       name: "Scoped policy",
@@ -128,6 +129,41 @@ describe("proposal applier registry", () => {
     expect(registered).toContain("capability_enable");
     expect(registered).toContain("capability_disable");
     expect(registered).toContain("runtime_skill_binding_update");
+  });
+
+  it("registers ClaimFact and object-relation proposal appliers", () => {
+    const registered = Array.from(createDefaultProposalApplierRegistry().registeredTypes());
+    expect(registered).toEqual(expect.arrayContaining([
+      "claim_create",
+      "claim_update",
+      "claim_archive",
+      "claim_relation_create",
+      "claim_relation_delete",
+      "object_relation_create",
+      "object_relation_delete",
+    ]));
+  });
+
+  it("registers object kind registry proposal appliers", () => {
+    const registered = Array.from(createDefaultProposalApplierRegistry().registeredTypes());
+    expect(registered).toEqual(expect.arrayContaining([
+      "object_kind_create",
+      "object_kind_update",
+      "object_kind_deprecate",
+      "object_kind_archive",
+    ]));
+  });
+
+  it("registers the memory maintenance packet applier", () => {
+    expect(createDefaultProposalApplierRegistry().registeredTypes()).toContain(
+      "memory_maintenance_packet",
+    );
+  });
+
+  it("registers the Claim Candidate Packet applier", () => {
+    expect(createDefaultProposalApplierRegistry().registeredTypes()).toContain(
+      "claim_candidate_packet",
+    );
   });
 
   it("refreshes only the policy_bundle digest, ignoring policy applies_to scopes", async () => {

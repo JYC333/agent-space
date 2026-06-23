@@ -13,6 +13,8 @@ import {
   type InvitationCreateInput,
   type SpaceFailure,
 } from "./repository";
+import { loadProtocol } from "../providers/protocolRuntime";
+import { enqueueRetrievalEmbeddingBackfill } from "../retrievalEmbedding/job";
 
 function isFailure(value: unknown): value is AuthFailure {
   return Boolean(value && typeof value === "object" && "statusCode" in value);
@@ -190,5 +192,102 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     });
     if (isSpaceFailure(result)) return reply.code(result.statusCode).send({ detail: result.detail });
     return reply.send(result);
+  });
+
+  app.get("/api/v1/spaces/:spaceId/retrieval-settings", async (request, reply) => {
+    const auth = authRepositoryFromConfig(context.config);
+    const spaces = spaceRepositoryFromConfig(context.config);
+    if (!auth || !spaces) return reply.code(502).send({ detail: "Database unavailable" });
+    const user = await auth.getCurrentUser(sessionTokenFromRequest(request));
+    if (isFailure(user)) return reply.code(user.statusCode).send({ detail: user.detail });
+    const result = await spaces.getRetrievalSettings(user.id, params(request).spaceId ?? "");
+    if (isSpaceFailure(result)) return reply.code(result.statusCode).send({ detail: result.detail });
+    return reply.send(result);
+  });
+
+  app.patch("/api/v1/spaces/:spaceId/retrieval-settings", async (request, reply) => {
+    const auth = authRepositoryFromConfig(context.config);
+    const spaces = spaceRepositoryFromConfig(context.config);
+    if (!auth || !spaces) return reply.code(502).send({ detail: "Database unavailable" });
+    const user = await auth.getCurrentUser(sessionTokenFromRequest(request));
+    if (isFailure(user)) return reply.code(user.statusCode).send({ detail: user.detail });
+    try {
+      const protocol = await loadProtocol();
+      const payload = protocol.SpaceRetrievalSettingsUpdateSchema.parse(jsonBody(request));
+      const before = await spaces.getRetrievalSettings(user.id, params(request).spaceId ?? "");
+      const result = await spaces.updateRetrievalSettings(
+        user.id,
+        params(request).spaceId ?? "",
+        payload,
+      );
+      if (isSpaceFailure(result)) return reply.code(result.statusCode).send({ detail: result.detail });
+      if (
+        !isSpaceFailure(before) &&
+        payload.embedding_dimensions !== undefined &&
+        before.embedding_dimensions !== result.embedding_dimensions
+      ) {
+        await enqueueRetrievalEmbeddingBackfill(context.config, {
+          spaceId: result.space_id,
+          userId: user.id,
+          trigger: "retrieval_embedding_dimension_update",
+        });
+      }
+      return reply.send(result);
+    } catch (error) {
+      if (error instanceof Error && "issues" in error) {
+        return reply.code(422).send({ detail: "Invalid retrieval settings" });
+      }
+      throw error;
+    }
+  });
+
+  app.get("/api/v1/spaces/:spaceId/retrieval-prompts/:task", async (request, reply) => {
+    const auth = authRepositoryFromConfig(context.config);
+    const spaces = spaceRepositoryFromConfig(context.config);
+    if (!auth || !spaces) return reply.code(502).send({ detail: "Database unavailable" });
+    const user = await auth.getCurrentUser(sessionTokenFromRequest(request));
+    if (isFailure(user)) return reply.code(user.statusCode).send({ detail: user.detail });
+    try {
+      const protocol = await loadProtocol();
+      const task = protocol.RetrievalPromptTaskSchema.parse(params(request).task ?? "");
+      const result = await spaces.getRetrievalPrompt(
+        user.id,
+        params(request).spaceId ?? "",
+        task,
+      );
+      if (isSpaceFailure(result)) return reply.code(result.statusCode).send({ detail: result.detail });
+      return reply.send(result);
+    } catch (error) {
+      if (error instanceof Error && "issues" in error) {
+        return reply.code(422).send({ detail: "Invalid retrieval prompt task" });
+      }
+      throw error;
+    }
+  });
+
+  app.patch("/api/v1/spaces/:spaceId/retrieval-prompts/:task", async (request, reply) => {
+    const auth = authRepositoryFromConfig(context.config);
+    const spaces = spaceRepositoryFromConfig(context.config);
+    if (!auth || !spaces) return reply.code(502).send({ detail: "Database unavailable" });
+    const user = await auth.getCurrentUser(sessionTokenFromRequest(request));
+    if (isFailure(user)) return reply.code(user.statusCode).send({ detail: user.detail });
+    try {
+      const protocol = await loadProtocol();
+      const task = protocol.RetrievalPromptTaskSchema.parse(params(request).task ?? "");
+      const payload = protocol.SpaceRetrievalPromptUpdateSchema.parse(jsonBody(request));
+      const result = await spaces.updateRetrievalPrompt(
+        user.id,
+        params(request).spaceId ?? "",
+        task,
+        payload,
+      );
+      if (isSpaceFailure(result)) return reply.code(result.statusCode).send({ detail: result.detail });
+      return reply.send(result);
+    } catch (error) {
+      if (error instanceof Error && "issues" in error) {
+        return reply.code(422).send({ detail: "Invalid retrieval prompt" });
+      }
+      throw error;
+    }
   });
 }

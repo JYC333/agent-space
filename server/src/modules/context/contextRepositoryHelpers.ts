@@ -49,17 +49,32 @@ export function hardFilterRows(
     userId: string;
     workspaceId: string | null;
     includeSystemScope: boolean;
+    // When present, project cutting is active: only project-free memory
+    // (`project_id IS NULL`) and the single `allowedProjectId` survive; memory of
+    // any other project is dropped. Absent means no project filtering (legacy).
+    projectFilter?: { allowedProjectId: string | null };
   },
 ): ContextMemoryRow[] {
-  return rows.filter((row) =>
-    canReadMemory(row, {
-      userId: input.userId,
-      spaceId: input.spaceId,
-      workspaceId: input.workspaceId,
-      includeSystemScope:
-        input.includeSystemScope && row.scope_type === "system",
-    }),
-  );
+  return rows.filter((row) => {
+    if (
+      !canReadMemory(row, {
+        userId: input.userId,
+        spaceId: input.spaceId,
+        workspaceId: input.workspaceId,
+        includeSystemScope:
+          input.includeSystemScope && row.scope_type === "system",
+      })
+    ) {
+      return false;
+    }
+    if (input.projectFilter) {
+      const projectId = row.project_id ?? null;
+      if (projectId !== null && projectId !== input.projectFilter.allowedProjectId) {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 
 export function assignSection(row: ContextMemoryRow): "stable_prefix" | "dynamic_tail" {

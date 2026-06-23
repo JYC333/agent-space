@@ -52,7 +52,7 @@ export default function KnowledgeDetailHeader({
         </Button>
       </div>
       <div className="flex flex-wrap gap-1.5 items-center">
-        <Badge variant="secondary">{item.item_type}</Badge>
+        <Badge variant="secondary">{item.knowledge_kind}</Badge>
         <Badge variant="outline">{item.status}</Badge>
         <ScopeBadge visibility={item.visibility} />
         <Badge variant="muted">{item.verification_status}</Badge>

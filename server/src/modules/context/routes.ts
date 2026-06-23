@@ -3,6 +3,7 @@ import type { ModuleContext } from "../../gateway/routeRegistry";
 import {
   jsonBody,
   optionalString,
+  params,
   query,
   resolveIdentity,
   sendRouteError,
@@ -11,8 +12,77 @@ import {
 import { buildContextPackage } from "./contextPackage";
 import { ContextDigestRefreshService } from "./digestService";
 import { PgRunContextRepository } from "./repository";
+import { loadProtocol } from "../providers/protocolRuntime";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
+  app.get("/api/v1/context/artifact-revocations", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = query(request);
+      const repo = PgRunContextRepository.fromConfig(context.config);
+      const items = await repo.listArtifactRevocations({
+        spaceId: identity.spaceId,
+        userId: identity.userId,
+        workspaceId: optionalString(q.workspace_id),
+        projectId: optionalString(q.project_id),
+        artifactIds: artifactIdsQuery(q.artifact_ids),
+      });
+      return reply.send({ items });
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/context/artifact-revocations", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const protocol = await loadProtocol();
+      const parsed = protocol.ContextArtifactRevocationCreateRequestSchema.safeParse(jsonBody(request));
+      if (!parsed.success) {
+        throw new HttpError(422, parsed.error.issues[0]?.message ?? "invalid artifact revocation request");
+      }
+      const repo = PgRunContextRepository.fromConfig(context.config);
+      const item = await repo.createArtifactRevocation({
+        spaceId: identity.spaceId,
+        userId: identity.userId,
+        artifactId: parsed.data.artifact_id,
+        scopeType: parsed.data.scope_type,
+        scopeId: parsed.data.scope_id,
+        reason: parsed.data.reason,
+      });
+      return reply.code(201).send(item);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.delete("/api/v1/context/artifact-revocations/:artifactId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = query(request);
+      const p = params(request);
+      const artifactId = optionalString(p.artifactId);
+      if (!artifactId) throw new HttpError(422, "artifact_id is required");
+      const scopeType = revocationScope(optionalString(q.scope_type));
+      const scopeId = optionalString(q.scope_id);
+      if (!scopeId) throw new HttpError(422, "scope_id is required");
+      const repo = PgRunContextRepository.fromConfig(context.config);
+      await repo.deleteArtifactRevocation({
+        spaceId: identity.spaceId,
+        userId: identity.userId,
+        artifactId,
+        scopeType,
+        scopeId,
+      });
+      return reply.code(204).send();
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
   app.post("/api/v1/context/build", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
@@ -25,6 +95,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const capabilityId = optionalString(body.capability_id) ?? optionalString(q.capability_id);
       const sessionId = optionalString(body.session_id) ?? optionalString(q.session_id);
       const runId = optionalString(body.run_id) ?? optionalString(q.run_id);
+      const contextArtifactIds = stringArrayBody(body.context_artifact_ids);
       const repo = PgRunContextRepository.fromConfig(context.config);
       const retrieval = await repo.retrieve({
         spaceId: identity.spaceId,
@@ -35,13 +106,24 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         query: optionalString(body.query) ?? optionalString(q.query),
         agentMemoryPolicy: null,
         includeSystemScope: true,
+        // Project cut only when the caller scopes the request to a project;
+        // absent project_id keeps the legacy (unfiltered) behavior.
+        projectId: projectId ?? undefined,
       });
       const sessionSummary = await repo.loadLatestSessionSummary(identity.spaceId, sessionId);
       const evidenceSelections = await repo.selectEvidenceForContext({
         spaceId: identity.spaceId,
+        userId: identity.userId,
         workspaceId,
         projectId,
         runId,
+      });
+      const artifactAttachments = await repo.selectArtifactAttachments({
+        spaceId: identity.spaceId,
+        userId: identity.userId,
+        workspaceId,
+        projectId,
+        artifactIds: contextArtifactIds,
       });
       const pkg = buildContextPackage({
         memories: retrieval.memories,
@@ -64,8 +146,10 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         workspaceId,
         sessionSummary,
         evidenceSelections,
+        artifactAttachments,
       });
-      return reply.send(pkg);
+      const protocol = await loadProtocol();
+      return reply.send(protocol.ContextPackageSchema.parse(pkg));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -98,6 +182,32 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       return sendRouteError(reply, error);
     }
   });
+}
+
+function stringArrayBody(value: unknown): string[] {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new HttpError(422, "context_artifact_ids must be an array");
+  }
+  if (value.length > 8) {
+    throw new HttpError(422, "context_artifact_ids must contain at most 8 items");
+  }
+  return value.map((item) => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new HttpError(422, "context_artifact_ids must contain non-empty strings");
+    }
+    return item.trim();
+  });
+}
+
+function artifactIdsQuery(value: string | undefined): string[] {
+  if (!value) return [];
+  return value.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 100);
+}
+
+function revocationScope(value: string | null): "workspace" | "project" {
+  if (value === "workspace" || value === "project") return value;
+  throw new HttpError(422, "scope_type must be workspace or project");
 }
 
 type DigestRefreshRequest = {

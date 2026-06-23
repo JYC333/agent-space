@@ -14,6 +14,30 @@ provider owner can edit provider metadata or replace secret material. Active
 space default selection and provider `network_profile_id` are grant-level
 fields.
 
+Auxiliary system tasks can bind to provider/model chains through
+`provider_task_policies`. The retrieval settings UI surfaces the retrieval
+tasks `retrieval_embedding`, `retrieval_rerank`, and
+`retrieval_query_rewrite` as space-scoped provider/model choices; owner/admin
+users edit these policies, while invocation still resolves credentials through
+the provider command store and pool/fallback path. Retrieval embedding dimension
+is a normalized space setting; provider adapters map it to request parameters
+where supported and validate the returned vector length.
+
+Retrieval task policies are capability-filtered. `retrieval_embedding` accepts
+embedding-capable providers (OpenAI-compatible, Ollama, ZeroEntropy, or local
+`other`), `retrieval_rerank` is reserved for native rerank providers
+(ZeroEntropy first), and `retrieval_query_rewrite` uses ordinary chat providers.
+The provider task-policy route enforces the same compatibility rules as the UI.
+Query rewrite prompt text is not stored in the provider policy; it is
+space-scoped in `space_retrieval_prompts` and rendered before the chat provider
+call.
+
+The Providers page remains the single place to create and maintain provider
+credentials, but it labels provider capabilities explicitly (`Chat`,
+`Embeddings`, `Native rerank`). ZeroEntropy is presented as a retrieval provider:
+`zembed-*` models are for embeddings, while `zerank-*` models are for native
+rerank task policies.
+
 `model_providers.base_url` is required and represents the Provider's managed API
 endpoint for server-side model calls. Provider records may additionally carry CLI bridge endpoints in
 `config_json`: `claude_compatible_base_url` for Anthropic-compatible Claude CLI

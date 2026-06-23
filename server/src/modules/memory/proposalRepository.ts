@@ -117,7 +117,13 @@ export class PgMemoryProposalRepository {
     }
 
     const scope = command.scope ?? "user";
-    const visibility = normalizeVisibility(command.visibility ?? "private");
+    // When the caller does not specify visibility, default by space type so the
+    // proposal is coherent with the apply-time placement invariant: a personal
+    // space gets `private`, a multi-member space gets owner-only `restricted`
+    // (never `private`, which the applier bars outside personal spaces).
+    const visibility = normalizeVisibility(
+      command.visibility ?? (await this.defaultCreateVisibility(effectiveSpaceId)),
+    );
     const sensitivity = normalizeSensitivity(command.sensitivity_level ?? "normal");
     validateCreateCommand(command, visibility, sensitivity);
 
@@ -338,6 +344,15 @@ export class PgMemoryProposalRepository {
       targetVisibility: target.visibility,
       sensitivityLevel: null,
     });
+  }
+
+  /** Space-type-aware default visibility for a create with no explicit value. */
+  private async defaultCreateVisibility(spaceId: string): Promise<string> {
+    const res = await this.db.query<{ type: string }>(
+      `SELECT type FROM spaces WHERE id = $1`,
+      [spaceId],
+    );
+    return (res.rows[0]?.type ?? "unknown") === "personal" ? "private" : "restricted";
   }
 
   private async getVisibleTargetMemory(

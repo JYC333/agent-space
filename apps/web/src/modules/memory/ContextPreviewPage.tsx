@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { Layers } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { AlertTriangle, CheckCircle2, Layers } from 'lucide-react'
 import { toast } from 'sonner'
 import { contextApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -9,11 +10,28 @@ import { Card, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
+import { Badge } from '../../components/ui/badge'
+import { ContextArtifactPicker } from '../artifacts/ContextArtifactPicker'
 
 interface ContextForm {
+  workspace_id: string
+  project_id: string
   session_id: string
   capability_id: string
   query: string
+}
+
+interface AttachmentPreview {
+  attachment_type?: string
+  artifact_id?: string
+  artifact_type?: string
+  label?: string
+  domain_label?: string
+  approved?: boolean
+  resolved_content?: string
+  rejection_reason?: string
+  policy_snapshot?: Record<string, unknown>
+  source_policy_snapshot?: Record<string, unknown>
 }
 
 const SUMMARY_ROWS: [string, keyof ContextPackage][] = [
@@ -28,11 +46,46 @@ const SUMMARY_ROWS: [string, keyof ContextPackage][] = [
 
 export default function ContextPreviewPage() {
   const { activeSpaceId, activeSpaceName } = useSpace()
-  const [form, setForm] = useState<ContextForm>({ session_id: '', capability_id: '', query: '' })
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [form, setForm] = useState<ContextForm>({
+    workspace_id: searchParams.get('workspace_id') ?? '',
+    project_id: searchParams.get('project_id') ?? '',
+    session_id: '',
+    capability_id: '',
+    query: '',
+  })
   const [pkg, setPkg]   = useState<ContextPackage | null>(null)
+  const [selectedArtifactIds, setSelectedArtifactIds] = useState<string[]>(() => initialArtifactIds(searchParams))
   const [loading, setLoading] = useState(false)
 
   function setField(k: keyof ContextForm, v: string) { setForm(f => ({ ...f, [k]: v })) }
+
+  useEffect(() => {
+    const urlIds = initialArtifactIds(searchParams)
+    if (urlIds.length > 0) setSelectedArtifactIds(urlIds.slice(0, 8))
+    const workspaceId = searchParams.get('workspace_id')
+    const projectId = searchParams.get('project_id')
+    if (workspaceId) setForm(current => ({ ...current, workspace_id: workspaceId }))
+    if (projectId) setForm(current => ({ ...current, project_id: projectId }))
+  }, [searchParams])
+
+  function updateSelectedArtifactIds(next: string[]) {
+    setSelectedArtifactIds(next)
+    setSearchParams(params => {
+      if (next.length > 0) params.set('artifact_ids', next.join(','))
+      else {
+        params.delete('artifact_ids')
+        params.delete('artifact_id')
+      }
+      const workspaceId = form.workspace_id.trim()
+      const projectId = form.project_id.trim()
+      if (workspaceId) params.set('workspace_id', workspaceId)
+      else params.delete('workspace_id')
+      if (projectId) params.set('project_id', projectId)
+      else params.delete('project_id')
+      return params
+    })
+  }
 
   async function build() {
     if (!activeSpaceId) {
@@ -42,9 +95,12 @@ export default function ContextPreviewPage() {
     setLoading(true)
     try {
       setPkg(await contextApi.build({
+        workspace_id:   form.workspace_id.trim()   || null,
+        project_id:     form.project_id.trim()     || null,
         session_id:    form.session_id.trim()    || null,
         capability_id: form.capability_id.trim() || null,
         query:         form.query.trim()          || null,
+        context_artifact_ids: selectedArtifactIds,
       }))
     } catch (e) { toast.error(errMsg(e)) }
     finally { setLoading(false) }
@@ -76,6 +132,14 @@ export default function ContextPreviewPage() {
         <CardTitle>Build Context Package</CardTitle>
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
+            <Label>Workspace ID (optional)</Label>
+            <Input value={form.workspace_id} onChange={e => setField('workspace_id', e.target.value)} placeholder="Required for workspace-scoped artifacts…" />
+          </div>
+          <div>
+            <Label>Project ID (optional)</Label>
+            <Input value={form.project_id} onChange={e => setField('project_id', e.target.value)} placeholder="Required for project-scoped artifact revocation…" />
+          </div>
+          <div>
             <Label>Session ID (optional)</Label>
             <Input value={form.session_id} onChange={e => setField('session_id', e.target.value)} placeholder="Paste session ID…" />
           </div>
@@ -92,6 +156,15 @@ export default function ContextPreviewPage() {
         {!activeSpaceId && (
           <p className="text-xs text-muted-foreground mt-2">Select an operational space to build a context package.</p>
         )}
+      </Card>
+
+      <Card>
+        <ContextArtifactPicker
+          selectedArtifactIds={selectedArtifactIds}
+          onChange={updateSelectedArtifactIds}
+          workspaceId={form.workspace_id}
+          projectId={form.project_id}
+        />
       </Card>
 
       {pkg && (
@@ -113,11 +186,86 @@ export default function ContextPreviewPage() {
             </div>
           </Card>
           <Card>
+            <CardTitle>Attachment Preview</CardTitle>
+            {pkg.attachments.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No artifact attachments were requested.</p>
+            ) : (
+              <div className="space-y-3">
+                {pkg.attachments.map((attachment, index) => (
+                  <AttachmentCard key={`${attachmentKey(attachment)}:${index}`} attachment={attachment as AttachmentPreview} />
+                ))}
+              </div>
+            )}
+          </Card>
+          <Card>
             <CardTitle>Full Package JSON</CardTitle>
             <pre>{JSON.stringify(pkg, null, 2)}</pre>
           </Card>
         </>
       )}
+    </div>
+  )
+}
+
+function initialArtifactIds(params: URLSearchParams): string[] {
+  const ids = [
+    params.get('artifact_id') ?? '',
+    ...((params.get('artifact_ids') ?? '').split(',')),
+  ]
+  return Array.from(new Set(ids.map(id => id.trim()).filter(Boolean))).slice(0, 8)
+}
+
+function attachmentKey(attachment: Record<string, unknown>): string {
+  return String(attachment.artifact_id ?? attachment.label ?? 'attachment')
+}
+
+function AttachmentCard({ attachment }: { attachment: AttachmentPreview }) {
+  const approved = attachment.approved === true
+  return (
+    <div className="rounded-md border border-border bg-background p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium text-sm">{attachment.label ?? attachment.artifact_id ?? 'Attachment'}</span>
+            {attachment.artifact_type && <Badge variant="secondary">{attachment.artifact_type}</Badge>}
+            {attachment.domain_label && <Badge variant="outline">{attachment.domain_label}</Badge>}
+          </div>
+          {attachment.artifact_id && <p className="mt-1 font-mono text-xs text-muted-foreground">{attachment.artifact_id}</p>}
+        </div>
+        <Badge variant={approved ? 'success' : 'destructive'}>
+          {approved ? <CheckCircle2 className="size-3" /> : <AlertTriangle className="size-3" />}
+          {approved ? 'approved' : 'blocked'}
+        </Badge>
+      </div>
+      {!approved && attachment.rejection_reason && (
+        <p className="mt-3 rounded-md border border-destructive/25 bg-destructive/10 p-2 text-xs text-destructive">
+          {attachment.rejection_reason}
+        </p>
+      )}
+      {attachment.resolved_content && (
+        <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-3 text-xs">
+          {attachment.resolved_content}
+        </pre>
+      )}
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        {attachment.policy_snapshot && (
+          <SnapshotBlock title="Policy snapshot" value={attachment.policy_snapshot} />
+        )}
+        {attachment.source_policy_snapshot && (
+          <SnapshotBlock title="Source policy snapshot" value={attachment.source_policy_snapshot} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SnapshotBlock({ title, value }: { title: string; value: Record<string, unknown> }) {
+  return (
+    <div>
+      <div className="mb-1 text-xs font-medium text-muted-foreground">{title}</div>
+      <pre className="max-h-36 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-2 text-[11px]">
+        {JSON.stringify(value, null, 2)}
+      </pre>
     </div>
   )
 }

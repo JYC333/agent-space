@@ -355,6 +355,246 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
+    action: "claim.create",
+    resource_type: "claim",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_knowledge_change",
+    default_required_approver_role: "owner",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Create a global Claim atom after an accepted claim_create proposal. Protected via proposal.apply gate and ProposalApplyService.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "claim.update",
+    resource_type: "claim",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_knowledge_change",
+    default_required_approver_role: "owner",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Update a global Claim atom after an accepted claim_update proposal. Protected via proposal.apply gate and ProposalApplyService.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "claim.archive",
+    resource_type: "claim",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_knowledge_change",
+    default_required_approver_role: "owner",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Archive a global Claim atom after an accepted claim_archive proposal. Protected via proposal.apply gate and ProposalApplyService.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "claim.relation_create",
+    resource_type: "claim_relation",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_knowledge_change",
+    default_required_approver_role: "owner",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Create a ClaimRelation after an accepted claim_relation_create proposal. Protected via proposal.apply gate and ProposalApplyService.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "claim.relation_delete",
+    resource_type: "claim_relation",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_knowledge_change",
+    default_required_approver_role: "owner",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Archive a ClaimRelation after an accepted claim_relation_delete proposal. Protected via proposal.apply gate and ProposalApplyService.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "object_relation.create",
+    resource_type: "object_relation",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_knowledge_change",
+    default_required_approver_role: "owner",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Create an FK-backed ObjectRelation after an accepted object_relation_create proposal. Protected via proposal.apply gate and ProposalApplyService.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "object_relation.delete",
+    resource_type: "object_relation",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_knowledge_change",
+    default_required_approver_role: "owner",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Archive an ObjectRelation after an accepted object_relation_delete proposal. Protected via proposal.apply gate and ProposalApplyService.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "object_kind.create",
+    resource_type: "object_schema",
+    default_risk_level: "high",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_knowledge_change",
+    default_required_approver_role: "admin",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Create a governed per-space object_kind definition after an accepted object_kind_create proposal. Does not create canonical domain rows or retrieval object types.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "object_kind.update",
+    resource_type: "object_schema",
+    default_risk_level: "high",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_knowledge_change",
+    default_required_approver_role: "admin",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Update label/config fields or activate a draft governed object_kind definition after an accepted object_kind_update proposal. Key and base object type remain fixed.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "object_kind.deprecate",
+    resource_type: "object_schema",
+    default_risk_level: "high",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_knowledge_change",
+    default_required_approver_role: "admin",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Deprecate a governed object_kind definition after an accepted object_kind_deprecate proposal. Existing object rows remain valid.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "object_kind.archive",
+    resource_type: "object_schema",
+    default_risk_level: "high",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_knowledge_change",
+    default_required_approver_role: "admin",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Archive a governed object_kind definition after an accepted object_kind_archive proposal. Existing object rows remain valid because object_kind remains optional.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "claim_candidate_packet",
+    resource_type: "proposal",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_proposal",
+    default_required_approver_role: "owner",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Review a Claim Candidate Packet. Accepting creates child pending claim/object-relation proposals for supported candidates and does not directly write canonical Claims.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "retrieval_maintenance_packet",
+    resource_type: "proposal",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_proposal",
+    default_required_approver_role: "owner",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Review a retrieval maintenance packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Brain Ops review setting to allow the reviewer. Accepting may create child pending Knowledge relation proposals but does not directly write canonical Knowledge.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "memory_maintenance_packet",
+    resource_type: "proposal",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_proposal",
+    default_required_approver_role: "owner",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Acknowledge a Memory maintenance packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Brain Ops review setting to allow the reviewer. Accepting records review acknowledgement only and performs no canonical Memory writes.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "retrieval_diagnostics_packet",
+    resource_type: "proposal",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_proposal",
+    default_required_approver_role: "owner",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Acknowledge a retrieval diagnostics packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Brain Ops review setting to allow the reviewer. Accepting records review acknowledgement only and performs no canonical Knowledge or Memory writes.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "relation_discovery_packet",
+    resource_type: "proposal",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_proposal",
+    default_required_approver_role: "owner",
+    current_enforcement_point:
+      "server/src/modules/proposals/applyService.ts via proposal.apply",
+    description:
+      "Review a candidate-relation discovery packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Brain Ops review setting to allow the reviewer. Accepting creates child pending knowledge_relation_create / knowledge_create proposals for supported candidates and does not directly write canonical Knowledge.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "best_effort",
+  },
+  {
     action: "skill.import",
     resource_type: "skill_package",
     default_risk_level: "medium",
@@ -609,7 +849,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     current_enforcement_point:
       "server/src/modules/automations/service.ts",
     description:
-      "Create an automation rule that can trigger agent runs on a schedule or event.",
+      "Create an automation rule that can trigger agent runs or managed operational scans on a schedule or event.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "fail_closed",
   },
@@ -623,7 +863,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     default_required_approver_role: "owner",
     current_enforcement_point:
       "server/src/modules/automations/service.ts",
-    description: "Manually trigger an automation rule to queue an agent run.",
+    description: "Manually trigger an automation rule to queue an agent run or execute a managed operational scan.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "fail_closed",
   },
@@ -753,6 +993,96 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
       "Authorize selecting explicitly linked active evidence for inclusion in a run context snapshot.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "best_effort",
+  },
+  {
+    action: "retrieval.search",
+    resource_type: "retrieval_tool",
+    default_risk_level: "low",
+    default_decision: "deny",
+    audit_required: true,
+    approval_capability: null,
+    default_required_approver_role: null,
+    current_enforcement_point:
+      "server/src/modules/retrievalTool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+    description:
+      "Invoke the managed-run Knowledge retrieval search tool under the instructing user's read access.",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "fail_closed",
+  },
+  {
+    action: "retrieval.brief",
+    resource_type: "retrieval_tool",
+    default_risk_level: "low",
+    default_decision: "deny",
+    audit_required: true,
+    approval_capability: null,
+    default_required_approver_role: null,
+    current_enforcement_point:
+      "server/src/modules/retrievalTool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+    description:
+      "Invoke the managed-run Knowledge Context Brief tool under the instructing user's read access.",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "fail_closed",
+  },
+  {
+    action: "memory.retrieval.search",
+    resource_type: "retrieval_tool",
+    default_risk_level: "low",
+    default_decision: "deny",
+    audit_required: true,
+    approval_capability: null,
+    default_required_approver_role: null,
+    current_enforcement_point:
+      "server/src/modules/retrievalTool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+    description:
+      "Invoke the explicitly opted-in managed-run Memory retrieval search tool under the instructing user's read access.",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "fail_closed",
+  },
+  {
+    action: "memory.retrieval.brief",
+    resource_type: "retrieval_tool",
+    default_risk_level: "low",
+    default_decision: "deny",
+    audit_required: true,
+    approval_capability: null,
+    default_required_approver_role: null,
+    current_enforcement_point:
+      "server/src/modules/retrievalTool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+    description:
+      "Invoke the explicitly opted-in managed-run Memory Context Brief tool under the instructing user's read access.",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "fail_closed",
+  },
+  {
+    action: "project_public_summary.search",
+    resource_type: "retrieval_tool",
+    default_risk_level: "low",
+    default_decision: "deny",
+    audit_required: true,
+    approval_capability: null,
+    default_required_approver_role: null,
+    current_enforcement_point:
+      "server/src/modules/retrievalTool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+    description:
+      "Invoke the explicitly opted-in managed-run Project public-summary search tool under the instructing user's read access.",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "fail_closed",
+  },
+  {
+    action: "project_public_summary.brief",
+    resource_type: "retrieval_tool",
+    default_risk_level: "low",
+    default_decision: "deny",
+    audit_required: true,
+    approval_capability: null,
+    default_required_approver_role: null,
+    current_enforcement_point:
+      "server/src/modules/retrievalTool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+    description:
+      "Invoke the explicitly opted-in managed-run Project public-summary Context Brief tool under the instructing user's read access.",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "fail_closed",
   },
   {
     action: "deployment.propose",

@@ -52,14 +52,20 @@ Brain") are presentation concerns. Knowledge is distinct from Memory: Memory is 
 context; Knowledge is durable content for people to inspect, revise, relate, and reuse.
 
 No removed route or compatibility alias exists. The API path is `/api/v1/knowledge`;
-canonical table names are `notes`, `note_collections`, `note_collection_items`,
-`knowledge_items`, `knowledge_item_relations`, `sources`, `knowledge_item_sources`,
-and the generic `entity_links`; wiki proposal types use `knowledge_*` (notes are not proposal-gated).
+canonical table names are `space_objects`, `notes`, `note_collections`,
+`note_collection_items`, `knowledge_items`, `knowledge_item_relations`, `sources`,
+`knowledge_item_sources`, `claims`, `claim_sources`, `claim_relations`,
+`object_relations`, and the generic `entity_links`; wiki proposal types use
+`knowledge_*`, claim proposal types use `claim_*`, object relation proposal
+types use `object_relation_*`, and `claim_candidate_packet` is the review packet
+bridge from retrieval artifacts into child claim/claim-relation/object-relation proposals
+(notes are not proposal-gated).
 
 ## Layers
 
 | Layer | Table | Write path | Role |
 |---|---|---|---|
+| **SpaceObject** | `space_objects` | owned by concrete object write path | shared space-scoped object root for common metadata |
 | **Note** | `notes` | direct CRUD | working knowledge that evolves freely |
 | **NoteCollection** | `note_collections` | direct CRUD | space-scoped folder tree for organizing notes |
 | **KnowledgeItem** (Wiki) | `knowledge_items` | proposal → approval | canonical, versioned knowledge |
@@ -67,6 +73,10 @@ and the generic `entity_links`; wiki proposal types use `knowledge_*` (notes are
 | **KnowledgeItemRelation** | `knowledge_item_relations` | proposal → approval | wiki item ↔ item semantic graph |
 | **KnowledgeItemSource** | `knowledge_item_sources` | direct CRUD | wiki item ↔ source evidence |
 | **EntityLink** | `entity_links` | direct CRUD | generic cross-object relation layer (notes ↔ anything) |
+| **Claim** | `claims` | proposal → approval | global semantic atom attached to `space_objects` |
+| **ClaimSource** | `claim_sources` | proposal → approval with claim writes | claim ↔ evidence/source-policy path |
+| **ClaimRelation** | `claim_relations` | proposal → approval | claim ↔ claim semantic graph |
+| **ObjectRelation** | `object_relations` | proposal → approval | FK-backed cross-object graph over `space_objects` |
 | **Card** | `cards` | direct CRUD (future) | space-scoped review card derived from knowledge objects |
 | **CardReviewState** | `card_review_states` | scheduler-written (future) | per-user FSRS scheduling state; one row per (card, user) |
 | **CardReview** | `card_reviews` | append-only (future) | per-user review history with rating + state snapshot |
@@ -87,8 +97,10 @@ are intentionally not foreign keys (covered by `server/test/baselineSchema.test.
 Endpoints are validated to exist in the same space. Link types: `references`,
 `related_to`, `belongs_to`, `captured_from`, `source_for`, `derived_from`; status:
 `suggested | accepted | rejected`. It **complements** — does not replace —
-`KnowledgeItemRelation` (governed wiki graph), `KnowledgeItemSource` (evidence), and
-`ProvenanceLink` (provenance into memory/policy/knowledge targets).
+`KnowledgeItemRelation` (governed wiki graph), `KnowledgeItemSource` (evidence),
+`ClaimRelation` (governed claim graph), `ObjectRelation` (governed FK-backed
+object graph), and `ProvenanceLink` (provenance into memory/policy/knowledge
+targets).
 
 Wiki pages read their generic backlinks (from Notes, Activities, Sources, Runs,
 Proposals, …) via `GET /api/v1/knowledge/items/{id}/backlinks` (EntityLinks targeting the
@@ -103,6 +115,10 @@ in many. The `note_collections` tree is space-scoped and user-configurable; PARA
 only as the initial folder template. A note still belongs to global Knowledge, never to a
 separate per-project note system.
 
+`note_collection_items` stores `space_id` and uses composite foreign keys to ensure
+collections and notes belong to the same space. `note_collections.parent_id` is also
+constrained by `(parent_id, space_id)` so folder trees cannot cross spaces.
+
 ## Owns
 - `Note` model (working-knowledge layer; direct CRUD via `NoteService`)
 - `NoteCollection` / `NoteCollectionItem` models (space-scoped Notes folder tree)
@@ -116,8 +132,10 @@ separate per-project note system.
   + `/api/v1/knowledge/notes/{id}/links|backlinks` direct CRUD for notes;
   `/api/v1/notes/collections` direct CRUD for the Notes collection tree;
   `/api/v1/knowledge/sources` direct CRUD; `/api/v1/knowledge/items/{id}/sources`
-  item-source link CRUD; `/api/v1/knowledge/summary`
-- Knowledge proposal apply handlers (wiki only)
+  item-source link CRUD; `/api/v1/knowledge/claims/candidate-packets`;
+  `/api/v1/knowledge/summary`
+- Knowledge proposal apply handlers for wiki, claim/object-relation writes, and
+  Claim Candidate Packets
 - Frontend Knowledge module (breadcrumb switcher, Notes workspace, Wiki/Sources/Cards, overview hub) under `apps/web/src/modules/knowledge/`
 - Relation and evidence-link records backed by database rows, not only Markdown links
 
@@ -148,6 +166,53 @@ this as current product scope, not as missing backend support.
 
 Knowledge items must not be auto-injected into runtime context. Promoting Knowledge into Memory is a separate future flow and is not part of the Knowledge MVP scaffold.
 
+## Retrieval Substrate
+
+Knowledge is the first consumer of the shared retrieval engine
+(`server/src/modules/retrieval/`), registering a domain adapter
+(`knowledge/retrievalAdapter.ts`) for `KnowledgeItem`, `Note`, `Source`, and
+`Claim`. The engine is generic and domain-agnostic; the adapter owns all
+Knowledge-specific SQL and the visibility revalidation gate. See
+[RETRIEVAL_AND_BRAIN_LAYER.md](../architecture/RETRIEVAL_AND_BRAIN_LAYER.md)
+for the engine/adapter boundary and the full retrieval + brain-layer
+architecture. The Brain Shape Registry foundation is also served from the
+Knowledge module: `space_object_kinds` registry rows are read in the current
+space, and owner/admin proposal routes create, update, deprecate, or archive
+object kinds through registered proposal appliers. This registry is object
+schema config only; it does not add retrieval object types or write canonical
+Knowledge, Memory, Claim, or Project rows. Remaining brain-layer work is tracked
+in [BRAIN_LAYER_CLOSURE_PLAN.md](../architecture/BRAIN_LAYER_CLOSURE_PLAN.md).
+Canonical lifecycle ownership does not change:
+KnowledgeItem writes remain proposal-gated, Notes and Sources remain direct CRUD,
+and retrieval projection rows are derived indexes that can be rebuilt from the
+canonical tables.
+
+The initial projection indexes:
+
+- `KnowledgeItem` title, slug, aliases, content/plain text, excerpt, source URL,
+  item status, visibility, owner, workspace, accepted item relations, and
+  item-source evidence links.
+- `Note` title, plain text, excerpt, status, workspace/project associations where
+  present, and generic `EntityLink` rows.
+- `Source` title, URI, raw text, summary, status, and item-source links.
+- `Claim` title, subject text, claim text, status, visibility, owner, claim
+  relations, claim-source evidence links, and object relation edges. Final
+  viewer-facing claim snippets after revalidation come from `claim_text` only.
+
+Extracted markdown links, wikilinks, source references, and alias matches are
+retrieval evidence or suggested retrieval edges only. They must not create an
+accepted `KnowledgeItemRelation` unless a user accepts the existing Knowledge
+relation proposal flow.
+
+Create-safety is advisory duplicate detection for review and proposal creation:
+`exists`, `probable_duplicate`, or `unknown`. It explains why a create may match
+an existing object, but it does not make retrieval projection authoritative and
+does not silently block canonical writes.
+
+Full-space retrieval reindex is a maintenance operation exposed at
+`POST /api/v1/knowledge/retrieval/reindex`. It rebuilds derived projection rows
+for the caller's space and requires space owner/admin authority.
+
 ## Activity-First Input Boundary
 
 Raw user input, session content, file imports, web captures, and run outputs enter Activity, Run, or Artifact first. Future Knowledge generation normally follows:
@@ -161,14 +226,13 @@ Activity / Run / Artifact
 
 Agent-generated knowledge never becomes active without proposal approval.
 
-## Item Types
+## Knowledge Kinds
 
-`KnowledgeItem.item_type` is restricted to these canonical Wiki types:
+`KnowledgeItem.knowledge_kind` is restricted to these canonical Wiki kinds:
 
-| Type | Purpose |
+| Kind | Purpose |
 |---|---|
 | `concept` | A definition, idea, or named concept |
-| `claim` | An assertion or position that can be supported/contradicted |
 | `lesson` | Learned principle or takeaway |
 | `procedure` | Repeatable steps or operating procedure |
 | `decision` | Decision record or rationale |
@@ -182,7 +246,7 @@ reflections are working-note / activity concepts and belong in **Notes** or **Ac
 not the proposal-governed `knowledge_items` table. (Daily-capture "experience"
 candidates land as canonical `summary` KnowledgeItems.)
 
-The default `item_type` for the create proposal is `concept`. Some item types may later
+The default `knowledge_kind` for the create proposal is `concept`. Some kinds may later
 gate on assessment flows (e.g. a Feynman/Reflection gate); these are future and must not
 block the MVP persistence/API slice.
 
@@ -234,6 +298,13 @@ Knowledge proposal apply currently relies on proposal approval and the `proposal
 - `knowledge.archive`
 - `knowledge.relation_create`
 - `knowledge.relation_delete`
+- `claim.create`
+- `claim.update`
+- `claim.archive`
+- `claim.relation_create`
+- `claim.relation_delete`
+- `object_relation.create`
+- `object_relation.delete`
 
 These actions are `WIRED_VIA_PROPOSAL`: durable mutation is protected by `proposal.apply` and `ProposalApplyService`, not direct `PolicyGateway.enforce()` call sites. Unknown or not-yet-implemented Knowledge actions must fail closed.
 
@@ -246,18 +317,27 @@ KnowledgeItem rows may carry `project_id` and/or `workspace_id`, but the primary
 ## Models
 
 ```text
-Note:                                 # working-knowledge layer (direct CRUD)
+SpaceObject:                           # shared object root for Knowledge-owned objects
   id, space_id
-  title
+  object_type                       # knowledge_item|note|source|claim|future core object types
+  title, summary
+  status                            # constrained by object_type:
+                                    #   KnowledgeItem draft|active|superseded|archived|deleted
+                                    #   Note active|archived|deleted
+                                    #   Source raw|processing|processed|archived|error
+                                    #   Claim active|disputed|superseded|rejected|archived
+  visibility
+  owner_user_id, primary_project_id, workspace_id
+  created_by_user_id, created_by_agent_id, created_by_run_id
+  created_at, updated_at, archived_at, deleted_at
+
+Note:                                 # working-knowledge layer (direct CRUD)
+  object_id, space_id             # object_id is PK/FK to SpaceObject.id
   content_json                    # ProseMirror JSON once a rich editor is wired
   content_format                  # markdown|plain|prosemirror_json (ships markdown)
   content_schema_version          # int, default 1
-  plain_text, excerpt             # derived projections for preview / future search
-  status                          # draft|active|archived
-  primary_project_id              # optional association (FK projects)
+  plain_text                      # derived projection for preview / future search
   created_from_activity_id        # optional capture provenance (FK activity_records)
-  created_by_user_id
-  created_at, updated_at, archived_at
 
 EntityLink:                           # generic cross-object relation layer (direct CRUD)
   id, space_id
@@ -269,27 +349,83 @@ EntityLink:                           # generic cross-object relation layer (dir
   status                          # suggested|accepted|rejected
   created_by_user_id, created_at
 
-KnowledgeItem:
+ObjectRelation:                       # governed FK-backed graph layer
   id, space_id
-  project_id, workspace_id        # optional associations
+  from_object_id, to_object_id      # composite FKs to SpaceObject(id, space_id)
+  relation_type                     # related_to|references|depends_on|part_of|
+                                    # source_for|derived_from|about|supports|
+                                    # contradicts|supersedes|refines|same_as
+  confidence
+  status                            # candidate|active|rejected|archived;
+                                    # create packets accept candidate|active only
+  source_claim_id, source_object_id, source_proposal_id
+  retrieval_projected               # response-only; true when both endpoints are
+                                    # indexed by Knowledge retrieval
+  metadata_json
+  created_by_user_id, created_by_agent_id
+  created_at, updated_at
+
+KnowledgeItem:
+  object_id, space_id             # object_id is PK/FK to SpaceObject.id
   root_item_id, supersedes_item_id
   redirect_to_item_id             # self-FK; readiness for future merge/rename/deprecate
-  item_type                       # canonical Wiki types above
+  knowledge_kind                  # canonical Wiki kinds above
   slug                            # readable-URL slug; indexed (space_id, slug), NOT unique
   aliases_json                    # alternate names for future search/linking
-  title, content
+  content
   content_json                    # ProseMirror/Tiptap JSON once a rich editor is wired
   content_format                  # markdown|plain|prosemirror_json
   content_schema_version          # int, default 1
-  plain_text, excerpt             # derived projections for search/preview/LLM context
-  status                          # draft|active|superseded|archived
-  visibility                      # private|space_shared|workspace_shared|restricted
+  plain_text                      # derived projection for search/preview/LLM context
   verification_status, reflection_status
-  tags_json, confidence, source_url, source_refs_json
-  owner_user_id, created_by_user_id, created_by_agent_id, created_by_run_id
+  tags_json, confidence, source_url
   source_activity_id, source_artifact_id, created_from_proposal_id
   approved_by_user_id
-  version, created_at, updated_at, archived_at, deprecated_at
+
+Claim:
+  object_id, space_id             # object_id is PK/FK to SpaceObject.id
+  subject_object_id, subject_text
+  claim_kind                      # fact|hypothesis|belief|preference|commitment|
+                                  # question|interpretation|instruction|metric|
+                                  # relationship|event
+  claim_text, normalized_claim_hash
+  holder_object_id, holder_type, holder_id
+  confidence, confidence_method
+  resolution_state                # unreviewed|confirmed|contradicted|stale|needs_source
+  valid_from, valid_until, observed_at
+  metadata_json
+  created_from_proposal_id, approved_by_user_id
+  lifecycle                       # enforced by proposal creation/apply:
+                                  #   create active|disputed|rejected
+                                  #   active -> disputed|superseded|archived
+                                  #   disputed -> active|superseded|archived
+                                  #   superseded|rejected -> archived
+                                  #   archived terminal
+  superseded_by_claim_id          # claim_update packet field; persisted into
+                                  # metadata_json when supplied
+
+ClaimSource:
+  id, space_id, claim_id
+  source_object_id                # optional FK to SpaceObject(id, space_id)
+  source_ref_type, source_ref_id
+  source_connection_id            # FK to SourceConnection(id, space_id);
+                                  # required whenever source_ref_type/source_ref_id is used
+  source_policy_snapshot_json
+  locator, quote_excerpt
+  evidence_role                   # supports|contradicts|mentions|derived_from|cites|summarizes
+  source_trust, confidence, metadata_json
+  created_by_user_id, created_at
+
+ClaimRelation:
+  id, space_id
+  from_claim_id, to_claim_id      # composite FKs to Claim(object_id, space_id)
+  relation_type                   # supports|contradicts|supersedes|refines|same_as|depends_on|derived_from
+  status                          # candidate|active|rejected|archived;
+                                  # create packets accept candidate|active only
+  confidence, evidence_summary
+  source_proposal_id
+  created_by_user_id, created_by_agent_id
+  created_at, updated_at
 
 KnowledgeItemRelation:                # item <-> item semantic graph
   id, space_id
@@ -304,14 +440,11 @@ KnowledgeItemRelation:                # item <-> item semantic graph
   created_at, updated_at
 
 Source:                               # independent provenance / evidence layer
-  id, space_id
+  object_id, space_id             # object_id is PK/FK to SpaceObject.id
   source_type                     # activity_record|chat_capture|webpage|article|
                                   #   paper|pdf|file|email|manual_reference|external_note
-  title, uri, content_ref, raw_text, summary, metadata_json
-  status                          # raw|processing|processed|archived|error
+  uri, content_ref, raw_text, summary, metadata_json
   source_activity_id              # optional FK back to the raw ActivityRecord
-  created_by_user_id
-  created_at, updated_at
 
 KnowledgeItemSource:                  # item <-> source evidence link
   id, space_id
@@ -365,7 +498,7 @@ not replaced by Source.
 **Enforced by tests:**
 - `server/test/leafDomainInvariants.test.ts` — knowledge proposals do not auto-promote into memory and server proposal appliers own accepted knowledge mutations.
 - `server/test/leafDomainRepositoryBehavior.test.ts` — repository behavior around leaf-domain proposal boundaries.
-- Payload validation is enforced at apply time in `KnowledgeProposalApplier`: `item_type`, `content_format`, `visibility`, `verification_status`, `reflection_status`, and `confidence` for items; `relation_type`, `status`, and `confidence` for relations.
+- Payload validation is enforced at apply time in `KnowledgeProposalApplier`: `knowledge_kind`, `content_format`, `visibility`, `verification_status`, `reflection_status`, and `confidence` for items; `relation_type`, `status`, and `confidence` for relations.
 
 ## Related Files
 - `server/src/modules/knowledge/` - API, service, schemas, read models, and proposal appliers

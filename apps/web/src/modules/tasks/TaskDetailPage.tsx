@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { agentsApi, artifactsApi, tasksApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg, isNotFoundError } from '../../lib/utils'
-import type { AgentOut, Task, TaskArtifact, TaskProposal, TaskRunListItem } from '../../types/api'
+import type { AgentOut, Task, TaskArtifact, TaskProposal, TaskRunCreateBody, TaskRunListItem } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Badge, StatusBadge } from '../../components/ui/badge'
@@ -17,6 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/ta
 import { EmptyState } from '../../components/ui/empty-state'
 import { PreviewBadge, DryRunBanner } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
+import { ContextArtifactPicker } from '../artifacts/ContextArtifactPicker'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -42,6 +43,7 @@ export default function TaskDetailPage() {
   const [loading, setLoading] = useState(true)
   const [mode, setMode] = useState<string>('live')
   const [agentPick, setAgentPick] = useState<string>('')
+  const [contextArtifactIds, setContextArtifactIds] = useState<string[]>([])
   const [creatingRun, setCreatingRun] = useState(false)
 
   const load = useCallback(async () => {
@@ -83,9 +85,10 @@ export default function TaskDetailPage() {
     if (!taskId || !task) return
     setCreatingRun(true)
     try {
-      const body: { mode: string; agent_id?: string } = { mode }
+      const body: TaskRunCreateBody = { mode }
       const aid = task.assigned_agent_id || agentPick || undefined
       if (aid) body.agent_id = aid
+      if (contextArtifactIds.length > 0) body.context_artifact_ids = contextArtifactIds
       await tasksApi.createRun(taskId, body)
       toast.success('Queued run created')
       await load()
@@ -194,6 +197,14 @@ export default function TaskDetailPage() {
             {creatingRun ? 'Creating…' : 'Create queued run'}
           </Button>
         </div>
+        <ContextArtifactPicker
+          className="pt-2"
+          title="Run context artifacts"
+          description="Selected artifacts will be attached to the queued task run."
+          selectedArtifactIds={contextArtifactIds}
+          onChange={setContextArtifactIds}
+          workspaceId={task.workspace_id}
+        />
       </div>
 
       <Tabs defaultValue="overview">

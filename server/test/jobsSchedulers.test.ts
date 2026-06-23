@@ -21,6 +21,27 @@ import { buildDailyReportJobPayload } from "../src/modules/dailyReports/schedule
 import { loadConfig } from "../src/config";
 import { enforce } from "../src/modules/policy";
 
+const maintenanceScanMock = vi.hoisted(() => vi.fn());
+const dbPoolMock = vi.hoisted(() => ({ current: null as unknown }));
+
+vi.mock("../src/db/pool", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/db/pool")>();
+  return {
+    ...actual,
+    getDbPool: vi.fn((databaseUrl: string) => dbPoolMock.current ?? actual.getDbPool(databaseUrl)),
+  };
+});
+
+vi.mock("../src/modules/retrieval", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/modules/retrieval")>();
+  return {
+    ...actual,
+    RetrievalMaintenanceService: vi.fn().mockImplementation(() => ({
+      scan: maintenanceScanMock,
+    })),
+  };
+});
+
 vi.mock("../src/modules/policy", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/modules/policy")>();
   return {
@@ -29,9 +50,37 @@ vi.mock("../src/modules/policy", async (importOriginal) => {
   };
 });
 
-vi.mock("../src/modules/policy/actionRegistry", () => ({
-  loadActionRegistry: vi.fn(async () => ({})),
-}));
+vi.mock("../src/modules/policy/actionRegistry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/modules/policy/actionRegistry")>();
+  const action = (
+    name: string,
+    resourceType: string,
+    risk: "low" | "medium" | "high" = "medium",
+  ) => ({
+    action: name,
+    resource_type: resourceType,
+    default_risk_level: risk,
+    default_decision: "allow",
+    audit_required: false,
+    approval_capability: null,
+    default_required_approver_role: null,
+    current_enforcement_point: "test",
+    description: "test action",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "best_effort",
+  });
+  return {
+    ...actual,
+    loadActionRegistry: vi.fn(async () =>
+      new Map([
+        ["runtime.execute", action("runtime.execute", "run")],
+        ["runtime.use_credential", action("runtime.use_credential", "credential", "high")],
+        ["context.inject_memory", action("context.inject_memory", "memory")],
+        ["context.render_for_runtime", action("context.render_for_runtime", "context", "low")],
+      ]),
+    ),
+  };
+});
 
 describe("JobHandlerRegistry", () => {
   it("registers handlers and fails fast on duplicates", () => {
@@ -410,6 +459,8 @@ describe("AutomationService policy preflight", () => {
 
   beforeEach(() => {
     vi.mocked(enforce).mockReset();
+    maintenanceScanMock.mockReset();
+    dbPoolMock.current = null;
   });
 
   it("rejects credential-looking automation config keys before policy enforcement", async () => {
@@ -468,6 +519,207 @@ describe("AutomationService policy preflight", () => {
     });
   });
 
+  it("creates knowledge maintenance automations with maintenance preflight instead of runtime preflight", async () => {
+    vi.mocked(enforce).mockResolvedValue({ status: "allow" });
+    const repo = new FakeAutomationRepository(sampleAutomation(), "owner");
+    const service = new AutomationService(configWithoutDb, repo);
+    await service.create({
+      spaceId: "space-1",
+      ownerUserId: "owner-1",
+      body: {
+        name: "Knowledge maintenance",
+        agent_id: "agent-1",
+        config_json: {
+          target_type: "knowledge_retrieval_maintenance",
+          create_packet: true,
+        },
+      },
+    });
+
+    expect(vi.mocked(enforce).mock.calls[0]?.[2].context).toMatchObject({
+      target_type: "knowledge_retrieval_maintenance",
+      membership_role: "owner",
+    });
+    expect(repo.createInputs[0]?.preflightSnapshot).toMatchObject({
+      executable: true,
+      target_type: "knowledge_retrieval_maintenance",
+      maintenance_preflight: {
+        persist_report: true,
+        create_packet: true,
+        membership_role: "owner",
+      },
+    });
+  });
+
+  it("creates Brain Ops Dream Cycle automations with Dream Cycle preflight", async () => {
+    vi.mocked(enforce).mockResolvedValue({ status: "allow" });
+    const repo = new FakeAutomationRepository(sampleAutomation(), "owner");
+    const service = new AutomationService(configWithoutDb, repo);
+    await service.create({
+      spaceId: "space-1",
+      ownerUserId: "owner-1",
+      body: {
+        name: "Brain Ops Dream Cycle",
+        agent_id: "agent-1",
+        config_json: {
+          target_type: "brain_ops_dream_cycle_v2",
+          create_packets: true,
+          include_memory_maintenance: true,
+        },
+      },
+    });
+
+    expect(vi.mocked(enforce).mock.calls[0]?.[2].context).toMatchObject({
+      target_type: "brain_ops_dream_cycle_v2",
+      membership_role: "owner",
+    });
+    expect(repo.createInputs[0]?.preflightSnapshot).toMatchObject({
+      executable: true,
+      target_type: "brain_ops_dream_cycle_v2",
+      dream_cycle_preflight: {
+        scope: "brain_ops",
+        persist_report: true,
+        create_packets: true,
+        review_scope: "private",
+        include_memory_maintenance: true,
+        membership_role: "owner",
+      },
+    });
+  });
+
+  it("rejects knowledge maintenance automations for non-admin space members", async () => {
+    vi.mocked(enforce).mockResolvedValue({ status: "allow" });
+    const repo = new FakeAutomationRepository(sampleAutomation(), "member");
+    const service = new AutomationService(configWithoutDb, repo);
+    await expect(
+      service.create({
+        spaceId: "space-1",
+        ownerUserId: "member-1",
+        body: {
+          name: "Knowledge maintenance",
+          agent_id: "agent-1",
+          config_json: { target_type: "knowledge_retrieval_maintenance" },
+        },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringContaining("owner or admin"),
+    });
+    expect(repo.createInputs).toHaveLength(0);
+  });
+
+  it("rejects Brain Ops Dream Cycle automations for non-admin space members", async () => {
+    vi.mocked(enforce).mockResolvedValue({ status: "allow" });
+    const repo = new FakeAutomationRepository(sampleAutomation(), "member");
+    const service = new AutomationService(configWithoutDb, repo);
+    await expect(
+      service.create({
+        spaceId: "space-1",
+        ownerUserId: "member-1",
+        body: {
+          name: "Brain Ops Dream Cycle",
+          agent_id: "agent-1",
+          config_json: { target_type: "brain_ops_dream_cycle_v2" },
+        },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringContaining("owner or admin"),
+    });
+    expect(repo.createInputs).toHaveLength(0);
+  });
+
+  it("rejects invalid Brain Ops Dream Cycle config fields", async () => {
+    vi.mocked(enforce).mockResolvedValue({ status: "allow" });
+    const repo = new FakeAutomationRepository(sampleAutomation(), "owner");
+    const service = new AutomationService(configWithoutDb, repo);
+    await expect(
+      service.create({
+        spaceId: "space-1",
+        ownerUserId: "owner-1",
+        body: {
+          name: "Brain Ops Dream Cycle",
+          agent_id: "agent-1",
+          config_json: {
+            target_type: "brain_ops_dream_cycle_v2",
+            review_scope: "everyone",
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      message: expect.stringContaining("review_scope"),
+    });
+    expect(repo.createInputs).toHaveLength(0);
+  });
+
+  it("rejects knowledge maintenance automations with an invalid attribution agent", async () => {
+    vi.mocked(enforce).mockResolvedValue({ status: "allow" });
+    const repo = new FakeAutomationRepository(
+      sampleAutomation(),
+      "owner",
+      [],
+      { status: "inactive", current_version_id: "agent-version-1", version_id: "agent-version-1" },
+    );
+    const service = new AutomationService(configWithoutDb, repo);
+
+    await expect(
+      service.create({
+        spaceId: "space-1",
+        ownerUserId: "owner-1",
+        body: {
+          name: "Knowledge maintenance",
+          agent_id: "agent-1",
+          config_json: { target_type: "knowledge_retrieval_maintenance" },
+        },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      message: expect.stringContaining("not active"),
+    });
+    expect(repo.createInputs).toHaveLength(0);
+  });
+
+  it("advances due maintenance automations when preflight fails before execution", async () => {
+    vi.mocked(enforce).mockResolvedValue({ status: "allow" });
+    const due = sampleAutomation({
+      trigger_type: "schedule",
+      config_json: {
+        target_type: "knowledge_retrieval_maintenance",
+        cron: "0 9 * * *",
+        timezone: "UTC",
+      },
+    });
+    const repo = new FakeAutomationRepository(due, "member", [due]);
+    const service = new AutomationService(config, repo);
+
+    await expect(service.scanAndFire()).resolves.toBe(0);
+    expect(repo.advanceScheduleCalls).toBe(1);
+    expect(repo.createAutomationRunCalls).toBe(0);
+  });
+
+  it("advances due maintenance automations once when scan execution fails", async () => {
+    vi.mocked(enforce).mockResolvedValue({ status: "allow" });
+    maintenanceScanMock.mockRejectedValue(new Error("scan failed"));
+    const fakePool = new MaintenanceAutomationFakePool();
+    dbPoolMock.current = fakePool;
+    const due = sampleAutomation({
+      trigger_type: "schedule",
+      config_json: {
+        target_type: "knowledge_retrieval_maintenance",
+        cron: "0 9 * * *",
+        timezone: "UTC",
+      },
+    });
+    const repo = new FakeAutomationRepository(due, "owner", [due]);
+    const service = new AutomationService(config, repo);
+
+    await expect(service.scanAndFire()).resolves.toBe(0);
+    expect(fakePool.advanceScheduleCalls).toBe(1);
+    expect(fakePool.terminalStatuses).toEqual(["failed"]);
+    expect(repo.advanceScheduleCalls).toBe(0);
+  });
+
   it("blocks fire with 403 when policy denies automation.fire", async () => {
     vi.mocked(enforce).mockResolvedValue({
       status: "blocked",
@@ -483,6 +735,34 @@ describe("AutomationService policy preflight", () => {
       }),
     ).rejects.toMatchObject({ statusCode: 403, message: expect.stringContaining("admin") });
     expect(repo.createAutomationRunCalls).toBe(0);
+  });
+
+  it("records last_fired_at for a successful manual agent-run fire", async () => {
+    vi.mocked(enforce).mockResolvedValue({ status: "allow" });
+    dbPoolMock.current = new AgentAutomationFireFakePool();
+    const repo = new FakeAutomationRepository(
+      sampleAutomation(),
+      "owner",
+      [],
+      { status: "active", current_version_id: "agent-version-1", version_id: "agent-version-1" },
+      true,
+    );
+    const service = new AutomationService(config, repo);
+
+    const result = await service.fire({
+      spaceId: "space-1",
+      automationId: "auto-1",
+      actorUserId: "owner-1",
+      prompt: "Run now",
+    });
+
+    expect(result).toMatchObject({
+      trigger_origin: "automation",
+      preflight_executable: true,
+    });
+    expect(result.run_id).toEqual(expect.any(String));
+    expect(result.automation_run_id).toEqual(expect.any(String));
+    expect(repo.recordFireCalls).toBe(1);
   });
 });
 
@@ -529,10 +809,20 @@ describe("DailyCaptureReport settings validation", () => {
 
 class FakeAutomationRepository {
   createAutomationRunCalls = 0;
+  createInputs: Array<{ preflightSnapshot: Record<string, unknown> }> = [];
+  advanceScheduleCalls = 0;
+  recordFireCalls = 0;
 
   constructor(
     private readonly automation: AutomationRow,
     private readonly membershipRole: string | null = "owner",
+    private readonly dueAutomations: AutomationRow[] = [],
+    private readonly agentPreflight: {
+      status: string;
+      current_version_id: string | null;
+      version_id: string | null;
+    } | null = { status: "active", current_version_id: "agent-version-1", version_id: "agent-version-1" },
+    private readonly activeGrant = false,
   ) {}
 
   async get(spaceId: string, automationId: string): Promise<AutomationRow | null> {
@@ -540,7 +830,8 @@ class FakeAutomationRepository {
     return this.automation;
   }
 
-  async create(): Promise<AutomationRow> {
+  async create(input?: { preflightSnapshot: Record<string, unknown> }): Promise<AutomationRow> {
+    if (input) this.createInputs.push(input);
     return this.automation;
   }
 
@@ -548,12 +839,20 @@ class FakeAutomationRepository {
     return this.membershipRole;
   }
 
+  async getAgentPreflight(): Promise<{
+    status: string;
+    current_version_id: string | null;
+    version_id: string | null;
+  } | null> {
+    return this.agentPreflight;
+  }
+
   async update(): Promise<AutomationRow> {
     return this.automation;
   }
 
   async hasActiveGrant(): Promise<boolean> {
-    return false;
+    return this.activeGrant;
   }
 
   async createAutomationRun(): Promise<string> {
@@ -562,11 +861,182 @@ class FakeAutomationRepository {
   }
 
   async listDue(): Promise<AutomationRow[]> {
-    return [];
+    return this.dueAutomations;
   }
 
   async advanceSchedule(): Promise<void> {
-    return;
+    this.advanceScheduleCalls += 1;
+  }
+
+  async recordFire(): Promise<void> {
+    this.recordFireCalls += 1;
+  }
+}
+
+class MaintenanceAutomationFakePool implements Queryable {
+  advanceScheduleCalls = 0;
+  terminalStatuses: string[] = [];
+
+  async connect(): Promise<Queryable & { release(): void }> {
+    return {
+      query: this.query.bind(this),
+      release() {
+        return;
+      },
+    };
+  }
+
+  async query<Row = Record<string, unknown>>(
+    sql: string,
+    params: readonly unknown[] = [],
+  ): Promise<QueryResult<Row>> {
+    const trimmed = sql.trim();
+    if (trimmed === "BEGIN" || trimmed === "COMMIT" || trimmed === "ROLLBACK") {
+      return { rowCount: 0, rows: [] };
+    }
+    if (sql.includes("FROM agents")) {
+      return {
+        rowCount: 1,
+        rows: [{ id: "agent-1", status: "active", current_version_id: "agent-version-1" }] as Row[],
+      };
+    }
+    if (sql.includes("FROM agent_versions")) {
+      return { rowCount: 1, rows: [{ id: "agent-version-1" }] as Row[] };
+    }
+    if (sql.includes("INSERT INTO context_snapshots")) {
+      return { rowCount: 1, rows: [] };
+    }
+    if (sql.includes("INSERT INTO runs")) {
+      return {
+        rowCount: 1,
+        rows: [
+          {
+            id: "run-1",
+            space_id: "space-1",
+            agent_id: "agent-1",
+            agent_version_id: "agent-version-1",
+            status: "running",
+          },
+        ] as Row[],
+      };
+    }
+    if (sql.includes("UPDATE context_snapshots")) {
+      return { rowCount: 1, rows: [] };
+    }
+    if (sql.includes("INSERT INTO automation_runs")) {
+      return { rowCount: 1, rows: [] };
+    }
+    if (sql.includes("UPDATE runs")) {
+      this.terminalStatuses.push(String(params[2]));
+      return {
+        rowCount: 1,
+        rows: [{ id: "run-1", status: params[2] }] as Row[],
+      };
+    }
+    if (sql.includes("UPDATE automations")) {
+      this.advanceScheduleCalls += 1;
+      return { rowCount: 1, rows: [] };
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  }
+}
+
+class AgentAutomationFireFakePool implements Queryable {
+  async connect(): Promise<Queryable & { release(): void }> {
+    return {
+      query: this.query.bind(this),
+      release() {
+        return;
+      },
+    };
+  }
+
+  async query<Row = Record<string, unknown>>(
+    sql: string,
+    params: readonly unknown[] = [],
+  ): Promise<QueryResult<Row>> {
+    const trimmed = sql.trim();
+    if (trimmed === "BEGIN" || trimmed === "COMMIT" || trimmed === "ROLLBACK") {
+      return { rowCount: 0, rows: [] };
+    }
+    if (sql.includes("FROM agents")) {
+      return {
+        rowCount: 1,
+        rows: [
+          {
+            id: "agent-1",
+            status: "active",
+            current_version_id: "agent-version-1",
+            version_id: "agent-version-1",
+            runtime_config_json: { adapter_type: "model_api" },
+            runtime_policy_json: { risk_level: "medium" },
+            model_provider_id: "provider-1",
+          },
+        ] as Row[],
+      };
+    }
+    if (sql.includes("SELECT runtime_config_json") && sql.includes("FROM agent_versions")) {
+      return {
+        rowCount: 1,
+        rows: [
+          {
+            runtime_config_json: { adapter_type: "model_api" },
+            runtime_policy_json: { risk_level: "medium" },
+            model_provider_id: "provider-1",
+            model_name: "gpt-4o-mini",
+          },
+        ] as Row[],
+      };
+    }
+    if (sql.includes("FROM agent_versions")) {
+      return { rowCount: 1, rows: [{ id: "agent-version-1" }] as Row[] };
+    }
+    if (sql.includes("FROM agent_runtime_profiles")) {
+      return { rowCount: 0, rows: [] };
+    }
+    if (sql.includes("FROM model_provider_space_grants")) {
+      return {
+        rowCount: 1,
+        rows: [
+          {
+            id: "provider-1",
+            name: "Main",
+            provider_type: "openai",
+            default_model: "gpt-4o-mini",
+            enabled: true,
+            credential_id: "credential-1",
+            config_json: { is_default: true },
+          },
+        ] as Row[],
+      };
+    }
+    if (sql.includes("INSERT INTO context_snapshots")) {
+      return { rowCount: 1, rows: [] };
+    }
+    if (sql.includes("INSERT INTO runs")) {
+      return {
+        rowCount: 1,
+        rows: [
+          {
+            id: params[0],
+            space_id: "space-1",
+            agent_id: "agent-1",
+            agent_version_id: "agent-version-1",
+            status: "queued",
+          },
+        ] as Row[],
+      };
+    }
+    if (sql.includes("UPDATE context_snapshots")) {
+      return { rowCount: 1, rows: [] };
+    }
+    if (sql.includes("INSERT INTO jobs")) {
+      return { rowCount: 1, rows: [makeJob({ id: String(params[0]) })] as Row[] };
+    }
+    if (sql.includes("INSERT INTO automation_runs")) {
+      return { rowCount: 1, rows: [] };
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
   }
 }
 

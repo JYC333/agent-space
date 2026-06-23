@@ -57,12 +57,16 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const parsed = parseListFilters(request);
     if ("error" in parsed) return reply.code(422).send({ detail: parsed.error });
     const services = proposalServices(context);
-    const page = await services.repository.listVisible(
-      identity.spaceId,
-      identity.userId,
-      parsed.filters,
-    );
-    return reply.send(page);
+    try {
+      const page = await services.repository.listVisible(
+        identity.spaceId,
+        identity.userId,
+        parsed.filters,
+      );
+      return reply.send(page);
+    } catch (error) {
+      return sendProposalRouteError(request, reply, error);
+    }
   });
 
   app.get("/api/v1/proposals/:proposalId", async (request, reply) => {
@@ -93,7 +97,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       if (!result) return reply.code(404).send({ detail: "Proposal not found or already decided" });
       return reply.send(result);
     } catch (error) {
-      return sendProposalApplyError(request, reply, error);
+      return sendProposalRouteError(request, reply, error);
     }
   });
 
@@ -107,7 +111,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       if (!result) return reply.code(404).send({ detail: "Proposal not found or already decided" });
       return reply.send(result);
     } catch (error) {
-      return sendProposalApplyError(request, reply, error);
+      return sendProposalRouteError(request, reply, error);
     }
   });
 
@@ -121,7 +125,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       if (!result) return reply.code(404).send({ detail: "Proposal not found or not eligible for rollback" });
       return reply.send(result);
     } catch (error) {
-      return sendProposalApplyError(request, reply, error);
+      return sendProposalRouteError(request, reply, error);
     }
   });
 
@@ -141,7 +145,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         );
         return reply.send(result);
       } catch (error) {
-        return sendProposalApplyError(request, reply, error);
+        return sendProposalRouteError(request, reply, error);
       }
     },
   );
@@ -222,7 +226,7 @@ function resolveStatus(raw: string | undefined): string | null | Error {
   return new Error(`Invalid status ${JSON.stringify(raw)}`);
 }
 
-function sendProposalApplyError(
+function sendProposalRouteError(
   request: FastifyRequest,
   reply: FastifyReply,
   error: unknown,

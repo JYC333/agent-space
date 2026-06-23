@@ -101,6 +101,7 @@ registry `default_decision`. Not full RBAC/ABAC — they express intent and defa
 | `proposal.create` | proposal | low | allow | proposals + target modules via `enforce()` |
 | `proposal.apply` | proposal | medium | require_approval | proposal apply service via `enforceProposalApply()` |
 | `workspace.read` | workspace | low | allow | workspaces routes via `enforce()` |
+| `runtime_skill.render` | runtime_skill_binding | medium | require_approval | context module via `enforce()` |
 | `agent.config_update` | agent | high | allow (audit_required) | agents routes/repository before config proposal creation |
 | `intake.connection_manage` | source_connection | medium | allow (audit_required) | intake routes via `enforce()` |
 | `intake.item_create` | intake_item | low | allow (audit_required) | intake routes via `enforce()` |
@@ -110,10 +111,43 @@ registry `default_decision`. Not full RBAC/ABAC — they express intent and defa
 | `evidence.link` | evidence | low | allow (audit_required) | intake routes via `enforce()` |
 | `workspace_intake.configure` | workspace_intake | medium | allow (audit_required) | intake routes via `enforce()` |
 | `context.select_evidence` | evidence | low | allow | context module via `enforce()` |
+| `retrieval.search` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
+| `retrieval.brief` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
+| `memory.retrieval.search` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
+| `memory.retrieval.brief` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
+| `project_public_summary.search` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
+| `project_public_summary.brief` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
 | `memory.create` | memory | medium | require_approval | via `proposal.apply` |
 | `memory.update` | memory | medium | require_approval | via `proposal.apply` |
 | `memory.archive` | memory | medium | require_approval | via `proposal.apply` |
 | `policy.change` | policy | high | require_approval | via `proposal.apply` |
+| `knowledge.create` | knowledge | medium | require_approval | via `proposal.apply` |
+| `knowledge.update` | knowledge | medium | require_approval | via `proposal.apply` |
+| `knowledge.archive` | knowledge | medium | require_approval | via `proposal.apply` |
+| `knowledge.relation_create` | knowledge_relation | medium | require_approval | via `proposal.apply` |
+| `knowledge.relation_delete` | knowledge_relation | medium | require_approval | via `proposal.apply` |
+| `claim.create` | claim | medium | require_approval | via `proposal.apply` |
+| `claim.update` | claim | medium | require_approval | via `proposal.apply` |
+| `claim.archive` | claim | medium | require_approval | via `proposal.apply` |
+| `claim.relation_create` | claim_relation | medium | require_approval | via `proposal.apply` |
+| `claim.relation_delete` | claim_relation | medium | require_approval | via `proposal.apply` |
+| `object_relation.create` | object_relation | medium | require_approval | via `proposal.apply` |
+| `object_relation.delete` | object_relation | medium | require_approval | via `proposal.apply` |
+| `memory_maintenance_packet` | proposal | medium | require_approval | via `proposal.apply` |
+| `retrieval_maintenance_packet` | proposal | medium | require_approval | via `proposal.apply` |
+| `retrieval_diagnostics_packet` | proposal | medium | require_approval | via `proposal.apply` |
+| `skill.import` | skill_package | medium | require_approval | via `proposal.apply` |
+| `skill.convert` | skill_package | high | require_approval | via `proposal.apply` |
+| `capability.enable` | capability | high | require_approval | via `proposal.apply` |
+| `capability.disable` | capability | medium | require_approval | via `proposal.apply` |
+
+Memory/Retrieval review packet actions keep private packet creator-only
+authorization in their appliers. Space-wide review is a separate explicit path:
+only `visibility = space_shared` packets with payload
+`review_scope = space_ops` can be accepted by non-creators, and only when the
+Space `brain_ops_review_mode` setting permits that reviewer role.
+| `capability.update` | capability | high | require_approval | via `proposal.apply` |
+| `runtime_skill.binding_update` | runtime_skill_binding | high | require_approval | via `proposal.apply` |
 | `automation.create` | automation | high | require_approval | `server/src/modules/automations/service.ts` via `enforce()` |
 | `automation.update` | automation | high | require_approval | `server/src/modules/automations/service.ts` via `enforce()` |
 | `automation.fire` | automation | medium | require_approval | `server/src/modules/automations/service.ts` via `enforce()` |
@@ -121,8 +155,9 @@ registry `default_decision`. Not full RBAC/ABAC — they express intent and defa
 `proposal.create` covers user-created memory proposals and system-created code_patch
 proposals from CLI runs. `agent.config_update` is the domain-specific creation gate
 for agent execution config proposals; accepted mutation still goes through
-`proposal.apply`. The `proposal.apply` gate is the durable enforcement point for all
-memory mutations and accepted config proposal application.
+`proposal.apply`. The `proposal.apply` gate is the durable enforcement point for
+proposal-gated Memory, Knowledge, Claim/ObjectRelation, Skill, Capability,
+runtime-skill binding, and accepted config proposal application.
 
 ### Reserved actions — lifecycle_status=RESERVED
 
@@ -138,8 +173,7 @@ Not wired to business code. The registry is **not** full RBAC/ABAC.
 | `proposal.approve` | proposal | medium | require_approval |
 | `memory.read_private` | memory | high | require_approval |
 | `memory.promote_shared` | memory | high | require_approval |
-| `capability.enable` | capability | high | require_approval |
-| `capability.update` | capability | high | require_approval |
+| `runtime_skill.execute` | runtime_skill_binding | high | require_approval |
 | `tool_binding.enable` | tool_binding | high | require_approval |
 | `evidence.export` | evidence | high | require_approval |
 | `deployment.propose` | deployment | high | require_approval |
@@ -183,6 +217,9 @@ Returns a full `PolicyDecision` with:
 
 Effective risk computation:
 - `memory_create / memory_update / memory_archive / follow_up_task` → medium
+- Knowledge/claim/object-relation proposal types and Memory/Retrieval review
+  packet types (`memory_maintenance_packet`, `retrieval_maintenance_packet`,
+  `retrieval_diagnostics_packet`) → medium
 - `code_patch / policy_change / egress_review` → high
 - Unknown proposal type → high (conservative)
 - Effective risk = max(type default, explicit proposal.risk_level)
@@ -254,6 +291,13 @@ preflight.
 | `proposal.apply` | `server/src/modules/proposals/applyService.ts` via `enforceProposalApply()` | Before accepted proposal side effects |
 | `workspace.write_patch` | `server/src/modules/workspaces/` and proposal appliers via `enforce()` | Before any workspace file writes |
 | `policy.change` | `server/src/modules/proposals/applyService.ts` via `enforceProposalApply()` | Protected by the `proposal.apply` gate for `policy_change` proposals |
+| `runtime_skill.render` | `server/src/modules/context/prepareService.ts` via `enforce()` | Before enabled runtime-skill content is rendered into a context snapshot |
+| `retrieval.search` | `server/src/modules/retrievalTool/service.ts` via `enforce()` | Before managed-run Knowledge search execution |
+| `retrieval.brief` | `server/src/modules/retrievalTool/service.ts` via `enforce()` | Before managed-run Knowledge Context Brief execution |
+| `memory.retrieval.search` | `server/src/modules/retrievalTool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Memory search execution; disabled-domain calls are denied/audited |
+| `memory.retrieval.brief` | `server/src/modules/retrievalTool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Memory Context Brief execution; disabled-domain calls are denied/audited |
+| `project_public_summary.search` | `server/src/modules/retrievalTool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Project public-summary search execution; disabled-domain calls are denied/audited |
+| `project_public_summary.brief` | `server/src/modules/retrievalTool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Project public-summary Context Brief execution; disabled-domain calls are denied/audited |
 
 **runtime.execute context fields**: Rule-relevant fields (`agent_status`, `agent_tool_permissions`,
 `tool_name`, `adapter_type`, `trigger_origin`, `risk_level`, etc.) are passed in
@@ -294,6 +338,8 @@ return DENY with `audit_code="unknown_policy_action"`. `BUILTIN_RULES` evaluated
 6. `rule_workspace_write_patch` — `require_approval` without proposal_id; `allow` with valid proposal
 7. `rule_automation` — allow automation.create/update/fire for admin/owner; deny lower roles
 8. `rule_runtime_execute_risk_level` — reflect context risk level on `runtime.execute`
+9. `rule_runtime_skill_render_enabled` — allow only runtime-skill render calls with an enabled binding proof
+10. `ruleRetrievalToolCall` — allow enabled retrieval-tool domains with an instructed viewer; deny disabled domains, missing viewers, source-policy denial, and egress-policy denial
 
 Falls through to registry default only for **known** registered actions when no rule matches.
 

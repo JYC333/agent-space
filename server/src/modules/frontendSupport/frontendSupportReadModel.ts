@@ -35,8 +35,8 @@ export function proposalVisibleSql(userParam: string): string {
 
 export function artifactVisibleSql(userParam: string): string {
   return `(
-    a.visibility IN ('space_shared', 'workspace_shared', 'public_template')
-    OR a.owner_user_id IS NULL
+    a.visibility IN ('space_shared', 'public_template')
+    OR (a.owner_user_id IS NULL AND a.visibility NOT IN ('workspace_shared', 'restricted', 'selected_users'))
     OR a.owner_user_id = ${userParam}
   )`;
 }

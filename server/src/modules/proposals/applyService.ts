@@ -49,8 +49,10 @@ interface ApplyProposalRow {
   preview: boolean;
   payload_json: Record<string, unknown> | null;
   workspace_id: string | null;
+  visibility: string | null;
   created_by_user_id: string | null;
   created_by_run_id: string | null;
+  project_id: string | null;
   title: string | null;
 }
 
@@ -129,13 +131,16 @@ export class PgProposalApplyService {
           title: proposal.title,
           payload_json: proposal.payload_json,
           workspace_id: proposal.workspace_id,
+          visibility: proposal.visibility,
           created_by_user_id: proposal.created_by_user_id,
           created_by_run_id: proposal.created_by_run_id,
+          project_id: proposal.project_id,
         },
         userId: identity.userId,
       });
       rollbackOnFailure = result.rollback ?? null;
       const publicResult = { result_type: result.result_type, result: result.result };
+      await this.markProposalAccepted(client, proposal, identity.userId);
       const accepted = await new PgProposalRepository(client).getVisible(
         identity.spaceId,
         identity.userId,
@@ -277,8 +282,9 @@ export class PgProposalApplyService {
       await client.query("BEGIN");
 
       const proposal = await client.query<ApplyProposalRow>(
-        `SELECT id, space_id, proposal_type, status, risk_level, preview,
-                payload_json, workspace_id, created_by_user_id, created_by_run_id, title
+      `SELECT id, space_id, proposal_type, status, risk_level, preview,
+                payload_json, workspace_id, created_by_user_id, created_by_run_id,
+                visibility, project_id, title
            FROM proposals
           WHERE id = $1 AND space_id = $2 AND proposal_type = 'code_patch' AND status = 'accepted'
           FOR UPDATE`,
@@ -379,13 +385,32 @@ export class PgProposalApplyService {
     const result = await client.query<ApplyProposalRow>(
       `SELECT id, space_id, proposal_type, status, risk_level, preview,
               payload_json, workspace_id, created_by_user_id, created_by_run_id,
-              title
+              visibility, project_id, title
          FROM proposals
         WHERE id = $1
         FOR UPDATE`,
       [proposalId],
     );
     return result.rows[0] ?? null;
+  }
+
+  private async markProposalAccepted(
+    client: PoolClient,
+    proposal: ApplyProposalRow,
+    userId: string,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    await client.query(
+      `UPDATE proposals
+          SET status = 'accepted',
+              reviewed_at = COALESCE(reviewed_at, $3),
+              reviewed_by = COALESCE(reviewed_by, $4),
+              updated_at = $3
+        WHERE id = $1
+          AND space_id = $2
+          AND status = 'pending'`,
+      [proposal.id, proposal.space_id, now, userId],
+    );
   }
 
   private async enforceApplyPolicy(

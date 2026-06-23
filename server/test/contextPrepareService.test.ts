@@ -19,6 +19,7 @@ import {
   type SnapshotUpdateInput,
   type PersonalGrantMetadata,
   type ContextEvidenceSelection,
+  type ContextArtifactAttachmentSelection,
 } from "../src/modules/context/repository";
 import { serializeMemoryRow } from "../src/modules/memory/repository";
 import type { ServerConfig } from "../src/config";
@@ -57,8 +58,13 @@ function config(): ServerConfig {
     memoryAccessLogRetentionEnabled: true,
     memoryAccessLogRetentionDays: 90,
     memoryAccessLogPruneIntervalSeconds: 3600,
+    memoryMaintenanceSchedulerEnabled: true,
+    memoryMaintenanceSchedulerIntervalSeconds: 900,
+    memoryMaintenanceSchedulerBatchLimit: 5,
     intakeExtractionSchedulerEnabled: true,
     intakeExtractionSchedulerIntervalSeconds: 30,
+    retrievalRerankEnabled: false,
+    retrievalQueryRewriteEnabled: false,
     agentSpaceEnv: "",
     appVersion: null,
     enableSystemEvolution: false,
@@ -150,6 +156,8 @@ class FakeContextRepo extends PgRunContextRepository {
       },
     },
   ];
+  readonly artifactAttachments: ContextArtifactAttachmentSelection[] = [];
+  readonly artifactAttachmentInputs: unknown[] = [];
   run: RunContextRecord | null = {
     id: "run-1",
     space_id: "space-1",
@@ -167,6 +175,7 @@ class FakeContextRepo extends PgRunContextRepository {
     trust_level: "trusted",
     has_personal_grant_context: false,
     personal_grant_context_json: null,
+    request_json: {},
     system_prompt: "You are a test agent.",
     capabilities_json: [],
     memory_policy_json: { readable_scopes: ["user", "system", "workspace", "agent"] },
@@ -265,6 +274,11 @@ class FakeContextRepo extends PgRunContextRepository {
 
   override async selectEvidenceForContext(): Promise<ContextEvidenceSelection[]> {
     return this.evidenceSelections;
+  }
+
+  override async selectArtifactAttachments(input: unknown): Promise<ContextArtifactAttachmentSelection[]> {
+    this.artifactAttachmentInputs.push(input);
+    return this.artifactAttachments;
   }
 
   override async loadDigestBundle(): Promise<DigestBundle> {
@@ -418,6 +432,139 @@ describe("ContextPrepareService", () => {
       },
     });
     expect(repo.runMarkers).toHaveLength(1);
+  });
+
+  it("injects explicit artifact evidence packs into runtime context and included refs", async () => {
+    const repo = new FakeContextRepo();
+    repo.run = {
+      ...repo.run!,
+      request_json: { context_artifact_ids: ["brief-1"] },
+    };
+    repo.artifactAttachments.push({
+      item: {
+        attachment_type: "artifact_evidence_pack",
+        artifact_id: "brief-1",
+        artifact_type: "retrieval_brief",
+        label: "Context Brief",
+        domain_label: "knowledge_brief",
+        approved: true,
+        resolved_content: "Artifact: Context Brief\nAnswer: Use the attached brief.",
+        policy_snapshot: {
+          content_mode: "bounded_summary",
+          raw_artifact_content_included: false,
+        },
+      },
+      ref: {
+        source_type: "artifact",
+        source_id: "brief-1",
+        artifact_type: "retrieval_brief",
+        attachment_type: "artifact_evidence_pack",
+        included: true,
+        section: "dynamic_tail",
+        content_mode: "bounded_summary",
+        raw_artifact_content_included: false,
+      },
+    });
+
+    const result = await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: "generic",
+      workspacePath: null,
+    });
+
+    expect(result.runtime_context_text).toContain("[attachment:Context Brief]");
+    expect(result.runtime_context_text).toContain("Answer: Use the attached brief.");
+    const snapshot = repo.snapshots[0]!;
+    expect(snapshot.sourceRefs).toContainEqual(
+      expect.objectContaining({
+        source_type: "artifact",
+        source_id: "brief-1",
+        attachment_type: "artifact_evidence_pack",
+      }),
+    );
+    expect(snapshot.includedEvidenceRefs).toContainEqual(
+      expect.objectContaining({
+        source_type: "artifact",
+        source_id: "brief-1",
+        attachment_type: "artifact_evidence_pack",
+      }),
+    );
+    expect(snapshot.retrievalTrace[0]).toMatchObject({
+      artifact_attachment: {
+        requested_count: 1,
+        attached_count: 1,
+        blocked_count: 0,
+      },
+    });
+  });
+
+  it("revalidates artifact attachments against the run workspace at prepare time", async () => {
+    const repo = new FakeContextRepo();
+    repo.run = {
+      ...repo.run!,
+      workspace_id: "ws-current",
+      request_json: { context_artifact_ids: ["brief-1"] },
+    };
+    repo.artifactAttachments.push({
+      item: {
+        attachment_type: "artifact_evidence_pack",
+        artifact_id: "brief-1",
+        artifact_type: "retrieval_brief",
+        label: "Context Brief",
+        domain_label: "knowledge_brief",
+        approved: false,
+        rejection_reason: "artifact not found or not visible",
+        policy_snapshot: {
+          content_mode: "blocked",
+          raw_artifact_content_included: false,
+        },
+      },
+      ref: {
+        source_type: "artifact",
+        source_id: "brief-1",
+        artifact_type: "retrieval_brief",
+        attachment_type: "artifact_evidence_pack",
+        included: false,
+        section: "dynamic_tail",
+        content_mode: "blocked",
+        raw_artifact_content_included: false,
+        rejection_reason: "artifact not found or not visible",
+      },
+    });
+
+    const result = await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: "generic",
+      workspacePath: null,
+    });
+
+    expect(repo.artifactAttachmentInputs[0]).toMatchObject({
+      workspaceId: "ws-current",
+      artifactIds: ["brief-1"],
+    });
+    expect(result.runtime_context_text).not.toContain("[attachment:Context Brief]");
+    const snapshot = repo.snapshots[0]!;
+    expect(snapshot.sourceRefs).toContainEqual(
+      expect.objectContaining({
+        source_type: "artifact",
+        source_id: "brief-1",
+        included: false,
+        rejection_reason: "artifact not found or not visible",
+      }),
+    );
+    expect(snapshot.retrievalTrace[0]).toMatchObject({
+      artifact_attachment: {
+        requested_count: 1,
+        attached_count: 0,
+        blocked_count: 1,
+      },
+    });
   });
 
   it("records active digest source refs when a digest is available", async () => {
@@ -1393,6 +1540,55 @@ describe("ContextCompiler", () => {
         },
       }),
     ).rejects.toThrow(/refuses to write/);
+  });
+
+  it("renders explicit artifact attachments into compiled vendor context files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aspace-context-attachments-"));
+    const sandbox = join(root, "sandbox");
+    await mkdir(sandbox, { recursive: true });
+
+    const compiler = new ContextCompiler();
+    const compiled = await compiler.compile({
+      target: "codex_cli",
+      taskGoal: "Use the attached evidence.",
+      sandboxDir: sandbox,
+      budgetChars: 20_000,
+      context: {
+        user_memory: [],
+        workspace_memory: [],
+        capability_memory: [],
+        agent_memory: [],
+        system_policy: [],
+        recent_session_summary: [],
+        relevant_episodes: [],
+        evidence_items: [],
+        attachments: [
+          {
+            attachment_type: "artifact_evidence_pack",
+            artifact_id: "brief-1",
+            label: "Context Brief",
+            approved: true,
+            resolved_content: "Answer: Use the explicit attached brief.",
+            policy_snapshot: {
+              content_mode: "bounded_summary",
+              raw_artifact_content_included: false,
+            },
+          },
+        ],
+        active_policies: [],
+        stable_prefix_refs: [],
+        dynamic_tail_refs: [],
+        source_refs: [],
+        retrieval_trace: {},
+        token_budget: {},
+        personal_context_block: "",
+      },
+    });
+
+    const instructionText = await readFile(compiled.instruction_file_path!, "utf8");
+    expect(instructionText).toContain("# Attached Context");
+    expect(instructionText).toContain("Context Brief");
+    expect(instructionText).toContain("Answer: Use the explicit attached brief.");
   });
 
   it("reduces a section to 75% when 100% does not fit but 75% does", async () => {

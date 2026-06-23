@@ -151,6 +151,10 @@ export class ContextPrepareService {
           query: run.prompt,
           agentMemoryPolicy: memoryPolicy,
           includeSystemScope,
+          // Project cut: a run bound to project P sees P's memory (only if the
+          // instructing user can access P) + project-free memory; a run with no
+          // project sees project-free memory only.
+          projectId: run.project_id,
         });
         await repo.recordContextMemoryAccess({
           memories: retrieval.memories,
@@ -168,9 +172,17 @@ export class ContextPrepareService {
         await this.enforceContextSelectEvidence(run);
         const evidenceSelections = await repo.selectEvidenceForContext({
           spaceId: run.space_id,
+          userId,
           workspaceId: run.workspace_id,
           projectId: run.project_id,
           runId: run.id,
+        });
+        const artifactAttachments = await repo.selectArtifactAttachments({
+          spaceId: run.space_id,
+          userId,
+          workspaceId: run.workspace_id,
+          projectId: run.project_id,
+          artifactIds: contextArtifactIdsForRun(run),
         });
         const pkg = buildContextPackage({
           memories: retrieval.memories,
@@ -183,6 +195,7 @@ export class ContextPrepareService {
           workspaceId: run.workspace_id,
           sessionSummary,
           evidenceSelections,
+          artifactAttachments,
         });
 
         const digestLoad = await loadDigestBundleSafely(repo, run);
@@ -269,7 +282,7 @@ export class ContextPrepareService {
           snapshotId: run.context_snapshot_id,
           spaceId: run.space_id,
           sourceRefs,
-          includedEvidenceRefs: sourceRefs.filter((ref) => ref.source_type === "evidence"),
+          includedEvidenceRefs: includedEvidenceLikeRefs(sourceRefs),
           retrievalTrace: [retrievalTrace],
           tokenBudget,
           compiledPrefixText: stableText,
@@ -462,6 +475,13 @@ export class ContextPrepareService {
       },
     });
   }
+}
+
+function includedEvidenceLikeRefs(sourceRefs: readonly Record<string, unknown>[]): Record<string, unknown>[] {
+  return sourceRefs.filter((ref) => {
+    if (ref.source_type === "evidence") return true;
+    return ref.source_type === "artifact" && ref.attachment_type === "artifact_evidence_pack";
+  });
 }
 
 async function enforcePolicyOrThrow(
@@ -800,6 +820,19 @@ function renderDynamicTail(
       `[evidence:${stringValue(ev.id) ?? ""}:${stringValue(ev.title) ?? "evidence"}]\n${excerpt}`,
     );
   }
+  for (const attachment of pkg.attachments) {
+    const item = recordValue(attachment);
+    const label = stringValue(item.label) ?? stringValue(item.attachment_type) ?? "attachment";
+    if (item.approved === false) {
+      parts.push(
+        `[attachment_blocked:${label}]\n${stringValue(item.rejection_reason) ?? "security policy"}`,
+      );
+      continue;
+    }
+    const content = stringValue(item.resolved_content);
+    if (!content) continue;
+    parts.push(`[attachment:${label}]\n${content}`);
+  }
   return parts.join("\n\n");
 }
 
@@ -976,6 +1009,11 @@ function allDigests(bundle: DigestBundle): ContextDigestRow[] {
   return [bundle.policy_bundle, bundle.workspace, bundle.agent].filter(
     (row): row is ContextDigestRow => row !== null,
   );
+}
+
+function contextArtifactIdsForRun(run: RunContextRecord): string[] {
+  const request = recordValue(run.request_json);
+  return arrayOfStrings(request.context_artifact_ids).slice(0, 8);
 }
 
 function composeRuntimePrompt(userPrompt: string, personalContextBlock: string): string {

@@ -214,6 +214,7 @@ export interface RunCreateInput {
   model_provider_id?: string | null;
   model?: string | null;
   model_override_json?: Record<string, unknown> | null;
+  context_artifact_ids?: string[] | null;
 }
 
 export class RunCreateValidationError extends Error {

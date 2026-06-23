@@ -443,6 +443,7 @@ describe("PgContextDigestService.generateWorkspaceBundle", () => {
     const memQuery = db.queries.find((q) => q.sql.includes("FROM memory_entries"));
     expect(memQuery).toBeDefined();
     expect(memQuery?.sql).toContain("workspace_id");
+    expect(memQuery?.sql).toContain("project_id IS NULL");
     expect(memQuery?.sql).toContain("visibility = ANY");
     expect(memQuery?.sql).toContain("highly_restricted");
     expect(memQuery?.params).toContain("ws-99");
@@ -486,6 +487,7 @@ describe("PgContextDigestService.generateAgentBundle", () => {
     await new PgContextDigestService(db as never).generateAgentBundle("space-1", "agent-42");
     const memQuery = db.queries.find((q) => q.sql.includes("FROM memory_entries"));
     expect(memQuery?.sql).toContain("agent_id");
+    expect(memQuery?.sql).toContain("project_id IS NULL");
     expect(memQuery?.sql).toContain("visibility = ANY");
     expect(memQuery?.params).toContain("agent-42");
     expect(memQuery?.params).toContainEqual(["space_shared"]);

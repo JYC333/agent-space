@@ -10,6 +10,7 @@ import {
   summaryOnlyRedactContent,
   type MemoryAuthFields,
 } from "./memoryReadAuth";
+import { accessibleProjectIds, canAccessProject } from "./projectAccess";
 
 export interface QueryResult<Row> {
   rows: Row[];
@@ -163,12 +164,16 @@ export class PgMemoryReadRepository {
         includeSystemScope: includeSystem && row.scope_type === "system",
       }),
     );
-    const items = readable
+    // Project gating: a memory tied to a project is only visible to viewers who
+    // can access that project. Applied to the readable set before pagination so
+    // counts and pages reflect what the viewer may actually see.
+    const visible = await this.filterByProjectAccess(readable, spaceId, userId);
+    const items = visible
       .slice(filters.offset, filters.offset + filters.limit)
       .map((row) => this.serialize(row, userId));
     return {
       items,
-      total: readable.length,
+      total: visible.length,
       limit: filters.limit,
       offset: filters.offset,
     };
@@ -191,6 +196,12 @@ export class PgMemoryReadRepository {
     if (
       !canReadMemory(row, { userId, spaceId, workspaceId, includeSystemScope })
     ) {
+      return null;
+    }
+    // Project gating: project-scoped memory requires project access. Checked
+    // before logging the read so an inaccessible row is neither returned nor
+    // traced. project_id IS NULL memory is not project-gated.
+    if (row.project_id && !(await canAccessProject(this.db, spaceId, row.project_id, userId))) {
       return null;
     }
     await this.recordReads([row.id], spaceId, userId, "explicit_read", null);
@@ -238,7 +249,8 @@ export class PgMemoryReadRepository {
         includeSystemScope: includeSystem && row.scope_type === "system",
       }),
     );
-    const returned = readable.slice(0, filters.limit);
+    const visible = await this.filterByProjectAccess(readable, spaceId, userId);
+    const returned = visible.slice(0, filters.limit);
     await this.recordReads(
       returned.map((row) => row.id),
       spaceId,
@@ -247,6 +259,67 @@ export class PgMemoryReadRepository {
       "memory search",
     );
     return returned.map((row) => this.serialize(row, userId));
+  }
+
+  /**
+   * Log the memories surfaced by a retrieval create-safety / duplicate check.
+   * Create-safety only returns rows the viewer could already read, so it is a
+   * read and must stay auditable like `search`. Only the final returned matches
+   * are logged — never the candidates the engine over-fetched and then dropped
+   * during revalidation (those can be cross-space/private rows the caller cannot
+   * read, so logging their ids would leak existence).
+   */
+  async recordCreateSafetyReads(
+    memoryIds: readonly string[],
+    spaceId: string,
+    userId: string,
+  ): Promise<void> {
+    await this.recordReads(memoryIds, spaceId, userId, "create_safety_hit", "memory create-safety");
+  }
+
+  /**
+   * Log the memories returned by the retrieval-backed memory search. Like the
+   * legacy `search`, this is a `search_hit`; only the final returned rows are
+   * logged, never candidates dropped during revalidation.
+   */
+  async recordRetrievalSearchReads(
+    memoryIds: readonly string[],
+    spaceId: string,
+    userId: string,
+  ): Promise<void> {
+    await this.recordReads(memoryIds, spaceId, userId, "search_hit", "memory retrieval search");
+  }
+
+  /**
+   * Log the memory revalidated while recording retrieval feedback. Feedback is
+   * positive-only ranking metadata, but the visibility check still reads the
+   * memory row and must remain auditable.
+   */
+  async recordRetrievalFeedbackReads(
+    memoryIds: readonly string[],
+    spaceId: string,
+    userId: string,
+  ): Promise<void> {
+    await this.recordReads(memoryIds, spaceId, userId, "explicit_read", "memory retrieval feedback");
+  }
+
+  /**
+   * Log memories that contributed to a private Memory maintenance report. Only
+   * final findings are logged; filtered-out candidates are never traced.
+   */
+  async recordMaintenanceReads(
+    memoryIds: readonly string[],
+    spaceId: string,
+    userId: string,
+    reportArtifactId: string | null,
+  ): Promise<void> {
+    await this.recordReads(
+      memoryIds,
+      spaceId,
+      userId,
+      "maintenance_scan",
+      reportArtifactId ? `memory maintenance report ${reportArtifactId}` : "memory maintenance scan",
+    );
   }
 
   /**
@@ -259,7 +332,7 @@ export class PgMemoryReadRepository {
     memoryIds: readonly string[],
     spaceId: string,
     userId: string,
-    accessType: "explicit_read" | "search_hit",
+    accessType: "explicit_read" | "search_hit" | "create_safety_hit" | "maintenance_scan",
     reason: string | null,
   ): Promise<void> {
     if (memoryIds.length === 0) return;
@@ -290,6 +363,25 @@ export class PgMemoryReadRepository {
         WHERE space_id = $2 AND id IN (${idPlaceholders})`,
       [now, spaceId, ...memoryIds],
     );
+  }
+
+  /**
+   * Drop rows whose `project_id` the viewer cannot access. Resolves accessible
+   * projects in a fixed number of queries (see `accessibleProjectIds`); rows
+   * with no `project_id` are kept.
+   */
+  private async filterByProjectAccess(
+    rows: MemoryRow[],
+    spaceId: string,
+    userId: string,
+  ): Promise<MemoryRow[]> {
+    const accessible = await accessibleProjectIds(
+      this.db,
+      spaceId,
+      userId,
+      rows.map((row) => row.project_id),
+    );
+    return rows.filter((row) => !row.project_id || accessible.has(row.project_id));
   }
 
   private async assertProjectInSpace(spaceId: string, projectId: string): Promise<void> {

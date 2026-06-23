@@ -23,6 +23,11 @@ import {
 import type { ProviderChatRequestBody } from "./providerInvocation";
 import { CliCredentialBroker } from "./cliCredentialBroker";
 import { startCliUsageRefreshScheduler } from "./cliUsageScheduler";
+import {
+  enqueueRetrievalEmbeddingBackfill,
+  resetRetrievalEmbeddingsForSpace,
+} from "../retrievalEmbedding/job";
+import { RETRIEVAL_EMBEDDING_TASK } from "../retrievalEmbedding/config";
 
 function params(request: FastifyRequest): Record<string, string | undefined> {
   return request.params as Record<string, string | undefined>;
@@ -329,14 +334,24 @@ export function registerProviderCommandRoutes(
         "ProviderTaskPolicyPutRequestSchema",
         jsonBody(request),
       );
-      return reply.send(
-        await resolveProviderCommandStore(config).putTaskPolicy(
-          identity.spaceId,
-          params(request).task ?? "",
-          body.chain,
-          body.enabled,
-        ),
+      const task = params(request).task ?? "";
+      const store = resolveProviderCommandStore(config);
+      const updated = await store.putTaskPolicy(
+        identity.spaceId,
+        identity.userId,
+        task,
+        body.chain,
+        body.enabled,
       );
+      if (task === RETRIEVAL_EMBEDDING_TASK) {
+        await resetRetrievalEmbeddingsForSpace(config, identity.spaceId);
+        await enqueueRetrievalEmbeddingBackfill(config, {
+          spaceId: identity.spaceId,
+          userId: identity.userId,
+          trigger: "retrieval_embedding_policy_update",
+        });
+      }
+      return reply.send(updated);
     } catch (error) {
       return sendDomainError(reply, error);
     }
@@ -346,10 +361,20 @@ export function registerProviderCommandRoutes(
     const identity = await resolveIdentity(config, request, reply);
     if (!identity) return reply;
     try {
+      const task = params(request).task ?? "";
       await resolveProviderCommandStore(config).deleteTaskPolicy(
         identity.spaceId,
-        params(request).task ?? "",
+        identity.userId,
+        task,
       );
+      if (task === RETRIEVAL_EMBEDDING_TASK) {
+        await resetRetrievalEmbeddingsForSpace(config, identity.spaceId);
+        await enqueueRetrievalEmbeddingBackfill(config, {
+          spaceId: identity.spaceId,
+          userId: identity.userId,
+          trigger: "retrieval_embedding_policy_delete",
+        });
+      }
       return reply.code(204).send();
     } catch (error) {
       return sendDomainError(reply, error);

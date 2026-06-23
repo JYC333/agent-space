@@ -7,6 +7,8 @@ import type {
   NetworkProfileOut, NetworkProfileCreateBody, NetworkProfileUpdateBody, CliCredentialProfileOut,
   CliCredentialAvailableProfileOut,
   CurrentUser, SpaceWithMembership, SpaceMember, SpaceInvitationOut, SpaceSnapshotDefaults,
+  RetrievalPromptTask, SpaceRetrievalPrompt, SpaceRetrievalPromptUpdate,
+  SpaceRetrievalSettings, SpaceRetrievalSettingsUpdate,
   Job, JobEvent, ActivityInboxRecord,
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
   TaskArtifact, TaskProposal, Artifact, Proposal, ProposalAcceptOut, AgentOut, AgentCreateBody, AgentUpdateBody, RunCreateBody,
@@ -35,6 +37,23 @@ import type {
   DailyCaptureReportSettingOut, DailyCaptureReportSettingUpdate,
   DailyReportRunRequest, DailyReportRunResponse, DailyReportArtifactItem,
   AutomationOut, AutomationCreateBody, AutomationUpdateBody, AutomationFireResult,
+  RetrievalFeedbackRequest, RetrievalFeedbackResponse, RetrievalSearchRequest, RetrievalSearchResponse,
+  RetrievalBriefRequest, RetrievalBriefResponse, RetrievalDiagnosticsReportRequest, RetrievalDiagnosticsReportResponse,
+  RetrievalCalibrationDecisionRequest, RetrievalCalibrationDecisionResponse,
+  RetrievalExplainRequest, RetrievalExplainResponse,
+  RetrievalMaintenanceScanRequest, RetrievalMaintenanceScanResponse,
+  RetrievalObjectType, SpaceObjectKindCreateProposalRequest, SpaceObjectKindPage,
+  SpaceObjectKindStatus, SpaceObjectKindUpdateProposalRequest,
+  ObjectSchemaExportManifest, ObjectSchemaImportRequest, ObjectSchemaImportResponse,
+  ObjectSchemaSuggestionScanRequest, ObjectSchemaSuggestionScanResponse,
+  BrainOpsSummary, BrainOpsDrilldown, BrainOpsDrilldownSection,
+  BrainOpsDreamCycleV2Request, BrainOpsDreamCycleV2Response,
+  BrainThinkRequest, BrainThinkResponse,
+  ClaimCandidatePacketCreateRequest, ClaimCandidatePacketCreateResponse,
+  ClaimContradictionScanRequest, ClaimContradictionScanResponse,
+  RelationDiscoveryScanRequest, RelationDiscoveryScanResponse,
+  ContextArtifactRevocation, ContextArtifactRevocationCreateRequest, ContextArtifactRevocationListResponse,
+  MemoryAccessLogListResponse, MemoryMaintenanceJob, MemoryMaintenanceJobRunResponse, MemoryMaintenanceReport, MemoryMaintenanceScanRequest,
 } from '../types/api'
 
 const BASE = '/api/v1'
@@ -154,13 +173,38 @@ export const memoryApi = {
   delete: (id: string) =>
     del<Proposal>(`/memory/${id}`),
   search: (data: { query: string; scope?: string; namespace?: string; type?: string; workspace_id?: string; limit?: number }) =>
-    post<Memory[]>('/memory/search', { space_id: _spaceId, user_id: _userId, ...data }),
+    // Memory search is identity-scoped server-side; do not send space_id/user_id.
+    post<Memory[]>('/memory/search', data),
+  retrievalSearch: (data: RetrievalSearchRequest) =>
+    post<RetrievalSearchResponse>('/memory/retrieval/search', data),
+  retrievalBrief: (data: RetrievalBriefRequest) =>
+    post<RetrievalBriefResponse>('/memory/retrieval/brief', data),
+  feedback: (data: RetrievalFeedbackRequest) =>
+    post<RetrievalFeedbackResponse>('/memory/retrieval/feedback', data),
+  maintenanceScan: (data: MemoryMaintenanceScanRequest = {}) =>
+    post<MemoryMaintenanceReport>('/memory/maintenance/scan', data),
+  createMaintenanceJob: (data: MemoryMaintenanceScanRequest = {}) =>
+    post<MemoryMaintenanceJob>('/memory/maintenance/jobs', data),
+  getMaintenanceJob: (jobId: string) =>
+    get<MemoryMaintenanceJob>(`/memory/maintenance/jobs/${jobId}`),
+  runMaintenanceJob: (jobId: string) =>
+    post<MemoryMaintenanceJobRunResponse>(`/memory/maintenance/jobs/${jobId}/run`, {}),
+  accessLogs: (params: { limit?: number; offset?: number; memory_id?: string; access_type?: string; workspace_id?: string; project_id?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    if (params.memory_id !== undefined) q.memory_id = params.memory_id
+    if (params.access_type !== undefined) q.access_type = params.access_type
+    if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
+    if (params.project_id !== undefined) q.project_id = params.project_id
+    return get<MemoryAccessLogListResponse>('/memory/access-logs?' + new URLSearchParams(q))
+  },
 }
 
 // ── Knowledge ─────────────────────────────────────────────────────────────
 export const knowledgeApi = {
   list: (params: {
-    item_type?: string
+    knowledge_kind?: string
     status?: string
     visibility?: string
     q?: string
@@ -168,7 +212,7 @@ export const knowledgeApi = {
     offset?: number
   } = {}) => {
     const q: Record<string, string> = {}
-    if (params.item_type !== undefined) q.item_type = params.item_type
+    if (params.knowledge_kind !== undefined) q.knowledge_kind = params.knowledge_kind
     if (params.status !== undefined) q.status = params.status
     if (params.visibility !== undefined) q.visibility = params.visibility
     if (params.q !== undefined) q.q = params.q
@@ -190,6 +234,56 @@ export const knowledgeApi = {
   proposeRelationArchive: (id: string) =>
     del<Proposal>(`/knowledge/relations/${id}`),
   summary: () => get<KnowledgeSummary>('/knowledge/summary'),
+  search: (data: RetrievalSearchRequest) =>
+    post<RetrievalSearchResponse>('/knowledge/search', data),
+  brief: (data: RetrievalBriefRequest) =>
+    post<RetrievalBriefResponse>('/knowledge/retrieval/brief', data),
+  diagnosticsReport: (data: RetrievalDiagnosticsReportRequest) =>
+    post<RetrievalDiagnosticsReportResponse>('/knowledge/retrieval/eval/diagnostics/report', data),
+  calibrationDecision: (data: RetrievalCalibrationDecisionRequest) =>
+    post<RetrievalCalibrationDecisionResponse>('/knowledge/retrieval/eval/calibration-decisions', data),
+  maintenanceScan: (data: RetrievalMaintenanceScanRequest = {}) =>
+    post<RetrievalMaintenanceScanResponse>('/knowledge/retrieval/maintenance/scan', data),
+  claimCandidatePacket: (data: ClaimCandidatePacketCreateRequest) =>
+    post<ClaimCandidatePacketCreateResponse>('/knowledge/claims/candidate-packets', data),
+  contradictionScan: (data: ClaimContradictionScanRequest = {}) =>
+    post<ClaimContradictionScanResponse>('/knowledge/claims/contradiction-scan', data),
+  relationDiscoveryScan: (data: RelationDiscoveryScanRequest = {}) =>
+    post<RelationDiscoveryScanResponse>('/knowledge/relations/discovery-scan', data),
+  explain: (data: RetrievalExplainRequest) =>
+    post<RetrievalExplainResponse>('/knowledge/retrieval/explain', data),
+  feedback: (data: RetrievalFeedbackRequest) =>
+    post<RetrievalFeedbackResponse>('/knowledge/retrieval/feedback', data),
+}
+
+export const objectSchemaApi = {
+  exportSchema: () =>
+    get<ObjectSchemaExportManifest>('/knowledge/object-schema/export'),
+  importSchema: (body: ObjectSchemaImportRequest) =>
+    post<ObjectSchemaImportResponse>('/knowledge/object-schema/imports/proposals', body),
+  suggestionScan: (body: ObjectSchemaSuggestionScanRequest = {}) =>
+    post<ObjectSchemaSuggestionScanResponse>('/knowledge/object-schema/suggestions/scan', body),
+  listKinds: (params: {
+    base_object_type?: RetrievalObjectType
+    status?: SpaceObjectKindStatus
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.base_object_type !== undefined) q.base_object_type = params.base_object_type
+    if (params.status !== undefined) q.status = params.status
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<SpaceObjectKindPage>('/knowledge/object-schema/kinds?' + new URLSearchParams(q))
+  },
+  proposeCreateKind: (body: SpaceObjectKindCreateProposalRequest) =>
+    post<Proposal>('/knowledge/object-schema/kinds/proposals', body),
+  proposeUpdateKind: (id: string, body: SpaceObjectKindUpdateProposalRequest) =>
+    patch<Proposal>(`/knowledge/object-schema/kinds/${encodeURIComponent(id)}/proposals`, body),
+  proposeDeprecateKind: (id: string, body: { rationale?: string } = {}) =>
+    post<Proposal>(`/knowledge/object-schema/kinds/${encodeURIComponent(id)}/deprecate-proposals`, body),
+  proposeArchiveKind: (id: string) =>
+    del<Proposal>(`/knowledge/object-schema/kinds/${encodeURIComponent(id)}`),
 }
 
 // ── Notes (working knowledge; direct CRUD) ─────────────────────────────────
@@ -357,25 +451,38 @@ export const artifactsApi = {
   list: (params: {
     artifact_type?: string
     project_id?: string
+    workspace_id?: string
     limit?: number
     offset?: number
   } = {}) => {
     const q: Record<string, string> = {}
     if (params.artifact_type !== undefined) q.artifact_type = params.artifact_type
     if (params.project_id !== undefined) q.project_id = params.project_id
+    if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
     return get<Page<Artifact>>('/artifacts?' + new URLSearchParams(q))
   },
-  get: (id: string) => get<Artifact>(`/artifacts/${id}`),
-  export: (id: string) => downloadArtifactExport(id),
+  get: (id: string, params: { workspace_id?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
+    const suffix = new URLSearchParams(q).toString()
+    return get<Artifact>(`/artifacts/${id}${suffix ? `?${suffix}` : ''}`)
+  },
+  export: (id: string, params: { workspace_id?: string } = {}) => downloadArtifactExport(id, params),
 }
 
-async function downloadArtifactExport(artifactId: string): Promise<void> {
+async function downloadArtifactExport(
+  artifactId: string,
+  params: { workspace_id?: string } = {},
+): Promise<void> {
   const headers: Record<string, string> = {}
   if (_apiKey) headers['Authorization'] = `Bearer ${_apiKey}`
   const sep = '/artifacts/' + artifactId + '/export'
-  const url = BASE + sep + (sep.includes('?') ? '&' : '?') + spaceParams()
+  const query = new URLSearchParams()
+  if (params.workspace_id !== undefined) query.set('workspace_id', params.workspace_id)
+  const artifactParams = query.toString()
+  const url = BASE + sep + '?' + [spaceParams(), artifactParams].filter(Boolean).join('&')
   const r = await fetch(url, { method: 'GET', headers })
   if (r.status === 401) window.dispatchEvent(new CustomEvent('auth:required'))
   if (r.status === 404) throw new Error('Artifact not found or not exportable')
@@ -561,7 +668,7 @@ export const workspacesApi = {
   get:    (id: string)                          => get<Workspace>(`/workspaces/${id}`),
   update: (id: string, data: WorkspaceUpdateBody) => patch<Workspace>(`/workspaces/${id}`, data),
   archive:(id: string)                          => del<null>(`/workspaces/${id}`),
-  scan:   ()                                    => post<{ created: Workspace[]; deleted: string[] }>('/workspaces/scan'),
+  scan:   ()                                    => post<{ created: Workspace[]; marked_stale: string[] }>('/workspaces/scan'),
 }
 
 // ── Capabilities ──────────────────────────────────────────────────────────
@@ -619,8 +726,42 @@ export const projectWorkflowProfilesApi = {
 
 // ── Context ───────────────────────────────────────────────────────────────
 export const contextApi = {
-  build: (data: { workspace_id?: string | null; session_id?: string | null; capability_id?: string | null; query?: string | null }) =>
+  build: (data: { workspace_id?: string | null; project_id?: string | null; session_id?: string | null; capability_id?: string | null; query?: string | null; context_artifact_ids?: string[] }) =>
     post<ContextPackage>('/context/build', data),
+  listArtifactRevocations: (params: { workspace_id?: string | null; project_id?: string | null; artifact_ids?: string[] } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.workspace_id) q.workspace_id = params.workspace_id
+    if (params.project_id) q.project_id = params.project_id
+    if (params.artifact_ids?.length) q.artifact_ids = params.artifact_ids.join(',')
+    return get<ContextArtifactRevocationListResponse>(`/context/artifact-revocations?${new URLSearchParams(q).toString()}`)
+  },
+  revokeArtifact: (data: ContextArtifactRevocationCreateRequest) =>
+    post<ContextArtifactRevocation>('/context/artifact-revocations', data),
+  unrevokeArtifact: (artifactId: string, params: { scope_type: 'workspace' | 'project'; scope_id: string }) => {
+    const q = new URLSearchParams({ scope_type: params.scope_type, scope_id: params.scope_id })
+    return del<null>(`/context/artifact-revocations/${encodeURIComponent(artifactId)}?${q.toString()}`)
+  },
+}
+
+export const brainOpsApi = {
+  summary: (params: { window_days?: number; limit?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.window_days !== undefined) q.window_days = String(params.window_days)
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    const suffix = new URLSearchParams(q).toString()
+    return get<BrainOpsSummary>(`/brain-ops/summary${suffix ? `?${suffix}` : ''}`)
+  },
+  drilldown: (section: BrainOpsDrilldownSection, params: { limit?: number } = {}) => {
+    const q: Record<string, string> = { section }
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    return get<BrainOpsDrilldown>(`/brain-ops/drilldown?${new URLSearchParams(q).toString()}`)
+  },
+  dreamCycleV2: (data: BrainOpsDreamCycleV2Request = {}) =>
+    post<BrainOpsDreamCycleV2Response>('/brain-ops/dream-cycle-v2', data),
+}
+
+export const brainThinkApi = {
+  think: (data: BrainThinkRequest) => post<BrainThinkResponse>('/brain/think', data),
 }
 
 export const runtimeToolsApi = {
@@ -983,6 +1124,10 @@ export const projectsApi = {
     const q = role ? `?role=${encodeURIComponent(role)}` : ''
     return del<null>(`/projects/${id}/workspaces/${workspaceId}${q}`)
   },
+  publicSummaryFeedback: (data: RetrievalFeedbackRequest) =>
+    post<RetrievalFeedbackResponse>('/projects/public-summaries/feedback', data),
+  publicSummaryBrief: (data: RetrievalBriefRequest) =>
+    post<RetrievalBriefResponse>('/projects/retrieval/brief', data),
 }
 
 // ── Features ──────────────────────────────────────────────────────────────
@@ -1014,6 +1159,14 @@ export const spacesApi = {
   acceptInvite:         (token: string)                                => post<{ space_id: string; role: string; space_name: string }>(`/invitations/${token}/accept`),
   getSnapshotDefaults:  (spaceId: string)                              => get<SpaceSnapshotDefaults>(`/spaces/${spaceId}/snapshot-defaults`),
   updateSnapshotDefaults: (spaceId: string, data: SpaceSnapshotDefaults) => patch<SpaceSnapshotDefaults>(`/spaces/${spaceId}/snapshot-defaults`, data),
+  getRetrievalSettings: (spaceId: string) =>
+    get<SpaceRetrievalSettings>(`/spaces/${spaceId}/retrieval-settings`),
+  updateRetrievalSettings: (spaceId: string, data: SpaceRetrievalSettingsUpdate) =>
+    patch<SpaceRetrievalSettings>(`/spaces/${spaceId}/retrieval-settings`, data),
+  getRetrievalPrompt: (spaceId: string, task: RetrievalPromptTask) =>
+    get<SpaceRetrievalPrompt>(`/spaces/${spaceId}/retrieval-prompts/${task}`),
+  updateRetrievalPrompt: (spaceId: string, task: RetrievalPromptTask, data: SpaceRetrievalPromptUpdate) =>
+    patch<SpaceRetrievalPrompt>(`/spaces/${spaceId}/retrieval-prompts/${task}`, data),
 }
 
 // ── Providers ─────────────────────────────────────────────────────────────
@@ -1022,6 +1175,7 @@ export type ProviderType =
   | 'anthropic'
   | 'openrouter'
   | 'ollama'
+  | 'zeroentropy'
   | 'other'
 
 export interface ModelProviderOut {
@@ -1050,6 +1204,23 @@ export interface ModelProviderOut {
 export interface ModelProviderModelsOut {
   models: string[]
   source: 'configured' | 'live'
+}
+
+export interface ProviderTaskChainEntry {
+  provider_id: string
+  model?: string | null
+}
+
+export interface ProviderTaskPolicyOut {
+  task: string
+  chain: ProviderTaskChainEntry[]
+  enabled: boolean
+  updated_at: string
+}
+
+export interface ProviderTaskPolicyPutRequest {
+  chain: ProviderTaskChainEntry[]
+  enabled?: boolean
 }
 
 export interface CatalogInfo {
@@ -1119,6 +1290,14 @@ export const providersApi = {
   models: (id: string) => get<ModelProviderModelsOut>(`/providers/${id}/models`),
 
   test: (id: string) => post<TestConnectionOut>(`/providers/${id}/test`, {}),
+
+  taskPolicies: () => get<ProviderTaskPolicyOut[]>('/providers/task-policies'),
+
+  putTaskPolicy: (task: string, data: ProviderTaskPolicyPutRequest) =>
+    put<ProviderTaskPolicyOut>(`/providers/task-policies/${encodeURIComponent(task)}`, data),
+
+  deleteTaskPolicy: (task: string) =>
+    del<void>(`/providers/task-policies/${encodeURIComponent(task)}`),
 
   grant: (id: string, data: {
     space_id: string

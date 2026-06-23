@@ -4,6 +4,11 @@ import { join } from "node:path";
 import type { ServerConfig } from "../../config";
 import type { Queryable } from "../routeUtils/common";
 import { HttpError } from "../routeUtils/common";
+import { CONNECTION_COLUMNS, type SourceConnectionRow } from "./intakeRepositoryRows";
+import {
+  enforceSourceRetentionPolicy,
+  normalizeSourceConnectionReadGovernance,
+} from "./sourceConsent";
 
 interface ExtractionJobRow {
   id: string;
@@ -20,6 +25,7 @@ interface ExtractionJobRow {
 interface IntakeItemRow {
   id: string;
   space_id: string;
+  connection_id: string | null;
   source_uri: string | null;
   title: string | null;
   content_state: string;
@@ -121,6 +127,7 @@ export class IntakeExtractionWorker {
     if (!job.intake_item_id) throw new HttpError(422, "extract_text requires intake_item_id");
     const item = await this.getItem(job.space_id, job.intake_item_id);
     if (!item?.source_uri) throw new HttpError(422, "Intake item is missing source_uri");
+    await this.enforceItemRetentionPolicy(job.space_id, item, "full_text");
 
     const response = await fetch(item.source_uri, { redirect: "follow" });
     if (!response.ok) {
@@ -135,6 +142,7 @@ export class IntakeExtractionWorker {
     await this.db.query(
       `UPDATE intake_items
           SET content_state = 'content_saved',
+              retention_policy = 'full_text',
               extracted_artifact_id = $3,
               content_hash = $4,
               updated_at = $5
@@ -169,6 +177,7 @@ export class IntakeExtractionWorker {
     if (!job.intake_item_id) throw new HttpError(422, "snapshot requires intake_item_id");
     const item = await this.getItem(job.space_id, job.intake_item_id);
     if (!item?.source_uri) throw new HttpError(422, "Intake item is missing source_uri");
+    await this.enforceItemRetentionPolicy(job.space_id, item, "full_snapshot");
 
     const response = await fetch(item.source_uri, { redirect: "follow" });
     if (!response.ok) {
@@ -180,6 +189,7 @@ export class IntakeExtractionWorker {
     await this.db.query(
       `UPDATE intake_items
           SET content_state = 'snapshot_saved',
+              retention_policy = 'full_snapshot',
               raw_artifact_id = $3,
               updated_at = $4
         WHERE space_id = $1 AND id = $2`,
@@ -194,6 +204,7 @@ export class IntakeExtractionWorker {
           `UPDATE intake_items
               SET extracted_artifact_id = $3,
                   content_state = 'content_saved',
+                  retention_policy = 'full_snapshot',
                   content_hash = $4,
                   updated_at = $5
             WHERE space_id = $1 AND id = $2`,
@@ -318,12 +329,27 @@ export class IntakeExtractionWorker {
 
   private async getItem(spaceId: string, itemId: string): Promise<IntakeItemRow | null> {
     const result = await this.db.query<IntakeItemRow>(
-      `SELECT id, space_id, source_uri, title, content_state
+      `SELECT id, space_id, connection_id, source_uri, title, content_state
          FROM intake_items
         WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
       [spaceId, itemId],
     );
     return result.rows[0] ?? null;
+  }
+
+  private async enforceItemRetentionPolicy(
+    spaceId: string,
+    item: IntakeItemRow,
+    retention: "full_text" | "full_snapshot",
+  ): Promise<void> {
+    if (!item.connection_id) return;
+    const result = await this.db.query<SourceConnectionRow>(
+      `SELECT ${CONNECTION_COLUMNS} FROM source_connections WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
+      [spaceId, item.connection_id],
+    );
+    const connection = result.rows[0];
+    if (!connection) throw new HttpError(404, "Source connection not found");
+    enforceSourceRetentionPolicy(normalizeSourceConnectionReadGovernance(connection).policy, retention);
   }
 
   private async writeTextArtifact(spaceId: string, title: string, content: string): Promise<string> {

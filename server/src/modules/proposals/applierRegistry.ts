@@ -9,6 +9,11 @@ import { registerCapabilityProposalAppliers } from "../capabilities/proposalAppl
 import { registerKnowledgeProposalAppliers } from "../knowledge/proposalApplier";
 import { registerTaskProposalAppliers } from "../tasks/proposalApplier";
 import { registerWorkspaceProposalAppliers } from "../workspaces";
+import { registerRetrievalDiagnosticsProposalAppliers } from "../retrieval/diagnosticsArtifacts";
+import { registerRetrievalMaintenanceProposalAppliers } from "../retrieval/maintenanceArtifacts";
+import { registerMemoryMaintenanceProposalAppliers } from "../memory/maintenanceArtifacts";
+import { registerClaimCandidatePacketProposalAppliers } from "../knowledge/claimCandidatePackets";
+import { registerRelationDiscoveryProposalAppliers } from "../knowledge/relationDiscoveryArtifacts";
 import {
   PgMemoryApplyRepository,
   type ApplyProposal,
@@ -21,6 +26,7 @@ import {
   markAgentBundleDirty,
 } from "../context/digestService";
 import { PgJobQueueRepository } from "../jobs/repository";
+import { enqueueRetrievalEmbeddingBackfillWithQueue } from "../retrievalEmbedding/job";
 import type { ProposalAcceptResultType } from "@agent-space/protocol" with {
   "resolution-mode": "import",
 };
@@ -89,6 +95,11 @@ export function createDefaultProposalApplierRegistry(
   registry.register("policy_change", applyPolicyChangeProposal);
   registerCapabilityProposalAppliers(registry);
   registerKnowledgeProposalAppliers(registry);
+  registerClaimCandidatePacketProposalAppliers(registry);
+  registerRelationDiscoveryProposalAppliers(registry);
+  registerRetrievalDiagnosticsProposalAppliers(registry);
+  registerRetrievalMaintenanceProposalAppliers(registry);
+  registerMemoryMaintenanceProposalAppliers(registry);
   registerTaskProposalAppliers(registry);
   registerWorkspaceProposalAppliers(registry);
   contributor?.applyProposalAppliers(registry);
@@ -113,6 +124,11 @@ async function applyMemoryProposal(context: ProposalApplyContext): Promise<Propo
     applied.affectedDigestTargets,
     dirtyReason,
   );
+  // Only create/update add or change chunk text; archive removes the memory (and
+  // its chunks) so there is nothing new to embed — skip the backfill enqueue.
+  if (context.proposal.proposal_type !== "memory_archive") {
+    await enqueueMemoryRetrievalEmbeddingBackfill(context);
+  }
 
   const row = await context.db.query<MemoryRow>(
     `SELECT ${MEMORY_COLUMNS} FROM memory_entries WHERE id = $1`,
@@ -124,6 +140,32 @@ async function applyMemoryProposal(context: ProposalApplyContext): Promise<Propo
     result_type: "memory_entry",
     result: { memory: serializeMemoryRow(memory, context.userId) },
   };
+}
+
+async function enqueueMemoryRetrievalEmbeddingBackfill(
+  context: ProposalApplyContext,
+): Promise<void> {
+  let savepointStarted = false;
+  try {
+    await context.db.query("SAVEPOINT retrieval_embedding_enqueue");
+    savepointStarted = true;
+    await enqueueRetrievalEmbeddingBackfillWithQueue(new PgJobQueueRepository(context.db), {
+      spaceId: context.proposal.space_id,
+      userId: context.userId,
+      trigger: "memory_proposal_apply",
+      proposalId: context.proposal.id,
+    });
+    await context.db.query("RELEASE SAVEPOINT retrieval_embedding_enqueue");
+    savepointStarted = false;
+  } catch (error) {
+    if (savepointStarted) {
+      await context.db.query("ROLLBACK TO SAVEPOINT retrieval_embedding_enqueue").catch(() => undefined);
+      await context.db.query("RELEASE SAVEPOINT retrieval_embedding_enqueue").catch(() => undefined);
+    }
+    process.stderr.write(
+      `[memory.retrieval] embedding backfill enqueue failed during proposal apply: ${String((error as Error)?.message ?? error)}\n`,
+    );
+  }
 }
 
 async function applyPolicyChangeProposal(context: ProposalApplyContext): Promise<ProposalApplyResult> {

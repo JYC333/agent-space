@@ -13,6 +13,7 @@ import type {
   WorkspaceBindingRow,
   WorkspaceProfileRow,
 } from "./intakeRepositoryRows";
+import { normalizeSourceConnectionReadGovernance } from "./sourceConsent";
 
 export function connectorOut(row: SourceConnectorRow) {
   return {
@@ -30,6 +31,7 @@ export function connectorOut(row: SourceConnectorRow) {
 }
 
 export function connectionOut(row: SourceConnectionRow) {
+  const governance = normalizeSourceConnectionReadGovernance(row);
   return {
     id: row.id,
     space_id: row.space_id,
@@ -43,8 +45,8 @@ export function connectionOut(row: SourceConnectionRow) {
     capture_policy: row.capture_policy,
     trust_level: row.trust_level,
     topic_hints_json: row.topic_hints_json ?? null,
-    consent_json: row.consent_json ?? {},
-    policy_json: row.policy_json ?? {},
+    consent_json: governance.consent,
+    policy_json: governance.policy,
     config_json: row.config_json ?? {},
     last_checked_at: dateIso(row.last_checked_at),
     next_check_at: dateIso(row.next_check_at),

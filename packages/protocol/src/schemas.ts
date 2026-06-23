@@ -146,6 +146,7 @@ export const ArtifactDTOSchema = z.object({
   preview: z.boolean(),
   visibility: z.string(),
   project_id: IdSchema.nullish(),
+  workspace_id: IdSchema.nullish(),
   created_at: ISODateTimeSchema,
   updated_at: ISODateTimeSchema,
 });
@@ -176,7 +177,7 @@ export const MemoryDTOSchema = z.object({
 export const KnowledgeItemDTOSchema = z.object({
   id: IdSchema,
   space_id: IdSchema,
-  item_type: z.string(),
+  knowledge_kind: z.string(),
   title: z.string(),
   content: z.string(),
   status: z.string(),

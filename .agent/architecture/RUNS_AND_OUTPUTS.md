@@ -70,6 +70,12 @@ Run output materialization supports:
 
 Materialization records errors in `run.output_json.materialization_errors` when structured output cannot be safely converted into durable records. Safe records are still created when possible.
 
+Claim/ObjectRelation proposal materialization is packet-only: `claim_*`,
+`claim_relation_*`, and `object_relation_*` entries must carry a structured
+`payload_json` or `payload` object with a matching `operation`. The materializer
+does not infer claims or relations from free text, gap-analysis strings, or flat
+proposal-envelope fields.
+
 ## Boundaries
 
 - Runtime/provider execution is outside the core product boundary and should be represented through adapter results.

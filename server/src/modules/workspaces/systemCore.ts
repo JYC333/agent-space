@@ -9,8 +9,9 @@
  */
 
 import { execFile } from "node:child_process";
+import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../config";
 import { getDbPool, type Pool } from "../../db/pool";
@@ -18,7 +19,14 @@ import { DeployerSocketClient } from "../deployment/client";
 
 const execFileAsync = promisify(execFile);
 
-const SYSTEM_CORE_WORKSPACE_ID = "system-core-workspace";
+export const SYSTEM_CORE_WORKSPACE_ID = "system-core-workspace";
+
+interface SystemCoreDb {
+  query<Row = Record<string, unknown>>(
+    sql: string,
+    params?: readonly unknown[],
+  ): Promise<{ rows: Row[] }>;
+}
 
 interface Logger {
   info: (msg: string) => void;
@@ -30,7 +38,8 @@ async function isGitRepo(path: string): Promise<boolean> {
     await execFileAsync("git", ["rev-parse", "--git-dir"], { cwd: path, timeout: 10_000 });
     return true;
   } catch {
-    return false;
+    const gitDir = await stat(join(path, ".git")).catch(() => null);
+    return Boolean(gitDir?.isDirectory() || gitDir?.isFile());
   }
 }
 
@@ -64,6 +73,71 @@ async function ensurePersonalSpace(pool: Pool, userId: string, displayName: stri
     [randomUUID(), spaceId, userId],
   );
   return spaceId;
+}
+
+export async function upsertSystemCoreWorkspace(
+  db: SystemCoreDb,
+  input: {
+    spaceId: string;
+    userId: string;
+    workspaceDir: string;
+    baseBranch: string;
+  },
+): Promise<"inserted" | "updated"> {
+  const existing = await db.query<{ id: string }>(
+    `SELECT id FROM workspaces WHERE id = $1 AND space_id = $2 LIMIT 1`,
+    [SYSTEM_CORE_WORKSPACE_ID, input.spaceId],
+  );
+
+  if (existing.rows[0]) {
+    await db.query(
+      `UPDATE workspaces
+          SET root_path = $1,
+              default_branch = $2,
+              workspace_type = 'system_core',
+              kind = 'repo',
+              status = 'active',
+              visibility = 'private',
+              protected = true,
+              system_managed = true,
+              registered_from = COALESCE(registered_from, 'auto'),
+              created_by_user_id = COALESCE(created_by_user_id, $3),
+              updated_at = now()
+        WHERE id = $4 AND space_id = $5`,
+      [
+        input.workspaceDir,
+        input.baseBranch,
+        input.userId,
+        SYSTEM_CORE_WORKSPACE_ID,
+        input.spaceId,
+      ],
+    );
+    return "updated";
+  }
+
+  await db.query(
+    `INSERT INTO workspaces (
+       id, space_id, created_by_user_id, name, description,
+       workspace_type, kind, root_path, default_branch,
+       status, visibility, protected, system_managed, registered_from,
+       created_at, updated_at
+     ) VALUES (
+       $1, $2, $3, $4, $5,
+       'system_core', 'repo', $6, $7,
+       'active', 'private', true, true, 'auto',
+       now(), now()
+     )`,
+    [
+      SYSTEM_CORE_WORKSPACE_ID,
+      input.spaceId,
+      input.userId,
+      "Agent Space",
+      "Agent-space self-evolution workspace — managed by agent-space",
+      input.workspaceDir,
+      input.baseBranch,
+    ],
+  );
+  return "inserted";
 }
 
 /**
@@ -124,44 +198,16 @@ export async function registerSystemCoreWorkspace(
       return;
     }
 
-    const existing = await pool.query<{ id: string }>(
-      `SELECT id FROM workspaces WHERE id = $1 AND space_id = $2 LIMIT 1`,
-      [SYSTEM_CORE_WORKSPACE_ID, spaceId],
-    );
-
-    if (existing.rows[0]) {
-      await pool.query(
-        `UPDATE workspaces SET root_path = $1, updated_at = now() WHERE id = $2`,
-        [workspaceDir, SYSTEM_CORE_WORKSPACE_ID],
-      );
-      log.info(`[system_core] workspace already registered — updated root_path to ${workspaceDir}`);
-      return;
-    }
-
-    await pool.query(
-      `INSERT INTO workspaces (
-         id, space_id, created_by_user_id, name, description,
-         workspace_type, kind, root_path, default_branch,
-         status, visibility, protected, system_managed, registered_from,
-         created_at, updated_at
-       ) VALUES (
-         $1, $2, $3, $4, $5,
-         'system_core', 'repo', $6, $7,
-         'active', 'private', true, true, 'auto',
-         now(), now()
-       )`,
-      [
-        SYSTEM_CORE_WORKSPACE_ID,
-        spaceId,
-        user.id,
-        "Agent Space",
-        "Agent-space self-evolution workspace — managed by agent-space",
-        workspaceDir,
-        config.systemCoreBaseBranch,
-      ],
-    );
+    const action = await upsertSystemCoreWorkspace(pool, {
+      spaceId,
+      userId: user.id,
+      workspaceDir,
+      baseBranch: config.systemCoreBaseBranch,
+    });
     log.info(
-      `[system_core] registered system_core workspace at ${workspaceDir} in space ${spaceId}`,
+      action === "inserted"
+        ? `[system_core] registered system_core workspace at ${workspaceDir} in space ${spaceId}`
+        : `[system_core] workspace already registered — refreshed active root_path to ${workspaceDir}`,
     );
   } catch (err) {
     log.warn(

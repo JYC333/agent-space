@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react'
-import { Settings, Users, Mail, Send, Globe2, ShieldAlert, Puzzle, History } from 'lucide-react'
+import { Settings, Users, Mail, Send, Globe2, ShieldAlert, Puzzle, History, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { SpaceLink as Link } from '../../core/spaceNav'
 import { useAuth } from '../../contexts/AuthContext'
@@ -12,6 +12,7 @@ import { Badge } from '../../components/ui/badge'
 import { UserAvatar } from '../../components/UserAvatar'
 import { cn, errMsg } from '../../lib/utils'
 import { SpaceRuntimePolicyPanel } from '../runtime_tools/SpaceRuntimePolicyPanel'
+import { ObjectSchemaPanel } from './ObjectSchemaPanel'
 import type { MemberRole, SpaceMember } from '../../types/api'
 
 const INVITE_ROLES: MemberRole[] = ['admin', 'member', 'viewer']
@@ -111,6 +112,8 @@ export default function SpaceSettingsPage() {
         <>
           <SpaceRuntimePolicyPanel />
 
+          <ObjectSchemaPanel />
+
           <Card>
             <CardTitle className="flex items-center gap-2">
               <Puzzle className="size-3.5" /> Optional Modules
@@ -144,6 +147,18 @@ export default function SpaceSettingsPage() {
             </p>
             <Button asChild variant="outline" size="sm">
               <Link to="/workspace-snapshot-settings">Manage Snapshot Settings</Link>
+            </Button>
+          </Card>
+
+          <Card>
+            <CardTitle className="flex items-center gap-2">
+              <Search className="size-3.5" /> Retrieval Search
+            </CardTitle>
+            <p className="text-sm text-muted-foreground mb-3">
+              View and configure search mode, rewrite prompt, rerank, cache, trace, and result defaults for this space.
+            </p>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/retrieval-settings">Open Retrieval Settings</Link>
             </Button>
           </Card>
 

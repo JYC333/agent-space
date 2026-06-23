@@ -15,7 +15,7 @@ Approval workflow. Durable memory and code changes must go through a Proposal be
 ```
 Proposal:
   id, space_id, workspace_id
-  proposal_type (memory_create|memory_update|memory_archive|policy_change|code_patch|egress_review|follow_up_task)
+  proposal_type (memory_create|memory_update|memory_archive|memory_maintenance_packet|object_kind_create|object_kind_update|object_kind_deprecate|object_kind_archive|policy_change|code_patch|egress_review|follow_up_task)
   title, summary, rationale, payload_json
   risk_level (low|medium|high|critical)
   status (pending|accepted|rejected|superseded|expired)
@@ -69,10 +69,20 @@ The public proposal review/apply surface is owned by the server:
 - The currently registered appliers are: `memory_create`, `memory_update`,
   `memory_archive`, `knowledge_create`, `knowledge_update`, `knowledge_archive`,
   `knowledge_relation_create`, `knowledge_relation_delete`, `follow_up_task`,
-  `code_patch`, `skill_import_approve`, `capability_install`,
-  `capability_update`, `capability_enable`, `capability_disable`, and
+  `claim_create`, `claim_update`, `claim_archive`, `claim_relation_create`,
+  `claim_relation_delete`, `object_relation_create`, `object_relation_delete`,
+  `object_kind_create`, `object_kind_update`, `object_kind_deprecate`,
+  `object_kind_archive`,
+  `memory_maintenance_packet`, `retrieval_maintenance_packet`,
+  `retrieval_diagnostics_packet`, `code_patch`,
+  `skill_import_approve`, `capability_install`, `capability_update`,
+  `capability_enable`, `capability_disable`, and
   `runtime_skill_binding_update`. Unregistered proposal types fail closed until
   their owning domain registers an applier.
+- `memory_maintenance_packet`, `retrieval_maintenance_packet`, and
+  `retrieval_diagnostics_packet` are owner-private, creator-owned review
+  packets; the current appliers reject another user, including a space admin,
+  accepting someone else's private packet.
 - Non-registered target-module appliers remain explicit fail-closed work; the
   server public route does not fall back to any external proposal port.
 - Proposal creation entrypoints remain in their product modules

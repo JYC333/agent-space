@@ -23,6 +23,11 @@ import { errMsg } from '../../lib/utils'
 import { SafetyView } from './ConfigCards'
 import CondenserPresetPromptPreview from './CondenserPresetPromptPreview'
 import {
+  RetrievalToolDomainControls,
+  mergeRetrievalToolDomains,
+  type RetrievalToolDomainState,
+} from './RetrievalToolDomainControls'
+import {
   allowedInputContexts,
   allowedOutputTypes,
   buildCondenserConfigContextPolicy,
@@ -179,6 +184,10 @@ export default function AgentFormPage() {
   const [condenseCustomSystem, setCondenseCustomSystem] = useState('')
   const [condenseCustomInstructions, setCondenseCustomInstructions] = useState('')
   const [summaryPromptOpen, setSummaryPromptOpen] = useState(false)
+  const [retrievalToolDomains, setRetrievalToolDomains] = useState<RetrievalToolDomainState>({
+    memory: false,
+    project_public_summary: false,
+  })
 
   useEffect(() => {
     Promise.all([
@@ -242,6 +251,7 @@ export default function AgentFormPage() {
         setCondenseCustomSystem(condenser.custom_system)
         setCondenseCustomInstructions(condenser.custom_instructions)
         setSummaryPromptOpen(Boolean(condenser.custom_system || condenser.custom_instructions))
+        setRetrievalToolDomains({ memory: false, project_public_summary: false })
       })
       .catch(err => toast.error(errMsg(err)))
       .finally(() => setLoading(false))
@@ -329,6 +339,7 @@ export default function AgentFormPage() {
         ...(isCli && credentialProfileId ? { credential_profile_id: credentialProfileId } : {}),
         ...(isCli && runtimeToolVersion ? { runtime_tool_version: runtimeToolVersion } : {}),
       }
+      const runtimeConfigWithTools = mergeRetrievalToolDomains(runtimeConfig, retrievalToolDomains)
       const common = {
         name: name.trim(),
         description: description.trim() || null,
@@ -342,14 +353,14 @@ export default function AgentFormPage() {
         ? await agentTemplatesApi.createAgent(templateId, {
             ...common,
             adapter_type: runtime,
-            runtime_config_json: runtimeConfig,
+            runtime_config_json: runtimeConfigWithTools,
             default_model_provider_id: showProviderSelector ? (modelSelection?.provider_id ?? null) : null,
             default_model: showProviderSelector ? (modelSelection?.model || null) : null,
           } satisfies CreateAgentFromTemplateBody)
         : await agentsApi.create({
             ...common,
             adapter_type: runtime,
-            runtime_config_json: runtimeConfig,
+            runtime_config_json: runtimeConfigWithTools,
             default_model_provider_id: showProviderSelector ? (modelSelection?.provider_id ?? null) : null,
             default_model: showProviderSelector ? (modelSelection?.model || null) : null,
           })
@@ -466,6 +477,10 @@ export default function AgentFormPage() {
               emptyLabel={isClaudeCli ? 'Claude Code default' : isCodexCli ? 'Codex default' : defaultProvider?.default_model ? 'System default provider' : undefined}
             />
           )}
+          <RetrievalToolDomainControls
+            value={retrievalToolDomains}
+            onChange={setRetrievalToolDomains}
+          />
         </Card>
 
         <Card className="p-4 space-y-3">

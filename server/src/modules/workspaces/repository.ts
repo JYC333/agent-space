@@ -121,6 +121,14 @@ export interface GitStatus {
   files: Array<{ path: string; status: string }>;
 }
 
+export interface ConsoleWorkspaceInfo {
+  id: string;
+  name: string;
+  path: string | null;
+  type: string;
+  description: string | null;
+}
+
 export class PgWorkspaceRepository {
   constructor(
     private readonly db: Queryable,
@@ -223,7 +231,7 @@ export class PgWorkspaceRepository {
       const info = await stat(root).catch(() => null);
       if (info?.isDirectory()) {
         knownPaths.add(resolve(root));
-      } else {
+      } else if (!isSystemManagedWorkspace(row)) {
         staleNames.push(row.name);
       }
     }
@@ -330,7 +338,7 @@ export class PgWorkspaceRepository {
     return run(this.db);
   }
 
-  async listConsoleWorkspaces(identity: SpaceUserIdentity): Promise<{ items: Array<Record<string, unknown>> }> {
+  async listConsoleWorkspaces(identity: SpaceUserIdentity): Promise<{ items: ConsoleWorkspaceInfo[] }> {
     const rows = await this.db.query<WorkspaceRow>(
       `${workspaceSelect()}
         WHERE space_id = $1 AND status = 'active'
@@ -341,8 +349,8 @@ export class PgWorkspaceRepository {
       items: rows.rows.map((w) => ({
         id: w.id,
         name: w.name,
-        root_path: w.root_path,
-        kind: w.kind,
+        path: w.root_path,
+        type: w.workspace_type,
         description: w.description,
       })),
     };
@@ -496,6 +504,10 @@ export class PgWorkspaceRepository {
     }
     throw new HttpError(403, result.message ?? "Workspace read denied by policy");
   }
+}
+
+function isSystemManagedWorkspace(ws: Pick<WorkspaceRow, "workspace_type" | "system_managed">): boolean {
+  return ws.workspace_type === "system_core" || Boolean(ws.system_managed);
 }
 
 export function workspaceAbsoluteRoot(

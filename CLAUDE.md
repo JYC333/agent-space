@@ -53,6 +53,9 @@ change.
 
 - Read the relevant docs first, then the code.
 - Keep changes scoped to the requested module/context.
+- Implement the smallest code that satisfies the requested behavior. Avoid
+  speculative, unused, duplicate, or convenience-only code; add abstraction only
+  when it removes real complexity or matches an established local pattern.
 - Prefer small, purpose-specific modules over large catch-all files. Before
   adding substantial behavior to an already large file, scan nearby file sizes
   and split along existing ownership boundaries when the extraction is low

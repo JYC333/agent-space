@@ -46,8 +46,29 @@ CREATE TABLE public.memory_entries (
 CREATE TABLE public.projects (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
     deleted_at timestamp with time zone,
     CONSTRAINT projects_pkey PRIMARY KEY (id)
+);
+
+-- Minimal spaces + project_members for the project-level memory access gate
+-- (canAccessProject / accessibleProjectIds). SOURCE OF TRUTH: server/migrations.
+CREATE TABLE public.spaces (
+    id character varying(36) NOT NULL,
+    type character varying(32) NOT NULL DEFAULT 'household',
+    CONSTRAINT spaces_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.project_members (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    project_id character varying(36) NOT NULL,
+    user_id character varying(36) NOT NULL,
+    role character varying(32) NOT NULL,
+    status character varying(32) NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT project_members_pkey PRIMARY KEY (id)
 );
 
 -- Read-access audit (slice 7a). SOURCE OF TRUTH: models.py MemoryReadTrace.

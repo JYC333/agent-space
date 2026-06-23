@@ -25,6 +25,16 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 --
+-- Name: vector; Type: EXTENSION; Schema: -; Owner: -
+--
+-- Hybrid-retrieval (Phase 2) embedding store. pgvector provides the `vector`
+-- type and distance operators used by retrieval_chunks.embedding.
+-- Requires a pgvector-enabled Postgres image (pgvector/pgvector:pg18).
+
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+
+
+--
 -- Name: activity_records; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -239,8 +249,29 @@ CREATE TABLE public.artifacts (
     source_execution_plane_id character varying(36),
     trust_level character varying(32),
     project_id character varying(36),
+    workspace_id character varying(36),
     CONSTRAINT ck_artifacts_storage_path_relative CHECK (((storage_path IS NULL) OR ((storage_path)::text !~~ '/%'::text))),
-    CONSTRAINT ck_artifacts_trust_level CHECK (((trust_level IS NULL) OR ((trust_level)::text = ANY ((ARRAY['high'::character varying, 'medium'::character varying, 'low'::character varying, 'unknown'::character varying])::text[]))))
+    CONSTRAINT ck_artifacts_trust_level CHECK (((trust_level IS NULL) OR ((trust_level)::text = ANY ((ARRAY['high'::character varying, 'medium'::character varying, 'low'::character varying, 'unknown'::character varying])::text[])))),
+    CONSTRAINT ck_artifacts_workspace_shared_workspace CHECK (((visibility)::text <> 'workspace_shared'::text) OR (workspace_id IS NOT NULL))
+);
+
+
+--
+-- Name: context_artifact_revocations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.context_artifact_revocations (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    artifact_id character varying(36) NOT NULL,
+    scope_type character varying(16) NOT NULL,
+    scope_id character varying(36) NOT NULL,
+    reason text,
+    created_by_user_id character varying(36),
+    deleted_by_user_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    deleted_at timestamp with time zone,
+    CONSTRAINT ck_context_artifact_revocations_scope_type CHECK (((scope_type)::text = ANY ((ARRAY['workspace'::character varying, 'project'::character varying])::text[])))
 );
 
 
@@ -1030,6 +1061,91 @@ CREATE TABLE public.jobs (
 
 
 --
+-- Name: space_objects; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.space_objects (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    object_type character varying(32) NOT NULL,
+    title character varying(512) NOT NULL,
+    summary text,
+    status character varying(32) NOT NULL,
+    visibility character varying(32) DEFAULT 'space_shared'::character varying NOT NULL,
+    owner_user_id character varying(36),
+    primary_project_id character varying(36),
+    workspace_id character varying(36),
+    created_by_user_id character varying(36),
+    created_by_agent_id character varying(36),
+    created_by_run_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    archived_at timestamp with time zone,
+    deleted_at timestamp with time zone,
+    CONSTRAINT ck_space_objects_object_type CHECK (((object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'project'::character varying, 'person'::character varying, 'relationship'::character varying, 'asset'::character varying, 'event'::character varying, 'task'::character varying, 'document'::character varying, 'claim'::character varying])::text[]))),
+    CONSTRAINT ck_space_objects_status CHECK (((status)::text = ANY ((ARRAY['draft'::character varying, 'active'::character varying, 'disputed'::character varying, 'superseded'::character varying, 'rejected'::character varying, 'archived'::character varying, 'deleted'::character varying, 'raw'::character varying, 'processing'::character varying, 'processed'::character varying, 'error'::character varying])::text[]))),
+    CONSTRAINT ck_space_objects_status_by_type CHECK (CASE (object_type)::text WHEN 'knowledge_item'::text THEN ((status)::text = ANY ((ARRAY['draft'::character varying, 'active'::character varying, 'superseded'::character varying, 'archived'::character varying, 'deleted'::character varying])::text[])) WHEN 'note'::text THEN ((status)::text = ANY ((ARRAY['active'::character varying, 'archived'::character varying, 'deleted'::character varying])::text[])) WHEN 'source'::text THEN ((status)::text = ANY ((ARRAY['raw'::character varying, 'processing'::character varying, 'processed'::character varying, 'archived'::character varying, 'error'::character varying])::text[])) WHEN 'claim'::text THEN ((status)::text = ANY ((ARRAY['active'::character varying, 'disputed'::character varying, 'superseded'::character varying, 'rejected'::character varying, 'archived'::character varying])::text[])) ELSE true END),
+    CONSTRAINT ck_space_objects_visibility CHECK (((visibility)::text = ANY ((ARRAY['private'::character varying, 'space_shared'::character varying, 'workspace_shared'::character varying, 'restricted'::character varying])::text[])))
+);
+
+
+--
+-- Name: space_object_kinds; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.space_object_kinds (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    key character varying(64) NOT NULL,
+    label character varying(160) NOT NULL,
+    description text,
+    base_object_type character varying(64) NOT NULL,
+    status character varying(32) DEFAULT 'active'::character varying NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    field_schema_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    extraction_policy_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    retrieval_policy_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    ui_config_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_by_user_id character varying(36),
+    created_from_proposal_id character varying(36),
+    updated_from_proposal_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_space_object_kinds_base_object_type CHECK (((base_object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[]))),
+    CONSTRAINT ck_space_object_kinds_extraction_policy_object CHECK ((jsonb_typeof(extraction_policy_json) = 'object'::text)),
+    CONSTRAINT ck_space_object_kinds_field_schema_object CHECK ((jsonb_typeof(field_schema_json) = 'object'::text)),
+    CONSTRAINT ck_space_object_kinds_key CHECK (((key)::text ~ '^[a-z][a-z0-9_]{0,63}$'::text)),
+    CONSTRAINT ck_space_object_kinds_key_by_base_object_type CHECK (CASE (base_object_type)::text WHEN 'knowledge_item'::text THEN ((key)::text = ANY ((ARRAY['concept'::character varying, 'lesson'::character varying, 'procedure'::character varying, 'decision'::character varying, 'question'::character varying, 'answer'::character varying, 'summary'::character varying])::text[])) WHEN 'note'::text THEN ((key)::text = 'note'::text) WHEN 'source'::text THEN ((key)::text = ANY ((ARRAY['activity_record'::character varying, 'chat_capture'::character varying, 'webpage'::character varying, 'article'::character varying, 'paper'::character varying, 'pdf'::character varying, 'file'::character varying, 'email'::character varying, 'manual_reference'::character varying, 'external_note'::character varying])::text[])) WHEN 'claim'::text THEN ((key)::text = ANY ((ARRAY['fact'::character varying, 'hypothesis'::character varying, 'belief'::character varying, 'preference'::character varying, 'commitment'::character varying, 'question'::character varying, 'interpretation'::character varying, 'instruction'::character varying, 'metric'::character varying, 'relationship'::character varying, 'event'::character varying])::text[])) WHEN 'memory_entry'::text THEN ((key)::text = ANY ((ARRAY['preference'::character varying, 'semantic'::character varying, 'episodic'::character varying, 'procedural'::character varying, 'project'::character varying])::text[])) WHEN 'project_public_summary'::text THEN ((key)::text = 'project_public_summary'::text) ELSE false END),
+    CONSTRAINT ck_space_object_kinds_retrieval_policy_object CHECK ((jsonb_typeof(retrieval_policy_json) = 'object'::text)),
+    CONSTRAINT ck_space_object_kinds_status CHECK (((status)::text = ANY ((ARRAY['draft'::character varying, 'active'::character varying, 'deprecated'::character varying, 'archived'::character varying])::text[]))),
+    CONSTRAINT ck_space_object_kinds_ui_config_object CHECK ((jsonb_typeof(ui_config_json) = 'object'::text)),
+    CONSTRAINT ck_space_object_kinds_version_positive CHECK ((version >= 1))
+);
+
+
+--
+-- Name: space_object_kind_relation_hints; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.space_object_kind_relation_hints (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    object_kind_id character varying(36) NOT NULL,
+    endpoint_object_type character varying(64) NOT NULL,
+    endpoint_object_kind_id character varying(36),
+    relation_type character varying(64) NOT NULL,
+    direction character varying(16) DEFAULT 'from'::character varying NOT NULL,
+    confidence_default double precision DEFAULT 0.55 NOT NULL,
+    required boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_space_object_kind_relation_hints_confidence CHECK (((confidence_default >= (0)::double precision) AND (confidence_default <= (1)::double precision))),
+    CONSTRAINT ck_space_object_kind_relation_hints_direction CHECK (((direction)::text = ANY ((ARRAY['from'::character varying, 'to'::character varying, 'either'::character varying])::text[]))),
+    CONSTRAINT ck_space_object_kind_relation_hints_endpoint_type CHECK (((endpoint_object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[]))),
+    CONSTRAINT ck_space_object_kind_relation_hints_relation_type CHECK (((relation_type)::text = ANY ((ARRAY['related_to'::character varying, 'explains'::character varying, 'depends_on'::character varying, 'prerequisite_of'::character varying, 'part_of'::character varying, 'example_of'::character varying, 'applies_to'::character varying, 'supports'::character varying, 'contradicts'::character varying, 'derived_from'::character varying, 'summarizes'::character varying, 'updates'::character varying, 'references'::character varying, 'source_for'::character varying, 'about'::character varying, 'supersedes'::character varying, 'refines'::character varying, 'same_as'::character varying])::text[])))
+);
+
+
+--
 -- Name: knowledge_item_relations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1080,50 +1196,158 @@ CREATE TABLE public.knowledge_item_sources (
 --
 
 CREATE TABLE public.knowledge_items (
-    id character varying(36) NOT NULL,
+    object_id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    project_id character varying(36),
-    workspace_id character varying(36),
     root_item_id character varying(36),
     supersedes_item_id character varying(36),
-    item_type character varying(32) NOT NULL,
+    knowledge_kind character varying(32) NOT NULL,
     slug character varying(512),
     aliases_json jsonb,
-    title character varying(512) NOT NULL,
     content text NOT NULL,
     content_json jsonb,
     content_format character varying(32) NOT NULL,
     content_schema_version integer NOT NULL,
     plain_text text,
-    excerpt character varying(512),
-    status character varying(32) NOT NULL,
-    visibility character varying(32) NOT NULL,
     verification_status character varying(32) NOT NULL,
     reflection_status character varying(32) NOT NULL,
     tags_json jsonb NOT NULL,
     confidence double precision,
     source_url text,
-    owner_user_id character varying(36),
-    created_by_user_id character varying(36),
-    created_by_agent_id character varying(36),
-    created_by_run_id character varying(36),
     source_activity_id character varying(36),
     source_artifact_id character varying(36),
     created_from_proposal_id character varying(36),
     approved_by_user_id character varying(36),
     redirect_to_item_id character varying(36),
     version integer NOT NULL,
-    created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    archived_at timestamp with time zone,
     deprecated_at timestamp with time zone,
     CONSTRAINT ck_knowledge_items_confidence CHECK (((confidence IS NULL) OR ((confidence >= (0)::double precision) AND (confidence <= (1)::double precision)))),
     CONSTRAINT ck_knowledge_items_content_format CHECK (((content_format)::text = ANY ((ARRAY['markdown'::character varying, 'plain'::character varying, 'prosemirror_json'::character varying])::text[]))),
-    CONSTRAINT ck_knowledge_items_item_type CHECK (((item_type)::text = ANY ((ARRAY['concept'::character varying, 'claim'::character varying, 'lesson'::character varying, 'procedure'::character varying, 'decision'::character varying, 'question'::character varying, 'answer'::character varying, 'summary'::character varying])::text[]))),
+    CONSTRAINT ck_knowledge_items_knowledge_kind CHECK (((knowledge_kind)::text = ANY ((ARRAY['concept'::character varying, 'lesson'::character varying, 'procedure'::character varying, 'decision'::character varying, 'question'::character varying, 'answer'::character varying, 'summary'::character varying])::text[]))),
     CONSTRAINT ck_knowledge_items_reflection_status CHECK (((reflection_status)::text = ANY ((ARRAY['unreviewed'::character varying, 'reviewed'::character varying, 'distilled'::character varying])::text[]))),
-    CONSTRAINT ck_knowledge_items_status CHECK (((status)::text = ANY ((ARRAY['draft'::character varying, 'active'::character varying, 'superseded'::character varying, 'archived'::character varying])::text[]))),
-    CONSTRAINT ck_knowledge_items_verification_status CHECK (((verification_status)::text = ANY ((ARRAY['unverified'::character varying, 'needs_review'::character varying, 'verified'::character varying])::text[]))),
-    CONSTRAINT ck_knowledge_items_visibility CHECK (((visibility)::text = ANY ((ARRAY['private'::character varying, 'space_shared'::character varying, 'workspace_shared'::character varying, 'restricted'::character varying])::text[])))
+    CONSTRAINT ck_knowledge_items_verification_status CHECK (((verification_status)::text = ANY ((ARRAY['unverified'::character varying, 'needs_review'::character varying, 'verified'::character varying])::text[])))
+);
+
+
+--
+-- Name: claims; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.claims (
+    object_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    subject_object_id character varying(36),
+    subject_text text,
+    claim_kind character varying(32) NOT NULL,
+    claim_text text NOT NULL,
+    normalized_claim_hash character varying(128) NOT NULL,
+    holder_object_id character varying(36),
+    holder_type character varying(64),
+    holder_id character varying(128),
+    confidence double precision,
+    confidence_method character varying(32) NOT NULL,
+    resolution_state character varying(32) NOT NULL,
+    valid_from timestamp with time zone,
+    valid_until timestamp with time zone,
+    observed_at timestamp with time zone,
+    metadata_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_from_proposal_id character varying(36),
+    approved_by_user_id character varying(36),
+    CONSTRAINT ck_claims_claim_kind CHECK (((claim_kind)::text = ANY ((ARRAY['fact'::character varying, 'hypothesis'::character varying, 'belief'::character varying, 'preference'::character varying, 'commitment'::character varying, 'question'::character varying, 'interpretation'::character varying, 'instruction'::character varying, 'metric'::character varying, 'relationship'::character varying, 'event'::character varying])::text[]))),
+    CONSTRAINT ck_claims_claim_text CHECK ((btrim(claim_text) <> ''::text)),
+    CONSTRAINT ck_claims_confidence CHECK (((confidence IS NULL) OR ((confidence >= (0)::double precision) AND (confidence <= (1)::double precision)))),
+    CONSTRAINT ck_claims_confidence_method CHECK (((confidence_method)::text = ANY ((ARRAY['human_confirmed'::character varying, 'source_extracted'::character varying, 'llm_extracted'::character varying, 'inferred'::character varying, 'imported'::character varying])::text[]))),
+    CONSTRAINT ck_claims_holder_ref CHECK ((((holder_object_id IS NOT NULL) AND (holder_type IS NULL) AND (holder_id IS NULL)) OR ((holder_object_id IS NULL) AND (((holder_type IS NULL) AND (holder_id IS NULL)) OR ((holder_type IS NOT NULL) AND (holder_id IS NOT NULL)))))),
+    CONSTRAINT ck_claims_metadata_object CHECK ((jsonb_typeof(metadata_json) = 'object'::text)),
+    CONSTRAINT ck_claims_resolution_state CHECK (((resolution_state)::text = ANY ((ARRAY['unreviewed'::character varying, 'confirmed'::character varying, 'contradicted'::character varying, 'stale'::character varying, 'needs_source'::character varying])::text[]))),
+    CONSTRAINT ck_claims_subject CHECK (((subject_object_id IS NOT NULL) OR ((subject_text IS NOT NULL) AND (btrim(subject_text) <> ''::text)))),
+    CONSTRAINT ck_claims_valid_range CHECK (((valid_from IS NULL) OR (valid_until IS NULL) OR (valid_from <= valid_until)))
+);
+
+
+--
+-- Name: claim_sources; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.claim_sources (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    claim_id character varying(36) NOT NULL,
+    source_object_id character varying(36),
+    source_ref_type character varying(64),
+    source_ref_id character varying(36),
+    source_connection_id character varying(36),
+    source_policy_snapshot_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    locator character varying(1024),
+    quote_excerpt text,
+    evidence_role character varying(32) NOT NULL,
+    source_trust character varying(32),
+    confidence double precision,
+    metadata_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_by_user_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_claim_sources_confidence CHECK (((confidence IS NULL) OR ((confidence >= (0)::double precision) AND (confidence <= (1)::double precision)))),
+    CONSTRAINT ck_claim_sources_evidence_role CHECK (((evidence_role)::text = ANY ((ARRAY['supports'::character varying, 'contradicts'::character varying, 'mentions'::character varying, 'derived_from'::character varying, 'cites'::character varying, 'summarizes'::character varying])::text[]))),
+    CONSTRAINT ck_claim_sources_metadata_object CHECK ((jsonb_typeof(metadata_json) = 'object'::text)),
+    CONSTRAINT ck_claim_sources_policy_snapshot_object CHECK ((jsonb_typeof(source_policy_snapshot_json) = 'object'::text)),
+    CONSTRAINT ck_claim_sources_has_source CHECK (((source_object_id IS NOT NULL) OR ((source_ref_type IS NOT NULL) AND (source_ref_id IS NOT NULL)) OR (source_connection_id IS NOT NULL))),
+    CONSTRAINT ck_claim_sources_source_ref CHECK ((((source_ref_type IS NULL) AND (source_ref_id IS NULL)) OR ((source_ref_type IS NOT NULL) AND (source_ref_id IS NOT NULL)))),
+    CONSTRAINT ck_claim_sources_source_ref_connection CHECK (((source_ref_type IS NULL) OR (source_connection_id IS NOT NULL))),
+    CONSTRAINT ck_claim_sources_source_ref_type CHECK (((source_ref_type IS NULL) OR ((source_ref_type)::text = ANY ((ARRAY['activity'::character varying, 'artifact'::character varying, 'run_event'::character varying, 'extracted_evidence'::character varying, 'source_snapshot'::character varying, 'external_pointer'::character varying, 'intake_item'::character varying])::text[])))),
+    CONSTRAINT ck_claim_sources_source_trust CHECK (((source_trust IS NULL) OR ((source_trust)::text = ANY ((ARRAY['trusted'::character varying, 'normal'::character varying, 'untrusted'::character varying, 'unknown'::character varying])::text[]))))
+);
+
+
+--
+-- Name: claim_relations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.claim_relations (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    from_claim_id character varying(36) NOT NULL,
+    to_claim_id character varying(36) NOT NULL,
+    relation_type character varying(64) NOT NULL,
+    status character varying(32) NOT NULL,
+    confidence double precision,
+    evidence_summary text,
+    source_proposal_id character varying(36),
+    created_by_user_id character varying(36),
+    created_by_agent_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_claim_relations_confidence CHECK (((confidence IS NULL) OR ((confidence >= (0)::double precision) AND (confidence <= (1)::double precision)))),
+    CONSTRAINT ck_claim_relations_no_self CHECK (((from_claim_id)::text <> (to_claim_id)::text)),
+    CONSTRAINT ck_claim_relations_relation_type CHECK (((relation_type)::text = ANY ((ARRAY['supports'::character varying, 'contradicts'::character varying, 'supersedes'::character varying, 'refines'::character varying, 'same_as'::character varying, 'depends_on'::character varying, 'derived_from'::character varying])::text[]))),
+    CONSTRAINT ck_claim_relations_status CHECK (((status)::text = ANY ((ARRAY['candidate'::character varying, 'active'::character varying, 'rejected'::character varying, 'archived'::character varying])::text[])))
+);
+
+
+--
+-- Name: object_relations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.object_relations (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    from_object_id character varying(36) NOT NULL,
+    to_object_id character varying(36) NOT NULL,
+    relation_type character varying(64) NOT NULL,
+    status character varying(32) NOT NULL,
+    confidence double precision,
+    evidence_summary text,
+    source_claim_id character varying(36),
+    source_object_id character varying(36),
+    source_proposal_id character varying(36),
+    metadata_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_by_user_id character varying(36),
+    created_by_agent_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_object_relations_confidence CHECK (((confidence IS NULL) OR ((confidence >= (0)::double precision) AND (confidence <= (1)::double precision)))),
+    CONSTRAINT ck_object_relations_metadata_object CHECK ((jsonb_typeof(metadata_json) = 'object'::text)),
+    CONSTRAINT ck_object_relations_no_self CHECK (((from_object_id)::text <> (to_object_id)::text)),
+    CONSTRAINT ck_object_relations_relation_type CHECK (((relation_type)::text = ANY ((ARRAY['related_to'::character varying, 'references'::character varying, 'depends_on'::character varying, 'part_of'::character varying, 'source_for'::character varying, 'derived_from'::character varying, 'about'::character varying, 'supports'::character varying, 'contradicts'::character varying, 'supersedes'::character varying, 'refines'::character varying, 'same_as'::character varying])::text[]))),
+    CONSTRAINT ck_object_relations_status CHECK (((status)::text = ANY ((ARRAY['candidate'::character varying, 'active'::character varying, 'rejected'::character varying, 'archived'::character varying])::text[])))
 );
 
 
@@ -1141,6 +1365,34 @@ CREATE TABLE public.memory_access_logs (
     access_type character varying(64) NOT NULL,
     reason text,
     accessed_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: memory_maintenance_jobs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.memory_maintenance_jobs (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36) NOT NULL,
+    status character varying(32) DEFAULT 'pending'::character varying NOT NULL,
+    review_scope character varying(32) DEFAULT 'private'::character varying NOT NULL,
+    scan_options_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    cursor character varying(256),
+    total_scanned integer DEFAULT 0 NOT NULL,
+    total_findings integer DEFAULT 0 NOT NULL,
+    last_report_artifact_id character varying(36),
+    last_packet_proposal_id character varying(36),
+    error_message text,
+    run_after timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT ck_memory_maintenance_jobs_status CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'running'::character varying, 'completed'::character varying, 'failed'::character varying])::text[]))),
+    CONSTRAINT ck_memory_maintenance_jobs_review_scope CHECK (((review_scope)::text = ANY ((ARRAY['private'::character varying, 'space_ops'::character varying])::text[]))),
+    CONSTRAINT ck_memory_maintenance_jobs_total_scanned CHECK ((total_scanned >= 0)),
+    CONSTRAINT ck_memory_maintenance_jobs_total_findings CHECK ((total_findings >= 0))
 );
 
 
@@ -1324,6 +1576,7 @@ CREATE TABLE public.model_provider_space_grants (
 
 CREATE TABLE public.note_collection_items (
     id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
     collection_id character varying(36) NOT NULL,
     note_id character varying(36) NOT NULL,
     sort_order integer NOT NULL,
@@ -1356,24 +1609,14 @@ CREATE TABLE public.note_collections (
 --
 
 CREATE TABLE public.notes (
-    id character varying(36) NOT NULL,
+    object_id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    title character varying(512) NOT NULL,
     content_json jsonb,
     content_format character varying(32) NOT NULL,
     content_schema_version integer NOT NULL,
     plain_text text,
-    excerpt character varying(512),
-    status character varying(32) NOT NULL,
-    primary_project_id character varying(36),
     created_from_activity_id character varying(36),
-    created_by_user_id character varying(36),
-    created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    archived_at timestamp with time zone,
-    deleted_at timestamp with time zone,
-    CONSTRAINT ck_notes_content_format CHECK (((content_format)::text = ANY ((ARRAY['markdown'::character varying, 'plain'::character varying, 'prosemirror_json'::character varying])::text[]))),
-    CONSTRAINT ck_notes_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'archived'::character varying, 'deleted'::character varying])::text[])))
+    CONSTRAINT ck_notes_content_format CHECK (((content_format)::text = ANY ((ARRAY['markdown'::character varying, 'plain'::character varying, 'prosemirror_json'::character varying])::text[])))
 );
 
 
@@ -1619,6 +1862,31 @@ CREATE TABLE public.project_workspaces (
 
 
 --
+-- Name: project_public_summaries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.project_public_summaries (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    project_id character varying(36) NOT NULL,
+    summary_text text NOT NULL,
+    topics_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    highlights_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    source_refs_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    redaction_version character varying(64) NOT NULL,
+    review_status character varying(32) DEFAULT 'approved'::character varying NOT NULL,
+    updated_by_user_id character varying(36),
+    generated_by_run_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_project_public_summaries_highlights_array CHECK ((jsonb_typeof(highlights_json) = 'array'::text)),
+    CONSTRAINT ck_project_public_summaries_review_status CHECK (((review_status)::text = ANY ((ARRAY['draft'::character varying, 'approved'::character varying, 'archived'::character varying])::text[]))),
+    CONSTRAINT ck_project_public_summaries_source_refs_array CHECK ((jsonb_typeof(source_refs_json) = 'array'::text)),
+    CONSTRAINT ck_project_public_summaries_topics_array CHECK ((jsonb_typeof(topics_json) = 'array'::text))
+);
+
+
+--
 -- Name: projects; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1636,6 +1904,24 @@ CREATE TABLE public.projects (
     archived_at timestamp with time zone,
     deleted_at timestamp with time zone,
     CONSTRAINT ck_projects_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'archived'::character varying, 'deleted'::character varying])::text[])))
+);
+
+
+--
+-- Name: project_members; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.project_members (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    project_id character varying(36) NOT NULL,
+    user_id character varying(36) NOT NULL,
+    role character varying(32) NOT NULL,
+    status character varying(32) NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_project_members_role CHECK (((role)::text = ANY ((ARRAY['owner'::character varying, 'member'::character varying, 'viewer'::character varying])::text[]))),
+    CONSTRAINT ck_project_members_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'invited'::character varying, 'revoked'::character varying])::text[])))
 );
 
 
@@ -2199,22 +2485,186 @@ CREATE TABLE public.source_snapshots (
 --
 
 CREATE TABLE public.sources (
-    id character varying(36) NOT NULL,
+    object_id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     source_type character varying(64) NOT NULL,
-    title character varying(512) NOT NULL,
     uri text,
     content_ref character varying(1024),
     raw_text text,
     summary text,
     metadata_json jsonb NOT NULL,
-    status character varying(32) NOT NULL,
     source_activity_id character varying(36),
-    created_by_user_id character varying(36),
+    CONSTRAINT ck_sources_source_type CHECK (((source_type)::text = ANY ((ARRAY['activity_record'::character varying, 'chat_capture'::character varying, 'webpage'::character varying, 'article'::character varying, 'paper'::character varying, 'pdf'::character varying, 'file'::character varying, 'email'::character varying, 'manual_reference'::character varying, 'external_note'::character varying])::text[])))
+);
+
+
+--
+-- Name: retrieval_objects; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.retrieval_objects (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    object_type character varying(32) NOT NULL,
+    object_id character varying(36) NOT NULL,
+    workspace_id character varying(36),
+    owner_user_id character varying(36),
+    visibility character varying(32),
+    status character varying(32) NOT NULL,
+    title character varying(512) NOT NULL,
+    slug character varying(512),
+    object_kind character varying(64),
+    content_hash character varying(64) NOT NULL,
+    source_connection_ids_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    indexed_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    source_updated_at timestamp with time zone,
+    CONSTRAINT ck_retrieval_objects_source_connections_array CHECK ((jsonb_typeof(source_connection_ids_json) = 'array'::text)),
+    CONSTRAINT ck_retrieval_objects_object_type CHECK (((object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[])))
+);
+
+
+--
+-- Name: retrieval_aliases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.retrieval_aliases (
+    id character varying(36) NOT NULL,
+    retrieval_object_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    object_type character varying(32) NOT NULL,
+    object_id character varying(36) NOT NULL,
+    alias text NOT NULL,
+    normalized_alias text NOT NULL,
+    alias_kind character varying(32) NOT NULL,
+    confidence double precision NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_retrieval_aliases_confidence CHECK (((confidence >= (0)::double precision) AND (confidence <= (1)::double precision))),
+    CONSTRAINT ck_retrieval_aliases_object_type CHECK (((object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[])))
+);
+
+
+--
+-- Name: retrieval_chunks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.retrieval_chunks (
+    id character varying(36) NOT NULL,
+    retrieval_object_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    object_type character varying(32) NOT NULL,
+    object_id character varying(36) NOT NULL,
+    chunk_index integer NOT NULL,
+    plain_text text NOT NULL,
+    tsv tsvector,
+    content_hash character varying(64) NOT NULL,
+    embedding public.vector,
+    embedding_model character varying(128),
+    embedding_dimensions integer,
+    embedding_generated_at timestamp with time zone,
+    embedding_claim_id character varying(64),
+    embedding_claimed_at timestamp with time zone,
+    embedding_attempts integer DEFAULT 0 NOT NULL,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_sources_source_type CHECK (((source_type)::text = ANY ((ARRAY['activity_record'::character varying, 'chat_capture'::character varying, 'webpage'::character varying, 'article'::character varying, 'paper'::character varying, 'pdf'::character varying, 'file'::character varying, 'email'::character varying, 'manual_reference'::character varying, 'external_note'::character varying])::text[]))),
-    CONSTRAINT ck_sources_status CHECK (((status)::text = ANY ((ARRAY['raw'::character varying, 'processing'::character varying, 'processed'::character varying, 'archived'::character varying, 'error'::character varying])::text[])))
+    CONSTRAINT ck_retrieval_chunks_embedding_dimensions CHECK ((((embedding IS NULL) AND (embedding_dimensions IS NULL)) OR ((embedding IS NOT NULL) AND (embedding_dimensions = public.vector_dims(embedding)) AND (embedding_dimensions >= 1) AND (embedding_dimensions <= 4096)))),
+    CONSTRAINT ck_retrieval_chunks_object_type CHECK (((object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[])))
+);
+
+
+--
+-- Name: retrieval_edges; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.retrieval_edges (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    from_object_type character varying(32) NOT NULL,
+    from_object_id character varying(36) NOT NULL,
+    to_object_type character varying(32) NOT NULL,
+    to_object_id character varying(36) NOT NULL,
+    relation_type character varying(64) NOT NULL,
+    edge_origin character varying(64) NOT NULL,
+    edge_status character varying(32) NOT NULL,
+    confidence double precision NOT NULL,
+    evidence_json jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_retrieval_edges_confidence CHECK (((confidence >= (0)::double precision) AND (confidence <= (1)::double precision))),
+    CONSTRAINT ck_retrieval_edges_from_object_type CHECK (((from_object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[]))),
+    CONSTRAINT ck_retrieval_edges_to_object_type CHECK (((to_object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[]))),
+    CONSTRAINT ck_retrieval_edges_status CHECK (((edge_status)::text = ANY ((ARRAY['derived'::character varying, 'suggested'::character varying])::text[])))
+);
+
+
+--
+-- Name: retrieval_feedback_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.retrieval_feedback_events (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    actor_user_id character varying(36) NOT NULL,
+    surface character varying(64) NOT NULL,
+    query_hash character varying(64) NOT NULL,
+    object_type character varying(32) NOT NULL,
+    object_id character varying(36) NOT NULL,
+    signal_type character varying(32) NOT NULL,
+    dwell_ms integer,
+    metadata_json jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_retrieval_feedback_events_dwell_ms CHECK (((dwell_ms IS NULL) OR (dwell_ms >= 0))),
+    CONSTRAINT ck_retrieval_feedback_events_object_type CHECK (((object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[]))),
+    CONSTRAINT ck_retrieval_feedback_events_signal_type CHECK (((signal_type)::text = ANY ((ARRAY['opened'::character varying, 'dwell'::character varying, 'used'::character varying, 'explicit_relevant'::character varying, 'accepted'::character varying, 'pinned'::character varying])::text[])))
+);
+
+
+--
+-- Name: space_retrieval_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.space_retrieval_settings (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    default_search_mode character varying(32) DEFAULT 'hybrid'::character varying NOT NULL,
+    rerank_enabled boolean DEFAULT false NOT NULL,
+    query_rewrite_enabled boolean DEFAULT false NOT NULL,
+    query_rewrite_default boolean DEFAULT false NOT NULL,
+    use_query_cache boolean DEFAULT true NOT NULL,
+    include_trace boolean DEFAULT false NOT NULL,
+    external_egress_enabled boolean DEFAULT true NOT NULL,
+    retrieval_tool_mode character varying(32) DEFAULT 'off'::character varying NOT NULL,
+    brain_ops_review_mode character varying(32) DEFAULT 'private_only'::character varying NOT NULL,
+    brain_ops_scan_mode character varying(32) DEFAULT 'admins'::character varying NOT NULL,
+    embedding_dimensions integer DEFAULT 2560 NOT NULL,
+    max_results_default integer DEFAULT 50 NOT NULL,
+    ranking_config_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_space_retrieval_settings_embedding_dimensions CHECK (((embedding_dimensions >= 64) AND (embedding_dimensions <= 4096))),
+    CONSTRAINT ck_space_retrieval_settings_brain_ops_review_mode CHECK (((brain_ops_review_mode)::text = ANY ((ARRAY['private_only'::character varying, 'admins'::character varying, 'members'::character varying])::text[]))),
+    CONSTRAINT ck_space_retrieval_settings_brain_ops_scan_mode CHECK (((brain_ops_scan_mode)::text = ANY ((ARRAY['admins'::character varying, 'members'::character varying])::text[]))),
+    CONSTRAINT ck_space_retrieval_settings_max_results_default CHECK (((max_results_default >= 1) AND (max_results_default <= 50))),
+    CONSTRAINT ck_space_retrieval_settings_retrieval_tool_mode CHECK (((retrieval_tool_mode)::text = ANY ((ARRAY['off'::character varying, 'manual_tool_only'::character varying, 'preflight_search'::character varying, 'preflight_brief'::character varying])::text[]))),
+    CONSTRAINT ck_space_retrieval_settings_search_mode CHECK (((default_search_mode)::text = ANY ((ARRAY['exact'::character varying, 'lexical'::character varying, 'hybrid'::character varying, 'hybrid_rerank'::character varying])::text[])))
+);
+
+
+--
+-- Name: space_retrieval_prompts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.space_retrieval_prompts (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    task character varying(64) NOT NULL,
+    system_prompt text NOT NULL,
+    user_template text NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_space_retrieval_prompts_task CHECK (((task)::text = ANY ((ARRAY['query_rewrite'::character varying])::text[]))),
+    CONSTRAINT ck_space_retrieval_prompts_system_prompt CHECK ((length(btrim(system_prompt)) > 0)),
+    CONSTRAINT ck_space_retrieval_prompts_user_template CHECK ((strpos(user_template, '{query}'::text) > 0))
 );
 
 
@@ -2692,6 +3142,14 @@ ALTER TABLE ONLY public.artifacts
 
 
 --
+-- Name: context_artifact_revocations context_artifact_revocations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.context_artifact_revocations
+    ADD CONSTRAINT context_artifact_revocations_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: auth_accounts auth_accounts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2956,6 +3414,46 @@ ALTER TABLE ONLY public.jobs
 
 
 --
+-- Name: space_objects space_objects_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_objects
+    ADD CONSTRAINT space_objects_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: space_objects space_objects_id_space_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_objects
+    ADD CONSTRAINT space_objects_id_space_id_key UNIQUE (id, space_id);
+
+
+--
+-- Name: space_object_kinds space_object_kinds_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_object_kinds
+    ADD CONSTRAINT space_object_kinds_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: space_object_kinds space_object_kinds_space_base_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_object_kinds
+    ADD CONSTRAINT space_object_kinds_space_base_key_key UNIQUE (space_id, base_object_type, key);
+
+
+--
+-- Name: space_object_kind_relation_hints space_object_kind_relation_hints_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_object_kind_relation_hints
+    ADD CONSTRAINT space_object_kind_relation_hints_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: knowledge_item_relations knowledge_item_relations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2976,7 +3474,55 @@ ALTER TABLE ONLY public.knowledge_item_sources
 --
 
 ALTER TABLE ONLY public.knowledge_items
-    ADD CONSTRAINT knowledge_items_pkey PRIMARY KEY (id);
+    ADD CONSTRAINT knowledge_items_pkey PRIMARY KEY (object_id);
+
+
+--
+-- Name: knowledge_items knowledge_items_object_id_space_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.knowledge_items
+    ADD CONSTRAINT knowledge_items_object_id_space_id_key UNIQUE (object_id, space_id);
+
+
+--
+-- Name: claims claims_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claims
+    ADD CONSTRAINT claims_pkey PRIMARY KEY (object_id);
+
+
+--
+-- Name: claims claims_object_id_space_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claims
+    ADD CONSTRAINT claims_object_id_space_id_key UNIQUE (object_id, space_id);
+
+
+--
+-- Name: claim_sources claim_sources_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_sources
+    ADD CONSTRAINT claim_sources_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: claim_relations claim_relations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_relations
+    ADD CONSTRAINT claim_relations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: object_relations object_relations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.object_relations
+    ADD CONSTRAINT object_relations_pkey PRIMARY KEY (id);
 
 
 --
@@ -2985,6 +3531,14 @@ ALTER TABLE ONLY public.knowledge_items
 
 ALTER TABLE ONLY public.memory_access_logs
     ADD CONSTRAINT memory_access_logs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: memory_maintenance_jobs memory_maintenance_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.memory_maintenance_jobs
+    ADD CONSTRAINT memory_maintenance_jobs_pkey PRIMARY KEY (id);
 
 
 --
@@ -3060,11 +3614,27 @@ ALTER TABLE ONLY public.note_collections
 
 
 --
+-- Name: note_collections note_collections_id_space_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.note_collections
+    ADD CONSTRAINT note_collections_id_space_id_key UNIQUE (id, space_id);
+
+
+--
 -- Name: notes notes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.notes
-    ADD CONSTRAINT notes_pkey PRIMARY KEY (id);
+    ADD CONSTRAINT notes_pkey PRIMARY KEY (object_id);
+
+
+--
+-- Name: notes notes_object_id_space_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notes
+    ADD CONSTRAINT notes_object_id_space_id_key UNIQUE (object_id, space_id);
 
 
 --
@@ -3172,11 +3742,27 @@ ALTER TABLE ONLY public.project_workspaces
 
 
 --
+-- Name: project_public_summaries project_public_summaries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_public_summaries
+    ADD CONSTRAINT project_public_summaries_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: projects projects_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.projects
     ADD CONSTRAINT projects_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: project_members project_members_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_members
+    ADD CONSTRAINT project_members_pkey PRIMARY KEY (id);
 
 
 --
@@ -3324,6 +3910,14 @@ ALTER TABLE ONLY public.source_connections
 
 
 --
+-- Name: source_connections source_connections_id_space_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_connections
+    ADD CONSTRAINT source_connections_id_space_id_key UNIQUE (id, space_id);
+
+
+--
 -- Name: source_connectors source_connectors_connector_key_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3360,7 +3954,71 @@ ALTER TABLE ONLY public.source_snapshots
 --
 
 ALTER TABLE ONLY public.sources
-    ADD CONSTRAINT sources_pkey PRIMARY KEY (id);
+    ADD CONSTRAINT sources_pkey PRIMARY KEY (object_id);
+
+
+--
+-- Name: sources sources_object_id_space_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sources
+    ADD CONSTRAINT sources_object_id_space_id_key UNIQUE (object_id, space_id);
+
+
+--
+-- Name: retrieval_objects retrieval_objects_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_objects
+    ADD CONSTRAINT retrieval_objects_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: retrieval_aliases retrieval_aliases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_aliases
+    ADD CONSTRAINT retrieval_aliases_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: retrieval_chunks retrieval_chunks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_chunks
+    ADD CONSTRAINT retrieval_chunks_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: retrieval_edges retrieval_edges_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_edges
+    ADD CONSTRAINT retrieval_edges_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: retrieval_feedback_events retrieval_feedback_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_feedback_events
+    ADD CONSTRAINT retrieval_feedback_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: space_retrieval_settings space_retrieval_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_retrieval_settings
+    ADD CONSTRAINT space_retrieval_settings_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: space_retrieval_prompts space_retrieval_prompts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_retrieval_prompts
+    ADD CONSTRAINT space_retrieval_prompts_pkey PRIMARY KEY (id);
 
 
 --
@@ -3544,7 +4202,7 @@ ALTER TABLE ONLY public.model_provider_space_grants
 --
 
 ALTER TABLE ONLY public.note_collection_items
-    ADD CONSTRAINT uq_note_collection_items_collection_note UNIQUE (collection_id, note_id);
+    ADD CONSTRAINT uq_note_collection_items_collection_note UNIQUE (space_id, collection_id, note_id);
 
 
 --
@@ -3553,6 +4211,17 @@ ALTER TABLE ONLY public.note_collection_items
 
 ALTER TABLE ONLY public.project_workspaces
     ADD CONSTRAINT uq_project_workspaces_project_workspace_role UNIQUE (project_id, workspace_id, role);
+
+
+--
+-- Name: projects uq_projects_space_id_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+-- Composite candidate key so child tables can carry a (space_id, project_id)
+-- foreign key into projects. This makes a row's space_id provably equal to its
+-- project's space_id at the database level, not only by service-layer checks.
+
+ALTER TABLE ONLY public.projects
+    ADD CONSTRAINT uq_projects_space_id_id UNIQUE (space_id, id);
 
 
 --
@@ -3593,6 +4262,22 @@ ALTER TABLE ONLY public.run_steps
 
 ALTER TABLE ONLY public.session_summaries
     ADD CONSTRAINT uq_session_summaries_session_version UNIQUE (session_id, version);
+
+
+--
+-- Name: space_retrieval_settings uq_space_retrieval_settings_space_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_retrieval_settings
+    ADD CONSTRAINT uq_space_retrieval_settings_space_id UNIQUE (space_id);
+
+
+--
+-- Name: space_retrieval_prompts uq_space_retrieval_prompts_space_task; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_retrieval_prompts
+    ADD CONSTRAINT uq_space_retrieval_prompts_space_task UNIQUE (space_id, task);
 
 
 --
@@ -4077,6 +4762,13 @@ CREATE INDEX ix_artifacts_project_id ON public.artifacts USING btree (project_id
 
 
 --
+-- Name: ix_artifacts_workspace_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_artifacts_workspace_id ON public.artifacts USING btree (workspace_id);
+
+
+--
 -- Name: ix_artifacts_proposal_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4102,6 +4794,27 @@ CREATE INDEX ix_artifacts_source_execution_plane_id ON public.artifacts USING bt
 --
 
 CREATE INDEX ix_artifacts_space_id ON public.artifacts USING btree (space_id);
+
+
+--
+-- Name: ix_context_artifact_revocations_artifact_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_context_artifact_revocations_artifact_id ON public.context_artifact_revocations USING btree (artifact_id);
+
+
+--
+-- Name: ix_context_artifact_revocations_space_scope; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_context_artifact_revocations_space_scope ON public.context_artifact_revocations USING btree (space_id, scope_type, scope_id);
+
+
+--
+-- Name: uq_context_artifact_revocations_active_scope; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_context_artifact_revocations_active_scope ON public.context_artifact_revocations USING btree (space_id, artifact_id, scope_type, scope_id) WHERE (deleted_at IS NULL);
 
 
 --
@@ -5484,24 +6197,24 @@ CREATE INDEX ix_knowledge_items_created_from_proposal_id ON public.knowledge_ite
 
 
 --
--- Name: ix_knowledge_items_item_type; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_knowledge_items_knowledge_kind; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_knowledge_items_item_type ON public.knowledge_items USING btree (item_type);
-
-
---
--- Name: ix_knowledge_items_owner_user_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_knowledge_items_owner_user_id ON public.knowledge_items USING btree (owner_user_id);
+CREATE INDEX ix_knowledge_items_knowledge_kind ON public.knowledge_items USING btree (knowledge_kind);
 
 
 --
--- Name: ix_knowledge_items_project_id; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_space_objects_owner_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_knowledge_items_project_id ON public.knowledge_items USING btree (project_id);
+CREATE INDEX ix_space_objects_owner_user_id ON public.space_objects USING btree (owner_user_id);
+
+
+--
+-- Name: ix_space_objects_primary_project_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_objects_primary_project_id ON public.space_objects USING btree (primary_project_id);
 
 
 --
@@ -5540,10 +6253,10 @@ CREATE INDEX ix_knowledge_items_space_slug ON public.knowledge_items USING btree
 
 
 --
--- Name: ix_knowledge_items_status; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_space_objects_status; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_knowledge_items_status ON public.knowledge_items USING btree (status);
+CREATE INDEX ix_space_objects_status ON public.space_objects USING btree (status);
 
 
 --
@@ -5554,17 +6267,255 @@ CREATE INDEX ix_knowledge_items_supersedes_item_id ON public.knowledge_items USI
 
 
 --
--- Name: ix_knowledge_items_visibility; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_space_objects_visibility; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_knowledge_items_visibility ON public.knowledge_items USING btree (visibility);
+CREATE INDEX ix_space_objects_visibility ON public.space_objects USING btree (visibility);
 
 
 --
--- Name: ix_knowledge_items_workspace_id; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_space_objects_workspace_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_knowledge_items_workspace_id ON public.knowledge_items USING btree (workspace_id);
+CREATE INDEX ix_space_objects_workspace_id ON public.space_objects USING btree (workspace_id);
+
+
+--
+-- Name: ix_space_objects_space_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_objects_space_type ON public.space_objects USING btree (space_id, object_type);
+
+
+--
+-- Name: ix_space_objects_created_by_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_objects_created_by_user_id ON public.space_objects USING btree (created_by_user_id);
+
+
+--
+-- Name: ix_space_objects_deleted_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_objects_deleted_at ON public.space_objects USING btree (deleted_at);
+
+
+--
+-- Name: ix_space_object_kinds_base_object_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_object_kinds_base_object_type ON public.space_object_kinds USING btree (base_object_type);
+
+
+--
+-- Name: ix_space_object_kinds_created_by_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_object_kinds_created_by_user_id ON public.space_object_kinds USING btree (created_by_user_id);
+
+
+--
+-- Name: ix_space_object_kinds_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_object_kinds_space_id ON public.space_object_kinds USING btree (space_id);
+
+
+--
+-- Name: ix_space_object_kinds_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_object_kinds_status ON public.space_object_kinds USING btree (status);
+
+
+--
+-- Name: ix_space_object_kind_relation_hints_endpoint_kind; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_object_kind_relation_hints_endpoint_kind ON public.space_object_kind_relation_hints USING btree (endpoint_object_kind_id);
+
+
+--
+-- Name: ix_space_object_kind_relation_hints_object_kind; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_object_kind_relation_hints_object_kind ON public.space_object_kind_relation_hints USING btree (object_kind_id);
+
+
+--
+-- Name: ix_space_object_kind_relation_hints_required; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_object_kind_relation_hints_required ON public.space_object_kind_relation_hints USING btree (space_id, required);
+
+
+--
+-- Name: ix_claims_claim_kind; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claims_claim_kind ON public.claims USING btree (claim_kind);
+
+
+--
+-- Name: ix_claims_created_from_proposal_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claims_created_from_proposal_id ON public.claims USING btree (created_from_proposal_id);
+
+
+--
+-- Name: ix_claims_holder_object_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claims_holder_object_id ON public.claims USING btree (holder_object_id);
+
+
+--
+-- Name: ix_claims_normalized_claim_hash; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claims_normalized_claim_hash ON public.claims USING btree (normalized_claim_hash);
+
+
+--
+-- Name: ix_claims_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claims_space_id ON public.claims USING btree (space_id);
+
+
+--
+-- Name: ix_claims_subject_object_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claims_subject_object_id ON public.claims USING btree (subject_object_id);
+
+
+--
+-- Name: ix_claim_sources_claim_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claim_sources_claim_id ON public.claim_sources USING btree (claim_id);
+
+
+--
+-- Name: ix_claim_sources_source_connection_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claim_sources_source_connection_id ON public.claim_sources USING btree (source_connection_id);
+
+
+--
+-- Name: ix_claim_sources_source_object_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claim_sources_source_object_id ON public.claim_sources USING btree (source_object_id);
+
+
+--
+-- Name: ix_claim_sources_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claim_sources_space_id ON public.claim_sources USING btree (space_id);
+
+
+--
+-- Name: ix_claim_relations_from_claim_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claim_relations_from_claim_id ON public.claim_relations USING btree (from_claim_id);
+
+
+--
+-- Name: ix_claim_relations_relation_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claim_relations_relation_type ON public.claim_relations USING btree (relation_type);
+
+
+--
+-- Name: ix_claim_relations_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claim_relations_space_id ON public.claim_relations USING btree (space_id);
+
+
+--
+-- Name: ix_claim_relations_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claim_relations_status ON public.claim_relations USING btree (status);
+
+
+--
+-- Name: ix_claim_relations_to_claim_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_claim_relations_to_claim_id ON public.claim_relations USING btree (to_claim_id);
+
+
+--
+-- Name: ix_claim_relations_unique_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ix_claim_relations_unique_active ON public.claim_relations USING btree (space_id, from_claim_id, to_claim_id, relation_type) WHERE ((status)::text = 'active'::text);
+
+
+--
+-- Name: ix_object_relations_from_object_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_object_relations_from_object_id ON public.object_relations USING btree (from_object_id);
+
+
+--
+-- Name: ix_object_relations_relation_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_object_relations_relation_type ON public.object_relations USING btree (relation_type);
+
+
+--
+-- Name: ix_object_relations_source_claim_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_object_relations_source_claim_id ON public.object_relations USING btree (source_claim_id);
+
+
+--
+-- Name: ix_object_relations_source_object_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_object_relations_source_object_id ON public.object_relations USING btree (source_object_id);
+
+
+--
+-- Name: ix_object_relations_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_object_relations_space_id ON public.object_relations USING btree (space_id);
+
+
+--
+-- Name: ix_object_relations_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_object_relations_status ON public.object_relations USING btree (status);
+
+
+--
+-- Name: ix_object_relations_to_object_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_object_relations_to_object_id ON public.object_relations USING btree (to_object_id);
+
+
+--
+-- Name: ix_object_relations_unique_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ix_object_relations_unique_active ON public.object_relations USING btree (space_id, from_object_id, to_object_id, relation_type) WHERE ((status)::text = 'active'::text);
 
 
 --
@@ -5607,6 +6558,20 @@ CREATE INDEX ix_memory_access_logs_space_id ON public.memory_access_logs USING b
 --
 
 CREATE INDEX ix_memory_access_logs_user_id ON public.memory_access_logs USING btree (user_id);
+
+
+--
+-- Name: ix_memory_maintenance_jobs_due; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_memory_maintenance_jobs_due ON public.memory_maintenance_jobs USING btree (status, run_after, updated_at);
+
+
+--
+-- Name: ix_memory_maintenance_jobs_owner; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_memory_maintenance_jobs_owner ON public.memory_maintenance_jobs USING btree (space_id, owner_user_id, status, updated_at);
 
 
 --
@@ -5886,14 +6851,14 @@ CREATE INDEX ix_model_providers_space_id ON public.model_providers USING btree (
 -- Name: ix_note_collection_items_collection_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_note_collection_items_collection_id ON public.note_collection_items USING btree (collection_id);
+CREATE INDEX ix_note_collection_items_collection_id ON public.note_collection_items USING btree (space_id, collection_id);
 
 
 --
 -- Name: ix_note_collection_items_note_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_note_collection_items_note_id ON public.note_collection_items USING btree (note_id);
+CREATE INDEX ix_note_collection_items_note_id ON public.note_collection_items USING btree (space_id, note_id);
 
 
 --
@@ -5939,27 +6904,6 @@ CREATE INDEX ix_note_collections_system_role ON public.note_collections USING bt
 
 
 --
--- Name: ix_notes_created_by_user_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_notes_created_by_user_id ON public.notes USING btree (created_by_user_id);
-
-
---
--- Name: ix_notes_deleted_at; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_notes_deleted_at ON public.notes USING btree (deleted_at);
-
-
---
--- Name: ix_notes_primary_project_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_notes_primary_project_id ON public.notes USING btree (primary_project_id);
-
-
---
 -- Name: ix_notes_space_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5967,10 +6911,31 @@ CREATE INDEX ix_notes_space_id ON public.notes USING btree (space_id);
 
 
 --
--- Name: ix_notes_status; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_sources_source_activity_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_notes_status ON public.notes USING btree (status);
+CREATE INDEX ix_sources_source_activity_id ON public.sources USING btree (source_activity_id);
+
+
+--
+-- Name: ix_sources_source_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_sources_source_type ON public.sources USING btree (source_type);
+
+
+--
+-- Name: ix_sources_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_sources_space_id ON public.sources USING btree (space_id);
+
+
+--
+-- Name: ix_notes_created_from_activity_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_notes_created_from_activity_id ON public.notes USING btree (created_from_activity_id);
 
 
 --
@@ -6261,6 +7226,27 @@ CREATE INDEX ix_project_workspaces_workspace_id ON public.project_workspaces USI
 
 
 --
+-- Name: ix_project_public_summaries_project_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ix_project_public_summaries_project_unique ON public.project_public_summaries USING btree (project_id);
+
+
+--
+-- Name: ix_project_public_summaries_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_project_public_summaries_space_id ON public.project_public_summaries USING btree (space_id);
+
+
+--
+-- Name: ix_project_public_summaries_review_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_project_public_summaries_review_status ON public.project_public_summaries USING btree (review_status);
+
+
+--
 -- Name: ix_projects_owner_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6279,6 +7265,27 @@ CREATE INDEX ix_projects_space_id ON public.projects USING btree (space_id);
 --
 
 CREATE INDEX ix_projects_status ON public.projects USING btree (status);
+
+
+--
+-- Name: ix_project_members_project_user_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ix_project_members_project_user_unique ON public.project_members USING btree (project_id, user_id);
+
+
+--
+-- Name: ix_project_members_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_project_members_user_id ON public.project_members USING btree (user_id);
+
+
+--
+-- Name: ix_project_members_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_project_members_space_id ON public.project_members USING btree (space_id);
 
 
 --
@@ -7157,38 +8164,191 @@ CREATE INDEX ix_source_snapshots_space_item ON public.source_snapshots USING btr
 
 
 --
--- Name: ix_sources_created_by_user_id; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_retrieval_objects_space_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_sources_created_by_user_id ON public.sources USING btree (created_by_user_id);
-
-
---
--- Name: ix_sources_source_activity_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_sources_source_activity_id ON public.sources USING btree (source_activity_id);
+CREATE INDEX ix_retrieval_objects_space_id ON public.retrieval_objects USING btree (space_id);
 
 
 --
--- Name: ix_sources_source_type; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_retrieval_objects_object; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_sources_source_type ON public.sources USING btree (source_type);
-
-
---
--- Name: ix_sources_space_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_sources_space_id ON public.sources USING btree (space_id);
+CREATE INDEX ix_retrieval_objects_object ON public.retrieval_objects USING btree (object_type, object_id);
 
 
 --
--- Name: ix_sources_status; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_retrieval_objects_space_object_unique; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_sources_status ON public.sources USING btree (status);
+CREATE UNIQUE INDEX ix_retrieval_objects_space_object_unique ON public.retrieval_objects USING btree (space_id, object_type, object_id);
+
+
+--
+-- Name: ix_retrieval_objects_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_objects_status ON public.retrieval_objects USING btree (status);
+
+
+--
+-- Name: ix_retrieval_objects_source_connections; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_objects_source_connections ON public.retrieval_objects USING gin (source_connection_ids_json);
+
+
+--
+-- Name: ix_retrieval_aliases_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_aliases_space_id ON public.retrieval_aliases USING btree (space_id);
+
+
+--
+-- Name: ix_retrieval_aliases_normalized_alias; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_aliases_normalized_alias ON public.retrieval_aliases USING btree (normalized_alias);
+
+
+--
+-- Name: ix_retrieval_aliases_object; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_aliases_object ON public.retrieval_aliases USING btree (object_type, object_id);
+
+
+--
+-- Name: ix_retrieval_aliases_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ix_retrieval_aliases_unique ON public.retrieval_aliases USING btree (space_id, object_type, object_id, normalized_alias, alias_kind);
+
+
+--
+-- Name: ix_retrieval_chunks_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_chunks_space_id ON public.retrieval_chunks USING btree (space_id);
+
+
+--
+-- Name: ix_retrieval_chunks_object; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_chunks_object ON public.retrieval_chunks USING btree (object_type, object_id);
+
+
+--
+-- Name: ix_retrieval_chunks_object_chunk_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ix_retrieval_chunks_object_chunk_unique ON public.retrieval_chunks USING btree (retrieval_object_id, chunk_index);
+
+
+--
+-- Name: ix_retrieval_chunks_tsv; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_chunks_tsv ON public.retrieval_chunks USING gin (tsv);
+
+
+--
+-- Name: ix_retrieval_chunks_embedding_filter; Type: INDEX; Schema: public; Owner: -
+--
+-- Filter index for the hybrid vector arm, narrowing by space, object type, and
+-- embedding_dimensions before the distance ordering. It also backs the
+-- exact-scan fallback used for non-ANN-indexed embedding dimensions.
+
+CREATE INDEX ix_retrieval_chunks_embedding_filter ON public.retrieval_chunks USING btree (space_id, object_type, embedding_dimensions) WHERE embedding IS NOT NULL;
+
+
+--
+-- Name: ix_retrieval_chunks_embedding_hnsw_2560; Type: INDEX; Schema: public; Owner: -
+--
+-- ANN index for the hybrid vector arm at the default embedding dimension (2560,
+-- W5). The `vector` type's HNSW support caps at 2000 dimensions, so the index is
+-- built over a `halfvec` cast (HNSW supports halfvec up to 4000 dims). It is
+-- PARTIAL on `embedding_dimensions = 2560` so the fixed-dimension cast is valid
+-- over the variable-dimension `embedding` column and only the default-dimension
+-- rows are indexed. The vector arm emits a matching constant-dimension halfvec
+-- cosine query (`embedding::halfvec(2560) <=> $q::halfvec(2560)` with the same
+-- predicate) so the planner uses this index; other dimensions fall back to the
+-- exact `vector` scan via ix_retrieval_chunks_embedding_filter. Keep this
+-- dimension in sync with ANN_HALFVEC_DIMENSIONS in the retrieval engine.
+
+CREATE INDEX ix_retrieval_chunks_embedding_hnsw_2560 ON public.retrieval_chunks USING hnsw ((embedding::public.halfvec(2560)) public.halfvec_cosine_ops) WHERE ((embedding IS NOT NULL) AND (embedding_dimensions = 2560));
+
+
+--
+-- Name: ix_retrieval_chunks_embedding_pending; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_chunks_embedding_pending ON public.retrieval_chunks USING btree (space_id, embedding_claimed_at, created_at, id) WHERE embedding IS NULL;
+
+
+--
+-- Name: ix_retrieval_edges_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_edges_space_id ON public.retrieval_edges USING btree (space_id);
+
+
+--
+-- Name: ix_retrieval_edges_from; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_edges_from ON public.retrieval_edges USING btree (from_object_type, from_object_id);
+
+
+--
+-- Name: ix_retrieval_edges_to; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_edges_to ON public.retrieval_edges USING btree (to_object_type, to_object_id);
+
+
+--
+-- Name: ix_retrieval_edges_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ix_retrieval_edges_unique ON public.retrieval_edges USING btree (space_id, from_object_type, from_object_id, to_object_type, to_object_id, relation_type, edge_origin);
+
+
+--
+-- Name: ix_retrieval_feedback_events_lookup; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_feedback_events_lookup ON public.retrieval_feedback_events USING btree (space_id, actor_user_id, surface, query_hash, object_type, object_id, created_at);
+
+
+--
+-- Name: ix_retrieval_feedback_events_object; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_feedback_events_object ON public.retrieval_feedback_events USING btree (space_id, object_type, object_id, created_at);
+
+
+--
+-- Name: ix_retrieval_feedback_events_space_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_retrieval_feedback_events_space_created ON public.retrieval_feedback_events USING btree (space_id, created_at);
+
+
+--
+-- Name: ix_space_retrieval_settings_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_retrieval_settings_space_id ON public.space_retrieval_settings USING btree (space_id);
+
+
+--
+-- Name: ix_space_retrieval_prompts_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_space_retrieval_prompts_space_id ON public.space_retrieval_prompts USING btree (space_id);
 
 
 --
@@ -7941,6 +9101,46 @@ ALTER TABLE ONLY public.artifacts
 
 
 --
+-- Name: artifacts artifacts_workspace_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.artifacts
+    ADD CONSTRAINT artifacts_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES public.workspaces(id);
+
+
+--
+-- Name: context_artifact_revocations context_artifact_revocations_artifact_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.context_artifact_revocations
+    ADD CONSTRAINT context_artifact_revocations_artifact_id_fkey FOREIGN KEY (artifact_id) REFERENCES public.artifacts(id);
+
+
+--
+-- Name: context_artifact_revocations context_artifact_revocations_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.context_artifact_revocations
+    ADD CONSTRAINT context_artifact_revocations_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: context_artifact_revocations context_artifact_revocations_deleted_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.context_artifact_revocations
+    ADD CONSTRAINT context_artifact_revocations_deleted_by_user_id_fkey FOREIGN KEY (deleted_by_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: context_artifact_revocations context_artifact_revocations_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.context_artifact_revocations
+    ADD CONSTRAINT context_artifact_revocations_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
 -- Name: auth_accounts auth_accounts_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8657,7 +9857,7 @@ ALTER TABLE ONLY public.intake_items
 --
 
 ALTER TABLE ONLY public.knowledge_items
-    ADD CONSTRAINT fk_knowledge_items_redirect_to_item_id_knowledge_items FOREIGN KEY (redirect_to_item_id) REFERENCES public.knowledge_items(id) ON DELETE SET NULL;
+    ADD CONSTRAINT fk_knowledge_items_redirect_to_item_id_knowledge_items FOREIGN KEY (redirect_to_item_id, space_id) REFERENCES public.knowledge_items(object_id, space_id) ON DELETE SET NULL (redirect_to_item_id);
 
 
 --
@@ -8665,7 +9865,7 @@ ALTER TABLE ONLY public.knowledge_items
 --
 
 ALTER TABLE ONLY public.knowledge_items
-    ADD CONSTRAINT fk_knowledge_items_root_item_id_knowledge_items FOREIGN KEY (root_item_id) REFERENCES public.knowledge_items(id) ON DELETE SET NULL;
+    ADD CONSTRAINT fk_knowledge_items_root_item_id_knowledge_items FOREIGN KEY (root_item_id, space_id) REFERENCES public.knowledge_items(object_id, space_id) ON DELETE SET NULL (root_item_id);
 
 
 --
@@ -8673,7 +9873,7 @@ ALTER TABLE ONLY public.knowledge_items
 --
 
 ALTER TABLE ONLY public.knowledge_items
-    ADD CONSTRAINT fk_knowledge_items_supersedes_item_id_knowledge_items FOREIGN KEY (supersedes_item_id) REFERENCES public.knowledge_items(id) ON DELETE SET NULL;
+    ADD CONSTRAINT fk_knowledge_items_supersedes_item_id_knowledge_items FOREIGN KEY (supersedes_item_id, space_id) REFERENCES public.knowledge_items(object_id, space_id) ON DELETE SET NULL (supersedes_item_id);
 
 
 --
@@ -8853,6 +10053,118 @@ ALTER TABLE ONLY public.jobs
 
 
 --
+-- Name: space_objects space_objects_created_by_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_objects
+    ADD CONSTRAINT space_objects_created_by_agent_id_fkey FOREIGN KEY (created_by_agent_id) REFERENCES public.agents(id);
+
+
+--
+-- Name: space_objects space_objects_created_by_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_objects
+    ADD CONSTRAINT space_objects_created_by_run_id_fkey FOREIGN KEY (created_by_run_id) REFERENCES public.runs(id);
+
+
+--
+-- Name: space_objects space_objects_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_objects
+    ADD CONSTRAINT space_objects_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: space_objects space_objects_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_objects
+    ADD CONSTRAINT space_objects_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: space_objects space_objects_primary_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_objects
+    ADD CONSTRAINT space_objects_primary_project_id_fkey FOREIGN KEY (primary_project_id) REFERENCES public.projects(id);
+
+
+--
+-- Name: space_objects space_objects_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_objects
+    ADD CONSTRAINT space_objects_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: space_objects space_objects_workspace_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_objects
+    ADD CONSTRAINT space_objects_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES public.workspaces(id);
+
+
+--
+-- Name: space_object_kinds space_object_kinds_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_object_kinds
+    ADD CONSTRAINT space_object_kinds_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: space_object_kinds space_object_kinds_created_from_proposal_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_object_kinds
+    ADD CONSTRAINT space_object_kinds_created_from_proposal_id_fkey FOREIGN KEY (created_from_proposal_id) REFERENCES public.proposals(id);
+
+
+--
+-- Name: space_object_kinds space_object_kinds_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_object_kinds
+    ADD CONSTRAINT space_object_kinds_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: space_object_kinds space_object_kinds_updated_from_proposal_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_object_kinds
+    ADD CONSTRAINT space_object_kinds_updated_from_proposal_id_fkey FOREIGN KEY (updated_from_proposal_id) REFERENCES public.proposals(id);
+
+
+--
+-- Name: space_object_kind_relation_hints space_object_kind_relation_hints_endpoint_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_object_kind_relation_hints
+    ADD CONSTRAINT space_object_kind_relation_hints_endpoint_kind_fkey FOREIGN KEY (endpoint_object_kind_id) REFERENCES public.space_object_kinds(id) ON DELETE CASCADE;
+
+
+--
+-- Name: space_object_kind_relation_hints space_object_kind_relation_hints_object_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_object_kind_relation_hints
+    ADD CONSTRAINT space_object_kind_relation_hints_object_kind_fkey FOREIGN KEY (object_kind_id) REFERENCES public.space_object_kinds(id) ON DELETE CASCADE;
+
+
+--
+-- Name: space_object_kind_relation_hints space_object_kind_relation_hints_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_object_kind_relation_hints
+    ADD CONSTRAINT space_object_kind_relation_hints_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
 -- Name: knowledge_item_relations knowledge_item_relations_created_by_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8873,7 +10185,7 @@ ALTER TABLE ONLY public.knowledge_item_relations
 --
 
 ALTER TABLE ONLY public.knowledge_item_relations
-    ADD CONSTRAINT knowledge_item_relations_from_item_id_fkey FOREIGN KEY (from_item_id) REFERENCES public.knowledge_items(id);
+    ADD CONSTRAINT knowledge_item_relations_from_item_id_fkey FOREIGN KEY (from_item_id, space_id) REFERENCES public.knowledge_items(object_id, space_id);
 
 
 --
@@ -8897,7 +10209,7 @@ ALTER TABLE ONLY public.knowledge_item_relations
 --
 
 ALTER TABLE ONLY public.knowledge_item_relations
-    ADD CONSTRAINT knowledge_item_relations_to_item_id_fkey FOREIGN KEY (to_item_id) REFERENCES public.knowledge_items(id);
+    ADD CONSTRAINT knowledge_item_relations_to_item_id_fkey FOREIGN KEY (to_item_id, space_id) REFERENCES public.knowledge_items(object_id, space_id);
 
 
 --
@@ -8913,7 +10225,7 @@ ALTER TABLE ONLY public.knowledge_item_sources
 --
 
 ALTER TABLE ONLY public.knowledge_item_sources
-    ADD CONSTRAINT knowledge_item_sources_knowledge_item_id_fkey FOREIGN KEY (knowledge_item_id) REFERENCES public.knowledge_items(id);
+    ADD CONSTRAINT knowledge_item_sources_knowledge_item_id_fkey FOREIGN KEY (knowledge_item_id, space_id) REFERENCES public.knowledge_items(object_id, space_id);
 
 
 --
@@ -8921,7 +10233,7 @@ ALTER TABLE ONLY public.knowledge_item_sources
 --
 
 ALTER TABLE ONLY public.knowledge_item_sources
-    ADD CONSTRAINT knowledge_item_sources_source_id_fkey FOREIGN KEY (source_id) REFERENCES public.sources(id);
+    ADD CONSTRAINT knowledge_item_sources_source_id_fkey FOREIGN KEY (source_id, space_id) REFERENCES public.sources(object_id, space_id);
 
 
 --
@@ -8941,51 +10253,11 @@ ALTER TABLE ONLY public.knowledge_items
 
 
 --
--- Name: knowledge_items knowledge_items_created_by_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.knowledge_items
-    ADD CONSTRAINT knowledge_items_created_by_agent_id_fkey FOREIGN KEY (created_by_agent_id) REFERENCES public.agents(id);
-
-
---
--- Name: knowledge_items knowledge_items_created_by_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.knowledge_items
-    ADD CONSTRAINT knowledge_items_created_by_run_id_fkey FOREIGN KEY (created_by_run_id) REFERENCES public.runs(id);
-
-
---
--- Name: knowledge_items knowledge_items_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.knowledge_items
-    ADD CONSTRAINT knowledge_items_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
-
-
---
 -- Name: knowledge_items knowledge_items_created_from_proposal_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.knowledge_items
     ADD CONSTRAINT knowledge_items_created_from_proposal_id_fkey FOREIGN KEY (created_from_proposal_id) REFERENCES public.proposals(id);
-
-
---
--- Name: knowledge_items knowledge_items_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.knowledge_items
-    ADD CONSTRAINT knowledge_items_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id);
-
-
---
--- Name: knowledge_items knowledge_items_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.knowledge_items
-    ADD CONSTRAINT knowledge_items_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id);
 
 
 --
@@ -9005,6 +10277,14 @@ ALTER TABLE ONLY public.knowledge_items
 
 
 --
+-- Name: knowledge_items knowledge_items_object_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.knowledge_items
+    ADD CONSTRAINT knowledge_items_object_id_fkey FOREIGN KEY (object_id, space_id) REFERENCES public.space_objects(id, space_id) ON DELETE CASCADE;
+
+
+--
 -- Name: knowledge_items knowledge_items_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9013,11 +10293,203 @@ ALTER TABLE ONLY public.knowledge_items
 
 
 --
--- Name: knowledge_items knowledge_items_workspace_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: claims claims_approved_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.knowledge_items
-    ADD CONSTRAINT knowledge_items_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES public.workspaces(id);
+ALTER TABLE ONLY public.claims
+    ADD CONSTRAINT claims_approved_by_user_id_fkey FOREIGN KEY (approved_by_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: claims claims_created_from_proposal_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claims
+    ADD CONSTRAINT claims_created_from_proposal_id_fkey FOREIGN KEY (created_from_proposal_id) REFERENCES public.proposals(id);
+
+
+--
+-- Name: claims claims_holder_object_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claims
+    ADD CONSTRAINT claims_holder_object_id_fkey FOREIGN KEY (holder_object_id, space_id) REFERENCES public.space_objects(id, space_id);
+
+
+--
+-- Name: claims claims_object_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claims
+    ADD CONSTRAINT claims_object_id_fkey FOREIGN KEY (object_id, space_id) REFERENCES public.space_objects(id, space_id) ON DELETE CASCADE;
+
+
+--
+-- Name: claims claims_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claims
+    ADD CONSTRAINT claims_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: claims claims_subject_object_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claims
+    ADD CONSTRAINT claims_subject_object_id_fkey FOREIGN KEY (subject_object_id, space_id) REFERENCES public.space_objects(id, space_id);
+
+
+--
+-- Name: claim_sources claim_sources_claim_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_sources
+    ADD CONSTRAINT claim_sources_claim_id_fkey FOREIGN KEY (claim_id, space_id) REFERENCES public.claims(object_id, space_id) ON DELETE CASCADE;
+
+
+--
+-- Name: claim_sources claim_sources_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_sources
+    ADD CONSTRAINT claim_sources_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: claim_sources claim_sources_source_connection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_sources
+    ADD CONSTRAINT claim_sources_source_connection_id_fkey FOREIGN KEY (source_connection_id, space_id) REFERENCES public.source_connections(id, space_id);
+
+
+--
+-- Name: claim_sources claim_sources_source_object_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_sources
+    ADD CONSTRAINT claim_sources_source_object_id_fkey FOREIGN KEY (source_object_id, space_id) REFERENCES public.space_objects(id, space_id);
+
+
+--
+-- Name: claim_sources claim_sources_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_sources
+    ADD CONSTRAINT claim_sources_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: claim_relations claim_relations_created_by_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_relations
+    ADD CONSTRAINT claim_relations_created_by_agent_id_fkey FOREIGN KEY (created_by_agent_id) REFERENCES public.agents(id);
+
+
+--
+-- Name: claim_relations claim_relations_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_relations
+    ADD CONSTRAINT claim_relations_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: claim_relations claim_relations_from_claim_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_relations
+    ADD CONSTRAINT claim_relations_from_claim_id_fkey FOREIGN KEY (from_claim_id, space_id) REFERENCES public.claims(object_id, space_id);
+
+
+--
+-- Name: claim_relations claim_relations_source_proposal_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_relations
+    ADD CONSTRAINT claim_relations_source_proposal_id_fkey FOREIGN KEY (source_proposal_id) REFERENCES public.proposals(id);
+
+
+--
+-- Name: claim_relations claim_relations_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_relations
+    ADD CONSTRAINT claim_relations_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: claim_relations claim_relations_to_claim_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.claim_relations
+    ADD CONSTRAINT claim_relations_to_claim_id_fkey FOREIGN KEY (to_claim_id, space_id) REFERENCES public.claims(object_id, space_id);
+
+
+--
+-- Name: object_relations object_relations_created_by_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.object_relations
+    ADD CONSTRAINT object_relations_created_by_agent_id_fkey FOREIGN KEY (created_by_agent_id) REFERENCES public.agents(id);
+
+
+--
+-- Name: object_relations object_relations_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.object_relations
+    ADD CONSTRAINT object_relations_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: object_relations object_relations_from_object_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.object_relations
+    ADD CONSTRAINT object_relations_from_object_id_fkey FOREIGN KEY (from_object_id, space_id) REFERENCES public.space_objects(id, space_id);
+
+
+--
+-- Name: object_relations object_relations_source_claim_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.object_relations
+    ADD CONSTRAINT object_relations_source_claim_id_fkey FOREIGN KEY (source_claim_id, space_id) REFERENCES public.claims(object_id, space_id);
+
+
+--
+-- Name: object_relations object_relations_source_object_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.object_relations
+    ADD CONSTRAINT object_relations_source_object_id_fkey FOREIGN KEY (source_object_id, space_id) REFERENCES public.space_objects(id, space_id);
+
+
+--
+-- Name: object_relations object_relations_source_proposal_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.object_relations
+    ADD CONSTRAINT object_relations_source_proposal_id_fkey FOREIGN KEY (source_proposal_id) REFERENCES public.proposals(id);
+
+
+--
+-- Name: object_relations object_relations_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.object_relations
+    ADD CONSTRAINT object_relations_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: object_relations object_relations_to_object_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.object_relations
+    ADD CONSTRAINT object_relations_to_object_id_fkey FOREIGN KEY (to_object_id, space_id) REFERENCES public.space_objects(id, space_id);
 
 
 --
@@ -9058,6 +10530,38 @@ ALTER TABLE ONLY public.memory_access_logs
 
 ALTER TABLE ONLY public.memory_access_logs
     ADD CONSTRAINT memory_access_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: memory_maintenance_jobs memory_maintenance_jobs_last_packet_proposal_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.memory_maintenance_jobs
+    ADD CONSTRAINT memory_maintenance_jobs_last_packet_proposal_id_fkey FOREIGN KEY (last_packet_proposal_id) REFERENCES public.proposals(id);
+
+
+--
+-- Name: memory_maintenance_jobs memory_maintenance_jobs_last_report_artifact_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.memory_maintenance_jobs
+    ADD CONSTRAINT memory_maintenance_jobs_last_report_artifact_id_fkey FOREIGN KEY (last_report_artifact_id) REFERENCES public.artifacts(id);
+
+
+--
+-- Name: memory_maintenance_jobs memory_maintenance_jobs_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.memory_maintenance_jobs
+    ADD CONSTRAINT memory_maintenance_jobs_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: memory_maintenance_jobs memory_maintenance_jobs_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.memory_maintenance_jobs
+    ADD CONSTRAINT memory_maintenance_jobs_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
 
 
 --
@@ -9277,27 +10781,35 @@ ALTER TABLE ONLY public.model_providers
 
 
 --
--- Name: note_collection_items note_collection_items_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: note_collection_items note_collection_items_collection_id_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.note_collection_items
-    ADD CONSTRAINT note_collection_items_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.note_collections(id) ON DELETE CASCADE;
+    ADD CONSTRAINT note_collection_items_collection_id_space_id_fkey FOREIGN KEY (collection_id, space_id) REFERENCES public.note_collections(id, space_id) ON DELETE CASCADE;
 
 
 --
--- Name: note_collection_items note_collection_items_note_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: note_collection_items note_collection_items_note_id_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.note_collection_items
-    ADD CONSTRAINT note_collection_items_note_id_fkey FOREIGN KEY (note_id) REFERENCES public.notes(id) ON DELETE CASCADE;
+    ADD CONSTRAINT note_collection_items_note_id_space_id_fkey FOREIGN KEY (note_id, space_id) REFERENCES public.notes(object_id, space_id) ON DELETE CASCADE;
 
 
 --
--- Name: note_collections note_collections_parent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: note_collections note_collections_parent_id_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.note_collections
-    ADD CONSTRAINT note_collections_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.note_collections(id) ON DELETE SET NULL;
+    ADD CONSTRAINT note_collections_parent_id_space_id_fkey FOREIGN KEY (parent_id, space_id) REFERENCES public.note_collections(id, space_id) ON DELETE SET NULL (parent_id);
+
+
+--
+-- Name: note_collection_items note_collection_items_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.note_collection_items
+    ADD CONSTRAINT note_collection_items_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
 
 
 --
@@ -9309,14 +10821,6 @@ ALTER TABLE ONLY public.note_collections
 
 
 --
--- Name: notes notes_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.notes
-    ADD CONSTRAINT notes_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
-
-
---
 -- Name: notes notes_created_from_activity_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9325,19 +10829,19 @@ ALTER TABLE ONLY public.notes
 
 
 --
--- Name: notes notes_primary_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.notes
-    ADD CONSTRAINT notes_primary_project_id_fkey FOREIGN KEY (primary_project_id) REFERENCES public.projects(id);
-
-
---
 -- Name: notes notes_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.notes
     ADD CONSTRAINT notes_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: notes notes_object_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notes
+    ADD CONSTRAINT notes_object_id_fkey FOREIGN KEY (object_id, space_id) REFERENCES public.space_objects(id, space_id) ON DELETE CASCADE;
 
 
 --
@@ -9477,6 +10981,40 @@ ALTER TABLE ONLY public.project_workspaces
 
 
 --
+-- Name: project_public_summaries project_public_summaries_generated_by_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_public_summaries
+    ADD CONSTRAINT project_public_summaries_generated_by_run_id_fkey FOREIGN KEY (generated_by_run_id) REFERENCES public.runs(id) ON DELETE SET NULL;
+
+
+--
+-- Name: project_public_summaries project_public_summaries_space_project_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+-- Composite FK ties the summary's (space_id, project_id) to a single project
+-- row, so a summary can never be associated with a project in another space.
+
+ALTER TABLE ONLY public.project_public_summaries
+    ADD CONSTRAINT project_public_summaries_space_project_fkey FOREIGN KEY (space_id, project_id) REFERENCES public.projects(space_id, id) ON DELETE CASCADE;
+
+
+--
+-- Name: project_public_summaries project_public_summaries_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_public_summaries
+    ADD CONSTRAINT project_public_summaries_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: project_public_summaries project_public_summaries_updated_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_public_summaries
+    ADD CONSTRAINT project_public_summaries_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
 -- Name: projects projects_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9490,6 +11028,32 @@ ALTER TABLE ONLY public.projects
 
 ALTER TABLE ONLY public.projects
     ADD CONSTRAINT projects_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: project_members project_members_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_members
+    ADD CONSTRAINT project_members_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: project_members project_members_space_project_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+-- Composite FK ties the membership's (space_id, project_id) to a single project
+-- row, so a project memory ACL row can never cross a space boundary.
+
+ALTER TABLE ONLY public.project_members
+    ADD CONSTRAINT project_members_space_project_fkey FOREIGN KEY (space_id, project_id) REFERENCES public.projects(space_id, id) ON DELETE CASCADE;
+
+
+--
+-- Name: project_members project_members_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_members
+    ADD CONSTRAINT project_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
 
 
 --
@@ -10061,14 +11625,6 @@ ALTER TABLE ONLY public.source_snapshots
 
 
 --
--- Name: sources sources_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.sources
-    ADD CONSTRAINT sources_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
-
-
---
 -- Name: sources sources_source_activity_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10082,6 +11638,94 @@ ALTER TABLE ONLY public.sources
 
 ALTER TABLE ONLY public.sources
     ADD CONSTRAINT sources_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: sources sources_object_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sources
+    ADD CONSTRAINT sources_object_id_fkey FOREIGN KEY (object_id, space_id) REFERENCES public.space_objects(id, space_id) ON DELETE CASCADE;
+
+
+--
+-- Name: retrieval_objects retrieval_objects_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_objects
+    ADD CONSTRAINT retrieval_objects_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: retrieval_aliases retrieval_aliases_retrieval_object_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_aliases
+    ADD CONSTRAINT retrieval_aliases_retrieval_object_id_fkey FOREIGN KEY (retrieval_object_id) REFERENCES public.retrieval_objects(id) ON DELETE CASCADE;
+
+
+--
+-- Name: retrieval_aliases retrieval_aliases_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_aliases
+    ADD CONSTRAINT retrieval_aliases_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: retrieval_chunks retrieval_chunks_retrieval_object_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_chunks
+    ADD CONSTRAINT retrieval_chunks_retrieval_object_id_fkey FOREIGN KEY (retrieval_object_id) REFERENCES public.retrieval_objects(id) ON DELETE CASCADE;
+
+
+--
+-- Name: retrieval_chunks retrieval_chunks_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_chunks
+    ADD CONSTRAINT retrieval_chunks_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: retrieval_edges retrieval_edges_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_edges
+    ADD CONSTRAINT retrieval_edges_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: retrieval_feedback_events retrieval_feedback_events_actor_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_feedback_events
+    ADD CONSTRAINT retrieval_feedback_events_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: retrieval_feedback_events retrieval_feedback_events_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retrieval_feedback_events
+    ADD CONSTRAINT retrieval_feedback_events_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: space_retrieval_settings space_retrieval_settings_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_retrieval_settings
+    ADD CONSTRAINT space_retrieval_settings_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
+
+
+--
+-- Name: space_retrieval_prompts space_retrieval_prompts_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.space_retrieval_prompts
+    ADD CONSTRAINT space_retrieval_prompts_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
 
 
 --

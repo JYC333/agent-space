@@ -17,12 +17,19 @@ Proposals are the product review and application boundary for durable mutations.
 - Product-recognized proposal types are `memory_create`, `memory_update`,
   `memory_archive`, `policy_change`, `code_patch`, `egress_review`,
   `follow_up_task`, `agent_config_update`, `knowledge_create`,
-  `knowledge_update`, `knowledge_archive`, `knowledge_relation_create`, and
-  `knowledge_relation_delete`.
-- The currently registered server apply types are `memory_create`,
-  `memory_update`, `memory_archive`, and `code_patch`. Unregistered proposal
-  types fail closed on accept until their owning domain migrates and registers a
-  server applier.
+  `knowledge_update`, `knowledge_archive`, `knowledge_relation_create`,
+  `knowledge_relation_delete`, `claim_create`, `claim_update`,
+  `claim_archive`, `claim_relation_create`, `claim_relation_delete`,
+  `object_relation_create`, `object_relation_delete`,
+  `claim_candidate_packet`, `memory_maintenance_packet`,
+  `retrieval_maintenance_packet`, and `retrieval_diagnostics_packet`.
+- Registered server apply types include `memory_create`, `memory_update`,
+  `memory_archive`, `policy_change`, `code_patch`, Knowledge proposal types,
+  Claim Candidate Packet, retrieval review packet types, task proposal types,
+  workspace proposal types, and capability proposal types contributed through
+  the server
+  `ProposalApplierRegistry`. Unregistered proposal types fail closed on accept
+  until their owning domain registers a server applier.
 - Accept returns the general `ProposalAcceptOut` response shape.
 - A proposal is never auto-applied.
 - `POST /api/v1/proposals/:proposalId/rollback` restores workspace files to their
@@ -38,11 +45,13 @@ Proposals are the product review and application boundary for durable mutations.
   dispatching any registered applier.
 - `memory_create`, `memory_update`, and `memory_archive` mutate durable memory
   only when accepted.
-- Knowledge proposal records are still reviewable through the proposal API, but
-  Knowledge apply is not registered in the server applier registry yet. It must fail
-  closed until the Knowledge domain migrates and registers its appliers:
+- Knowledge proposal records are reviewable through the proposal API, and
+  Knowledge apply is registered in the server applier registry for
   `knowledge_create`, `knowledge_update`, `knowledge_archive`,
-  `knowledge_relation_create`, and `knowledge_relation_delete`.
+  `knowledge_relation_create`, `knowledge_relation_delete`, `claim_create`,
+  `claim_update`, `claim_archive`, `claim_relation_create`,
+  `claim_relation_delete`, `object_relation_create`, and
+  `object_relation_delete`.
 - Knowledge read and proposal creation endpoints are viewer-aware. Private and
   restricted Knowledge is owner-readable for the MVP; unauthorized same-space
   users receive 404 for item reads and cannot create update/archive/relation
@@ -51,6 +60,33 @@ Proposals are the product review and application boundary for durable mutations.
   `proposal.apply` allows acceptance when that applier is registered. Malformed
   or internally seeded proposals must not mutate another user's private or
   restricted Knowledge or relations that include private or restricted endpoints.
+- Claim proposal apply enforces claim lifecycle rules: no `superseded` or
+  `archived` claim creation, terminal archived claims, restricted
+  `active/disputed/superseded/rejected` transitions, disputed-resolution
+  compatibility, and successor evidence for superseded claims.
+- Memory maintenance packet apply records creator-owned review of owner-private
+  Memory maintenance work. A space admin cannot accept another user's private
+  packet through the current applier. It acknowledges review and may create
+  child pending `memory_archive` proposals for supported duplicate findings and
+  child pending `memory_update` proposals for supported stale, thin, lifecycle,
+  archived-state, project-scope, source-policy, and contradiction findings. It
+  does not write canonical Memory directly; child proposals still require their
+  own normal review/apply step.
+- Retrieval maintenance and diagnostics packet apply records creator-owned
+  review of owner-private retrieval work. A space admin cannot accept another
+  user's private packet through the current appliers. Retrieval maintenance
+  packets may create child pending Knowledge relation proposals for supported
+  relation suggestions. Diagnostics packets only acknowledge review and do not
+  write canonical Knowledge or Memory.
+- Claim Candidate Packet apply records creator-owned review of owner-private
+  candidate claim work, or shared `space_ops` review when Brain Ops review mode
+  allows it. Accepting a `claim_candidate_packet` creates child pending
+  `claim_create`, `claim_relation_create`, or `object_relation_create`
+  proposals from valid candidates only; it does not directly write canonical
+  Claims, Claim Relations, Object Relations, Knowledge, or Memory. Invalid child
+  candidate payloads are skipped and recorded on the accepted packet payload as
+  `skipped_child_proposal_count` plus bounded skip records, instead of being
+  silently dropped.
 - `policy_change`, `follow_up_task`, `agent_config_update`, and other
   non-memory target mutations are not currently registered server appliers. They
   fail closed until their owning domain registers a server applier.
@@ -73,9 +109,9 @@ Proposals are the product review and application boundary for durable mutations.
   Activity, Run, or Artifact source -> `knowledge_*` proposal -> human
   acceptance -> active Knowledge record. They must not auto-activate and must
   not auto-enter Memory or ContextBuilder.
-- Knowledge proposal apply is currently deferred with the Knowledge migration.
-  Source monitoring has an explicit code boundary for Knowledge but the full
-  evaluator for external or untrusted Activity/Artifact derived Knowledge
-  remains future work.
+- Knowledge proposal apply is implemented through the server
+  `ProposalApplierRegistry`. Source monitoring has an explicit code boundary
+  for Knowledge, but the full evaluator for external or untrusted
+  Activity/Artifact-derived Knowledge remains future work.
 - Accepted proposals keep enough result detail for callers to identify the applied product effect.
 - Proposal application must be idempotence-safe at the API boundary: repeated accept attempts must not repeat the mutation.

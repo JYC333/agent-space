@@ -25,6 +25,12 @@ import {
 import AssistantSettingsPanel from './AssistantSettingsPanel'
 import CondenserPresetPromptPreview from './CondenserPresetPromptPreview'
 import ProviderSelector from '../providers/ProviderSelector'
+import {
+  RetrievalToolDomainControls,
+  mergeRetrievalToolDomains,
+  readRetrievalToolDomains,
+  type RetrievalToolDomainState,
+} from './RetrievalToolDomainControls'
 
 export default function AgentDetailPage() {
   const { agentId } = useParams()
@@ -123,6 +129,7 @@ export default function AgentDetailPage() {
           <TabsTrigger value="outputs">Outputs</TabsTrigger>
           <TabsTrigger value="schedule">Schedule</TabsTrigger>
           <TabsTrigger value="model">Runtime</TabsTrigger>
+          <TabsTrigger value="tools">Tools</TabsTrigger>
           <TabsTrigger value="safety">Review &amp; Safety</TabsTrigger>
           <TabsTrigger value="versions">Versions</TabsTrigger>
           <TabsTrigger value="runs">Runs</TabsTrigger>
@@ -149,6 +156,9 @@ export default function AgentDetailPage() {
         <TabsContent value="model">
           {version ? <ModelTab agentId={agent.id} version={version} profiles={runtimeProfiles} onSaved={reload} /> : <Card><NoVersion /></Card>}
         </TabsContent>
+        <TabsContent value="tools">
+          {version ? <ToolsTab agentId={agent.id} version={version} onSaved={reload} /> : <Card><NoVersion /></Card>}
+        </TabsContent>
         <TabsContent value="safety">
           <Card>{version ? <SafetyView version={version} /> : <NoVersion />}</Card>
         </TabsContent>
@@ -160,6 +170,49 @@ export default function AgentDetailPage() {
         </TabsContent>
       </Tabs>
     </div>
+  )
+}
+
+function ToolsTab({ agentId, version, onSaved }: {
+  agentId: string
+  version: AgentVersionOut
+  onSaved: () => Promise<void>
+}) {
+  const [domains, setDomains] = useState<RetrievalToolDomainState>(() => readRetrievalToolDomains(version.runtime_config_json))
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setDomains(readRetrievalToolDomains(version.runtime_config_json))
+  }, [version.id, version.runtime_config_json])
+
+  async function save() {
+    setSaving(true)
+    try {
+      await agentsApi.updateConfig(agentId, {
+        runtime_config_json: mergeRetrievalToolDomains(version.runtime_config_json, domains),
+      })
+      toast.success('Retrieval tool settings updated (new version created)')
+      await onSaved()
+    } catch (err) {
+      toast.error(errMsg(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card className="space-y-4">
+      <div>
+        <CardTitle>Managed-run retrieval tools</CardTitle>
+        <p className="mt-1 text-xs text-muted-foreground">
+          These settings apply to normal runs that use the agent version default runtime config. Runtime profiles can override them.
+        </p>
+      </div>
+      <RetrievalToolDomainControls value={domains} onChange={setDomains} />
+      <Button size="sm" onClick={save} disabled={saving}>
+        {saving ? <Loader2 className="size-4 animate-spin" /> : 'Save tool settings'}
+      </Button>
+    </Card>
   )
 }
 
@@ -556,6 +609,9 @@ function ModelTab({
   const [runtimeToolVersion, setRuntimeToolVersion] = useState(
     typeof runtimeConfig.runtime_tool_version === 'string' ? runtimeConfig.runtime_tool_version : '',
   )
+  const [retrievalToolDomains, setRetrievalToolDomains] = useState<RetrievalToolDomainState>(() =>
+    readRetrievalToolDomains(runtimeConfig),
+  )
 
   useEffect(() => {
     setSelectedProfileId(defaultProfile?.id ?? '')
@@ -585,6 +641,7 @@ function ModelTab({
     setRuntimeToolVersion(
       typeof cfg.runtime_tool_version === 'string' ? cfg.runtime_tool_version : '',
     )
+    setRetrievalToolDomains(readRetrievalToolDomains(cfg))
   }, [selectedProfile?.id, version.id])
 
   useEffect(() => {
@@ -617,11 +674,12 @@ function ModelTab({
     setSaving(true)
     try {
       const selectedModel = providerSelection?.model || model.trim()
-      const nextRuntimeConfig: Record<string, unknown> = { ...runtimeConfig, adapter_type: adapterType }
+      let nextRuntimeConfig: Record<string, unknown> = { ...runtimeConfig, adapter_type: adapterType }
       if (isCli && credentialProfileId) nextRuntimeConfig.credential_profile_id = credentialProfileId
       else delete nextRuntimeConfig.credential_profile_id
       if (isCli && runtimeToolVersion) nextRuntimeConfig.runtime_tool_version = runtimeToolVersion
       else delete nextRuntimeConfig.runtime_tool_version
+      nextRuntimeConfig = mergeRetrievalToolDomains(nextRuntimeConfig, retrievalToolDomains)
       const body = {
         name: name.trim() || 'Default',
         adapter_type: adapterType,
@@ -650,6 +708,7 @@ function ModelTab({
     setIsDefault(profiles.length === 0)
     setCredentialProfileId('')
     setRuntimeToolVersion('')
+    setRetrievalToolDomains({ memory: false, project_public_summary: false })
   }
 
   return (
@@ -728,6 +787,11 @@ function ModelTab({
           disabled={supportsProviderSelection && !providerSelection?.provider_id}
         />
       </div>
+      <RetrievalToolDomainControls
+        value={retrievalToolDomains}
+        onChange={setRetrievalToolDomains}
+        compact
+      />
       <div>
         <button type="button" onClick={() => setShowAdvanced(s => !s)} className="text-xs text-muted-foreground underline">
           {showAdvanced ? 'Hide' : 'Show'} advanced (raw JSON)

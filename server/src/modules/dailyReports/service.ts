@@ -566,7 +566,7 @@ export class DailyCaptureReportService {
         "Daily capture report experience candidate",
         JSON.stringify({
           operation: "create",
-          item_type: "summary",
+          knowledge_kind: "summary",
           title: candidate.title,
           content: candidate.content,
           content_format: "markdown",

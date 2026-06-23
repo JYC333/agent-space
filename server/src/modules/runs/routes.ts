@@ -7,7 +7,7 @@ import { introspectIdentity } from "../auth/identity";
 import { PgActivityRepository } from "../activity/repository";
 import { PgArtifactRepository } from "../artifacts/repository";
 import { PgProposalRepository } from "../proposals/repository";
-import { dbPool, page } from "../routeUtils/common";
+import { dbPool, page, sendRouteError } from "../routeUtils/common";
 import { PgRunRepository, type RunRecord } from "./repository";
 import { RunOrchestrationService } from "./orchestrationService";
 import { RunMaterializationService } from "./materializationService";
@@ -220,20 +220,24 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     const q = query(request);
     const repository = PgRunRepository.fromConfig(context.config);
-    const runs = await repository.listRuns({
-      space_id: identity.spaceId,
-      user_id: identity.userId,
-      status: q.status ?? null,
-      mode: q.mode ?? null,
-      agent_id: q.agent_id ?? null,
-      workspace_id: q.workspace_id ?? null,
-      project_id: q.project_id ?? null,
-      limit: boundedInt(q.limit, 50, 1, 200),
-      offset: boundedInt(q.offset, 0, 0, Number.MAX_SAFE_INTEGER),
-    });
-    return reply.send(
-      await Promise.all(runs.map((run) => runToOutWithProvider(repository, run))),
-    );
+    try {
+      const runs = await repository.listRuns({
+        space_id: identity.spaceId,
+        user_id: identity.userId,
+        status: q.status ?? null,
+        mode: q.mode ?? null,
+        agent_id: q.agent_id ?? null,
+        workspace_id: q.workspace_id ?? null,
+        project_id: q.project_id ?? null,
+        limit: boundedInt(q.limit, 50, 1, 200),
+        offset: boundedInt(q.offset, 0, 0, Number.MAX_SAFE_INTEGER),
+      });
+      return reply.send(
+        await Promise.all(runs.map((run) => runToOutWithProvider(repository, run))),
+      );
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
   });
 
   app.get("/api/v1/runs/:runId/status", async (request, reply) => {

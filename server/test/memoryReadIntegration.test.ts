@@ -30,7 +30,7 @@ let available = false;
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("postgres:18").start();
+    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
     pool = new Pool({ connectionString: container.getConnectionUri() });
     await pool.query(SCHEMA);
     repo = new PgMemoryReadRepository(pool);
@@ -87,7 +87,7 @@ async function insertMemory(over: Record<string, unknown>): Promise<void> {
 
 beforeEach(async () => {
   if (!available || !pool) return;
-  await pool.query("TRUNCATE memory_entries, projects, memory_access_logs");
+  await pool.query("TRUNCATE memory_entries, projects, project_members, spaces, memory_access_logs");
 });
 
 async function accessLogs(memoryId: string): Promise<Array<Record<string, unknown>>> {
@@ -277,9 +277,10 @@ describe("PgMemoryReadRepository against real Postgres", () => {
   it("raises on a project filter that is not in the space", async () => {
     if (!available || !repo || !pool) return;
     await insertMemory({ id: "m-1", owner_user_id: USER, project_id: "proj-1" });
+    // USER owns the project, so the project gate keeps the row visible.
     await pool.query(
-      "INSERT INTO projects (id, space_id) VALUES ('proj-1', $1)",
-      [SPACE],
+      "INSERT INTO projects (id, space_id, owner_user_id) VALUES ('proj-1', $1, $2)",
+      [SPACE, USER],
     );
     // Valid project filter returns rows.
     const ok = await repo.list(SPACE, USER, { limit: 50, offset: 0, projectId: "proj-1" });
@@ -288,5 +289,79 @@ describe("PgMemoryReadRepository against real Postgres", () => {
     await expect(
       repo.list(SPACE, USER, { limit: 50, offset: 0, projectId: "missing" }),
     ).rejects.toBeInstanceOf(MemoryReadValidationError);
+  });
+
+  it("project-gates list/search/get for a non-member, and reveals after membership", async () => {
+    if (!available || !repo || !pool) return;
+    // A shared (non-personal) space: project gating is active.
+    await pool.query("INSERT INTO spaces (id, type) VALUES ($1, 'household')", [SPACE]);
+    // Project owned by another user; USER's own memory is filed under it.
+    await pool.query(
+      "INSERT INTO projects (id, space_id, owner_user_id) VALUES ('proj-x', $1, 'other')",
+      [SPACE],
+    );
+    await insertMemory({ id: "m-proj", owner_user_id: USER, project_id: "proj-x", content: "project note" });
+    await insertMemory({ id: "m-free", owner_user_id: USER, content: "free note" });
+
+    // Non-member of proj-x: the project memory is hidden everywhere; the
+    // project-free memory is still visible.
+    expect((await repo.list(SPACE, USER, { limit: 50, offset: 0 })).items.map((m) => m.id)).toEqual(["m-free"]);
+    expect((await repo.search(SPACE, USER, { query: "note", limit: 10 })).map((m) => m.id)).toEqual(["m-free"]);
+    expect(await repo.get(SPACE, USER, "m-proj", null)).toBeNull();
+
+    // Grant membership → the project memory becomes visible.
+    await pool.query(
+      `INSERT INTO project_members (id, space_id, project_id, user_id, role, status, created_at, updated_at)
+       VALUES ('pm-1', $1, 'proj-x', $2, 'member', 'active', now(), now())`,
+      [SPACE, USER],
+    );
+    expect((await repo.list(SPACE, USER, { limit: 50, offset: 0 })).items.map((m) => m.id).sort()).toEqual([
+      "m-free",
+      "m-proj",
+    ]);
+    expect((await repo.get(SPACE, USER, "m-proj", null))?.id).toBe("m-proj");
+  });
+
+  it("does not treat a personal-space project_id as accessible unless the project is in that space", async () => {
+    if (!available || !repo || !pool) return;
+    await pool.query("INSERT INTO spaces (id, type) VALUES ($1, 'personal')", [SPACE]);
+    await pool.query("INSERT INTO spaces (id, type) VALUES ('space-other', 'household')");
+    await pool.query(
+      "INSERT INTO projects (id, space_id, owner_user_id) VALUES ('proj-other', 'space-other', $1)",
+      [USER],
+    );
+    await insertMemory({
+      id: "m-cross-project",
+      owner_user_id: USER,
+      visibility: "space_shared",
+      project_id: "proj-other",
+    });
+
+    expect((await repo.list(SPACE, USER, { limit: 50, offset: 0 })).items).toHaveLength(0);
+    expect(await repo.get(SPACE, USER, "m-cross-project", null)).toBeNull();
+  });
+
+  it("does not allow a stale active project_members row for a soft-deleted project", async () => {
+    if (!available || !repo || !pool) return;
+    await pool.query("INSERT INTO spaces (id, type) VALUES ($1, 'household')", [SPACE]);
+    await pool.query(
+      "INSERT INTO projects (id, space_id, owner_user_id, deleted_at) VALUES ('proj-deleted', $1, 'other', now())",
+      [SPACE],
+    );
+    await pool.query(
+      `INSERT INTO project_members (id, space_id, project_id, user_id, role, status, created_at, updated_at)
+       VALUES ('pm-deleted', $1, 'proj-deleted', $2, 'member', 'active', now(), now())`,
+      [SPACE, USER],
+    );
+    await insertMemory({
+      id: "m-deleted-project",
+      owner_user_id: USER,
+      visibility: "space_shared",
+      project_id: "proj-deleted",
+      content: "stale project note",
+    });
+
+    expect((await repo.list(SPACE, USER, { limit: 50, offset: 0 })).items).toHaveLength(0);
+    expect(await repo.search(SPACE, USER, { query: "stale project", limit: 10 })).toHaveLength(0);
   });
 });

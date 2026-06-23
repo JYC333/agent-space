@@ -1,12 +1,54 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type {
+  MemoryMaintenanceScanRequest,
+  RetrievalBriefRequest,
+  RetrievalCreateSafetyRequest,
+  RetrievalFeedbackRequest,
+  RetrievalSearchRequest,
+} from "@agent-space/protocol" with {
+  "resolution-mode": "import",
+};
+import type { ServerConfig } from "../../config";
 import type { ModuleContext } from "../../gateway/routeRegistry";
 import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
 import { getDbPool } from "../../db/pool";
-import { introspectIdentity } from "../auth/identity";
+import { authRepositoryFromConfig, introspectIdentity } from "../auth/identity";
 import { PgActivityConsolidationRepository } from "../activity/consolidationRepository";
 import { loadProtocol } from "../providers/protocolRuntime";
-import { PgMemoryReadRepository, MemoryReadValidationError } from "./repository";
+import {
+  RetrievalFeedbackService,
+  RetrievalProjectionService,
+  RetrievalSearchService,
+  persistRetrievalBriefArtifact,
+} from "../retrieval";
+import { readSpaceRetrievalPrompt } from "../retrieval/prompts";
+import { readSpaceRetrievalSettings, resolveRetrievalSearchControls } from "../retrieval/settings";
+import { canInitiateBrainOpsScan, canReviewSpaceOpsPackets } from "../brainOps/reviewPolicy";
+import { withDbTransaction } from "../routeUtils/common";
+import { enqueueRetrievalEmbeddingBackfill } from "../retrievalEmbedding/job";
+import { ProviderQueryEmbedder } from "../retrievalEmbedding/queryEmbedder";
+import { ProviderReranker } from "../retrievalRerank/providerReranker";
+import { ProviderQueryRewriter } from "../retrievalQueryRewrite/providerQueryRewriter";
+import { ProviderSynthesizer } from "../retrievalSynthesis/providerSynthesizer";
+import { resolveProviderCommandStore } from "../providers/providerCommandStore";
+import { memoryRetrievalRegistry } from "./retrievalAdapter";
+import { MemoryMaintenanceService } from "./maintenance";
+import {
+  createMemoryMaintenanceProposalPacket,
+  persistMemoryMaintenanceReportArtifact,
+} from "./maintenanceArtifacts";
+import {
+  createMemoryMaintenanceJob,
+  getMemoryMaintenanceJob,
+  runMemoryMaintenanceJobOnce,
+} from "./maintenanceJobs";
+import {
+  MemoryReadValidationError,
+  PgMemoryReadRepository,
+  type MemoryRow,
+  type Queryable,
+} from "./repository";
 import {
   MemoryProposalForbiddenError,
   MemoryProposalNotFoundError,
@@ -14,6 +56,8 @@ import {
   MemoryProposalValidationError,
   PgMemoryProposalRepository,
 } from "./proposalRepository";
+import { canReadMemory } from "./memoryReadAuth";
+import { accessibleProjectIds } from "./projectAccess";
 
 /**
  * server memory model.
@@ -37,6 +81,27 @@ type MemoryIdentity = { spaceId: string; userId: string };
 type MemoryIdentityOverride =
   | MemoryIdentity
   | ((request: FastifyRequest) => Promise<MemoryIdentity | null> | MemoryIdentity | null);
+
+interface MemoryAccessLogJoinedRow extends MemoryRow {
+  log_id: string;
+  log_space_id: string;
+  log_memory_id: string;
+  log_user_id: string | null;
+  log_agent_id: string | null;
+  log_run_id: string | null;
+  log_access_type: string;
+  log_reason: string | null;
+  log_accessed_at: unknown;
+}
+
+const MEMORY_ACCESS_LOG_MEMORY_COLUMNS = `m.id, m.space_id, m.subject_user_id,
+  m.owner_user_id, m.workspace_id, m.scope_type, m.namespace, m.memory_type,
+  m.title, NULL::text AS content, m.status, m.visibility, m.sensitivity_level,
+  m.selected_user_ids, m.last_confirmed_at, m.confidence, m.importance,
+  m.source_id, m.created_by, m.created_at, m.updated_at, m.deleted_at,
+  m.version, m.tags, m.memory_layer, m.memory_kind, m.source_trust,
+  m.created_from_proposal_id, m.root_memory_id, m.supersedes_memory_id,
+  m.project_id`;
 
 let servicesFactoryOverride: MemoryServicesFactory | null = null;
 let identityOverride: MemoryIdentityOverride | null = null;
@@ -105,6 +170,43 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
+  app.get("/api/v1/memory/access-logs", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    if (!context.config.databaseUrl) {
+      return reply.code(502).send({ detail: "SERVER_DATABASE_URL is required" });
+    }
+    const q = query(request);
+    const limit = intQuery(q.limit, 50);
+    if (limit === null || limit < 1 || limit > 200) {
+      return reply.code(422).send({ detail: "limit must be between 1 and 200" });
+    }
+    const offset = intQuery(q.offset, 0);
+    if (offset === null || offset < 0 || offset > 1000) {
+      return reply.code(422).send({ detail: "offset must be between 0 and 1000" });
+    }
+    const memoryId = optionalString(q.memory_id);
+    const accessType = optionalString(q.access_type);
+    const workspaceId = optionalString(q.workspace_id);
+    const projectId = optionalString(q.project_id);
+    try {
+      const db = getDbPool(context.config.databaseUrl);
+      const page = await loadVisibleMemoryAccessLogs(db, {
+        spaceId: identity.spaceId,
+        userId: identity.userId,
+        limit,
+        offset,
+        memoryId,
+        accessType,
+        workspaceId,
+        projectId,
+      });
+      return reply.send(page);
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
   app.get("/api/v1/memory/:memoryId", async (request, reply) => {
     const identity = await resolveIdentity(context, request, reply);
     if (!identity) return reply;
@@ -126,10 +228,11 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     try {
       const protocol = await loadProtocol();
       const body = protocol.MemorySearchRequestSchema.parse(jsonBody(request));
-      // Public API honors body space_id/user_id overrides over caller identity.
-      const spaceId = body.space_id ?? identity.spaceId;
-      const userId = body.user_id ?? identity.userId;
-      const rows = await memoryServices(context).repository.search(spaceId, userId, {
+      // Memory search is strictly identity-scoped: space_id and user_id come
+      // only from the authenticated identity, never from the request body
+      // (SECURITY_AND_ACCESS_BOUNDARIES §2). A caller can only search their own
+      // current space as themselves; any body space_id/user_id is ignored.
+      const rows = await memoryServices(context).repository.search(identity.spaceId, identity.userId, {
         query: body.query,
         scope: body.scope ?? null,
         namespace: body.namespace ?? null,
@@ -139,6 +242,515 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         limit: body.limit,
       });
       return reply.send(rows);
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  // Advisory duplicate detection for memory proposal creation. It surfaces
+  // existing memories (exists / probable_duplicate / unknown) so a create
+  // proposal can warn about likely duplicates. It is read-only and must never
+  // block creation — the proposal write path is unchanged. Matches returned to
+  // the caller are logged through the same memory read-trace as search.
+  app.post("/api/v1/memory/create-safety", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    if (!context.config.databaseUrl) {
+      return reply.code(502).send({ detail: "SERVER_DATABASE_URL is required" });
+    }
+    try {
+      const protocol = await loadProtocol();
+      const body = protocol.RetrievalCreateSafetyRequestSchema.parse(
+        jsonBody(request),
+      ) as RetrievalCreateSafetyRequest;
+      // The memory surface is scoped to memory objects so it cannot be used to
+      // probe Knowledge objects through the memory registry.
+      if (body.object_type !== "memory_entry") {
+        return reply
+          .code(422)
+          .send({ detail: "memory create-safety only supports object_type=memory_entry" });
+      }
+      const search = new RetrievalSearchService(
+        getDbPool(context.config.databaseUrl),
+        memoryRetrievalRegistry,
+      );
+      const response = await search.assessCreateSafety({
+        spaceId: identity.spaceId,
+        viewerUserId: identity.userId,
+        objectType: "memory_entry",
+        title: body.title ?? null,
+        slug: body.slug ?? null,
+        aliases: body.aliases ?? [],
+        uri: body.uri ?? null,
+        excludeObjectId: body.exclude_object_id ?? null,
+        maxResults: body.max_results,
+      });
+      const matchedIds = response.matches.map((match) => match.object_id);
+      if (matchedIds.length > 0) {
+        await PgMemoryReadRepository.fromConfig(context.config).recordCreateSafetyReads(
+          matchedIds,
+          identity.spaceId,
+          identity.userId,
+        );
+      }
+      return reply.send(response);
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  // Human user-facing, retrieval-backed memory search for the caller's CURRENT
+  // space only. Cross-space is fail-closed (not implemented here). The single
+  // read-access gate is the memory adapter's revalidate: canReadMemory +
+  // summary-only redaction + project-membership gating. Only the returned rows
+  // are logged to memory_access_logs (search_hit).
+  app.post("/api/v1/memory/retrieval/search", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    if (!context.config.databaseUrl) {
+      return reply.code(502).send({ detail: "SERVER_DATABASE_URL is required" });
+    }
+    try {
+      const protocol = await loadProtocol();
+      const body = protocol.RetrievalSearchRequestSchema.parse(
+        jsonBody(request),
+      ) as RetrievalSearchRequest;
+      const pool = getDbPool(context.config.databaseUrl);
+      const retrievalSettings = await readSpaceRetrievalSettings(pool, identity.spaceId);
+      const controls = resolveRetrievalSearchControls(body, retrievalSettings);
+      const store = resolveProviderCommandStore(context.config);
+      const queryRewritePrompt = retrievalSettings.queryRewriteEnabled
+        ? await readSpaceRetrievalPrompt(pool, identity.spaceId, "query_rewrite")
+        : null;
+      const egressPolicy = { externalEgressEnabled: retrievalSettings.externalEgressEnabled };
+      const search = new RetrievalSearchService(pool, memoryRetrievalRegistry, {
+        egressPolicy,
+        // Vector recall arm; provider egress is checked at invocation time, so
+        // local providers remain usable when external egress is disabled.
+        queryEmbedder: new ProviderQueryEmbedder(
+          store,
+          null,
+          undefined,
+          retrievalSettings.embeddingDimensions,
+          egressPolicy,
+        ),
+        feedbackService: new RetrievalFeedbackService(pool, memoryRetrievalRegistry),
+        // Reranker is off unless this space enables it; degrades to the fused order otherwise.
+        reranker: retrievalSettings.rerankEnabled
+          ? new ProviderReranker(store, {
+              databaseUrl: context.config.databaseUrl,
+              surface: "memory_retrieval_search",
+              egressPolicy,
+            })
+          : undefined,
+        // Query rewriter is off unless this space enables it; degrades to the original query.
+        queryRewriter: retrievalSettings.queryRewriteEnabled
+          ? new ProviderQueryRewriter(store, {
+              databaseUrl: context.config.databaseUrl,
+              surface: "memory_retrieval_search",
+              prompt: queryRewritePrompt,
+              egressPolicy,
+            })
+          : undefined,
+      });
+      const response = await search.search({
+        spaceId: identity.spaceId,
+        viewerUserId: identity.userId,
+        // Scoped to memory objects; the memory registry only resolves memory_entry.
+        objectTypes: ["memory_entry"],
+        objectKinds: body.object_kinds,
+        query: body.query,
+        maxResults: controls.maxResults,
+        includeTrace: controls.includeTrace,
+        feedbackSurface: "memory_retrieval_search",
+        mode: controls.mode,
+        rewrite: controls.rewrite,
+        useCache: controls.useCache,
+        adaptiveReturn: controls.adaptiveReturn,
+        rankingConfig: controls.rankingConfig,
+      });
+      const ids = response.items.map((item) => item.object_id);
+      if (ids.length > 0) {
+        await PgMemoryReadRepository.fromConfig(context.config).recordRetrievalSearchReads(
+          ids,
+          identity.spaceId,
+          identity.userId,
+        );
+      }
+      return reply.send(response);
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/memory/retrieval/brief", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    if (!context.config.databaseUrl) {
+      return reply.code(502).send({ detail: "SERVER_DATABASE_URL is required" });
+    }
+    try {
+      const protocol = await loadProtocol();
+      const body = protocol.RetrievalBriefRequestSchema.parse(
+        jsonBody(request),
+      ) as RetrievalBriefRequest;
+      const objectTypes = body.object_types ?? ["memory_entry"];
+      if (objectTypes.some((objectType) => objectType !== "memory_entry")) {
+        return reply
+          .code(422)
+          .send({ detail: "memory retrieval brief only supports object_type=memory_entry" });
+      }
+      const pool = getDbPool(context.config.databaseUrl);
+      const retrievalSettings = await readSpaceRetrievalSettings(pool, identity.spaceId);
+      const store = resolveProviderCommandStore(context.config);
+      const egressPolicy = { externalEgressEnabled: retrievalSettings.externalEgressEnabled };
+      const search = new RetrievalSearchService(pool, memoryRetrievalRegistry, {
+        egressPolicy,
+        queryEmbedder: new ProviderQueryEmbedder(
+          store,
+          null,
+          undefined,
+          retrievalSettings.embeddingDimensions,
+          egressPolicy,
+        ),
+        reranker: retrievalSettings.rerankEnabled
+          ? new ProviderReranker(store, {
+              databaseUrl: context.config.databaseUrl,
+              surface: "memory_retrieval_brief",
+              egressPolicy,
+            })
+          : undefined,
+        synthesizer: new ProviderSynthesizer(store, {
+          databaseUrl: context.config.databaseUrl,
+          surface: "memory_retrieval_brief",
+          egressPolicy,
+        }),
+      });
+      const maxResults = body.max_results ?? retrievalSettings.maxResultsDefault;
+      const includeTrace = body.include_trace ?? retrievalSettings.includeTrace;
+      const mode = body.mode ?? retrievalSettings.defaultSearchMode;
+      const adaptiveReturn = body.adaptive_return ?? resolveRetrievalSearchControls(body, retrievalSettings).adaptiveReturn;
+      const response = await search.buildBrief({
+        spaceId: identity.spaceId,
+        viewerUserId: identity.userId,
+        objectTypes: ["memory_entry"],
+        objectKinds: body.object_kinds,
+        query: body.query,
+        maxResults,
+        includeTrace,
+        mode,
+        useCache: retrievalSettings.useQueryCache,
+        adaptiveReturn,
+        rankingConfig: retrievalSettings.rankingConfig,
+      });
+      const ids = response.items.map((item) => item.object_id);
+      if (ids.length > 0) {
+        await PgMemoryReadRepository.fromConfig(context.config).recordRetrievalSearchReads(
+          ids,
+          identity.spaceId,
+          identity.userId,
+        );
+      }
+      if (!body.persist_artifact) return reply.send(response);
+      try {
+        const artifactId = await persistRetrievalBriefArtifact(pool, {
+          spaceId: identity.spaceId,
+          ownerUserId: identity.userId,
+          runId: null,
+          projectId: null,
+          query: body.query,
+          objectTypes: ["memory_entry"],
+          objectKinds: body.object_kinds,
+          maxResults,
+          includeTrace,
+          mode,
+          surface: "memory_retrieval_brief",
+          response,
+          persistTrace: false,
+          egressPolicySnapshot: {
+            external_egress_enabled: retrievalSettings.externalEgressEnabled,
+          },
+          settingsSnapshot: {
+            default_search_mode: retrievalSettings.defaultSearchMode,
+            rerank_enabled: retrievalSettings.rerankEnabled,
+            query_rewrite_enabled: retrievalSettings.queryRewriteEnabled,
+            use_query_cache: retrievalSettings.useQueryCache,
+            embedding_dimensions: retrievalSettings.embeddingDimensions,
+            max_results_default: retrievalSettings.maxResultsDefault,
+          },
+        });
+        return reply.send({ ...response, artifact_id: artifactId });
+      } catch (error) {
+        request.log.warn(
+          { err: error },
+          "memory retrieval brief artifact persistence failed",
+        );
+        return reply.send({ ...response, artifact_error: "retrieval_brief_persist_failed" });
+      }
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/memory/retrieval/feedback", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    if (!context.config.databaseUrl) {
+      return reply.code(502).send({ detail: "SERVER_DATABASE_URL is required" });
+    }
+    try {
+      const protocol = await loadProtocol();
+      const body = protocol.RetrievalFeedbackRequestSchema.parse(
+        jsonBody(request),
+      ) as RetrievalFeedbackRequest;
+      if (body.object_type !== "memory_entry") {
+        return reply
+          .code(422)
+          .send({ detail: "memory retrieval feedback only supports object_type=memory_entry" });
+      }
+      const pool = getDbPool(context.config.databaseUrl);
+      const recorded = await withDbTransaction(pool, async (client) => {
+        const ok = await new RetrievalFeedbackService(client, memoryRetrievalRegistry).record({
+          spaceId: identity.spaceId,
+          viewerUserId: identity.userId,
+          surface: "memory_retrieval_search",
+          query: body.query,
+          objectType: "memory_entry",
+          objectId: body.object_id,
+          signalType: body.signal_type,
+          dwellMs: body.dwell_ms ?? null,
+          metadata: body.metadata ?? null,
+        });
+        if (!ok) return false;
+        await new PgMemoryReadRepository(client).recordRetrievalFeedbackReads(
+          [body.object_id],
+          identity.spaceId,
+          identity.userId,
+        );
+        return true;
+      });
+      if (!recorded) return reply.code(404).send({ detail: "Retrieval result not found" });
+      return reply.send({ ok: true });
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  // Owner-private Memory maintenance scan. The scan runs through the normal
+  // memory visibility gate, emits only IDs/titles/reasons, and logs only final
+  // findings that contributed to the report.
+  app.post("/api/v1/memory/maintenance/scan", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    if (!context.config.databaseUrl) {
+      return reply.code(502).send({ detail: "SERVER_DATABASE_URL is required" });
+    }
+    try {
+      const protocol = await loadProtocol();
+      const body = protocol.MemoryMaintenanceScanRequestSchema.parse(
+        jsonBody(request),
+      ) as MemoryMaintenanceScanRequest;
+      if (body.create_packet && !body.persist_report) {
+        return reply
+          .code(422)
+          .send({ detail: "create_packet requires persist_report" });
+      }
+      const pool = getDbPool(context.config.databaseUrl);
+      const canScan = await canInitiateBrainOpsScan(pool, identity.spaceId, identity.userId);
+      if (!canScan) {
+        return reply.code(403).send({ detail: "Requires space owner/admin role or enabled Brain Ops member scan access" });
+      }
+      const reviewScope = body.review_scope ?? "private";
+      if (reviewScope === "space_ops") {
+        const allowed = await canReviewSpaceOpsPackets(pool, identity.spaceId, identity.userId);
+        if (!allowed) {
+          return reply.code(403).send({ detail: "space-wide Brain Ops review is not enabled for this reviewer" });
+        }
+      }
+      const scanInput = {
+        spaceId: identity.spaceId,
+        userId: identity.userId,
+        limit: body.limit,
+        staleAfterDays: body.stale_after_days,
+        thinContentChars: body.thin_content_chars,
+        maxFindings: body.max_findings,
+        projectId: body.project_id ?? null,
+        scanMode: body.scan_mode,
+        cursor: body.cursor ?? null,
+      };
+      const scanOptions = {
+        limit: body.limit,
+        stale_after_days: body.stale_after_days,
+        thin_content_chars: body.thin_content_chars,
+        max_findings: body.max_findings,
+        project_id: body.project_id ?? null,
+        scan_mode: body.scan_mode,
+        cursor: body.cursor ?? null,
+      };
+
+      if (body.persist_report) {
+        const persisted = await withDbTransaction(pool, async (client) => {
+          const result = await new MemoryMaintenanceService(client).scan(scanInput);
+          const artifactId = await persistMemoryMaintenanceReportArtifact(client, {
+            spaceId: identity.spaceId,
+            ownerUserId: identity.userId,
+            report: result.report,
+            scanOptions,
+            reviewScope,
+          });
+          const proposalId = body.create_packet
+            ? await createMemoryMaintenanceProposalPacket(client, {
+                spaceId: identity.spaceId,
+                ownerUserId: identity.userId,
+                report: result.report,
+                scanOptions,
+                artifactId,
+                reviewScope,
+              })
+            : undefined;
+          await new PgMemoryReadRepository(client).recordMaintenanceReads(
+            result.contributingMemoryIds,
+            identity.spaceId,
+            identity.userId,
+            artifactId,
+          );
+          return { report: result.report, artifactId, proposalId };
+        });
+        return reply.send({
+          ...persisted.report,
+          artifact_id: persisted.artifactId,
+          ...(persisted.proposalId ? { proposal_id: persisted.proposalId } : {}),
+        });
+      }
+
+      const result = await new MemoryMaintenanceService(pool).scan(scanInput);
+      await new PgMemoryReadRepository(pool).recordMaintenanceReads(
+        result.contributingMemoryIds,
+        identity.spaceId,
+        identity.userId,
+        null,
+      );
+      return reply.send(result.report);
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/memory/maintenance/jobs", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    if (!context.config.databaseUrl) {
+      return reply.code(502).send({ detail: "SERVER_DATABASE_URL is required" });
+    }
+    try {
+      const protocol = await loadProtocol();
+      const body = protocol.MemoryMaintenanceJobCreateRequestSchema.parse(jsonBody(request));
+      if (body.create_packet && !body.persist_report) {
+        return reply.code(422).send({ detail: "create_packet requires persist_report" });
+      }
+      const pool = getDbPool(context.config.databaseUrl);
+      const canScan = await canInitiateBrainOpsScan(pool, identity.spaceId, identity.userId);
+      if (!canScan) {
+        return reply.code(403).send({ detail: "Requires space owner/admin role or enabled Brain Ops member scan access" });
+      }
+      if (body.review_scope === "space_ops") {
+        const allowed = await canReviewSpaceOpsPackets(pool, identity.spaceId, identity.userId);
+        if (!allowed) {
+          return reply.code(403).send({ detail: "space-wide Brain Ops review is not enabled for this reviewer" });
+        }
+      }
+      const job = await createMemoryMaintenanceJob(pool, {
+        spaceId: identity.spaceId,
+        ownerUserId: identity.userId,
+        request: body,
+      });
+      return reply.code(201).send(protocol.MemoryMaintenanceJobSchema.parse(job));
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/memory/maintenance/jobs/:jobId", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    if (!context.config.databaseUrl) {
+      return reply.code(502).send({ detail: "SERVER_DATABASE_URL is required" });
+    }
+    try {
+      const protocol = await loadProtocol();
+      const pool = getDbPool(context.config.databaseUrl);
+      const includeSpaceOps = await canReviewSpaceOpsPackets(pool, identity.spaceId, identity.userId);
+      const job = await getMemoryMaintenanceJob(pool, {
+        spaceId: identity.spaceId,
+        userId: identity.userId,
+        jobId: params(request).jobId ?? "",
+        includeSpaceOps,
+      });
+      if (!job) return reply.code(404).send({ detail: "Memory maintenance job not found" });
+      return reply.send(protocol.MemoryMaintenanceJobSchema.parse(job));
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/memory/maintenance/jobs/:jobId/run", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    if (!context.config.databaseUrl) {
+      return reply.code(502).send({ detail: "SERVER_DATABASE_URL is required" });
+    }
+    try {
+      const protocol = await loadProtocol();
+      const pool = getDbPool(context.config.databaseUrl);
+      const canScan = await canInitiateBrainOpsScan(pool, identity.spaceId, identity.userId);
+      if (!canScan) {
+        return reply.code(403).send({ detail: "Requires space owner/admin role or enabled Brain Ops member scan access" });
+      }
+      const includeSpaceOps = await canReviewSpaceOpsPackets(pool, identity.spaceId, identity.userId);
+      const result = await withDbTransaction(pool, async (client) =>
+        runMemoryMaintenanceJobOnce(client, {
+          spaceId: identity.spaceId,
+          userId: identity.userId,
+          jobId: params(request).jobId ?? "",
+          includeSpaceOps,
+        }));
+      if (!result) return reply.code(404).send({ detail: "Memory maintenance job not found" });
+      return reply.send(protocol.MemoryMaintenanceJobRunResponseSchema.parse(result));
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  // Rebuild the derived memory retrieval projection for the caller's space.
+  // Derived, idempotent, space-scoped maintenance; requires space owner/admin.
+  app.post("/api/v1/memory/retrieval/reindex", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    if (!(await requireSpaceMaintenanceRole(context.config, identity, reply))) return reply;
+    if (!context.config.databaseUrl) {
+      return reply.code(502).send({ detail: "SERVER_DATABASE_URL is required" });
+    }
+    try {
+      const projection = new RetrievalProjectionService(
+        getDbPool(context.config.databaseUrl),
+        memoryRetrievalRegistry,
+      );
+      const summary = await projection.reindexAll(identity.spaceId);
+      const embeddingBackfill = await enqueueRetrievalEmbeddingBackfill(context.config, {
+        spaceId: identity.spaceId,
+        userId: identity.userId,
+        trigger: "memory_retrieval_reindex",
+      }).catch((error) => {
+        process.stderr.write(
+          `[memory.retrieval] embedding backfill enqueue failed: ${String((error as Error)?.message ?? error)}\n`,
+        );
+        return null;
+      });
+      return reply.send({
+        ok: true,
+        reindexed: summary,
+        embedding_backfill_job_id: embeddingBackfill?.jobId ?? null,
+      });
     } catch (error) {
       return sendDomainError(reply, error);
     }
@@ -240,6 +852,113 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   });
 }
 
+async function loadVisibleMemoryAccessLogs(
+  db: Queryable,
+  input: {
+    spaceId: string;
+    userId: string;
+    limit: number;
+    offset: number;
+    memoryId?: string | null;
+    accessType?: string | null;
+    workspaceId?: string | null;
+    projectId?: string | null;
+  },
+): Promise<{
+  items: Array<Record<string, unknown>>;
+  limit: number;
+  offset: number;
+  returned: number;
+  has_more: boolean;
+}> {
+  const where = ["l.space_id = $1"];
+  const values: unknown[] = [input.spaceId];
+  if (input.memoryId) {
+    values.push(input.memoryId);
+    where.push(`l.memory_id = $${values.length}`);
+  }
+  if (input.accessType) {
+    values.push(input.accessType);
+    where.push(`l.access_type = $${values.length}`);
+  }
+  if (input.projectId) {
+    values.push(input.projectId);
+    where.push(`m.project_id = $${values.length}`);
+  }
+  const overfetchLimit = Math.min((input.offset + input.limit + 1) * 5, 5000);
+  values.push(overfetchLimit);
+
+  const result = await db.query<MemoryAccessLogJoinedRow>(
+    `SELECT
+        l.id AS log_id,
+        l.space_id AS log_space_id,
+        l.memory_id AS log_memory_id,
+        l.user_id AS log_user_id,
+        l.agent_id AS log_agent_id,
+        l.run_id AS log_run_id,
+        l.access_type AS log_access_type,
+        l.reason AS log_reason,
+        l.accessed_at AS log_accessed_at,
+        ${MEMORY_ACCESS_LOG_MEMORY_COLUMNS}
+       FROM memory_access_logs l
+       JOIN memory_entries m
+         ON m.id = l.memory_id
+        AND m.space_id = l.space_id
+      WHERE ${where.join(" AND ")}
+      ORDER BY l.accessed_at DESC, l.id DESC
+      LIMIT $${values.length}`,
+    values,
+  );
+
+  const readableRows = result.rows.filter((row) =>
+    canReadMemory(row, {
+      spaceId: input.spaceId,
+      userId: input.userId,
+      workspaceId: input.workspaceId ?? null,
+    }),
+  );
+  const accessibleProjects = await accessibleProjectIds(
+    db,
+    input.spaceId,
+    input.userId,
+    readableRows.map((row) => row.project_id),
+  );
+  const visibleRows = readableRows
+    .filter((row) => !row.project_id || accessibleProjects.has(row.project_id))
+    .map((row) => ({
+      id: row.log_id,
+      space_id: row.log_space_id,
+      memory_id: row.log_memory_id,
+      user_id: row.log_user_id,
+      agent_id: row.log_agent_id,
+      run_id: row.log_run_id,
+      access_type: row.log_access_type,
+      reason: row.log_reason,
+      accessed_at: isoString(row.log_accessed_at),
+      memory_title: row.title,
+      memory_scope: row.scope_type,
+      memory_visibility: row.visibility,
+      project_id: row.project_id,
+    }));
+  const items = visibleRows.slice(input.offset, input.offset + input.limit);
+  return {
+    items,
+    limit: input.limit,
+    offset: input.offset,
+    returned: items.length,
+    has_more: visibleRows.length > input.offset + input.limit,
+  };
+}
+
+function isoString(value: unknown): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+  if (typeof value === "string" && value.trim()) {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+  }
+  return new Date(0).toISOString();
+}
+
 async function resolveIdentity(
   context: ModuleContext,
   request: FastifyRequest,
@@ -272,6 +991,32 @@ async function resolveIdentity(
     ),
   );
   return null;
+}
+
+async function requireSpaceMaintenanceRole(
+  config: ServerConfig,
+  identity: MemoryIdentity,
+  reply: FastifyReply,
+): Promise<boolean> {
+  const repository = authRepositoryFromConfig(config);
+  if (!repository) {
+    reply.code(502).send({ detail: "Identity database is unavailable" });
+    return false;
+  }
+  const space = await repository.getSpaceForUser(identity.userId, identity.spaceId);
+  if (!space) {
+    reply.code(404).send({ detail: "Space not found" });
+    return false;
+  }
+  if ("statusCode" in space) {
+    reply.code(space.statusCode).send({ detail: space.detail });
+    return false;
+  }
+  if (space.role !== "owner" && space.role !== "admin") {
+    reply.code(403).send({ detail: "Requires space owner or admin role" });
+    return false;
+  }
+  return true;
 }
 
 function sendDomainError(reply: FastifyReply, error: unknown): FastifyReply {

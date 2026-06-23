@@ -1,0 +1,31 @@
+{
+  "docs": [
+    {
+      "id": "eval-knowledge-1",
+      "title": "Postgres indexing strategies",
+      "content": "B-tree, GIN, and HNSW indexes accelerate different query shapes.",
+      "slug": "postgres-indexing-strategies",
+      "aliases": ["pg indexes"]
+    },
+    {
+      "id": "eval-knowledge-2",
+      "title": "Reciprocal rank fusion",
+      "content": "RRF combines ranked lists by summing one over k plus rank.",
+      "slug": "reciprocal-rank-fusion",
+      "aliases": ["rrf"]
+    },
+    {
+      "id": "eval-knowledge-3",
+      "title": "Vector embeddings",
+      "content": "Embeddings map text into a dense vector space for similarity search.",
+      "slug": "vector-embeddings",
+      "aliases": ["embeddings"]
+    }
+  ],
+  "cases": [
+    { "query": "Postgres indexing strategies", "expected": ["eval-knowledge-1"] },
+    { "query": "pg indexes", "expected": ["eval-knowledge-1"] },
+    { "query": "reciprocal rank fusion", "expected": ["eval-knowledge-2"] },
+    { "query": "dense vector space similarity search", "expected": ["eval-knowledge-3"] }
+  ]
+}

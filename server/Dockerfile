@@ -17,7 +17,7 @@ ENV NPM_CONFIG_FETCH_RETRIES=5 \
 
 # Build toolchain for native modules (node-pty hosts the CLI login PTY).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates python3 make g++ \
+    ca-certificates git python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
 COPY packages/protocol/package.json ./packages/protocol/package.json
@@ -86,7 +86,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
+    ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY packages/protocol/package.json ./packages/protocol/package.json

@@ -48,6 +48,7 @@ function artifact(overrides: Partial<ArtifactOut> = {}): ArtifactOut {
     created_at: "2026-06-16T10:00:00.000Z",
     updated_at: "2026-06-16T10:00:00.000Z",
     project_id: null,
+    workspace_id: null,
     ...overrides,
   };
 }
@@ -55,8 +56,10 @@ function artifact(overrides: Partial<ArtifactOut> = {}): ArtifactOut {
 describe("artifact routes", () => {
   it("lists and reads artifacts with public response shapes", async () => {
     __setArtifactIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    const calls: Array<{ kind: "list" | "get"; workspaceId: string | null | undefined }> = [];
     __setArtifactRepositoryFactoryForTests(() => ({
       async listVisible(spaceId, userId, filters) {
+        calls.push({ kind: "list", workspaceId: filters.workspaceId });
         return {
           items: [
             artifact({
@@ -68,7 +71,8 @@ describe("artifact routes", () => {
           offset: filters.offset,
         } satisfies ArtifactPage;
       },
-      async getVisible(_spaceId, _userId, artifactId, includeContent) {
+      async getVisible(_spaceId, _userId, artifactId, includeContent, workspaceId) {
+        calls.push({ kind: "get", workspaceId });
         return artifact({ id: artifactId, content: includeContent ? "inline" : null });
       },
       async exportVisible() {
@@ -79,9 +83,9 @@ describe("artifact routes", () => {
 
     const list = await app.inject({
       method: "GET",
-      url: "/api/v1/artifacts?limit=25&offset=5&artifact_type=summary",
+      url: "/api/v1/artifacts?limit=25&offset=5&artifact_type=summary&workspace_id=ws-1",
     });
-    const get = await app.inject({ method: "GET", url: "/api/v1/artifacts/artifact-1" });
+    const get = await app.inject({ method: "GET", url: "/api/v1/artifacts/artifact-1?workspace_id=ws-1" });
 
     expect(list.statusCode).toBe(200);
     expect(list.json()).toMatchObject({
@@ -92,10 +96,15 @@ describe("artifact routes", () => {
     });
     expect(get.statusCode).toBe(200);
     expect(get.json()).toMatchObject({ id: "artifact-1", content: "inline" });
+    expect(calls).toEqual([
+      { kind: "list", workspaceId: "ws-1" },
+      { kind: "get", workspaceId: "ws-1" },
+    ]);
   });
 
   it("exports inline artifact content with an attachment disposition", async () => {
     __setArtifactIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    const calls: Array<{ workspaceId: string | null | undefined }> = [];
     __setArtifactRepositoryFactoryForTests(() => ({
       async listVisible() {
         throw new Error("list should not run");
@@ -103,7 +112,8 @@ describe("artifact routes", () => {
       async getVisible() {
         throw new Error("get should not run");
       },
-      async exportVisible(_spaceId, _userId, artifactId) {
+      async exportVisible(_spaceId, _userId, artifactId, workspaceId) {
+        calls.push({ workspaceId });
         return {
           artifact: artifact({ id: artifactId, content: "download" }),
           filename: "Summary",
@@ -116,12 +126,50 @@ describe("artifact routes", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/artifacts/artifact-1/export",
+      url: "/api/v1/artifacts/artifact-1/export?workspace_id=ws-1",
     });
 
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-disposition"]).toBe('attachment; filename="Summary"');
     expect(res.payload).toBe("download");
+    expect(calls).toEqual([{ workspaceId: "ws-1" }]);
+  });
+
+  it("requires a matching workspace parameter for workspace_shared artifacts", async () => {
+    const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
+    const row = artifact({
+      id: "workspace-artifact",
+      visibility: "workspace_shared",
+      owner_user_id: "other-user",
+      workspace_id: "ws-1",
+    });
+    const fakeDb = {
+      async query(sql: string, params: readonly unknown[] = []) {
+        calls.push({ sql, params });
+        return {
+          rows: params[3] === "ws-1" ? [row] : [],
+          rowCount: params[3] === "ws-1" ? 1 : 0,
+        };
+      },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const repo = new PgArtifactRepository(fakeDb as any, {
+      artifactStorageRoot: "/tmp/artifacts",
+      sandboxRoot: "/tmp/artifacts/sandbox",
+    });
+
+    await expect(repo.getVisible("space-1", "user-1", "workspace-artifact", false)).resolves.toBeNull();
+    await expect(repo.getVisible("space-1", "user-1", "workspace-artifact", false, "ws-2")).resolves.toBeNull();
+    await expect(repo.getVisible("space-1", "user-1", "workspace-artifact", false, "ws-1")).resolves.toMatchObject({
+      id: "workspace-artifact",
+      visibility: "workspace_shared",
+      workspace_id: "ws-1",
+    });
+    const lastCall = calls[calls.length - 1];
+    expect(lastCall?.sql).toContain("visibility = 'workspace_shared'");
+    expect(lastCall?.sql).toContain("workspace_id = $4");
+    expect(lastCall?.sql).toContain("project_workspaces");
+    expect(lastCall?.sql).toContain("project_members");
   });
 
   it("rejects path traversal, absolute paths, null bytes, and sandbox paths in file-backed export", async () => {

@@ -5,7 +5,16 @@ import {
   type MemoryRow,
   type Queryable,
 } from "../memory/repository";
+import { accessibleProjectIds } from "../memory/projectAccess";
 import { canReadMemory } from "../memory/memoryReadAuth";
+import {
+  loadSourceConnectionIdsForTargets,
+  loadSourcePolicySnapshots,
+  loadViewerSpaceRole,
+  sourceConnectionIdsFromMetadata,
+  sourceConnectionIdsFromSourceRefs,
+  type SourcePolicySnapshot,
+} from "../retrieval/sourcePolicy";
 
 /**
  * Native server reads for chat context candidate sources.
@@ -21,7 +30,8 @@ import { canReadMemory } from "../memory/memoryReadAuth";
  *
  * Memory reads are intentionally **not** access-logged here; only full-run
  * context preparation logs `context_injection`.
- * `canReadMemory` is the read-authorization boundary.
+ * `canReadMemory` plus the project-level ACL is the read-authorization
+ * boundary.
  *
  * Fidelity note: memory selection here ranks readable active memories by
  * `importance DESC, confidence DESC`. Graph expansion and keyword-fallback
@@ -34,10 +44,9 @@ const MAX_EXCERPT_CHARS = 800;
 /** Cap on candidate memory rows fetched before the read-auth filter. */
 const MEMORY_FETCH_CAP = 200;
 
-/** Knowledge `item_type` values selected when `knowledge_item` is allowed. */
-const KNOWLEDGE_ITEM_TYPES = [
+/** Knowledge `knowledge_kind` values selected when `knowledge_item` is allowed. */
+const KNOWLEDGE_KINDS = [
   "concept",
-  "claim",
   "lesson",
   "procedure",
   "decision",
@@ -50,6 +59,7 @@ export interface CandidateRow {
   item_id: string;
   title: string | null;
   text: string;
+  source_connection_ids: string[];
 }
 
 export interface ContextPolicy {
@@ -131,10 +141,18 @@ export class PgChatCandidateRepository {
         includeSystemScope: false,
       }),
     );
-    return readable.slice(0, limit).map((row) => ({
+    const accessible = await accessibleProjectIds(
+      this.db,
+      spaceId,
+      userId,
+      readable.map((row) => row.project_id),
+    );
+    const visible = readable.filter((row) => !row.project_id || accessible.has(row.project_id));
+    return visible.slice(0, limit).map((row) => ({
       item_id: row.id,
       title: row.title,
       text: row.content ?? "",
+      source_connection_ids: [],
     }));
   }
 
@@ -148,30 +166,40 @@ export class PgChatCandidateRepository {
     limit: number,
   ): Promise<CandidateRow[]> {
     const where = [
-      `space_id = $1`,
-      `status = 'active'`,
-      `item_type = ANY($2)`,
+      `ki.space_id = $1`,
+      `so.status = 'active'`,
+      `ki.knowledge_kind = ANY($2)`,
     ];
-    const params: unknown[] = [spaceId, KNOWLEDGE_ITEM_TYPES];
+    const params: unknown[] = [spaceId, KNOWLEDGE_KINDS];
     if (message) {
       params.push(`%${message.slice(0, 40)}%`);
-      where.push(`(title ILIKE $${params.length} OR content ILIKE $${params.length})`);
+      where.push(`(so.title ILIKE $${params.length} OR ki.content ILIKE $${params.length})`);
     }
     const result = await this.db.query<{
       id: string;
       title: string | null;
       content: string | null;
     }>(
-      `SELECT id, title, content FROM knowledge_items
+      `SELECT ki.object_id AS id, so.title, ki.content
+         FROM knowledge_items ki
+         JOIN space_objects so ON so.id = ki.object_id AND so.space_id = ki.space_id
         WHERE ${where.join(" AND ")}
-        ORDER BY updated_at DESC
+          AND so.object_type = 'knowledge_item'
+        ORDER BY so.updated_at DESC
         LIMIT ${clampLimit(limit)}`,
       params,
+    );
+    const sourceIdsByTarget = await loadSourceConnectionIdsForTargets(
+      this.db,
+      spaceId,
+      "knowledge",
+      result.rows.map((row) => row.id),
     );
     return result.rows.map((row) => ({
       item_id: row.id,
       title: row.title,
       text: row.content ?? "",
+      source_connection_ids: sourceIdsByTarget.get(row.id) ?? [],
     }));
   }
 
@@ -182,10 +210,13 @@ export class PgChatCandidateRepository {
       title: string | null;
       summary: string | null;
       raw_text: string | null;
+      metadata_json: unknown;
     }>(
-      `SELECT id, title, summary, raw_text FROM sources
-        WHERE space_id = $1 AND status = 'processed'
-        ORDER BY created_at DESC
+      `SELECT s.object_id AS id, so.title, s.summary, s.raw_text, s.metadata_json
+         FROM sources s
+         JOIN space_objects so ON so.id = s.object_id AND so.space_id = s.space_id
+        WHERE s.space_id = $1 AND so.object_type = 'source' AND so.status = 'processed'
+        ORDER BY so.created_at DESC
         LIMIT ${clampLimit(limit)}`,
       [spaceId],
     );
@@ -193,6 +224,53 @@ export class PgChatCandidateRepository {
       item_id: row.id,
       title: row.title,
       text: row.summary ?? row.raw_text ?? "",
+      source_connection_ids: sourceConnectionIdsFromMetadata(row.metadata_json),
+    }));
+  }
+
+  /**
+   * Approved project public summaries in the space. These are the deliberately
+   * sanitized, space-public discovery layer (not concrete project memory), so
+   * they need no per-user/project-member gate — they let the shared assistant
+   * surface cross-project inspiration. Optionally keyword-filtered by the
+   * message prefix against name / summary / topics.
+   */
+  async selectProjectPublicSummaries(
+    spaceId: string,
+    message: string,
+    limit: number,
+  ): Promise<CandidateRow[]> {
+    const where = [
+      `ps.space_id = $1`,
+      `ps.review_status = 'approved'`,
+      `p.status = 'active'`,
+      `p.deleted_at IS NULL`,
+    ];
+    const params: unknown[] = [spaceId];
+    if (message) {
+      params.push(`%${message.slice(0, 40)}%`);
+      const p = `$${params.length}`;
+      where.push(`(p.name ILIKE ${p} OR ps.summary_text ILIKE ${p} OR ps.topics_json::text ILIKE ${p})`);
+    }
+    const result = await this.db.query<{
+      project_id: string;
+      title: string | null;
+      summary_text: string | null;
+      source_refs_json: unknown;
+    }>(
+      `SELECT ps.project_id, p.name AS title, ps.summary_text, ps.source_refs_json
+         FROM project_public_summaries ps
+         JOIN projects p ON p.id = ps.project_id AND p.space_id = ps.space_id
+        WHERE ${where.join(" AND ")}
+        ORDER BY ps.updated_at DESC
+        LIMIT ${clampLimit(limit)}`,
+      params,
+    );
+    return result.rows.map((row) => ({
+      item_id: row.project_id,
+      title: row.title,
+      text: row.summary_text ?? "",
+      source_connection_ids: sourceConnectionIdsFromSourceRefs(row.source_refs_json),
     }));
   }
 
@@ -216,7 +294,30 @@ export class PgChatCandidateRepository {
       item_id: row.id,
       title: row.title,
       text: row.content ?? "",
+      source_connection_ids: [],
     }));
+  }
+
+  async loadSourcePolicySnapshots(
+    spaceId: string,
+    sourceConnectionIds: readonly string[],
+  ): Promise<Map<string, SourcePolicySnapshot>> {
+    return loadSourcePolicySnapshots(this.db, spaceId, sourceConnectionIds);
+  }
+
+  async loadViewerSpaceRole(spaceId: string, userId: string): Promise<string | null> {
+    return loadViewerSpaceRole(this.db, spaceId, userId);
+  }
+
+  async loadExternalEgressEnabled(spaceId: string): Promise<boolean> {
+    const result = await this.db.query<{ external_egress_enabled: boolean }>(
+      `SELECT external_egress_enabled
+         FROM space_retrieval_settings
+        WHERE space_id = $1
+        LIMIT 1`,
+      [spaceId],
+    );
+    return result.rows[0]?.external_egress_enabled !== false;
   }
 }
 

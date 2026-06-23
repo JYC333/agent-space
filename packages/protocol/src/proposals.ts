@@ -80,6 +80,15 @@ export const ProposalAcceptResultTypeSchema = z.enum([
   "capability_overlay",
   "knowledge_item",
   "knowledge_relation",
+  "claim",
+  "claim_relation",
+  "object_relation",
+  "object_kind",
+  "claim_candidate_packet",
+  "memory_maintenance_packet",
+  "retrieval_maintenance_packet",
+  "retrieval_diagnostics_packet",
+  "relation_discovery_packet",
 ]);
 export type ProposalAcceptResultType = z.infer<
   typeof ProposalAcceptResultTypeSchema

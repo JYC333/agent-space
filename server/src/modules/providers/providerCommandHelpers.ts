@@ -11,9 +11,10 @@ export const PROVIDER_TYPES = new Set([
   "anthropic",
   "openrouter",
   "ollama",
+  "zeroentropy",
   "other",
 ]);
-export const CLOUD_PROVIDER_TYPES = new Set(["openai", "anthropic", "openrouter"]);
+export const CLOUD_PROVIDER_TYPES = new Set(["openai", "anthropic", "openrouter", "zeroentropy"]);
 export const ROTATION_STRATEGIES = new Set(["fill_first", "round_robin", "least_used", "random"]);
 
 export type ProviderRow = Parameters<typeof mapProviderRowToDto>[0];
@@ -112,6 +113,7 @@ export function defaultBaseUrlFor(providerType: string): string | null {
   if (providerType === "openai") return "https://api.openai.com/v1";
   if (providerType === "anthropic") return "https://api.anthropic.com";
   if (providerType === "openrouter") return "https://openrouter.ai/api/v1";
+  if (providerType === "zeroentropy") return "https://api.zeroentropy.dev/v1";
   return null;
 }
 

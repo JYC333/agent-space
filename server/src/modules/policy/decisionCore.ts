@@ -523,6 +523,90 @@ const ruleRuntimeSkillRenderEnabled: Rule = (ctx) => {
   });
 };
 
+const RETRIEVAL_TOOL_ACTIONS = new Set([
+  "retrieval.search",
+  "retrieval.brief",
+  "memory.retrieval.search",
+  "memory.retrieval.brief",
+  "project_public_summary.search",
+  "project_public_summary.brief",
+]);
+
+const ruleRetrievalToolCall: Rule = (ctx) => {
+  const action = str(ctx.action);
+  if (!RETRIEVAL_TOOL_ACTIONS.has(action)) return null;
+
+  const toolName = str(ctx.tool_name) || action;
+  const domain = str(ctx.domain) || "unknown";
+  if (ctx.domain_enabled !== true) {
+    return makeDecision({
+      decision: "deny",
+      message: `Retrieval tool ${pyRepr(toolName)} is not enabled for domain ${pyRepr(domain)} in this run.`,
+      risk_level: "low",
+      reason_code: "retrieval_tool_domain_not_enabled",
+      policy_rule_id: "retrieval_tool_domain_enabled",
+      audit_code: "retrieval_tool_domain_not_enabled",
+      action,
+      resource_type: "retrieval_tool",
+      resource_id: toolName,
+    });
+  }
+
+  if (!str(ctx.instructed_by_user_id)) {
+    return makeDecision({
+      decision: "deny",
+      message: `Retrieval tool ${pyRepr(toolName)} requires an instructed user viewer.`,
+      risk_level: "low",
+      reason_code: "retrieval_tool_missing_viewer",
+      policy_rule_id: "retrieval_tool_viewer_required",
+      audit_code: "retrieval_tool_missing_viewer",
+      action,
+      resource_type: "retrieval_tool",
+      resource_id: toolName,
+    });
+  }
+
+  if (ctx.source_policy_denied === true) {
+    return makeDecision({
+      decision: "deny",
+      message: `Retrieval tool ${pyRepr(toolName)} denied by source policy.`,
+      risk_level: "medium",
+      reason_code: "retrieval_tool_source_policy_denied",
+      policy_rule_id: "retrieval_tool_source_policy",
+      audit_code: "retrieval_tool_source_policy_denied",
+      action,
+      resource_type: "retrieval_tool",
+      resource_id: toolName,
+    });
+  }
+
+  if (ctx.egress_policy_denied === true) {
+    return makeDecision({
+      decision: "deny",
+      message: `Retrieval tool ${pyRepr(toolName)} denied by egress policy.`,
+      risk_level: "medium",
+      reason_code: "retrieval_tool_egress_policy_denied",
+      policy_rule_id: "retrieval_tool_egress_policy",
+      audit_code: "retrieval_tool_egress_policy_denied",
+      action,
+      resource_type: "retrieval_tool",
+      resource_id: toolName,
+    });
+  }
+
+  return makeDecision({
+    decision: "allow",
+    message: `Retrieval tool ${pyRepr(toolName)} allowed for domain ${pyRepr(domain)}.`,
+    risk_level: "low",
+    reason_code: "retrieval_tool_call_allowed",
+    policy_rule_id: "retrieval_tool_call_allowed",
+    audit_code: "retrieval_tool_call_allowed",
+    action,
+    resource_type: "retrieval_tool",
+    resource_id: toolName,
+  });
+};
+
 const BUILTIN_RULES: readonly Rule[] = [
   ruleSpaceBoundary,
   ruleAgentStatus,
@@ -533,6 +617,7 @@ const BUILTIN_RULES: readonly Rule[] = [
   ruleAutomation,
   ruleRuntimeExecuteRiskLevel,
   ruleRuntimeSkillRenderEnabled,
+  ruleRetrievalToolCall,
 ];
 
 // ---------------------------------------------------------------------------

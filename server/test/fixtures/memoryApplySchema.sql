@@ -11,6 +11,13 @@ CREATE TABLE public.spaces (
     CONSTRAINT spaces_pkey PRIMARY KEY (id)
 );
 
+CREATE TABLE public.projects (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    deleted_at timestamp with time zone,
+    CONSTRAINT projects_pkey PRIMARY KEY (id)
+);
+
 CREATE TABLE public.memory_entries (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
@@ -77,6 +84,7 @@ CREATE TABLE public.proposals (
     created_by_user_id character varying(36),
     created_by_run_id character varying(36),
     workspace_id character varying(36),
+    project_id character varying(36),
     title character varying(512),
     CONSTRAINT proposals_pkey PRIMARY KEY (id)
 );

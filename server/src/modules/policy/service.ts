@@ -43,6 +43,8 @@ export interface EnforceResult {
   message?: string;
 }
 
+type PolicyEnforcementConfig = Pick<ServerConfig, "databaseUrl">;
+
 function blockedErrorCode(
   decision: PolicyDecision,
 ): "policy_denied" | "policy_requires_approval" {
@@ -52,7 +54,7 @@ function blockedErrorCode(
 }
 
 async function persistAudit(
-  config: ServerConfig,
+  config: PolicyEnforcementConfig,
   envelope: ReturnType<typeof buildAuditEnvelope>,
 ): Promise<void> {
   if (!config.databaseUrl) {
@@ -68,7 +70,7 @@ async function persistAudit(
  * proceed).
  */
 export async function enforce(
-  config: ServerConfig,
+  config: PolicyEnforcementConfig,
   registry: Registry,
   req: PolicyCheckRequest,
 ): Promise<EnforceResult> {
@@ -122,7 +124,7 @@ export async function enforce(
  * `error`.
  */
 export async function enforceProposalApply(
-  config: ServerConfig,
+  config: PolicyEnforcementConfig,
   input: ProposalApplyInput,
   role: string | null,
   supportedTypes: ReadonlySet<string>,
@@ -196,7 +198,7 @@ export async function enforceProposalApply(
 }
 
 async function writeProposalAudit(
-  config: ServerConfig,
+  config: PolicyEnforcementConfig,
   decision: PolicyDecision,
   input: ProposalApplyInput,
   nowIso: string,

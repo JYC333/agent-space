@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ReactNode } from 'react'
 import { ResearchWorkflowPanel } from '../ResearchWorkflowPanel'
 import { agentsApi, capabilitiesFrameworkApi, projectWorkflowProfilesApi } from '../../../api/client'
 
@@ -10,7 +11,33 @@ vi.mock('sonner', () => ({
   },
 }))
 
+vi.mock('../../../contexts/SpaceContext', () => ({
+  useSpace: () => ({
+    activeSpaceId: 'space-1',
+    activeSpaceName: 'Space One',
+  }),
+}))
+
+vi.mock('../../../core/spaceNav', () => ({
+  SpaceLink: ({ to, children, ...props }: { to: string; children: ReactNode }) => (
+    <a href={to} {...props}>{children}</a>
+  ),
+}))
+
 vi.mock('../../../api/client', () => ({
+  artifactsApi: {
+    list: vi.fn().mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    }),
+  },
+  contextApi: {
+    listArtifactRevocations: vi.fn().mockResolvedValue({ items: [] }),
+    revokeArtifact: vi.fn(),
+    unrevokeArtifact: vi.fn(),
+  },
   capabilitiesFrameworkApi: {
     listWorkflowTemplates: vi.fn().mockResolvedValue([
       {

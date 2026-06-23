@@ -14,6 +14,7 @@ Scoped, long-term context for agents and users. Not raw data — curated, approv
 - `ContextSnapshot` — frozen audit record of run input; populated before adapter execution
 - `MemoryCandidateValidator` — gates activity-sourced candidates before Proposal creation
 - `MemoryProposalProducer` — creates Proposals from validated candidates
+- `MemoryMaintenanceService` — owner-private Memory quality scans, report artifacts, and review packets
 - `SourceMonitoringService` — gates semantic/policy proposal acceptance by source trust
 - `server/src/modules/context/compiler.ts` and workspace `PathPolicy` — secret/injection scanning and path policy
 
@@ -35,7 +36,7 @@ MemoryEntry:
   created_by, approved_by
   access_count, last_accessed_at, fitness_score
 
-Proposal (memory_create | memory_update | memory_archive | policy_change):
+Proposal (memory_create | memory_update | memory_archive | memory_maintenance_packet | policy_change):
   id, space_id, workspace_id, proposal_type, status, risk_level, urgency
   payload_json  — carries proposed content, provenance_entries, source evidence
   created_by_agent_id, created_by_run_id, created_by_user_id
@@ -88,6 +89,150 @@ MemoryReadTrace:
 - Executed runs must have a non-empty `ContextSnapshot`; snapshot population failure blocks execution
 - All content passes security scanning before entering compiled context
 
+## Relationship To Retrieval
+
+Memory is a consumer of the shared retrieval engine
+(`server/src/modules/retrieval/`; see
+[RETRIEVAL_AND_BRAIN_LAYER.md](../architecture/RETRIEVAL_AND_BRAIN_LAYER.md) for
+the engine/adapter boundary and the full retrieval + brain-layer architecture),
+scoped to two **current-space, human-facing** surfaces: advisory create-safety /
+duplicate detection, and a retrieval-backed memory search. It is **not** a
+ContextBuilder candidate source, and it does **not** do cross-space retrieval.
+Those remain deferred (see
+[MEMORY_EVOLUTION_PLAN.md](../architecture/MEMORY_EVOLUTION_PLAN.md) Track B); do
+not widen this surface without a design that covers them explicitly. The brain-
+layer closure plan ([BRAIN_LAYER_CLOSURE_PLAN.md](../architecture/BRAIN_LAYER_CLOSURE_PLAN.md))
+keeps Memory a separate canonical domain with its own search/review/brief
+surfaces: a shared retrieval engine must not collapse Memory into Knowledge.
+
+### Memory retrieval search (`POST /api/v1/memory/retrieval/search`)
+
+Human user-facing search over the caller's **current space only**
+(`viewer = logged-in user`). Cross-space retrieval is fail-closed and not
+implemented — including the "same user owns memory in another of their spaces"
+case, which is a deliberate later extension point. The single read-access gate
+is the memory adapter's `revalidate` (shared with create-safety): `canReadMemory`
++ summary-only redaction + **project-membership gating**. Only the rows actually
+returned are logged to `memory_access_logs` (`search_hit`).
+
+### Project-level access gate (`project_members`)
+
+A memory row that carries a `project_id` is only retrievable by a viewer who can
+access that project. The rule (`server/src/modules/memory/projectAccess.ts`
+`canAccessProject`):
+
+- **Personal space** (single-member): the sole member can access every project
+  in it.
+- **Shared (team/household) space**: the project `owner_user_id`, or any user
+  with an `active` row in the new `project_members` table.
+- A missing / deleted / cross-space project, or any non-member, **fails closed**.
+- Memory with `project_id = null` is not project-gated (normal space/visibility
+  rules apply).
+
+The gate is enforced on every **user-facing** memory read surface:
+
+- Retrieval surfaces (`POST /memory/retrieval/search`, `POST /memory/create-safety`)
+  via the adapter `revalidate` (per-row `canAccessProject`).
+- Legacy `PgMemoryReadRepository` read paths (`GET /memory`, `GET /memory/{id}`,
+  `POST /memory/search`) via a batched `accessibleProjectIds` filter applied after
+  `canReadMemory`, before pagination/logging.
+
+Membership is managed through the projects module
+(`server/src/modules/projects/`):
+
+- `GET /api/v1/projects/{id}/members` — list (any space member).
+- `POST /api/v1/projects/{id}/members` — add/upsert (`user_id`, `role`); requires
+  the project owner or a space owner/admin, and the target must be an active
+  member of the space.
+- `DELETE /api/v1/projects/{id}/members/{userId}` — remove (same authority).
+
+Proposal apply preserves this boundary: `ProposalApplyService` forwards
+`proposals.project_id` into the memory applier, and `PgMemoryApplyRepository`
+validates the project still exists in the proposal space before writing
+`memory_entries.project_id`. A rejected/missing/cross-space project fails closed
+with HTTP 422 semantics and does not create active memory.
+
+**Runtime project cut.**
+The per-run `ContextBuilder` retriever (`context/repository.ts retrieve` via
+`prepareService`) now applies the project cut at the shared `hardFilterRows`
+chokepoint: a run bound to project P sees P's memory (only if
+`instructed_by_user_id` can access P) + project-free memory; a no-project run sees
+project-free memory only. Chat/assistant context candidates
+(`context/candidateRepository.ts`) use `canReadMemory` plus the same
+`accessibleProjectIds` filter as the legacy memory read paths, so concrete
+project memory can appear only for projects the viewer can access.
+`ContextDigest` (`context/digestService.ts`) is a shared cache, so workspace/agent
+digests exclude `project_id IS NOT NULL` memory at generation time and revalidate
+source ids with `project_id IS NULL` at consumption time — runtime memory
+consumers are project-cut at the shared chokepoints (per-run retriever, chat
+candidates, digest, project-linked evidence).
+
+What landed (`server/src/modules/memory/retrievalAdapter.ts`):
+
+- A `memory_entry` `RetrievalObjectType` and a Memory-owned
+  `RetrievalDomainAdapter` registered in its **own** `memoryRetrievalRegistry`,
+  separate from `knowledgeRetrievalRegistry` so the memory surface can never
+  resolve Knowledge objects and vice versa.
+- `revalidate` is the single read-access gate: it reuses `canReadMemory` plus
+  summary-only content redaction plus project-membership gating (see "Project-
+  level access gate" above). It runs with no workspace/system/template context,
+  so workspace_shared and system/template memories owned by other users fail
+  closed; the proposer's own memories still match (owner check precedes the
+  visibility switch), which is what duplicate detection needs. The derived
+  `retrieval_*` projection is never trusted for read access.
+- `POST /api/v1/memory/create-safety` (advisory; object_type must be
+  `memory_entry`) returns `exists` / `probable_duplicate` / `unknown` with
+  evidence. It is read-only and never blocks creation — the proposal write path
+  is unchanged.
+- Read-trace stays intact: only the matches actually returned are logged to
+  `memory_access_logs` (`access_type = create_safety_hit`); candidates the engine
+  over-fetched and then dropped during revalidation are never logged.
+- Snippets come only from live-revalidated text, never the pre-revalidation
+  projection chunk, so a `summary_only` memory shown to a non-owner returns a
+  null snippet (content redaction is preserved).
+- The projection is derived index data, kept fresh by a best-effort,
+  SAVEPOINT-isolated reindex inside `acceptAndApply` (a projection failure never
+  rolls back the accepted canonical write) and a space owner/admin-gated
+  `POST /api/v1/memory/retrieval/reindex` for backfill. Memory create/update/
+  archive stay proposal-gated; this work writes no `memory_entries`.
+
+Memory context remains controlled by `ContextBuilder`, `MemoryReadAuth`,
+`memory_access_logs`, `SourceMonitoringService`, and proposal-gated writes.
+Knowledge retrieval results do not automatically enter Memory or runtime context.
+
+## Memory Maintenance
+
+`POST /api/v1/memory/maintenance/scan` runs an owner-private Memory health scan
+for the authenticated user in the current space. It is separate from Knowledge
+retrieval maintenance and uses the Memory read boundary:
+
+- The scan is bounded by `limit` per page: by default it samples recent
+  active/superseded/archived candidates ordered by `updated_at DESC, id DESC`;
+  callers can opt into `scan_mode = full` and continue page-by-page with the
+  opaque `next_cursor`. Durable maintenance jobs store that cursor in
+  `memory_maintenance_jobs` and can be advanced by the job API or background
+  scheduler.
+- `canReadMemory` plus summary-only redaction.
+- Project membership filtering through `accessibleProjectIds`.
+- `highly_restricted`, `system`, and `public_template` rows are excluded.
+- Only final finding rows are logged to `memory_access_logs` with
+  `access_type = maintenance_scan`; filtered candidates are never logged or
+  counted. Non-persistent scans still write this read log.
+- The bounded SQL query may briefly load same-space rows before app-level
+  visibility/project filtering, matching the existing Memory read model; such
+  rows are not returned or persisted unless they pass the gates and contribute
+  to findings.
+
+The scan can persist a private `memory_maintenance_report` artifact and, with
+`create_packet=true`, a private `memory_maintenance_packet` proposal. Accepting
+that packet can create child pending `memory_archive` proposals for supported
+duplicate findings and child pending `memory_update` proposals for supported
+stale/thin/lifecycle/project/source/contradiction findings. It never writes
+`memory_entries` directly; child proposals still require their own normal
+review/apply step. Update child payloads carry maintenance provenance and mark
+`requires_operator_edit` when the system cannot safely propose a complete
+no-edit update.
+
 ## ContextDigest cache
 
 `ContextDigest` is a versioned derived cache of approved Memory/Policy content. It is **not** Memory and **not** Policy.
@@ -115,6 +260,7 @@ MemoryReadTrace:
 - `policy_change` → marks only the `policy_bundle` digest dirty. Workspace/agent digests are memory-only and never embed policy content, so a policy change does not dirty them (invalidating them would just recompute an identical memory hash). Scoped policies are still surfaced per-run at consumption time via `loadDigestBundle`.
 
 ## Related Files
+- `.agent/architecture/MEMORY_MAINTENANCE.md`
 - `server/src/modules/memory/`
 - `server/src/modules/proposals/applyService.ts` (proposal-owned orchestration; memory owns registered appliers)
 - `server/src/modules/context/`

@@ -2,6 +2,21 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../config";
 import { getDbPool, type Pool } from "../../db/pool";
 import { withTransaction } from "../../db/tx";
+import {
+  getOrCreateSpaceRetrievalSettings,
+  updateSpaceRetrievalSettings,
+  type SpaceRetrievalSettingsOut,
+} from "../retrieval/settings";
+import {
+  getOrCreateSpaceRetrievalPrompt,
+  updateSpaceRetrievalPrompt,
+  type SpaceRetrievalPromptOut,
+} from "../retrieval/prompts";
+import type {
+  RetrievalPromptTask,
+  SpaceRetrievalPromptUpdate,
+  SpaceRetrievalSettingsUpdate,
+} from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { seedSpaceDefaults } from "./spaceSeeds";
 
 export interface SpaceCreateInput {
@@ -78,6 +93,26 @@ export interface SpaceRepository {
     spaceId: string,
     data: SnapshotDefaults,
   ): Promise<SnapshotDefaults | SpaceFailure>;
+  getRetrievalSettings(
+    userId: string,
+    spaceId: string,
+  ): Promise<SpaceRetrievalSettingsOut | SpaceFailure>;
+  updateRetrievalSettings(
+    userId: string,
+    spaceId: string,
+    data: SpaceRetrievalSettingsUpdate,
+  ): Promise<SpaceRetrievalSettingsOut | SpaceFailure>;
+  getRetrievalPrompt(
+    userId: string,
+    spaceId: string,
+    task: RetrievalPromptTask,
+  ): Promise<SpaceRetrievalPromptOut | SpaceFailure>;
+  updateRetrievalPrompt(
+    userId: string,
+    spaceId: string,
+    task: RetrievalPromptTask,
+    data: SpaceRetrievalPromptUpdate,
+  ): Promise<SpaceRetrievalPromptOut | SpaceFailure>;
 }
 
 type SpaceRow = {
@@ -333,6 +368,50 @@ export class PgSpaceRepository implements SpaceRepository {
       [data.snapshot_retention_days_default, data.snapshot_max_count_default, spaceId],
     );
     return data;
+  }
+
+  async getRetrievalSettings(
+    userId: string,
+    spaceId: string,
+  ): Promise<SpaceRetrievalSettingsOut | SpaceFailure> {
+    const role = await this.activeRole(userId, spaceId);
+    if (!role) return { statusCode: 403, detail: "Not a member of this space" };
+    return getOrCreateSpaceRetrievalSettings(this.pool, spaceId);
+  }
+
+  async updateRetrievalSettings(
+    userId: string,
+    spaceId: string,
+    data: SpaceRetrievalSettingsUpdate,
+  ): Promise<SpaceRetrievalSettingsOut | SpaceFailure> {
+    const role = await this.activeRole(userId, spaceId);
+    if (!role || (role !== "owner" && role !== "admin")) {
+      return { statusCode: 403, detail: "Requires space owner or admin role" };
+    }
+    return updateSpaceRetrievalSettings(this.pool, spaceId, data, { actorUserId: userId });
+  }
+
+  async getRetrievalPrompt(
+    userId: string,
+    spaceId: string,
+    task: RetrievalPromptTask,
+  ): Promise<SpaceRetrievalPromptOut | SpaceFailure> {
+    const role = await this.activeRole(userId, spaceId);
+    if (!role) return { statusCode: 403, detail: "Not a member of this space" };
+    return getOrCreateSpaceRetrievalPrompt(this.pool, spaceId, task);
+  }
+
+  async updateRetrievalPrompt(
+    userId: string,
+    spaceId: string,
+    task: RetrievalPromptTask,
+    data: SpaceRetrievalPromptUpdate,
+  ): Promise<SpaceRetrievalPromptOut | SpaceFailure> {
+    const role = await this.activeRole(userId, spaceId);
+    if (!role || (role !== "owner" && role !== "admin")) {
+      return { statusCode: 403, detail: "Requires space owner or admin role" };
+    }
+    return updateSpaceRetrievalPrompt(this.pool, spaceId, task, data);
   }
 
   private async activeRole(userId: string, spaceId: string): Promise<string | null> {

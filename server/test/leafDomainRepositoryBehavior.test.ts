@@ -39,8 +39,13 @@ function intakeConfig(): ServerConfig {
     memoryAccessLogRetentionEnabled: true,
     memoryAccessLogRetentionDays: 90,
     memoryAccessLogPruneIntervalSeconds: 3600,
+    memoryMaintenanceSchedulerEnabled: true,
+    memoryMaintenanceSchedulerIntervalSeconds: 900,
+    memoryMaintenanceSchedulerBatchLimit: 5,
     intakeExtractionSchedulerEnabled: true,
     intakeExtractionSchedulerIntervalSeconds: 30,
+    retrievalRerankEnabled: false,
+    retrievalQueryRewriteEnabled: false,
     agentSpaceEnv: "",
     appVersion: null,
     enableSystemEvolution: false,
@@ -151,6 +156,121 @@ function noteRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function claimRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "claim-1",
+    space_id: "space-1",
+    subject_object_id: null,
+    subject_text: "Retrieval",
+    claim_kind: "fact",
+    claim_text: "The retrieval default embedding dimension is 2560.",
+    normalized_claim_hash: "hash-1",
+    holder_object_id: null,
+    holder_type: null,
+    holder_id: null,
+    confidence: 0.9,
+    confidence_method: "human_confirmed",
+    resolution_state: "confirmed",
+    valid_from: null,
+    valid_until: null,
+    observed_at: null,
+    metadata_json: {},
+    status: "active",
+    visibility: "space_shared",
+    title: "Retrieval embedding dimension",
+    excerpt: null,
+    owner_user_id: "user-1",
+    primary_project_id: null,
+    workspace_id: null,
+    created_by_user_id: "user-1",
+    created_by_agent_id: null,
+    created_by_run_id: null,
+    created_from_proposal_id: null,
+    approved_by_user_id: null,
+    created_at: "2026-06-16T00:00:00.000Z",
+    updated_at: "2026-06-16T00:00:00.000Z",
+    archived_at: null,
+    ...overrides,
+  };
+}
+
+function claimRelationRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "claim-relation-1",
+    space_id: "space-1",
+    from_claim_id: "claim-1",
+    to_claim_id: "claim-2",
+    relation_type: "supports",
+    status: "active",
+    confidence: 0.8,
+    evidence_summary: null,
+    source_proposal_id: null,
+    created_by_user_id: "user-1",
+    created_by_agent_id: null,
+    created_at: "2026-06-16T00:00:00.000Z",
+    updated_at: "2026-06-16T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function objectRelationRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "object-relation-1",
+    space_id: "space-1",
+    from_object_id: "claim-1",
+    from_object_type: "claim",
+    to_object_id: "claim-2",
+    to_object_type: "claim",
+    relation_type: "supports",
+    status: "active",
+    confidence: 0.8,
+    evidence_summary: null,
+    source_claim_id: "claim-source-1",
+    source_object_id: "source-1",
+    source_proposal_id: null,
+    metadata_json: {},
+    created_by_user_id: "user-1",
+    created_by_agent_id: null,
+    created_at: "2026-06-16T00:00:00.000Z",
+    updated_at: "2026-06-16T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function intakeItemRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "item-1",
+    title: "Item",
+    excerpt: "Item excerpt",
+    source_uri: "https://example.test/i",
+    content_state: "metadata_only",
+    connection_id: null,
+    ...overrides,
+  };
+}
+
+function sourceConnectionRow(policyOverrides: Record<string, unknown> = {}) {
+  return {
+    id: "conn-1",
+    space_id: "space-1",
+    connector_id: "connector-1",
+    owner_user_id: "user-1",
+    capture_policy: "metadata_only",
+    trust_level: "normal",
+    consent_json: {},
+    policy_json: {
+      schema_version: 1,
+      source_egress_class: "internal_only",
+      retention_policy: "summary_only",
+      import_trust_level: "normal",
+      derived_write_policy: "proposal_required",
+      allowed_import_targets: ["activity", "source_artifact"],
+      revalidation: { required: true, viewer_scoped: true },
+      ...policyOverrides,
+    },
+  };
+}
+
 describe("Leaf domain repository behavior", () => {
   it("captures raw input as an activity record", async () => {
     const db = new FakeDb((sql) => {
@@ -229,6 +349,77 @@ describe("Leaf domain repository behavior", () => {
     });
   });
 
+  it("blocks connected manual URL content queueing beyond source retention policy", async () => {
+    const db = new FakeDb((sql) => {
+      if (sql.includes("FROM source_connections")) {
+        return [sourceConnectionRow({ retention_policy: "metadata_only" })];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    await expect(new PgIntakeRepository(db, intakeConfig()).createManualUrl(identity, {
+      connection_id: "conn-1",
+      url: "https://example.test/private",
+      queue_content: true,
+    })).rejects.toThrow("Source retention policy does not allow full_text");
+  });
+
+  it("blocks connected intake item actions beyond source retention policy", async () => {
+    const db = new FakeDb((sql) => {
+      if (sql.includes("FROM intake_items")) {
+        return [intakeItemRow({ connection_id: "conn-1" })];
+      }
+      if (sql.includes("FROM source_connections")) {
+        return [sourceConnectionRow({ retention_policy: "metadata_only" })];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    await expect(new PgIntakeRepository(db, intakeConfig()).itemAction(identity, "item-1", {
+      action: "queue_content",
+    })).rejects.toThrow("Source retention policy does not allow full_text");
+  });
+
+  it("blocks source-derived summary proposals unless the source policy allows the target", async () => {
+    const db = new FakeDb((sql) => {
+      if (sql.includes("FROM intake_items")) {
+        return [intakeItemRow({ connection_id: "conn-1" })];
+      }
+      if (sql.includes("INSERT INTO artifacts")) return [];
+      if (sql.includes("FROM source_connections")) {
+        return [sourceConnectionRow({ allowed_import_targets: ["activity", "source_artifact"] })];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    await expect(new PgIntakeRepository(db, intakeConfig()).createSummaryRun(identity, {
+      intake_item_ids: ["item-1"],
+      create_memory_proposal: true,
+    })).rejects.toThrow("Source policy does not allow memory_proposal imports");
+  });
+
+  it("allows source-derived summary proposals when the source policy opts in", async () => {
+    const db = new FakeDb((sql, params) => {
+      if (sql.includes("FROM intake_items")) {
+        return [intakeItemRow({ connection_id: "conn-1" })];
+      }
+      if (sql.includes("INSERT INTO artifacts")) return [];
+      if (sql.includes("FROM source_connections")) {
+        return [sourceConnectionRow({ allowed_import_targets: ["activity", "source_artifact", "memory_proposal", "knowledge"] })];
+      }
+      if (sql.includes("INSERT INTO proposals")) return [{ id: `${params[2]}-proposal` }];
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const out = await new PgIntakeRepository(db, intakeConfig()).createSummaryRun(identity, {
+      intake_item_ids: ["item-1"],
+      create_memory_proposal: true,
+      create_knowledge_proposal: true,
+    });
+
+    expect(out).toMatchObject({ proposal_ids: ["memory_create-proposal", "knowledge_create-proposal"] });
+  });
+
   it("creates Knowledge proposals with knowledge-specific provenance", async () => {
     const db = new FakeDb((sql, params) => {
       if (sql.includes("INSERT INTO proposals")) return [proposalRow(params)];
@@ -236,7 +427,7 @@ describe("Leaf domain repository behavior", () => {
     });
 
     const proposal = await new PgKnowledgeRepository(db).proposeCreate(identity, {
-      item_type: "concept",
+      knowledge_kind: "concept",
       title: "Knowledge item",
       content: "Curated knowledge content.",
       source_refs: [{ source_type: "activity", source_id: "activity-1", source_trust: "user_confirmed" }],
@@ -246,18 +437,224 @@ describe("Leaf domain repository behavior", () => {
     expect(proposal.provenance_entries).toBeNull();
   });
 
+  it("creates Claim proposals with normalized sources", async () => {
+    const payloads: Record<string, unknown>[] = [];
+    const db = new FakeDb((sql, params) => {
+      if (sql.includes("FROM source_connections")) {
+        return [sourceConnectionRow()];
+      }
+      if (sql.includes("INSERT INTO proposals")) {
+        payloads.push(JSON.parse(String(params[4])) as Record<string, unknown>);
+        return [proposalRow(params)];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const proposal = await new PgKnowledgeRepository(db).proposeClaimCreate(identity, {
+      claim_kind: "fact",
+      subject_text: "Retrieval",
+      claim_text: "The retrieval default embedding dimension is 2560.",
+      sources: [{
+        source_ref_type: "external_pointer",
+        source_ref_id: "pointer-1",
+        source_connection_id: "conn-1",
+        evidence_role: "supports",
+        confidence: 0.8,
+      }],
+    });
+
+    expect(proposal).toMatchObject({ proposal_type: "claim_create", status: "pending" });
+    expect(payloads[0]).toMatchObject({
+      operation: "claim_create",
+      claim_kind: "fact",
+      subject_text: "Retrieval",
+      sources: [expect.objectContaining({
+        source_ref_type: "external_pointer",
+        source_ref_id: "pointer-1",
+        source_connection_id: "conn-1",
+        evidence_role: "supports",
+        confidence: 0.8,
+      })],
+    });
+  });
+
+  it("rejects claim source refs without a source connection", async () => {
+    const db = new FakeDb(() => {
+      throw new Error("unexpected DB call");
+    });
+
+    await expect(new PgKnowledgeRepository(db).proposeClaimCreate(identity, {
+      claim_kind: "fact",
+      subject_text: "Retrieval",
+      claim_text: "The retrieval default embedding dimension is 2560.",
+      sources: [{
+        source_ref_type: "external_pointer",
+        source_ref_id: "pointer-1",
+        evidence_role: "supports",
+      }],
+    })).rejects.toThrow("source_ref entries require source_connection_id");
+  });
+
+  it("creates object relation proposals after checking both endpoint objects", async () => {
+    const seenObjectLookups: unknown[][] = [];
+    const payloads: Record<string, unknown>[] = [];
+    const db = new FakeDb((sql, params) => {
+      if (sql.includes("FROM space_objects")) {
+        seenObjectLookups.push([...params]);
+        return [{
+          id: params[0],
+          space_id: "space-1",
+          object_type: "claim",
+          title: String(params[0]),
+          status: "active",
+          visibility: "space_shared",
+          owner_user_id: "user-1",
+          primary_project_id: null,
+          workspace_id: null,
+          created_by_user_id: "user-1",
+        }];
+      }
+      if (sql.includes("INSERT INTO proposals")) {
+        payloads.push(JSON.parse(String(params[4])) as Record<string, unknown>);
+        return [proposalRow(params)];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const proposal = await new PgKnowledgeRepository(db).proposeObjectRelation(identity, {
+      from_object_id: "claim-a",
+      to_object_id: "claim-b",
+      relation_type: "supports",
+    });
+
+    expect(seenObjectLookups).toEqual([
+      ["claim-a", "space-1"],
+      ["claim-b", "space-1"],
+    ]);
+    expect(proposal).toMatchObject({ proposal_type: "object_relation_create", status: "pending" });
+    expect(payloads[0]).toMatchObject({
+      operation: "object_relation_create",
+      from_object_id: "claim-a",
+      to_object_id: "claim-b",
+      relation_type: "supports",
+    });
+  });
+
+  it("counts only visible active claims in the knowledge summary", async () => {
+    const db = new FakeDb((sql, params) => {
+      const norm = sql.replace(/\s+/g, " ");
+      if (norm.includes("FROM notes n")) return [{ status: "active", total: "2" }];
+      if (norm.includes("FROM knowledge_items ki")) return [{ total: "3" }];
+      if (norm.includes("FROM sources s")) return [{ total: "4" }];
+      if (norm.includes("FROM claims c")) {
+        expect(sql).toContain("so.visibility IN ('space_shared', 'workspace_shared')");
+        expect(sql).toContain("so.owner_user_id = $2");
+        expect(sql).toContain("so.created_by_user_id = $2");
+        expect(params).toEqual(["space-1", "user-1"]);
+        return [{ total: "1" }];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const out = await new PgKnowledgeRepository(db).summary(identity);
+
+    expect(out).toMatchObject({
+      claims: { active: 1 },
+      notes: { active: 2 },
+      wiki: { active: 3 },
+      sources: { total: 4 },
+    });
+  });
+
+  it("hides claim relations unless both endpoint claims are visible", async () => {
+    const db = new FakeDb((sql, params) => {
+      const norm = sql.replace(/\s+/g, " ");
+      if (norm.includes("FROM claims c")) return [claimRow()];
+      if (norm.includes("FROM claim_relations r")) {
+        expect(sql).toContain("JOIN space_objects from_so");
+        expect(sql).toContain("JOIN space_objects to_so");
+        expect(sql).toContain("from_so.visibility IN ('space_shared', 'workspace_shared')");
+        expect(sql).toContain("to_so.visibility IN ('space_shared', 'workspace_shared')");
+        expect(sql).toContain("from_so.owner_user_id = $2");
+        expect(sql).toContain("to_so.owner_user_id = $2");
+        expect(sql).toContain("from_so.deleted_at IS NULL");
+        expect(sql).toContain("to_so.deleted_at IS NULL");
+        expect(params).toEqual(["space-1", "user-1", "claim-1"]);
+        return [claimRelationRow()];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const out = await new PgKnowledgeRepository(db).claimRelations(identity, "claim-1");
+
+    expect(out).toEqual([expect.objectContaining({ id: "claim-relation-1" })]);
+  });
+
+  it("hides object relations unless endpoints and evidence objects are visible", async () => {
+    const db = new FakeDb((sql, params) => {
+      const norm = sql.replace(/\s+/g, " ");
+      if (norm.includes("FROM object_relations r")) {
+        expect(sql).toContain("JOIN space_objects from_so");
+        expect(sql).toContain("JOIN space_objects to_so");
+        expect(sql).toContain("from_so.object_type AS from_object_type");
+        expect(sql).toContain("to_so.object_type AS to_object_type");
+        expect(sql).toContain("LEFT JOIN space_objects source_claim_so");
+        expect(sql).toContain("LEFT JOIN space_objects source_so");
+        expect(sql).toContain("from_so.visibility IN ('space_shared', 'workspace_shared')");
+        expect(sql).toContain("to_so.visibility IN ('space_shared', 'workspace_shared')");
+        expect(sql).toContain("source_claim_so.visibility IN ('space_shared', 'workspace_shared')");
+        expect(sql).toContain("source_so.visibility IN ('space_shared', 'workspace_shared')");
+        expect(sql).toContain("r.source_claim_id IS NULL OR");
+        expect(sql).toContain("r.source_object_id IS NULL OR");
+        expect(params).toEqual(["space-1", "user-1", "claim-1"]);
+        return [objectRelationRow()];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const out = await new PgKnowledgeRepository(db).objectRelations(identity, {
+      from_object_id: "claim-1",
+    });
+
+    expect(out).toEqual([expect.objectContaining({ id: "object-relation-1", retrieval_projected: true })]);
+  });
+
+  it("marks object relations as not retrieval projected when an endpoint is not indexed by Knowledge retrieval", async () => {
+    const db = new FakeDb((sql, params) => {
+      const norm = sql.replace(/\s+/g, " ");
+      if (norm.includes("FROM object_relations r")) {
+        expect(params).toEqual(["space-1", "user-1"]);
+        return [objectRelationRow({ from_object_id: "project-1", from_object_type: "project", to_object_type: "claim" })];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const out = await new PgKnowledgeRepository(db).objectRelations(identity, {});
+
+    expect(out).toEqual([
+      expect.objectContaining({
+        id: "object-relation-1",
+        from_object_id: "project-1",
+        retrieval_projected: false,
+      }),
+    ]);
+  });
+
   it("filters notes by collection in both count and row queries", async () => {
     const seenSql: string[] = [];
     const db = new FakeDb((sql, params) => {
       seenSql.push(sql);
-      if (sql.includes("count(DISTINCT n.id)")) {
+      const norm = sql.replace(/\s+/g, " ");
+      if (norm.includes("count(DISTINCT n.object_id)")) {
         expect(sql).toContain("LEFT JOIN note_collection_items nci_filter");
+        expect(sql).toContain("nci_filter.space_id = n.space_id");
         expect(sql).toContain("nci_filter.collection_id = $2");
         expect(params).toEqual(["space-1", "collection-1"]);
         return [{ total: "1" }];
       }
-      if (sql.includes("FROM notes n")) {
+      if (norm.includes("FROM notes n")) {
         expect(sql).toContain("LEFT JOIN note_collection_items nci_filter");
+        expect(sql).toContain("nci_filter.space_id = n.space_id");
         expect(sql).toContain("nci_filter.collection_id = $2");
         return [noteRow()];
       }
@@ -275,5 +672,55 @@ describe("Leaf domain repository behavior", () => {
 
     expect(out).toMatchObject({ total: 1 });
     expect(seenSql).toHaveLength(2);
+  });
+
+  it("rejects note statuses outside the note lifecycle", async () => {
+    let updateCount = 0;
+    const db = new FakeDb((sql) => {
+      const norm = sql.replace(/\s+/g, " ");
+      if (norm.includes("FROM notes n")) return [noteRow()];
+      if (sql.includes("UPDATE space_objects")) {
+        updateCount += 1;
+        return [];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    await expect(new PgKnowledgeRepository(db).updateNote(identity, "note-1", {
+      status: "processed",
+    })).rejects.toThrow("invalid note status");
+
+    expect(updateCount).toBe(0);
+  });
+
+  it("writes note collection memberships with the current space", async () => {
+    const seenSql: string[] = [];
+    const db = new FakeDb((sql, params) => {
+      seenSql.push(sql);
+      const norm = sql.replace(/\s+/g, " ");
+      if (norm.includes("FROM notes n")) return [noteRow()];
+      if (sql.includes("UPDATE space_objects")) return [];
+      if (sql.includes("SELECT id FROM note_collections")) {
+        expect(params).toEqual(["collection-1", "space-1"]);
+        return [{ id: "collection-1" }];
+      }
+      if (sql.includes("DELETE FROM note_collection_items")) {
+        expect(sql).toContain("space_id = $2");
+        expect(params).toEqual(["note-1", "space-1"]);
+        return [];
+      }
+      if (sql.includes("INSERT INTO note_collection_items")) {
+        expect(sql).toContain("id, space_id, collection_id, note_id");
+        expect(params.slice(1, 4)).toEqual(["space-1", "collection-1", "note-1"]);
+        return [];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    await new PgKnowledgeRepository(db).updateNote(identity, "note-1", {
+      collection_id: "collection-1",
+    });
+
+    expect(seenSql.some((sql) => sql.includes("INSERT INTO note_collection_items"))).toBe(true);
   });
 });

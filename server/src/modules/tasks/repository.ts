@@ -16,6 +16,8 @@ import {
 } from "../routeUtils/common";
 import { PgRunRepository } from "../runs/repository";
 import { runToOut } from "../runs/runReadModel";
+import { PgRunContextRepository } from "../context/repository";
+import { workspaceProjectReadAccessSql } from "../workspaces/access";
 import {
   bounded01,
   boardColumnOut,
@@ -382,6 +384,9 @@ export class PgTaskRepository {
       }
       const agentId = optionalString(body.agent_id) ?? task.assigned_agent_id;
       if (!agentId) throw new HttpError(422, "agent_id is required when task has no assigned_agent_id");
+      const contextArtifactIds = contextArtifactIdsFromBody(body.context_artifact_ids);
+      const workspaceId = optionalString(body.workspace_id) ?? task.workspace_id;
+      await validateContextArtifactAttachments(client, identity, contextArtifactIds, workspaceId, null);
       const run = await new PgRunRepository(client).createQueuedRun({
         agent_id: agentId,
         space_id: identity.spaceId,
@@ -390,13 +395,14 @@ export class PgTaskRepository {
         run_type: optionalString(body.run_type) ?? "agent",
         trigger_origin: optionalString(body.trigger_origin) ?? "manual",
         session_id: optionalString(body.session_id),
-        workspace_id: optionalString(body.workspace_id) ?? task.workspace_id,
+        workspace_id: workspaceId,
         project_id: null,
         prompt: optionalString(body.prompt),
         instruction: optionalString(body.instruction) ?? defaultTaskInstruction(task),
         scheduled_at: toDbDate(body.scheduled_at),
         parent_run_id: optionalString(body.parent_run_id),
         adapter_type: optionalString(body.adapter_type),
+        context_artifact_ids: contextArtifactIds,
       });
       const now = new Date().toISOString();
       await client.query(`UPDATE runs SET task_id = $3, updated_at = $4 WHERE space_id = $1 AND id = $2`, [identity.spaceId, run.id, taskId, now]);
@@ -448,9 +454,20 @@ export class PgTaskRepository {
     const total = await this.pool.query<{ total: string }>(
       `SELECT count(*)::text AS total
          FROM task_artifacts ta
+         JOIN tasks t ON t.id = ta.task_id AND t.space_id = ta.space_id
          JOIN artifacts a ON a.id = ta.artifact_id AND a.space_id = ta.space_id
         WHERE ta.space_id = $1 AND ta.task_id = $2
-          AND (a.visibility IN ('space_shared', 'workspace_shared', 'public_template') OR a.owner_user_id IS NULL OR a.owner_user_id = $3)`,
+          AND (
+            a.visibility IN ('space_shared', 'public_template')
+            OR (
+              a.visibility = 'workspace_shared'
+              AND a.workspace_id IS NOT NULL
+              AND a.workspace_id = t.workspace_id
+              AND ${workspaceProjectReadAccessSql({ spaceExpr: "a.space_id", workspaceExpr: "a.workspace_id", userExpr: "$3" })}
+            )
+            OR (a.owner_user_id IS NULL AND a.visibility NOT IN ('workspace_shared', 'restricted', 'selected_users'))
+            OR a.owner_user_id = $3
+          )`,
       [identity.spaceId, taskId, identity.userId],
     );
     const rows = await this.pool.query<TaskArtifactRow>(
@@ -458,9 +475,20 @@ export class PgTaskRepository {
               a.space_id AS artifact_space_id, a.run_id, a.proposal_id, a.artifact_type,
               a.title, a.mime_type, a.visibility, a.created_at AS artifact_created_at
          FROM task_artifacts ta
+         JOIN tasks t ON t.id = ta.task_id AND t.space_id = ta.space_id
          JOIN artifacts a ON a.id = ta.artifact_id AND a.space_id = ta.space_id
         WHERE ta.space_id = $1 AND ta.task_id = $2
-          AND (a.visibility IN ('space_shared', 'workspace_shared', 'public_template') OR a.owner_user_id IS NULL OR a.owner_user_id = $3)
+          AND (
+            a.visibility IN ('space_shared', 'public_template')
+            OR (
+              a.visibility = 'workspace_shared'
+              AND a.workspace_id IS NOT NULL
+              AND a.workspace_id = t.workspace_id
+              AND ${workspaceProjectReadAccessSql({ spaceExpr: "a.space_id", workspaceExpr: "a.workspace_id", userExpr: "$3" })}
+            )
+            OR (a.owner_user_id IS NULL AND a.visibility NOT IN ('workspace_shared', 'restricted', 'selected_users'))
+            OR a.owner_user_id = $3
+          )
         ORDER BY ta.created_at DESC, ta.id DESC
         LIMIT $4 OFFSET $5`,
       [identity.spaceId, taskId, identity.userId, limit, offset],
@@ -585,6 +613,39 @@ export class PgTaskRepository {
     );
     return { ...boardOut(board), columns: columns.rows.map(boardColumnOut) };
   }
+}
+
+function contextArtifactIdsFromBody(value: unknown): string[] {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value)) throw new HttpError(422, "context_artifact_ids must be an array");
+  if (value.length > 8) throw new HttpError(422, "context_artifact_ids must contain at most 8 items");
+  return value.map((item) => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new HttpError(422, "context_artifact_ids must contain non-empty strings");
+    }
+    return item.trim();
+  });
+}
+
+async function validateContextArtifactAttachments(
+  db: Queryable,
+  identity: SpaceUserIdentity,
+  artifactIds: readonly string[],
+  workspaceId: string | null,
+  projectId: string | null,
+): Promise<void> {
+  if (artifactIds.length === 0) return;
+  const selections = await new PgRunContextRepository(db).selectArtifactAttachments({
+    spaceId: identity.spaceId,
+    userId: identity.userId,
+    workspaceId,
+    projectId,
+    artifactIds,
+  });
+  const blocked = selections.find((selection) => selection.item.approved === false);
+  if (!blocked) return;
+  const reason = optionalString(blocked.item.rejection_reason) ?? "artifact is not attachable";
+  throw new HttpError(422, `context_artifact_ids invalid: ${reason}`);
 }
 
 async function getVisibleTaskRow(db: Queryable, identity: SpaceUserIdentity, taskId: string): Promise<TaskRow | null> {

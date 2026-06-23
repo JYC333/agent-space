@@ -9,6 +9,11 @@ import type { ServerConfig } from "../../config";
 import { executeRuntimeHost } from "../runtimeHost";
 import type { RunRecord } from "./repository";
 import {
+  executeWithRetrievalTools,
+  resolveRetrievalToolBinding,
+  type ManagedApiRetrievalToolDeps,
+} from "./managedRetrievalTools";
+import {
   redactEvidenceText,
   sanitizeEvidenceJson,
 } from "./evidenceRedaction";
@@ -37,7 +42,7 @@ export interface ManagedApiNoToolAdapterInput {
   context_snapshot_id?: string | null;
 }
 
-export interface ManagedApiNoToolAdapterDeps {
+export interface ManagedApiNoToolAdapterDeps extends ManagedApiRetrievalToolDeps {
   executeRuntimeHost?: RuntimeHostExecutor;
 }
 
@@ -72,7 +77,10 @@ export async function executeManagedApiNoToolAdapter(
 
   const request = runtimeHostRequest(input, adapterType, modelProviderId);
   const execute = deps.executeRuntimeHost ?? executeRuntimeHost;
-  const response = await execute(config, request);
+  const retrievalTools = await resolveRetrievalToolBinding(config, input.run, deps);
+  const response = retrievalTools
+    ? await executeWithRetrievalTools(config, input.run, request, execute, retrievalTools)
+    : await execute(config, request);
   return envelopeFromRuntimeHost(input, adapterType, response, startedAt);
 }
 

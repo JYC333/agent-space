@@ -35,7 +35,7 @@ let available = false;
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("postgres:18").start();
+    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
     pool = new Pool({ connectionString: container.getConnectionUri() });
     await pool.query(SCHEMA);
     available = true;
@@ -217,16 +217,20 @@ describe("runs repositories against real PostgreSQL", () => {
       run_type: "agent",
       trigger_origin: "manual",
       prompt: "hello",
+      context_artifact_ids: ["artifact-1", "artifact-1", "artifact-2"],
     });
 
     expect(run.status).toBe("queued");
     expect(run.agent_version_id).toBe(versionId);
     expect(run.context_snapshot_id).toBeTruthy();
-    const snapshot = await pool!.query<{ run_id: string; agent_id: string }>(
-      "SELECT run_id, agent_id FROM context_snapshots WHERE id = $1",
+    const snapshot = await pool!.query<{ run_id: string; agent_id: string; request_json: unknown }>(
+      "SELECT run_id, agent_id, request_json FROM context_snapshots WHERE id = $1",
       [run.context_snapshot_id],
     );
-    expect(snapshot.rows[0]).toEqual({ run_id: run.id, agent_id: agentId });
+    expect(snapshot.rows[0]).toMatchObject({ run_id: run.id, agent_id: agentId });
+    expect(snapshot.rows[0]?.request_json).toMatchObject({
+      context_artifact_ids: ["artifact-1", "artifact-2"],
+    });
     await expect(repo.getRun("space-1", run.id)).resolves.toMatchObject({
       id: run.id,
       system_prompt: "You are a test agent.",

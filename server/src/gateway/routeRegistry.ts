@@ -42,6 +42,8 @@ import { agentsModule } from "../modules/agents";
 import { personalMemoryGrantsModule } from "../modules/personalMemoryGrants";
 import { memoryModule } from "../modules/memory";
 import { contextModule } from "../modules/context";
+import { brainOpsModule } from "../modules/brainOps";
+import { brainThinkModule } from "../modules/brainThink";
 import { activityModule } from "../modules/activity";
 import { sourcePointersModule } from "../modules/sourcePointers";
 import { intakeModule } from "../modules/intake";
@@ -109,6 +111,8 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   personalMemoryGrantsModule,
   memoryModule,
   contextModule,
+  brainOpsModule,
+  brainThinkModule,
   activityModule,
   sourcePointersModule,
   intakeModule,

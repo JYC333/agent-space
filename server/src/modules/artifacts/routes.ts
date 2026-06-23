@@ -58,6 +58,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       identity.userId,
       artifactId,
       true,
+      query(request).workspace_id ?? null,
     );
     if (!artifact) return reply.code(404).send({ detail: "Artifact not found" });
     return reply.send(artifact);
@@ -72,6 +73,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         identity.spaceId,
         identity.userId,
         artifactId,
+        query(request).workspace_id ?? null,
       );
       if (!exported) return reply.code(404).send({ detail: "Artifact not found" });
       reply.header("content-type", exported.mediaType);
@@ -124,6 +126,7 @@ function parseListFilters(request: FastifyRequest):
         artifactType: string | null;
         runId: string | null;
         projectId: string | null;
+        workspaceId: string | null;
         limit: number;
         offset: number;
       };
@@ -141,6 +144,7 @@ function parseListFilters(request: FastifyRequest):
       artifactType: q.artifact_type ?? null,
       runId: q.run_id ?? null,
       projectId: q.project_id ?? null,
+      workspaceId: q.workspace_id ?? null,
       limit,
       offset,
     },

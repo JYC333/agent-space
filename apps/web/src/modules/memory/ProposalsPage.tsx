@@ -16,38 +16,20 @@ import { PreviewBadge, UrgencyBadge } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
 import { EgressReviewNotice, isGrantDerivedProposal } from './EgressReviewNotice'
 import { codePatchAcceptOptions } from './codePatchConfirm'
+import {
+  TYPE_FILTERS,
+  apiTypesForFilter,
+  proposalMatchesTypeFilter,
+  type ProposalTypeFilter,
+} from './proposalFilters'
 
 function fmt(dt: string | null | undefined) { return dt ? new Date(dt).toLocaleString() : '—' }
-
-type ProposalTypeFilter = '' | 'memory' | 'knowledge' | 'code_patch' | 'follow_up_task'
-
-const TYPE_FILTERS: { value: ProposalTypeFilter; label: string }[] = [
-  { value: '', label: 'All' },
-  { value: 'memory', label: 'Memory' },
-  { value: 'knowledge', label: 'Knowledge' },
-  { value: 'code_patch', label: 'Code' },
-  { value: 'follow_up_task', label: 'Tasks' },
-]
 
 const RISK_VARIANT: Record<string, 'default' | 'secondary' | 'muted' | 'destructive'> = {
   low:      'muted',
   medium:   'secondary',
   high:     'default',
   critical: 'destructive',
-}
-
-function apiTypesForFilter(type: string): (string | undefined)[] {
-  if (!type) return [undefined]
-  if (type === 'memory') return ['memory_create', 'memory_update', 'memory_archive']
-  if (type === 'knowledge') return ['knowledge_create', 'knowledge_update', 'knowledge_archive']
-  return [type]
-}
-
-function proposalMatchesTypeFilter(p: Proposal, type: string): boolean {
-  if (!type) return true
-  if (type === 'memory') return p.proposal_type.startsWith('memory_')
-  if (type === 'knowledge') return p.proposal_type.startsWith('knowledge_')
-  return p.proposal_type === type
 }
 
 export default function ProposalsPage() {
@@ -114,6 +96,13 @@ export default function ProposalsPage() {
           toast.success('Accepted — knowledge item created.')
         } else if (out.result_type === 'knowledge_relation') {
           toast.success('Accepted — knowledge relation created.')
+        } else if (out.result_type === 'retrieval_maintenance_packet') {
+          const count = out.result.generated_child_proposal_count ?? out.result.generated_child_proposal_ids?.length ?? 0
+          toast.success(`Accepted — ${count} child proposal${count === 1 ? '' : 's'} created.`)
+        } else if (out.result_type === 'claim_candidate_packet') {
+          const count = out.result.generated_child_proposal_count ?? out.result.generated_child_proposal_ids?.length ?? 0
+          const skipped = out.result.skipped_child_proposal_count ?? 0
+          toast.success(`Accepted — ${count} child proposal${count === 1 ? '' : 's'} created${skipped ? `, ${skipped} skipped` : ''}.`)
         } else if (out.result_type === 'agent_version') {
           toast.success('Accepted — agent version updated.')
         } else {
@@ -235,7 +224,7 @@ export default function ProposalsPage() {
           const active = urlType === filter.value || (
             filter.value === 'memory' && urlType.startsWith('memory_')
           ) || (
-            filter.value === 'knowledge' && urlType.startsWith('knowledge_')
+            filter.value === 'knowledge' && proposalMatchesTypeFilter({ proposal_type: urlType }, 'knowledge')
           )
           return (
             <button

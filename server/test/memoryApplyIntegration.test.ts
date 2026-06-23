@@ -31,7 +31,7 @@ const USER = "user-1";
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("postgres:18").start();
+    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
     pool = new Pool({ connectionString: container.getConnectionUri() });
     await pool.query(SCHEMA);
     repo = new PgMemoryApplyRepository(pool);
@@ -52,7 +52,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   if (!available || !pool) return;
-  await pool.query("TRUNCATE memory_entries, provenance_links, memory_relations, spaces, proposals");
+  await pool.query("TRUNCATE memory_entries, provenance_links, memory_relations, spaces, projects, proposals");
   await pool.query("INSERT INTO spaces (id, type) VALUES ($1, 'personal')", [SPACE]);
 });
 
@@ -75,9 +75,19 @@ async function inTx<T>(fn: (repo: PgMemoryApplyRepository) => Promise<T>): Promi
 
 async function seedProposal(p: ApplyProposal): Promise<void> {
   await pool!.query(
-    `INSERT INTO proposals (id, space_id, proposal_type, status, payload_json, created_by_user_id, created_by_run_id, workspace_id, title)
-     VALUES ($1, $2, $3, 'pending', $4::jsonb, $5, $6, $7, $8)`,
-    [p.id, p.space_id, p.proposal_type, JSON.stringify(p.payload_json), p.created_by_user_id, p.created_by_run_id ?? null, p.workspace_id, p.title],
+    `INSERT INTO proposals (id, space_id, proposal_type, status, payload_json, created_by_user_id, created_by_run_id, workspace_id, project_id, title)
+     VALUES ($1, $2, $3, 'pending', $4::jsonb, $5, $6, $7, $8, $9)`,
+    [
+      p.id,
+      p.space_id,
+      p.proposal_type,
+      JSON.stringify(p.payload_json),
+      p.created_by_user_id,
+      p.created_by_run_id ?? null,
+      p.workspace_id,
+      p.project_id,
+      p.title,
+    ],
   );
 }
 
@@ -88,6 +98,7 @@ function proposal(over: Partial<ApplyProposal> & { payload_json: Record<string, 
     proposal_type: over.proposal_type ?? "memory_create",
     title: over.title ?? "Remember",
     workspace_id: over.workspace_id ?? null,
+    project_id: over.project_id ?? null,
     created_by_user_id: over.created_by_user_id ?? USER,
     created_by_run_id: over.created_by_run_id ?? null,
     payload_json: over.payload_json,
@@ -171,6 +182,46 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     expect(prov).toContainEqual({ source_type: "proposal", source_id: "prop-1", source_trust: "internal_system" });
   });
 
+  it("applies memory_create with a validated project association", async () => {
+    if (!available || !repo || !pool) return;
+    await pool.query("INSERT INTO projects (id, space_id, deleted_at) VALUES ('project-1', $1, NULL)", [SPACE]);
+
+    const out = await repo.applyCreate(
+      proposal({
+        project_id: "project-1",
+        payload_json: {
+          target_visibility: "space_shared",
+          proposed_content: "project memory",
+          provenance_entries: [userConf],
+        },
+      }),
+      USER,
+    );
+
+    expect(out.memory.project_id).toBe("project-1");
+    const row = (await pool.query("SELECT project_id FROM memory_entries WHERE id = $1", [out.memory.id])).rows[0];
+    expect(row.project_id).toBe("project-1");
+  });
+
+  it("rejects memory_create when the proposal project is outside the current space", async () => {
+    if (!available || !repo || !pool) return;
+
+    await expect(
+      repo.applyCreate(
+        proposal({
+          project_id: "project-other",
+          payload_json: {
+            target_visibility: "space_shared",
+            proposed_content: "project memory",
+            provenance_entries: [userConf],
+          },
+        }),
+        USER,
+      ),
+    ).rejects.toBeInstanceOf(MemoryApplyError);
+    expect((await pool.query("SELECT count(*)::int AS c FROM memory_entries")).rows[0].c).toBe(0);
+  });
+
   it("rejects private visibility in a non-personal space (placement invariant)", async () => {
     if (!available || !repo || !pool) return;
     await pool.query("UPDATE spaces SET type = 'team' WHERE id = $1", [SPACE]);
@@ -191,6 +242,63 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     );
     expect(out.memory.visibility).toBe("private");
     expect(out.memory.owner_user_id).toBe(USER); // fell back to acting user
+  });
+
+  it("defaults a no-visibility create to owner-only restricted in a multi-member space", async () => {
+    if (!available || !repo || !pool) return;
+    await pool.query("UPDATE spaces SET type = 'team' WHERE id = $1", [SPACE]);
+    const creator = "creator-9";
+
+    const out = await repo.applyCreate(
+      proposal({
+        created_by_user_id: creator,
+        payload_json: { proposed_content: "assistant-derived", provenance_entries: [userConf] },
+      }),
+      USER, // accepting user differs from the creator the memory belongs to
+    );
+
+    // restricted + owner=creator + no selected users == owner-only in a team space.
+    expect(out.memory.visibility).toBe("restricted");
+    expect(out.memory.owner_user_id).toBe(creator);
+    const row = (await pool.query("SELECT selected_user_ids FROM memory_entries WHERE id = $1", [out.memory.id])).rows[0];
+    expect(row.selected_user_ids).toBeNull();
+  });
+
+  it("keeps the personal-space no-visibility default at space_shared", async () => {
+    if (!available || !repo) return; // space is 'personal' by default
+    const out = await repo.applyCreate(
+      proposal({ payload_json: { proposed_content: "personal default", provenance_entries: [userConf] } }),
+      USER,
+    );
+    expect(out.memory.visibility).toBe("space_shared");
+  });
+
+  it("promotes an owner-only restricted memory to space_shared via memory_update", async () => {
+    if (!available || !repo || !pool) return;
+    await pool.query("UPDATE spaces SET type = 'team' WHERE id = $1", [SPACE]);
+    await insertActiveMemory({
+      id: "mem-personal",
+      visibility: "restricted",
+      owner_user_id: USER,
+      content: "personal note",
+    });
+
+    const out = await repo.applyUpdate(
+      proposal({
+        proposal_type: "memory_update",
+        payload_json: {
+          target_memory_id: "mem-personal",
+          target_visibility: "space_shared",
+          provenance_entries: [userConf],
+        },
+      }),
+      USER,
+    );
+
+    expect(out.memory.visibility).toBe("space_shared");
+    expect(out.memory.owner_user_id).toBe(USER); // promoter stays steward
+    const old = (await pool.query("SELECT status FROM memory_entries WHERE id = 'mem-personal'")).rows[0];
+    expect(old.status).toBe("superseded");
   });
 
   it("applies memory_update: new version supersedes old, copies + adds provenance", async () => {
