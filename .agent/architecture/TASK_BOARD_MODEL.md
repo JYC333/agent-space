@@ -16,7 +16,7 @@ This document describes the **agent-native task board** domain layer. It is back
 
 - A task may optionally sit on a **board** and **column** (`board_id`, `column_id`).
 - A task links to many **runs** via `task_runs` (roles such as `primary`, `retry`, `review`).
-- A task links to **artifacts** and **proposals** through junction tables with roles (for example `output`, `evidence`, `main_change`).
+- A task links to **artifacts** and **proposals** through junction tables with roles (for example `output`, `evidence`, `main_change`). `task_artifacts.run_id` records the task-run context for a selected artifact when known; `artifacts.run_id` remains the artifact's producing run.
 - Dependencies between tasks use `task_dependencies` (`blocks`, `requires`, `related`, etc.).
 
 ## Agent–human collaboration

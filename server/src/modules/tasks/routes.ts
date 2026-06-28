@@ -24,6 +24,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const { limit, offset } = parsePage(q);
       return reply.send(await repository().listBoards(identity, {
         workspaceId: optionalString(q.workspace_id),
+        projectId: optionalString(q.project_id),
         status: optionalString(q.status),
         limit,
         offset,
@@ -189,6 +190,7 @@ function taskListHandler(context: ModuleContext, repository: () => PgTaskReposit
       return reply.send(await repository().listTasks(identity, {
         boardId: optionalString(q.board_id),
         workspaceId: optionalString(q.workspace_id),
+        projectId: optionalString(q.project_id),
         status: optionalString(q.status),
         assignedToMe: boolQuery(q.assigned_to_me, false),
         q: optionalString(q.q),

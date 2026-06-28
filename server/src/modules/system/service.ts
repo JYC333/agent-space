@@ -73,7 +73,6 @@ export function computeFeatures(config: ServerConfig): string[] {
     "api_keys_feature_gate",
     "space_default_seeding",
     "runtime_adapter_catalog",
-    "execution_planes_server_authority",
     "runtime_tool_bindings_server_authority",
     "providers_read_server_authority",
     "providers_credentials_server_authority",

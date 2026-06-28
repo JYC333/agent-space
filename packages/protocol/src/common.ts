@@ -50,7 +50,7 @@ export function isVisibility(value: string): value is VisibilityValue {
 }
 
 /** Documented space-type values (see `docs/SPACE_MODEL.md`). */
-export const SPACE_TYPE_VALUES = ["personal", "family", "team"] as const;
+export const SPACE_TYPE_VALUES = ["personal", "household", "team"] as const;
 export type SpaceTypeValue = (typeof SPACE_TYPE_VALUES)[number];
 export function isSpaceType(value: string): value is SpaceTypeValue {
   return (SPACE_TYPE_VALUES as readonly string[]).includes(value);

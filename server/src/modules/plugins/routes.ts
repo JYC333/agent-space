@@ -10,7 +10,7 @@ import {
   objectValue,
   withDbTransaction,
 } from "../routeUtils/common";
-import { authRepositoryFromConfig } from "../auth/identity";
+import { requireSpaceOwnerOrAdmin, requireInstanceAdmin } from "../routeUtils/access";
 import { pluginService } from "./service";
 import { getOfficialPlugin } from "./registry";
 import { installOfficialPlugin } from "./installer";
@@ -22,32 +22,6 @@ function settingsObject(value: unknown): Record<string, unknown> | undefined {
     throw new HttpError(422, "settings must be an object");
   }
   return objectValue(value);
-}
-
-async function requireSpaceAdmin(
-  config: ServerConfig,
-  identity: { spaceId: string; userId: string },
-  reply: FastifyReply,
-): Promise<boolean> {
-  const repository = authRepositoryFromConfig(config);
-  if (!repository) {
-    reply.code(502).send({ detail: "Identity database is unavailable" });
-    return false;
-  }
-  const space = await repository.getSpaceForUser(identity.userId, identity.spaceId);
-  if (!space) {
-    reply.code(404).send({ detail: "Space not found" });
-    return false;
-  }
-  if ("statusCode" in space) {
-    reply.code(space.statusCode).send({ detail: space.detail });
-    return false;
-  }
-  if (space.role !== "owner" && space.role !== "admin") {
-    reply.code(403).send({ detail: "Requires space owner or admin role" });
-    return false;
-  }
-  return true;
 }
 
 async function requirePluginWritePermission(
@@ -62,7 +36,7 @@ async function requirePluginWritePermission(
     return false;
   }
   if (descriptor.scope === "user") return true;
-  return requireSpaceAdmin(config, identity, reply);
+  return requireSpaceOwnerOrAdmin(config, identity, reply);
 }
 
 export function registerRoutes(app: FastifyInstance, { config }: ModuleContext): void {
@@ -132,6 +106,7 @@ export function registerRoutes(app: FastifyInstance, { config }: ModuleContext):
       const { pluginId } = request.params as { pluginId: string };
       if (!(await requirePluginWritePermission(config, identity, pluginId, reply))) return;
 
+      if (!(await requireInstanceAdmin(config, identity, reply, "Plugin install requires instance admin"))) return;
       const install = await withDbTransaction(
         db(),
         (client) =>

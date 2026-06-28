@@ -1,7 +1,7 @@
 import type {
   Memory, Session, Message, Task, CondenserPresetPromptOut,
-  Capability, ContextPackage, Feature, Workspace, WorkspaceCreateBody, WorkspaceUpdateBody, Page,
-  CapabilitiesReloadResult, ReflectResult, ApiError,
+  ContextPackage, Feature, Workspace, WorkspaceCreateBody, WorkspaceUpdateBody, Page,
+  ReflectResult, ApiError,
   RuntimeToolDefinition, RuntimeToolInstallResult, RuntimeToolStatus, RuntimeToolLatest, SpaceRuntimeToolPolicyOut,
   CredentialLoginMethod, CredentialStatus, CliUsageEntry, CliUsageAutoRefreshSettings, LoginEvent,
   NetworkProfileOut, NetworkProfileCreateBody, NetworkProfileUpdateBody, CliCredentialProfileOut,
@@ -59,20 +59,14 @@ import type {
 const BASE = '/api/v1'
 
 let _spaceId = 'personal'
-let _userId  = 'default_user'
 let _apiKey: string | null = null
 
-export function setSpaceContext(spaceId: string, userId: string): void {
+export function setSpaceContext(spaceId: string): void {
   _spaceId = spaceId
-  _userId  = userId
 }
 
 export function setAuth(key: string | null): void {
   _apiKey = key
-}
-
-function spaceParams(spaceId = _spaceId, userId = _userId): string {
-  return `space_id=${encodeURIComponent(spaceId)}&user_id=${encodeURIComponent(userId)}`
 }
 
 function formatApiErrorMessage(err: ApiError, fallback: string): string {
@@ -90,7 +84,7 @@ function formatApiErrorMessage(err: ApiError, fallback: string): string {
 }
 
 interface RequestOptions {
-  includeSpaceParams?: boolean
+  includeSpaceContext?: boolean
   spaceId?: string
 }
 
@@ -100,11 +94,9 @@ async function request<T = unknown>(method: string, path: string, body?: unknown
   const isForm = typeof FormData !== 'undefined' && body instanceof FormData
   const headers: Record<string, string> = isForm ? {} : { 'Content-Type': 'application/json' }
   if (_apiKey) headers['Authorization'] = `Bearer ${_apiKey}`
+  if (options.includeSpaceContext ?? true) headers['X-Agent-Space-Id'] = options.spaceId ?? _spaceId
 
-  const includeSpaceParams = options.includeSpaceParams ?? true
-  const url = includeSpaceParams
-    ? BASE + path + (path.includes('?') ? '&' : '?') + spaceParams(options.spaceId)
-    : BASE + path
+  const url = BASE + path
 
   const opts: RequestInit = { method, headers }
   if (body !== undefined) opts.body = isForm ? (body as FormData) : JSON.stringify(body)
@@ -167,7 +159,7 @@ export const memoryApi = {
     return get<Memory>(`/memory/${id}${suffix}`)
   },
   create: (data: Partial<Memory>) =>
-    post<Proposal>('/memory', { space_id: _spaceId, owner_user_id: _userId, ...data }),
+    post<Proposal>('/memory', data),
   update: (id: string, data: Partial<Memory>) =>
     patch<Proposal>(`/memory/${id}`, data),
   delete: (id: string) =>
@@ -230,9 +222,18 @@ export const knowledgeApi = {
   proposeArchive: (id: string) =>
     del<Proposal>(`/knowledge/items/${id}`),
   proposeRelation: (body: KnowledgeRelationProposalBody) =>
-    post<Proposal>('/knowledge/relations/proposals', body),
+    post<Proposal>('/knowledge/object-relations/proposals', {
+      from_object_id: body.from_object_id,
+      to_object_id: body.to_object_id,
+      relation_type: body.relation_type,
+      status: body.status,
+      confidence: body.confidence,
+      evidence_summary: body.evidence_summary,
+      rationale: body.rationale,
+      metadata: { endpoint_type: 'knowledge_item', requested_relation_type: body.relation_type },
+    }),
   proposeRelationArchive: (id: string) =>
-    del<Proposal>(`/knowledge/relations/${id}`),
+    del<Proposal>(`/knowledge/object-relations/${id}`),
   summary: () => get<KnowledgeSummary>('/knowledge/summary'),
   search: (data: RetrievalSearchRequest) =>
     post<RetrievalSearchResponse>('/knowledge/search', data),
@@ -386,13 +387,13 @@ export const homeApi = {
 // ── Personal perspective (/me aggregation) ─────────────────────────────────
 export const meApi = {
   summary: (params: Record<string, string> = {}) =>
-    get<MeSummaryOut>('/me/summary?' + new URLSearchParams(params), { includeSpaceParams: false }),
+    get<MeSummaryOut>('/me/summary?' + new URLSearchParams(params), { includeSpaceContext: false }),
   timeline: (params: Record<string, string> = {}) =>
-    get<MeTimelineEntry[]>('/me/timeline?' + new URLSearchParams(params), { includeSpaceParams: false }),
+    get<MeTimelineEntry[]>('/me/timeline?' + new URLSearchParams(params), { includeSpaceContext: false }),
   tasks: (params: Record<string, string> = {}) =>
-    get<Page<MeTaskItem>>('/me/tasks?' + new URLSearchParams(params), { includeSpaceParams: false }),
+    get<Page<MeTaskItem>>('/me/tasks?' + new URLSearchParams(params), { includeSpaceContext: false }),
   pending: (params: Record<string, string> = {}) =>
-    get<MePendingProposalItem[]>('/me/pending?' + new URLSearchParams(params), { includeSpaceParams: false }),
+    get<MePendingProposalItem[]>('/me/pending?' + new URLSearchParams(params), { includeSpaceContext: false }),
 }
 
 // ── Runs (canonical API) ──────────────────────────────────────────────────
@@ -478,11 +479,12 @@ async function downloadArtifactExport(
 ): Promise<void> {
   const headers: Record<string, string> = {}
   if (_apiKey) headers['Authorization'] = `Bearer ${_apiKey}`
+  headers['X-Agent-Space-Id'] = _spaceId
   const sep = '/artifacts/' + artifactId + '/export'
   const query = new URLSearchParams()
   if (params.workspace_id !== undefined) query.set('workspace_id', params.workspace_id)
   const artifactParams = query.toString()
-  const url = BASE + sep + '?' + [spaceParams(), artifactParams].filter(Boolean).join('&')
+  const url = BASE + sep + (artifactParams ? `?${artifactParams}` : '')
   const r = await fetch(url, { method: 'GET', headers })
   if (r.status === 401) window.dispatchEvent(new CustomEvent('auth:required'))
   if (r.status === 404) throw new Error('Artifact not found or not exportable')
@@ -671,13 +673,6 @@ export const workspacesApi = {
   scan:   ()                                    => post<{ created: Workspace[]; marked_stale: string[] }>('/workspaces/scan'),
 }
 
-// ── Capabilities ──────────────────────────────────────────────────────────
-export const capabilitiesApi = {
-  list:   ()            => get<Capability[]>('/capabilities'),
-  get:    (id: string)  => get<Capability>(`/capabilities/${id}`),
-  reload: ()            => post<CapabilitiesReloadResult>('/capabilities/reload'),
-}
-
 export const capabilitiesFrameworkApi = {
   listCapabilityDefinitions: () =>
     get<CapabilityDefinition[]>('/capability-definitions'),
@@ -850,9 +845,10 @@ export const credentialsApi = {
 
   async *loginStream(runtime: string, profileId?: string | null, spaceId?: string | null): AsyncGenerator<LoginEvent> {
     const profileParam = profileId ? `&profile_id=${encodeURIComponent(profileId)}` : ''
-    const url = `${BASE}/credentials/cli/login/stream?runtime=${encodeURIComponent(runtime)}${profileParam}&${spaceParams(spaceId ?? _spaceId)}`
+    const url = `${BASE}/credentials/cli/login/stream?runtime=${encodeURIComponent(runtime)}${profileParam}`
     const headers: Record<string, string> = {}
     if (_apiKey) headers['Authorization'] = `Bearer ${_apiKey}`
+    headers['X-Agent-Space-Id'] = spaceId ?? _spaceId
 
     const r = await fetch(url, { headers })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)

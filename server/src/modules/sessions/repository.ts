@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
+import { insertProposalRow } from "../proposals/reviewPackets";
 import type {
   MessageOut,
   SessionSummaryForContext,
@@ -317,51 +318,36 @@ export class PgSessionRepository {
     const title = session.title
       ? `Session reflection: ${session.title}`.slice(0, 512)
       : "Session reflection";
-    const now = new Date().toISOString();
-    await this.db.query(
-      `INSERT INTO proposals (
-         id, space_id, proposal_type, status, risk_level, urgency, preview,
-         title, summary, payload_json, review_deadline, expires_at, created_at,
-         updated_at, reviewed_at, reviewed_by, workspace_id, rationale,
-         created_by_agent_id, created_by_user_id, required_approver_role,
-         visibility, project_id
-       ) VALUES (
-         $1, $2, 'memory_create', 'pending', 'low', 'normal', false,
-         $3, NULL, $4::jsonb, NULL, NULL, $5,
-         $5, NULL, NULL, $6, $7,
-         NULL, $8, NULL,
-         'space_shared', NULL
-       )`,
-      [
-        randomUUID(),
-        spaceId,
-        title,
-        JSON.stringify({
-          operation: "create",
-          proposed_content: transcript,
-          memory_type: "experience",
-          target_scope: "user",
-          target_namespace: "session.reflect",
-          target_visibility: "private",
-          owner_user_id: userId,
-          subject_user_id: userId,
-          source_session_id: sessionId,
-          source_message_ids: usable.map((message) => message.id),
-          provenance_entries: [
-            {
-              source_type: "session",
-              source_id: sessionId,
-              source_trust: "user_confirmed",
-              evidence_json: { message_count: usable.length },
-            },
-          ],
-        }),
-        now,
-        session.workspace_id,
-        "Session reflection requested by the user.",
-        userId,
-      ],
-    );
+    await insertProposalRow(this.db, {
+      spaceId,
+      proposalType: "memory_create",
+      title,
+      payload: {
+        operation: "create",
+        proposed_content: transcript,
+        memory_type: "experience",
+        target_scope: "user",
+        target_namespace: "session.reflect",
+        target_visibility: "private",
+        owner_user_id: userId,
+        subject_user_id: userId,
+        source_session_id: sessionId,
+        source_message_ids: usable.map((message) => message.id),
+        provenance_entries: [
+          {
+            source_type: "session",
+            source_id: sessionId,
+            source_trust: "user_confirmed",
+            evidence_json: { message_count: usable.length },
+          },
+        ],
+      },
+      workspaceId: session.workspace_id,
+      rationale: "Session reflection requested by the user.",
+      createdByUserId: userId,
+      visibility: "space_shared",
+      riskLevel: "low",
+    });
     return { session_id: sessionId, proposals_created: 1 };
   }
 

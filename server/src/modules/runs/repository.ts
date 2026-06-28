@@ -21,6 +21,7 @@ import {
 } from "./runRepositoryHelpers";
 import {
   type ArtifactSummaryRecord,
+  type ContextSnapshotRecord,
   type ModelProviderSummaryRecord,
   type ProposalSummaryRecord,
   type Queryable,
@@ -53,6 +54,7 @@ import {
 export {
   RunCreateValidationError,
   type ArtifactSummaryRecord,
+  type ContextSnapshotRecord,
   type ModelProviderSummaryRecord,
   type ProposalSummaryRecord,
   type QueryResult,
@@ -183,14 +185,17 @@ export class PgRunRepository {
           input.runtime_profile_id,
         )
       : await this.getDefaultRuntimeProfileForRun(input.space_id, input.agent_id);
-    // Resolve adapter type + model provider from the agent version and space
-    // defaults when the caller did not pass them explicitly. The chat path
-    // passes neither, so without this the run is created with a null provider
-    // and a `model_api` execution fails closed with `model_provider_required`.
+    if (!runtimeProfile) {
+      throw new RunCreateValidationError(
+        `Agent '${input.agent_id}' has no enabled runtime profile`,
+        409,
+      );
+    }
+    // Resolve adapter type + model provider from the selected/default runtime
+    // profile and space provider defaults. Public run creation does not accept
+    // per-run adapter/model overrides.
     const resolved = await this.resolveRunModelConfig(
       input.space_id,
-      agent.current_version_id,
-      input,
       runtimeProfile,
     );
     const requiredSandboxLevel = requiredSandboxLevelForRun(
@@ -412,7 +417,7 @@ export class PgRunRepository {
     const runId = randomUUID();
     const modelOverrideJson = JSON.stringify({
       source: "system_run",
-      adapter_type: "capability",
+      native_capability_executor: false,
     });
     const result = await this.db.query<RunRecord>(
       `INSERT INTO runs (
@@ -428,7 +433,7 @@ export class PgRunRepository {
        VALUES (
           $1, $2, $3, $4, NULL, $5, $6, NULL, NULL, $7,
           'system', $8, 'running', 'live', $9, $10,
-          NULL, $11, $11, $11, 'capability',
+          NULL, $11, $11, $11, NULL,
           $12, $13::jsonb, NULL, $14::jsonb,
           NULL, 'none', 'estimated',
           'space_shared', $15, $16
@@ -547,70 +552,35 @@ export class PgRunRepository {
 
   /**
    * Resolve adapter type + model provider + model for a new run. Priority:
-   * runtime profile → legacy explicit request → agent version default →
-   * space default provider (for adapters that require a provider).
+   * runtime profile → space default provider (for adapters that require one).
    */
   private async resolveRunModelConfig(
     spaceId: string,
-    versionId: string,
-    input: RunCreateInput,
-    runtimeProfile: RuntimeProfileForRun | null,
+    runtimeProfile: RuntimeProfileForRun,
   ): Promise<{
     adapterType: string;
     modelProviderId: string | null;
     modelName: string | null;
     source: string;
   }> {
-    const version = await this.loadAgentVersionForResolution(spaceId, versionId);
-    const runtimeConfig = recordValue(version?.runtime_config_json);
-    const runtimePolicy = recordValue(version?.runtime_policy_json);
     const profileRuntimeConfig = recordValue(runtimeProfile?.runtime_config_json);
     const profileRuntimePolicy = recordValue(runtimeProfile?.runtime_policy_json);
     const adapterType =
       trimmed(runtimeProfile?.adapter_type) ||
       trimmed(profileRuntimeConfig.adapter_type) ||
       trimmed(profileRuntimePolicy.default_adapter_type) ||
-      trimmed(input.adapter_type) ||
-      trimmed(runtimeConfig.adapter_type) ||
-      trimmed(runtimePolicy.default_adapter_type) ||
       "model_api";
     const mode =
       BUILTIN_RUNTIME_ADAPTER_SPECS[adapterType as RuntimeAdapterType]?.model
         .model_provider_mode ?? "none";
-    const requestModel = runtimeProfile ? null : trimmed(input.model) || null;
     const profileModel = trimmed(runtimeProfile?.model_name) || null;
-    const versionModel = trimmed(version?.model_name) || null;
 
     if (runtimeProfile?.model_provider_id) {
       return {
         adapterType,
         modelProviderId: runtimeProfile.model_provider_id,
-        modelName: profileModel ?? versionModel,
+        modelName: profileModel,
         source: "runtime_profile",
-      };
-    }
-    if (!runtimeProfile && input.model_provider_id) {
-      return {
-        adapterType,
-        modelProviderId: input.model_provider_id,
-        modelName: requestModel ?? versionModel,
-        source: "request",
-      };
-    }
-    if (mode !== "none" && version?.model_provider_id) {
-      return {
-        adapterType,
-        modelProviderId: version.model_provider_id,
-        modelName: requestModel ?? profileModel ?? versionModel,
-        source: "agent_default",
-      };
-    }
-    if ((adapterType === "claude_code" || adapterType === "codex_cli") && version?.model_provider_id) {
-      return {
-        adapterType,
-        modelProviderId: version.model_provider_id,
-        modelName: requestModel ?? profileModel ?? versionModel,
-        source: "agent_default",
       };
     }
     if (mode === "required") {
@@ -619,7 +589,7 @@ export class PgRunRepository {
         return {
           adapterType,
           modelProviderId: fallback.id,
-          modelName: requestModel ?? profileModel ?? versionModel ?? fallback.default_model,
+          modelName: profileModel ?? fallback.default_model,
           source: fallback.source,
         };
       }
@@ -627,33 +597,9 @@ export class PgRunRepository {
     return {
       adapterType,
       modelProviderId: null,
-      modelName: requestModel ?? profileModel,
-      source: runtimeProfile && profileModel ? "runtime_profile" : requestModel ? "request" : "none",
+      modelName: profileModel,
+      source: profileModel ? "runtime_profile" : "none",
     };
-  }
-
-  private async loadAgentVersionForResolution(
-    spaceId: string,
-    versionId: string,
-  ): Promise<{
-    runtime_config_json: unknown;
-    runtime_policy_json: unknown;
-    model_provider_id: string | null;
-    model_name: string | null;
-  } | null> {
-    const result = await this.db.query<{
-      runtime_config_json: unknown;
-      runtime_policy_json: unknown;
-      model_provider_id: string | null;
-      model_name: string | null;
-    }>(
-      `SELECT runtime_config_json, runtime_policy_json, model_provider_id, model_name
-         FROM agent_versions
-        WHERE id = $1 AND space_id = $2
-        LIMIT 1`,
-      [versionId, spaceId],
-    );
-    return result.rows[0] ?? null;
   }
 
   /**
@@ -756,7 +702,7 @@ export class PgRunRepository {
               r.project_id, r.scheduled_at, r.adapter_type, r.capability_id,
               r.capabilities_json, r.model_provider_id, r.model_override_json, r.required_sandbox_level,
               r.runtime_profile_snapshot_json,
-              COALESCE(r.runtime_profile_snapshot_json->'runtime_config_json', av.runtime_config_json) AS runtime_config_json,
+              COALESCE(r.runtime_profile_snapshot_json->'runtime_config_json', '{}'::jsonb) AS runtime_config_json,
               r.trigger_origin, r.instructed_by_user_id, r.error_message,
               r.error_json, r.output_json, r.usage_json, r.started_at,
               r.ended_at, r.created_at, r.updated_at, r.visibility
@@ -953,6 +899,30 @@ export class PgRunRepository {
       [spaceId, runId],
     );
     return result.rows;
+  }
+
+  async getContextSnapshot(
+    spaceId: string,
+    snapshotId: string | null | undefined,
+  ): Promise<ContextSnapshotRecord | null> {
+    if (!snapshotId) return null;
+    const result = await this.db.query<ContextSnapshotRecord>(
+      `SELECT id, space_id, run_id, agent_id, session_id, source_refs_json,
+              compiled_summary, token_estimate, relevant_period_start,
+              relevant_period_end, compiled_prefix_text, compiled_tail_text,
+              compiled_prefix_ref, compiled_tail_ref, prefix_hash, tail_hash,
+              compiler_version, retrieval_trace_json, token_budget_json,
+              policy_bundle_version, memory_digest_version, workspace_digest_version,
+              included_memory_refs_json, included_evidence_refs_json,
+              included_file_refs_json, included_doc_refs_json, redactions_json,
+              data_exposure_level, rendered_context_uri, rendered_context_text,
+              request_json, created_at
+         FROM context_snapshots
+        WHERE space_id = $1 AND id = $2
+        LIMIT 1`,
+      [spaceId, snapshotId],
+    );
+    return result.rows[0] ?? null;
   }
 
   async getLatestRunEvaluation(
@@ -1310,12 +1280,8 @@ export class PgRunRepository {
                     started_at, ended_at
        )
        SELECT u.*,
-              COALESCE(u.runtime_profile_snapshot_json->'runtime_config_json', av.runtime_config_json) AS runtime_config_json
-         FROM updated u
-         LEFT JOIN agent_versions av
-           ON av.id = u.agent_version_id
-          AND av.space_id = u.space_id
-          AND av.agent_id = u.agent_id`,
+              COALESCE(u.runtime_profile_snapshot_json->'runtime_config_json', '{}'::jsonb) AS runtime_config_json
+         FROM updated u`,
       [
         input.space_id,
         input.run_id,
@@ -1374,6 +1340,110 @@ export class PgRunRepository {
         JSON.stringify(usageJson),
         input.completed_at,
         redactEvidenceText(extractErrorMessage(errorJson)),
+      ],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async markRunWaitingForReview(input: {
+    run_id: string;
+    space_id: string;
+    approval_code: string;
+    message: string;
+    paused_at: string;
+  }): Promise<RunRecord | null> {
+    const errorJson = sanitizeErrorJson({
+      error_code: input.approval_code,
+      error_text: input.message,
+    });
+    const result = await this.db.query<RunRecord>(
+      `UPDATE runs
+          SET status = 'waiting_for_review',
+              error_json = $3::jsonb,
+              error_message = $4,
+              updated_at = $5
+        WHERE space_id = $1
+          AND id = $2
+          AND status = 'running'
+        RETURNING id, space_id, agent_id, agent_version_id, run_type, status, mode,
+                  prompt, instruction, workspace_id, session_id, project_id,
+                  adapter_type, model_provider_id,
+                  required_sandbox_level, trigger_origin, instructed_by_user_id, error_message, started_at, ended_at`,
+      [
+        input.space_id,
+        input.run_id,
+        JSON.stringify(errorJson),
+        redactEvidenceText(input.message),
+        input.paused_at,
+      ],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async grantRunApprovalAndRequeue(input: {
+    run_id: string;
+    space_id: string;
+    granted_by_user_id: string;
+    granted_at: string;
+  }): Promise<RunRecord | null> {
+    const result = await this.db.query<RunRecord>(
+      `UPDATE runs
+          SET status = 'queued',
+              permission_snapshot_json = jsonb_set(
+                COALESCE(permission_snapshot_json, '{}'),
+                '{policy_grants}',
+                COALESCE(permission_snapshot_json->'policy_grants', '[]') ||
+                  jsonb_build_array(jsonb_build_object(
+                    'approval_code', error_json->>'error_code',
+                    'granted_by_user_id', $3::text,
+                    'granted_at', $4::text
+                  ))
+              ),
+              error_json = NULL,
+              error_message = NULL,
+              updated_at = $4
+        WHERE space_id = $1
+          AND id = $2
+          AND status = 'waiting_for_review'
+        RETURNING id, space_id, agent_id, agent_version_id, run_type, status, mode,
+                  prompt, instruction, workspace_id, session_id, project_id,
+                  adapter_type, model_provider_id, permission_snapshot_json,
+                  required_sandbox_level, trigger_origin, instructed_by_user_id, error_message, started_at, ended_at`,
+      [input.space_id, input.run_id, input.granted_by_user_id, input.granted_at],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async markRunDegraded(input: {
+    run_id: string;
+    space_id: string;
+    completed_at: string;
+    error_code: string;
+    error_message: string;
+  }): Promise<RunRecord | null> {
+    const errorJson = sanitizeErrorJson({
+      error_code: input.error_code,
+      error_text: input.error_message,
+    });
+    const result = await this.db.query<RunRecord>(
+      `UPDATE runs
+          SET status = 'degraded',
+              error_json = COALESCE(error_json, '{}'::jsonb) || $3::jsonb,
+              updated_at = $4,
+              error_message = $5
+        WHERE space_id = $1
+          AND id = $2
+          AND status = 'succeeded'
+        RETURNING id, space_id, agent_id, agent_version_id, run_type, status, mode,
+                  prompt, instruction, workspace_id, session_id, project_id,
+                  adapter_type, model_provider_id,
+                  required_sandbox_level, trigger_origin, instructed_by_user_id, error_message, started_at, ended_at`,
+      [
+        input.space_id,
+        input.run_id,
+        JSON.stringify(errorJson),
+        input.completed_at,
+        redactEvidenceText(input.error_message),
       ],
     );
     return result.rows[0] ?? null;

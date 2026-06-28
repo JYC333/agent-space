@@ -8,6 +8,7 @@ import type {
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { CLAIM_COLUMNS, CLAIM_FROM, type ClaimRow } from "./knowledgeRepositoryRows";
 import type { Queryable } from "../routeUtils/common";
+import { spaceObjectVisibleSql } from "../access/visibility";
 import {
   loadSourcePolicySnapshots,
   loadViewerSpaceRole,
@@ -30,11 +31,11 @@ const CONFIDENCE_TIERS = ["high", "medium", "low"] as const;
 type ConfidenceTier = (typeof CONFIDENCE_TIERS)[number];
 
 function readableClaimClause(userParam: string): string {
-  return readableSpaceObjectClause("so", userParam);
+  return spaceObjectVisibleSql("so", userParam);
 }
 
 function readableSpaceObjectClause(alias: string, userParam: string): string {
-  return `(${alias}.visibility IN ('space_shared', 'workspace_shared') OR ${alias}.owner_user_id = ${userParam} OR ${alias}.created_by_user_id = ${userParam})`;
+  return spaceObjectVisibleSql(alias, userParam);
 }
 
 export interface ClaimTrajectoryInput {
@@ -564,9 +565,9 @@ function buildFinding(
     to_claim: { claim_id: b.id, title: b.title ?? b.claim_text.slice(0, 80) },
     reason: detected.reason,
     proposed_action: {
-      proposal_type: "claim_relation_create",
-      from_claim_id: a.id,
-      to_claim_id: b.id,
+      proposal_type: "object_relation_create",
+      from_object_id: a.id,
+      to_object_id: b.id,
       relation_type: "contradicts",
       confidence: confidenceForTier(detected.tier),
     },
@@ -575,7 +576,7 @@ function buildFinding(
 
 function findingKey(finding: ClaimContradictionFinding): string {
   const action = finding.proposed_action;
-  if (action) return `${action.from_claim_id}->${action.to_claim_id}:${action.relation_type}`;
+  if (action) return `${action.from_object_id}->${action.to_object_id}:${action.relation_type}`;
   return `${finding.from_claim.claim_id}->${finding.to_claim.claim_id}:${finding.signal}`;
 }
 

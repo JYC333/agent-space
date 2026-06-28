@@ -5,6 +5,7 @@ import type { ProposalAcceptResultType } from "@agent-space/protocol" with {
 import { assertCanReviewBrainOpsPacket } from "../brainOps/reviewPolicy";
 import type { Queryable } from "../routeUtils/common";
 import type { ProposalApplyContext, ProposalApplyResult } from "./applierRegistry";
+import type { ProposalRow } from "./repository";
 
 /**
  * Shared plumbing for review/brain-layer proposal packets.
@@ -45,15 +46,17 @@ export interface InsertProposalRowInput {
   preview?: boolean;
   status?: string;
   createdByRunId?: string | null;
+  createdByAgentId?: string | null;
   workspaceId?: string | null;
   projectId?: string | null;
   createdAt?: string;
+  requiredApproverRole?: string | null;
 }
 
-export async function insertProposalRow(db: Queryable, input: InsertProposalRowInput): Promise<string> {
+export async function insertProposalRow(db: Queryable, input: InsertProposalRowInput): Promise<ProposalRow> {
   const id = input.id ?? randomUUID();
   const now = input.createdAt ?? new Date().toISOString();
-  await db.query(
+  const result = await db.query<ProposalRow>(
     `INSERT INTO proposals (
        id, space_id, created_by_run_id, proposal_type, status, risk_level,
        urgency, preview, title, summary, payload_json, review_deadline,
@@ -64,16 +67,23 @@ export async function insertProposalRow(db: Queryable, input: InsertProposalRowI
        $1, $2, $3, $4, $5, $6,
        $7, $8, $9, $10, $11::jsonb, NULL,
        NULL, $12, $12, NULL, NULL,
-       $13, $14, NULL, $15,
-       NULL, $16, $17
-     )`,
+       $13, $14, $18, $15,
+       $19, $16, $17
+     )
+     RETURNING id, space_id, created_by_user_id, workspace_id,
+               created_by_run_id, proposal_type, status, risk_level, urgency,
+               preview, title, payload_json, rationale, visibility,
+               review_deadline, expires_at, created_at, reviewed_at,
+               project_id,
+               NULL::varchar AS egress_approval_id,
+               NULL::varchar AS egress_approval_status`,
     [
       id,
       input.spaceId,
       input.createdByRunId ?? null,
       input.proposalType,
       input.status ?? "pending",
-      input.riskLevel ?? "medium",
+      input.riskLevel ?? "low",
       input.urgency ?? "normal",
       input.preview ?? false,
       input.title,
@@ -85,9 +95,36 @@ export async function insertProposalRow(db: Queryable, input: InsertProposalRowI
       input.createdByUserId,
       input.visibility,
       input.projectId ?? null,
+      input.createdByAgentId ?? null,
+      input.requiredApproverRole ?? null,
     ],
   );
-  return id;
+  return result.rows[0]!;
+}
+
+/**
+ * Look up an existing pending packet proposal by lineage_key.
+ * Returns the existing proposal id if found, null otherwise.
+ *
+ * Packet generators embed a deterministic `lineage_key` in their payload so
+ * callers can skip creation when equivalent work is already pending review.
+ */
+export async function lookupExistingPendingPacket(
+  db: Queryable,
+  spaceId: string,
+  proposalType: string,
+  lineageKey: string,
+): Promise<string | null> {
+  const result = await db.query<{ id: string }>(
+    `SELECT id FROM proposals
+      WHERE space_id = $1
+        AND proposal_type = $2
+        AND payload_json->>'lineage_key' = $3
+        AND status = 'pending'
+      LIMIT 1`,
+    [spaceId, proposalType, lineageKey],
+  );
+  return result.rows[0]?.id ?? null;
 }
 
 export interface ChildProposalDraft {
@@ -108,7 +145,7 @@ export async function insertChildProposalRow(
   context: ProposalApplyContext,
   draft: ChildProposalDraft,
 ): Promise<string> {
-  return insertProposalRow(context.db, {
+  const row = await insertProposalRow(context.db, {
     id: draft.id,
     spaceId: context.proposal.space_id,
     proposalType: draft.proposalType,
@@ -122,6 +159,7 @@ export async function insertChildProposalRow(
     workspaceId: draft.workspaceId ?? null,
     projectId: draft.projectId ?? null,
   });
+  return row.id;
 }
 
 export interface AcceptReviewPacketBuild {
@@ -166,7 +204,7 @@ export async function acceptReviewPacket(
 
   const now = new Date().toISOString();
   const skipped = built.skipped;
-  const finalPayload = {
+  const proposalPayloadPatch = {
     ...payload,
     generated_child_proposal_ids: childProposalIds,
     generated_child_proposal_count: childProposalIds.length,
@@ -177,12 +215,6 @@ export async function acceptReviewPacket(
       : {}),
     ...(built.finalPayloadExtra ?? {}),
   };
-  await context.db.query(
-    `UPDATE proposals
-        SET status = 'accepted', reviewed_at = $1, reviewed_by = $2, payload_json = $3::jsonb
-      WHERE id = $4 AND space_id = $5`,
-    [now, context.userId, JSON.stringify(finalPayload), context.proposal.id, context.proposal.space_id],
-  );
 
   return {
     result_type: options.resultType,
@@ -192,5 +224,6 @@ export async function acceptReviewPacket(
       ...(skipped ? { skipped_child_proposal_count: skipped.length } : {}),
       ...(built.resultExtra ?? {}),
     },
+    proposalPayloadPatch,
   };
 }

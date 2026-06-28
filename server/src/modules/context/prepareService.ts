@@ -258,7 +258,7 @@ export class ContextPrepareService {
             target_space_id: grant.metadata.target_space_id,
             access_mode: grant.metadata.access_mode,
             memory_count: grant.metadata.memory_count,
-            raw_memory_included: false,
+            raw_private_memory_included: false,
             personal_summary_persisted: false,
             section: "ephemeral",
           });
@@ -266,7 +266,7 @@ export class ContextPrepareService {
             grant_id: grant.metadata.grant_id,
             access_mode: grant.metadata.access_mode,
             memory_count: grant.metadata.memory_count,
-            raw_memory_included: false,
+            raw_private_memory_included: false,
             personal_summary_persisted: false,
           };
           await repo.markRunPersonalGrantContext({

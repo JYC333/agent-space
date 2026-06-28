@@ -31,7 +31,6 @@ CREATE TABLE public.memory_entries (
     version integer NOT NULL DEFAULT 1,
     tags jsonb,
     memory_layer character varying(64),
-    memory_kind character varying(64),
     source_trust character varying(64),
     created_from_proposal_id character varying(36),
     root_memory_id character varying(36),

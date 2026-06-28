@@ -40,7 +40,7 @@ import { loadActionRegistry } from "../policy/actionRegistry";
 import { enforce, type EnforceResult } from "../policy/service";
 import { RuntimeToolRegistry } from "../runtimeTools";
 import { resolveRuntimeToolVersionForSpace } from "../runtimeTools/policies";
-import { RunPreparationError } from "./orchestrationErrors";
+import { RunApprovalRequiredError, RunPreparationError } from "./orchestrationErrors";
 import {
   adapterErrorJson,
   adapterFailureEnvelope,
@@ -77,6 +77,13 @@ export interface RunExecutionRepositoryPort {
     required_sandbox_level: string;
   }): Promise<void>;
   markRunTerminal(input: RunTerminalUpdate): Promise<RunRecord | null>;
+  markRunDegraded?(input: {
+    run_id: string;
+    space_id: string;
+    completed_at: string;
+    error_code: string;
+    error_message: string;
+  }): Promise<RunRecord | null>;
   appendRunEvent(input: RunEventInput): Promise<unknown>;
   createRunStep(input: RunStepInput): Promise<RunStepRecord>;
   updateRunStepStatus(input: {
@@ -95,6 +102,13 @@ export interface RunExecutionRepositoryPort {
     job_id?: string | null;
   }): Promise<boolean>;
   releaseExecutionLock(runId: string): Promise<void>;
+  markRunWaitingForReview(input: {
+    run_id: string;
+    space_id: string;
+    approval_code: string;
+    message: string;
+    paused_at: string;
+  }): Promise<RunRecord | null>;
 }
 
 export interface RunExecutionAdapterDeps {
@@ -274,7 +288,7 @@ export class RunOrchestrationService {
         effectiveRun,
         input.command_source,
       );
-      step = await this.repository.createRunStep({
+      step = await this.createRunStepBestEffort({
         run_id: effectiveRun.id,
         space_id: effectiveRun.space_id,
         actor_id: actorId,
@@ -290,12 +304,12 @@ export class RunOrchestrationService {
           worker_id: input.worker_id,
         },
       });
-      await this.repository.appendRunEvent({
+      await this.appendRunEventBestEffort({
         run_id: effectiveRun.id,
         space_id: effectiveRun.space_id,
         event_type: "adapter_invoked",
         status: "running",
-        step_id: step.id,
+        step_id: step?.id ?? null,
         actor_id: actorId,
         summary: "Runtime adapter started.",
         workspace_id: effectiveRun.workspace_id,
@@ -311,7 +325,7 @@ export class RunOrchestrationService {
         effectiveRun,
         inputWithPreparedRuntime(effectiveInput, preparedRuntime),
       );
-      const terminalStatus = terminalStatusFromAdapter(adapterResult);
+      const adapterTerminalStatus = terminalStatusFromAdapter(adapterResult);
       const completedAt = adapterResult.completed_at ?? new Date().toISOString();
       const materialization = this.adapters.materializer
         ? await this.adapters.materializer.materializeAdapterResult({
@@ -327,6 +341,9 @@ export class RunOrchestrationService {
         materialization.items.push(codePatch.item);
         materialization.errors.push(...codePatch.errors);
       }
+      const terminalStatus = adapterResult.success && materialization.errors.length > 0
+        ? "degraded"
+        : adapterTerminalStatus;
 
       const terminalRun = await this.repository.markRunTerminal({
         run_id: running.id,
@@ -348,7 +365,7 @@ export class RunOrchestrationService {
         // a concurrent cancel owns the terminal write. Do not overwrite it.
         const current = await this.repository.getRun(running.space_id, running.id);
         const currentStatus = protocolRunStatus(current?.status ?? "cancelled");
-        await this.repository.updateRunStepStatus({
+        if (step) await this.updateRunStepStatusBestEffort({
           step_id: step.id,
           run_id: running.id,
           space_id: running.space_id,
@@ -357,12 +374,12 @@ export class RunOrchestrationService {
           error_type: "run_cancelled",
           error_message: "Adapter finished after the run was cancelled; result not applied.",
         });
-        await this.repository.appendRunEvent({
+        await this.appendRunEventBestEffort({
           run_id: running.id,
           space_id: running.space_id,
           event_type: "adapter_completed",
           status: "cancelled",
-          step_id: step.id,
+          step_id: step?.id ?? null,
           summary: "Adapter finished after the run was cancelled; result not applied.",
           error_code: "run_cancelled",
           workspace_id: running.workspace_id,
@@ -380,7 +397,7 @@ export class RunOrchestrationService {
         };
       }
       await this.appendMaterializationEvents(running, materialization.items);
-      await this.repository.updateRunStepStatus({
+      if (step) await this.updateRunStepStatusBestEffort({
         step_id: step.id,
         run_id: running.id,
         space_id: running.space_id,
@@ -390,12 +407,12 @@ export class RunOrchestrationService {
         error_type: adapterResult.error_code ?? null,
         error_message: adapterResult.error_message ?? null,
       });
-      await this.repository.appendRunEvent({
+      await this.appendRunEventBestEffort({
         run_id: running.id,
         space_id: running.space_id,
         event_type: "adapter_completed",
         status: adapterResult.success ? "succeeded" : "failed",
-        step_id: step.id,
+        step_id: step?.id ?? null,
         summary: adapterResult.success
           ? "Runtime adapter completed successfully."
           : "Runtime adapter failed.",
@@ -408,6 +425,7 @@ export class RunOrchestrationService {
           exit_code: adapterResult.exit_code,
         },
       });
+      let returnedStatus = terminalStatus;
       if (this.adapters.materializer && isTerminalRunStatus(terminalStatus)) {
         const finalization = await this.adapters.materializer.finalizeRun({
           ...running,
@@ -416,18 +434,42 @@ export class RunOrchestrationService {
         });
         if (finalization.status !== "succeeded") {
           await this.appendFinalizationEvent(running, finalization);
+          if (adapterResult.success && terminalStatus === "succeeded") {
+            const degraded = await this.markRunDegradedBestEffort({
+              run_id: running.id,
+              space_id: running.space_id,
+              completed_at: completedAt,
+              error_code: finalization.error_code ?? "finalization_failed",
+              error_message: finalization.error_message ?? "Run finalization failed.",
+            });
+            if (degraded) returnedStatus = "degraded";
+          }
         }
       }
 
       return {
         run_id: running.id,
-        status: terminalStatus,
+        status: returnedStatus,
         error_code: adapterResult.error_code ?? null,
         error_text: adapterResult.error_message ?? null,
       };
     } catch (error) {
       const completedAt = new Date().toISOString();
       const message = errorMessage(error);
+      if (error instanceof RunApprovalRequiredError) {
+        await this.repository.markRunWaitingForReview({
+          run_id: run.id,
+          space_id: run.space_id,
+          approval_code: error.code,
+          message,
+          paused_at: completedAt,
+        });
+        return {
+          run_id: run.id,
+          status: "waiting_for_review",
+          error_code: error.code,
+        };
+      }
       const errorCode =
         error instanceof RunPreparationError ? error.code : "run_orchestration_failed";
       await this.repository.markRunTerminal({
@@ -445,7 +487,7 @@ export class RunOrchestrationService {
         usage_json: {},
       });
       if (step) {
-        await this.repository.updateRunStepStatus({
+        await this.updateRunStepStatusBestEffort({
           step_id: step.id,
           run_id: run.id,
           space_id: run.space_id,
@@ -455,7 +497,7 @@ export class RunOrchestrationService {
           error_message: message,
         });
       }
-      await this.repository.appendRunEvent({
+      await this.appendRunEventBestEffort({
         run_id: run.id,
         space_id: run.space_id,
         event_type: "adapter_completed",
@@ -591,13 +633,15 @@ export class RunOrchestrationService {
       },
       force_record: false,
     };
-    await this.enforcePolicyRequest(
-      policyRequest,
-      "policy_requires_approval_runtime_execute",
-      "policy_denied_runtime_execute",
-      "runtime.execute denied by policy.",
-    );
-    if (run.model_provider_id) {
+    if (!this.hasGrantedApproval(run, "policy_requires_approval_runtime_execute")) {
+      await this.enforcePolicyRequest(
+        policyRequest,
+        "policy_requires_approval_runtime_execute",
+        "policy_denied_runtime_execute",
+        "runtime.execute denied by policy.",
+      );
+    }
+    if (run.model_provider_id && !this.hasGrantedApproval(run, "policy_requires_approval_runtime_use_credential")) {
       await this.enforcePolicyRequest(
         {
           action: "runtime.use_credential",
@@ -642,35 +686,37 @@ export class RunOrchestrationService {
           error instanceof Error ? error.message : "Runtime tool version is unavailable.",
         );
       }
-      await this.enforcePolicyRequest(
-        {
-          action: "runtime.use_credential",
-          actor_type: "run",
-          actor_id: run.id,
-          space_id: run.space_id,
-          resource_type: "cli_credential_profile",
-          resource_id: credentialProfileId ?? `${run.adapter_type ?? "cli"}:default`,
-          resource_space_id: run.space_id,
-          run_id: run.id,
-          context: {
-            adapter_type: run.adapter_type,
-            command_source: input.command_source,
-            trigger_origin: run.trigger_origin,
-            credential_profile_id: credentialProfileId,
-            risk_level: base.risk_level,
+      if (!this.hasGrantedApproval(run, "policy_requires_approval_runtime_use_credential")) {
+        await this.enforcePolicyRequest(
+          {
+            action: "runtime.use_credential",
+            actor_type: "run",
+            actor_id: run.id,
+            space_id: run.space_id,
+            resource_type: "cli_credential_profile",
+            resource_id: credentialProfileId ?? `${run.adapter_type ?? "cli"}:default`,
+            resource_space_id: run.space_id,
+            run_id: run.id,
+            context: {
+              adapter_type: run.adapter_type,
+              command_source: input.command_source,
+              trigger_origin: run.trigger_origin,
+              credential_profile_id: credentialProfileId,
+              risk_level: base.risk_level,
+            },
+            metadata_json: {
+              adapter_type: run.adapter_type,
+              command_source: input.command_source,
+              credential_kind: "cli_profile",
+              credential_profile_id: credentialProfileId,
+            },
+            force_record: false,
           },
-          metadata_json: {
-            adapter_type: run.adapter_type,
-            command_source: input.command_source,
-            credential_kind: "cli_profile",
-            credential_profile_id: credentialProfileId,
-          },
-          force_record: false,
-        },
-        "policy_requires_approval_runtime_use_credential",
-        "policy_denied_runtime_use_credential",
-        "runtime.use_credential denied by policy.",
-      );
+          "policy_requires_approval_runtime_use_credential",
+          "policy_denied_runtime_use_credential",
+          "runtime.use_credential denied by policy.",
+        );
+      }
     }
     return base;
   }
@@ -705,11 +751,20 @@ export class RunOrchestrationService {
       ? await this.adapters.policyEnforcer(policyRequest)
       : await enforce(this.config, await loadActionRegistry(), policyRequest);
     if (policy.status !== "allow") {
-      throw new RunPreparationError(
-        policy.error_code === "policy_requires_approval" ? requiresApprovalCode : deniedCode,
-        policy.message ?? fallbackMessage,
-      );
+      if (policy.error_code === "policy_requires_approval") {
+        throw new RunApprovalRequiredError(requiresApprovalCode, policy.message ?? fallbackMessage);
+      }
+      throw new RunPreparationError(deniedCode, policy.message ?? fallbackMessage);
     }
+  }
+
+  private hasGrantedApproval(run: RunRecord, approvalCode: string): boolean {
+    const snap = recordValue(run.permission_snapshot_json);
+    const grants = snap?.policy_grants;
+    if (!Array.isArray(grants)) return false;
+    return grants.some(
+      (g) => typeof g === "object" && g !== null && (g as Record<string, unknown>).approval_code === approvalCode,
+    );
   }
 
   private async prepareRuntimeContext(
@@ -744,7 +799,7 @@ export class RunOrchestrationService {
             workspace_root: null,
           };
           prepared.sandbox_kind = "ephemeral";
-          await this.repository.appendRunEvent({
+          await this.appendRunEventBestEffort({
             run_id: run.id,
             space_id: run.space_id,
             event_type: "sandbox_created",
@@ -773,7 +828,7 @@ export class RunOrchestrationService {
           prepared.sandbox_kind = workspaceResult.sandbox_kind;
           prepared.base_commit_sha = workspaceResult.base_commit_sha;
           if (prepared.sandbox_cwd) {
-            await this.repository.appendRunEvent({
+            await this.appendRunEventBestEffort({
               run_id: run.id,
               space_id: run.space_id,
               event_type: "sandbox_created",
@@ -886,7 +941,6 @@ export class RunOrchestrationService {
         this.config,
         {
           run,
-          model_provider_id: run.model_provider_id,
           model: input.model ?? null,
           system_prompt: input.system_prompt ?? run.system_prompt ?? null,
           prompt: input.prompt ?? null,
@@ -926,7 +980,7 @@ export class RunOrchestrationService {
   ): Promise<void> {
     for (const item of items) {
       if (item.kind === "artifact") {
-        await this.repository.appendRunEvent({
+        await this.appendRunEventBestEffort({
           run_id: run.id,
           space_id: run.space_id,
           event_type: "artifact_ingested",
@@ -941,7 +995,7 @@ export class RunOrchestrationService {
           },
         });
       } else if (item.kind === "code_patch") {
-        await this.repository.appendRunEvent({
+        await this.appendRunEventBestEffort({
           run_id: run.id,
           space_id: run.space_id,
           event_type: "patch_collected",
@@ -956,7 +1010,7 @@ export class RunOrchestrationService {
           },
         });
         if (item.proposal_id) {
-          await this.repository.appendRunEvent({
+          await this.appendRunEventBestEffort({
             run_id: run.id,
             space_id: run.space_id,
             event_type: "proposal_created",
@@ -973,7 +1027,7 @@ export class RunOrchestrationService {
           });
         }
       } else if (item.kind === "proposal") {
-        await this.repository.appendRunEvent({
+        await this.appendRunEventBestEffort({
           run_id: run.id,
           space_id: run.space_id,
           event_type: "proposal_created",
@@ -989,7 +1043,7 @@ export class RunOrchestrationService {
           },
         });
       } else {
-        await this.repository.appendRunEvent({
+        await this.appendRunEventBestEffort({
           run_id: run.id,
           space_id: run.space_id,
           event_type: "artifact_ingested",
@@ -1012,7 +1066,7 @@ export class RunOrchestrationService {
     run: RunRecord,
     item: RunMaterializationItemSummary,
   ): Promise<void> {
-    await this.repository.appendRunEvent({
+    await this.appendRunEventBestEffort({
       run_id: run.id,
       space_id: run.space_id,
       event_type: "run_finalized",
@@ -1022,6 +1076,46 @@ export class RunOrchestrationService {
       summary: item.status === "succeeded" ? "Run finalized." : "Run finalization failed.",
       metadata_json: recordValue(item.metadata_json),
     });
+  }
+
+  private async createRunStepBestEffort(input: RunStepInput): Promise<RunStepRecord | null> {
+    try {
+      return await this.repository.createRunStep(input);
+    } catch {
+      return null;
+    }
+  }
+
+  private async updateRunStepStatusBestEffort(
+    input: Parameters<RunExecutionRepositoryPort["updateRunStepStatus"]>[0],
+  ): Promise<boolean> {
+    try {
+      return await this.repository.updateRunStepStatus(input);
+    } catch {
+      return false;
+    }
+  }
+
+  private async appendRunEventBestEffort(input: RunEventInput): Promise<void> {
+    try {
+      await this.repository.appendRunEvent(input);
+    } catch {
+      return;
+    }
+  }
+
+  private async markRunDegradedBestEffort(input: {
+    run_id: string;
+    space_id: string;
+    completed_at: string;
+    error_code: string;
+    error_message: string;
+  }): Promise<RunRecord | null> {
+    try {
+      return await this.repository.markRunDegraded?.(input) ?? null;
+    } catch {
+      return null;
+    }
   }
 }
 

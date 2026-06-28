@@ -53,7 +53,7 @@ CodePatchSnapshot:
    - Enforces `SourceMonitoringService` for semantic/policy types
    - Writes `ProvenanceLink` rows for accepted memory/policy changes
    - Dispatches through `ProposalApplierRegistry` to the target module's registered applier
-4. `proposal.status = "accepted"`, `decided_at` set, commit — durable write completes. No separate approval-event row is created for normal accept/reject. `ProposalApproval` rows are a distinct gate for `egress_review` proposals only (written via `/proposals/{id}/approvals/egress-granting-user`).
+4. `proposal.status = "accepted"`, `decided_at` set, commit — durable write completes. No separate approval-event row is created for normal accept/reject. `ProposalApproval` rows are distinct egress approval metadata (written via `/proposals/{id}/approvals/egress-granting-user`); they do not by themselves make `egress_review` apply-supported.
 5. For `code_patch` proposals, a `CodePatchSnapshot` (pre-apply file content) is persisted inside the apply transaction. The user can later call `POST /api/v1/proposals/{id}/rollback` to restore files to their pre-apply state while the snapshot is within its retention window and status is `available`.
 
 ## Server Apply Boundary
@@ -68,9 +68,8 @@ The public proposal review/apply surface is owned by the server:
   `ProposalApplierRegistry`.
 - The currently registered appliers are: `memory_create`, `memory_update`,
   `memory_archive`, `knowledge_create`, `knowledge_update`, `knowledge_archive`,
-  `knowledge_relation_create`, `knowledge_relation_delete`, `follow_up_task`,
-  `claim_create`, `claim_update`, `claim_archive`, `claim_relation_create`,
-  `claim_relation_delete`, `object_relation_create`, `object_relation_delete`,
+  `follow_up_task`, `claim_create`, `claim_update`, `claim_archive`,
+  `object_relation_create`, `object_relation_delete`,
   `object_kind_create`, `object_kind_update`, `object_kind_deprecate`,
   `object_kind_archive`,
   `memory_maintenance_packet`, `retrieval_maintenance_packet`,

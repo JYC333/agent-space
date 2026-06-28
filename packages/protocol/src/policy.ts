@@ -325,36 +325,6 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "knowledge.relation_create",
-    resource_type: "knowledge_relation",
-    default_risk_level: "medium",
-    default_decision: "require_approval",
-    audit_required: true,
-    approval_capability: "approve_knowledge_change",
-    default_required_approver_role: "owner",
-    current_enforcement_point:
-      "server/src/modules/proposals/applyService.ts via proposal.apply",
-    description:
-      "Create a same-space KnowledgeItemRelation after an accepted knowledge_relation_create proposal. Protected via proposal.apply gate and ProposalApplyService.",
-    lifecycle_status: "wired_via_proposal",
-    record_failure_mode: "best_effort",
-  },
-  {
-    action: "knowledge.relation_delete",
-    resource_type: "knowledge_relation",
-    default_risk_level: "medium",
-    default_decision: "require_approval",
-    audit_required: true,
-    approval_capability: "approve_knowledge_change",
-    default_required_approver_role: "owner",
-    current_enforcement_point:
-      "server/src/modules/proposals/applyService.ts via proposal.apply",
-    description:
-      "Remove or archive a KnowledgeItemRelation after an accepted knowledge_relation_delete proposal. Protected via proposal.apply gate and ProposalApplyService.",
-    lifecycle_status: "wired_via_proposal",
-    record_failure_mode: "best_effort",
-  },
-  {
     action: "claim.create",
     resource_type: "claim",
     default_risk_level: "medium",
@@ -396,36 +366,6 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
       "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
       "Archive a global Claim atom after an accepted claim_archive proposal. Protected via proposal.apply gate and ProposalApplyService.",
-    lifecycle_status: "wired_via_proposal",
-    record_failure_mode: "best_effort",
-  },
-  {
-    action: "claim.relation_create",
-    resource_type: "claim_relation",
-    default_risk_level: "medium",
-    default_decision: "require_approval",
-    audit_required: true,
-    approval_capability: "approve_knowledge_change",
-    default_required_approver_role: "owner",
-    current_enforcement_point:
-      "server/src/modules/proposals/applyService.ts via proposal.apply",
-    description:
-      "Create a ClaimRelation after an accepted claim_relation_create proposal. Protected via proposal.apply gate and ProposalApplyService.",
-    lifecycle_status: "wired_via_proposal",
-    record_failure_mode: "best_effort",
-  },
-  {
-    action: "claim.relation_delete",
-    resource_type: "claim_relation",
-    default_risk_level: "medium",
-    default_decision: "require_approval",
-    audit_required: true,
-    approval_capability: "approve_knowledge_change",
-    default_required_approver_role: "owner",
-    current_enforcement_point:
-      "server/src/modules/proposals/applyService.ts via proposal.apply",
-    description:
-      "Archive a ClaimRelation after an accepted claim_relation_delete proposal. Protected via proposal.apply gate and ProposalApplyService.",
     lifecycle_status: "wired_via_proposal",
     record_failure_mode: "best_effort",
   },
@@ -590,7 +530,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     current_enforcement_point:
       "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
-      "Review a candidate-relation discovery packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Brain Ops review setting to allow the reviewer. Accepting creates child pending knowledge_relation_create / knowledge_create proposals for supported candidates and does not directly write canonical Knowledge.",
+      "Review a candidate-relation discovery packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Brain Ops review setting to allow the reviewer. Accepting creates child pending object_relation_create / knowledge_create proposals for supported candidates and does not directly write canonical Knowledge.",
     lifecycle_status: "wired_via_proposal",
     record_failure_mode: "best_effort",
   },

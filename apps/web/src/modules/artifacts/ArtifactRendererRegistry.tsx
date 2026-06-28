@@ -721,7 +721,7 @@ function ClaimContradictionReportRenderer({ artifact }: ArtifactRendererProps) {
                 <div className="flex flex-wrap items-center gap-1.5">
                   <Badge variant="secondary">{signal}</Badge>
                   {tier && <Badge variant={tier === 'high' ? 'warning' : 'outline'}>{tier}</Badge>}
-                  {action && <Badge variant="outline">claim_relation_create · contradicts</Badge>}
+                  {action && <Badge variant="outline">object_relation_create · contradicts</Badge>}
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5 text-sm">
                   <span className="font-medium">{firstString(from, ['title']) ?? 'claim'}</span>
@@ -808,15 +808,13 @@ function BriefCitationList({ citations }: { citations: unknown[] }) {
       <div className="space-y-1.5">
         {citations.map((citation, index) => {
           const record = isRecord(citation) ? citation : {}
-          const sourceIndex = stringValue(record.source_index)
           const title = firstString(record, ['title']) ?? `Citation ${index + 1}`
           const objectType = firstString(record, ['object_type'])
           const objectId = firstString(record, ['object_id'])
-          const quote = firstString(record, ['quote'])
           return (
             <div key={`${title}-${index}`} className="rounded-md border border-border px-3 py-2 text-sm">
               <div className="flex flex-wrap items-center gap-1.5">
-                {sourceIndex && <Badge variant="outline">[{sourceIndex}]</Badge>}
+                <Badge variant="outline">[{index + 1}]</Badge>
                 {objectType && <Badge variant="muted">{objectType}</Badge>}
                 {objectId && (
                   <Link to={objectPath(objectType, objectId)} className="text-accent-foreground hover:underline">
@@ -825,7 +823,6 @@ function BriefCitationList({ citations }: { citations: unknown[] }) {
                 )}
                 {!objectId && <span>{title}</span>}
               </div>
-              {quote && <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap">{quote}</p>}
             </div>
           )
         })}

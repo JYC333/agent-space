@@ -45,8 +45,6 @@ export function agentOut(row: AgentRecord): AgentOut {
     status: row.status,
     agent_kind: row.agent_kind,
     current_version_id: row.current_version_id,
-    source_template_id: row.source_template_id,
-    source_template_version_id: row.source_template_version_id,
     model: hasModel
       ? {
           provider_id: row.model_provider_id ?? null,

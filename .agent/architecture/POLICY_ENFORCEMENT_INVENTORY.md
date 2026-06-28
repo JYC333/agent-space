@@ -41,7 +41,12 @@ Direct use of `PolicyEngine` or hard-invariant helpers outside documented non-mu
 
 **PolicyDecisionRecord** is an append-only durable audit table for sensitive policy decisions. Created for: audit_required actions, DENY, REQUIRE_APPROVAL, and forced records.
 
-Space membership role checks remain separate from persisted Policy rows. Canonical roles (ascending authority): `guest < member < reviewer < admin < owner`. Approval matrix: owner=all risk levels, admin=low/medium/high, reviewer=low/medium, member/guest=none. Role helpers live in `server/src/modules/policy/decisionCore.ts`.
+Space membership role checks remain separate from persisted Policy rows.
+Canonical roles (ascending authority): `guest < member < reviewer < admin <
+owner`. General owner/admin role helpers live in
+`server/src/modules/access/roles.ts`; proposal approval resolution remains in
+`server/src/modules/policy/decisionCore.ts`. Approval matrix: owner=all risk
+levels, admin=low/medium/high, reviewer=low/medium, member/guest=none.
 
 ---
 
@@ -126,18 +131,17 @@ active `Policy` row. Unsupported and reserved domains do not create active rows.
 
 ## SourcePointer (provenance metadata)
 
-**Status:** ✅ Schema + service + API — **no read grant**
+**Status:** Schema + metadata API — **no read grant**
 
 - Table `source_pointers`; HTTP/service boundary `server/src/modules/sourcePointers/routes.ts`.
-- `access_mode` in (`read`, `subscribe`, `federated`) — intent labels only; DB check constraint.
-- **API membership:** create requires member of owner + source space; list/get require owner-space
-  membership; delete requires admin/owner in owner space.
-- `granted_by_user_id` server-assigned on create (not in request body; `extra=forbid` on schema).
-- `metadata_json` rejects content-bearing keys recursively (case-insensitive; service layer)
-  and enforces bounded safe metadata (16 KiB UTF-8 JSON, depth 8, ≤256 dict/list items,
-  key ≤128 chars, string ≤2048 chars; tuple/set/bytes rejected). Pointer rows never store
-  source content and do not grant read access.
-- Does **not** activate `memory.cross_space_read`; does **not** bypass `can_read_memory` or federation.
+- Create requires active membership in both owner and source spaces.
+- Create validates the referenced source object exists in `source_space_id`.
+- Delete requires owner/admin in the owner space.
+- `granted_by_user_id` is server-assigned; client payload cannot set it.
+- `metadata_json` is bounded safe metadata and rejects content-bearing or grant-derived
+  personal-memory marker keys recursively.
+- SourcePointer must not activate `memory.cross_space_read`, bypass `can_read_memory`, or
+  serve as authorization evidence.
 - Tests: route registration is covered by `server/test/gateway.test.ts`; schema coverage is in `server/test/baselineSchema.test.ts`.
 
 ---
@@ -221,7 +225,7 @@ fail closed via `unknown_policy_action` DENY if ever passed to `PolicyEngine` or
 | `context.render_for_runtime` | `server/src/modules/runs/` | Before adapter execution — cross-space hard DENY. `has_personal_grant_context` in `context`. |
 | `workspace.write_patch` | `server/src/modules/workspaces/` and proposal appliers | Uses `enforce()` before workspace file writes. **fail_closed**. |
 | `workspace.read` | `server/src/modules/workspaces/routes.ts` | Uses `enforce()` before workspace tree/file/status/diff reads. Uses actual `Workspace.space_id` as `resource_space_id`. Normal project reads default allow; system_core, external-root, protected/restricted, full diff, and secret-like path reads use `force_record=True`. PathPolicy still blocks traversal and secret-like paths before content is returned. Full diff is bounded and secret-like diff values are redacted; secret-like diff paths are denied. |
-| `artifact.persist` | `server/src/modules/runs/materializationService.ts` | Uses `enforce()` before egress guard or persistence. Blocked decisions are audited once and write no file or row. **fail_closed**. |
+| `artifact.persist` | `server/src/modules/runs/materializationService.ts` | Uses `enforce()` before persistence. Blocked decisions are audited once and write no file or row. **fail_closed**. |
 | `proposal.create` | `server/src/modules/proposals/` and target modules | Uses `enforce()` for user-created proposals. |
 | `proposal.create` | `server/src/modules/workspaces/codePatchCollector.ts` | Uses `enforce()` with `force_record=True` for system-created code_patch proposals. |
 | `proposal.apply` | `server/src/modules/proposals/applyService.ts` | Uses `enforceProposalApply()`; unsupported types deny first. **fail_closed**. |
@@ -261,17 +265,13 @@ is the actual fail_closed audit and approval boundary for all of these actions.
 | `knowledge.create` | `proposal.apply` gate | `knowledge_create` creates active KnowledgeItem rows only after proposal acceptance. No direct PolicyGateway call site. |
 | `knowledge.update` | `proposal.apply` gate | `knowledge_update` creates a new KnowledgeItem version and marks the previous row superseded. No direct PolicyGateway call site. |
 | `knowledge.archive` | `proposal.apply` gate | `knowledge_archive` archives an item. No direct PolicyGateway call site. |
-| `knowledge.relation_create` | `proposal.apply` gate | `knowledge_relation_create` creates a same-space database-backed relation. No direct PolicyGateway call site. |
-| `knowledge.relation_delete` | `proposal.apply` gate | `knowledge_relation_delete` archives a relation. No direct PolicyGateway call site. |
 | `claim.create` | `proposal.apply` gate | `claim_create` creates a global Claim atom. No direct PolicyGateway call site. |
 | `claim.update` | `proposal.apply` gate | `claim_update` updates a global Claim atom. No direct PolicyGateway call site. |
 | `claim.archive` | `proposal.apply` gate | `claim_archive` archives a global Claim atom. No direct PolicyGateway call site. |
-| `claim.relation_create` | `proposal.apply` gate | `claim_relation_create` creates a database-backed ClaimRelation. No direct PolicyGateway call site. |
-| `claim.relation_delete` | `proposal.apply` gate | `claim_relation_delete` archives a ClaimRelation. No direct PolicyGateway call site. |
 | `object_relation.create` | `proposal.apply` gate | `object_relation_create` creates an FK-backed ObjectRelation. No direct PolicyGateway call site. |
 | `object_relation.delete` | `proposal.apply` gate | `object_relation_delete` archives an ObjectRelation. No direct PolicyGateway call site. |
 | `memory_maintenance_packet` | `proposal.apply` gate | Private packets remain creator-only. Explicit `visibility = space_shared` + `review_scope = space_ops` packets are reviewable only when `space_retrieval_settings.brain_ops_review_mode` permits the reviewer role. No canonical Memory writes and no direct PolicyGateway call site. |
-| `retrieval_maintenance_packet` | `proposal.apply` gate | Private packets remain creator-only. Explicit `visibility = space_shared` + `review_scope = space_ops` packets are reviewable only when `space_retrieval_settings.brain_ops_review_mode` permits the reviewer role. May create child Knowledge relation proposals for supported findings. No direct PolicyGateway call site. |
+| `retrieval_maintenance_packet` | `proposal.apply` gate | Private packets remain creator-only. Explicit `visibility = space_shared` + `review_scope = space_ops` packets are reviewable only when `space_retrieval_settings.brain_ops_review_mode` permits the reviewer role. May create child ObjectRelation proposals for supported findings. No direct PolicyGateway call site. |
 | `retrieval_diagnostics_packet` | `proposal.apply` gate | Private packets remain creator-only. Explicit `visibility = space_shared` + `review_scope = space_ops` packets are reviewable only when `space_retrieval_settings.brain_ops_review_mode` permits the reviewer role. No canonical Knowledge or Memory writes and no direct PolicyGateway call site. |
 
 ### Context artifact attachment structural guard
@@ -294,17 +294,13 @@ managed-run creation:
 
 Knowledge durable writes are implemented through `ProposalApplyService` and
 protected by `proposal.apply`. The action registry marks `knowledge.create`,
-`knowledge.update`, `knowledge.archive`, `knowledge.relation_create`, and
-`knowledge.relation_delete` as `WIRED_VIA_PROPOSAL`. The same proposal-gated
+`knowledge.update`, and `knowledge.archive` as `WIRED_VIA_PROPOSAL`. The same proposal-gated
 boundary protects Claim/ObjectRelation writes through `claim.create`,
-`claim.update`, `claim.archive`, `claim.relation_create`,
-`claim.relation_delete`, `object_relation.create`, and
+`claim.update`, `claim.archive`, `object_relation.create`, and
 `object_relation.delete`.
 
 `SUPPORTED_PROPOSAL_TYPES` includes `knowledge_create`, `knowledge_update`,
-`knowledge_archive`, `knowledge_relation_create`, and
-`knowledge_relation_delete`, plus `claim_create`, `claim_update`,
-`claim_archive`, `claim_relation_create`, `claim_relation_delete`,
+`knowledge_archive`, plus `claim_create`, `claim_update`, `claim_archive`,
 `object_relation_create`, and `object_relation_delete`. Unsupported proposal
 types still deny at the `proposal.apply` gate with
 `unsupported_proposal_type`.
@@ -355,10 +351,10 @@ instead of silently using `model_provider_mode=none`.
 | `context.inject_memory` | context/runs PolicyGateway (`trigger_origin` in `context`) | PolicyDecisionRecord on DENY |
 | `context.render_for_runtime` | runs PolicyGateway (`has_personal_grant_context` in `context`) | PolicyDecisionRecord on DENY |
 | `workspace.read` | workspaces PolicyGateway (`read_kind`, `relative_path`, workspace posture in `context`) | PolicyDecisionRecord on DENY/REQUIRE_APPROVAL and forced audit for system_core/external-root/restricted/full-diff/secret-like reads |
-| `artifact.persist` | run materialization PolicyGateway (`target_space_id`, `derived_from_personal_memory_grant`, `raw_private_memory_included` in `context`; DENY+REQUIRE_APPROVAL block) | PolicyDecisionRecord (audit_required=True) |
+| `artifact.persist` | run materialization PolicyGateway (`artifact_type`, `visibility`, workspace/project IDs, storage shape in `context`) | PolicyDecisionRecord (audit_required=True) |
 | `proposal.create` | proposals + target modules (`target_visibility`, `target_scope` in `context` for memory proposals) | PolicyDecisionRecord (force_record=True for code_patch) |
 | `proposal.apply` | proposal apply service PolicyGateway | PolicyDecisionRecord (audit_required=True). Unsupported proposal types deny at gate (`audit_code="unsupported_proposal_type"`) before any role check. Role matrix: owner=all, admin=low/medium/high, reviewer=low/medium. |
-| `knowledge.*` | proposals + knowledge proposal appliers via `proposal.apply` | No direct write gate. Accepted `knowledge_*` proposals create/version/archive KnowledgeItem or archive/create KnowledgeItemRelation rows. |
+| `knowledge.*` | proposals + knowledge proposal appliers via `proposal.apply` | No direct write gate. Accepted `knowledge_*` proposals create/version/archive KnowledgeItem or create/archive ObjectRelation rows. |
 | `agent.config_update` | `server/src/modules/agents/service.ts` PolicyGateway before `agent_config_update` proposal creation | PolicyDecisionRecord (audit_required=True, safe metadata only) |
 | `automation.create` | `server/src/modules/automations/service.ts` PolicyGateway | PolicyDecisionRecord (audit_required=True, fail_closed). `membership_role` in context; requires admin/owner. Runtime preflight + policy preflight snapshots are stored in `preflight_snapshot_json`. |
 | `automation.update` | `server/src/modules/automations/service.ts` PolicyGateway | PolicyDecisionRecord (audit_required=True, fail_closed). `membership_role` in context; requires admin/owner. |
@@ -405,35 +401,15 @@ Malformed effects on security-sensitive domains fail safe → **deny** (`get_act
 - `ContextSnapshot.source_refs_json` stores only safe grant metadata; raw memory, generated summaries, and memory IDs are not stored.
 - `Run.personal_grant_context_json` stores only safe metadata: grant ID, space IDs, memory count, boolean safety flags.
 
-### Egress guard (`server/src/modules/personalMemoryGrants/`)
+### Egress status
 
-`check_personal_memory_egress(db, run, target_space_id, …)` → `EgressCheckResult(ALLOW | BLOCK)`.
+Automatic grant-derived output blocking is **not implemented** in the run materialization
+path. The system records safe grant context metadata and exposes explicit
+`egress_granting_user` approval rows, but it does not yet route grant-derived artifacts,
+memory proposals, or code patches through a unified review flow.
 
-| Condition | Result |
-|---|---|
-| Non-personal target | BLOCK (egress_review proposal required) |
-| `raw_private_memory_included` in egress guard `output_metadata` | BLOCK (hard; this is not `PolicyCheckRequest.metadata_json`) |
-| `target_visibility == "public"` | BLOCK (hard) |
-| Unknown target space | BLOCK (fails closed) |
-| Personal target | ALLOW |
-| Non-grant-derived output | ALLOW |
-
-Enforcement points: `RunMaterializationService` (artifact and memory proposal creation/file artifact persistence), proposal apply memory handlers (defense-in-depth), and SourcePointer creation with grant-derived keys.
-
-Code patch proposals from grant-derived runs are not blocked but carry elevated `risk_level = "high"` and explicit risk metadata.
-
-### Proposal approval gate (`server/src/modules/proposals/applyService.ts`)
-
-- Approval type `egress_granting_user`; statuses: `approved | revoked`.
-- Only `PersonalMemoryGrant.granting_user_id` may record `egress_granting_user`; space admins/owners cannot approve on behalf of the granting user.
-- `ProposalApplyService` requires a valid `proposal_approvals` row before applying `egress_review` proposals or grant-derived proposals to non-personal targets.
-- Payload flags (e.g., `approved_by_granting_user`) are never treated as proof of approval.
-
-### Egress review proposal creation (`server/src/modules/proposals/applyService.ts`)
-
-- When materialization is blocked, a metadata-only `egress_review` proposal is created for the granting user.
-- Payload contains no output text, raw memory, generated summary, or memory IDs.
-- Applying an `egress_review` proposal is metadata-only; shared content is not created automatically.
+Future implementation must be proposal/review based and must not rely on payload flags as
+proof of approval.
 
 ### Remaining deferred items
 
@@ -448,8 +424,8 @@ See `docs/FUTURE_ROADMAP.md` for the full deferred list. Key items:
 
 ## Remaining deferred items
 
-1. Semantic leakage detection for grant-derived output. Exact `personal_context_block` echoes are redacted; paraphrased/inferred personal-memory meaning must be reviewed manually.
-2. Shared persistence pipeline from approved egress_review: applying an egress_review proposal is metadata-only. Future phase required for full shared-content apply.
+1. Semantic leakage detection for grant-derived output.
+2. Shared persistence pipeline from approved egress review. Future phase required for full shared-content apply.
 3. Publish proposal apply + redaction pipeline.
 4. Federation remote fetch (see `docs/FEDERATED_ACCESS_MODEL.md`).
 5. `GET /api/v1/spaces/{space_id}/grant-stats`: space admin aggregate grant statistics endpoint. Deferred. Must return safe aggregate counts only.

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { BUILTIN_RUNTIME_ADAPTER_SPECS, type RuntimeAdapterType } from "../runtimeAdapters";
 import { HttpError, dateIso, type Queryable, type SpaceUserIdentity } from "../routeUtils/common";
+import { isSpaceOwnerOrAdmin } from "../access/roles";
 import { RuntimeToolRegistry } from "./service";
 
 export interface SpaceRuntimeToolPolicy {
@@ -145,7 +146,7 @@ export class RuntimeToolPolicyRepository {
       [userId, spaceId],
     );
     const role = rows.rows[0]?.role;
-    if (role !== "owner" && role !== "admin") {
+    if (!isSpaceOwnerOrAdmin(role)) {
       throw new HttpError(403, "Requires space admin role");
     }
   }

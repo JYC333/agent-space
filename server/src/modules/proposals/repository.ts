@@ -46,6 +46,7 @@ export interface ProposalListFilters {
   expired?: boolean | null;
   projectId?: string | null;
   createdByRunId?: string | null;
+  agentId?: string | null;
   limit: number;
   offset: number;
   now?: Date;
@@ -165,6 +166,10 @@ function buildVisibleWhere(
 
   if (filters.projectId) clauses.push(`p.project_id = ${addParam(filters.projectId)}`);
   if (filters.createdByRunId) clauses.push(`p.created_by_run_id = ${addParam(filters.createdByRunId)}`);
+  if (filters.agentId) {
+    const ref = addParam(filters.agentId);
+    clauses.push(`(p.created_by_agent_id = ${ref} OR (p.payload_json->>'agent_id') = ${ref})`);
+  }
   if (filters.status) clauses.push(`p.status = ${addParam(filters.status)}`);
   if (filters.proposalType) clauses.push(`p.proposal_type = ${addParam(filters.proposalType)}`);
   if (filters.urgency) clauses.push(`p.urgency = ${addParam(filters.urgency)}`);

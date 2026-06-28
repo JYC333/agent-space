@@ -155,6 +155,7 @@ export const RUN_EXECUTION_ERROR_CODES = [
   "policy_denied_runtime_execute",
   "policy_denied_runtime_use_credential",
   "policy_requires_approval_runtime_execute",
+  "policy_requires_approval_runtime_use_credential",
   "produced_artifact_ingestion_error",
   "run_cancelled",
   "runtime_removed",

@@ -107,19 +107,24 @@ export class PostRunFinalizationService {
       finalized_at: now,
       created_at: now,
     });
-    await this.repository.appendRunEvent({
-      run_id: runId,
-      space_id: spaceId,
-      event_type: "run_finalized",
-      status: "succeeded",
-      metadata_json: {
-        run_finalization_id: finalization.id,
-        run_evaluation_id: evaluation.id,
-        task_evaluation_id: taskBridge.taskEvaluationId,
-        skipped_reasons: skippedReasons,
-        finalizer_version: RUN_FINALIZER_VERSION,
-      },
-    });
+    try {
+      await this.repository.appendRunEvent({
+        run_id: runId,
+        space_id: spaceId,
+        event_type: "run_finalized",
+        status: "succeeded",
+        metadata_json: {
+          run_finalization_id: finalization.id,
+          run_evaluation_id: evaluation.id,
+          task_evaluation_id: taskBridge.taskEvaluationId,
+          skipped_reasons: skippedReasons,
+          finalizer_version: RUN_FINALIZER_VERSION,
+        },
+      });
+    } catch {
+      // RunEvent is an append-only audit log. A missed audit event must not
+      // turn a completed finalization into a failed one.
+    }
     return finalization;
   }
 

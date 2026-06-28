@@ -49,7 +49,7 @@ export async function createMemoryMaintenanceProposalPacket(
 ): Promise<string> {
   const ownerUserId = normalizedOwner(input.ownerUserId);
   const payload = packetPayload(input, ownerUserId);
-  return insertProposalRow(db, {
+  return (await insertProposalRow(db, {
     spaceId: input.spaceId,
     proposalType: MEMORY_MAINTENANCE_PACKET_PROPOSAL_TYPE,
     title: titleForReport(input.report),
@@ -59,7 +59,7 @@ export async function createMemoryMaintenanceProposalPacket(
       "Review this Memory maintenance packet. Accepting the packet may create child Memory archive or update proposals; it does not write canonical Memory directly.",
     createdByUserId: ownerUserId,
     visibility: visibilityForReviewScope(input.reviewScope),
-  });
+  })).id;
 }
 
 export function registerMemoryMaintenanceProposalAppliers(registry: {

@@ -18,6 +18,9 @@ export interface Queryable {
 export interface ChatSnapshotPersistInput {
   contextSnapshotId: string;
   spaceId: string;
+  runId: string;
+  userId: string;
+  agentId?: string | null;
   tokenEstimate: number;
   requestJson: Record<string, unknown>;
   retrievalTraceJson?: Record<string, unknown> | null;
@@ -31,7 +34,8 @@ export interface ChatSnapshotPersistInput {
  * The run already owns an empty `ContextSnapshot` (created by run creation), so
  * this UPDATEs `token_estimate` + `request_json` on that row
  * and INSERTs the selected `context_snapshot_items`. It never creates snapshots
- * (run creation owns that) and writes no other context tables.
+ * (run creation owns that). Selected chat memory items are also access-logged in
+ * `memory_access_logs`, matching the full-run ContextBuilder audit contract.
  */
 export class PgContextSnapshotRepository {
   constructor(private readonly db: Queryable) {}
@@ -100,6 +104,51 @@ export class PgContextSnapshotRepository {
       `INSERT INTO context_snapshot_items (${columns})
        VALUES ${valueGroups.join(", ")}`,
       params,
+    );
+    await this.recordChatMemoryAccess(input, now);
+  }
+
+  private async recordChatMemoryAccess(input: ChatSnapshotPersistInput, now: string): Promise<void> {
+    const memoryIds = Array.from(new Set(
+      input.items
+        .filter((item) => item.item_type === "memory" && typeof item.item_id === "string" && item.item_id)
+        .map((item) => item.item_id as string),
+    ));
+    if (memoryIds.length === 0) return;
+
+    const columns = "id, space_id, memory_id, user_id, agent_id, run_id, access_type, reason, accessed_at";
+    const valueGroups: string[] = [];
+    const params: unknown[] = [];
+    for (const memoryId of memoryIds) {
+      const base = params.length;
+      valueGroups.push(
+        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, ` +
+          `$${base + 6}, 'context_injection', $${base + 7}, $${base + 8})`,
+      );
+      params.push(
+        randomUUID(),
+        input.spaceId,
+        memoryId,
+        input.userId,
+        input.agentId ?? null,
+        input.runId,
+        `chat context snapshot ${input.contextSnapshotId}`,
+        now,
+      );
+    }
+    await this.db.query(
+      `INSERT INTO memory_access_logs (${columns})
+       VALUES ${valueGroups.join(", ")}`,
+      params,
+    );
+    await this.db.query(
+      `UPDATE memory_entries
+          SET access_count = COALESCE(access_count, 0) + 1,
+              last_accessed_at = $3,
+              last_retrieved_at = $3
+        WHERE space_id = $1
+          AND id = ANY($2::varchar[])`,
+      [input.spaceId, memoryIds, now],
     );
   }
 }

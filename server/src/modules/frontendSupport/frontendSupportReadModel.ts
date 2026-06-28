@@ -1,4 +1,8 @@
 import { HttpError, intQuery } from "../routeUtils/common";
+import {
+  artifactVisibleSql as sharedArtifactVisibleSql,
+  taskVisibleSql as sharedTaskVisibleSql,
+} from "../access/visibility";
 import type { HomeSummaryOut } from "./frontendSupportTypes";
 
 export const ACTIVE_RUN_STATUSES = ["queued", "running", "waiting_for_review"];
@@ -34,20 +38,11 @@ export function proposalVisibleSql(userParam: string): string {
 }
 
 export function artifactVisibleSql(userParam: string): string {
-  return `(
-    a.visibility IN ('space_shared', 'public_template')
-    OR (a.owner_user_id IS NULL AND a.visibility NOT IN ('workspace_shared', 'restricted', 'selected_users'))
-    OR a.owner_user_id = ${userParam}
-  )`;
+  return sharedArtifactVisibleSql({ userExpr: userParam });
 }
 
 export function taskVisibleSql(userParam: string): string {
-  return `(
-    t.visibility IN ('space_shared', 'workspace_shared', 'public_template')
-    OR t.created_by_user_id = ${userParam}
-    OR t.assigned_user_id = ${userParam}
-    OR t.claimed_by_user_id = ${userParam}
-  )`;
+  return sharedTaskVisibleSql({ userExpr: userParam, includePublicTemplate: true });
 }
 
 export function proposalVisibleSelect(): string {
@@ -92,7 +87,7 @@ export function suggestedActions(input: {
       id: "configure_model_provider",
       label: "Configure model provider",
       reason: "No enabled model provider is configured for this space.",
-      target_path: "/settings/providers",
+      target_path: "/providers",
       priority: "high",
     });
   }

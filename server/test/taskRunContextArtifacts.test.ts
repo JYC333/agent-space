@@ -7,6 +7,7 @@ function taskRow(overrides: Partial<TaskRow> = {}): TaskRow {
     id: "task-1",
     space_id: "space-1",
     workspace_id: "workspace-1",
+    project_id: null,
     board_id: null,
     column_id: null,
     parent_task_id: null,

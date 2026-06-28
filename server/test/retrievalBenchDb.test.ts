@@ -101,7 +101,7 @@ beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
     `TRUNCATE retrieval_objects, retrieval_aliases, retrieval_chunks, retrieval_edges,
-              knowledge_items, space_objects, knowledge_item_relations, users, spaces CASCADE`,
+              object_relations, knowledge_items, space_objects, users, spaces CASCADE`,
   );
   for (const [id, name] of [[SPACE, "Bench"], [OTHER_SPACE, "Other"]] as const) {
     await pool.query(
@@ -150,8 +150,8 @@ async function seed(doc: SeedDoc): Promise<void> {
 
 async function relate(fromId: string, toId: string, relationType = "related_to"): Promise<void> {
   await pool!.query(
-    `INSERT INTO knowledge_item_relations (
-       id, space_id, from_item_id, to_item_id, relation_type, status, confidence, created_at, updated_at
+    `INSERT INTO object_relations (
+       id, space_id, from_object_id, to_object_id, relation_type, status, confidence, created_at, updated_at
      ) VALUES ($1, $2, $3, $4, $5, 'active', 0.9, now(), now())`,
     [randomUUID(), SPACE, fromId, toId, relationType],
   );

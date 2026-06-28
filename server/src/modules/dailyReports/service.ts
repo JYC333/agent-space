@@ -5,6 +5,7 @@ import { withTransaction } from "../../db/tx";
 import { resolveProviderCommandStore } from "../providers/providerCommandStore";
 import { completeProviderText } from "../providers/providerInvocation";
 import type { Queryable } from "../routeUtils/common";
+import { insertProposalRow } from "../proposals/reviewPackets";
 import {
   assertValidLocalDate,
   assertValidTimezone,
@@ -552,44 +553,37 @@ export class DailyCaptureReportService {
     const rawSourceIds = candidate.source_activity_ids;
     const sourceIds = rawSourceIds.filter((id) => validIds.includes(id));
     if (sourceIds.length === 0 || sourceIds.length !== rawSourceIds.length) return null;
-    const proposalId = randomUUID();
-    const now = new Date().toISOString();
-    await db.query(
-      `INSERT INTO proposals (
-         id, space_id, proposal_type, status, risk_level, urgency, title, rationale,
-         payload_json, created_by_user_id, created_by_run_id, created_at, updated_at
-       ) VALUES ($1, $2, 'knowledge_create', 'pending', 'low', 'normal', $3, $4, $5::jsonb, $6, $7, $8, $8)`,
-      [
-        proposalId,
-        input.spaceId,
-        candidate.title,
-        "Daily capture report experience candidate",
-        JSON.stringify({
-          operation: "create",
-          knowledge_kind: "summary",
-          title: candidate.title,
-          content: candidate.content,
-          content_format: "markdown",
-          visibility: "space_shared",
-          owner_user_id: input.userId,
-          tags: ["daily-capture-report"],
-          confidence,
-          source_refs: sourceIds.map((id) => ({
-            source_type: "activity",
-            source_id: id,
-            source_trust: "user_confirmed",
-          })),
-          source_artifact_id: artifactId,
-          source_run_id: runId,
-          verification_status: "unverified",
-          reflection_status: "unreviewed",
-        }),
-        input.userId,
-        runId,
-        now,
-      ],
-    );
-    return proposalId;
+    const row = await insertProposalRow(db, {
+      spaceId: input.spaceId,
+      proposalType: "knowledge_create",
+      title: candidate.title,
+      rationale: "Daily capture report experience candidate",
+      payload: {
+        operation: "create",
+        knowledge_kind: "summary",
+        title: candidate.title,
+        content: candidate.content,
+        content_format: "markdown",
+        visibility: "space_shared",
+        owner_user_id: input.userId,
+        tags: ["daily-capture-report"],
+        confidence,
+        source_refs: sourceIds.map((id) => ({
+          source_type: "activity",
+          source_id: id,
+          source_trust: "user_confirmed",
+        })),
+        source_artifact_id: artifactId,
+        source_run_id: runId,
+        verification_status: "unverified",
+        reflection_status: "unreviewed",
+      },
+      createdByUserId: input.userId,
+      createdByRunId: runId,
+      visibility: "space_shared",
+      riskLevel: "low",
+    });
+    return row.id;
   }
 
   private async insertMemoryProposal(
@@ -607,42 +601,35 @@ export class DailyCaptureReportService {
     const rawSourceIds = candidate.source_activity_ids;
     const sourceIds = rawSourceIds.filter((id) => validIds.includes(id));
     if (sourceIds.length === 0 || sourceIds.length !== rawSourceIds.length) return null;
-    const proposalId = randomUUID();
-    const now = new Date().toISOString();
-    await db.query(
-      `INSERT INTO proposals (
-         id, space_id, proposal_type, status, risk_level, urgency, title, rationale,
-         payload_json, created_by_user_id, created_by_run_id, created_at, updated_at
-       ) VALUES ($1, $2, 'memory_create', 'pending', 'low', 'normal', $3, $4, $5::jsonb, $6, $7, $8, $8)`,
-      [
-        proposalId,
-        input.spaceId,
-        candidate.title,
-        `Memory candidate from Daily Capture Report. Confidence: ${confidence.toFixed(2)}.`,
-        JSON.stringify({
-          operation: "create",
-          proposed_content: candidate.content,
-          memory_type: memoryType,
-          target_scope: "user",
-          target_namespace: "user.default",
-          target_visibility: "space_shared",
-          owner_user_id: input.userId,
-          provenance_entries: sourceIds.map((id) => ({
-            source_type: "activity",
-            source_id: id,
-            source_trust: "user_confirmed",
-          })),
-          source_refs_metadata: {
-            daily_report_artifact_id: artifactId,
-            daily_report_run_id: runId,
-          },
-        }),
-        input.userId,
-        runId,
-        now,
-      ],
-    );
-    return proposalId;
+    const row = await insertProposalRow(db, {
+      spaceId: input.spaceId,
+      proposalType: "memory_create",
+      title: candidate.title,
+      rationale: `Memory candidate from Daily Capture Report. Confidence: ${confidence.toFixed(2)}.`,
+      payload: {
+        operation: "create",
+        proposed_content: candidate.content,
+        memory_type: memoryType,
+        target_scope: "user",
+        target_namespace: "user.default",
+        target_visibility: "space_shared",
+        owner_user_id: input.userId,
+        provenance_entries: sourceIds.map((id) => ({
+          source_type: "activity",
+          source_id: id,
+          source_trust: "user_confirmed",
+        })),
+        source_refs_metadata: {
+          daily_report_artifact_id: artifactId,
+          daily_report_run_id: runId,
+        },
+      },
+      createdByUserId: input.userId,
+      createdByRunId: runId,
+      visibility: "space_shared",
+      riskLevel: "low",
+    });
+    return row.id;
   }
 }
 

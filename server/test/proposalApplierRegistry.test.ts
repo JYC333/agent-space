@@ -137,8 +137,6 @@ describe("proposal applier registry", () => {
       "claim_create",
       "claim_update",
       "claim_archive",
-      "claim_relation_create",
-      "claim_relation_delete",
       "object_relation_create",
       "object_relation_delete",
     ]));

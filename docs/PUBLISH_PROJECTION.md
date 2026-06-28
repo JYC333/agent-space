@@ -1,6 +1,6 @@
 # Publish Projection (Deferred)
 
-Status: **documented only** — no publish apply path (Phase 7B-1 adds SourcePointer metadata API only).
+Status: **documented only** — no publish apply path; SourcePointer is metadata-only.
 
 ## Purpose
 
@@ -48,9 +48,8 @@ Registered as **future / deferred** only. Executable accept types remain:
 - Public artifact storage or external URLs
 - Automatic SourcePointer creation on publish (may be added when apply exists)
 
-Phase 7B-1 SourcePointer API may record provenance manually (metadata only; `granted_by_user_id`
-server-assigned; bounded safe `metadata_json` with recursive forbidden-key and size caps).
-SourcePointer does not grant read access or copy source content. It does not implement publish apply.
+SourcePointer metadata may record provenance manually. SourcePointer does not grant read
+access, copy source content, or implement publish apply by itself.
 
 ## Related docs
 

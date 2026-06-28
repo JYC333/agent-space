@@ -17,6 +17,7 @@ import type {
   SpaceRetrievalPromptUpdate,
   SpaceRetrievalSettingsUpdate,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
+import { isSpaceOwnerOrAdmin } from "../access/roles";
 import { seedSpaceDefaults } from "./spaceSeeds";
 
 export interface SpaceCreateInput {
@@ -244,8 +245,14 @@ export class PgSpaceRepository implements SpaceRepository {
     if (!hasRoleAtLeast(role, "admin")) {
       return { statusCode: 403, detail: "Requires admin role to invite" };
     }
-    const space = await this.pool.query("SELECT 1 FROM spaces WHERE id = $1 LIMIT 1", [spaceId]);
+    const space = await this.pool.query<{ type: string }>(
+      "SELECT type FROM spaces WHERE id = $1 LIMIT 1",
+      [spaceId],
+    );
     if (!space.rowCount) return { statusCode: 404, detail: "Space not found" };
+    if (space.rows[0]?.type === "personal") {
+      return { statusCode: 403, detail: "Personal spaces cannot have additional members" };
+    }
 
     const token = rawInvitationToken();
     const roleToGrant = input.role ?? "member";
@@ -356,7 +363,7 @@ export class PgSpaceRepository implements SpaceRepository {
     data: SnapshotDefaults,
   ): Promise<SnapshotDefaults | SpaceFailure> {
     const role = await this.activeRole(userId, spaceId);
-    if (!role || (role !== "owner" && role !== "admin")) {
+    if (!isSpaceOwnerOrAdmin(role)) {
       return { statusCode: 403, detail: "Requires space owner or admin role" };
     }
     await this.pool.query(
@@ -385,7 +392,7 @@ export class PgSpaceRepository implements SpaceRepository {
     data: SpaceRetrievalSettingsUpdate,
   ): Promise<SpaceRetrievalSettingsOut | SpaceFailure> {
     const role = await this.activeRole(userId, spaceId);
-    if (!role || (role !== "owner" && role !== "admin")) {
+    if (!isSpaceOwnerOrAdmin(role)) {
       return { statusCode: 403, detail: "Requires space owner or admin role" };
     }
     return updateSpaceRetrievalSettings(this.pool, spaceId, data, { actorUserId: userId });
@@ -408,7 +415,7 @@ export class PgSpaceRepository implements SpaceRepository {
     data: SpaceRetrievalPromptUpdate,
   ): Promise<SpaceRetrievalPromptOut | SpaceFailure> {
     const role = await this.activeRole(userId, spaceId);
-    if (!role || (role !== "owner" && role !== "admin")) {
+    if (!isSpaceOwnerOrAdmin(role)) {
       return { statusCode: 403, detail: "Requires space owner or admin role" };
     }
     return updateSpaceRetrievalPrompt(this.pool, spaceId, task, data);

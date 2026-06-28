@@ -411,16 +411,20 @@ function relationSuggestionAction(
 ): Record<string, unknown> | null {
   if (from.object_type !== "knowledge_item" || to.object_type !== "knowledge_item") return null;
   return {
-    proposal_type: "knowledge_relation_create",
+    proposal_type: "object_relation_create",
     title: `Relate: ${from.title} -> ${to.title}`,
     payload: {
-      operation: "relation_create",
-      from_item_id: from.object_id,
-      to_item_id: to.object_id,
+      operation: "object_relation_create",
+      from_object_id: from.object_id,
+      to_object_id: to.object_id,
       relation_type: relationType,
       status: "candidate",
       confidence: null,
       evidence_summary: reason,
+      metadata: {
+        candidate_origin: "retrieval_maintenance",
+        endpoint_type: "knowledge_item",
+      },
     },
   };
 }

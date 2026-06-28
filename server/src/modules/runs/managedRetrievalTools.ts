@@ -693,7 +693,6 @@ function explicitRetrievalToolDomainsFromRun(run: RunRecord): Set<RetrievalToolD
   const domains = new Set<RetrievalToolDomain>();
   const records = [
     recordOrEmpty(run.runtime_config_json),
-    recordOrEmpty(recordOrEmpty(run.runtime_profile_snapshot_json).runtime_config_json),
     recordOrEmpty(run.model_override_json),
   ];
   for (const record of records) {
@@ -756,14 +755,10 @@ function arrayOfStrings(value: unknown): string[] {
 
 function retrievalToolModeFromRun(run: RunRecord): RetrievalToolMode | null {
   const runtimeConfig = recordOrEmpty(run.runtime_config_json);
-  const profileRuntimeConfig = recordOrEmpty(
-    recordOrEmpty(run.runtime_profile_snapshot_json).runtime_config_json,
-  );
   const modelOverride = recordOrEmpty(run.model_override_json);
   const capabilities = run.capabilities_json;
   return (
     retrievalToolModeIn(runtimeConfig) ??
-    retrievalToolModeIn(profileRuntimeConfig) ??
     retrievalToolModeIn(modelOverride) ??
     retrievalCapabilityMode(capabilities)
   );

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { PgRunContextRepository } from "../src/modules/context/repository";
+import {
+  PgRunContextRepository,
+  type RunContextRecord,
+} from "../src/modules/context/repository";
 import type { Queryable } from "../src/modules/memory/repository";
 
 class CapturingDb implements Queryable {
@@ -10,7 +13,11 @@ class CapturingDb implements Queryable {
   contextArtifactRevocations: Record<string, unknown>[] = [];
   accessibleWorkspaceIds = new Set<string>();
   sourceSnapshotRows: Record<string, unknown>[] = [];
+  evidenceRows: Record<string, unknown>[] = [];
+  personalGrantRows: Record<string, unknown>[] = [];
+  personalMemoryRows: Record<string, unknown>[] = [];
   viewerRole: string | null = "member";
+  failUsedInContextInsert = false;
 
   async query<Row = Record<string, unknown>>(
     sql: string,
@@ -20,6 +27,26 @@ class CapturingDb implements Queryable {
     const norm = sql.replace(/\s+/g, " ").trim();
     if (norm.includes("FROM source_connections")) {
       return { rows: this.sourceSnapshotRows as Row[], rowCount: this.sourceSnapshotRows.length };
+    }
+    if (norm.includes("FROM extracted_evidence")) {
+      return { rows: this.evidenceRows as Row[], rowCount: this.evidenceRows.length };
+    }
+    if (norm.includes("INSERT INTO evidence_links")) {
+      if (this.failUsedInContextInsert) throw new Error("audit insert failed");
+      return { rows: [] as Row[], rowCount: 1 };
+    }
+    if (norm.includes("FROM personal_memory_grants")) {
+      return { rows: this.personalGrantRows as Row[], rowCount: this.personalGrantRows.length };
+    }
+    if (norm.startsWith("UPDATE personal_memory_grants")) {
+      return { rows: [] as Row[], rowCount: 1 };
+    }
+    if (norm.includes("INSERT INTO personal_memory_grant_events")) {
+      return { rows: [] as Row[], rowCount: 1 };
+    }
+    if (norm.includes("FROM memory_entries") && norm.includes("owner_user_id = $2")) {
+      const rows = this.filteredPersonalMemoryRows(norm, params);
+      return { rows: rows as Row[], rowCount: rows.length };
     }
     if (norm.includes("FROM space_memberships")) {
       const rows = this.viewerRole ? [{ role: this.viewerRole }] : [];
@@ -72,6 +99,22 @@ class CapturingDb implements Queryable {
     }
     return { rows: [], rowCount: 0 };
   }
+
+  private filteredPersonalMemoryRows(sql: string, params: readonly unknown[]): Record<string, unknown>[] {
+    let rows = this.personalMemoryRows;
+    const applyArrayFilter = (column: "memory_layer" | "memory_type" | "namespace") => {
+      const match = sql.match(new RegExp(`${column} = ANY\\(\\$(\\d+)\\)`));
+      if (!match) return;
+      const values = params[Number(match[1]) - 1];
+      if (!Array.isArray(values)) return;
+      const allowed = new Set(values.map(String));
+      rows = rows.filter((row) => allowed.has(String(row[column] ?? "")));
+    };
+    applyArrayFilter("memory_layer");
+    applyArrayFilter("memory_type");
+    applyArrayFilter("namespace");
+    return rows;
+  }
 }
 
 describe("PgRunContextRepository digest source revalidation", () => {
@@ -105,6 +148,158 @@ describe("PgRunContextRepository digest source revalidation", () => {
     );
     expect(evidenceQuery?.params).not.toContain("project");
     expect(evidenceQuery?.params).not.toContain("project-1");
+  });
+
+  it("filters context evidence by source read policy and treats used_in_context as best-effort audit", async () => {
+    const db = new CapturingDb();
+    db.failUsedInContextInsert = true;
+    db.evidenceRows = [
+      {
+        id: "ev-denied",
+        title: "Denied",
+        content_excerpt: "secret",
+        evidence_type: "source_excerpt",
+        trust_level: "normal",
+        intake_item_id: "intake-denied",
+        source_snapshot_id: null,
+        artifact_id: null,
+        source_uri: null,
+        source_connection_id: "source-denied",
+        link_id: "link-denied",
+        link_type: "context_candidate",
+        target_type: "space",
+        target_id: "space-1",
+      },
+      {
+        id: "ev-allowed",
+        title: "Allowed",
+        content_excerpt: "usable",
+        evidence_type: "source_excerpt",
+        trust_level: "normal",
+        intake_item_id: "intake-allowed",
+        source_snapshot_id: null,
+        artifact_id: null,
+        source_uri: null,
+        source_connection_id: "source-allowed",
+        link_id: "link-allowed",
+        link_type: "context_candidate",
+        target_type: "space",
+        target_id: "space-1",
+      },
+    ];
+    db.sourceSnapshotRows = [
+      {
+        id: "source-denied",
+        owner_user_id: "other-user",
+        consent_json: {
+          schema_version: 1,
+          owner_user_id: "other-user",
+          allowed_reader_user_ids: [],
+          allowed_agent_ids: [],
+          allow_space_admins: false,
+          allow_local_provider_egress: true,
+          allow_external_model_egress: false,
+        },
+        policy_json: {
+          schema_version: 1,
+          source_egress_class: "local_provider_allowed",
+        },
+      },
+      {
+        id: "source-allowed",
+        owner_user_id: "user-1",
+        consent_json: {
+          schema_version: 1,
+          owner_user_id: "user-1",
+          allowed_reader_user_ids: [],
+          allowed_agent_ids: [],
+          allow_space_admins: false,
+          allow_local_provider_egress: true,
+          allow_external_model_egress: false,
+        },
+        policy_json: {
+          schema_version: 1,
+          source_egress_class: "local_provider_allowed",
+        },
+      },
+    ];
+
+    const selections = await new PgRunContextRepository(db).selectEvidenceForContext({
+      spaceId: "space-1",
+      userId: "user-1",
+      workspaceId: null,
+      projectId: null,
+      runId: "run-1",
+    });
+
+    expect(selections.map((selection) => selection.item.id)).toEqual(["ev-allowed"]);
+    const evidenceQuery = db.queries.find((query) =>
+      query.sql.includes("FROM extracted_evidence"),
+    );
+    expect(evidenceQuery?.params[1]).toEqual(["context_candidate", "supports", "mentions"]);
+  });
+
+  it("applies personal memory grant filters before generating summary context", async () => {
+    const db = new CapturingDb();
+    db.personalGrantRows = [
+      {
+        id: "grant-1",
+        granting_user_id: "user-1",
+        personal_space_id: "personal-space-1",
+        target_space_id: "space-1",
+        access_mode: "summary_only",
+        memory_filter_json: {
+          memory_types: ["preference"],
+          max_items: 5,
+        },
+      },
+    ];
+    db.personalMemoryRows = [
+      {
+        memory_type: "preference",
+        memory_layer: "semantic",
+        namespace: "user_profile",
+        updated_at: "2026-06-25T00:00:00.000Z",
+        created_at: "2026-06-24T00:00:00.000Z",
+      },
+      {
+        memory_type: "profile",
+        memory_layer: "semantic",
+        namespace: "user_profile",
+        updated_at: "2026-06-25T00:00:00.000Z",
+        created_at: "2026-06-24T00:00:00.000Z",
+      },
+    ];
+    const run: RunContextRecord = {
+      id: "run-1",
+      space_id: "space-1",
+      agent_id: null,
+      agent_version_id: null,
+      context_snapshot_id: null,
+      prompt: "hello",
+      workspace_id: null,
+      project_id: null,
+      session_id: null,
+      instructed_by_user_id: "user-1",
+      capability_id: null,
+      trigger_origin: null,
+      data_exposure_level: null,
+      trust_level: null,
+      has_personal_grant_context: false,
+      personal_grant_context_json: null,
+      request_json: null,
+      system_prompt: null,
+      capabilities_json: null,
+      memory_policy_json: null,
+      model_config_json: null,
+    };
+
+    const result = await new PgRunContextRepository(db).resolvePersonalGrantForRun(run);
+
+    expect(result.metadata?.memory_count).toBe(1);
+    expect(result.personal_context_block).toContain("1 relevant personal memory entry");
+    expect(result.personal_context_block).toContain("Categories: preference.");
+    expect(result.personal_context_block).not.toContain("profile");
   });
 
   it("selects explicit artifact evidence packs as bounded context attachments", async () => {

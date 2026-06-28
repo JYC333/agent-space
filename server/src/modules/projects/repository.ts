@@ -33,6 +33,7 @@ export interface ProjectRow {
 
 export interface ProjectWorkspaceLinkRow {
   id: string;
+  space_id: string;
   project_id: string;
   workspace_id: string;
   role: string;
@@ -73,7 +74,7 @@ const PROJECT_COLUMNS = `
   settings_json, created_at, updated_at, archived_at
 `;
 
-const LINK_COLUMNS = `id, project_id, workspace_id, role, created_at, updated_at`;
+const LINK_COLUMNS = `id, space_id, project_id, workspace_id, role, created_at, updated_at`;
 const PUBLIC_SUMMARY_COLUMNS = `
   ps.id, ps.space_id, ps.project_id, p.name AS project_name, ps.summary_text,
   ps.topics_json, ps.highlights_json, ps.source_refs_json, ps.redaction_version,
@@ -256,7 +257,7 @@ export class PgProjectRepository {
       this.db.query<{ total: string | number }>(
         `SELECT count(id)::text AS total
            FROM memory_entries
-          WHERE space_id = $1 AND project_id = $2 AND deleted_at IS NULL`,
+          WHERE space_id = $1 AND project_id = $2 AND deleted_at IS NULL AND status = 'active'`,
         [identity.spaceId, projectId],
       ),
     ]);
@@ -408,9 +409,8 @@ export class PgProjectRepository {
     const rows = await this.db.query<ProjectWorkspaceLinkRow>(
       `SELECT pw.${LINK_COLUMNS.replaceAll(", ", ", pw.")}
          FROM project_workspaces pw
-         JOIN workspaces w ON w.id = pw.workspace_id
         WHERE pw.project_id = $1
-          AND w.space_id = $2
+          AND pw.space_id = $2
         ORDER BY pw.created_at ASC, pw.id ASC`,
       [projectId, identity.spaceId],
     );
@@ -433,12 +433,12 @@ export class PgProjectRepository {
     if (!workspace.rows[0]) throw new HttpError(404, "Workspace not found");
     const now = new Date().toISOString();
     const result = await this.db.query<ProjectWorkspaceLinkRow>(
-      `INSERT INTO project_workspaces (id, project_id, workspace_id, role, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $5)
-       ON CONFLICT (project_id, workspace_id, role)
+      `INSERT INTO project_workspaces (id, space_id, project_id, workspace_id, role, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $6)
+       ON CONFLICT (space_id, project_id, workspace_id, role)
        DO UPDATE SET updated_at = EXCLUDED.updated_at
        RETURNING ${LINK_COLUMNS}`,
-      [randomUUID(), projectId, workspaceId, role, now],
+      [randomUUID(), identity.spaceId, projectId, workspaceId, role, now],
     );
     return projectWorkspaceLinkToOut(result.rows[0]!);
   }

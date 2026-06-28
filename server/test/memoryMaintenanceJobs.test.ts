@@ -195,7 +195,6 @@ function memoryRow(overrides: Partial<MemoryRow> = {}): MemoryRow {
     version: 1,
     tags: [],
     memory_layer: "semantic",
-    memory_kind: "fact",
     source_trust: "user_confirmed",
     created_from_proposal_id: null,
     root_memory_id: null,

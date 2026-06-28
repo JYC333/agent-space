@@ -21,7 +21,6 @@ import { randomUUID } from "node:crypto";
 import {
   copyProvenanceToMemory,
   dominantSourceTrust,
-  firstActivityId,
   mergeDistinctProvenanceEntries,
   proposalProvenanceEntry,
   recordMemorySupersedesRelation,
@@ -136,11 +135,9 @@ export interface AppliedMemoryRow {
   workspace_id: string | null;
   project_id: string | null;
   source_trust: string | null;
-  source_activity_id: string | null;
   root_memory_id: string | null;
   supersedes_memory_id: string | null;
   memory_layer: string | null;
-  memory_kind: string | null;
   version: number;
   agent_id: string | null;
 }
@@ -157,18 +154,18 @@ export interface MemoryDigestTarget {
   agentId: string | null;
 }
 
-const INSERT_COLUMNS = `id, space_id, scope_type, scope_id, memory_type, content, status,
-  source_proposal_id, created_at, updated_at, subject_user_id, owner_user_id,
+const INSERT_COLUMNS = `id, space_id, scope_type, memory_type, content, status,
+  created_at, updated_at, subject_user_id, owner_user_id,
   sensitivity_level, selected_user_ids, last_confirmed_at, workspace_id, namespace,
-  title, visibility, confidence, importance, source_id, source_activity_id,
-  created_by, approved_by, version, access_count, tags, memory_layer, memory_kind,
+  title, visibility, confidence, importance, source_id,
+  created_by, approved_by, version, access_count, tags, memory_layer,
   created_from_proposal_id, root_memory_id, supersedes_memory_id, source_trust, agent_id,
   project_id`;
 
 const RETURNING_COLUMNS = `id, space_id, scope_type, namespace, memory_type, title,
   content, status, visibility, sensitivity_level, owner_user_id, subject_user_id,
-  selected_user_ids, workspace_id, project_id, source_trust, source_activity_id,
-  root_memory_id, supersedes_memory_id, memory_layer, memory_kind, version, agent_id`;
+  selected_user_ids, workspace_id, project_id, source_trust,
+  root_memory_id, supersedes_memory_id, memory_layer, version, agent_id`;
 
 /** Columns + values needed for one new active memory version. */
 interface NewMemoryFields {
@@ -186,9 +183,7 @@ interface NewMemoryFields {
   projectId: string | null;
   agentId: string | null;
   memoryLayer: string | null;
-  memoryKind: string | null;
   sourceTrust: string | null;
-  sourceActivityId: string | null;
   rootMemoryId: string | null;
   supersedesMemoryId: string | null;
   createdBy: string;
@@ -203,16 +198,19 @@ export class PgMemoryApplyRepository {
   }
 
   /**
-   * Accept-and-apply a memory proposal in one transaction (the caller owns the
-   * BEGIN/COMMIT and must have already passed the proposal.apply policy gate and
-   * validated pending/not-preview/space). accept_context is fixed
-   * `explicit_user_accept`.
+   * Apply a memory proposal without marking it accepted.
    *
-   * Fails closed (`MemoryApplyUnsupportedError`) for proposal apply paths that
- * still need server implementation: run/grant egress context (the personal-memory
-   * egress guard) and workspace/agent-scope memory digest invalidation.
+   * The caller (proposal apply service) owns the single proposal status update
+   * so the accept state machine has one writer. Runs inside the caller's
+   * BEGIN/COMMIT. accept_context is fixed to `explicit_user_accept`.
+   *
+   * Fails closed (`MemoryApplyUnsupportedError`) for grant-derived cross-space
+   * egress context; same-space run proposals are allowed.
    */
-  async acceptAndApply(proposal: ApplyProposal, userId: string): Promise<MemoryAcceptResult> {
+  async applyOnly(
+    proposal: ApplyProposal,
+    userId: string,
+  ): Promise<MemoryAcceptResult & { finalPayload: Record<string, unknown> }> {
     if (!MEMORY_APPLY_TYPES.has(proposal.proposal_type)) {
       throw new MemoryApplyError(`unsupported proposal type: ${proposal.proposal_type}`);
     }
@@ -228,8 +226,6 @@ export class PgMemoryApplyRepository {
     });
     if (outcome.action === "reject") throw new MemoryApplyError(outcome.message);
     if (outcome.action === "require_review") {
-      // accept_context is always explicit_user_accept here, which satisfies a
-      // require_review outcome only after persisting the result on the payload.
       payload = {
         ...payload,
         source_monitoring_result: {
@@ -241,23 +237,19 @@ export class PgMemoryApplyRepository {
 
     const result = await this.applyByType({ ...proposal, payload_json: payload }, userId);
 
-    // Best-effort derived retrieval reindex. acceptAndApply runs inside the
-    // proposal apply transaction (the caller owns BEGIN/COMMIT), so the reindex
-    // is SAVEPOINT-isolated and a projection failure never rolls back the
-    // accepted canonical write. Reindexing the superseded/archived row drops its
-    // stale projection (loadCanonical returns null for non-active rows).
+    // Best-effort derived retrieval reindex. Runs inside the caller's transaction;
+    // SAVEPOINT-isolated so a projection failure never rolls back the canonical write.
     const reindexIds = result.supersededMemoryId
       ? [result.memory.id, result.supersededMemoryId]
       : [result.memory.id];
     await reindexMemoryWithinApply(this.db, proposal.space_id, reindexIds);
 
     const finalPayload: Record<string, unknown> = { ...payload, resulting_memory_id: result.memory.id };
-    await this.markProposalAccepted(proposal.id, proposal.space_id, userId, finalPayload);
-
     return {
       memoryId: result.memory.id,
       supersededMemoryId: result.supersededMemoryId,
       payloadJson: finalPayload,
+      finalPayload,
       scopeType: result.memory.scope_type,
       workspaceId: result.memory.workspace_id,
       agentId: result.memory.agent_id,
@@ -283,11 +275,8 @@ export class PgMemoryApplyRepository {
     if (proposal.proposal_type === "egress_review") {
       throw new MemoryApplyUnsupportedError("egress_review apply is not implemented in the server authority yet");
     }
-    if (proposal.created_by_run_id || strOr(payload.source_run_id)) {
-      throw new MemoryApplyUnsupportedError(
-        "memory proposals with run egress context are not served by the server authority yet",
-      );
-    }
+    // Same-space run proposals (created_by_run_id / source_run_id) are allowed.
+    // Only reject proposals that carry grant-derived cross-space egress markers.
     for (const marker of GRANT_DERIVED_MARKERS) {
       if (payload[marker]) {
         throw new MemoryApplyUnsupportedError(
@@ -297,19 +286,6 @@ export class PgMemoryApplyRepository {
     }
   }
 
-  private async markProposalAccepted(
-    proposalId: string,
-    spaceId: string,
-    userId: string,
-    payloadJson: Record<string, unknown>,
-  ): Promise<void> {
-    await this.db.query(
-      `UPDATE proposals
-          SET status = 'accepted', reviewed_at = $3, reviewed_by = $4, payload_json = $5::jsonb
-        WHERE id = $1 AND space_id = $2`,
-      [proposalId, spaceId, new Date().toISOString(), userId, JSON.stringify(payloadJson)],
-    );
-  }
 
   /** Apply a memory_create proposal: one new active memory + provenance. */
   async applyCreate(proposal: ApplyProposal, userId: string): Promise<MemoryApplyResult> {
@@ -347,9 +323,7 @@ export class PgMemoryApplyRepository {
       projectId,
       agentId: strOr(payload.agent_id),
       memoryLayer: memoryLayer(payload),
-      memoryKind: strOr(payload.memory_kind),
       sourceTrust: dominantSourceTrust(entries),
-      sourceActivityId: firstActivityId(entries),
       rootMemoryId: null,
       supersedesMemoryId: null,
       createdBy: String(proposal.created_by_user_id ?? userId),
@@ -423,9 +397,7 @@ export class PgMemoryApplyRepository {
       projectId,
       agentId: strOr(payload.agent_id) ?? old.agent_id,
       memoryLayer: memoryLayer(payload) ?? old.memory_layer,
-      memoryKind: strOr(payload.memory_kind) ?? old.memory_kind,
       sourceTrust: dominantSourceTrust(entries) ?? old.source_trust,
-      sourceActivityId: firstActivityId(entries) ?? old.source_activity_id,
       rootMemoryId: rootId,
       supersedesMemoryId: old.id,
       createdBy: String(proposal.created_by_user_id ?? userId),
@@ -569,12 +541,12 @@ export class PgMemoryApplyRepository {
     const now = new Date().toISOString();
     const result = await this.db.query<AppliedMemoryRow>(
       `INSERT INTO memory_entries (${INSERT_COLUMNS}) VALUES (
-         $1, $2, $3, NULL, $4, $5, 'active',
-         $6, $7, $7, $8, $9,
-         $10, $11::jsonb, NULL, $12, $13,
-         $14, $15, 1.0, 0.5, NULL, $16,
-         $17, $18, 1, 0, NULL, $19, $20,
-         $6, $21, $22, $23, $24, $25
+         $1, $2, $3, $4, $5, 'active',
+         $6, $6, $7, $8,
+         $9, $10::jsonb, NULL, $11, $12,
+         $13, $14, 1.0, 0.5, NULL,
+         $15, $16, 1, 0, NULL, $17,
+         $18, $19, $20, $21, $22, $23
        )
        RETURNING ${RETURNING_COLUMNS}`,
       [
@@ -583,26 +555,24 @@ export class PgMemoryApplyRepository {
         f.scope, // $3 scope_type
         f.memoryType, // $4
         f.content, // $5
-        proposal.id, // $6 source_proposal_id + created_from_proposal_id
-        now, // $7 created_at + updated_at
-        f.subjectUserId, // $8
-        f.ownerUserId, // $9
-        f.sensitivity, // $10
-        f.selectedUserIds === undefined ? null : f.selectedUserIds == null ? null : JSON.stringify(f.selectedUserIds), // $11
-        f.workspaceId, // $12
-        f.namespace, // $13
-        f.title, // $14
-        f.visibility, // $15
-        f.sourceActivityId, // $16
-        f.createdBy, // $17
-        f.approvedBy, // $18
-        f.memoryLayer, // $19
-        f.memoryKind, // $20
-        f.rootMemoryId, // $21
-        f.supersedesMemoryId, // $22
-        f.sourceTrust, // $23
-        f.agentId, // $24
-        f.projectId, // $25
+        now, // $6 created_at + updated_at
+        f.subjectUserId, // $7
+        f.ownerUserId, // $8
+        f.sensitivity, // $9
+        f.selectedUserIds === undefined ? null : f.selectedUserIds == null ? null : JSON.stringify(f.selectedUserIds), // $10
+        f.workspaceId, // $11
+        f.namespace, // $12
+        f.title, // $13
+        f.visibility, // $14
+        f.createdBy, // $15
+        f.approvedBy, // $16
+        f.memoryLayer, // $17
+        proposal.id, // $18 created_from_proposal_id
+        f.rootMemoryId, // $19
+        f.supersedesMemoryId, // $20
+        f.sourceTrust, // $21
+        f.agentId, // $22
+        f.projectId, // $23
       ],
     );
     return result.rows[0]!;

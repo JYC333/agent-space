@@ -20,7 +20,7 @@ function tsFiles(dir: string): string[] {
  * Anything else (frontend, ORM packages, migration tooling, sandbox/deployer
  * internals, local-host) must not appear.
  */
-const ALLOWED_BARE = new Set(["fastify", "undici", "yaml", "@agent-space/protocol"]);
+const ALLOWED_BARE = new Set(["fastify", "undici", "yaml", "zod", "@agent-space/protocol"]);
 
 /**
  * Packages allowed only from a specific file or directory. `pg` is the raw DB

@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { ArrowRight, Download, Eye, RefreshCw, ShieldCheck, Zap } from 'lucide-react'
 import { toast } from 'sonner'
-import { capabilitiesApi, capabilitiesFrameworkApi } from '../../api/client'
+import { capabilitiesFrameworkApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
 import type {
-  Capability,
+  CapabilityDefinition,
   CapabilityPackDescriptor,
   SkillImportPreviewResponse,
   SkillPackage,
@@ -230,11 +230,11 @@ function SkillDetailPanel({ skill, onReview, onConvert, reviewingId, convertingI
 
 export default function CapabilitiesPage() {
   const { activeSpaceId, activeSpaceName } = useSpace()
-  const [caps, setCaps]           = useState<Capability[]>([])
+  const [caps, setCaps]           = useState<CapabilityDefinition[]>([])
   const [packs, setPacks]         = useState<CapabilityPackDescriptor[]>([])
   const [workflows, setWorkflows] = useState<WorkflowTemplate[]>([])
   const [skillPackages, setSkillPackages] = useState<SkillPackage[]>([])
-  const [reloading, setReloading] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [selected, setSelected]   = useState<string | null>(null)
   const [importUrl, setImportUrl] = useState('')
   const [preview, setPreview] = useState<SkillImportPreviewResponse | null>(null)
@@ -259,7 +259,7 @@ export default function CapabilitiesPage() {
     }
     try {
       const [data, packData, workflowData, skillData] = await Promise.all([
-        capabilitiesApi.list(),
+        capabilitiesFrameworkApi.listCapabilityDefinitions(),
         capabilitiesFrameworkApi.listCapabilityPacks(),
         capabilitiesFrameworkApi.listWorkflowTemplates(),
         capabilitiesFrameworkApi.listSkillPackages(),
@@ -299,18 +299,17 @@ export default function CapabilitiesPage() {
     return () => { cancelled = true }
   }, [activeSpaceId, selectedSkillId])
 
-  async function reload() {
+  async function refresh() {
     if (!activeSpaceId) {
-      toast.error('Select an operational space before reloading capabilities')
+      toast.error('Select an operational space before refreshing capabilities')
       return
     }
-    setReloading(true)
+    setRefreshing(true)
     try {
-      const r = await capabilitiesApi.reload()
-      toast[r.failed ? 'warning' : 'success'](`Loaded ${r.loaded}, failed ${r.failed}`)
       await load()
+      toast.success('Capabilities refreshed')
     } catch (e) { toast.error(errMsg(e)) }
-    finally { setReloading(false) }
+    finally { setRefreshing(false) }
   }
 
   async function previewImport() {
@@ -401,9 +400,9 @@ export default function CapabilitiesPage() {
             <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
           </div>
         </div>
-        <Button variant="ghost" size="sm" onClick={reload} disabled={reloading}>
+        <Button variant="ghost" size="sm" onClick={refresh} disabled={refreshing}>
           <RefreshCw className="size-4 mr-1" />
-          {reloading ? 'Reloading…' : 'Reload'}
+          {refreshing ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
 
@@ -574,8 +573,8 @@ export default function CapabilitiesPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>ID</TableHead><TableHead>Name</TableHead>
-                  <TableHead>Version</TableHead><TableHead>Description</TableHead>
-                  <TableHead>Status</TableHead><TableHead>Updated</TableHead>
+                  <TableHead>Namespace</TableHead><TableHead>Version</TableHead>
+                  <TableHead>Description</TableHead><TableHead>Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -587,10 +586,10 @@ export default function CapabilitiesPage() {
                   >
                     <TableCell className="font-mono text-xs">{c.id}</TableCell>
                     <TableCell>{c.name}</TableCell>
+                    <TableCell className="text-muted-foreground">{c.namespace}</TableCell>
                     <TableCell className="text-muted-foreground">{c.version}</TableCell>
-                    <TableCell className="max-w-[240px] truncate text-muted-foreground">{c.description ?? '—'}</TableCell>
-                    <TableCell><StatusBadge status={c.enabled ? 'active' : 'archived'} /></TableCell>
-                    <TableCell className="text-muted-foreground text-xs">{fmt(c.updated_at)}</TableCell>
+                    <TableCell className="max-w-[240px] truncate text-muted-foreground">{c.description || '—'}</TableCell>
+                    <TableCell><StatusBadge status={c.status} /></TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -600,8 +599,8 @@ export default function CapabilitiesPage() {
 
       {selectedCap && (
         <Card>
-          <CardTitle>Manifest — {selectedCap.id}</CardTitle>
-          <pre className="text-xs">{JSON.stringify(selectedCap.manifest_json, null, 2)}</pre>
+          <CardTitle>Definition — {selectedCap.id}</CardTitle>
+          <pre className="text-xs">{JSON.stringify(selectedCap, null, 2)}</pre>
         </Card>
       )}
     </div>

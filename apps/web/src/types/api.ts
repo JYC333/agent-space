@@ -162,13 +162,11 @@ export interface RetrievalSearchResponse {
   trace?: Record<string, unknown>
 }
 export interface RetrievalCitation {
-  source_index: number
   object_type: RetrievalObjectType
   object_id: string
   object_kind?: string | null
   object_kind_label?: string | null
   title: string
-  quote?: string | null
   [key: string]: unknown
 }
 export interface RetrievalGapItem {
@@ -658,7 +656,7 @@ export interface RetrievalFeedbackRequest {
 export interface RetrievalFeedbackResponse {
   ok: true
 }
-export type ActivityStatus     = 'raw' | 'processed' | 'proposals_generated' | 'archived'
+export type ActivityStatus     = 'raw' | 'processed' | 'proposals_generated' | 'failed' | 'archived'
 export type ActivitySourceType =
   | 'user_capture'
   | 'chat_message'
@@ -1134,7 +1132,6 @@ export interface Memory {
   last_confirmed_at?: string | null
   confidence: number
   importance: number
-  source_id: string | null
   created_by: string | null
   version: number
   access_count?: number
@@ -1145,11 +1142,8 @@ export interface Memory {
   deleted_at: string | null
   agent_id?: string | null
   capability_id?: string | null
-  source_activity_id?: string | null
-  source_artifact_id?: string | null
   approved_by?: string | null
   memory_layer?: string | null
-  memory_kind?: string | null
   source_trust?: string | null
   created_from_proposal_id?: string | null
   root_memory_id?: string | null
@@ -1290,14 +1284,11 @@ export interface KnowledgeItem extends KnowledgeItemSummary {
   content_format: KnowledgeContentFormat
   content_schema_version: number
   plain_text: string | null
-  source_url: string | null
   source_refs: Record<string, unknown>[]
   owner_user_id: string | null
   created_by_user_id: string | null
   created_by_agent_id: string | null
   created_by_run_id: string | null
-  source_activity_id: string | null
-  source_artifact_id: string | null
   created_from_proposal_id: string | null
   approved_by_user_id: string | null
   created_at: string
@@ -1308,8 +1299,8 @@ export interface KnowledgeItem extends KnowledgeItemSummary {
 export interface KnowledgeRelation {
   id: string
   space_id: string
-  from_item_id: string
-  to_item_id: string
+  from_object_id: string
+  to_object_id: string
   relation_type: KnowledgeRelationType
   status: KnowledgeRelationStatus
   confidence: number | null
@@ -1336,11 +1327,8 @@ export interface KnowledgeCreateProposalBody {
   workspace_id?: string | null
   tags: string[]
   confidence?: number | null
-  source_url?: string | null
   source_refs?: Record<string, unknown>[]
-  source_activity_id?: string | null
   source_run_id?: string | null
-  source_artifact_id?: string | null
   object_kind_fields?: Record<string, unknown>
   rationale?: string | null
 }
@@ -1362,8 +1350,8 @@ export interface KnowledgeUpdateProposalBody {
 }
 
 export interface KnowledgeRelationProposalBody {
-  from_item_id: string
-  to_item_id: string
+  from_object_id: string
+  to_object_id: string
   relation_type: KnowledgeRelationType
   status: Extract<KnowledgeRelationStatus, 'candidate' | 'active'>
   confidence?: number | null
@@ -1766,6 +1754,7 @@ export interface TaskArtifact {
   space_id: string
   task_id: string
   artifact_id: string
+  run_id: string | null
   role: string
   created_at: string
   artifact: ArtifactSummary & { preview?: boolean }
@@ -1881,16 +1870,8 @@ export type ProposalAcceptOut = {
   result: { knowledge_item: KnowledgeItem }
 } | {
   proposal: Proposal
-  result_type: 'knowledge_relation'
-  result: { knowledge_relation: KnowledgeRelation }
-} | {
-  proposal: Proposal
   result_type: 'claim'
   result: { claim: Record<string, unknown> }
-} | {
-  proposal: Proposal
-  result_type: 'claim_relation'
-  result: { claim_relation: Record<string, unknown> }
 } | {
   proposal: Proposal
   result_type: 'object_relation'
@@ -1917,6 +1898,33 @@ export type ProposalAcceptOut = {
     skipped_child_proposal_count?: number
     skipped_child_proposals?: Record<string, unknown>[]
     canonical_write_performed?: boolean
+  }
+} | {
+  proposal: Proposal
+  result_type: 'object_kind'
+  result: Record<string, unknown>
+} | {
+  proposal: Proposal
+  result_type: 'memory_maintenance_packet'
+  result: {
+    report_artifact_id?: string | null
+    generated_child_proposal_ids?: string[]
+    generated_child_proposal_count?: number
+  }
+} | {
+  proposal: Proposal
+  result_type: 'retrieval_diagnostics_packet'
+  result: {
+    report_artifact_id?: string | null
+    generated_child_proposal_ids?: string[]
+    generated_child_proposal_count?: number
+  }
+} | {
+  proposal: Proposal
+  result_type: 'relation_discovery_packet'
+  result: {
+    generated_child_proposal_ids?: string[]
+    generated_child_proposal_count?: number
   }
 }
 
@@ -2427,17 +2435,6 @@ export type WorkspaceUpdateBody = Partial<Omit<WorkspaceCreateBody, 'workspace_t
   snapshot_max_count?: number | null
 }
 
-export interface Capability {
-  id: string
-  name: string
-  version: string
-  description: string | null
-  enabled: boolean
-  manifest_json: Record<string, unknown>
-  created_at: string
-  updated_at: string
-}
-
 export type CapabilitySourceKind = 'builtin' | 'imported_skill' | 'generated' | 'official'
 export type CapabilityStatus = 'draft' | 'proposed' | 'testing' | 'available' | 'enabled' | 'disabled' | 'archived'
 export type SkillRiskLevel = 'low' | 'medium' | 'high' | 'critical'
@@ -2768,12 +2765,6 @@ export interface Feature {
   name: string
   always_on: boolean
   enabled: boolean
-}
-
-export interface CapabilitiesReloadResult {
-  loaded: number
-  failed: number
-  details: Record<string, unknown>[]
 }
 
 export interface ReflectResult {

@@ -140,7 +140,7 @@ describe("Retrieval maintenance scan (real Postgres)", () => {
     const after = await pool.query<{ n: string }>(`SELECT count(*) AS n FROM knowledge_items`);
     expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
     // No relations were accepted; the suggested edge stays suggested, not canonical.
-    const rels = await pool.query<{ n: string }>(`SELECT count(*) AS n FROM knowledge_item_relations`);
+    const rels = await pool.query<{ n: string }>(`SELECT count(*) AS n FROM object_relations`);
     expect(rels.rows[0]!.n).toBe("0");
   });
 

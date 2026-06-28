@@ -120,60 +120,42 @@ with a reasoning-only warning and delimiters. It is not written to:
 - `Run.prompt`
 - `AgentVersion.system_prompt`
 - `ContextSnapshot.compiled_prefix_text` / `compiled_tail_text`
-- `ContextSnapshot.source_refs_json` / `retrieval_trace_json`
 
-If the adapter echoes the exact `personal_context_block` in its output, the persisted
-run output redacts that block before storage and materialization.
+`ContextSnapshot.source_refs_json` / `retrieval_trace_json` may contain only safe
+grant metadata (`grant_id`, space ids, access mode, memory count, safety booleans).
+They never contain raw memory, memory IDs, generated summary text, or the
+`personal_context_block`.
 
----
-
-## Egress Guard
-
-The egress guard runs before any persistence of run output to a non-personal target.
-
-**Detection:** `run.has_personal_grant_context == True` OR output metadata contains
-grant-derived indicator keys (`derived_from_personal_memory`, `personal_memory_grant_ids`).
-
-**Hard blocks (always BLOCK regardless of other conditions):**
-- `raw_private_memory_included` in output metadata → BLOCK
-- `target_visibility == "public"` → BLOCK
-
-**Non-personal target:** BLOCK with egress review required.
-
-**Personal target:** ALLOW.
-
-**Non-grant-derived output:** ALLOW (existing behavior unchanged).
-
-On BLOCK, the guard writes a `denied` event to `personal_memory_grant_events` and
-(for artifact and memory-proposal materialization) creates a sanitized metadata-only
-`egress_review` proposal for the granting user to review.
-
-### Egress Review Proposal
-
-When artifact or memory-proposal materialization is blocked, a sanitized
-`egress_review` proposal is created automatically.
-
-**Payload contains only:** `source_run_id`, `target_space_id`, `target_object_type`,
-`operation`, `grant_id`, `granting_user_id`, `personal_space_id`, `access_mode`,
-`memory_count`, boolean safety flags, `required_approval_type`, `required_approver_user_id`,
-semantic review status, a stable `egress_review_dedupe_key` (IDs + operation only, no content).
-
-**Payload never contains:** output text, artifact content, raw memory, generated summary,
-`personal_context_block`, memory IDs, source memory titles, artifact payload, public URL.
-
-Dedupe prevents duplicate proposals for the same run + target + type + operation + grant.
-The `egress_review_dedupe_key` is matched after a bounded column query and
-application-level payload comparison; no JSON path operators are required.
-
-**SourcePointer** remains hard-blocked without an egress_review proposal when grant-derived
-indicator keys are present in metadata for non-personal owner spaces.
+Run materialization does not yet automatically route grant-derived outputs through an
+egress review flow. It does not suppress terminal run output solely because a run had
+personal grant context.
 
 ---
 
-## Proposal Approval Gate
+## Egress Review Status
 
-Applying an `egress_review` proposal or any grant-derived proposal to a non-personal
-target requires a valid `proposal_approvals` row with:
+Current implementation:
+
+- `Run.has_personal_grant_context` and `Run.personal_grant_context_json` store safe grant
+  metadata for audit/policy context.
+- `proposal_approvals` supports explicit `egress_granting_user` approval rows.
+- Only the granting user may record that approval.
+- Approval rejects payloads marked `raw_private_memory_included = true`.
+- `SourcePointer.metadata_json` rejects grant-derived/personal-memory marker keys
+  recursively.
+
+Not implemented yet:
+
+- automatic grant-derived output blocking in `RunMaterializationService`
+- automatic `egress_review` proposal creation from artifacts, memory proposals, or code patches
+- a registered `egress_review` applier that creates shared artifacts/memory
+- semantic leakage detection for paraphrased personal-memory content
+
+---
+
+## Proposal Approval Rows
+
+An explicit egress approval row has:
 - `approval_type = egress_granting_user`
 - `approver_user_id = PersonalMemoryGrant.granting_user_id`
 - `status = approved`
@@ -183,12 +165,12 @@ approve on behalf of the granting user. Payload metadata flags
 (`approved_by_granting_user`, `granting_user_approved`, etc.) are never treated as
 proof of approval.
 
-Revoked, failed, or expired grants block apply. `used` grants remain valid for egress
-review only for the same source run while the egress review deadline is still valid.
+Revoked, failed, or expired grants block approval. `used` grants remain valid for egress
+approval only for the same source run while the egress review deadline is still valid.
 
-**Applying an egress_review proposal is metadata-only in the current MVP.** Approval
-records permission to proceed to the next review step — no shared artifact or memory
-is automatically created. A future phase would wire the full shared-content pipeline.
+Approval rows are metadata-only in the current MVP. Approval records permission to proceed
+to a later shared-content review step; no shared artifact or memory is automatically
+created.
 
 ---
 
@@ -242,7 +224,7 @@ These invariants are enforced at code level and covered by tests. They must neve
 - **Server-derived granting fields.** `granting_user_id` and `personal_space_id` are not client-writable.
 - **`schema_version = 1`** required for non-empty `memory_filter_json`.
 - **Egress review is metadata-only.** Approved egress review does not automatically create a shared artifact or memory — a future phase is required for the full shared-content pipeline.
-- **Semantic leakage detection is manual.** Exact `personal_context_block` echoes are redacted from persisted output, but paraphrased or inferred personal-memory meaning in egress-review proposals must be reviewed manually (`semantic_review_status: "not_performed"`).
+- **Semantic leakage detection is manual.** The current materialization path does not detect paraphrased or inferred personal-memory meaning in outputs.
 - **No public publishing or federation.** `visibility=public` and cross-instance federation are not supported.
 - **No multi-user grants.** Only single granting user per grant.
 - **No admin grant-stats endpoint.** Aggregate grant statistics for space admins are deferred.

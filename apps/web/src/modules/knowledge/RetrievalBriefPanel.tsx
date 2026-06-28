@@ -178,12 +178,11 @@ function BriefResult({ response }: { response: RetrievalBriefResponse }) {
           {response.brief.citations.map((citation, index) => (
             <div key={`${citation.object_id}-${index}`} className="rounded-md border border-border px-3 py-2 text-sm">
               <div className="flex flex-wrap items-center gap-1.5">
-                <Badge variant="outline">[{citation.source_index}]</Badge>
+                <Badge variant="outline">[{index + 1}]</Badge>
                 <Badge variant="muted">{citation.object_type}</Badge>
                 {citation.object_kind_label && <Badge variant="secondary">{citation.object_kind_label}</Badge>}
                 <span>{citation.title}</span>
               </div>
-              {citation.quote && <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap">{citation.quote}</p>}
             </div>
           ))}
         </div>

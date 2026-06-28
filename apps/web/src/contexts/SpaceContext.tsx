@@ -40,13 +40,11 @@ interface SpaceContextValue {
 
 const SpaceContext = createContext<SpaceContextValue | null>(null)
 
-const DEFAULT_USER_ID = 'default_user'
 const STORAGE_KEY = 'agent-space:space-context'
 
 interface StoredContext {
   writeTargetSpaceId: string | null
   lastSpaceId: string | null
-  userId: string
 }
 
 function readStored(): StoredContext {
@@ -55,10 +53,9 @@ function readStored(): StoredContext {
     return {
       writeTargetSpaceId: typeof s.writeTargetSpaceId === 'string' ? s.writeTargetSpaceId : null,
       lastSpaceId: typeof s.lastSpaceId === 'string' ? s.lastSpaceId : null,
-      userId: typeof s.userId === 'string' ? s.userId : DEFAULT_USER_ID,
     }
   } catch {
-    return { writeTargetSpaceId: null, lastSpaceId: null, userId: DEFAULT_USER_ID }
+    return { writeTargetSpaceId: null, lastSpaceId: null }
   }
 }
 
@@ -73,9 +70,9 @@ export function SpaceProvider({ children }: { children: ReactNode }) {
 
   const [writeTargetSpaceId, setWriteTargetState] = useState<string | null>(stored.writeTargetSpaceId)
   const [lastSpaceId, setLastSpaceId] = useState<string | null>(stored.lastSpaceId)
-  const [userId, setUserIdState] = useState(stored.userId)
   const [spaces, setSpaces] = useState<SpaceWithMembership[]>([])
   const [ready, setReady] = useState(false)
+  const userId = currentUser?.id ?? ''
 
   const personalSpaceId = useMemo(
     () => spaces.find(s => s.type === 'personal')?.id ?? null,
@@ -104,13 +101,12 @@ export function SpaceProvider({ children }: { children: ReactNode }) {
   // the correct Space on the first render after navigation, not a stale one.
   const apiSpace = activeSpaceId ?? preferredSpaceId
   const lastApiSync = useRef<string>('')
-  if (apiSpace && `${apiSpace}|${userId}` !== lastApiSync.current) {
-    setSpaceContext(apiSpace, userId)
-    lastApiSync.current = `${apiSpace}|${userId}`
+  if (apiSpace && apiSpace !== lastApiSync.current) {
+    setSpaceContext(apiSpace)
+    lastApiSync.current = apiSpace
   }
 
   useEffect(() => {
-    if (currentUser) setUserIdState(currentUser.id)
     setReady(true)
   }, [currentUser?.id])
 
@@ -150,8 +146,8 @@ export function SpaceProvider({ children }: { children: ReactNode }) {
   // Persist write target + last space (active space is the URL's concern, not storage).
   useEffect(() => {
     if (!ready) return
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ writeTargetSpaceId, lastSpaceId, userId } satisfies StoredContext))
-  }, [writeTargetSpaceId, lastSpaceId, userId, ready])
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ writeTargetSpaceId, lastSpaceId } satisfies StoredContext))
+  }, [writeTargetSpaceId, lastSpaceId, ready])
 
   const setWriteTarget = useCallback((newSpaceId: string | null) => {
     setWriteTargetState(newSpaceId && spaces.some(s => s.id === newSpaceId) ? newSpaceId : null)

@@ -1,22 +1,21 @@
 # Module: Capability
 
 ## Purpose
-Capabilities are installed, file-defined units of backend behavior. Today they
-are catalog metadata exposed by the server; direct capability
-execution is a planned runtime adapter path and is disabled by default.
+Capabilities are installed, file-defined units of backend behavior. Product
+surfaces use the capability framework read model exposed through
+`/api/v1/capability-definitions`.
 
 ## Owns
-- YAML manifest discovery from builtin capabilities and explicitly configured local workspace roots.
-- In-memory capability registry records.
+- Built-in capability definitions from `server/src/modules/capabilities/registry.ts`.
+- Framework capability-definition read APIs.
 - Enable/disable state: manifest `enabled` for builtins; persisted instance config for external capabilities.
-- Catalog-backed capability metadata exposed through `/api/v1/capabilities*`.
 
 ## Does Not Own
 - Automation, schedules, or cron triggers.
 - Capability marketplace installation.
 - GitHub or remote repository scanning.
 - Repository clone/install flows.
-- DB-backed capability lifecycle tables.
+- Legacy catalog product routes (`/api/v1/capabilities*`).
 - Agent-produced capability updates.
 - Proposal approval for code or capability changes.
 
@@ -54,7 +53,12 @@ supported.
 
 ## Discovery
 
-The registry loads two sources:
+The legacy catalog registry is not a product API authority. Product capability
+pages consume `/api/v1/capability-definitions`; built-in capability definitions
+come from the server registry module. Historical catalog YAML manifests may
+exist for diagnostics or development but do not enter the product path.
+
+The legacy catalog registry loads two sources when used internally:
 
 - `builtin`: diagnostic/example capabilities bundled under `catalog/capabilities/`.
 - `external_workspace`: workflow capabilities stored in a local registered Workspace.

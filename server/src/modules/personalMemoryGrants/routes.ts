@@ -248,6 +248,18 @@ class GrantRepository {
     targetSpaceId: string,
     targetRunId: string,
   ): Promise<RunCheckRow> {
+    const membership = await this.db.query(
+      `SELECT 1
+         FROM space_memberships
+        WHERE space_id = $1
+          AND user_id = $2
+          AND status = 'active'
+        LIMIT 1`,
+      [targetSpaceId, identity.userId],
+    );
+    if (membership.rows.length === 0) {
+      throw new HttpError(403, "Granting user is not an active member of target_space_id");
+    }
     const result = await this.db.query<RunCheckRow>(
       `SELECT id, space_id, agent_id, instructed_by_user_id
          FROM runs
@@ -271,6 +283,7 @@ class GrantRepository {
         WHERE s.type = 'personal'
           AND sm.user_id = $1
           AND sm.status = 'active'
+          AND sm.role = 'owner'
         ORDER BY s.created_at ASC
         LIMIT 1`,
       [userId],

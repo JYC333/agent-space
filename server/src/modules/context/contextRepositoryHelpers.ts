@@ -15,6 +15,7 @@ export interface EvidenceContextRow {
   source_snapshot_id: string | null;
   artifact_id: string | null;
   source_uri: string | null;
+  source_connection_id: string | null;
   link_id: string;
   link_type: string;
   target_type: string;
@@ -51,7 +52,7 @@ export function hardFilterRows(
     includeSystemScope: boolean;
     // When present, project cutting is active: only project-free memory
     // (`project_id IS NULL`) and the single `allowedProjectId` survive; memory of
-    // any other project is dropped. Absent means no project filtering (legacy).
+    // any other project is dropped. Absent means unscoped — no project filter.
     projectFilter?: { allowedProjectId: string | null };
   },
 ): ContextMemoryRow[] {
@@ -99,7 +100,7 @@ export function memorySourceRef(
     section: assignSection(row),
     stage,
     source_trust: row.source_trust ?? "internal_system",
-    memory_kind: row.memory_kind,
+    memory_type: row.memory_type,
     memory_layer: row.memory_layer,
     scope_type: row.scope_type,
   };
@@ -184,8 +185,8 @@ export function generatePersonalSummary(memories: readonly ContextMemoryRow[]): 
   const kinds = [
     ...new Set(
       memories
-        .map((m) => m.memory_kind)
-        .filter((kind): kind is string => typeof kind === "string" && kind.length > 0),
+        .map((m) => m.memory_type)
+        .filter((type): type is string => typeof type === "string" && type.length > 0),
     ),
   ].sort();
   const timestamps = memories

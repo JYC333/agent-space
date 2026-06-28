@@ -35,15 +35,16 @@ async function applySkillImportApproveProposal(
     proposalId: context.proposal.id,
     skillPackageId,
   });
-  await markProposalAccepted(context, {
-    reviewed_skill_package_id: skillPackage.id,
-    resulting_status: skillPackage.status,
-  });
   return {
     result_type: "capability_overlay",
     result: {
       action: "skill_import_approve",
       skill_package: skillPackage,
+    },
+    proposalPayloadPatch: {
+      ...objectValue(context.proposal.payload_json),
+      reviewed_skill_package_id: skillPackage.id,
+      resulting_status: skillPackage.status,
     },
   };
 }
@@ -68,12 +69,6 @@ async function applyCapabilityInstallProposal(
       create_runtime_bindings: payload.create_runtime_bindings !== false,
     },
   });
-  await markProposalAccepted(context, {
-    resulting_skill_package_id: result.skill_package.id,
-    resulting_capability_key: result.capability_definition.id,
-    resulting_capability_version_id: result.capability_version_id,
-    runtime_binding_ids: result.runtime_bindings.map((binding) => binding.id),
-  });
   return {
     result_type: "capability_overlay",
     result: {
@@ -83,6 +78,13 @@ async function applyCapabilityInstallProposal(
       capability_version_id: result.capability_version_id,
       runtime_bindings: result.runtime_bindings,
       enabled: false,
+    },
+    proposalPayloadPatch: {
+      ...objectValue(context.proposal.payload_json),
+      resulting_skill_package_id: result.skill_package.id,
+      resulting_capability_key: result.capability_definition.id,
+      resulting_capability_version_id: result.capability_version_id,
+      runtime_binding_ids: result.runtime_bindings.map((binding) => binding.id),
     },
   };
 }
@@ -118,14 +120,15 @@ async function applyCapabilityUpdateProposal(
   );
   const row = updated.rows[0];
   if (!row) throw new HttpError(404, "Capability version not found");
-  await markProposalAccepted(context, {
-    resulting_capability_version_id: row.id,
-    resulting_capability_key: row.capability_key,
-    resulting_status: row.status,
-  });
   return {
     result_type: "capability_overlay",
     result: { action: "capability_update", capability_version: row },
+    proposalPayloadPatch: {
+      ...objectValue(context.proposal.payload_json),
+      resulting_capability_version_id: row.id,
+      resulting_capability_key: row.capability_key,
+      resulting_status: row.status,
+    },
   };
 }
 
@@ -160,14 +163,15 @@ async function applyCapabilityEnableProposal(
       [capabilityVersionId, context.proposal.space_id, now],
     );
   }
-  await markProposalAccepted(context, {
-    capability_enablement_id: updated.id,
-    resulting_capability_key: capabilityKey,
-    resulting_enabled: true,
-  });
   return {
     result_type: "capability_overlay",
     result: { action: "capability_enable", capability_enablement: updated },
+    proposalPayloadPatch: {
+      ...objectValue(context.proposal.payload_json),
+      capability_enablement_id: updated.id,
+      resulting_capability_key: capabilityKey,
+      resulting_enabled: true,
+    },
   };
 }
 
@@ -189,14 +193,15 @@ async function applyCapabilityDisableProposal(
     config: optionalObject(payload.config_json) ?? {},
     now,
   });
-  await markProposalAccepted(context, {
-    capability_enablement_id: updated.id,
-    resulting_capability_key: capabilityKey,
-    resulting_enabled: false,
-  });
   return {
     result_type: "capability_overlay",
     result: { action: "capability_disable", capability_enablement: updated },
+    proposalPayloadPatch: {
+      ...objectValue(context.proposal.payload_json),
+      capability_enablement_id: updated.id,
+      resulting_capability_key: capabilityKey,
+      resulting_enabled: false,
+    },
   };
 }
 
@@ -231,40 +236,15 @@ async function applyRuntimeSkillBindingUpdateProposal(
   );
   const row = rows.rows[0];
   if (!row) throw new HttpError(404, "Runtime skill binding not found");
-  await markProposalAccepted(context, {
-    runtime_skill_binding_id: bindingId,
-    resulting_enabled: row.enabled,
-  });
   return {
     result_type: "capability_overlay",
     result: { action: "runtime_skill_binding_update", runtime_skill_binding: row },
+    proposalPayloadPatch: {
+      ...objectValue(context.proposal.payload_json),
+      runtime_skill_binding_id: bindingId,
+      resulting_enabled: row.enabled,
+    },
   };
-}
-
-async function markProposalAccepted(
-  context: ProposalApplyContext,
-  resultFields: JsonRecord,
-): Promise<void> {
-  const now = new Date().toISOString();
-  const payload = {
-    ...objectValue(context.proposal.payload_json),
-    ...resultFields,
-  };
-  await context.db.query(
-    `UPDATE proposals
-        SET status = 'accepted',
-            reviewed_at = $1,
-            reviewed_by = $2,
-            payload_json = $3::jsonb
-      WHERE id = $4 AND space_id = $5`,
-    [
-      now,
-      context.userId,
-      JSON.stringify(payload),
-      context.proposal.id,
-      context.proposal.space_id,
-    ],
-  );
 }
 
 function ensureOperation(payload: JsonRecord, expected: string): void {

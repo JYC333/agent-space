@@ -115,34 +115,15 @@ interface KnowledgeItemRow {
   reflection_status: string;
   tags_json: unknown;
   confidence: number | null;
-  source_url: string | null;
   owner_user_id: string | null;
   created_by_user_id: string | null;
   created_by_agent_id: string | null;
   created_by_run_id: string | null;
-  source_activity_id: string | null;
-  source_artifact_id: string | null;
   created_from_proposal_id: string | null;
   approved_by_user_id: string | null;
   version: string | number;
   archived_at: string | null;
   deprecated_at: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-interface KnowledgeRelationRow {
-  id: string;
-  space_id: string;
-  from_item_id: string;
-  to_item_id: string;
-  relation_type: string;
-  status: string;
-  confidence: number | null;
-  evidence_summary: string | null;
-  source_proposal_id: string | null;
-  created_by_user_id: string | null;
-  created_by_agent_id: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -199,22 +180,6 @@ interface ClaimSourceRow {
   metadata_json: unknown;
   created_by_user_id: string | null;
   created_at: string | null;
-}
-
-interface ClaimRelationRow {
-  id: string;
-  space_id: string;
-  from_claim_id: string;
-  to_claim_id: string;
-  relation_type: string;
-  status: string;
-  confidence: number | null;
-  evidence_summary: string | null;
-  source_proposal_id: string | null;
-  created_by_user_id: string | null;
-  created_by_agent_id: string | null;
-  created_at: string | null;
-  updated_at: string | null;
 }
 
 interface ObjectRelationRow {
@@ -316,8 +281,6 @@ const VALID_RELATION_TYPES = new Set([
   "updates",
 ]);
 
-const VALID_RELATION_STATUSES = new Set(["candidate", "active"]);
-
 const VALID_CLAIM_KINDS = new Set([
   "fact",
   "hypothesis",
@@ -382,16 +345,6 @@ const VALID_CLAIM_SOURCE_TRUST_LEVELS = new Set([
   "unknown",
 ]);
 
-const VALID_CLAIM_RELATION_TYPES = new Set([
-  "supports",
-  "contradicts",
-  "supersedes",
-  "refines",
-  "same_as",
-  "depends_on",
-  "derived_from",
-]);
-
 const VALID_OBJECT_RELATION_TYPES = new Set([
   "related_to",
   "references",
@@ -451,9 +404,9 @@ const KNOWLEDGE_ITEM_COLUMNS = `
   so.title, ki.content, ki.content_json, ki.content_format,
   ki.content_schema_version, ki.plain_text, so.summary AS excerpt,
   so.status, so.visibility, ki.verification_status, ki.reflection_status,
-  ki.tags_json, ki.confidence, ki.source_url, so.owner_user_id,
+  ki.tags_json, ki.confidence, so.owner_user_id,
   so.created_by_user_id, so.created_by_agent_id, so.created_by_run_id,
-  ki.source_activity_id, ki.source_artifact_id, ki.created_from_proposal_id,
+  ki.created_from_proposal_id,
   ki.approved_by_user_id, ki.version, so.archived_at, ki.deprecated_at,
   so.created_at, so.updated_at
 `;
@@ -464,12 +417,6 @@ const KNOWLEDGE_ITEM_FROM = `
     ON so.id = ki.object_id
    AND so.space_id = ki.space_id
    AND so.object_type = 'knowledge_item'
-`;
-
-const KNOWLEDGE_RELATION_COLUMNS = `
-  id, space_id, from_item_id, to_item_id, relation_type, status, confidence,
-  evidence_summary, source_proposal_id, created_by_user_id, created_by_agent_id,
-  created_at, updated_at
 `;
 
 const CLAIM_COLUMNS = `
@@ -499,12 +446,6 @@ const CLAIM_SOURCE_COLUMNS = `
   created_at
 `;
 
-const CLAIM_RELATION_COLUMNS = `
-  id, space_id, from_claim_id, to_claim_id, relation_type, status, confidence,
-  evidence_summary, source_proposal_id, created_by_user_id, created_by_agent_id,
-  created_at, updated_at
-`;
-
 const OBJECT_RELATION_COLUMNS = `
   r.id, r.space_id,
   r.from_object_id, from_so.object_type AS from_object_type,
@@ -530,13 +471,9 @@ export function registerKnowledgeProposalAppliers(
   registry.register("knowledge_create", applyKnowledgeCreateProposal);
   registry.register("knowledge_update", applyKnowledgeUpdateProposal);
   registry.register("knowledge_archive", applyKnowledgeArchiveProposal);
-  registry.register("knowledge_relation_create", applyKnowledgeRelationCreateProposal);
-  registry.register("knowledge_relation_delete", applyKnowledgeRelationDeleteProposal);
   registry.register("claim_create", applyClaimCreateProposal);
   registry.register("claim_update", applyClaimUpdateProposal);
   registry.register("claim_archive", applyClaimArchiveProposal);
-  registry.register("claim_relation_create", applyClaimRelationCreateProposal);
-  registry.register("claim_relation_delete", applyClaimRelationDeleteProposal);
   registry.register("object_relation_create", applyObjectRelationCreateProposal);
   registry.register("object_relation_delete", applyObjectRelationDeleteProposal);
   registry.register("object_kind_create", applyObjectKindCreateProposal);
@@ -604,9 +541,6 @@ async function applyKnowledgeCreateProposal(
   const tags = toStringArray(payload.tags);
   const confidence = parseConfidence(payload.confidence);
   const sourceRefs = provenanceEntriesFromPayload(payload.source_refs);
-  const sourceUrl = optionalString(payload.source_url);
-  const sourceActivityId = optionalString(payload.source_activity_id);
-  const sourceArtifactId = optionalString(payload.source_artifact_id);
   const sourceRunId = optionalString(payload.source_run_id);
   const slug = optionalString(payload.slug);
 
@@ -631,14 +565,12 @@ async function applyKnowledgeCreateProposal(
          object_id, space_id, knowledge_kind, slug, aliases_json, content,
          content_json, content_format, content_schema_version, plain_text,
          verification_status, reflection_status, tags_json, confidence,
-         source_url, source_activity_id, source_artifact_id,
          created_from_proposal_id, approved_by_user_id, version
        ) VALUES (
          $1, $2, $12, $13, $14::jsonb, $15,
          $16::jsonb, $17, COALESCE($18::int, 1), $19,
          $20, $21, $22::jsonb, $23,
-         $24, $25, $26,
-         $27, $28, 1
+         $24, $25, 1
        )
        RETURNING object_id AS id
      )
@@ -667,9 +599,6 @@ async function applyKnowledgeCreateProposal(
       reflectionStatus,
       JSON.stringify(tags),
       confidence,
-      sourceUrl,
-      sourceActivityId,
-      sourceArtifactId,
       context.proposal.id,
       context.userId,
     ],
@@ -733,7 +662,6 @@ async function applyKnowledgeUpdateProposal(
     : [];
   const tags = hasPayloadKey(payload, "tags") ? toStringArray(payload.tags) : [];
   const sourceRefs = provenanceEntriesFromPayload(payload.source_refs);
-  const sourceUrl = optionalString(payload.source_url) ?? current.source_url;
   const slug = optionalString(payload.slug) ?? current.slug;
   const now = new Date().toISOString();
 
@@ -761,15 +689,13 @@ async function applyKnowledgeUpdateProposal(
          knowledge_kind, slug, aliases_json, content, content_json,
          content_format, content_schema_version, plain_text,
          verification_status, reflection_status, tags_json, confidence,
-         source_url, source_activity_id, source_artifact_id,
          created_from_proposal_id, approved_by_user_id, version
        ) VALUES (
          $1, $2, $12, $13,
          $14, $15, $16::jsonb, $17, $18::jsonb,
          $19, $20, $21,
          $22, $23, $24::jsonb, $25,
-         $26, $27, $28,
-         $29, $30, $31
+         $26, $27, $28
        )
        RETURNING object_id AS id
      )
@@ -800,9 +726,6 @@ async function applyKnowledgeUpdateProposal(
       reflectionStatus,
       JSON.stringify(tags),
       confidence,
-      sourceUrl,
-      current.source_activity_id,
-      current.source_artifact_id,
       context.proposal.id,
       context.userId,
       newVersion,
@@ -864,117 +787,6 @@ async function applyKnowledgeArchiveProposal(
   return {
     result_type: "knowledge_item",
     result: { knowledge_item: serializeKnowledgeItem(row) },
-  };
-}
-
-async function applyKnowledgeRelationCreateProposal(
-  context: ProposalApplyContext,
-): Promise<ProposalApplyResult> {
-  const payload = context.proposal.payload_json ?? {};
-  ensureOperation(payload, "relation_create");
-
-  const fromItemId = expectString(payload.from_item_id);
-  const toItemId = expectString(payload.to_item_id);
-  const relationType = expectString(payload.relation_type);
-  if (!VALID_RELATION_TYPES.has(relationType)) {
-    throw new KnowledgeApplyValidationError(`invalid relation_type: ${JSON.stringify(relationType)}`);
-  }
-
-  const status = optionalString(payload.status) ?? "active";
-  if (!VALID_RELATION_STATUSES.has(status)) {
-    throw new KnowledgeApplyValidationError(`invalid relation status: ${JSON.stringify(status)}`);
-  }
-
-  const confidence = parseConfidence(payload.confidence);
-  const evidenceSummary = optionalString(payload.evidence_summary);
-  const fromItem = await requireKnowledgeItem(context.db, context.proposal.space_id, fromItemId, context.proposal);
-  const toItem = await requireKnowledgeItem(context.db, context.proposal.space_id, toItemId, context.proposal);
-  if (fromItem.space_id !== toItem.space_id || fromItem.space_id !== context.proposal.space_id) {
-    throw new KnowledgeApplyValidationError("Knowledge relation endpoints must be in the same space");
-  }
-
-  if (status === "active") {
-    const existing = await context.db.query<{ id: string }>(
-      `SELECT id FROM knowledge_item_relations
-         WHERE space_id = $1 AND from_item_id = $2 AND to_item_id = $3 AND relation_type = $4 AND status = 'active'`,
-      [context.proposal.space_id, fromItemId, toItemId, relationType],
-    );
-    if (existing.rows.length > 0) {
-      throw new KnowledgeApplyValidationError("active Knowledge relation already exists");
-    }
-  }
-
-  const relationId = randomUUID();
-  await context.db.query(
-    `INSERT INTO knowledge_item_relations (
-       id, space_id, from_item_id, to_item_id, relation_type, status, confidence,
-       evidence_summary, source_proposal_id, created_by_user_id, created_by_agent_id
-     ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL
-     )`,
-    [
-      relationId,
-      context.proposal.space_id,
-      fromItemId,
-      toItemId,
-      relationType,
-      status,
-      confidence,
-      evidenceSummary,
-      context.proposal.id,
-      context.proposal.created_by_user_id,
-    ],
-  );
-
-  await reindexWithinApply(context, async (projection) => {
-    await projection.reindex(context.proposal.space_id, "knowledge_item", fromItemId);
-    await projection.reindex(context.proposal.space_id, "knowledge_item", toItemId);
-  });
-
-  const row = await getKnowledgeRelationById(context.db, context.proposal.space_id, relationId);
-  return {
-    result_type: "knowledge_relation",
-    result: { knowledge_relation: serializeKnowledgeRelation(row) },
-  };
-}
-
-async function applyKnowledgeRelationDeleteProposal(
-  context: ProposalApplyContext,
-): Promise<ProposalApplyResult> {
-  const payload = context.proposal.payload_json ?? {};
-  ensureOperation(payload, "relation_delete");
-
-  const relationId = expectString(payload.relation_id);
-  const relation = await context.db.query<KnowledgeRelationRow>(
-    `SELECT ${KNOWLEDGE_RELATION_COLUMNS}
-       FROM knowledge_item_relations
-      WHERE id = $1 AND space_id = $2`,
-    [relationId, context.proposal.space_id],
-  );
-  if (relation.rows.length === 0) {
-    throw new KnowledgeApplyValidationError("Knowledge relation not found");
-  }
-  const existing = relation.rows[0]!;
-
-  await requireKnowledgeItemForMutation(context.db, context.proposal.space_id, existing.from_item_id, context.proposal);
-  await requireKnowledgeItemForMutation(context.db, context.proposal.space_id, existing.to_item_id, context.proposal);
-
-  await context.db.query(
-    `UPDATE knowledge_item_relations
-       SET status = 'archived', updated_at = $3
-     WHERE id = $1 AND space_id = $2`,
-    [relationId, context.proposal.space_id, new Date().toISOString()],
-  );
-
-  await reindexWithinApply(context, async (projection) => {
-    await projection.reindex(context.proposal.space_id, "knowledge_item", existing.from_item_id);
-    await projection.reindex(context.proposal.space_id, "knowledge_item", existing.to_item_id);
-  });
-
-  const row = await getKnowledgeRelationById(context.db, context.proposal.space_id, relationId);
-  return {
-    result_type: "knowledge_relation",
-    result: { knowledge_relation: serializeKnowledgeRelation(row) },
   };
 }
 
@@ -1312,100 +1124,6 @@ async function applyClaimArchiveProposal(
   };
 }
 
-async function applyClaimRelationCreateProposal(
-  context: ProposalApplyContext,
-): Promise<ProposalApplyResult> {
-  const payload = context.proposal.payload_json ?? {};
-  ensureOperation(payload, "claim_relation_create");
-
-  const fromClaimId = expectString(payload.from_claim_id);
-  const toClaimId = expectString(payload.to_claim_id);
-  if (fromClaimId === toClaimId) throw new KnowledgeApplyValidationError("claim relation endpoints must differ");
-  const relationType = expectString(payload.relation_type);
-  if (!VALID_CLAIM_RELATION_TYPES.has(relationType)) {
-    throw new KnowledgeApplyValidationError(`invalid relation_type: ${JSON.stringify(relationType)}`);
-  }
-  const status = optionalString(payload.status) ?? "active";
-  if (!RELATION_CREATE_STATUSES.has(status)) {
-    throw new KnowledgeApplyValidationError(`invalid relation status: ${JSON.stringify(status)}`);
-  }
-
-  await requireClaimForMutation(context.db, context.proposal.space_id, fromClaimId, context.proposal);
-  await requireClaimForMutation(context.db, context.proposal.space_id, toClaimId, context.proposal);
-  if (status === "active") {
-    await assertNoActiveClaimRelation(context.db, context.proposal.space_id, fromClaimId, toClaimId, relationType);
-  }
-
-  const now = new Date().toISOString();
-  const relationId = randomUUID();
-  await context.db.query(
-    `INSERT INTO claim_relations (
-       id, space_id, from_claim_id, to_claim_id, relation_type, status,
-       confidence, evidence_summary, source_proposal_id, created_by_user_id,
-       created_by_agent_id, created_at, updated_at
-     ) VALUES (
-       $1, $2, $3, $4, $5, $6,
-       $7, $8, $9, $10,
-       NULL, $11, $11
-     )`,
-    [
-      relationId,
-      context.proposal.space_id,
-      fromClaimId,
-      toClaimId,
-      relationType,
-      status,
-      parseConfidence(payload.confidence),
-      optionalString(payload.evidence_summary),
-      context.proposal.id,
-      context.proposal.created_by_user_id,
-      now,
-    ],
-  );
-
-  await reindexWithinApply(context, async (projection) => {
-    await projection.reindex(context.proposal.space_id, "claim", fromClaimId);
-    await projection.reindex(context.proposal.space_id, "claim", toClaimId);
-  });
-
-  const row = await getClaimRelationById(context.db, context.proposal.space_id, relationId);
-  return {
-    result_type: "claim_relation",
-    result: { claim_relation: serializeClaimRelation(row) },
-  };
-}
-
-async function applyClaimRelationDeleteProposal(
-  context: ProposalApplyContext,
-): Promise<ProposalApplyResult> {
-  const payload = context.proposal.payload_json ?? {};
-  ensureOperation(payload, "claim_relation_delete");
-
-  const relationId = expectString(payload.relation_id);
-  const relation = await getClaimRelationById(context.db, context.proposal.space_id, relationId);
-  await requireClaimForMutation(context.db, context.proposal.space_id, relation.from_claim_id, context.proposal);
-  await requireClaimForMutation(context.db, context.proposal.space_id, relation.to_claim_id, context.proposal);
-
-  const now = new Date().toISOString();
-  await context.db.query(
-    `UPDATE claim_relations
-        SET status = 'archived', updated_at = $3
-      WHERE id = $1 AND space_id = $2`,
-    [relationId, context.proposal.space_id, now],
-  );
-
-  await reindexWithinApply(context, async (projection) => {
-    await projection.reindex(context.proposal.space_id, "claim", relation.from_claim_id);
-    await projection.reindex(context.proposal.space_id, "claim", relation.to_claim_id);
-  });
-
-  const row = await getClaimRelationById(context.db, context.proposal.space_id, relationId);
-  return {
-    result_type: "claim_relation",
-    result: { claim_relation: serializeClaimRelation(row) },
-  };
-}
-
 async function applyObjectRelationCreateProposal(
   context: ProposalApplyContext,
 ): Promise<ProposalApplyResult> {
@@ -1722,19 +1440,6 @@ async function requireKnowledgeItem(
   return row;
 }
 
-async function requireKnowledgeItemForMutation(
-  db: Queryable,
-  spaceId: string,
-  itemId: string,
-  proposal: ProposalApplyContext["proposal"],
-): Promise<KnowledgeItemRow> {
-  const row = await getKnowledgeItemById(db, spaceId, itemId);
-  if (!canApplyKnowledgeMutation(row, proposal)) {
-    throw new KnowledgeApplyValidationError("Knowledge relation not found");
-  }
-  return row;
-}
-
 async function getKnowledgeItemById(db: Queryable, spaceId: string, itemId: string): Promise<KnowledgeItemRow> {
   const result = await db.query<KnowledgeItemRow>(
     `SELECT ${KNOWLEDGE_ITEM_COLUMNS}
@@ -1744,24 +1449,6 @@ async function getKnowledgeItemById(db: Queryable, spaceId: string, itemId: stri
   );
   const row = result.rows[0];
   if (!row) throw new KnowledgeApplyValidationError("Knowledge item not found");
-  return row;
-}
-
-async function getKnowledgeRelationById(
-  db: Queryable,
-  spaceId: string,
-  relationId: string,
-): Promise<KnowledgeRelationRow> {
-  const result = await db.query<KnowledgeRelationRow>(
-    `SELECT ${KNOWLEDGE_RELATION_COLUMNS}
-       FROM knowledge_item_relations
-      WHERE id = $1 AND space_id = $2`,
-    [relationId, spaceId],
-  );
-  const row = result.rows[0];
-  if (!row) {
-    throw new KnowledgeApplyValidationError("Knowledge relation not found");
-  }
   return row;
 }
 
@@ -1802,22 +1489,6 @@ async function getClaimSources(db: Queryable, spaceId: string, claimId: string):
     [claimId, spaceId],
   );
   return result.rows;
-}
-
-async function getClaimRelationById(
-  db: Queryable,
-  spaceId: string,
-  relationId: string,
-): Promise<ClaimRelationRow> {
-  const result = await db.query<ClaimRelationRow>(
-    `SELECT ${CLAIM_RELATION_COLUMNS}
-       FROM claim_relations
-      WHERE id = $1 AND space_id = $2`,
-    [relationId, spaceId],
-  );
-  const row = result.rows[0];
-  if (!row) throw new KnowledgeApplyValidationError("Claim relation not found");
-  return row;
 }
 
 async function getObjectRelationById(
@@ -2079,33 +1750,28 @@ async function insertClaimSources(
   }
 }
 
-async function assertNoActiveClaimRelation(
-  db: Queryable,
-  spaceId: string,
-  fromClaimId: string,
-  toClaimId: string,
-  relationType: string,
-): Promise<void> {
-  const result = await db.query<{ id: string }>(
-    `SELECT id FROM claim_relations
-      WHERE space_id = $1 AND from_claim_id = $2 AND to_claim_id = $3
-        AND relation_type = $4 AND status = 'active'`,
-    [spaceId, fromClaimId, toClaimId, relationType],
-  );
-  if (result.rows[0]) throw new KnowledgeApplyValidationError("active Claim relation already exists");
-}
-
 async function hasActiveSupersedingClaimRelation(
   db: Queryable,
   spaceId: string,
   targetClaimId: string,
 ): Promise<boolean> {
   const result = await db.query<{ id: string }>(
-    `SELECT id FROM claim_relations
-      WHERE space_id = $1
-        AND to_claim_id = $2
-        AND relation_type = 'supersedes'
-        AND status = 'active'
+    `SELECT r.id
+       FROM object_relations r
+       JOIN space_objects from_so
+         ON from_so.id = r.from_object_id
+        AND from_so.space_id = r.space_id
+        AND from_so.object_type = 'claim'
+        AND from_so.deleted_at IS NULL
+       JOIN space_objects to_so
+         ON to_so.id = r.to_object_id
+        AND to_so.space_id = r.space_id
+        AND to_so.object_type = 'claim'
+        AND to_so.deleted_at IS NULL
+      WHERE r.space_id = $1
+        AND r.to_object_id = $2
+        AND r.relation_type = 'supersedes'
+        AND r.status = 'active'
       LIMIT 1`,
     [spaceId, targetClaimId],
   );
@@ -2232,13 +1898,10 @@ function serializeKnowledgeItem(row: KnowledgeItemRow): Record<string, unknown> 
     reflection_status: row.reflection_status,
     tags: parseJsonArray(row.tags_json),
     confidence: row.confidence,
-    source_url: row.source_url,
     owner_user_id: row.owner_user_id,
     created_by_user_id: row.created_by_user_id,
     created_by_agent_id: row.created_by_agent_id,
     created_by_run_id: row.created_by_run_id,
-    source_activity_id: row.source_activity_id,
-    source_artifact_id: row.source_artifact_id,
     created_from_proposal_id: row.created_from_proposal_id,
     approved_by_user_id: row.approved_by_user_id,
     version: toNumber(row.version),
@@ -2246,24 +1909,6 @@ function serializeKnowledgeItem(row: KnowledgeItemRow): Record<string, unknown> 
     updated_at: normalizeDate(row.updated_at),
     archived_at: normalizeDate(row.archived_at),
     deprecated_at: normalizeDate(row.deprecated_at),
-  };
-}
-
-function serializeKnowledgeRelation(row: KnowledgeRelationRow): Record<string, unknown> {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    from_item_id: row.from_item_id,
-    to_item_id: row.to_item_id,
-    relation_type: row.relation_type,
-    status: row.status,
-    confidence: row.confidence,
-    evidence_summary: row.evidence_summary,
-    source_proposal_id: row.source_proposal_id,
-    created_by_user_id: row.created_by_user_id,
-    created_by_agent_id: row.created_by_agent_id,
-    created_at: normalizeDate(row.created_at),
-    updated_at: normalizeDate(row.updated_at),
   };
 }
 
@@ -2323,24 +1968,6 @@ function serializeClaimSource(row: ClaimSourceRow): Record<string, unknown> {
     metadata: optionalObject(row.metadata_json) ?? {},
     created_by_user_id: row.created_by_user_id,
     created_at: normalizeDate(row.created_at),
-  };
-}
-
-function serializeClaimRelation(row: ClaimRelationRow): Record<string, unknown> {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    from_claim_id: row.from_claim_id,
-    to_claim_id: row.to_claim_id,
-    relation_type: row.relation_type,
-    status: row.status,
-    confidence: row.confidence,
-    evidence_summary: row.evidence_summary,
-    source_proposal_id: row.source_proposal_id,
-    created_by_user_id: row.created_by_user_id,
-    created_by_agent_id: row.created_by_agent_id,
-    created_at: normalizeDate(row.created_at),
-    updated_at: normalizeDate(row.updated_at),
   };
 }
 

@@ -101,8 +101,8 @@ export default function KnowledgeRelationProposalForm({ currentItemId, onProposa
     setSubmitting(true)
     try {
       const p = await knowledgeApi.proposeRelation({
-        from_item_id: currentItemId,
-        to_item_id: targetId,
+        from_object_id: currentItemId,
+        to_object_id: targetId,
         relation_type: form.relation_type,
         status: form.status,
         confidence,
@@ -181,7 +181,7 @@ export default function KnowledgeRelationProposalForm({ currentItemId, onProposa
 
         <div className="grid gap-3 md:grid-cols-2">
           <div className="md:col-span-2">
-            <Label>Manual to_item_id</Label>
+            <Label>Manual to_object_id</Label>
             <Input
               value={form.manual_item_id}
               onChange={e => {

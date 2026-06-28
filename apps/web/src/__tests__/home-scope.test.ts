@@ -10,20 +10,22 @@ describe('Home aggregate is not filtered by the active space', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) }) as unknown as typeof fetch
   })
 
-  it('meApi.summary omits space_id/user_id even when a space is active', async () => {
-    setSpaceContext('space-team', 'user-1')
+  it('meApi.summary omits space context even when a space is active', async () => {
+    setSpaceContext('space-team')
     await meApi.summary()
-    const url = (globalThis.fetch as unknown as { mock: { calls: string[][] } }).mock.calls[0][0]
+    const [url, init] = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]
     expect(url).toContain('/me/summary')
     expect(url).not.toContain('space_id')
     expect(url).not.toContain('user_id')
+    expect((init.headers as Record<string, string>)['X-Agent-Space-Id']).toBeUndefined()
   })
 
-  it('homeApi.summary (Space Today) IS space-scoped', async () => {
-    setSpaceContext('space-team', 'user-1')
+  it('homeApi.summary (Space Today) sends explicit space context', async () => {
+    setSpaceContext('space-team')
     await homeApi.summary()
-    const url = (globalThis.fetch as unknown as { mock: { calls: string[][] } }).mock.calls[0][0]
+    const [url, init] = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]
     expect(url).toContain('/home/summary')
-    expect(url).toContain('space_id=space-team')
+    expect(url).not.toContain('space_id')
+    expect((init.headers as Record<string, string>)['X-Agent-Space-Id']).toBe('space-team')
   })
 })

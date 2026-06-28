@@ -66,7 +66,7 @@ export const MEMORY_COLUMNS = `id, space_id, subject_user_id, owner_user_id, wor
   scope_type, namespace, memory_type, title, content, status, visibility,
   sensitivity_level, selected_user_ids, last_confirmed_at, confidence, importance,
   source_id, created_by, created_at, updated_at, deleted_at, version, tags,
-  memory_layer, memory_kind, source_trust, created_from_proposal_id,
+  memory_layer, source_trust, created_from_proposal_id,
   root_memory_id, supersedes_memory_id, project_id`;
 
 export interface MemoryRow extends MemoryAuthFields {
@@ -87,7 +87,6 @@ export interface MemoryRow extends MemoryAuthFields {
   version: number | string;
   tags: unknown;
   memory_layer: string | null;
-  memory_kind: string | null;
   source_trust: string | null;
   created_from_proposal_id: string | null;
   root_memory_id: string | null;
@@ -424,7 +423,6 @@ export function serializeMemoryRow(row: MemoryRow, viewerUserId: string): Memory
       last_confirmed_at: isoOrNull(row.last_confirmed_at),
       confidence: numeric(row.confidence),
       importance: numeric(row.importance),
-      source_id: row.source_id,
       created_by: row.created_by,
       created_at: isoOrNull(row.created_at) ?? new Date(0).toISOString(),
       updated_at: isoOrNull(row.updated_at) ?? new Date(0).toISOString(),
@@ -432,7 +430,6 @@ export function serializeMemoryRow(row: MemoryRow, viewerUserId: string): Memory
       version: Number(row.version),
       tags: normalizeArray(row.tags),
       memory_layer: row.memory_layer,
-      memory_kind: row.memory_kind,
       source_trust: row.source_trust,
       created_from_proposal_id: row.created_from_proposal_id,
       root_memory_id: row.root_memory_id,

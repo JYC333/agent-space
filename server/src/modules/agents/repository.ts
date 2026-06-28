@@ -45,8 +45,6 @@ export interface AgentRecord {
   role_instruction: string | null;
   status: string;
   agent_kind: string;
-  source_template_id: string | null;
-  source_template_version_id: string | null;
   current_version_id: string | null;
   visibility: string;
   created_at: unknown;
@@ -116,8 +114,6 @@ export interface AgentOut {
   status: string;
   agent_kind: string;
   current_version_id: string | null;
-  source_template_id: string | null;
-  source_template_version_id: string | null;
   model: {
     provider_id: string | null;
     provider_name: string | null;
@@ -168,7 +164,7 @@ export interface AgentRuntimeProfileOut {
 
 const AGENT_COLUMNS = `
   a.id, a.space_id, a.owner_user_id, a.name, a.description, a.role_instruction,
-  a.status, a.agent_kind, a.source_template_id, a.source_template_version_id,
+  a.status, a.agent_kind,
   a.current_version_id, a.visibility, a.created_at, a.updated_at,
   COALESCE(arp.model_provider_id, av.model_provider_id) AS model_provider_id,
   COALESCE(arp.model_name, av.model_name) AS model_name,
@@ -491,8 +487,6 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
     outputPolicyJson?: Record<string, unknown> | null;
     scheduleConfigJson?: Record<string, unknown> | null;
     outputSchemaJson?: Record<string, unknown> | null;
-    sourceTemplateId?: string | null;
-    sourceTemplateVersionId?: string | null;
   }): Promise<AgentOut> {
     const adapterType = normalizeAdapterType(input.adapterType);
     const providerId = input.defaultModelProviderId ?? null;
@@ -513,8 +507,6 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         roleInstruction: input.roleInstruction ?? null,
         status: "active",
         agentKind: "standard",
-        sourceTemplateId: input.sourceTemplateId ?? null,
-        sourceTemplateVersionId: input.sourceTemplateVersionId ?? null,
         systemPrompt: input.systemPrompt ?? null,
         modelProviderId: providerId,
         modelName,
@@ -807,8 +799,6 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         roleInstruction: null,
         status: "active",
         agentKind: "system_assistant",
-        sourceTemplateId: null,
-        sourceTemplateVersionId: null,
         systemPrompt: "You are the space's contextual personal assistant.",
         modelProviderId: null,
         modelName: null,
@@ -986,8 +976,6 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
       roleInstruction: string | null;
       status: string;
       agentKind: string;
-      sourceTemplateId: string | null;
-      sourceTemplateVersionId: string | null;
       systemPrompt: string | null;
       modelProviderId: string | null;
       modelName: string | null;
@@ -1009,9 +997,8 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
     await client.query(
       `INSERT INTO agents (
          id, space_id, owner_user_id, name, description, role_instruction,
-         status, agent_kind, source_template_id, source_template_version_id,
-         visibility, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)`,
+         status, agent_kind, visibility, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
       [
         agentId,
         input.spaceId,
@@ -1021,8 +1008,6 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         input.roleInstruction,
         input.status,
         input.agentKind,
-        input.sourceTemplateId,
-        input.sourceTemplateVersionId,
         input.visibility,
         now,
       ],

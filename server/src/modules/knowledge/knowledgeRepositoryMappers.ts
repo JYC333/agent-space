@@ -11,7 +11,6 @@ import type {
   ClaimRelationRow,
   ClaimRow,
   ClaimSourceRow,
-  EntityLinkRow,
   KnowledgeItemRow,
   KnowledgeRelationRow,
   NoteCollectionRow,
@@ -55,14 +54,11 @@ export function knowledgeItemOut(row: KnowledgeItemRow, sourceRefs: Record<strin
     content_format: row.content_format,
     content_schema_version: numberValue(row.content_schema_version) ?? 1,
     plain_text: row.plain_text,
-    source_url: row.source_url,
     source_refs: sourceRefs,
     owner_user_id: row.owner_user_id,
     created_by_user_id: row.created_by_user_id,
     created_by_agent_id: row.created_by_agent_id,
     created_by_run_id: row.created_by_run_id,
-    source_activity_id: row.source_activity_id,
-    source_artifact_id: row.source_artifact_id,
     created_from_proposal_id: row.created_from_proposal_id,
     approved_by_user_id: row.approved_by_user_id,
     created_at: dateIso(row.created_at),
@@ -212,10 +208,6 @@ export function noteCollectionOut(row: NoteCollectionRow): Record<string, unknow
     created_at: dateIso(row.created_at),
     updated_at: dateIso(row.updated_at),
   };
-}
-
-export function entityLinkOut(row: EntityLinkRow): Record<string, unknown> {
-  return normalizeDates({ ...row });
 }
 
 export function normalizeDates(row: Record<string, unknown>): Record<string, unknown> {

@@ -233,10 +233,11 @@ export class PgFrontendSupportService {
       error_message: string | null;
       visibility: string;
     }>(
-      `SELECT r.id, r.status, r.mode, r.run_type, r.agent_id, r.task_id,
+      `SELECT r.id, r.status, r.mode, r.run_type, r.agent_id, tr.task_id,
               r.created_at, r.started_at, r.ended_at, r.error_message,
               r.visibility
          FROM runs r
+         LEFT JOIN task_runs tr ON tr.run_id = r.id AND tr.space_id = r.space_id AND tr.role = 'primary'
         WHERE r.space_id = $1
           AND ${runVisibleSql("$2")}
           ${activeFilter}
@@ -451,7 +452,7 @@ export class PgFrontendSupportService {
          count(*) FILTER (WHERE ar.status = 'raw')::text AS raw_count,
          count(*) FILTER (WHERE ar.created_at >= date_trunc('day', now()))::text AS today_count
        FROM activity_records ar
-       WHERE ar.space_id = $1`,
+       WHERE ar.space_id = $1 AND ar.status NOT IN ('archived', 'failed')`,
       [spaceId],
     );
     const row = result.rows[0];

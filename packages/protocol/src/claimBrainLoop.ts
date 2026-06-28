@@ -15,7 +15,7 @@
  *    batched and confidence-tiered. The report is persisted as an owner-private
  *    (or `space_ops`) artifact; turning it into proposals reuses the existing
  *    Claim Candidate Packet flow, so the only canonical writes remain
- *    proposal-gated `claim_relation_create` (contradicts) children.
+ *    proposal-gated `object_relation_create` (contradicts) children.
  */
 import { z } from "zod";
 import { IdSchema, ISODateTimeSchema, SecretResponseGuards } from "./common.js";
@@ -116,7 +116,7 @@ export const ClaimContradictionScanRequestSchema = z
     review_scope: ReviewScopeSchema.default("private"),
     // When true the report artifact is immediately turned into a Claim Candidate
     // Packet (reusing that route), whose accept creates the child
-    // `claim_relation_create` (contradicts) proposals.
+    // `object_relation_create` (contradicts) proposals.
     create_packet: z.boolean().default(false),
     llm_judge_enabled: z.boolean().default(false),
   })
@@ -136,9 +136,9 @@ const ClaimRefSchema = z
 
 export const ClaimContradictionProposedActionSchema = z
   .object({
-    proposal_type: z.literal("claim_relation_create"),
-    from_claim_id: IdSchema,
-    to_claim_id: IdSchema,
+    proposal_type: z.literal("object_relation_create"),
+    from_object_id: IdSchema,
+    to_object_id: IdSchema,
     relation_type: z.literal("contradicts"),
     confidence: z.number().min(0).max(1),
   })

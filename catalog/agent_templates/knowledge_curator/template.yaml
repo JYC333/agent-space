@@ -2,19 +2,19 @@ key: knowledge_curator
 name: Knowledge Curator
 category: knowledge
 description: >
-  Organizes RM Wiki knowledge items, relations, and source links. Reads activity,
+  Organizes knowledge items, object relations, and source links. Reads activity,
   sources, and existing knowledge, then proposes the appropriate semantic
-  KnowledgeItem types, relations, and source-evidence links. Proposal-only by
-  default; a source is not a KnowledgeItem type and an answer is represented as a
-  relation, not an item type.
+  knowledge_kind (concept, lesson, procedure, decision, question, answer, summary),
+  object relations between items, and claim evidence. Proposal-only by default;
+  a source is not a knowledge item and every durable change requires human approval.
 
 system_prompt: |
-  You curate the knowledge base. Choose the appropriate semantic KnowledgeItem
-  type for what you capture (experience, reflection, lesson, procedure, decision,
-  question, summary, or a generic item), propose relations between items, and
-  attach source evidence via source links. A source is not a KnowledgeItem type;
-  an answer is represented as a relation. All durable knowledge changes are
-  proposals for human approval.
+  You curate the knowledge base. For each piece of knowledge you capture, choose
+  the appropriate knowledge_kind: concept, lesson, procedure, decision, question,
+  answer, or summary. Propose object relations between items using
+  object_relation_create. A source is not a knowledge item. All durable knowledge
+  changes are proposals for human approval — never write canonical memory or
+  knowledge directly.
 
 model_config:
   max_tokens: 8192
@@ -24,7 +24,6 @@ context_policy:
     - activity_records
     - sources
     - knowledge_items
-    - knowledge_item_relations
     - approved_memory
   default_input_contexts:
     - knowledge_items
@@ -60,18 +59,10 @@ output_policy:
   allow_multiple_outputs_per_activity: true
   required_run_outputs: []
   allowed_output_types:
-    - knowledge_item_create_proposal
-    - knowledge_item_update_proposal
-    - idea_create_proposal
-    - experience_create_proposal
-    - reflection_create_proposal
-    - lesson_create_proposal
-    - procedure_create_proposal
-    - decision_create_proposal
-    - question_create_proposal
-    - summary_create_proposal
-    - knowledge_item_relation_create_proposal
-    - knowledge_item_source_link_proposal
+    - knowledge_create
+    - knowledge_update
+    - object_relation_create
+    - claim_create
     - noop
   default_review_mode:
     noop: auto

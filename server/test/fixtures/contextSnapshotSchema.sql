@@ -42,6 +42,7 @@ CREATE TABLE public.context_snapshot_items (
         ((item_type)::text = ANY ((ARRAY[
             'memory'::character varying, 'knowledge_item'::character varying,
             'source'::character varying, 'activity_record'::character varying,
+            'project_public_summary'::character varying,
             'task'::character varying, 'idea'::character varying,
             'project'::character varying, 'workspace'::character varying,
             'run'::character varying, 'proposal'::character varying,
@@ -52,3 +53,25 @@ CREATE TABLE public.context_snapshot_items (
 
 CREATE INDEX ix_context_snapshot_items_snapshot
     ON public.context_snapshot_items USING btree (context_snapshot_id);
+
+CREATE TABLE public.memory_entries (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    access_count integer DEFAULT 0 NOT NULL,
+    last_accessed_at timestamp with time zone,
+    last_retrieved_at timestamp with time zone,
+    CONSTRAINT memory_entries_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.memory_access_logs (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    memory_id character varying(36) NOT NULL,
+    user_id character varying(36),
+    agent_id character varying(36),
+    run_id character varying(36),
+    access_type character varying(64) NOT NULL,
+    reason text,
+    accessed_at timestamp with time zone NOT NULL,
+    CONSTRAINT memory_access_logs_pkey PRIMARY KEY (id)
+);

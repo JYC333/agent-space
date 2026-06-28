@@ -19,7 +19,7 @@ Rules:
 |---|---|---|
 | Auth / spaces / identity | Session-cookie identity resolution, Google OAuth login/callback/config, `GET /auth/introspect`, `GET /me`, `GET /me/spaces`, `POST /auth/logout`, feature-gated API-key routes, `POST /spaces`, `GET /spaces/{id}`, `GET /spaces/{id}/members`, `POST /spaces/{id}/invitations`, `POST /invitations/{token}/accept`, and deterministic space-created default seeds | DB-persisted API-key storage until the canonical schema adds an `api_keys` table |
 | Providers/credentials | Provider reads, commands, invocation, API-key credential pools, CLI credential login/broker/audit, internal provider/credential ports | — |
-| Runtime adapters | `RuntimeAdapterSpec` catalog, adapter-type semantics, execution-plane reads, runtime-tool binding reads, server runtime-host/tool integration | `one_shot_docker` and managed API tool execution |
+| Runtime adapters | `RuntimeAdapterSpec` catalog, adapter-type semantics, runtime-tool binding reads, server runtime-host/tool integration | `one_shot_docker` and managed API tool execution |
 | Agents | Agent CRUD (`/agents*`), current-version/version list/read/restore, config updates as immutable `agent_versions`, default Assistant ensure/read, Assistant settings, agent-scoped run list/read subresources, catalog-backed agent template list/version reads, and create-from-template | Template catalog persistence remains catalog-file-backed; DB-backed template authoring is not implemented |
 | Runs | Run creation via agent subresources, top-level run list/detail/status/trace, activity/artifact/proposal child read surfaces, execute/stop commands, internal execute port, deterministic post-run evaluation/finalization, `agent_run` worker dispatch, run execution evidence writes, native context.prepare consumption, and server worktree/ephemeral sandbox preparation for CLI runs | — |
 | Jobs / schedulers | Generic durable `jobs` queue (`/jobs*`), unified worker registry (`agent_run`, `memory_consolidation`, `daily_capture_report`, `context_digest_refresh`, `session_condense`), in-process schedulers (daily capture report, automation, memory access-log retention, intake extraction polling, backup), stuck-job reclaim, stale running-run recovery at worker startup, and non-overlapping scheduler task execution | — |
@@ -57,12 +57,13 @@ Current ownership aliases to avoid migration-drift mistakes:
   is no standalone workspace-console route module.
 
 The active route-registered server modules are: `system`, `auth`,
-`spaces`, `catalog`, `streaming`, `notifications`, `runtimeTools`,
-`providers`, `execution_planes`, `runtime_tool_bindings`, `runtimeHost`, `runs`, `artifacts`, `projects`, `policy`,
-`proposals`, `sessions`, `agentTemplates`, `agents`,
-`personalMemoryGrants`, `memory`, `context`, `activity`, `source_pointers`, `intake`, `knowledge`,
-`evolution`, `tasks`, `workspace_profiles`, `workspaces`, `jobs`, `automations`,
-`dailyReports`, `backups`, `deployment`, and `frontendSupport`.
+`spaces`, `catalog`, `capabilities`, `streaming`, `notifications`, `runtimeTools`,
+`networkProfiles`, `providers`, `runtime_tool_bindings`, `runtimeHost`, `runs`,
+`artifacts`, `projects`, `policy`, `proposals`, `sessions`, `agentTemplates`, `agents`,
+`personalMemoryGrants`, `memory`, `context`, `brainOps`, `brainThink`, `activity`,
+`source_pointers`, `intake`, `knowledge`, `evolution`, `tasks`, `workspace_profiles`,
+`workspaces`, `jobs`, `automations`, `dailyReports`, `backups`, `deployment`,
+`frontendSupport`, and `plugins`.
 `runtimeAdapters` is a first-class code-only domain consumed by `runs`,
 `runtimeHost`, and `runtimeTools`.
 

@@ -1,8 +1,8 @@
 # Retrieval & Brain Layer
 
-Status: implemented (Phases 1–7, current through 2026-06-27). This is a
-current-state architecture doc; outstanding work is consolidated under
-[Deferred / future work](#deferred--future-work).
+Status: implemented (current through 2026-06-27). This is a current-state
+architecture doc. Follow-up quality work and risk watch items live in
+[`ROADMAP_AND_FUTURE_RISKS.md`](ROADMAP_AND_FUTURE_RISKS.md).
 
 agent-space's knowledge retrieval is a deterministic recall **substrate** plus a
 **brain layer** layered on top — the gbrain-inspired capabilities: hybrid recall,
@@ -28,9 +28,9 @@ deliberately includes gated LLM stages.)
 | Eval harness (recall@k + MRR/nDCG/NamedThing/relational/staleness/per-mode/leak-fuzz) | solid eval/report substrate; aggregate-only eval reports can persist as owner-private `retrieval_eval_report` artifacts; manual brief diagnostics can generate aggregate eval reports from saved owner-private Context Brief gap metadata; Artifacts UI can trigger/render diagnostics and record evidence-backed `retrieval_calibration_decision` artifacts for per-mechanic adopt/defer/reject decisions; `space_retrieval_settings.ranking_config` can ship gated mechanics only when the referenced `space_shared` calibration artifact passes the configured aggregate eval/evidence gate |
 | Vector + ANN (halfvec HNSW at default dim) + intent ranking | solid; access-neutral ranking calibrated with floor-ratio gating + deterministic post-RRF cosine blend + runtime-gated visible-edge backlink / candidate-owned salience / richer dedup / autocut mechanics + aggregate boost-attribution/score-bucket/drop telemetry; true BM25 / non-default-dim ANN deferred |
 | Reranker + query rewriter (gated, skippable, audited) | solid; rerank payload bounded by a token (char-proxy) budget |
-| Context Brief: synthesis + citations + two-tier gap analysis | solid; selected Knowledge, Memory, and Project briefs can persist as owner-private `retrieval_brief` artifacts through separate routes |
-| Brain Think / Ask Brain (unified entry point) | core product slice; `POST /api/v1/brain/think` (`modules/brainThink`) runs the per-domain Context Brief pipeline across Knowledge (always) + opt-in Memory/Project, reusing each domain's own read gate and Memory access logging; returns per-domain cited answers, optional opt-in cross-domain `combined_answer`, aggregate gap summary, domain-tagged provenance, and proposal-first follow-ups (Claim Candidate Packet / maintenance scan, surfaced only with Brain Ops scan authority); combined synthesis reuses `ProviderSynthesizer` and the same external-egress/source-policy gate over the union of included sources, and Memory is excluded from the combined prompt unless `combine_include_memory` is explicitly set; optionally persists per-domain `retrieval_brief` artifacts plus an owner-private `brain_think_session` artifact; performs no canonical writes; web `Ask Brain` page + `brain_think_session` renderer |
-| Claim Candidate Packet | solid backend/product slice; `POST /api/v1/knowledge/claims/candidate-packets` plus the web API client and artifact renderer turn selected retrieval brief / retrieval maintenance / diagnostics / Memory maintenance artifacts into `claim_candidate_packet` artifacts and proposals; brief uncited-claim candidates include deterministic holder/perspective, validity/observation, and governed source-ref hints when available; accepting the packet creates valid child pending claim/claim-relation/object-relation proposals only and records skipped invalid children; `space_ops` packets default to `space_shared` source artifacts and require explicit `promote_private_sources_to_space_ops` opt-in plus `private_source_promotion_confirmed = true` to include the caller's private source artifacts |
+| Context Brief: synthesis + citations + two-tier gap analysis | solid; selected Knowledge, Memory, and Project briefs can persist as owner-private `retrieval_brief` artifacts through separate routes; gap findings are advisory artifact metadata, not a proposal channel |
+| Brain Think / Ask Brain (unified entry point) | core product slice; `POST /api/v1/brain/think` (`modules/brainThink`) runs the per-domain Context Brief pipeline across Knowledge (always) + opt-in Memory/Project through `RetrievalSearchService`, reusing each domain's own read gate and Memory access logging; returns per-domain cited answers, optional opt-in cross-domain `combined_answer`, aggregate gap summary, domain-tagged provenance, and proposal-first follow-up descriptors (Claim Candidate Packet / maintenance scan, surfaced only with Brain Ops scan authority); combined synthesis reuses `ProviderSynthesizer` and the same external-egress/source-policy gate over the union of included sources, and Memory is excluded from the combined prompt unless `combine_include_memory` is explicitly set; optionally persists per-domain `retrieval_brief` artifacts plus an owner-private `brain_think_session` artifact; creates no Memory proposals and performs no canonical writes; web `Ask Brain` page + `brain_think_session` renderer |
+| Claim Candidate Packet | solid backend/product slice; `POST /api/v1/knowledge/claims/candidate-packets` plus the web API client and artifact renderer is the explicit bridge from selected retrieval brief / retrieval maintenance / diagnostics / Memory maintenance artifacts into `claim_candidate_packet` artifacts and proposals; brief uncited-claim candidates include deterministic holder/perspective, validity/observation, and governed source-ref hints when available; accepting the packet creates valid child pending claim/claim-relation/object-relation proposals only and records skipped invalid children; `space_ops` packets default to `space_shared` source artifacts and require explicit `promote_private_sources_to_space_ops` opt-in plus `private_source_promotion_confirmed = true` to include the caller's private source artifacts |
 | Maintenance scan (duplicate/orphan/thin/stale/relation, read-only) | solid; manual route plus Dream Cycle Lite v2 route/Automation target produces report artifacts and optional packet proposals |
 | Egress governance (per-space external-egress switch) | solid; backend + Space Settings UI implemented; external/local/internal destination vocabulary implemented; DB-backed chat candidates use the conservative external-provider egress gate until chat provider routing is passed into the collector |
 | Source / connector consent | implemented across the retrieval read plane; intake source connections normalize versioned consent/policy JSON and enforce connected retention/proposal-target checks; the reader/agent/admin read gate + source-egress gate are consumed by search, Context Brief, graph/relational traversal, managed-run tools, rerank/synthesis/embedding egress, maintenance scans, relation discovery, Brain Ops drill-down, claim evidence rendering, non-creator artifact attachment, and DB-backed chat candidates with explicit source ids; the connector→projection linkage is covered by a real-DB test; connector refresh/purge edge cases and future chat artifact/evidence-pack attachments remain deferred |
@@ -56,7 +56,7 @@ deliberately includes gated LLM stages.)
    `restricted` owner-only tier. Graph expansion starts only from visible seeds.
 5. **Cross-space stays fail-closed.** Nothing widens the current-space-only scope.
 6. **Canonical writes stay proposal-gated.** Derived index writes may be
-   automatic; accepted `KnowledgeItemRelation` and Memory create/update/archive
+   automatic; accepted `ObjectRelation` and Memory create/update/archive
    stay on the proposal/approval flow. Maintenance emits *batched review
    candidates*, never one proposal per finding, never silent canonical writes.
 7. **Provider calls use the ADR 0010 channel.** Embeddings, rerank, rewrite, and
@@ -97,21 +97,23 @@ projection's own reindex time) so freshness signals are real.
   with cross-arm RRF (multi-arm agreement still rewarded). The SQL arms pick the
   best hit per object before the fetch window so one chunk-heavy object can't
   exhaust the candidate pool; the vector arm keeps its ANN window then dedupes.
-- **Access-neutral ranking signals** apply after fusion: source-tier,
-  relation-type weighting for graph/relational candidates, name/title-phrase
-  match, recency (half-life decay over the candidate's own canonical
-  `source_updated_at`), and a small deterministic post-RRF **cosine blend** that
-  nudges a candidate by its OWN best-chunk query/chunk similarity (carried
-  separately from evidence so fusion can't drop it). Metadata boosts are
-  floor-gated two ways: an absolute fused-score floor AND a **floor-ratio** gate
-  (the candidate must reach a fraction of the visible set's top fused score, so
-  the floor adapts to result-set scale). Both gates read only candidate-owned
-  scores or the visible-set top score — never a hidden object — so a weak
-  candidate cannot win on metadata alone. Each signal reads only the candidate's
-  own metadata/evidence (invariant 3); relation weights are explained through
-  matched-field tags such as `relation_weight:supports`, and the aggregate-safe
-  `trace.boost_attribution` / `trace.score_buckets` record how often each axis
-  fired and the visible-set score distribution (counts only, no ids/titles).
+- **Access-neutral ranking signals** apply after fusion and after live
+  revalidation/source-policy filtering has produced the visible candidate set:
+  source-tier, relation-type weighting for graph/relational candidates,
+  name/title-phrase match, recency (half-life decay over the candidate's own
+  canonical `source_updated_at`), and a small deterministic post-RRF **cosine
+  blend** that nudges a candidate by its OWN best-chunk query/chunk similarity
+  (carried separately from evidence so fusion can't drop it). Metadata boosts
+  are floor-gated two ways: an absolute fused-score floor AND a **floor-ratio**
+  gate (the candidate must reach a fraction of the visible set's top fused
+  score, so the floor adapts to result-set scale). Both gates read only
+  candidate-owned scores or the revalidated/source-policy-allowed visible-set
+  top score — never a hidden object — so a weak candidate cannot win on metadata
+  alone. Each signal reads only the candidate's own metadata/evidence (invariant
+  3); relation weights are explained through matched-field tags such as
+  `relation_weight:supports`, and the aggregate-safe `trace.boost_attribution` /
+  `trace.score_buckets` record how often each axis fired and the visible-set
+  score distribution (counts only, no ids/titles).
 - **Deterministic intent** (`retrieval/intent.ts`) classifies the query string
   into entity / temporal / event / general and selects ranking knobs only — it
   never changes which rows are eligible. The separate relational parser
@@ -165,10 +167,13 @@ write pointer-only audit.
   artifact payload. These artifacts are `visibility = private` with
   `owner_user_id = viewerUserId`, because answers, titles, and citations can
   derive from that viewer's private/restricted readable scope. Gap findings are
-  advisory output, never canonical writes (invariant 6); briefs are not
-  auto-injected into runtime context. Memory and Project brief routes stay
-  separate and are scoped to `memory_entry` and `project_public_summary`
-  respectively.
+  advisory output, never proposal creation and never canonical writes (invariant
+  6); briefs are not auto-injected into runtime context. The only current path
+  from brief-side uncited claims/contradictions/missing topics into reviewable
+  claim work is an explicit Claim Candidate Packet created from selected
+  artifacts; accepting that packet creates child pending proposals, not canonical
+  claim rows. Memory and Project brief routes stay separate and are scoped to
+  `memory_entry` and `project_public_summary` respectively.
 
 ## Explicit context artifact attachments
 
@@ -267,7 +272,7 @@ write an owner-private `retrieval_maintenance_report` artifact, or
 packet is creator-owned: the private packet creator must accept it, and a space
 admin cannot review another user's private packet through the current applier.
 It does not mutate Knowledge directly; it marks the packet accepted and creates
-child pending `knowledge_relation_create` proposals for supported
+child pending `object_relation_create` proposals for supported
 relation-suggestion findings. Duplicate/orphan/thin/stale findings stay
 review-only until a user turns them into explicit Knowledge proposals.
 
@@ -310,11 +315,10 @@ owner-private (or `space_ops`) `relation_discovery_report` artifact plus a
 `relation_discovery_packet` proposal (`relationDiscoveryArtifacts.ts`, registered
 in the policy action registry + gateway risk map at `medium`). Accepting the
 packet is creator-owned (same Brain Ops packet rule) and only creates child
-pending `knowledge_relation_create` / `object_relation_create` / `knowledge_create`
+pending `object_relation_create` / `knowledge_create`
 proposals — never a direct edge or item write (invariants 6, 9). A note source
-can't anchor a `knowledge_relation` (two Knowledge items required), so a resolved
-note→item link proposes an FK-backed `object_relation` over `space_objects`
-instead. Activity and Artifact anchors emit `relation_review_candidate` rows with
+and a Knowledge item source both propose FK-backed `object_relation` edges over
+`space_objects`. Activity and Artifact anchors emit `relation_review_candidate` rows with
 no child write action because they are evidence surfaces, not governed graph
 endpoints. Optional LLM extraction is request-gated and injectable; without a
 provider adapter the public HTTP route rejects `llm_extraction_enabled=true`
@@ -627,15 +631,48 @@ active pack an always-consulted source of type/path/link/extraction/search-cycle
 behavior. Agent Space keeps the canonical domain boundary closed and uses the
 existing Space/User/Agent/Run/Proposal/Artifact governance instead.
 
-The Agent Space-native direction is a lighter per-space **Brain Shape Registry**:
-fixed `object_type`, configurable `object_kind`. It is implemented by
-`space_object_kinds`, `space_object_kind_relation_hints`, and owner/admin
-proposal flows for create, update, deprecate, archive, and import. Registry rows
-hold declarative field schemas, extraction hints, retrieval hints, relation
-hints, and UI labels/config; they are not executable code and do not create
-canonical domain rows. Object-schema export/import is a manifest wrapper over
-those definitions; importing creates draft proposals, not active runtime
-changes.
+The Agent Space-native implementation is a per-space **Brain Shape Registry**:
+fixed `object_type`, configurable `object_kind`, and an `object_schema` export
+view over active registry rows. `object_type` is the closed domain boundary used
+by protocol, SQL checks, retrieval adapters, read gates, and ownership. An
+`object_kind` is a governed label/config layer under one fixed `object_type`; it
+must match subtype values that the owning domain adapter can actually project,
+for example Knowledge `knowledge_kind`, Source `source_type`, Claim
+`claim_kind`, Memory `memory_type`, plus the current single projected kinds for
+Notes and Project public summaries. It cannot create new retrieval object types
+or move a row across canonical domain ownership.
+
+The implemented data model is:
+
+- `space_object_kinds`: per-space registry rows keyed by
+  `(space_id, base_object_type, key)` with `draft|active|deprecated|archived`
+  status, version, label/description, bounded `field_schema_json`,
+  `extraction_policy_json`, `retrieval_policy_json`, and `ui_config_json`, plus
+  proposal provenance. Archive retires the key so historical references do not
+  point at a new definition.
+- `space_object_kind_relation_hints`: declarative relation hints for an
+  `object_kind`, with fixed endpoint `object_type`, optional endpoint kind,
+  constrained relation type, direction, confidence default, and `required` flag.
+  Hints are config only; they never write relations directly.
+
+The implemented server/protocol surface is:
+
+- `packages/protocol/src/objectSchema.ts` defines object-kind list/output,
+  proposal request contracts, relation hints, object-schema manifests, and
+  deterministic suggestion reports without adding schema-pack values to
+  `RetrievalObjectTypeSchema`.
+- Knowledge routes expose owner/admin proposal creation for object kind create,
+  update/activate, deprecate, and archive; member-visible list/get reads;
+  object-schema export/import; and deterministic suggestion scans.
+- `server/src/modules/knowledge/proposalApplier.ts` applies accepted
+  `object_kind_create`, `object_kind_update`, `object_kind_deprecate`, and
+  `object_kind_archive` proposals. These appliers write registry rows only and
+  do not create canonical Knowledge, Memory, Claim, Project, relation, or
+  retrieval projection rows. `object_kind_update` is the draft activation path;
+  only `draft -> active` activation is allowed.
+- Object-schema export returns `agent_space.object_schema.v1` manifests with
+  registry definitions only. Import creates draft object-kind proposals and
+  never activates definitions directly.
 
 Retrieval projections include nullable `retrieval_objects.object_kind`,
 populated by domain adapters from subtype fields such as `knowledge_kind`,
@@ -643,67 +680,43 @@ populated by domain adapters from subtype fields such as `knowledge_kind`,
 optional `object_kinds` filters under the fixed `object_type` boundary and
 surface active kind key/label metadata only after normal read/source-policy
 revalidation. The projection slot is not a license to change canonical
-`object_type`.
+`object_type`. `retrieval_policy_json` remains advisory unless a separate
+calibrated runtime setting adopts a mechanic with access-safety proof and shared
+evidence; object schema config must not become a backdoor for ranking changes.
 
 Brain Ops can run deterministic object-schema suggestion scans from visible
-usage and registry rows. Relation hints guide the injectable relation-discovery
-LLM extraction hook and required-hint gap findings without changing the
-deterministic wikilink extractor.
+aggregate usage and registry rows: missing registry definitions for used kinds,
+deprecated kind usage, and active kinds with no current visible usage. Suggestion
+reports are artifacts/review surfaces; they do not call providers or mutate
+active config. Relation hints guide the injectable relation-discovery LLM
+extraction hook and required-hint gap findings without changing the deterministic
+wikilink extractor. Required-hint gaps are review-only unless a user accepts an
+explicit packet/proposal flow.
 
-The durable design and implementation slices live in
-[`SCHEMA_PACKS_AND_OBJECT_SHAPE.md`](SCHEMA_PACKS_AND_OBJECT_SHAPE.md).
+Load-bearing boundaries:
 
-## Deferred / future work
-
-Consolidated from across the capabilities above. None is required for current
-correctness; each is an enhancement. Remaining product/runtime work is tracked in
-[`BRAIN_LAYER_CLOSURE_PLAN.md`](BRAIN_LAYER_CLOSURE_PLAN.md).
-
-- **Recall / ranking.** True BM25 via pg_search/ParadeDB (would swap the Postgres
-  image — deferred at current scale); ANN for non-default embedding dimensions
-  (only the default dim has the halfvec HNSW index); semantic / title-aware chunk
-  boundaries (chunks are fixed ~2200-char slices); a distinct max-pool evidence
-  *kind* (currently a matched-field tag); typed relation filtering beyond carrying
-  and weighting the surfaced candidate's relation type. Current ranking already
-  includes floor-ratio gating, deterministic post-RRF cosine blend, rerank +
-  synthesis token budgets, runtime-gated visible-edge/candidate-salience/dedup/
-  autocut mechanics, adaptive return, and aggregate boost-attribution /
-  score-bucket/drop telemetry; see the Recall and Eval/explain sections. Any
-  cross-viewer semantic *results* cache remains rejected for privacy (only the
-  query-embedding cache is kept).
-- **Intent.** An optional LLM intent refiner; any intent-driven arm bypass (intent
-  stays ranking-only today).
-- **Brief / eval.** Richer persisted failed/low-confidence search events,
-  richer diagnostics-to-proposal authoring, and broader reviewed transformation
-  from diagnostics into concrete proposal work.
-- **Maintenance.** Folding the brief's uncited-claim / contradiction findings
-  into richer structural scans; richer operator editing for generated
-  `memory_update` drafts before their normal proposal review/apply step; a
-  first-class web console for durable Memory maintenance jobs; dedicated
-  queryable finding tables if report artifacts become insufficient.
-- **Context packs / Brain Ops.** Chat-turn artifact attachment support if the
-  chat path needs it; richer Brain Ops packet triage.
-  (UI-managed context attachment selection/future-run removal, Brain Ops
-  drill-down including explain reports, scan-trigger controls, explain presets
-  and A/B comparison, Dream Cycle Lite v2, optional packet creation from scans,
-  artifact-level and batch packet actions, Memory maintenance jobs, and the
-  Memory access-log inspector are implemented; richer guided follow-up proposal
-  creation after reviewing a specific finding row remains deferred. See the
-  Brain Ops section above.)
-- **Governance.** Continue extending source policy into connector scheduler
-  refresh/purge edge cases and future chat artifact/evidence-pack attachments as
-  the source model expands.
-- **Brain Shape Registry / object schema.** Future hardening can add richer
-  schema drift diagnostics, relation-hint yield analysis, and guided follow-up
-  proposal authoring. Full gbrain-style dynamic schema packs remain rejected as
-  the runtime model.
+1. No dynamic replacement of `RetrievalObjectTypeSchema`.
+2. No schema-driven canonical writes.
+3. All object schema changes are proposal-gated and require owner/admin
+   authority.
+4. Source policy and live read gates apply before any schema-driven discovery,
+   extraction, relation hinting, provider call, UI drill-down, or suggestion
+   report surfaces content.
+5. Ranking, salience, backlink, graph, diagnostics, and gap signals may use only
+   visible rows or access-neutral metadata.
+6. Cross-space behavior stays fail-closed. An object schema from space A never
+   changes read, write, cache, discovery, or UI behavior in space B.
+7. Object schema config is declarative only. Bounded JSON config rejects
+   executable/script/tool, SQL, and regex-like keys.
+8. Imported object schemas create draft proposals, not active runtime changes.
+9. Schema/kind hints cannot widen source retention, provider egress, connector
+   import targets, Memory visibility, Project public-summary scope, artifact
+   attachment policy, or canonical write authority.
 
 ## Cross-references
 
-- Remaining brain-layer work plan:
-  [`BRAIN_LAYER_CLOSURE_PLAN.md`](BRAIN_LAYER_CLOSURE_PLAN.md).
-- Brain Shape Registry / schema-pack design:
-  [`SCHEMA_PACKS_AND_OBJECT_SHAPE.md`](SCHEMA_PACKS_AND_OBJECT_SHAPE.md).
+- Retrieval and brain-layer stabilization roadmap:
+  [`ROADMAP_AND_FUTURE_RISKS.md`](ROADMAP_AND_FUTURE_RISKS.md#retrieval-and-brain-layer-stabilization).
 - Module current-state: `.agent/modules/knowledge-base.md`,
   `.agent/modules/memory.md`.
 - Credential channel for all provider calls: ADR 0010.

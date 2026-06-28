@@ -992,7 +992,27 @@ class AgentAutomationFireFakePool implements Queryable {
       return { rowCount: 1, rows: [{ id: "agent-version-1" }] as Row[] };
     }
     if (sql.includes("FROM agent_runtime_profiles")) {
-      return { rowCount: 0, rows: [] };
+      return {
+        rowCount: 1,
+        rows: [
+          {
+            id: "runtime-profile-1",
+            space_id: "space-1",
+            agent_id: "agent-1",
+            name: "Default",
+            adapter_type: "model_api",
+            model_provider_id: "provider-1",
+            model_name: "gpt-4o-mini",
+            credential_profile_id: null,
+            runtime_config_json: {},
+            runtime_policy_json: {},
+            enabled: true,
+            is_default: true,
+            created_at: "2026-06-01T00:00:00.000Z",
+            updated_at: "2026-06-01T00:00:00.000Z",
+          },
+        ] as Row[],
+      };
     }
     if (sql.includes("FROM model_provider_space_grants")) {
       return {

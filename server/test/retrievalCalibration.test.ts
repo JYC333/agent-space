@@ -46,6 +46,37 @@ describe("§2.2 floor-ratio gating", () => {
     // Ratio disabled (topScore 0) ⇒ only the absolute floor applies.
     expect(metadataBoostsAllowed(weak, DEFAULT_RANKING_SIGNALS, 0)).toBe(true);
   });
+
+  it("calibrates visible candidates without a hidden high-score topScore", () => {
+    const hiddenPrivate = scored({ objectId: "hidden-private", objectType: "source", score: 1 });
+    const visiblePlain = scored({ objectId: "visible-plain", objectType: "source", title: "Plain candidate", score: 0.13 });
+    const visibleTitle = scored({
+      objectId: "visible-title",
+      objectType: "source",
+      title: "Calibration target",
+      score: 0.12,
+    });
+
+    const visibleOnlyTelemetry = newRankingTelemetry();
+    const visibleOnly = applyRankingSignals(
+      [visiblePlain, visibleTitle],
+      "calibration",
+      NOW,
+      DEFAULT_RANKING_SIGNALS,
+      visibleOnlyTelemetry,
+    );
+    expect(visibleOnly.map((candidate) => candidate.objectId)).toEqual(["visible-title", "visible-plain"]);
+    expect(visibleOnly[0]!.matchedFields).toContain("title_phrase");
+    expect(visibleOnlyTelemetry.boost_attribution.title_phrase).toBe(1);
+
+    const contaminated = applyRankingSignals(
+      [hiddenPrivate, visiblePlain, visibleTitle],
+      "calibration",
+      NOW,
+      DEFAULT_RANKING_SIGNALS,
+    ).filter((candidate) => candidate.objectId.startsWith("visible-"));
+    expect(contaminated.map((candidate) => candidate.objectId)).toEqual(["visible-plain", "visible-title"]);
+  });
 });
 
 describe("§2.3 post-RRF cosine blend", () => {

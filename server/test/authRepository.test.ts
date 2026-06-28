@@ -51,23 +51,6 @@ CREATE TABLE auth_accounts (
   email varchar(256) NOT NULL,
   created_at timestamptz NOT NULL
 );
-CREATE TABLE execution_planes (
-  id varchar(36) PRIMARY KEY,
-  space_id varchar(36) NOT NULL REFERENCES spaces(id),
-  name varchar(256) NOT NULL,
-  type varchar(32) NOT NULL,
-  provider varchar(64) NOT NULL,
-  execution_location varchar(32) NOT NULL,
-  runtime_origin varchar(64) NOT NULL,
-  trust_level varchar(32) NOT NULL,
-  observability_level varchar(64) NOT NULL,
-  data_exposure_level varchar(64) NOT NULL,
-  credential_mode varchar(32) NOT NULL,
-  config_json jsonb NOT NULL,
-  enabled boolean NOT NULL,
-  created_at timestamptz NOT NULL,
-  updated_at timestamptz NOT NULL
-);
 CREATE TABLE memory_entries (
   id varchar(36) PRIMARY KEY,
   space_id varchar(36) NOT NULL REFERENCES spaces(id),
@@ -134,7 +117,7 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    "TRUNCATE note_collections, memory_entries, execution_planes, auth_accounts, user_sessions, space_memberships, spaces, users CASCADE",
+    "TRUNCATE note_collections, memory_entries, auth_accounts, user_sessions, space_memberships, spaces, users CASCADE",
   );
   await pool.query(
     `INSERT INTO users
@@ -252,7 +235,6 @@ describe("PgAuthRepository", () => {
       [user.id, spaceId],
     );
     expect(membership.rows[0]).toEqual({ role: "owner", status: "active" });
-    expect((await pool.query("SELECT count(*)::int AS count FROM execution_planes WHERE space_id = $1", [spaceId])).rows[0].count).toBe(8);
     expect((await pool.query("SELECT count(*)::int AS count FROM memory_entries WHERE space_id = $1 AND scope_type = 'system'", [spaceId])).rows[0].count).toBe(3);
     expect((await pool.query("SELECT count(*)::int AS count FROM note_collections WHERE space_id = $1", [spaceId])).rows[0].count).toBe(5);
     expect((await pool.query("SELECT count(*)::int AS count FROM user_sessions WHERE user_id = $1", [user.id])).rows[0].count).toBe(1);

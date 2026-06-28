@@ -32,8 +32,6 @@ export type RuntimeHostExecutor = (
 
 export interface ManagedApiNoToolAdapterInput {
   run: RunRecord;
-  adapter_type?: string | null;
-  model_provider_id?: string | null;
   model?: string | null;
   system_prompt?: string | null;
   prompt?: string | null;
@@ -53,18 +51,18 @@ export async function executeManagedApiNoToolAdapter(
 ): Promise<RunAdapterResultEnvelope> {
   const startedAt = new Date().toISOString();
   const adapterType = normalizeManagedApiAdapterType(
-    input.adapter_type ?? input.run.adapter_type,
+    input.run.adapter_type,
   );
   if (!adapterType) {
     return failureEnvelope(
       input,
       "managed_api_adapter_unsupported",
-      `Managed API no-tool execution does not support adapter '${input.adapter_type ?? input.run.adapter_type ?? "unknown"}'.`,
+      `Managed API no-tool execution does not support adapter '${input.run.adapter_type ?? "unknown"}'.`,
       startedAt,
     );
   }
 
-  const modelProviderId = input.model_provider_id ?? input.run.model_provider_id;
+  const modelProviderId = input.run.model_provider_id;
   if (!modelProviderId) {
     return failureEnvelope(
       input,
@@ -165,7 +163,7 @@ function envelopeFromRuntimeHost(
     ...(recordOrEmpty(response.adapter_metadata)),
     adapter_type: adapterType,
     runtime_host_adapter_type: recordOrEmpty(response.adapter_metadata).adapter_type,
-    model_provider_id: input.model_provider_id ?? input.run.model_provider_id,
+    model_provider_id: input.run.model_provider_id,
     model: response.model ?? input.model ?? null,
   });
   return {

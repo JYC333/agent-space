@@ -22,10 +22,13 @@ A **Space** is a collaboration boundary, not a shared mind. Members of a househo
 |-------|------|
 | `owner_user_id` | Human who controls the memory and receives owner ACL (may be null for system, workspace, space-level, agent, capability, public-template, or policy-controlled rows). |
 | `subject_user_id` | Who or what the memory is about. Never inferred from `owner_user_id`. |
-| `scope_type` / `scope_id` | Where the memory belongs in the hierarchy (system, space, user, workspace, …). |
+| `scope_type` | Public placement category (`system`, `space`, `user`, `workspace`, `agent`, etc.). Specific object placement uses the dedicated owner/workspace/project/agent columns rather than a generic `scope_id`. |
+| `memory_type` | Public memory category used by APIs, digests, and UI grouping. |
+| `memory_layer` | Layer in the memory hierarchy (`semantic` or `episodic` in the current baseline). |
 | `visibility` | Who may read or see a redacted view (`private`, `space_shared`, `workspace_shared`, `selected_users`, `summary_only`, `restricted`, `public_template`). |
 | `sensitivity_level` | How cautiously the row may be used (`normal`, `sensitive`, `restricted`, `highly_restricted`). |
 | `selected_user_ids` | JSON list; used with `selected_users` or `restricted` visibility. |
+| `created_from_proposal_id` | Canonical accepted-proposal FK for active memory creation. |
 
 ## Agents and context
 

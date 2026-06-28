@@ -15,9 +15,11 @@ import {
   type SpaceUserIdentity,
   type Queryable,
 } from "../routeUtils/common";
-import { proposalToOut, type ProposalRow } from "../proposals/repository";
+import { proposalToOut } from "../proposals/repository";
+import { insertProposalRow } from "../proposals/reviewPackets";
 import { assertProjectInSpace } from "../projects/access";
 import type { ProposalOut } from "@agent-space/protocol" with { "resolution-mode": "import" };
+import { assessActivityMemoryDuplicate } from "./memoryDedup";
 
 export interface ActivityRow {
   id: string;
@@ -43,7 +45,6 @@ export interface ActivityRow {
   source_integrity_json: unknown;
   entity_refs_json: unknown;
   subject_user_id: string | null;
-  consolidation_status: string;
   processed_at: unknown;
   discarded_at: unknown;
   visibility: string;
@@ -98,7 +99,7 @@ const ACTIVITY_COLUMNS = `
   source_task_id, project_id, source_url, activity_type, title, content,
   payload_json, occurred_at, created_at, status, updated_at, source_kind,
   source_trust, source_integrity_json, entity_refs_json, subject_user_id,
-  consolidation_status, processed_at, discarded_at, visibility, owner_user_id
+  processed_at, discarded_at, visibility, owner_user_id
 `;
 
 const SOURCE_TYPE_ALIASES: Record<string, string> = {
@@ -234,7 +235,6 @@ export class PgActivityRepository {
     const result = await this.db.query<ActivityRow>(
       `UPDATE activity_records
           SET status = $3,
-              consolidation_status = CASE WHEN $3 = 'processed' THEN 'skipped' ELSE consolidation_status END,
               processed_at = CASE WHEN $3 = 'processed' THEN $4::timestamptz ELSE processed_at END,
               discarded_at = CASE WHEN $3 = 'archived' THEN $4::timestamptz ELSE discarded_at END,
               updated_at = $4
@@ -251,12 +251,29 @@ export class PgActivityRepository {
     if (!activity.content || !activity.content.trim()) {
       throw new HttpError(422, "Activity record has no content to consolidate");
     }
+    const duplicate = await assessActivityMemoryDuplicate(this.db, {
+      spaceId: identity.spaceId,
+      viewerUserId: identity.userId,
+      title: activity.title,
+      content: activity.content,
+    });
+    if (duplicate.duplicate) {
+      const now = new Date().toISOString();
+      await this.db.query(
+        `UPDATE activity_records
+            SET status = 'processed',
+                processed_at = $3,
+                updated_at = $3
+          WHERE id = $1 AND space_id = $2`,
+        [activity.id, identity.spaceId, now],
+      );
+      return [];
+    }
     const proposal = await this.insertMemoryProposalFromActivity(identity, activity);
     const now = new Date().toISOString();
     await this.db.query(
       `UPDATE activity_records
           SET status = 'proposals_generated',
-              consolidation_status = 'proposals_generated',
               processed_at = $3,
               updated_at = $3
         WHERE id = $1 AND space_id = $2`,
@@ -491,42 +508,19 @@ export class PgActivityRepository {
     projectId: string | null;
   }): Promise<ProposalOut> {
     const now = new Date();
-    const nowIso = now.toISOString();
-    const result = await this.db.query<ProposalRow>(
-      `INSERT INTO proposals (
-         id, space_id, proposal_type, status, risk_level, urgency, preview,
-         title, summary, payload_json, review_deadline, expires_at, created_at,
-         updated_at, reviewed_at, reviewed_by, workspace_id, rationale,
-         created_by_agent_id, created_by_user_id, required_approver_role,
-         visibility, project_id
-       ) VALUES (
-         $1, $2, $3, 'pending', 'low', 'normal', false,
-         $4, NULL, $5::jsonb, NULL, NULL, $6,
-         $6, NULL, NULL, $7, $8,
-         NULL, $9, NULL,
-         'space_shared', $10
-       )
-       RETURNING id, space_id, created_by_user_id, workspace_id,
-                 created_by_run_id, proposal_type, status, risk_level, urgency,
-                 preview, title, payload_json, rationale, visibility,
-                 review_deadline, expires_at, created_at, reviewed_at,
-                 project_id,
-                 NULL::varchar AS egress_approval_id,
-                 NULL::varchar AS egress_approval_status`,
-      [
-        randomUUID(),
-        input.identity.spaceId,
-        input.proposalType,
-        input.title,
-        JSON.stringify(input.payload),
-        nowIso,
-        input.workspaceId,
-        input.rationale,
-        input.identity.userId,
-        input.projectId,
-      ],
-    );
-    return proposalToOut(result.rows[0]!, now);
+    const row = await insertProposalRow(this.db, {
+      spaceId: input.identity.spaceId,
+      proposalType: input.proposalType,
+      title: input.title,
+      payload: input.payload,
+      rationale: input.rationale,
+      workspaceId: input.workspaceId,
+      projectId: input.projectId,
+      createdByUserId: input.identity.userId,
+      visibility: "space_shared",
+      riskLevel: "low",
+    });
+    return proposalToOut(row, now);
   }
 }
 

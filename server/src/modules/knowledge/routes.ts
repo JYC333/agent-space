@@ -34,6 +34,8 @@ import {
   sendRouteError,
   withDbTransaction,
 } from "../routeUtils/common";
+import { requireSpaceOwnerOrAdmin } from "../routeUtils/access";
+import { isSpaceOwnerOrAdmin } from "../access/roles";
 import { authRepositoryFromConfig } from "../auth/identity";
 import { PgKnowledgeRepository } from "./repository";
 import {
@@ -1136,28 +1138,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  app.post("/api/v1/knowledge/relations/proposals", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      return reply.code(202).send(await repository().proposeRelation(identity, jsonBody(request)));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.delete("/api/v1/knowledge/relations/:relationId", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      return reply
-        .code(202)
-        .send(await repository().proposeRelationArchive(identity, params(request).relationId ?? ""));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
   app.get("/api/v1/knowledge/claims", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
@@ -1240,28 +1220,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       return reply
         .code(202)
         .send(await repository().proposeClaimArchive(identity, params(request).claimId ?? ""));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.post("/api/v1/knowledge/claim-relations/proposals", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      return reply.code(202).send(await repository().proposeClaimRelation(identity, jsonBody(request)));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.delete("/api/v1/knowledge/claim-relations/:relationId", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      return reply
-        .code(202)
-        .send(await repository().proposeClaimRelationArchive(identity, params(request).relationId ?? ""));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -1595,25 +1553,7 @@ async function requireSpaceMaintenanceRole(
   identity: { spaceId: string; userId: string },
   reply: FastifyReply,
 ): Promise<boolean> {
-  const repository = authRepositoryFromConfig(config);
-  if (!repository) {
-    reply.code(502).send({ detail: "Identity database is unavailable" });
-    return false;
-  }
-  const space = await repository.getSpaceForUser(identity.userId, identity.spaceId);
-  if (!space) {
-    reply.code(404).send({ detail: "Space not found" });
-    return false;
-  }
-  if ("statusCode" in space) {
-    reply.code(space.statusCode).send({ detail: space.detail });
-    return false;
-  }
-  if (space.role !== "owner" && space.role !== "admin") {
-    reply.code(403).send({ detail: "Requires space owner or admin role" });
-    return false;
-  }
-  return true;
+  return requireSpaceOwnerOrAdmin(config, identity, reply);
 }
 
 async function requireBrainOpsScanRole(
@@ -1635,7 +1575,7 @@ async function requireBrainOpsScanRole(
     reply.code(space.statusCode).send({ detail: space.detail });
     return false;
   }
-  if (space.role === "owner" || space.role === "admin") return true;
+  if (isSpaceOwnerOrAdmin(space.role)) return true;
   const allowed = await canInitiateBrainOpsScan(dbPool(config), identity.spaceId, identity.userId);
   if (!allowed) {
     reply.code(403).send({ detail: "Requires space owner/admin role or enabled Brain Ops member scan access" });

@@ -7,6 +7,7 @@ import { authRepositoryFromConfig } from "../auth/identity";
 import { readSpaceRetrievalSettings } from "../retrieval/settings";
 import { knowledgeRetrievalRegistry } from "../knowledge/retrievalAdapter";
 import { roleCanInitiateBrainOpsScan, roleCanReviewSpaceOps, type SpaceRole } from "./reviewPolicy";
+import { isSpaceOwnerOrAdmin } from "../access/roles";
 import { BrainOpsService } from "./service";
 import { runBrainOpsDreamCycleV2 } from "./dreamCycle";
 
@@ -133,7 +134,7 @@ async function requireSpaceBrainOpsRole(
   }
   return {
     includeSpaceOpsReports: canReviewSpaceOps,
-    isSpaceAdmin: role === "owner" || role === "admin",
+    isSpaceAdmin: isSpaceOwnerOrAdmin(role),
     canScan,
   };
 }

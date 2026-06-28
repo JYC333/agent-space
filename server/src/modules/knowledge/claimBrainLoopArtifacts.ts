@@ -9,7 +9,7 @@ import type { Queryable } from "../routeUtils/common";
  *
  * The findings are stored in `metadata_json` so the existing Claim Candidate
  * Packet builder can read them and turn each finding's `proposed_action` into a
- * child `claim_relation_create` (contradicts) proposal — keeping the only
+ * child `object_relation_create` (contradicts) proposal — keeping the only
  * canonical-write path on the proposal-gated packet flow. No raw private claim
  * text or hidden claim counts are persisted; the report carries only the
  * findings the access-safe scan already surfaced.

@@ -80,12 +80,8 @@ export default function ProposalDetailPage() {
           toast.success(`Accepted — ${n} file${n === 1 ? '' : 's'} updated.`)
         } else if (out.result_type === 'knowledge_item') {
           toast.success('Accepted — knowledge item created.')
-        } else if (out.result_type === 'knowledge_relation') {
-          toast.success('Accepted — knowledge relation created.')
         } else if (out.result_type === 'claim') {
           toast.success('Accepted — claim updated.')
-        } else if (out.result_type === 'claim_relation') {
-          toast.success('Accepted — claim relation created.')
         } else if (out.result_type === 'object_relation') {
           toast.success('Accepted — object relation created.')
         } else if (out.result_type === 'retrieval_maintenance_packet') {

@@ -23,15 +23,14 @@ Scoped, long-term context for agents and users. Not raw data — curated, approv
 ```
 MemoryEntry:
   id, space_id, owner_user_id, workspace_id
-  agent_id, capability_id           (nullable; FK-style links for scope=agent/capability)
+  agent_id                          (nullable agent placement link)
   scope_type (system|space|user|workspace|capability|agent)
-  memory_layer (episodic|semantic), memory_kind
-  namespace, memory_type, title, content
+  memory_type, memory_layer (episodic|semantic)
+  namespace, title, content
   status (active|archived|proposed|rejected|superseded)
   visibility (private|space_shared|workspace_shared|restricted|public_template)
   confidence, importance, version, tags
-  source_proposal_id, created_from_proposal_id  (provenance — required on accepted writes)
-  source_activity_id, source_artifact_id  (nullable provenance)
+  created_from_proposal_id           (accepted proposal linkage)
   source_trust
   created_by, approved_by
   access_count, last_accessed_at, fitness_score
@@ -68,12 +67,22 @@ MemoryReadTrace:
 5. `ProposalApplyService.apply()` validates source trust, writes provenance links, then calls internal writer
 6. `MemoryInternalWriter` creates/supersedes/archives the `MemoryEntry`
 
+Accepted Memory provenance has one durable audit chain:
+`provenance_links` attached to the resulting MemoryEntry. Proposal payload
+`provenance_entries` are the pending/review-time source envelope before apply.
+`MemoryEntry.created_from_proposal_id` is the accepted proposal linkage index.
+Activity, Artifact, and other source provenance is not
+duplicated onto MemoryEntry rows; read/audit code follows `provenance_links`.
+
 **Activity → Proposal flow:**
 1. `ActivityRecord` created with raw content and `source_trust`
 2. `POST /api/v1/activity/{id}/consolidate` or `POST /api/v1/memory/consolidation/run` runs `ActivityConsolidationService`
-3. Classifier → `MemoryCandidateValidator` (rejects cross-space, missing provenance, agent_inferred semantic, invalid scope)
-4. `MemoryProposalProducer` creates reviewable Proposals with `provenance_entries`
-5. Normal approval flow proceeds; `SourceMonitoringService` gates acceptance
+3. Memory retrieval create-safety runs as a visible-set pre-dedupe check. Existing
+   visible duplicates mark the Activity `processed` without creating another
+   `memory_create` proposal.
+4. Classifier → `MemoryCandidateValidator` (rejects cross-space, missing provenance, agent_inferred semantic, invalid scope)
+5. `MemoryProposalProducer` creates reviewable Proposals with `provenance_entries`
+6. Normal approval flow proceeds; `SourceMonitoringService` gates acceptance
 
 ## Invariants
 - `space_id` required; `ContextBuilder` raises without it
@@ -100,10 +109,12 @@ duplicate detection, and a retrieval-backed memory search. It is **not** a
 ContextBuilder candidate source, and it does **not** do cross-space retrieval.
 Those remain deferred (see
 [MEMORY_EVOLUTION_PLAN.md](../architecture/MEMORY_EVOLUTION_PLAN.md) Track B); do
-not widen this surface without a design that covers them explicitly. The brain-
-layer closure plan ([BRAIN_LAYER_CLOSURE_PLAN.md](../architecture/BRAIN_LAYER_CLOSURE_PLAN.md))
+not widen this surface without a design that covers them explicitly. The
+retrieval and brain-layer roadmap
+([ROADMAP_AND_FUTURE_RISKS.md](../architecture/ROADMAP_AND_FUTURE_RISKS.md#retrieval-and-brain-layer-stabilization))
 keeps Memory a separate canonical domain with its own search/review/brief
-surfaces: a shared retrieval engine must not collapse Memory into Knowledge.
+surfaces: a shared retrieval engine must not collapse Memory into Knowledge or
+silently promote between them.
 
 ### Memory retrieval search (`POST /api/v1/memory/retrieval/search`)
 
@@ -161,6 +172,8 @@ project-free memory only. Chat/assistant context candidates
 (`context/candidateRepository.ts`) use `canReadMemory` plus the same
 `accessibleProjectIds` filter as the legacy memory read paths, so concrete
 project memory can appear only for projects the viewer can access.
+The chat path logs only final selected memory items, after budget/dedup, through
+`PgContextSnapshotRepository` with `access_type = context_injection`.
 `ContextDigest` (`context/digestService.ts`) is a shared cache, so workspace/agent
 digests exclude `project_id IS NOT NULL` memory at generation time and revalidate
 source ids with `project_id IS NULL` at consumption time — runtime memory

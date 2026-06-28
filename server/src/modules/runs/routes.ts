@@ -10,6 +10,7 @@ import { PgProposalRepository } from "../proposals/repository";
 import { dbPool, page, sendRouteError } from "../routeUtils/common";
 import { PgRunRepository, type RunRecord } from "./repository";
 import { RunOrchestrationService } from "./orchestrationService";
+import { enqueueAgentRunJob } from "./agentRunHandler";
 import { RunMaterializationService } from "./materializationService";
 import { sharedCliProcessRegistry } from "./processRegistry";
 import { ContextPrepareService } from "../context";
@@ -22,6 +23,7 @@ import {
 import {
   artifactSummaryToOut,
   canReadRun,
+  contextSnapshotToOut,
   proposalSummaryToOut,
   runEvaluationToOut,
   runEventToOut,
@@ -307,23 +309,26 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const result = await visibleRun(context, request, reply);
     if (!result) return reply;
     const { repository, run } = result;
-    const [steps, events, artifacts, proposals, children] = await Promise.all([
+    const [steps, events, artifacts, proposals, children, contextSnapshot, finalization] = await Promise.all([
       repository.listRunSteps(run.space_id, run.id),
       repository.listRunEvents(run.space_id, run.id),
       repository.listArtifactSummaries(run.space_id, run.id),
       repository.listProposalSummaries(run.space_id, run.id),
       repository.listChildRuns(run.space_id, run.id),
+      repository.getContextSnapshot(run.space_id, run.context_snapshot_id),
+      repository.getLatestRunFinalization(run.space_id, run.id),
     ]);
     return reply.send({
       run: await runToOutWithProvider(repository, run),
       agent: null,
       agent_version: null,
       model_provider: null,
-      context_snapshot: null,
+      context_snapshot: contextSnapshotToOut(contextSnapshot),
       steps: steps.map(runStepToOut),
       events: events.map(runEventToOut),
       artifacts: artifacts.map(artifactSummaryToOut),
       proposals: proposals.map((proposal) => proposalSummaryToOut(proposal)),
+      finalization: finalization ? runFinalizationToOut(finalization) : null,
       parent: null,
       children: children.map(runLineageToOut),
     });
@@ -405,6 +410,44 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const result = await visibleRun(context, request, reply);
     if (!result) return reply;
     return reply.send(await runToOutWithProvider(result.repository, result.run));
+  });
+
+  app.post("/api/v1/runs/:runId/resume", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    const repository = PgRunRepository.fromConfig(context.config);
+    const runId = params(request).runId ?? "";
+    const run = await repository.getRun(identity.spaceId, runId);
+    if (!run || !canReadRun(run, identity.userId)) {
+      return reply.code(404).send({ detail: "Run not found in this space" });
+    }
+    if (run.status !== "waiting_for_review") {
+      return reply
+        .code(409)
+        .send({ detail: `Run is not waiting for review (current status: ${run.status})` });
+    }
+    const grantedAt = new Date().toISOString();
+    const updated = await repository.grantRunApprovalAndRequeue({
+      run_id: runId,
+      space_id: identity.spaceId,
+      granted_by_user_id: identity.userId,
+      granted_at: grantedAt,
+    });
+    if (!updated) {
+      return reply.code(409).send({ detail: "Run could not be resumed (status may have changed)" });
+    }
+    await enqueueAgentRunJob(context.config, {
+      run_id: runId,
+      space_id: identity.spaceId,
+      user_id: identity.userId,
+      agent_id: run.agent_id,
+      workspace_id: run.workspace_id,
+    });
+    return reply.code(202).send({
+      id: updated.id,
+      status: updated.status,
+      resumed_at: grantedAt,
+    });
   });
 }
 

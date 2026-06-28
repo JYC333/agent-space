@@ -516,27 +516,25 @@ export class RetrievalSearchService {
 
     // Per-arm max-pool collapses chunk multiplicity to one entry per object per
     // arm (so chunk count cannot inflate an object's score), then cross-arm RRF
-    // fuses, then deterministic access-neutral ranking signals apply (source-tier
-    // / name-match / title-phrase / recency / floor-ratio gate / cosine blend).
-    // Revalidation runs on the ranked order so the unchanged read gate still
-    // decides what is returned. The ranking telemetry sink accumulates
-    // aggregate-only boost-axis fire counts (§2.8).
+    // fuses. The single live read/source-policy gate runs before deterministic
+    // ranking signals that depend on the visible-set top score, so a hidden
+    // high-score candidate cannot calibrate floor-ratio boosts.
     const rankingTelemetry = newRankingTelemetry();
-    const fused = applyRankingSignals(
-      fuseCandidates([
-        ...maxPoolPerObject(exact),
-        ...maxPoolPerObject(lexical),
-        ...maxPoolPerObject(graph),
-        ...maxPoolPerObject(relational),
-        ...maxPoolPerObject(vector),
-      ]),
+    const fused = fuseCandidates([
+      ...maxPoolPerObject(exact),
+      ...maxPoolPerObject(lexical),
+      ...maxPoolPerObject(graph),
+      ...maxPoolPerObject(relational),
+      ...maxPoolPerObject(vector),
+    ]);
+    await this.revalidateCandidates(fused, input.viewerUserId, input.spaceId, revalidationCache, input.agentId, trace);
+    let visible = applyRankingSignals(
+      collectVisibleCandidates(fused, revalidationCache, trace),
       query,
       Date.now(),
       rankingCfg,
       rankingTelemetry,
     );
-    await this.revalidateCandidates(fused, input.viewerUserId, input.spaceId, revalidationCache, input.agentId, trace);
-    let visible = collectVisibleCandidates(fused, revalidationCache, trace);
     visible = await this.applyRuntimeRankingMechanics(
       input.spaceId,
       visible,
@@ -1428,8 +1426,8 @@ export class RetrievalSearchService {
   /**
    * Query-rewrite "discovery" results, kept SEPARATE from the primary list. The
    * rewriter rephrases the original query; each variant is searched through the
-   * free-text arms (lexical, + vector in hybrid tiers), fused, ranked, and — like
-   * every other path — passed through the live `revalidate` gate before returning.
+   * free-text arms (lexical, + vector in hybrid tiers), fused, revalidated,
+   * visible-set ranked, and returned.
    * Results already in the primary list are excluded so this section only surfaces
    * ADDITIONAL matches. It is deliberately NOT reranked or feedback-boosted and is
    * never co-ranked with the primary results (the caller shows it apart). Only the
@@ -1470,14 +1468,14 @@ export class RetrievalSearchService {
           )
         ).flat()
       : [];
-    const fused = applyRankingSignals(
-      fuseCandidates([...maxPoolPerObject(lexical), ...maxPoolPerObject(vector)]),
+    const fused = fuseCandidates([...maxPoolPerObject(lexical), ...maxPoolPerObject(vector)]);
+    const cache = await this.revalidateCandidates(fused, input.viewerUserId, input.spaceId, undefined, input.agentId, trace);
+    const visible = applyRankingSignals(
+      collectVisibleCandidates(fused, cache, trace),
       query,
       Date.now(),
       rankingCfg,
     );
-    const cache = await this.revalidateCandidates(fused, input.viewerUserId, input.spaceId, undefined, input.agentId, trace);
-    const visible = collectVisibleCandidates(fused, cache, trace);
     return buildItems(visible, cache, query, maxResults, input.includeTrace, excludeKeys);
   }
 

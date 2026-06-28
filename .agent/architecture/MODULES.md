@@ -56,7 +56,6 @@ Core modules are `always_on=True`. Optional product routes are still mounted by 
 | `notifications` | infra | `/server/notifications/webhooks/*` | empty | Notification webhook egress policy and dispatch boundary. |
 | `runtimeTools` | infra | `/runtime-tools*` | empty | Controlled runtime CLI installer/status/catalog. |
 | `providers` | infra | `/providers*`, `/credentials/cli*`, `/internal/providers-credentials/*` | yes | Model providers, credential pools, provider invocation, and CLI credential broker/audit. There is no separate credentials route module. |
-| `execution_planes` | infra | `/execution-planes*` | empty | Execution plane reads/resolution and per-space defaults. |
 | `runtime_tool_bindings` | infra | `/runtime-tool-bindings*` | empty | Runtime tool binding reads. |
 | `runtimeHost` | infra | `/internal/runtime-host/execute` | empty | Internal runtime-host execution for server-owned model/runtime paths. |
 | `runs` | kernel | `/runs*`, `/internal/runs/execute` | yes, lazy | Run lifecycle, execution, events, finalization, runtime bridge, outputs/artifacts. |
@@ -71,7 +70,7 @@ Core modules are `always_on=True`. Optional product routes are still mounted by 
 | `memory` | kernel | `/memory*` | yes, lazy | Memory entries, read logging, search, and memory proposal creation. |
 | `context` | kernel | `/context/build` | empty | Frontend context preview/native context build route. |
 | `activity` | product | `/activity*` | yes | Activity records, upload, review/archive, consolidation, and summary runs. |
-| `source_pointers` | product | `/source-pointers*` | empty | Source pointer creation/list/delete. |
+| `source_pointers` | product | `/source-pointers*` | empty | Metadata-only cross-space provenance pointers; no read grant. |
 | `intake` | product | `/intake*` | empty | Source connections, intake items, extraction evidence, trust helpers, summary runs. |
 | `knowledge` | product | `/knowledge*`, `/notes/collections*` | empty | Knowledge items, notes, sources, entity links, source links, read model, and proposal appliers. |
 | `evolution` | capability | `/evolution*` | empty | Evolution targets/signals, validation reads, and prompt-update proposal applier. |
@@ -100,6 +99,7 @@ These routes are not `ServerModule` entries. They are mounted by `PluginHost` af
 |---|---|---|---|
 | `runtimeAdapters` | support-package / infra | yes | Runtime adapter specs/types only. Consumed by `agents`, `automations`, `runtimeTools`, and `runs`; not route-registered. |
 | `routeUtils` | support-package / kernel | empty | Shared route helpers for DB pool access, identity resolution, pagination, parsing, and route error handling. |
+| `access` | support-package / kernel | empty | Shared resource visibility predicates, common SQL read predicates, and space role helpers. It does not replace PolicyGateway or domain-owned ACLs. |
 | `jobs/schedulerRegistry` | support-package / infra | yes via `jobs` | In-process periodic task registry used by server startup/background services. |
 | `workspaces/pathPolicy`, `workspaces/sandbox`, `workspaces/codePatch` | module-internal infra | yes via `workspaces` | Workspace path validation, worktree/sandbox preparation, and code-patch collection/apply ports. |
 

@@ -5,6 +5,7 @@ import type {
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { insertArtifactRow } from "../artifacts/reviewArtifactWriter";
 import type { Queryable } from "../routeUtils/common";
+import { spaceObjectVisibleSql } from "../access/visibility";
 import { reviewScopeValue, visibilityForReviewScope } from "../proposals/reviewPackets";
 import { RETRIEVAL_OBJECT_TYPE_VALUES } from "../retrieval/objectTypes";
 import {
@@ -40,7 +41,7 @@ interface UsageObjectRow {
 }
 
 function readableClause(userParam: string, alias = "so"): string {
-  return `(${alias}.visibility IN ('space_shared', 'workspace_shared') OR ${alias}.owner_user_id = ${userParam} OR ${alias}.created_by_user_id = ${userParam})`;
+  return spaceObjectVisibleSql(alias, userParam);
 }
 
 export async function scanObjectSchemaSuggestions(
@@ -209,6 +210,9 @@ async function loadVisibleUsage(
   if (baseTypes.includes("knowledge_item")) rows.push(...await loadKnowledgeKindUsageObjects(db, spaceId, userId));
   if (baseTypes.includes("claim")) rows.push(...await loadClaimKindUsageObjects(db, spaceId, userId));
   if (baseTypes.includes("source")) rows.push(...await loadSourceKindUsageObjects(db, spaceId, userId));
+  if (baseTypes.includes("note")) rows.push(...await loadNoteKindUsageObjects(db, spaceId, userId));
+  if (baseTypes.includes("memory_entry")) rows.push(...await loadMemoryEntryKindUsageObjects(db, spaceId, userId));
+  if (baseTypes.includes("project_public_summary")) rows.push(...await loadProjectPublicSummaryKindUsageObjects(db, spaceId));
   const filtered = await filterUsageRowsBySourcePolicy(db, spaceId, userId, rows);
   return aggregateUsage(filtered).sort((a, b) =>
     a.base_object_type.localeCompare(b.base_object_type) ||
@@ -296,6 +300,89 @@ async function loadSourceKindUsageObjects(db: Queryable, spaceId: string, userId
   }));
 }
 
+async function loadNoteKindUsageObjects(db: Queryable, spaceId: string, userId: string): Promise<UsageObjectRow[]> {
+  const result = await db.query<{ object_id: string }>(
+    `SELECT n.object_id
+       FROM notes n
+       JOIN space_objects so
+         ON so.id = n.object_id
+        AND so.space_id = n.space_id
+        AND so.object_type = 'note'
+      WHERE n.space_id = $1
+        AND so.deleted_at IS NULL
+        AND so.status = 'active'
+        AND ${readableClause("$2")}
+      ORDER BY n.object_id ASC`,
+    [spaceId, userId],
+  );
+  const sourceIds = await loadSourceConnectionIdsForTargets(
+    db,
+    spaceId,
+    "note",
+    result.rows.map((row) => row.object_id),
+  );
+  return result.rows.map((row) => ({
+    object_id: row.object_id,
+    base_object_type: "note",
+    object_kind: "note",
+    source_connection_ids: sourceIds.get(row.object_id) ?? [],
+  }));
+}
+
+async function loadMemoryEntryKindUsageObjects(db: Queryable, spaceId: string, userId: string): Promise<UsageObjectRow[]> {
+  const result = await db.query<{ object_id: string; object_kind: string }>(
+    `SELECT me.id AS object_id,
+            me.memory_type AS object_kind
+       FROM memory_entries me
+      WHERE me.space_id = $1
+        AND me.status = 'active'
+        AND me.deleted_at IS NULL
+        AND me.scope_type <> 'system'
+        AND me.visibility NOT IN ('public_template')
+        AND me.sensitivity_level <> 'highly_restricted'
+        AND (
+          me.owner_user_id = $2
+          OR me.visibility IN ('space_shared', 'summary_only')
+        )
+      ORDER BY me.id ASC`,
+    [spaceId, userId],
+  );
+  const sourceIds = await loadSourceConnectionIdsForTargets(
+    db,
+    spaceId,
+    "memory",
+    result.rows.map((row) => row.object_id),
+  );
+  return result.rows.map((row) => ({
+    object_id: row.object_id,
+    base_object_type: "memory_entry",
+    object_kind: row.object_kind,
+    source_connection_ids: sourceIds.get(row.object_id) ?? [],
+  }));
+}
+
+async function loadProjectPublicSummaryKindUsageObjects(db: Queryable, spaceId: string): Promise<UsageObjectRow[]> {
+  const result = await db.query<{ object_id: string }>(
+    `SELECT ps.project_id AS object_id
+       FROM project_public_summaries ps
+       JOIN projects p
+         ON p.id = ps.project_id
+        AND p.space_id = ps.space_id
+      WHERE ps.space_id = $1
+        AND ps.review_status = 'approved'
+        AND p.status = 'active'
+        AND p.deleted_at IS NULL
+      ORDER BY ps.project_id ASC`,
+    [spaceId],
+  );
+  return result.rows.map((row) => ({
+    object_id: row.object_id,
+    base_object_type: "project_public_summary",
+    object_kind: "project_public_summary",
+    source_connection_ids: [],
+  }));
+}
+
 async function loadClaimSourceConnectionIds(
   db: Queryable,
   spaceId: string,
@@ -365,7 +452,7 @@ function aggregateUsage(rows: readonly UsageObjectRow[]): UsageRow[] {
 }
 
 function normalizedBaseTypes(raw: readonly string[] | undefined): string[] {
-  const values = raw && raw.length > 0 ? raw : ["knowledge_item", "claim", "source"];
+  const values = raw && raw.length > 0 ? raw : ["knowledge_item", "note", "source", "claim", "memory_entry", "project_public_summary"];
   return [...new Set(values.filter((value) => RETRIEVAL_OBJECT_TYPE_VALUES.includes(value as never)))];
 }
 

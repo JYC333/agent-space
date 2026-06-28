@@ -36,7 +36,8 @@ RBAC/ABAC platform — it is a lightweight, code-owned permission layer that rou
 
 - User authentication (auth module).
 - Proposal creation UI or workflow (proposals module).
-- Agent runtime policy (stored on AgentVersion.runtime_policy_json, read by runners).
+- Agent runtime policy (stored on `AgentRuntimeProfile.runtime_policy_json` and
+  snapshotted onto runs, then read by runners).
 
 ## Key Models
 
@@ -124,13 +125,13 @@ registry `default_decision`. Not full RBAC/ABAC — they express intent and defa
 | `knowledge.create` | knowledge | medium | require_approval | via `proposal.apply` |
 | `knowledge.update` | knowledge | medium | require_approval | via `proposal.apply` |
 | `knowledge.archive` | knowledge | medium | require_approval | via `proposal.apply` |
-| `knowledge.relation_create` | knowledge_relation | medium | require_approval | via `proposal.apply` |
-| `knowledge.relation_delete` | knowledge_relation | medium | require_approval | via `proposal.apply` |
+| `knowledge.relation_create` | object_relation | medium | require_approval | via `proposal.apply` |
+| `knowledge.relation_delete` | object_relation | medium | require_approval | via `proposal.apply` |
 | `claim.create` | claim | medium | require_approval | via `proposal.apply` |
 | `claim.update` | claim | medium | require_approval | via `proposal.apply` |
 | `claim.archive` | claim | medium | require_approval | via `proposal.apply` |
-| `claim.relation_create` | claim_relation | medium | require_approval | via `proposal.apply` |
-| `claim.relation_delete` | claim_relation | medium | require_approval | via `proposal.apply` |
+| `claim.relation_create` | object_relation | medium | require_approval | via `proposal.apply` |
+| `claim.relation_delete` | object_relation | medium | require_approval | via `proposal.apply` |
 | `object_relation.create` | object_relation | medium | require_approval | via `proposal.apply` |
 | `object_relation.delete` | object_relation | medium | require_approval | via `proposal.apply` |
 | `memory_maintenance_packet` | proposal | medium | require_approval | via `proposal.apply` |
@@ -286,7 +287,7 @@ preflight.
 | `runtime.use_credential` | `server/src/modules/providers/providerCommandStore.ts` + run orchestration | Uses real credential/provider space from DB; before secret resolution |
 | `context.inject_memory` | `server/src/modules/context/prepareService.ts` | Before context assembly/persistence |
 | `context.render_for_runtime` | `server/src/modules/runs/orchestrationService.ts` | After context snapshot, before adapter execution |
-| `artifact.persist` | `server/src/modules/runs/materializationService.ts` via `enforce()` | Before egress guard and filesystem/row persistence; fail-closed audit |
+| `artifact.persist` | `server/src/modules/runs/materializationService.ts` via `enforce()` | Before filesystem/row persistence; fail-closed audit |
 | `proposal.create` | `server/src/modules/proposals/` and target modules via `enforce()` | Code patch collection uses `force_record=True` |
 | `proposal.apply` | `server/src/modules/proposals/applyService.ts` via `enforceProposalApply()` | Before accepted proposal side effects |
 | `workspace.write_patch` | `server/src/modules/workspaces/` and proposal appliers via `enforce()` | Before any workspace file writes |
@@ -350,8 +351,7 @@ Falls through to registry default only for **known** registered actions when no 
   wired, unknown-action fail-closed still applies if they are called without a registry
   entry, but having them registered means callers can at least look up metadata.
 - `context.use_personal_grant` — add PolicyGateway call site in `personal_memory_grants/`
-  when grant resolution merits its own policy audit trail; until then, egress guard is
-  the enforcement boundary.
+  when grant resolution merits its own policy audit trail.
 - `memory.create/update/archive` are WIRED_VIA_PROPOSAL — enforced only through `proposal.apply`.
 - Extend approval resolver with per-user/per-project approval capabilities when needed.
 - Space-level policy row overrides (currently domain-specific only).

@@ -4,6 +4,15 @@ Date: 2026-06-16
 
 Artifacts are durable outputs produced by runs. They let users inspect generated content after sandbox cleanup and can be linked to proposals or activities.
 
+An `Artifact` records its production context with `artifacts.run_id` when it was
+produced by a run. Task attachment is a separate product relationship:
+`task_artifacts` links a task to selected artifacts as output, evidence, or other
+task-level material. `task_artifacts.run_id` is the task attachment's run context
+when the attachment is tied to a task run; `artifacts.run_id` remains the
+artifact's producing run. They usually match for run-produced task output, but
+manual or reused attachments can keep the task attachment run null while the
+artifact's production context remains unchanged.
+
 ## Product API
 
 - The server owns the client-facing artifact read/export

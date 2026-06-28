@@ -5,7 +5,7 @@ import type { Queryable } from "../routeUtils/common";
  * Shared writer for the review/brain-layer artifact rows.
  *
  * Every report / packet / brief / eval / explain / session artifact writes the
- * exact same 24-column `artifacts` row; the only differences are values
+ * exact same `artifacts` row; the only differences are values
  * (artifact type, content, canonical format, visibility, run/project refs). This
  * helper owns that one INSERT so the positional-parameter ordering lives in a
  * single place (it was an easy `$10/$11` footgun when copy-pasted), and callers
@@ -48,13 +48,13 @@ export async function insertArtifactRow(db: Queryable, input: InsertArtifactRowI
        storage_ref, storage_path, mime_type, exportable, export_formats_json,
        canonical_format, preview, relevant_period_start, relevant_period_end,
        created_at, updated_at, metadata_json, visibility, owner_user_id,
-       source_execution_plane_id, trust_level, project_id
+       trust_level, project_id
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7,
        NULL, NULL, $8, $9, $10::jsonb,
        $11, $12, NULL, NULL,
        $13, $13, $14::jsonb, $15, $16,
-       NULL, $17, $18
+       $17, $18
      )`,
     [
       id,

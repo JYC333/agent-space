@@ -14,13 +14,16 @@ Raw-input intake layer (L0). Everything entering the system lands as an `Activit
 
 ## source_kind / source_trust Values
 
-`source_kind` values: `user_capture`, `chat_message`, `user_input`, `manual`, `run_event`, `system_event`, `workspace_event`, `agent_run`, `task_log`, `external_chat`, `web_capture`, `file_import`, `external_source`, `imported_chat`, `agent_inferred`
+Canonical `source_kind` / `activity_type` values: `user_capture`,
+`chat_message`, `external_chat`, `file_import`, `web_capture`, `run_event`,
+`workspace_event`, `system_event`, `external_source`, and `intake`. Legacy input
+aliases such as `user_input`, `manual`, `agent_run`, `task_log`,
+`imported_chat`, `file_capture`, and `voice_capture` are normalized at ingest.
 
 Default `source_trust` by kind:
-- `user_capture`, `chat_message`, `user_input`, `manual` → `user_confirmed`
-- `run_event`, `system_event`, `workspace_event`, `agent_run`, `task_log` → `internal_system`
-- `external_chat`, `web_capture`, `file_import`, `external_source`, `imported_chat` → `untrusted_external`
-- `agent_inferred` → `agent_inferred`
+- `user_capture`, `chat_message`, `external_chat`, `file_import` → `user_confirmed`
+- `run_event`, `system_event`, `workspace_event`, `intake` → `internal_system`
+- `web_capture`, `external_source` → `untrusted_external`
 - Unknown/empty → `untrusted_external`
 
 If `ActivityRecord.source_trust` is already set to a valid enum value, that value wins.
@@ -33,8 +36,7 @@ ActivityRecord:
   source_kind, source_trust, activity_type, title, content
   source_run_id, source_task_id, source_session_id, source_url
   subject_user_id
-  status (raw|processed|proposals_generated|archived)
-  lifecycle_status, consolidation_status
+  status (raw|processed|proposals_generated|failed|archived)
   payload_json, occurred_at, created_at, updated_at
 ```
 
@@ -56,18 +58,22 @@ Batch / explicit ids: `POST /api/v1/memory/consolidation/run` with optional `act
 ```
 raw input → ActivityRecord (status=raw, source_trust assigned)
     → POST /activity/{id}/consolidate (or batch consolidation run)
+        → Memory retrieval create-safety pre-dedupe
         → classifier → MemoryCandidateValidator → MemoryProposalProducer
         → reviewable Proposals created with provenance_entries
     → user approves proposals → ProposalApplyService writes MemoryEntry
-    → ActivityRecord consolidation_status updated
+    → ActivityRecord status updated
 ```
 
 ## Invariants
 - `ActivityRecord` is L0 raw event layer; it is not active Memory
 - ActivityRecords become memory only through the Proposal → ProposalApplyService path
 - `agent_inferred` activities cannot produce active semantic memory or policy without explicit user accept
-- `source_activity_id` set on all Proposals generated from an ActivityRecord
-- Consolidation is idempotent: duplicate proposals are blocked by `proposal_dedupe_key`
+- Activity-derived proposals carry Activity provenance in `provenance_entries`
+  and may include `source_activity_id` as a pending-proposal compatibility
+  shortcut
+- Consolidation is idempotent: visible Memory duplicate checks run before proposal
+  creation, and duplicate proposals are blocked by `proposal_dedupe_key`
 
 ## Related Files
 - `server/migrations/`

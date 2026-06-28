@@ -16,7 +16,7 @@ import { ScopeBadge } from '../../components/ScopeBadge'
 function fmt(dt: string) { return new Date(dt).toLocaleString() }
 
 type StatusFilter = ActivityStatus | 'all'
-const STATUS_FILTERS: StatusFilter[] = ['all', 'raw', 'proposals_generated', 'processed', 'archived']
+const STATUS_FILTERS: StatusFilter[] = ['all', 'raw', 'proposals_generated', 'processed', 'failed', 'archived']
 
 const SOURCE_COLORS: Record<ActivitySourceType, string> = {
   user_capture:    'default',

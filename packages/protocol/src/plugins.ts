@@ -19,7 +19,7 @@
  */
 export type OfficialPluginCategory =
   | "personal"
-  | "family"
+  | "household"
   | "team"
   | "knowledge"
   | "agent_work"

@@ -21,7 +21,6 @@ interface RuntimeToolBindingRow {
   agent_id: string | null;
   capability_id: string | null;
   runtime_adapter_type: string;
-  execution_plane_id: string | null;
   external_type: string;
   external_ref: string;
   display_name: string;
@@ -39,7 +38,7 @@ interface RuntimeToolBindingRow {
 
 const COLUMNS = `
   id, space_id, workspace_id, agent_id, capability_id, runtime_adapter_type,
-  execution_plane_id, external_type, external_ref, display_name,
+  external_type, external_ref, display_name,
   required_scopes_json, credential_ref, data_exposure_level,
   observability_level, side_effect_level, approval_required, enabled,
   notes, created_at, updated_at
@@ -85,7 +84,6 @@ class RuntimeToolBindingRepository {
       ["agent_id", "agent_id"],
       ["capability_id", "capability_id"],
       ["runtime_adapter_type", "runtime_adapter_type"],
-      ["execution_plane_id", "execution_plane_id"],
     ] as const) {
       const value = optionalString(filters[queryKey]);
       if (!value) continue;

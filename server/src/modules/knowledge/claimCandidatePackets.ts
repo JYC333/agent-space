@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ClaimCandidatePacketCreateRequest } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { ProposalApplyContext, ProposalApplyResult } from "../proposals/applierRegistry";
 import type { Queryable } from "../routeUtils/common";
@@ -7,6 +7,7 @@ import { insertArtifactRow } from "../artifacts/reviewArtifactWriter";
 import {
   acceptReviewPacket,
   insertProposalRow,
+  lookupExistingPendingPacket,
   visibilityForReviewScope,
   type ChildProposalDraft,
 } from "../proposals/reviewPackets";
@@ -29,7 +30,7 @@ interface SourceArtifactRow {
 
 interface ClaimCandidateAction {
   id: string;
-  kind: "claim_candidate" | "claim_relation_candidate" | "object_relation_candidate" | "review_note";
+  kind: "claim_candidate" | "object_relation_candidate" | "review_note";
   title: string;
   reason: string;
   origin: {
@@ -43,7 +44,7 @@ interface ClaimCandidateAction {
   markers: Record<string, unknown>;
   confidence: number | null;
   proposed_action: {
-    proposal_type: "claim_create" | "claim_relation_create" | "object_relation_create";
+    proposal_type: "claim_create" | "object_relation_create";
     title: string;
     payload: Record<string, unknown>;
   } | null;
@@ -246,8 +247,8 @@ async function buildCandidates(
 
 /**
  * Slice E bridge: a contradiction-discovery report already carries concrete
- * `from_claim_id` / `to_claim_id` pairs (the scan only judged visible claims), so
- * each finding becomes a real `claim_relation_create` (contradicts) candidate
+ * `from_object_id` / `to_object_id` pairs (the scan only judged visible claims), so
+ * each finding becomes a real `object_relation_create` (contradicts) candidate
  * rather than a review note. Accepting the packet still only creates child
  * pending proposals.
  */
@@ -259,8 +260,8 @@ function contradictionReportCandidates(
   const candidates: ClaimCandidateAction[] = [];
   for (const finding of arrayValue(metadata.findings).map(record)) {
     const action = record(finding.proposed_action);
-    const fromClaimId = stringValue(action.from_claim_id);
-    const toClaimId = stringValue(action.to_claim_id);
+    const fromClaimId = stringValue(action.from_object_id);
+    const toClaimId = stringValue(action.to_object_id);
     if (!fromClaimId || !toClaimId || fromClaimId === toClaimId) continue;
     const fromTitle = stringValue(record(finding.from_claim).title);
     const toTitle = stringValue(record(finding.to_claim).title);
@@ -564,17 +565,25 @@ function claimRelationAction(input: {
 }): ClaimCandidateAction {
   const evidenceRefs = artifactEvidenceRefs(input.row);
   const payload = {
-    operation: "claim_relation_create",
-    from_claim_id: input.fromClaimId,
-    to_claim_id: input.toClaimId,
+    operation: "object_relation_create",
+    from_object_id: input.fromClaimId,
+    to_object_id: input.toClaimId,
     relation_type: input.relationType,
     status: "candidate",
     confidence: input.confidence,
     evidence_summary: input.reason,
+    metadata: {
+      candidate_origin: "claim_candidate_packet",
+      endpoint_type: "claim",
+      source_artifact_ids: [input.row.id],
+      source_section: input.sourceSection,
+      evidence_refs: evidenceRefs,
+      markers: input.markers,
+    },
   };
   return {
     id: randomUUID(),
-    kind: "claim_relation_candidate",
+    kind: "object_relation_candidate",
     title: input.title,
     reason: input.reason,
     origin: origin(input.row, input.sourceSection),
@@ -584,7 +593,7 @@ function claimRelationAction(input: {
     markers: input.markers,
     confidence: input.confidence,
     proposed_action: {
-      proposal_type: "claim_relation_create",
+      proposal_type: "object_relation_create",
       title: input.title,
       payload,
     },
@@ -658,7 +667,7 @@ function claimAction(input: {
     valid_from: input.validFrom ?? undefined,
     valid_until: input.validUntil ?? undefined,
     observed_at: input.observedAt ?? undefined,
-    visibility: "space_shared",
+    visibility: input.row.visibility,
     sources: claimSourcesFromConnections(input.sourceConnectionIds, input.sourcePolicySnapshots, input),
     metadata: {
       candidate_origin: "claim_candidate_packet",
@@ -956,8 +965,13 @@ async function createClaimCandidatePacketProposal(
     reviewScope: ReviewScope;
   },
 ): Promise<string> {
-  const payload = packetProposalPayload(input);
-  return insertProposalRow(db, {
+  const lineageKey = claimCandidateLineageKey(input.spaceId, input.sourceArtifacts);
+  const existing = await lookupExistingPendingPacket(
+    db, input.spaceId, CLAIM_CANDIDATE_PACKET_PROPOSAL_TYPE, lineageKey,
+  );
+  if (existing) return existing;
+  const payload = packetProposalPayload(input, lineageKey);
+  return (await insertProposalRow(db, {
     spaceId: input.spaceId,
     proposalType: CLAIM_CANDIDATE_PACKET_PROPOSAL_TYPE,
     title: titleForPacket(input.candidates.length),
@@ -967,7 +981,7 @@ async function createClaimCandidatePacketProposal(
       "Review this Claim Candidate Packet. Accepting creates child pending claim/object-relation proposals only; it does not write canonical Claims.",
     createdByUserId: input.ownerUserId,
     visibility: visibilityForReviewScope(input.reviewScope),
-  });
+  })).id;
 }
 
 function claimChildDraft(
@@ -1043,6 +1057,15 @@ function packetArtifactPayload(input: {
   };
 }
 
+function claimCandidateLineageKey(spaceId: string, sourceArtifacts: readonly SourceArtifactRow[]): string {
+  const date = new Date().toISOString().slice(0, 10);
+  const idsHash = createHash("sha256")
+    .update([...sourceArtifacts].map((a) => a.id).sort().join(":"))
+    .digest("hex")
+    .slice(0, 16);
+  return `claim_cand:${spaceId}:${idsHash}:${date}`;
+}
+
 function packetProposalPayload(input: {
   spaceId: string;
   ownerUserId: string;
@@ -1050,9 +1073,10 @@ function packetProposalPayload(input: {
   sourceArtifacts: readonly SourceArtifactRow[];
   candidates: readonly ClaimCandidateAction[];
   reviewScope: ReviewScope;
-}): Record<string, unknown> {
+}, lineageKey: string): Record<string, unknown> {
   return {
     operation: "claim_candidate_packet",
+    lineage_key: lineageKey,
     target_scope: "claim",
     target_namespace: "knowledge.claim_candidates",
     review_scope: input.reviewScope,
@@ -1077,7 +1101,6 @@ function proposedAction(value: unknown): NonNullable<ClaimCandidateAction["propo
   const proposalType = stringValue(action.proposal_type);
   if (
     proposalType !== "claim_create" &&
-    proposalType !== "claim_relation_create" &&
     proposalType !== "object_relation_create"
   ) {
     return null;
@@ -1187,10 +1210,9 @@ function titleForPacket(count: number): string {
 
 function summaryForPacket(candidates: readonly ClaimCandidateAction[]): string {
   const claimCreates = candidates.filter((candidate) => candidate.proposed_action?.proposal_type === "claim_create").length;
-  const claimRelations = candidates.filter((candidate) => candidate.proposed_action?.proposal_type === "claim_relation_create").length;
   const objectRelations = candidates.filter((candidate) => candidate.proposed_action?.proposal_type === "object_relation_create").length;
   const notes = candidates.filter((candidate) => candidate.proposed_action === null).length;
-  return `Review ${candidates.length} claim candidate(s): ${claimCreates} claim proposal(s), ${claimRelations} claim relation proposal(s), ${objectRelations} object relation proposal(s), ${notes} review note(s).`;
+  return `Review ${candidates.length} claim candidate(s): ${claimCreates} claim proposal(s), ${objectRelations} object relation proposal(s), ${notes} review note(s).`;
 }
 
 

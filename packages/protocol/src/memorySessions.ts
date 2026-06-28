@@ -244,7 +244,6 @@ export const MemoryOutSchema = z
     last_confirmed_at: ISODateTimeSchema.nullish(),
     confidence: z.number(),
     importance: z.number(),
-    source_id: IdSchema.nullish(),
     created_by: IdSchema.nullish(),
     created_at: ISODateTimeSchema,
     updated_at: ISODateTimeSchema,
@@ -252,7 +251,6 @@ export const MemoryOutSchema = z
     version: z.number().int(),
     tags: z.array(z.unknown()).nullish(),
     memory_layer: z.string().nullish(),
-    memory_kind: z.string().nullish(),
     source_trust: z.string().nullish(),
     created_from_proposal_id: IdSchema.nullish(),
     root_memory_id: IdSchema.nullish(),
@@ -278,7 +276,7 @@ const MemoryCreateFieldsSchema = z.object({
   type: z.string(),
   scope: z.string().default("user"),
   namespace: z.string().default("user.default"),
-  visibility: z.string().default("private"),
+  visibility: z.string().nullish(),
   sensitivity_level: z.string().default("normal"),
   confidence: z.number().default(1),
   importance: z.number().default(0.5),
@@ -289,10 +287,8 @@ const MemoryCreateFieldsSchema = z.object({
   owner_user_id: IdSchema.nullish(),
   selected_user_ids: z.array(IdSchema).nullish(),
   last_confirmed_at: ISODateTimeSchema.nullish(),
-  source_proposal_id: IdSchema.nullish(),
   workspace_id: IdSchema.nullish(),
   memory_layer: z.string().nullish(),
-  memory_kind: z.string().nullish(),
 });
 
 const MemoryUpdateFieldsSchema = z.object({
@@ -311,7 +307,6 @@ const MemoryUpdateFieldsSchema = z.object({
   selected_user_ids: z.array(IdSchema).nullish(),
   workspace_id: IdSchema.nullish(),
   memory_layer: z.string().nullish(),
-  memory_kind: z.string().nullish(),
 });
 
 export const MemoryProposalCreateCommandSchema = MemoryCreateFieldsSchema.extend({
@@ -746,7 +741,6 @@ export const ContextSnapshotAuditSchema = z
     policy_bundle_version: z.string().nullish(),
     memory_digest_version: z.string().nullish(),
     workspace_digest_version: z.string().nullish(),
-    execution_plane_id: IdSchema.nullish(),
     included_memory_refs_json: z.array(ContextSourceRefSchema).nullish(),
     included_evidence_refs_json: z.array(ContextSourceRefSchema).nullish(),
     included_file_refs_json: z.array(ContextSourceRefSchema).nullish(),

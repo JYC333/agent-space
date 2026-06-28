@@ -71,7 +71,6 @@ export interface CliCredentialBrokerPort {
 
 export interface VendorCliAdapterInput {
   run: RunRecord;
-  adapter_type?: string | null;
   prompt?: string | null;
   mode?: string | null;
   model?: string | null;
@@ -101,7 +100,7 @@ export async function executeVendorCliAdapter(
   deps: VendorCliAdapterDeps = {},
 ): Promise<RunAdapterResultEnvelope> {
   const startedAt = new Date().toISOString();
-  const adapterType = input.adapter_type ?? input.run.adapter_type;
+  const adapterType = input.run.adapter_type;
   const spec = getLocalCliRuntimeAdapterSpec(adapterType);
   if (!spec) {
     return cliFailure(input, "runtime_adapter_not_found", "Runtime adapter is not registered.", startedAt);
@@ -438,7 +437,7 @@ function cliFailure(
   spec?: LocalCliRuntimeAdapterSpec,
   metadataJson: unknown = {},
 ): RunAdapterResultEnvelope {
-  const adapterType = spec?.adapter_type ?? (input.adapter_type ?? input.run.adapter_type ?? "unknown");
+  const adapterType = spec?.adapter_type ?? (input.run.adapter_type ?? "unknown");
   return {
     adapter_type: adapterType,
     adapter_kind: "local_cli",

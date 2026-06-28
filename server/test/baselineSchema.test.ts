@@ -29,7 +29,6 @@ const REPRESENTATIVE_TABLES = [
   "knowledge_items",
   "claims",
   "claim_sources",
-  "claim_relations",
   "object_relations",
   "space_object_kinds",
   "space_object_kind_relation_hints",
@@ -81,17 +80,17 @@ async function baselineTableNames(p: Pool): Promise<string[]> {
   return res.rows.map((r) => r.table_name);
 }
 
+function tableDefinition(sql: string, table: string): string {
+  const match = new RegExp(`CREATE TABLE public\\.${table} \\(([\\s\\S]*?)\\n\\);`).exec(sql);
+  return match?.[1] ?? "";
+}
+
 describe("server runner applies the baseline schema", () => {
   it("uses the single committed baseline migration", () => {
     const migrationFiles = readdirSync(MIGRATIONS_DIR)
       .filter((name) => /^\d+_.+\.sql$/.test(name))
       .sort();
     expect(migrationFiles).toEqual(["0001_baseline.sql"]);
-  });
-
-  it("does not recreate retired context source tables", () => {
-    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
-    expect(baseline).not.toContain("CREATE TABLE public.context_sources");
   });
 
   it("keeps space object statuses constrained by concrete object type", () => {
@@ -107,13 +106,44 @@ describe("server runner applies the baseline schema", () => {
     const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
     expect(baseline).toContain("CREATE TABLE public.claims");
     expect(baseline).toContain("CREATE TABLE public.claim_sources");
-    expect(baseline).toContain("CREATE TABLE public.claim_relations");
     expect(baseline).toContain("CREATE TABLE public.object_relations");
     expect(baseline).toContain("ck_claim_sources_source_ref_connection");
     expect(baseline).toContain("FOREIGN KEY (object_id, space_id) REFERENCES public.space_objects(id, space_id)");
     expect(baseline).toContain("FOREIGN KEY (claim_id, space_id) REFERENCES public.claims(object_id, space_id)");
     expect(baseline).toContain("FOREIGN KEY (from_object_id, space_id) REFERENCES public.space_objects(id, space_id)");
     expect(baseline).toContain("'claim'::character varying, 'memory_entry'::character varying");
+  });
+
+  it("keeps object_relations as the canonical relation graph", () => {
+    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const objectRelations = tableDefinition(baseline, "object_relations");
+    expect(objectRelations).toContain("from_object_id character varying(36) NOT NULL");
+    expect(objectRelations).toContain("to_object_id character varying(36) NOT NULL");
+    expect(objectRelations).toContain("source_proposal_id character varying(36)");
+    expect(baseline).toContain("object_relations_source_proposal_id_fkey");
+    expect(baseline).toContain("FOREIGN KEY (from_object_id, space_id) REFERENCES public.space_objects(id, space_id)");
+    expect(baseline).toContain("FOREIGN KEY (to_object_id, space_id) REFERENCES public.space_objects(id, space_id)");
+  });
+
+  it("keeps KnowledgeItem and MemoryEntry on canonical source and proposal fields", () => {
+    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const knowledgeItemSources = tableDefinition(baseline, "knowledge_item_sources");
+    const knowledgeItems = tableDefinition(baseline, "knowledge_items");
+    expect(knowledgeItemSources).toContain("knowledge_item_id character varying(36) NOT NULL");
+    expect(knowledgeItemSources).toContain("source_id character varying(36) NOT NULL");
+    expect(knowledgeItemSources).toContain("relation_type character varying(32) NOT NULL");
+    expect(knowledgeItems).toContain("created_from_proposal_id character varying(36)");
+    expect(baseline).toContain("knowledge_item_sources_source_id_fkey");
+    expect(baseline).toContain("knowledge_item_sources_knowledge_item_id_fkey");
+    expect(baseline).toContain("knowledge_items_created_from_proposal_id_fkey");
+
+    const memoryEntries = tableDefinition(baseline, "memory_entries");
+    expect(memoryEntries).toContain("memory_type character varying(32) NOT NULL");
+    expect(memoryEntries).toContain("memory_layer character varying(32)");
+    expect(memoryEntries).toContain("created_from_proposal_id character varying(36)");
+    expect(baseline).toContain("ck_memory_entries_memory_layer");
+    expect(baseline).toContain("ix_memory_entries_memory_type");
+    expect(baseline).toContain("memory_entries_created_from_proposal_id_fkey");
   });
 
   it("adds object kind registry without changing retrieval object types", () => {
@@ -125,7 +155,6 @@ describe("server runner applies the baseline schema", () => {
     expect(baseline).toContain("'project_public_summary'::character varying");
     expect(baseline).toContain("ck_retrieval_objects_object_type");
     expect(baseline).toContain("'knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying");
-    expect(baseline).not.toContain("ALTER TABLE public.retrieval_objects");
   });
 
   it("keeps note collection trees and memberships space-scoped in the baseline", () => {

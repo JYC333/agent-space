@@ -161,10 +161,10 @@ describe("scanClaimContradictions", () => {
     const finding = report.findings[0]!;
     expect(finding.signal).toBe("negation");
     expect(finding.proposed_action).toMatchObject({
-      proposal_type: "claim_relation_create",
+      proposal_type: "object_relation_create",
       relation_type: "contradicts",
-      from_claim_id: "a",
-      to_claim_id: "b",
+      from_object_id: "a",
+      to_object_id: "b",
     });
   });
 
@@ -220,9 +220,9 @@ describe("scanClaimContradictions", () => {
             to_claim: { claim_id: "b", title: "Deploy pipeline" },
             reason: "Injected judge identified a semantic contradiction.",
             proposed_action: {
-              proposal_type: "claim_relation_create",
-              from_claim_id: "a",
-              to_claim_id: "b",
+              proposal_type: "object_relation_create",
+              from_object_id: "a",
+              to_object_id: "b",
               relation_type: "contradicts",
               confidence: 0.3,
             },

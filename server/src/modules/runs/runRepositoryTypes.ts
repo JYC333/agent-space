@@ -35,6 +35,7 @@ export interface RunRecord {
   runtime_config_json?: unknown;
   model_override_json?: unknown;
   runtime_profile_snapshot_json?: unknown;
+  permission_snapshot_json?: unknown;
   required_sandbox_level: string;
   trigger_origin: string;
   instructed_by_user_id?: string | null;
@@ -68,6 +69,41 @@ export interface ModelProviderSummaryRecord {
   default_model: string | null;
   enabled: boolean;
   credential_id?: string | null;
+}
+
+export interface ContextSnapshotRecord {
+  id: string;
+  space_id: string;
+  run_id: string | null;
+  agent_id: string | null;
+  session_id: string | null;
+  source_refs_json: unknown;
+  compiled_summary: string | null;
+  token_estimate: number | null;
+  relevant_period_start: string | null;
+  relevant_period_end: string | null;
+  compiled_prefix_text: string | null;
+  compiled_tail_text: string | null;
+  compiled_prefix_ref: string | null;
+  compiled_tail_ref: string | null;
+  prefix_hash: string | null;
+  tail_hash: string | null;
+  compiler_version: string | null;
+  retrieval_trace_json: unknown;
+  token_budget_json: unknown;
+  policy_bundle_version: string | null;
+  memory_digest_version: string | null;
+  workspace_digest_version: string | null;
+  included_memory_refs_json: unknown;
+  included_evidence_refs_json: unknown;
+  included_file_refs_json: unknown;
+  included_doc_refs_json: unknown;
+  redactions_json: unknown;
+  data_exposure_level: string | null;
+  rendered_context_uri: string | null;
+  rendered_context_text: string | null;
+  request_json: unknown;
+  created_at: string;
 }
 
 export interface RunEvaluationRecord {
@@ -208,11 +244,8 @@ export interface RunCreateInput {
   scheduled_at?: string | null;
   parent_run_id?: string | null;
   runtime_profile_id?: string | null;
-  adapter_type?: string | null;
   capability_id?: string | null;
   capabilities_json?: unknown[] | null;
-  model_provider_id?: string | null;
-  model?: string | null;
   model_override_json?: Record<string, unknown> | null;
   context_artifact_ids?: string[] | null;
 }

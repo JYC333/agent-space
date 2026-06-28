@@ -142,7 +142,7 @@ describe('ArtifactInlineRenderer', () => {
             answer: 'Use the cited relation sources.',
             synthesized: true,
             citations: [
-              { source_index: 1, object_type: 'knowledge_item', title: 'Relation source', quote: 'supports the claim' },
+              { object_type: 'knowledge_item', object_id: 'ki-1', title: 'Relation source' },
             ],
             gap_analysis: {
               low_coverage: true,
@@ -185,7 +185,7 @@ describe('ArtifactInlineRenderer', () => {
                   { object_type: 'knowledge_item', title: 'A' },
                   { object_type: 'knowledge_item', title: 'B' },
                 ],
-                proposed_action: { proposal_type: 'knowledge_relation_create' },
+                proposed_action: { proposal_type: 'object_relation_create' },
               },
             ],
           }),
@@ -196,7 +196,7 @@ describe('ArtifactInlineRenderer', () => {
     expect(screen.getByText('automation_knowledge_retrieval_maintenance')).toBeInTheDocument()
     expect(screen.getAllByText('relation_suggestion').length).toBeGreaterThan(0)
     expect(screen.getByText('A supports B')).toBeInTheDocument()
-    expect(screen.getByText('knowledge_relation_create')).toBeInTheDocument()
+    expect(screen.getByText('object_relation_create')).toBeInTheDocument()
   })
 
   it('renders memory maintenance reports with the shared maintenance renderer', () => {
@@ -290,17 +290,17 @@ describe('ArtifactInlineRenderer', () => {
               proposal_candidate: 1,
               review_only_candidate: 1,
               relation_review_candidate: 1,
-              knowledge_relation_candidate: 1,
+              object_relation_candidate: 1,
             },
             sources_scanned: 2,
             links_extracted: 2,
             candidates: [
               {
-                kind: 'knowledge_relation_candidate',
+                kind: 'object_relation_candidate',
                 title: 'Relate Alpha to Beta',
                 reason: 'Alpha links to Beta.',
                 confidence_tier: 'high',
-                proposed_action: { proposal_type: 'knowledge_relation_create' },
+                proposed_action: { proposal_type: 'object_relation_create' },
               },
               {
                 kind: 'relation_review_candidate',
@@ -318,7 +318,7 @@ describe('ArtifactInlineRenderer', () => {
     expect(screen.getByText('Relation Discovery Report')).toBeInTheDocument()
     expect(screen.getByText('1 proposal-ready')).toBeInTheDocument()
     expect(screen.getAllByText('1 review-only').length).toBeGreaterThan(0)
-    expect(screen.getByText('knowledge_relation_create')).toBeInTheDocument()
+    expect(screen.getByText('object_relation_create')).toBeInTheDocument()
     expect(screen.getByText('Review-only evidence; accepting the packet will not generate a child proposal for this candidate.')).toBeInTheDocument()
   })
 

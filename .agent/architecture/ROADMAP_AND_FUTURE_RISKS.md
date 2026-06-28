@@ -16,6 +16,7 @@ code and migrations still win over documentation.
 | Policy and security | [POLICY_ENFORCEMENT_INVENTORY.md](POLICY_ENFORCEMENT_INVENTORY.md), [SECURITY_AND_ACCESS_BOUNDARIES.md](SECURITY_AND_ACCESS_BOUNDARIES.md), [../modules/policy.md](../modules/policy.md) |
 | Credentials | [CREDENTIAL_STORAGE.md](CREDENTIAL_STORAGE.md), [../modules/credentials.md](../modules/credentials.md), [../modules/provider-policy.md](../modules/provider-policy.md), [../decisions/0010-credential-channel-isolation.md](../decisions/0010-credential-channel-isolation.md) |
 | Memory, context, provenance | [MEMORY_MODEL.md](MEMORY_MODEL.md), [MEMORY_CONTEXT_RUNTIME.md](MEMORY_CONTEXT_RUNTIME.md), [MEMORY_ACTIVITY_PROVENANCE.md](MEMORY_ACTIVITY_PROVENANCE.md), [MEMORY_EVOLUTION_PLAN.md](MEMORY_EVOLUTION_PLAN.md) |
+| Retrieval and brain layer | [RETRIEVAL_AND_BRAIN_LAYER.md](RETRIEVAL_AND_BRAIN_LAYER.md), [SOURCE_CONNECTOR_CONSENT.md](SOURCE_CONNECTOR_CONSENT.md) |
 | Intake and evidence | [INTAKE_EVIDENCE_FOUNDATION.md](INTAKE_EVIDENCE_FOUNDATION.md), [../modules/activity.md](../modules/activity.md), [../modules/activity-inbox.md](../modules/activity-inbox.md) |
 | Proposals and tasks | [PROPOSALS.md](PROPOSALS.md), [TASK_BOARD_MODEL.md](TASK_BOARD_MODEL.md), [../modules/proposals.md](../modules/proposals.md) |
 | Operations | [OPERATIONS_AND_SAFETY.md](OPERATIONS_AND_SAFETY.md), [DATABASE_AND_TRANSACTIONS.md](DATABASE_AND_TRANSACTIONS.md) |
@@ -45,7 +46,79 @@ code and migrations still win over documentation.
 
 ---
 
-### 2. Runtime and Adapter Safety
+### 2. Retrieval and Brain Layer Stabilization
+
+**Current blocker state**
+- No current P0/P1 blocker is known for first dogfooding.
+- The next work is dogfooding, tests, calibration, and quality enhancement of
+  implemented retrieval/brain-layer surfaces. It is not another gbrain
+  absorption phase.
+
+**Supported first dogfood scope**
+- Knowledge retrieval.
+- Context Brief.
+- Brain Think.
+- Source policy.
+- Memory opt-in retrieval.
+- Project public summary retrieval.
+- Brain Ops maintenance and object schema suggestions.
+
+**Out of scope for first dogfood**
+- True BM25.
+- Non-default ANN.
+- Semantic chunking.
+- Broad connector refresh/purge edge cases.
+- Automatic Dream canonical writes.
+
+**Deferred quality work**
+- True BM25 via a deliberate search-stack decision.
+- ANN for non-default embedding dimensions beyond the shipped default-dimension
+  halfvec HNSW path.
+- Semantic or title-aware chunking beyond the current fixed chunk slices.
+- Optional LLM intent refiner. Intent must not widen eligibility or bypass read
+  gates.
+- Richer diagnostics and proposal authoring from reviewed diagnostics/finding
+  rows.
+
+**Maintenance / Dream review load**
+- Maintenance and Dream outputs must stay batched, clustered, and
+  confidence-tiered. They should create review packets and artifacts, not one
+  proposal per finding.
+- Conservative defaults: bounded scan limits, explicit review queues,
+  retention metadata on artifacts/reports, and a manual review cadence before
+  broader scheduled use.
+- Dream and maintenance scans must not add automatic paths that write canonical
+  Knowledge, Claims, Object Relations, Project summaries, or Memory rows.
+- Memory maintenance packets intentionally remain two-step: accepting the packet
+  creates child `memory_archive` / `memory_update` proposals, and canonical
+  Memory changes still require normal proposal review.
+
+**Rejected / non-goals (not backlog)**
+- gbrain runtime dependency or a gbrain repository as an Agent Space source of
+  truth.
+- Dynamic schema-pack runtime or per-call schema-pack overrides.
+- Default external MCP brain server as the brain interface.
+- Dream/maintenance automatic canonical writes.
+- Direct application of Memory maintenance packet child proposals on packet
+  acceptance.
+- Silent Memory/Knowledge merging or automatic promotion between Memory,
+  Knowledge, Claims, and Project public summaries.
+
+**Prerequisites**
+- Search, Context Brief, Brain Think, Memory opt-in retrieval, Project public
+  summary retrieval, Source policy, and Brain Ops tests remain green.
+- Ranking and diagnostics signals continue to use only visible candidates or
+  access-neutral metadata.
+
+**Risk watch**
+- Calibration can leak hidden/private candidates if any ranking or diagnostic
+  stage uses pre-revalidation top scores, hidden counts, dropped ids, or private
+  titles.
+- Maintenance/Dream value can be lost if packet volume overwhelms review.
+
+---
+
+### 3. Runtime and Adapter Safety
 
 **Next work**
 - Design the `one_shot_docker` path before allowing critical-risk file execution.
@@ -65,7 +138,7 @@ code and migrations still win over documentation.
 
 ---
 
-### 3. Policy and Governance Expansion
+### 4. Policy and Governance Expansion
 
 **Next work**
 - Wire reserved actions only when their product surfaces exist: capability enable/update, tool binding, artifact/evidence export, deployment proposal/execute.
@@ -89,7 +162,7 @@ code and migrations still win over documentation.
 
 ---
 
-### 4. Memory, Context, Intake, and Evidence Quality
+### 5. Memory, Context, Intake, and Evidence Quality
 
 **Next work**
 - Implement planned memory-quality phases from [MEMORY_EVOLUTION_PLAN.md](MEMORY_EVOLUTION_PLAN.md) only through proposal-safe flows.
@@ -108,7 +181,7 @@ code and migrations still win over documentation.
 
 ---
 
-### 5. Automation and Triggers
+### 6. Automation and Triggers
 
 **Next work**
 - Design external trigger registry after manual and scheduled automation behavior is stable.
@@ -127,7 +200,7 @@ code and migrations still win over documentation.
 
 ---
 
-### 6. Operations, Backup, Retention, and Export
+### 7. Operations, Backup, Retention, and Export
 
 **Next work**
 - Define offsite backup procedure, starting with manual encrypted archive transfer.
@@ -147,7 +220,7 @@ code and migrations still win over documentation.
 
 ---
 
-### 7. Frontend Command Center
+### 8. Frontend Command Center
 
 **Next work**
 - Build review inbox aggregate and continue-working surfaces from runs, tasks, proposals, and artifacts.
@@ -167,7 +240,7 @@ code and migrations still win over documentation.
 
 ---
 
-### 8. Learning Loop and Self-Evolution
+### 9. Learning Loop and Self-Evolution
 
 **Next work**
 - Run managed dogfood flows against real workspaces before automating more of the loop.
@@ -205,11 +278,11 @@ tool-call message preservation in conversation windows, tracked under P6/P7
 
 | Item | Description | Maps to |
 |---|---|---|
-| H3 | Provider privacy/compliance policy: data-collection deny, provider allow/deny, required parameter rules. Add as space-scoped policy/provider-routing rules, not global config. | Capability 3 (Policy and Governance) |
+| H3 | Provider privacy/compliance policy: data-collection deny, provider allow/deny, required parameter rules. Add as space-scoped policy/provider-routing rules, not global config. | Capability 4 (Policy and Governance) |
 | P2 | Per-session chat concurrency guard. Add only if real chat ordering issues appear during dogfooding. | Capability 1 (Dogfooding Stabilization) |
-| P6/P7 | Self-hosted TS agent loop (AgentSession/TurnRunner/AgentLoop), tool scheduler (sequential/concurrent with observability) including tool-call (`tool_use`/`tool_result`) message preservation in conversation windows, MCP client integration. `RuntimeToolBinding` remains the authorization surface until then. | Capability 2 (Runtime and Adapter Safety) |
-| P8 | Channel adapters: IM/email/channel ingestion with external-session mapping. Requires stable intake/evidence provenance and proposal boundaries first. | Capability 5 (Automation and Triggers) |
-| P9 | Always-On governance: trigger budgets and cooldowns. Future automation/policy vocabulary. | Capability 5 (Automation and Triggers) |
+| P6/P7 | Self-hosted TS agent loop (AgentSession/TurnRunner/AgentLoop), tool scheduler (sequential/concurrent with observability) including tool-call (`tool_use`/`tool_result`) message preservation in conversation windows, MCP client integration. `RuntimeToolBinding` remains the authorization surface until then. | Capability 3 (Runtime and Adapter Safety) |
+| P8 | Channel adapters: IM/email/channel ingestion with external-session mapping. Requires stable intake/evidence provenance and proposal boundaries first. | Capability 6 (Automation and Triggers) |
+| P9 | Always-On governance: trigger budgets and cooldowns. Future automation/policy vocabulary. | Capability 6 (Automation and Triggers) |
 
 **Explicitly rejected (not to be revisited without a new decision):**
 - PilotDeck-style secrets in YAML or `${ENV}` substitution.

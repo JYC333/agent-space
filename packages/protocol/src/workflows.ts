@@ -55,9 +55,6 @@ export const WorkflowRunDraftRequestSchema = z
     instruction: z.string().nullish(),
     workspace_id: IdSchema.nullish(),
     session_id: IdSchema.nullish(),
-    adapter_type: z.string().min(1).nullish(),
-    model_provider_id: IdSchema.nullish(),
-    model: z.string().min(1).nullish(),
     config_json: JsonObjectSchema.optional(),
   })
   .strict();
@@ -79,11 +76,8 @@ export const WorkflowRunCreateBodyDraftSchema = z
     session_id: IdSchema.nullish(),
     prompt: z.string().min(1),
     instruction: z.string().nullish(),
-    adapter_type: z.string().min(1).nullish(),
     capability_id: z.string().min(1).nullish(),
     capabilities_json: z.array(z.string().min(1)).default([]),
-    model_provider_id: IdSchema.nullish(),
-    model: z.string().min(1).nullish(),
   })
   .passthrough();
 export type WorkflowRunCreateBodyDraft = z.infer<

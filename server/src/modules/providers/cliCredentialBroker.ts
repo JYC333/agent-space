@@ -23,6 +23,7 @@ import { probeCodexQuota } from "./codexUsageProbe";
 import { CLI_USAGE_REFRESH_INTERVAL_MS } from "./cliUsageScheduler";
 import { RuntimeToolRegistry } from "../runtimeTools";
 import { resolveNetworkProfileRepository } from "../networkProfiles";
+import { isSpaceOwnerOrAdmin } from "../access/roles";
 import {
   ProviderCommandNotFoundError,
   ProviderCommandValidationError,
@@ -286,7 +287,7 @@ export class CliCredentialBroker {
 
   private async canAdminSpace(userId: string, spaceId: string): Promise<boolean> {
     const role = await this.userSpaceRole(userId, spaceId);
-    return role === "owner" || role === "admin";
+    return isSpaceOwnerOrAdmin(role);
   }
 
   async listProfiles(

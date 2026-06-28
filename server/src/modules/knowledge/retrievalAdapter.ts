@@ -27,7 +27,6 @@ interface KnowledgeProjectionRow {
   content: string;
   plain_text: string | null;
   excerpt: string | null;
-  source_url: string | null;
   updated_at: Date | string | null;
 }
 
@@ -37,6 +36,7 @@ interface NoteProjectionRow {
   plain_text: string | null;
   excerpt: string | null;
   status: string;
+  visibility: string | null;
   created_by_user_id: string | null;
   updated_at: Date | string | null;
 }
@@ -50,6 +50,7 @@ interface SourceProjectionRow {
   summary: string | null;
   metadata_json: unknown;
   status: string;
+  visibility: string | null;
   created_by_user_id: string | null;
   updated_at: Date | string | null;
 }
@@ -83,6 +84,9 @@ interface KnowledgeVisibilityRow {
 interface NoteVisibilityRow {
   id: string;
   title: string;
+  visibility: string | null;
+  owner_user_id: string | null;
+  created_by_user_id: string | null;
   excerpt: string | null;
   plain_text: string | null;
 }
@@ -90,6 +94,9 @@ interface NoteVisibilityRow {
 interface SourceVisibilityRow {
   id: string;
   title: string;
+  visibility: string | null;
+  owner_user_id: string | null;
+  created_by_user_id: string | null;
   uri: string | null;
   raw_text: string | null;
   summary: string | null;
@@ -103,22 +110,6 @@ interface ClaimVisibilityRow {
   created_by_user_id: string | null;
   subject_text: string | null;
   claim_text: string | null;
-}
-
-interface KnowledgeRelationProjectionRow {
-  from_item_id: string;
-  to_item_id: string;
-  relation_type: string;
-  confidence: number | null;
-  evidence_summary: string | null;
-}
-
-interface ClaimRelationProjectionRow {
-  from_claim_id: string;
-  to_claim_id: string;
-  relation_type: string;
-  confidence: number | null;
-  evidence_summary: string | null;
 }
 
 interface ClaimSourceProjectionRow {
@@ -146,16 +137,6 @@ interface ClaimSourceConnectionRow {
   source_metadata_json: unknown;
 }
 
-interface EntityLinkProjectionRow {
-  source_type: RetrievalObjectType;
-  source_id: string;
-  target_type: RetrievalObjectType;
-  target_id: string;
-  link_type: string;
-  confidence: number | null;
-  status: string;
-}
-
 interface ItemSourceProjectionRow {
   knowledge_item_id: string;
   source_id: string;
@@ -167,9 +148,9 @@ interface ItemSourceProjectionRow {
  * Knowledge domain adapter for the shared zero-LLM retrieval engine. It owns all
  * Knowledge-specific SQL — loading `knowledge_items` / `notes` / `sources` /
  * `claims` for projection, the visibility revalidation gate, and the derived
- * edges from accepted relations, claim sources, object relations, entity links,
- * and item-source links. The engine stays domain-agnostic; this is the only
- * place that touches Knowledge tables.
+ * edges from canonical object relations, curated source links, and claim-source
+ * links. The engine stays domain-agnostic; this is the only place that touches
+ * Knowledge tables.
  */
 export const knowledgeRetrievalAdapter: RetrievalDomainAdapter = {
   objectTypes: KNOWLEDGE_RETRIEVAL_OBJECT_TYPES,
@@ -192,12 +173,6 @@ export const knowledgeRetrievalAdapter: RetrievalDomainAdapter = {
 
   async projectEdges(db, spaceId, object): Promise<RetrievalEdge[]> {
     const edges: RetrievalEdge[] = [];
-    if (object.objectType === "knowledge_item") {
-      edges.push(...(await acceptedRelationEdges(db, spaceId, object.objectId)));
-    }
-    if (object.objectType === "claim") {
-      edges.push(...(await claimRelationEdges(db, spaceId, object.objectId)));
-    }
     if (object.objectType === "knowledge_item" || object.objectType === "source") {
       edges.push(...(await itemSourceEdges(db, spaceId, object)));
     }
@@ -205,7 +180,6 @@ export const knowledgeRetrievalAdapter: RetrievalDomainAdapter = {
       edges.push(...(await claimSourceEdges(db, spaceId, object)));
     }
     edges.push(...(await objectRelationEdges(db, spaceId, object)));
-    edges.push(...(await entityLinkEdges(db, spaceId, object)));
     return edges;
   },
 
@@ -239,7 +213,7 @@ export const knowledgeRetrievalAdapter: RetrievalDomainAdapter = {
          JOIN space_objects so ON so.id = s.object_id AND so.space_id = s.space_id
         WHERE s.space_id = $1
           AND so.object_type = 'source'
-          AND so.status <> 'archived'`,
+          AND so.status = 'processed'`,
       [spaceId],
     );
     for (const row of sources.rows) refs.push({ objectType: "source", objectId: row.id });
@@ -296,7 +270,8 @@ async function revalidateKnowledgeMany(
 
   if (objectType === "note") {
     const result = await db.query<NoteVisibilityRow>(
-      `SELECT n.object_id AS id, so.title, so.summary AS excerpt, n.plain_text
+      `SELECT n.object_id AS id, so.title, so.visibility, so.owner_user_id,
+              so.created_by_user_id, so.summary AS excerpt, n.plain_text
          FROM notes n
          JOIN space_objects so ON so.id = n.object_id AND so.space_id = n.space_id
         WHERE n.space_id = $1
@@ -305,9 +280,14 @@ async function revalidateKnowledgeMany(
           AND so.status = 'active'`,
       [spaceId, ids],
     );
-    return new Map(
-      result.rows.map((row) => [row.id, { title: row.title, text: row.excerpt ?? row.plain_text }]),
-    );
+    const rows = new Map<string, RevalidatedObject>();
+    for (const row of result.rows) {
+      if (!canReadByVisibility(row.visibility, viewerUserId, [row.owner_user_id, row.created_by_user_id])) {
+        continue;
+      }
+      rows.set(row.id, { title: row.title, text: row.excerpt ?? row.plain_text });
+    }
+    return rows;
   }
 
   if (objectType === "claim") {
@@ -333,18 +313,24 @@ async function revalidateKnowledgeMany(
   }
 
   const result = await db.query<SourceVisibilityRow>(
-    `SELECT s.object_id AS id, so.title, s.uri, s.raw_text, s.summary
+    `SELECT s.object_id AS id, so.title, so.visibility, so.owner_user_id,
+            so.created_by_user_id, s.uri, s.raw_text, s.summary
        FROM sources s
        JOIN space_objects so ON so.id = s.object_id AND so.space_id = s.space_id
       WHERE s.space_id = $1
         AND s.object_id = ANY($2::varchar[])
         AND so.object_type = 'source'
-        AND so.status <> 'archived'`,
+        AND so.status = 'processed'`,
     [spaceId, ids],
   );
-  return new Map(
-    result.rows.map((row) => [row.id, { title: row.title, text: row.summary ?? row.raw_text ?? row.uri }]),
-  );
+  const rows = new Map<string, RevalidatedObject>();
+  for (const row of result.rows) {
+    if (!canReadByVisibility(row.visibility, viewerUserId, [row.owner_user_id, row.created_by_user_id])) {
+      continue;
+    }
+    rows.set(row.id, { title: row.title, text: row.summary ?? row.raw_text ?? row.uri });
+  }
+  return rows;
 }
 
 async function loadKnowledgeItem(db: Queryable, spaceId: string, objectId: string): Promise<CanonicalObject | null> {
@@ -352,7 +338,7 @@ async function loadKnowledgeItem(db: Queryable, spaceId: string, objectId: strin
     `SELECT ki.object_id AS id, so.workspace_id, so.owner_user_id,
             so.created_by_user_id, so.visibility, so.status,
             ki.knowledge_kind, so.title, ki.slug, ki.aliases_json, ki.content,
-            ki.plain_text, so.summary AS excerpt, ki.source_url, so.updated_at
+            ki.plain_text, so.summary AS excerpt, so.updated_at
        FROM knowledge_items ki
        JOIN space_objects so ON so.id = ki.object_id AND so.space_id = ki.space_id
       WHERE ki.space_id = $1
@@ -362,7 +348,7 @@ async function loadKnowledgeItem(db: Queryable, spaceId: string, objectId: strin
   );
   const row = result.rows[0];
   if (!row || row.status !== "active") return null;
-  const text = joinText([row.title, row.slug, row.plain_text, row.excerpt, row.content, row.source_url]);
+  const text = joinText([row.title, row.slug, row.plain_text, row.excerpt, row.content]);
   const sourceConnectionIds = await sourceConnectionIdsForTarget(db, spaceId, "knowledge", row.id);
   return {
     objectType: "knowledge_item",
@@ -384,7 +370,7 @@ async function loadKnowledgeItem(db: Queryable, spaceId: string, objectId: strin
 async function loadNote(db: Queryable, spaceId: string, objectId: string): Promise<CanonicalObject | null> {
   const result = await db.query<NoteProjectionRow>(
     `SELECT n.object_id AS id, so.title, n.plain_text, so.summary AS excerpt,
-            so.status, so.created_by_user_id, so.updated_at
+            so.status, so.visibility, so.created_by_user_id, so.updated_at
        FROM notes n
        JOIN space_objects so ON so.id = n.object_id AND so.space_id = n.space_id
       WHERE n.space_id = $1
@@ -402,7 +388,7 @@ async function loadNote(db: Queryable, spaceId: string, objectId: string): Promi
     slug: null,
     workspaceId: null,
     ownerUserId: row.created_by_user_id,
-    visibility: "space_shared",
+    visibility: row.visibility ?? "space_shared",
     status: row.status,
     objectKind: "note",
     aliases: [],
@@ -415,8 +401,8 @@ async function loadNote(db: Queryable, spaceId: string, objectId: string): Promi
 async function loadSource(db: Queryable, spaceId: string, objectId: string): Promise<CanonicalObject | null> {
   const result = await db.query<SourceProjectionRow>(
     `SELECT s.object_id AS id, s.source_type, so.title, s.uri, s.raw_text,
-            s.summary, s.metadata_json, so.status, so.created_by_user_id,
-            so.updated_at
+            s.summary, s.metadata_json, so.status, so.visibility,
+            so.created_by_user_id, so.updated_at
        FROM sources s
        JOIN space_objects so ON so.id = s.object_id AND so.space_id = s.space_id
       WHERE s.space_id = $1
@@ -433,7 +419,7 @@ async function loadSource(db: Queryable, spaceId: string, objectId: string): Pro
     slug: row.uri,
     workspaceId: null,
     ownerUserId: row.created_by_user_id,
-    visibility: "space_shared",
+    visibility: row.visibility ?? "space_shared",
     status: row.status,
     objectKind: row.source_type,
     aliases: row.uri ? [row.uri] : [],
@@ -503,26 +489,6 @@ async function sourceConnectionIdsForClaim(db: Queryable, spaceId: string, claim
   return [...ids];
 }
 
-async function acceptedRelationEdges(db: Queryable, spaceId: string, itemId: string): Promise<RetrievalEdge[]> {
-  const rows = await db.query<KnowledgeRelationProjectionRow>(
-    `SELECT from_item_id, to_item_id, relation_type, confidence, evidence_summary
-       FROM knowledge_item_relations
-      WHERE space_id = $1
-        AND status = 'active'
-        AND (from_item_id = $2 OR to_item_id = $2)`,
-    [spaceId, itemId],
-  );
-  return rows.rows.map((row) => ({
-    from: { objectType: "knowledge_item", objectId: row.from_item_id },
-    to: { objectType: "knowledge_item", objectId: row.to_item_id },
-    relationType: row.relation_type,
-    edgeOrigin: "accepted_relation_projection",
-    edgeStatus: "derived",
-    confidence: row.confidence ?? 1,
-    evidence: { evidence_summary: row.evidence_summary },
-  }));
-}
-
 async function itemSourceEdges(db: Queryable, spaceId: string, object: CanonicalObject): Promise<RetrievalEdge[]> {
   const where = object.objectType === "knowledge_item" ? "knowledge_item_id = $2" : "source_id = $2";
   const rows = await db.query<ItemSourceProjectionRow>(
@@ -539,26 +505,6 @@ async function itemSourceEdges(db: Queryable, spaceId: string, object: Canonical
     edgeStatus: "derived",
     confidence: row.confidence ?? 0.9,
     evidence: { source_link: true },
-  }));
-}
-
-async function claimRelationEdges(db: Queryable, spaceId: string, claimId: string): Promise<RetrievalEdge[]> {
-  const rows = await db.query<ClaimRelationProjectionRow>(
-    `SELECT from_claim_id, to_claim_id, relation_type, confidence, evidence_summary
-       FROM claim_relations
-      WHERE space_id = $1
-        AND status = 'active'
-        AND (from_claim_id = $2 OR to_claim_id = $2)`,
-    [spaceId, claimId],
-  );
-  return rows.rows.map((row) => ({
-    from: { objectType: "claim", objectId: row.from_claim_id },
-    to: { objectType: "claim", objectId: row.to_claim_id },
-    relationType: row.relation_type,
-    edgeOrigin: "claim_relation_projection",
-    edgeStatus: "derived",
-    confidence: row.confidence ?? 1,
-    evidence: { evidence_summary: row.evidence_summary },
   }));
 }
 
@@ -624,32 +570,6 @@ async function objectRelationEdges(db: Queryable, spaceId: string, object: Canon
       evidence_summary: row.evidence_summary,
       source_claim_id: row.source_claim_id,
     },
-  }));
-}
-
-async function entityLinkEdges(db: Queryable, spaceId: string, object: CanonicalObject): Promise<RetrievalEdge[]> {
-  const rows = await db.query<EntityLinkProjectionRow>(
-    `SELECT source_type, source_id, target_type, target_id, link_type,
-            confidence, status
-       FROM entity_links
-      WHERE space_id = $1
-        AND source_type = ANY($2::varchar[])
-        AND target_type = ANY($2::varchar[])
-        AND status <> 'rejected'
-        AND (
-          (source_type = $3 AND source_id = $4)
-          OR (target_type = $3 AND target_id = $4)
-        )`,
-    [spaceId, KNOWLEDGE_RETRIEVAL_OBJECT_TYPES, object.objectType, object.objectId],
-  );
-  return rows.rows.map((row) => ({
-    from: { objectType: row.source_type, objectId: row.source_id },
-    to: { objectType: row.target_type, objectId: row.target_id },
-    relationType: row.link_type,
-    edgeOrigin: "entity_link_projection",
-    edgeStatus: row.status === "accepted" ? "derived" : "suggested",
-    confidence: row.confidence ?? (row.status === "accepted" ? 0.9 : 0.6),
-    evidence: { entity_link_status: row.status },
   }));
 }
 

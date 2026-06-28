@@ -182,7 +182,7 @@ AgentVersion:
 AgentRuntimeProfile:
   id, agent_id, space_id
   name
-  adapter_type                 — model_api, claude_code, codex_cli, capability, ...
+  adapter_type                 — model_api, claude_code, codex_cli, ... (`capability` is planned/disabled)
   model_provider_id            — optional ModelProvider binding
   model_name                   — optional model id for the selected provider
   credential_profile_id        — optional CLI credential profile binding

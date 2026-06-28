@@ -62,7 +62,6 @@ export const ActivityDTOSchema = z.object({
   project_id: IdSchema.nullish(),
   status: z.string().nullish(),
   source_kind: z.string().nullish(),
-  consolidation_status: z.string().nullish(),
   visibility: z.string(),
   occurred_at: ISODateTimeSchema,
   created_at: ISODateTimeSchema,

@@ -7,6 +7,7 @@ import type {
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { extractRetrievalLinks } from "../retrieval/linkExtractor";
 import type { Queryable } from "../routeUtils/common";
+import { artifactVisibleSql, spaceObjectVisibleSql } from "../access/visibility";
 import {
   loadSourceConnectionIdsForTargets,
   loadSourcePolicySnapshots,
@@ -22,7 +23,7 @@ import { OBJECT_RELATION_TYPES, RELATION_TYPES } from "./knowledgeRepositoryRows
  * Reads viewer-visible note / knowledge-item text plus policy-allowed Activity
  * and inline Artifact text, extracts typed internal links deterministically, and
  * resolves each target against the viewer-visible Knowledge items. Resolved
- * targets become candidate `knowledge_relation_create` edges; unresolved targets
+ * targets become candidate `object_relation_create` edges; unresolved targets
  * (opt-in) become low-confidence candidate `knowledge_create` stubs. Output is a
  * single batched, confidence-tiered report. It writes nothing canonical — the
  * report only feeds the proposal-gated discovery packet, and even that creates
@@ -128,7 +129,7 @@ export interface RelationDiscoveryLlmExtractor {
 type ConfidenceTier = "high" | "medium" | "low";
 
 function readableClause(userParam: string, alias = "so"): string {
-  return `(${alias}.visibility IN ('space_shared', 'workspace_shared') OR ${alias}.owner_user_id = ${userParam} OR ${alias}.created_by_user_id = ${userParam})`;
+  return spaceObjectVisibleSql(alias, userParam);
 }
 
 export interface RelationDiscoveryScanInput {
@@ -237,9 +238,9 @@ export async function runRelationDiscoveryScan(
         const pairKey = `${source.id}->${resolved.itemId}:${relationType}`;
         if (seenRelationPairs.has(pairKey)) continue;
         seenRelationPairs.add(pairKey);
-        // Two Knowledge items → the item-specific governed `knowledge_relation`.
-        // A note source can't anchor that, so it proposes an FK-backed
-        // `object_relation` over space_objects instead (note↔item).
+        // Relation discovery emits FK-backed `object_relation` proposals over
+        // space_objects. Direct note UI links live in note_links and are not the
+        // canonical graph.
         candidates.push(
           source.objectType === "knowledge_item"
             ? relationCandidate(source, resolved, relationType, link.target, link.label, link.origin)
@@ -412,16 +413,12 @@ async function loadVisibleArtifacts(
   limit: number,
 ): Promise<VisibleArtifactRow[]> {
   const result = await db.query<Omit<VisibleArtifactRow, "source_connection_ids">>(
-    `SELECT id, title, content, visibility, owner_user_id, metadata_json
-       FROM artifacts
-      WHERE space_id = $1
+    `SELECT a.id, a.title, a.content, a.visibility, a.owner_user_id, a.metadata_json
+       FROM artifacts a
+      WHERE a.space_id = $1
         AND content IS NOT NULL
-        AND (
-          visibility IN ('space_shared', 'public_template')
-          OR owner_user_id = $2
-          OR (owner_user_id IS NULL AND visibility NOT IN ('workspace_shared', 'restricted', 'selected_users'))
-        )
-      ORDER BY created_at DESC, id DESC
+        AND ${artifactVisibleSql({ userExpr: "$2" })}
+      ORDER BY a.created_at DESC, a.id DESC
       LIMIT $3`,
     [spaceId, userId, limit],
   );
@@ -592,12 +589,13 @@ function relationCandidate(
   linkOrigin: string,
 ): RelationDiscoveryCandidate {
   const confidence = resolved.tier === "high" ? 0.6 : 0.45;
+  const objectRelationType = OBJECT_RELATION_TYPES.has(relationType) ? relationType : "related_to";
   return {
     id: randomUUID(),
-    kind: "knowledge_relation_candidate",
+    kind: "object_relation_candidate",
     cluster_key: `source:${source.id}`,
     title: `Relate: ${shortTitle(source.title)} → ${shortTitle(resolved.title)}`,
-    reason: `"${source.title}" links to "${resolved.title}" via ${linkOrigin}; propose a ${relationType} relation.`,
+    reason: `"${source.title}" links to "${resolved.title}" via ${linkOrigin}; propose a ${objectRelationType} object relation.`,
     confidence_tier: resolved.tier,
     evidence_refs: [
       {
@@ -615,12 +613,17 @@ function relationCandidate(
         link_text: null,
       },
     ],
-    markers: { resolution_tier: resolved.tier, relation_type: relationType, link_origin: linkOrigin },
+    markers: {
+      resolution_tier: resolved.tier,
+      relation_type: objectRelationType,
+      requested_relation_type: relationType,
+      link_origin: linkOrigin,
+    },
     proposed_action: {
-      proposal_type: "knowledge_relation_create",
-      from_item_id: source.id,
-      to_item_id: resolved.itemId,
-      relation_type: relationType,
+      proposal_type: "object_relation_create",
+      from_object_id: source.id,
+      to_object_id: resolved.itemId,
+      relation_type: objectRelationType,
       confidence,
       evidence_summary: `Discovered from ${linkOrigin} in "${source.title}".`,
     },
@@ -748,7 +751,6 @@ function itemCandidate(source: SourceText, name: string, linkTarget: string): Re
 
 function countsFor(candidates: readonly RelationDiscoveryCandidate[]): Record<string, number> {
   const counts: Record<string, number> = {
-    knowledge_relation_candidate: 0,
     object_relation_candidate: 0,
     knowledge_item_candidate: 0,
     relation_review_candidate: 0,
@@ -927,47 +929,7 @@ async function hasVisibleRequiredHintRelation(
   source: SourceText,
   hint: RelationDiscoveryRelationHint,
 ): Promise<boolean> {
-  return source.objectType === "knowledge_item" && hint.endpoint_object_type === "knowledge_item"
-    ? hasVisibleKnowledgeHintRelation(db, spaceId, userId, source.id, hint)
-    : hasVisibleObjectHintRelation(db, spaceId, userId, source.id, hint);
-}
-
-async function hasVisibleKnowledgeHintRelation(
-  db: Queryable,
-  spaceId: string,
-  userId: string,
-  sourceObjectId: string,
-  hint: RelationDiscoveryRelationHint,
-): Promise<boolean> {
-  const allowFrom = hint.direction !== "to";
-  const allowTo = hint.direction !== "from";
-  const result = await db.query<{ id: string }>(
-    `SELECT r.id
-       FROM knowledge_item_relations r
-       JOIN knowledge_items other_ki
-         ON other_ki.object_id = CASE WHEN r.from_item_id = $3 THEN r.to_item_id ELSE r.from_item_id END
-        AND other_ki.space_id = r.space_id
-       JOIN space_objects other_so
-         ON other_so.id = other_ki.object_id
-        AND other_so.space_id = other_ki.space_id
-        AND other_so.object_type = 'knowledge_item'
-       LEFT JOIN space_object_kinds endpoint_kind
-         ON endpoint_kind.space_id = other_ki.space_id
-        AND endpoint_kind.base_object_type = 'knowledge_item'
-        AND endpoint_kind.key = other_ki.knowledge_kind
-        AND endpoint_kind.status = 'active'
-      WHERE r.space_id = $1
-        AND r.status = 'active'
-        AND r.relation_type = $2
-        AND (($4::boolean AND r.from_item_id = $3) OR ($5::boolean AND r.to_item_id = $3))
-        AND other_so.deleted_at IS NULL
-        AND other_so.status = 'active'
-        AND ${readableClause("$6", "other_so")}
-        AND ($7::varchar IS NULL OR endpoint_kind.id = $7)
-      LIMIT 1`,
-    [spaceId, hint.relation_type, sourceObjectId, allowFrom, allowTo, userId, hint.endpoint_object_kind_id],
-  );
-  return result.rows.length > 0;
+  return hasVisibleObjectHintRelation(db, spaceId, userId, source.id, hint);
 }
 
 async function hasVisibleObjectHintRelation(

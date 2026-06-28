@@ -27,7 +27,6 @@ import { dailyReportsModule } from "../modules/dailyReports";
 import { backupsModule } from "../modules/backups";
 import { providersModule } from "../modules/providers";
 import { networkProfilesModule } from "../modules/networkProfiles";
-import { executionPlanesModule } from "../modules/executionPlanes";
 import { runtimeToolsModule } from "../modules/runtimeTools";
 import { runtimeToolBindingsModule } from "../modules/runtimeToolBindings";
 import { runtimeHostModule } from "../modules/runtimeHost";
@@ -97,7 +96,6 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   runtimeToolsModule,
   networkProfilesModule,
   providersModule,
-  executionPlanesModule,
   runtimeToolBindingsModule,
   runtimeHostModule,
   runsModule,

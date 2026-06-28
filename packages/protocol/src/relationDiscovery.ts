@@ -7,7 +7,7 @@
  * items. Service-level LLM extraction is injectable for future provider
  * wiring; the public HTTP route rejects the flag until that adapter exists. It
  * produces a single batched, confidence-tiered proposal packet of candidate
- * `knowledge_relation_create` edges (and, optionally, candidate `knowledge_item`
+ * `object_relation_create` edges (and, optionally, candidate `knowledge_item`
  * stubs for unresolved targets). It is the proposal-gated analogue of gbrain's
  * self-wiring graph: discovery NEVER writes an edge or item directly — accepting
  * the packet only creates child pending proposals, which still go through normal
@@ -45,10 +45,6 @@ export const RelationDiscoveryScanRequestSchema = z
 export type RelationDiscoveryScanRequest = z.infer<typeof RelationDiscoveryScanRequestSchema>;
 
 export const RelationDiscoveryCandidateKindSchema = z.enum([
-  "knowledge_relation_candidate",
-  // A note source can't anchor a knowledge_relation (that needs two Knowledge
-  // items), so a resolved note→item wikilink becomes an FK-backed object relation
-  // over the wider space_objects graph instead.
   "object_relation_candidate",
   // Activity/Artifact anchors cannot safely create FK-backed object relations
   // today. They stay as review-only evidence rows in the packet.
@@ -70,16 +66,6 @@ const EvidenceRefSchema = z
 // Proposed child action. Discriminated by proposal_type; the applier validates
 // each against the canonical Knowledge proposal payload before creating a child.
 export const RelationDiscoveryProposedActionSchema = z.union([
-  z
-    .object({
-      proposal_type: z.literal("knowledge_relation_create"),
-      from_item_id: IdSchema,
-      to_item_id: IdSchema,
-      relation_type: z.string(),
-      confidence: z.number().min(0).max(1),
-      evidence_summary: z.string(),
-    })
-    .strict(),
   z
     .object({
       proposal_type: z.literal("object_relation_create"),

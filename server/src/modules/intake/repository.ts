@@ -15,6 +15,7 @@ import {
   type SpaceUserIdentity,
 } from "../routeUtils/common";
 import { IntakeExtractionWorker } from "./extractionWorker";
+import { insertProposalRow } from "../proposals/reviewPackets";
 import {
   bindingOut,
   buildSummary,
@@ -55,6 +56,15 @@ import {
   normalizeSourceConnectionReadGovernance,
   normalizeSourceConnectionUpdateGovernance,
 } from "./sourceConsent";
+
+const EVIDENCE_LINK_TYPES = new Set([
+  "supports",
+  "contradicts",
+  "derived_from",
+  "mentions",
+  "context_candidate",
+  "used_in_context",
+]);
 
 export class PgIntakeRepository {
   constructor(
@@ -513,6 +523,13 @@ export class PgIntakeRepository {
   async createEvidenceLink(identity: SpaceUserIdentity, body: Record<string, unknown>) {
     const evidence = await this.getEvidenceRow(identity, requiredString(body.evidence_id, "evidence_id"));
     if (!evidence) throw new HttpError(404, "Evidence not found");
+    const linkType = optionalString(body.link_type) ?? "context_candidate";
+    if (!EVIDENCE_LINK_TYPES.has(linkType)) throw new HttpError(422, "invalid link_type");
+    const targetType = requiredString(body.target_type, "target_type");
+    const targetId = optionalString(body.target_id);
+    if (targetId) {
+      await this.assertTargetInSpace(identity.spaceId, targetType, targetId);
+    }
     const now = new Date().toISOString();
     const result = await this.db.query<EvidenceLinkRow>(
       `INSERT INTO evidence_links (
@@ -524,9 +541,9 @@ export class PgIntakeRepository {
         randomUUID(),
         identity.spaceId,
         evidence.id,
-        requiredString(body.target_type, "target_type"),
-        optionalString(body.target_id),
-        optionalString(body.link_type) ?? "context_candidate",
+        targetType,
+        targetId,
+        linkType,
         optionalString(body.status) ?? "active",
         numberValue(body.confidence),
         optionalString(body.reason),
@@ -535,6 +552,34 @@ export class PgIntakeRepository {
       ],
     );
     return evidenceLinkOut(result.rows[0]!);
+  }
+
+  private async assertTargetInSpace(spaceId: string, targetType: string, targetId: string): Promise<void> {
+    const tableMap: Record<string, string | null> = {
+      space: null,
+      workspace: "workspaces",
+      project: "projects",
+      user: "space_memberships",
+      agent: "agents",
+      run: "runs",
+      proposal: "proposals",
+      artifact: "artifacts",
+      knowledge: "knowledge_items",
+      memory: "memory_entries",
+      task: "tasks",
+    };
+    if (targetType === "space") {
+      if (targetId !== spaceId) throw new HttpError(403, "Target space is not accessible");
+      return;
+    }
+    const table = tableMap[targetType];
+    if (!table) throw new HttpError(422, "Unknown target_type");
+    const idCol = targetType === "user" ? "user_id" : "id";
+    const rows = await this.db.query(
+      `SELECT 1 FROM ${table} WHERE space_id = $1 AND ${idCol} = $2 LIMIT 1`,
+      [spaceId, targetId],
+    );
+    if (!rows.rows[0]) throw new HttpError(403, "Target is not accessible in this space");
   }
 
   async listWorkspaceProfiles(identity: SpaceUserIdentity) {
@@ -765,7 +810,6 @@ export class PgIntakeRepository {
   }
 
   private async insertSummaryProposal(identity: SpaceUserIdentity, proposalType: string, title: string, summary: string, artifactId: string, evidenceIds: string[], intakeItemIds: string[]) {
-    const now = new Date().toISOString();
     const sourceRefs = [
       { source_type: "artifact", source_id: artifactId, source_trust: "internal_system" },
       ...evidenceIds.map((id) => ({ source_type: "extracted_evidence", source_id: id, source_trust: "agent_inferred" })),
@@ -792,31 +836,16 @@ export class PgIntakeRepository {
           source_artifact_id: artifactId,
           provenance_entries: sourceRefs,
         };
-    const result = await this.db.query<{ id: string }>(
-      `INSERT INTO proposals (
-         id, space_id, proposal_type, status, risk_level, urgency, preview,
-         title, summary, payload_json, review_deadline, expires_at, created_at,
-         updated_at, reviewed_at, reviewed_by, workspace_id, rationale,
-         created_by_agent_id, created_by_user_id, required_approver_role,
-         visibility, project_id
-       ) VALUES (
-         $1, $2, $3, 'pending', 'low', 'normal', false,
-         $4, NULL, $5::jsonb, NULL, NULL, $6,
-         $6, NULL, NULL, NULL, $7,
-         NULL, $8, NULL,
-         'space_shared', NULL
-       ) RETURNING id`,
-      [
-        randomUUID(),
-        identity.spaceId,
-        proposalType,
-        title,
-        JSON.stringify(payload),
-        now,
-        "Intake summary generated a proposal without directly mutating memory or knowledge.",
-        identity.userId,
-      ],
-    );
-    return result.rows[0]!.id;
+    const row = await insertProposalRow(this.db, {
+      spaceId: identity.spaceId,
+      proposalType,
+      title,
+      payload,
+      rationale: "Intake summary generated a proposal without directly mutating memory or knowledge.",
+      createdByUserId: identity.userId,
+      visibility: "space_shared",
+      riskLevel: "low",
+    });
+    return row.id;
   }
 }

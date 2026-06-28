@@ -140,7 +140,7 @@ export class PgProposalApplyService {
       });
       rollbackOnFailure = result.rollback ?? null;
       const publicResult = { result_type: result.result_type, result: result.result };
-      await this.markProposalAccepted(client, proposal, identity.userId);
+      await this.markProposalAccepted(client, proposal, identity.userId, result.proposalPayloadPatch);
       const accepted = await new PgProposalRepository(client).getVisible(
         identity.spaceId,
         identity.userId,
@@ -398,19 +398,35 @@ export class PgProposalApplyService {
     client: PoolClient,
     proposal: ApplyProposalRow,
     userId: string,
+    payloadPatch?: Record<string, unknown>,
   ): Promise<void> {
     const now = new Date().toISOString();
-    await client.query(
-      `UPDATE proposals
-          SET status = 'accepted',
-              reviewed_at = COALESCE(reviewed_at, $3),
-              reviewed_by = COALESCE(reviewed_by, $4),
-              updated_at = $3
-        WHERE id = $1
-          AND space_id = $2
-          AND status = 'pending'`,
-      [proposal.id, proposal.space_id, now, userId],
-    );
+    if (payloadPatch) {
+      await client.query(
+        `UPDATE proposals
+            SET status = 'accepted',
+                reviewed_at = COALESCE(reviewed_at, $3),
+                reviewed_by = COALESCE(reviewed_by, $4),
+                payload_json = $5::jsonb,
+                updated_at = $3
+          WHERE id = $1
+            AND space_id = $2
+            AND status = 'pending'`,
+        [proposal.id, proposal.space_id, now, userId, JSON.stringify(payloadPatch)],
+      );
+    } else {
+      await client.query(
+        `UPDATE proposals
+            SET status = 'accepted',
+                reviewed_at = COALESCE(reviewed_at, $3),
+                reviewed_by = COALESCE(reviewed_by, $4),
+                updated_at = $3
+          WHERE id = $1
+            AND space_id = $2
+            AND status = 'pending'`,
+        [proposal.id, proposal.space_id, now, userId],
+      );
+    }
   }
 
   private async enforceApplyPolicy(
@@ -483,6 +499,9 @@ export class PgProposalApplyService {
         403,
         "only granting_user_id can approve grant-derived egress",
       );
+    }
+    if (payload.raw_private_memory_included === true) {
+      throw new ProposalApplyHttpError(403, "raw private memory cannot be approved for egress");
     }
     if (grant.status === "revoked" || grant.status === "expired" || grant.status === "failed") {
       throw new ProposalApplyHttpError(403, `grant status ${JSON.stringify(grant.status)} cannot approve egress`);

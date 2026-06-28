@@ -60,10 +60,7 @@ output_policy:
   required_run_outputs: []
   allowed_output_types:
     - source_summary_artifact
-    - summary_create_proposal
-    - question_create_proposal
-    - knowledge_item_create_proposal
-    - knowledge_item_source_link_proposal
+    - knowledge_create
     - noop
   default_review_mode:
     source_summary_artifact: artifact

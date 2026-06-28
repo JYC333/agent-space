@@ -84,7 +84,7 @@ class FakeDiscoveryDb implements Queryable {
     if (/FROM space_object_kind_relation_hints h/.test(sql)) {
       return { rows: this.hints as Row[], rowCount: this.hints.length };
     }
-    if (/FROM knowledge_item_relations r/.test(sql) || /FROM object_relations r/.test(sql)) {
+    if (/FROM object_relations r/.test(sql)) {
       return { rows: this.existingRelations as Row[], rowCount: this.existingRelations.length };
     }
     if (/FROM notes n/.test(sql)) {
@@ -141,11 +141,11 @@ describe("runRelationDiscoveryScan", () => {
     expect(report.access_safety.deterministic_extraction).toBe(true);
     expect(report.candidates).toHaveLength(1);
     const candidate = report.candidates[0]!;
-    expect(candidate.kind).toBe("knowledge_relation_candidate");
+    expect(candidate.kind).toBe("object_relation_candidate");
     expect(candidate.proposed_action).toMatchObject({
-      proposal_type: "knowledge_relation_create",
-      from_item_id: "item-a",
-      to_item_id: "item-b",
+      proposal_type: "object_relation_create",
+      from_object_id: "item-a",
+      to_object_id: "item-b",
       relation_type: "related_to",
     });
   });
@@ -161,7 +161,7 @@ describe("runRelationDiscoveryScan", () => {
       userId: "user-1",
       request: { limit: 200, max_candidates: 40, review_scope: "private", include_unresolved_item_candidates: false, llm_extraction_enabled: false, llm_max_sources: 8, create_packet: true },
     });
-    expect(report.candidates[0]!.proposed_action).toMatchObject({ relation_type: "depends_on", to_item_id: "item-b" });
+    expect(report.candidates[0]!.proposed_action).toMatchObject({ relation_type: "depends_on", to_object_id: "item-b" });
   });
 
   it("supports richer typed-link syntax beyond relation double-colon prefixes", async () => {
@@ -179,8 +179,8 @@ describe("runRelationDiscoveryScan", () => {
 
     expect(report.candidates.map((candidate) => candidate.proposed_action)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ relation_type: "supports", to_item_id: "item-b" }),
-        expect.objectContaining({ relation_type: "depends_on", to_item_id: "item-c" }),
+        expect.objectContaining({ relation_type: "supports", to_object_id: "item-b" }),
+        expect.objectContaining({ relation_type: "depends_on", to_object_id: "item-c" }),
       ]),
     );
   });
@@ -458,13 +458,13 @@ describe("relation_discovery_packet applier", () => {
           candidates: [
             {
               id: "cand-1",
-              kind: "knowledge_relation_candidate",
+              kind: "object_relation_candidate",
               cluster_key: "source:item-a",
               confidence_tier: "high",
               proposed_action: {
-                proposal_type: "knowledge_relation_create",
-                from_item_id: "item-a",
-                to_item_id: "item-b",
+                proposal_type: "object_relation_create",
+                from_object_id: "item-a",
+                to_object_id: "item-b",
                 relation_type: "related_to",
                 confidence: 0.6,
                 evidence_summary: "From wikilink.",
@@ -517,8 +517,8 @@ describe("relation_discovery_packet applier", () => {
     expect(result.result_type).toBe("relation_discovery_packet");
     expect(result.result.canonical_write_performed).toBe(false);
     expect(db.inserted).toHaveLength(3);
-    expect(db.inserted[0]!.proposal_type).toBe("knowledge_relation_create");
-    expect(db.inserted[0]!.payload_json).toMatchObject({ operation: "relation_create", from_item_id: "item-a" });
+    expect(db.inserted[0]!.proposal_type).toBe("object_relation_create");
+    expect(db.inserted[0]!.payload_json).toMatchObject({ operation: "object_relation_create", from_object_id: "item-a", to_object_id: "item-b" });
     expect(db.inserted[1]!.proposal_type).toBe("object_relation_create");
     expect(db.inserted[1]!.payload_json).toMatchObject({ operation: "object_relation_create", from_object_id: "note-a", to_object_id: "item-b" });
     expect(db.inserted[2]!.proposal_type).toBe("knowledge_create");
@@ -536,13 +536,13 @@ describe("relation_discovery_packet applier", () => {
     registerRelationDiscoveryProposalAppliers(registry);
     const cappedProposalCandidates = Array.from({ length: 40 }, (_, index) => ({
       id: `cand-${index}`,
-      kind: "knowledge_relation_candidate",
+      kind: "object_relation_candidate",
       cluster_key: `source:item-${index}`,
       confidence_tier: "high",
       proposed_action: {
-        proposal_type: "knowledge_relation_create",
-        from_item_id: `item-a-${index}`,
-        to_item_id: `item-b-${index}`,
+        proposal_type: "object_relation_create",
+        from_object_id: `item-a-${index}`,
+        to_object_id: `item-b-${index}`,
         relation_type: "related_to",
         confidence: 0.6,
         evidence_summary: "From wikilink.",

@@ -161,7 +161,7 @@ export default function MemoryDetailPage() {
                 <Field label="Confidence" value={memory.confidence.toFixed(2)} />
                 <Field label="Version" value={memory.version} />
                 <Field label="Layer" value={val(memory.memory_layer)} />
-                <Field label="Kind" value={val(memory.memory_kind)} />
+                <Field label="Type" value={val(memory.type)} />
                 <Field label="Tags" value={(memory.tags ?? []).length ? memory.tags?.join(', ') : '-'} />
                 <Field label="Last confirmed" value={fmt(memory.last_confirmed_at)} />
                 <Field label="Last accessed" value={fmt(memory.last_accessed_at)} />
@@ -173,9 +173,6 @@ export default function MemoryDetailPage() {
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <Field label="Created by" value={val(memory.created_by)} />
                 <Field label="Approved by" value={val(memory.approved_by)} />
-                <Field label="Source ID" value={<code className="text-xs">{val(memory.source_id)}</code>} />
-                <Field label="Source activity" value={<code className="text-xs">{val(memory.source_activity_id)}</code>} />
-                <Field label="Source artifact" value={<code className="text-xs">{val(memory.source_artifact_id)}</code>} />
                 <Field
                   label="Created from proposal"
                   value={memory.created_from_proposal_id ? (

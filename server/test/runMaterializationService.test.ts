@@ -61,7 +61,28 @@ class FakeDb implements Queryable {
     }
     if (sql.includes("INSERT INTO proposals")) {
       this.proposals.push([...params]);
-      return { rows: [], rowCount: 1 };
+      return {
+        rows: [{
+          id: params[0],
+          space_id: params[1],
+          created_by_run_id: params[2],
+          proposal_type: params[3],
+          status: params[4],
+          risk_level: params[5],
+          urgency: params[6],
+          preview: params[7],
+          title: params[8],
+          summary: params[9],
+          payload_json: JSON.parse(String(params[10] ?? "{}")),
+          created_at: params[11],
+          workspace_id: params[12],
+          rationale: params[13],
+          created_by_user_id: params[14],
+          visibility: params[15],
+          project_id: params[16],
+        }] as Row[],
+        rowCount: 1,
+      };
     }
     throw new Error(`Unexpected SQL: ${sql}`);
   }
@@ -171,7 +192,7 @@ describe("RunMaterializationService", () => {
     expect(db.artifacts[2][12]).toBe("private");
     expect(db.artifacts[2][13]).toBe("user-1");
 
-    const proposalPayload = JSON.parse(db.proposals[0][9] as string) as Record<string, unknown>;
+    const proposalPayload = JSON.parse(db.proposals[0][10] as string) as Record<string, unknown>;
     expect(proposalPayload.project_id).toBe("project-1");
     expect(db.proposals[0][16]).toBe("project-1");
     expect(proposalPayload.patch).toEqual({
@@ -244,6 +265,51 @@ describe("RunMaterializationService", () => {
     expect(db.proposals).toHaveLength(0);
   });
 
+  it("enforces artifact.persist before inserting artifacts", async () => {
+    const artifactRoot = await mkdtemp(join(tmpdir(), "aspace-artifacts-"));
+    tempRoots.push(artifactRoot);
+    const db = new FakeDb();
+    const config = loadConfig({
+      SERVER_DATABASE_URL: "postgresql://server@localhost:5432/agent_space",
+      ARTIFACT_STORAGE_ROOT: artifactRoot,
+    });
+    const service = new RunMaterializationService(
+      config,
+      db,
+      undefined,
+      async (request) => request.action === "artifact.persist"
+        ? { status: "blocked", error_code: "policy_denied", message: "Artifact denied" }
+        : { status: "allow" },
+    );
+
+    const result = await service.materializeAdapterResult({
+      run: run(),
+      adapterResult: {
+        adapter_type: "model_api",
+        adapter_kind: "managed_api",
+        success: true,
+        output_text: "blocked artifact",
+        output_json: {},
+        exit_code: 0,
+        error_code: null,
+        error_message: null,
+        started_at: "2026-06-12T10:00:00.000Z",
+        completed_at: "2026-06-12T10:00:01.000Z",
+        usage: null,
+      },
+    });
+
+    expect(result.items).toMatchObject([
+      {
+        kind: "artifact",
+        status: "failed",
+        error_code: "output_artifact_materialization_error",
+        error_message: "Artifact denied",
+      },
+    ]);
+    expect(db.artifacts).toHaveLength(0);
+  });
+
   it("materializes claim/object packets only from structured proposal payloads", async () => {
     const db = new FakeDb();
     const config = loadConfig({
@@ -311,7 +377,7 @@ describe("RunMaterializationService", () => {
       },
     ]);
     expect(db.proposals).toHaveLength(1);
-    const payload = JSON.parse(db.proposals[0][9] as string) as Record<string, unknown>;
+    const payload = JSON.parse(db.proposals[0][10] as string) as Record<string, unknown>;
     expect(payload).toMatchObject({
       operation: "claim_create",
       proposal_type: "claim_create",

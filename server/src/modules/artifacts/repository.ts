@@ -5,7 +5,7 @@ import type { ReadStream } from "node:fs";
 import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
 import type { Queryable } from "../proposals/repository";
-import { workspaceProjectReadAccessSql } from "../workspaces/access";
+import { artifactVisibleSql } from "../access/visibility";
 
 export interface ArtifactOut {
   id: string;
@@ -142,7 +142,7 @@ export class PgArtifactRepository {
       `${artifactSelectSql()}
         WHERE a.id = $1
           AND a.space_id = $2
-          AND ${visibleSql("$3", workspaceParam)}`,
+          AND ${artifactVisibleSql({ userExpr: "$3", workspaceMatchExpr: workspaceParam })}`,
       params,
     );
     const row = result.rows[0];
@@ -210,26 +210,15 @@ function buildWhere(
     return `$${params.length}`;
   };
   const workspaceParam = filters.workspaceId ? add(filters.workspaceId) : null;
-  const clauses = [`a.space_id = $1`, visibleSql("$2", workspaceParam)];
+  const clauses = [
+    `a.space_id = $1`,
+    artifactVisibleSql({ userExpr: "$2", workspaceMatchExpr: workspaceParam }),
+  ];
   if (filters.artifactType) clauses.push(`a.artifact_type = ${add(filters.artifactType)}`);
   if (filters.runId) clauses.push(`a.run_id = ${add(filters.runId)}`);
   if (filters.projectId) clauses.push(`a.project_id = ${add(filters.projectId)}`);
   if (workspaceParam) clauses.push(`a.workspace_id = ${workspaceParam}`);
   return { whereSql: `WHERE ${clauses.join(" AND ")}`, params };
-}
-
-function visibleSql(userParam: string, workspaceParam: string | null): string {
-  const workspaceVisible = workspaceParam
-    ? `(a.visibility = 'workspace_shared'
-        AND a.workspace_id = ${workspaceParam}
-        AND ${workspaceProjectReadAccessSql({ spaceExpr: "a.space_id", workspaceExpr: "a.workspace_id", userExpr: userParam })})`
-    : "false";
-  return `(
-    a.visibility IN ('space_shared', 'public_template')
-    OR ${workspaceVisible}
-    OR (a.owner_user_id IS NULL AND a.visibility NOT IN ('workspace_shared', 'restricted', 'selected_users'))
-    OR a.owner_user_id = ${userParam}
-  )`;
 }
 
 function artifactSelectSql(): string {

@@ -13,7 +13,7 @@ import type { ModuleContext } from "../../gateway/routeRegistry";
 import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
 import { getDbPool } from "../../db/pool";
-import { authRepositoryFromConfig, introspectIdentity } from "../auth/identity";
+import { introspectIdentity } from "../auth/identity";
 import { PgActivityConsolidationRepository } from "../activity/consolidationRepository";
 import { loadProtocol } from "../providers/protocolRuntime";
 import {
@@ -26,6 +26,7 @@ import { readSpaceRetrievalPrompt } from "../retrieval/prompts";
 import { readSpaceRetrievalSettings, resolveRetrievalSearchControls } from "../retrieval/settings";
 import { canInitiateBrainOpsScan, canReviewSpaceOpsPackets } from "../brainOps/reviewPolicy";
 import { withDbTransaction } from "../routeUtils/common";
+import { requireSpaceOwnerOrAdmin } from "../routeUtils/access";
 import { enqueueRetrievalEmbeddingBackfill } from "../retrievalEmbedding/job";
 import { ProviderQueryEmbedder } from "../retrievalEmbedding/queryEmbedder";
 import { ProviderReranker } from "../retrievalRerank/providerReranker";
@@ -99,7 +100,7 @@ const MEMORY_ACCESS_LOG_MEMORY_COLUMNS = `m.id, m.space_id, m.subject_user_id,
   m.title, NULL::text AS content, m.status, m.visibility, m.sensitivity_level,
   m.selected_user_ids, m.last_confirmed_at, m.confidence, m.importance,
   m.source_id, m.created_by, m.created_at, m.updated_at, m.deleted_at,
-  m.version, m.tags, m.memory_layer, m.memory_kind, m.source_trust,
+  m.version, m.tags, m.memory_layer, m.source_trust,
   m.created_from_proposal_id, m.root_memory_id, m.supersedes_memory_id,
   m.project_id`;
 
@@ -577,6 +578,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         projectId: body.project_id ?? null,
         scanMode: body.scan_mode,
         cursor: body.cursor ?? null,
+        excludePersonalVisibility: reviewScope === "space_ops",
       };
       const scanOptions = {
         limit: body.limit,
@@ -998,25 +1000,7 @@ async function requireSpaceMaintenanceRole(
   identity: MemoryIdentity,
   reply: FastifyReply,
 ): Promise<boolean> {
-  const repository = authRepositoryFromConfig(config);
-  if (!repository) {
-    reply.code(502).send({ detail: "Identity database is unavailable" });
-    return false;
-  }
-  const space = await repository.getSpaceForUser(identity.userId, identity.spaceId);
-  if (!space) {
-    reply.code(404).send({ detail: "Space not found" });
-    return false;
-  }
-  if ("statusCode" in space) {
-    reply.code(space.statusCode).send({ detail: space.detail });
-    return false;
-  }
-  if (space.role !== "owner" && space.role !== "admin") {
-    reply.code(403).send({ detail: "Requires space owner or admin role" });
-    return false;
-  }
-  return true;
+  return requireSpaceOwnerOrAdmin(config, identity, reply);
 }
 
 function sendDomainError(reply: FastifyReply, error: unknown): FastifyReply {

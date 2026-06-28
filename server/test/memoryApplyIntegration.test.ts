@@ -167,11 +167,9 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
       namespace: "ns.x",
       version: 1,
       source_trust: "user_confirmed", // dominant over agent_inferred
-      source_activity_id: "act-9",
     });
 
     const row = (await pool.query("SELECT * FROM memory_entries WHERE id = $1", [out.memory.id])).rows[0];
-    expect(row.source_proposal_id).toBe("prop-1");
     expect(row.created_from_proposal_id).toBe("prop-1");
     expect(row.approved_by).toBe(USER);
     expect(row.access_count).toBe(0);
@@ -179,6 +177,7 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     // Provenance: the two payload entries + the proposal entry.
     const prov = await provFor(out.memory.id);
     expect(prov).toHaveLength(3);
+    expect(prov).toContainEqual({ source_type: "activity", source_id: "act-9", source_trust: "agent_inferred" });
     expect(prov).toContainEqual({ source_type: "proposal", source_id: "prop-1", source_trust: "internal_system" });
   });
 
@@ -413,9 +412,9 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     ).rejects.toBeInstanceOf(MemoryApplyError);
   });
 
-  // ── acceptAndApply orchestration (7b.5) ──────────────────────────────────
+  // ── applyOnly repository contract ────────────────────────────────────────
 
-  it("acceptAndApply: applies create and marks the proposal accepted", async () => {
+  it("applyOnly: applies create and returns the proposal payload patch", async () => {
     if (!available || !pool) return;
     const p = proposal({
       payload_json: {
@@ -426,18 +425,19 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     });
     await seedProposal(p);
 
-    const out = await inTx((r) => r.acceptAndApply(p, USER));
+    const out = await inTx((r) => r.applyOnly(p, USER));
 
     const mem = (await pool.query("SELECT * FROM memory_entries WHERE id = $1", [out.memoryId])).rows[0];
     expect(mem.content).toBe("orchestrated");
     expect(mem.status).toBe("active");
     const prop = (await pool.query("SELECT status, reviewed_by, payload_json FROM proposals WHERE id = $1", [p.id])).rows[0];
-    expect(prop.status).toBe("accepted");
-    expect(prop.reviewed_by).toBe(USER);
-    expect(prop.payload_json.resulting_memory_id).toBe(out.memoryId);
+    expect(prop.status).toBe("pending");
+    expect(prop.reviewed_by).toBeNull();
+    expect(prop.payload_json.resulting_memory_id).toBeUndefined();
+    expect(out.payloadJson.resulting_memory_id).toBe(out.memoryId);
   });
 
-  it("acceptAndApply: rejects an agent_inferred-only semantic proposal (source monitoring) with no writes", async () => {
+  it("applyOnly: rejects an agent_inferred-only semantic proposal (source monitoring) with no writes", async () => {
     if (!available || !pool) return;
     const p = proposal({
       payload_json: {
@@ -448,13 +448,13 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     });
     await seedProposal(p);
 
-    await expect(inTx((r) => r.acceptAndApply(p, USER))).rejects.toBeInstanceOf(MemoryApplyError);
+    await expect(inTx((r) => r.applyOnly(p, USER))).rejects.toBeInstanceOf(MemoryApplyError);
     // Rolled back: no memory, proposal still pending.
     expect((await pool.query("SELECT count(*)::int AS c FROM memory_entries")).rows[0].c).toBe(0);
     expect((await pool.query("SELECT status FROM proposals WHERE id = $1", [p.id])).rows[0].status).toBe("pending");
   });
 
-  it("acceptAndApply: persists source_monitoring_result for untrusted_external require_review", async () => {
+  it("applyOnly: returns source_monitoring_result for untrusted_external require_review", async () => {
     if (!available || !pool) return;
     const p = proposal({
       payload_json: {
@@ -465,7 +465,7 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     });
     await seedProposal(p);
 
-    const out = await inTx((r) => r.acceptAndApply(p, USER));
+    const out = await inTx((r) => r.applyOnly(p, USER));
     expect((out.payloadJson.source_monitoring_result as Record<string, unknown>).reason_code).toBe(
       "untrusted_external_only",
     );
@@ -473,18 +473,23 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     expect(mem.status).toBe("active");
   });
 
-  it("acceptAndApply: fails closed for run/grant egress context", async () => {
+  it("applyOnly: fails closed for grant-derived memory proposals", async () => {
     if (!available || !pool) return;
     const runCtx = proposal({
       id: "p-run",
-      payload_json: { proposed_content: "x", provenance_entries: [userConf] },
+      payload_json: {
+        proposed_content: "x",
+        provenance_entries: [userConf],
+        derived_from_personal_memory_grant: true,
+        grant_id: "grant-1",
+      },
       created_by_run_id: "run-9",
     });
     await seedProposal(runCtx);
-    await expect(inTx((r) => r.acceptAndApply(runCtx, USER))).rejects.toBeInstanceOf(MemoryApplyUnsupportedError);
+    await expect(inTx((r) => r.applyOnly(runCtx, USER))).rejects.toBeInstanceOf(MemoryApplyUnsupportedError);
   });
 
-  it("acceptAndApply: returns affected digest target for workspace-scope memory", async () => {
+  it("applyOnly: returns affected digest target for workspace-scope memory", async () => {
     if (!available || !pool) return;
     const wsScope = proposal({
       id: "p-ws",
@@ -492,7 +497,7 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
       workspace_id: "ws-1",
     });
     await seedProposal(wsScope);
-    const result = await inTx((r) => r.acceptAndApply(wsScope, USER));
+    const result = await inTx((r) => r.applyOnly(wsScope, USER));
     expect(result.scopeType).toBe("workspace");
     expect(result.workspaceId).toBe("ws-1");
     expect(result.affectedDigestTargets).toEqual([

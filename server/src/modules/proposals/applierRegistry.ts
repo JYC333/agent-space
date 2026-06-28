@@ -30,6 +30,8 @@ import { enqueueRetrievalEmbeddingBackfillWithQueue } from "../retrievalEmbeddin
 import type { ProposalAcceptResultType } from "@agent-space/protocol" with {
   "resolution-mode": "import",
 };
+import { validateProposalPayload } from "./payloadSchemas";
+export { ProposalPayloadValidationError } from "./payloadSchemas";
 
 export interface ProposalApplyContext {
   config: ServerConfig;
@@ -42,6 +44,8 @@ export interface ProposalApplyResult {
   result_type: ProposalAcceptResultType;
   result: Record<string, unknown>;
   rollback?: () => Promise<void>;
+  /** Updated proposal payload to persist on accept (e.g., memory resulting_memory_id). */
+  proposalPayloadPatch?: Record<string, unknown>;
 }
 
 export class UnknownProposalApplierError extends Error {
@@ -77,6 +81,7 @@ export class ProposalApplierRegistry {
   async apply(context: ProposalApplyContext): Promise<ProposalApplyResult> {
     const applier = this.get(context.proposal.proposal_type);
     if (!applier) throw new UnknownProposalApplierError(context.proposal.proposal_type);
+    validateProposalPayload(context.proposal.proposal_type, context.proposal.payload_json);
     return applier(context);
   }
 }
@@ -107,7 +112,7 @@ export function createDefaultProposalApplierRegistry(
 }
 
 async function applyMemoryProposal(context: ProposalApplyContext): Promise<ProposalApplyResult> {
-  const applied = await new PgMemoryApplyRepository(context.db).acceptAndApply(
+  const applied = await new PgMemoryApplyRepository(context.db).applyOnly(
     context.proposal,
     context.userId,
   );
@@ -124,8 +129,6 @@ async function applyMemoryProposal(context: ProposalApplyContext): Promise<Propo
     applied.affectedDigestTargets,
     dirtyReason,
   );
-  // Only create/update add or change chunk text; archive removes the memory (and
-  // its chunks) so there is nothing new to embed — skip the backfill enqueue.
   if (context.proposal.proposal_type !== "memory_archive") {
     await enqueueMemoryRetrievalEmbeddingBackfill(context);
   }
@@ -135,10 +138,11 @@ async function applyMemoryProposal(context: ProposalApplyContext): Promise<Propo
     [applied.memoryId],
   );
   const memory = row.rows[0];
-  if (!memory) throw new Error("applied memory row not found after acceptAndApply");
+  if (!memory) throw new Error("applied memory row not found after applyOnly");
   return {
     result_type: "memory_entry",
     result: { memory: serializeMemoryRow(memory, context.userId) },
+    proposalPayloadPatch: applied.finalPayload,
   };
 }
 
@@ -231,17 +235,10 @@ async function applyPolicyChangeProposal(context: ProposalApplyContext): Promise
   // policies are still surfaced per-run at consumption time (loadDigestBundle
   // assembles policy_bundle + workspace + agent for the run).
 
-  const finalPayload = { ...payload, resulting_policy_id: policyId };
-  await context.db.query(
-    `UPDATE proposals
-        SET status = 'accepted', reviewed_at = $1, reviewed_by = $2, payload_json = $3::jsonb
-      WHERE id = $4 AND space_id = $5`,
-    [now, context.userId, JSON.stringify(finalPayload), context.proposal.id, spaceId],
-  );
-
   return {
     result_type: "policy_version",
     result: { policy_id: policyId, space_id: spaceId, domain, name },
+    proposalPayloadPatch: { ...payload, resulting_policy_id: policyId },
   };
 }
 

@@ -94,8 +94,6 @@ export default function ProposalsPage() {
           toast.success(`Accepted — ${n} file${n === 1 ? '' : 's'} updated.`)
         } else if (out.result_type === 'knowledge_item') {
           toast.success('Accepted — knowledge item created.')
-        } else if (out.result_type === 'knowledge_relation') {
-          toast.success('Accepted — knowledge relation created.')
         } else if (out.result_type === 'retrieval_maintenance_packet') {
           const count = out.result.generated_child_proposal_count ?? out.result.generated_child_proposal_ids?.length ?? 0
           toast.success(`Accepted — ${count} child proposal${count === 1 ? '' : 's'} created.`)

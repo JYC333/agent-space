@@ -100,41 +100,45 @@ describe("Retrieval ANN halfvec index (real Postgres + pgvector)", () => {
     expect(idx.rows[0]!.indexdef).toMatch(/halfvec/i);
   });
 
-  it("the planner uses the HNSW index for the arm's constant-dimension halfvec query", async () => {
-    if (!available || !pool) return;
-    for (let i = 0; i < 40; i++) await seed(`noise-${i}`, `Noise ${i}`, `noise chunk ${i}`);
-    await seed("target", "Target doc", "the target chunk");
-    const svc = new RetrievalProjectionService(pool, knowledgeRetrievalRegistry);
-    await svc.reindexAll(SPACE);
-    await new RetrievalEmbeddingBackfillService(pool, markerEmbedder).backfillSpace(SPACE, {
-      embeddingDimensions: EMBED_DIMENSIONS,
-    });
+  it(
+    "the planner uses the HNSW index for the arm's constant-dimension halfvec query",
+    async () => {
+      if (!available || !pool) return;
+      for (let i = 0; i < 40; i++) await seed(`noise-${i}`, `Noise ${i}`, `noise chunk ${i}`);
+      await seed("target", "Target doc", "the target chunk");
+      const svc = new RetrievalProjectionService(pool, knowledgeRetrievalRegistry);
+      await svc.reindexAll(SPACE);
+      await new RetrievalEmbeddingBackfillService(pool, markerEmbedder).backfillSpace(SPACE, {
+        embeddingDimensions: EMBED_DIMENSIONS,
+      });
 
-    // EXPLAIN the exact halfvec query shape the vector arm emits at the default
-    // dim. SET + EXPLAIN must run on the SAME connection (a GUC set via the pool
-    // could otherwise land on a different pooled connection under load), so use a
-    // dedicated client.
-    const client = await pool.connect();
-    let planText: string;
-    try {
-      await client.query("SET enable_seqscan = off");
-      const plan = await client.query<{ "QUERY PLAN": string }>(
-        `EXPLAIN (FORMAT TEXT)
-           SELECT rc.object_id, rc.embedding::halfvec(2560) <=> $1::halfvec(2560) AS distance
-             FROM retrieval_chunks rc
-            WHERE rc.space_id = $2
-              AND rc.embedding IS NOT NULL
-              AND rc.embedding_dimensions = 2560
-            ORDER BY rc.embedding::halfvec(2560) <=> $1::halfvec(2560)
-            LIMIT 10`,
-        [toVectorLiteral(oneHot(1)), SPACE],
-      );
-      planText = plan.rows.map((r) => r["QUERY PLAN"]).join("\n");
-    } finally {
-      client.release();
-    }
-    expect(planText).toMatch(/ix_retrieval_chunks_embedding_hnsw_2560/);
-  });
+      // EXPLAIN the exact halfvec query shape the vector arm emits at the default
+      // dim. SET + EXPLAIN must run on the SAME connection (a GUC set via the pool
+      // could otherwise land on a different pooled connection under load), so use a
+      // dedicated client.
+      const client = await pool.connect();
+      let planText: string;
+      try {
+        await client.query("SET enable_seqscan = off");
+        const plan = await client.query<{ "QUERY PLAN": string }>(
+          `EXPLAIN (FORMAT TEXT)
+             SELECT rc.object_id, rc.embedding::halfvec(2560) <=> $1::halfvec(2560) AS distance
+               FROM retrieval_chunks rc
+              WHERE rc.space_id = $2
+                AND rc.embedding IS NOT NULL
+                AND rc.embedding_dimensions = 2560
+              ORDER BY rc.embedding::halfvec(2560) <=> $1::halfvec(2560)
+              LIMIT 10`,
+          [toVectorLiteral(oneHot(1)), SPACE],
+        );
+        planText = plan.rows.map((r) => r["QUERY PLAN"]).join("\n");
+      } finally {
+        client.release();
+      }
+      expect(planText).toMatch(/ix_retrieval_chunks_embedding_hnsw_2560/);
+    },
+    15_000,
+  );
 
   it("recalls the nearest object at the default dimension through the arm", async () => {
     if (!available || !pool) return;

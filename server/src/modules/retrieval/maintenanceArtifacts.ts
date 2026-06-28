@@ -4,6 +4,7 @@ import { insertArtifactRow } from "../artifacts/reviewArtifactWriter";
 import {
   acceptReviewPacket,
   insertProposalRow,
+  lookupExistingPendingPacket,
   reviewScopeValue,
   visibilityForReviewScope,
   type ChildProposalDraft,
@@ -49,8 +50,13 @@ export async function createRetrievalMaintenanceProposalPacket(
   input: RetrievalMaintenanceReportContext & { artifactId: string },
 ): Promise<string> {
   const ownerUserId = normalizedOwner(input.ownerUserId);
-  const payload = packetPayload(input, ownerUserId);
-  return insertProposalRow(db, {
+  const lineageKey = maintenanceLineageKey(input.spaceId, input.source);
+  const existing = await lookupExistingPendingPacket(
+    db, input.spaceId, RETRIEVAL_MAINTENANCE_PACKET_PROPOSAL_TYPE, lineageKey,
+  );
+  if (existing) return existing;
+  const payload = packetPayload(input, ownerUserId, lineageKey);
+  return (await insertProposalRow(db, {
     spaceId: input.spaceId,
     proposalType: RETRIEVAL_MAINTENANCE_PACKET_PROPOSAL_TYPE,
     title: titleForReport(input.report),
@@ -61,7 +67,7 @@ export async function createRetrievalMaintenanceProposalPacket(
     createdByUserId: ownerUserId,
     visibility: visibilityForReviewScope(input.reviewScope),
     createdByRunId: input.runId ?? null,
-  });
+  })).id;
 }
 
 export function registerRetrievalMaintenanceProposalAppliers(registry: {
@@ -84,9 +90,9 @@ function applyRetrievalMaintenancePacketProposal(
       const children: ChildProposalDraft[] = [];
       for (const finding of findings) {
         const action = proposedAction(finding);
-        if (!action || action.proposal_type !== "knowledge_relation_create") continue;
+        if (!action || action.proposal_type !== "object_relation_create") continue;
         children.push({
-          proposalType: "knowledge_relation_create",
+          proposalType: "object_relation_create",
           title: action.title,
           rationale: "Generated from an accepted retrieval maintenance packet.",
           visibility: "private",
@@ -132,12 +138,19 @@ function maintenanceReportPayload(
   };
 }
 
+function maintenanceLineageKey(spaceId: string, source: string): string {
+  const date = new Date().toISOString().slice(0, 10);
+  return `ret_maint:${spaceId}:${source}:${date}`;
+}
+
 function packetPayload(
   input: RetrievalMaintenanceReportContext & { artifactId: string },
   ownerUserId: string,
+  lineageKey: string,
 ): Record<string, unknown> {
   return {
     operation: "retrieval_maintenance_packet",
+    lineage_key: lineageKey,
     target_scope: "knowledge",
     target_namespace: "knowledge.retrieval.maintenance",
     review_scope: reviewScopeValue(input.reviewScope),

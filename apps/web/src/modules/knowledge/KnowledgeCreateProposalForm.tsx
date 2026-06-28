@@ -39,10 +39,7 @@ interface CreateForm {
   confidence: string
   project_id: string
   workspace_id: string
-  source_url: string
-  source_activity_id: string
   source_run_id: string
-  source_artifact_id: string
   source_refs: string
   object_kind_fields: string
   rationale: string
@@ -58,10 +55,7 @@ const EMPTY_CREATE_FORM: CreateForm = {
   confidence: '',
   project_id: '',
   workspace_id: '',
-  source_url: '',
-  source_activity_id: '',
   source_run_id: '',
-  source_artifact_id: '',
   source_refs: '',
   object_kind_fields: '',
   rationale: '',
@@ -143,10 +137,7 @@ export default function KnowledgeCreateProposalForm({ hasOperationalSpace }: Kno
       confidence,
       project_id: form.project_id.trim() || null,
       workspace_id: form.workspace_id.trim() || null,
-      source_url: form.source_url.trim() || null,
-      source_activity_id: form.source_activity_id.trim() || null,
       source_run_id: form.source_run_id.trim() || null,
-      source_artifact_id: form.source_artifact_id.trim() || null,
       source_refs: sourceRefs,
       ...(objectKindFields ? { object_kind_fields: objectKindFields } : {}),
       rationale: form.rationale.trim() || null,
@@ -222,21 +213,9 @@ export default function KnowledgeCreateProposalForm({ hasOperationalSpace }: Kno
       <div className="mt-5 border-t border-border pt-4">
         <CardTitle>Advanced Source</CardTitle>
         <div className="grid gap-3 md:grid-cols-2 mt-3">
-          <div className="md:col-span-2">
-            <Label>source_url</Label>
-            <Input value={form.source_url} onChange={e => setField('source_url', e.target.value)} placeholder="optional" />
-          </div>
-          <div>
-            <Label>source_activity_id</Label>
-            <Input value={form.source_activity_id} onChange={e => setField('source_activity_id', e.target.value)} placeholder="optional activity id" />
-          </div>
           <div>
             <Label>source_run_id</Label>
             <Input value={form.source_run_id} onChange={e => setField('source_run_id', e.target.value)} placeholder="optional run id" />
-          </div>
-          <div>
-            <Label>source_artifact_id</Label>
-            <Input value={form.source_artifact_id} onChange={e => setField('source_artifact_id', e.target.value)} placeholder="optional artifact id" />
           </div>
           <div className="md:col-span-2">
             <Label>source_refs JSON</Label>

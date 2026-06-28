@@ -108,11 +108,34 @@ CREATE TABLE public.context_snapshots (
     source_refs_json jsonb NOT NULL,
     compiled_summary text,
     token_estimate integer,
+    relevant_period_start timestamp with time zone,
+    relevant_period_end timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
+    compiled_prefix_text text,
+    compiled_tail_text text,
+    compiled_prefix_ref character varying(1024),
+    compiled_tail_ref character varying(1024),
+    prefix_hash character varying(128),
+    tail_hash character varying(128),
+    compiler_version character varying(64),
+    retrieval_trace_json jsonb,
+    token_budget_json jsonb,
+    policy_bundle_version character varying(64),
+    memory_digest_version character varying(64),
+    workspace_digest_version character varying(64),
+    included_memory_refs_json jsonb,
+    included_evidence_refs_json jsonb,
+    included_file_refs_json jsonb,
+    included_doc_refs_json jsonb,
+    redactions_json jsonb,
+    data_exposure_level character varying(64),
+    rendered_context_uri character varying(1024),
+    rendered_context_text text,
     agent_id character varying(36),
     session_id character varying(36),
     run_id character varying(36),
-    request_json jsonb
+    request_json jsonb,
+    CONSTRAINT ck_context_snapshots_data_exposure_level CHECK (((data_exposure_level IS NULL) OR ((data_exposure_level)::text = ANY ((ARRAY['local_only'::character varying, 'model_provider'::character varying, 'vendor_platform'::character varying, 'third_party_tools'::character varying, 'unknown'::character varying])::text[]))))
 );
 
 CREATE TABLE public.job_events (
@@ -308,7 +331,6 @@ CREATE TABLE public.runs (
     visibility character varying(32) DEFAULT 'space_shared'::character varying NOT NULL,
     has_personal_grant_context boolean DEFAULT false NOT NULL,
     personal_grant_context_json jsonb,
-    execution_plane_id character varying(36),
     source character varying(32),
     observability_level character varying(64),
     data_exposure_level character varying(64),
@@ -521,8 +543,6 @@ CREATE INDEX ix_runs_agent_id ON public.runs USING btree (agent_id);
 CREATE INDEX ix_runs_agent_version_id ON public.runs USING btree (agent_version_id);
 
 CREATE INDEX ix_runs_context_snapshot_id ON public.runs USING btree (context_snapshot_id);
-
-CREATE INDEX ix_runs_execution_plane_id ON public.runs USING btree (execution_plane_id);
 
 CREATE INDEX ix_runs_instructed_by_user_id ON public.runs USING btree (instructed_by_user_id);
 

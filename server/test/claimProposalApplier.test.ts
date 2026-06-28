@@ -45,9 +45,6 @@ class ClaimApplyFakeDb {
     if (norm.includes("FROM claim_sources")) {
       return { rows: [], rowCount: 0 };
     }
-    if (norm.startsWith("SELECT id FROM claim_relations")) {
-      return { rows: [], rowCount: 0 };
-    }
     if (norm.startsWith("SELECT id, space_id, object_type")) {
       const row = this.objects.get(String(params[0]));
       return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };

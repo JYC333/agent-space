@@ -53,12 +53,12 @@ context; Knowledge is durable content for people to inspect, revise, relate, and
 
 No removed route or compatibility alias exists. The API path is `/api/v1/knowledge`;
 canonical table names are `space_objects`, `notes`, `note_collections`,
-`note_collection_items`, `knowledge_items`, `knowledge_item_relations`, `sources`,
-`knowledge_item_sources`, `claims`, `claim_sources`, `claim_relations`,
-`object_relations`, and the generic `entity_links`; wiki proposal types use
-`knowledge_*`, claim proposal types use `claim_*`, object relation proposal
-types use `object_relation_*`, and `claim_candidate_packet` is the review packet
-bridge from retrieval artifacts into child claim/claim-relation/object-relation proposals
+`note_collection_items`, `knowledge_items`, `sources`,
+`knowledge_item_sources`, `claims`, `claim_sources`, and `object_relations`.
+Wiki proposal types use `knowledge_*`, claim proposal types use `claim_*`,
+object relation proposal types use `object_relation_*`, and
+`claim_candidate_packet` is the review packet bridge from retrieval artifacts
+into child claim/object-relation proposals
 (notes are not proposal-gated).
 
 ## Layers
@@ -70,13 +70,10 @@ bridge from retrieval artifacts into child claim/claim-relation/object-relation 
 | **NoteCollection** | `note_collections` | direct CRUD | space-scoped folder tree for organizing notes |
 | **KnowledgeItem** (Wiki) | `knowledge_items` | proposal → approval | canonical, versioned knowledge |
 | **Source** | `sources` | direct CRUD | provenance / evidence |
-| **KnowledgeItemRelation** | `knowledge_item_relations` | proposal → approval | wiki item ↔ item semantic graph |
 | **KnowledgeItemSource** | `knowledge_item_sources` | direct CRUD | wiki item ↔ source evidence |
-| **EntityLink** | `entity_links` | direct CRUD | generic cross-object relation layer (notes ↔ anything) |
 | **Claim** | `claims` | proposal → approval | global semantic atom attached to `space_objects` |
 | **ClaimSource** | `claim_sources` | proposal → approval with claim writes | claim ↔ evidence/source-policy path |
-| **ClaimRelation** | `claim_relations` | proposal → approval | claim ↔ claim semantic graph |
-| **ObjectRelation** | `object_relations` | proposal → approval | FK-backed cross-object graph over `space_objects` |
+| **ObjectRelation** | `object_relations` | proposal → approval | canonical FK-backed cross-object graph over `space_objects` |
 | **Card** | `cards` | direct CRUD (future) | space-scoped review card derived from knowledge objects |
 | **CardReviewState** | `card_review_states` | scheduler-written (future) | per-user FSRS scheduling state; one row per (card, user) |
 | **CardReview** | `card_reviews` | append-only (future) | per-user review history with rating + state snapshot |
@@ -84,29 +81,13 @@ bridge from retrieval artifacts into child claim/claim-relation/object-relation 
 Notes on the wiki layers: `source` is **not** a KnowledgeItem type — it is the `sources`
 table. `answer` **is** a canonical KnowledgeItem type (a `question` item and its `answer`
 item are linked with a generic `related_to` relation; there is no dedicated `answers`
-relation type). `KnowledgeItemRelation` is the governed item↔item graph; `KnowledgeItemSource`
-is item↔source evidence; the two must not be conflated.
+relation type). `ObjectRelation` is the governed cross-object graph;
+`KnowledgeItemSource` is item↔source evidence; the two must not be conflated.
+`ProvenanceLink` records accepted lineage into memory/policy/knowledge targets.
 
-### EntityLink — generic cross-object relations
-
-`entity_links` is the user-facing working relation layer (direct CRUD), primarily for
-Notes: it connects a note to another note, a wiki KnowledgeItem, a Source, a Project, a
-Workspace, an ActivityRecord, a Run, or a Proposal without a join table per pair.
-`source_id` / `target_id` are polymorphic (keyed by `source_type` / `target_type`) and
-are intentionally not foreign keys (covered by `server/test/baselineSchema.test.ts`).
-Endpoints are validated to exist in the same space. Link types: `references`,
-`related_to`, `belongs_to`, `captured_from`, `source_for`, `derived_from`; status:
-`suggested | accepted | rejected`. It **complements** — does not replace —
-`KnowledgeItemRelation` (governed wiki graph), `KnowledgeItemSource` (evidence),
-`ClaimRelation` (governed claim graph), `ObjectRelation` (governed FK-backed
-object graph), and `ProvenanceLink` (provenance into memory/policy/knowledge
-targets).
-
-Wiki pages read their generic backlinks (from Notes, Activities, Sources, Runs,
-Proposals, …) via `GET /api/v1/knowledge/items/{id}/backlinks` (EntityLinks targeting the
-item). A generic read endpoint `GET /api/v1/knowledge/entity-links?source_type=&source_id=
-&target_type=&target_id=` filters the layer by any endpoint combination. Item↔item
-semantic relations stay on the separate `/items/{id}/relations` (KnowledgeItemRelation).
+Wiki pages read canonical backlinks through `object_relations`. Notes also expose
+direct working-note links through `note_links`; those links are not canonical graph
+authority and are not projected into retrieval edges.
 
 ### Notes vs Collections
 
@@ -123,10 +104,10 @@ constrained by `(parent_id, space_id)` so folder trees cannot cross spaces.
 - `Note` model (working-knowledge layer; direct CRUD via `NoteService`)
 - `NoteCollection` / `NoteCollectionItem` models (space-scoped Notes folder tree)
 - `KnowledgeItem` model (canonical wiki layer)
-- `KnowledgeItemRelation` model (item↔item semantic relations)
 - `Source` model (independent provenance/evidence layer)
 - `KnowledgeItemSource` model (item↔source evidence links)
-- `EntityLink` model + `EntityLinkService` (generic cross-object relation layer)
+- `ObjectRelation` model (proposal-gated canonical cross-object graph)
+- `NoteLink` model (`note_links`, direct working-note UI links)
 - `KnowledgeSummaryService` (Overview counts)
 - `/api/v1/knowledge` read and proposal API for wiki items; `/api/v1/knowledge/notes`
   + `/api/v1/knowledge/notes/{id}/links|backlinks` direct CRUD for notes;
@@ -136,6 +117,13 @@ constrained by `(parent_id, space_id)` so folder trees cannot cross spaces.
   `/api/v1/knowledge/summary`
 - Knowledge proposal apply handlers for wiki, claim/object-relation writes, and
   Claim Candidate Packets
+- Brain Shape Registry / object-kind registry routes and appliers:
+  owner/admin proposal routes for `object_kind_create`, `object_kind_update`
+  (including draft activation), `object_kind_deprecate`, and
+  `object_kind_archive`; member-visible registry reads; object-schema
+  export/import; and deterministic object-schema suggestion scans. These routes
+  and appliers write only registry rows/proposals/artifacts, never canonical
+  Knowledge, Memory, Claim, Project, relation, or retrieval projection rows.
 - Frontend Knowledge module (breadcrumb switcher, Notes workspace, Wiki/Sources/Cards, overview hub) under `apps/web/src/modules/knowledge/`
 - Relation and evidence-link records backed by database rows, not only Markdown links
 
@@ -177,11 +165,16 @@ Knowledge-specific SQL and the visibility revalidation gate. See
 for the engine/adapter boundary and the full retrieval + brain-layer
 architecture. The Brain Shape Registry foundation is also served from the
 Knowledge module: `space_object_kinds` registry rows are read in the current
-space, and owner/admin proposal routes create, update, deprecate, or archive
-object kinds through registered proposal appliers. This registry is object
-schema config only; it does not add retrieval object types or write canonical
-Knowledge, Memory, Claim, or Project rows. Remaining brain-layer work is tracked
-in [BRAIN_LAYER_CLOSURE_PLAN.md](../architecture/BRAIN_LAYER_CLOSURE_PLAN.md).
+space, and owner/admin proposal routes create, update/activate, deprecate, or
+archive object kinds through registered proposal appliers. The registry stores
+bounded declarative field schemas, extraction hints, retrieval hints, relation
+hints, and UI labels/config under fixed retrieval `object_type` values. Object
+schema export/import serializes registry definitions; import creates draft
+object-kind proposals and never activates definitions directly. This registry is
+object schema config only; it does not add retrieval object types or write
+canonical Knowledge, Memory, Claim, Project, relation, or retrieval projection
+rows. Follow-up retrieval/brain-layer quality work and non-goals are tracked in
+[ROADMAP_AND_FUTURE_RISKS.md](../architecture/ROADMAP_AND_FUTURE_RISKS.md#retrieval-and-brain-layer-stabilization).
 Canonical lifecycle ownership does not change:
 KnowledgeItem writes remain proposal-gated, Notes and Sources remain direct CRUD,
 and retrieval projection rows are derived indexes that can be rebuilt from the
@@ -190,10 +183,10 @@ canonical tables.
 The initial projection indexes:
 
 - `KnowledgeItem` title, slug, aliases, content/plain text, excerpt, source URL,
-  item status, visibility, owner, workspace, accepted item relations, and
+  item status, visibility, owner, workspace, accepted object relations, and
   item-source evidence links.
 - `Note` title, plain text, excerpt, status, workspace/project associations where
-  present, and generic `EntityLink` rows.
+  present, and working `note_links` rows.
 - `Source` title, URI, raw text, summary, status, and item-source links.
 - `Claim` title, subject text, claim text, status, visibility, owner, claim
   relations, claim-source evidence links, and object relation edges. Final
@@ -201,8 +194,8 @@ The initial projection indexes:
 
 Extracted markdown links, wikilinks, source references, and alias matches are
 retrieval evidence or suggested retrieval edges only. They must not create an
-accepted `KnowledgeItemRelation` unless a user accepts the existing Knowledge
-relation proposal flow.
+accepted `ObjectRelation` unless a user accepts the existing object relation
+proposal flow.
 
 Create-safety is advisory duplicate detection for review and proposal creation:
 `exists`, `probable_duplicate`, or `unknown`. It explains why a create may match
@@ -221,7 +214,7 @@ Raw user input, session content, file imports, web captures, and run outputs ent
 Activity / Run / Artifact
 -> knowledge proposal
 -> proposal acceptance
--> active KnowledgeItem / KnowledgeItemRelation
+-> active KnowledgeItem / ObjectRelation
 ```
 
 Agent-generated knowledge never becomes active without proposal approval.
@@ -255,8 +248,8 @@ block the MVP persistence/API slice.
 - `knowledge_create` creates an active KnowledgeItem.
 - `knowledge_update` creates a new version, not an in-place overwrite.
 - `knowledge_archive` archives an item.
-- `knowledge_relation_create` creates a relation only within the same space.
-- `knowledge_relation_delete` removes or archives a relation.
+- `object_relation_create` creates a relation only within the same space.
+- `object_relation_delete` removes or archives a relation.
 
 These proposal types are supported by `ProposalApplyService`. They remain review-gated and are not direct-write API operations.
 
@@ -339,15 +332,16 @@ Note:                                 # working-knowledge layer (direct CRUD)
   plain_text                      # derived projection for preview / future search
   created_from_activity_id        # optional capture provenance (FK activity_records)
 
-EntityLink:                           # generic cross-object relation layer (direct CRUD)
+NoteLink:                             # working note UI links (direct CRUD; not canonical graph)
   id, space_id
-  source_type, source_id          # polymorphic (note|knowledge_item|source|project|
-  target_type, target_id          #   workspace|activity|run|proposal); not FKs
-  link_type                       # references|related_to|belongs_to|captured_from|
-                                  #   source_for|derived_from
+  from_object_id, to_object_id    # composite FKs to SpaceObject(id, space_id)
+  from_object_type, to_object_type
+  link_type                       # related_to|references|depends_on|part_of|
+                                  #   source_for|derived_from|about|supports|...
   confidence
-  status                          # suggested|accepted|rejected
-  created_by_user_id, created_at
+  status                          # active|archived
+  metadata_json                   # includes canonical_graph=false
+  created_by_user_id, created_at, updated_at
 
 ObjectRelation:                       # governed FK-backed graph layer
   id, space_id
@@ -416,29 +410,6 @@ ClaimSource:
   source_trust, confidence, metadata_json
   created_by_user_id, created_at
 
-ClaimRelation:
-  id, space_id
-  from_claim_id, to_claim_id      # composite FKs to Claim(object_id, space_id)
-  relation_type                   # supports|contradicts|supersedes|refines|same_as|depends_on|derived_from
-  status                          # candidate|active|rejected|archived;
-                                  # create packets accept candidate|active only
-  confidence, evidence_summary
-  source_proposal_id
-  created_by_user_id, created_by_agent_id
-  created_at, updated_at
-
-KnowledgeItemRelation:                # item <-> item semantic graph
-  id, space_id
-  from_item_id, to_item_id
-  relation_type                   # related_to|explains|depends_on|prerequisite_of|
-                                  #   part_of|example_of|applies_to|supports|
-                                  #   contradicts|derived_from|summarizes|updates
-  status                          # candidate|active|rejected|archived
-  confidence, evidence_summary
-  source_proposal_id
-  created_by_user_id, created_by_agent_id
-  created_at, updated_at
-
 Source:                               # independent provenance / evidence layer
   object_id, space_id             # object_id is PK/FK to SpaceObject.id
   source_type                     # activity_record|chat_capture|webpage|article|
@@ -455,12 +426,13 @@ KnowledgeItemSource:                  # item <-> source evidence link
   created_at
 ```
 
-Relation creation must enforce same-space endpoints. `KnowledgeItemRelation` is the
-item↔item semantic layer; `KnowledgeItemSource` is the item↔source evidence layer —
-the two must not be conflated. Sources are evidence/raw material, so Source and
-KnowledgeItemSource use direct CRUD (`/api/v1/knowledge/sources`,
-`/api/v1/knowledge/items/{id}/sources`) rather than the proposal workflow that gates
-semantic KnowledgeItem and KnowledgeItemRelation writes. A Source may point back to an
+Relation creation must enforce same-space endpoints. `ObjectRelation` is the
+proposal-gated semantic graph; `KnowledgeItemSource` is the item↔source evidence
+layer; `note_links` is a direct working-note UI edge. The three must not be
+conflated. Sources are evidence/raw material, so Source and KnowledgeItemSource use
+direct CRUD (`/api/v1/knowledge/sources`, `/api/v1/knowledge/items/{id}/sources`)
+rather than the proposal workflow that gates semantic KnowledgeItem and
+ObjectRelation writes. A Source may point back to an
 existing ActivityRecord via `source_activity_id` (or any other origin via
 `content_ref` / `metadata_json`); ActivityRecord remains the raw capture layer and is
 not replaced by Source.
@@ -475,8 +447,8 @@ not replaced by Source.
 - **Notes** (working knowledge) are direct-CRUD and **not** proposal-gated; they are
   space-scoped and never auto-injected into Memory/ContextBuilder. Notes are not wiki:
   they do not version, carry verification/reflection status, or share the proposal path.
-- `entity_links.source_id` / `target_id` are polymorphic (no FK); every link endpoint
-  must resolve to an existing row in the same space, and an entity cannot link to itself.
+- `object_relations.from_object_id` / `to_object_id` are FK-backed
+  `space_objects` endpoints in the same space, and an object cannot link to itself.
 - **Card content** (`cards`) is space-scoped; any member of the space can see cards
   in that space. **Card review state** (`card_review_states`) and **review history**
   (`card_reviews`) are user-specific. `cards.source_id` is polymorphic (no FK;
@@ -502,7 +474,7 @@ not replaced by Source.
 
 ## Related Files
 - `server/src/modules/knowledge/` - API, service, schemas, read models, and proposal appliers
-- `server/migrations/` - canonical schema tables (incl. `notes`, `entity_links`, `cards`, `card_review_states`, `card_reviews`)
+- `server/migrations/` - canonical schema tables (incl. `notes`, `object_relations`, `cards`, `card_review_states`, `card_reviews`)
 - `server/test/` - live schema and API tests for Knowledge/Cards surfaces
 - `server/src/modules/policy/` - Knowledge policy actions wired via proposal
 - `server/src/gateway/routeRegistry.ts` - active backend module registry entry
@@ -520,8 +492,8 @@ not replaced by Source.
 ## TODO
 - Notes: ProseMirror/Tiptap rich editor (schema already ProseMirror-ready), full link
   picker across all entity types, and richer collection management
-- Note → Wiki promotion flow (create a `knowledge_create` proposal from a note, linked
-  via `entity_links` `source_for`/`derived_from`)
+- Note → Wiki promotion flow (create a `knowledge_create` proposal from a note,
+  linked via `object_relations` `source_for`/`derived_from`)
 - Plain-text/excerpt + search projection regeneration from `content_json`
 - Later Feynman and Reflection assessments
 - Automatic Activity/Artifact to Knowledge proposal generation

@@ -149,8 +149,8 @@ async function insertClaimSource(input: { id: string; claimId: string; sourceCon
   await pool!.query(
     `INSERT INTO claim_sources (
        id, space_id, claim_id, source_connection_id, evidence_role,
-       source_trust, confidence, metadata_json, created_by_user_id, created_at, updated_at
-     ) VALUES ($1, $2, $3, $4, 'supports', 'normal', 0.8, '{}'::jsonb, $5, now(), now())`,
+       source_trust, confidence, metadata_json, created_by_user_id, created_at
+     ) VALUES ($1, $2, $3, $4, 'supports', 'normal', 0.8, '{}'::jsonb, $5, now())`,
     [input.id, SPACE, input.claimId, input.sourceConnectionId, VIEWER],
   );
 }

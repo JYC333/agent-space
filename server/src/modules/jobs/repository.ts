@@ -331,7 +331,9 @@ export class PgJobQueueRepository {
          UPDATE runs
             SET status = 'cancelled',
                 ended_at = $2,
-                updated_at = $2
+                updated_at = $2,
+                error_message = 'Run cancelled',
+                error_json = '{"error_code":"run_cancelled","error_text":"Run cancelled"}'::jsonb
            FROM cancelled_job
           WHERE cancelled_job.job_type = 'agent_run'
             AND runs.id::text = cancelled_job.payload_json->>'run_id'
@@ -435,7 +437,8 @@ export class PgJobQueueRepository {
             SET status = 'failed',
                 ended_at = $1,
                 updated_at = $1,
-                error_message = 'run abandoned: backing job stuck and retry attempts exhausted'
+                error_message = 'run abandoned: backing job stuck and retry attempts exhausted',
+                error_json = '{"error_code":"run_abandoned","error_text":"run abandoned: backing job stuck and retry attempts exhausted"}'::jsonb
            FROM exhausted_agent_runs
           WHERE runs.id::text = exhausted_agent_runs.run_id
             AND runs.status <> ALL($3::text[])
@@ -469,9 +472,3 @@ export class PgJobQueueRepository {
   }
 }
 
-/** @deprecated Use {@link PgJobQueueRepository} — kept for runs module compatibility. */
-export const PgRunJobRepository = PgJobQueueRepository;
-export type RunJobRecord = JobRecord;
-export type RunJobStatus = JobStatus;
-export type RunJobEventRecord = JobEventRecord;
-export type RunJobReclaimResult = JobReclaimResult;

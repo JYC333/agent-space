@@ -11,6 +11,7 @@ import {
 import { HttpError } from "../routeUtils/common";
 import { canAccessProject } from "../memory/projectAccess";
 import { workspaceProjectReadAccessSql } from "../workspaces/access";
+import { artifactVisibleSql } from "../access/visibility";
 import {
   loadSourcePolicySnapshots,
   loadViewerSpaceRole,
@@ -40,11 +41,10 @@ const ALLOWED_RELATION_TYPES = [
 const MAX_HOPS = 2;
 const DEFAULT_MAX_MEMORIES = 20;
 
-const CONTEXT_MEMORY_COLUMNS = `${MEMORY_COLUMNS}, agent_id, capability_id, access_count, last_accessed_at, last_retrieved_at`;
+const CONTEXT_MEMORY_COLUMNS = `${MEMORY_COLUMNS}, agent_id, access_count, last_accessed_at, last_retrieved_at`;
 
 export interface ContextMemoryRow extends MemoryRow {
   agent_id: string | null;
-  capability_id: string | null;
   access_count: number | string;
   last_accessed_at: unknown;
   last_retrieved_at: unknown;
@@ -118,7 +118,7 @@ export interface PersonalGrantMetadata {
   target_space_id: string;
   access_mode: string;
   memory_count: number;
-  raw_memory_included: false;
+  raw_private_memory_included: false;
   personal_summary_persisted: false;
 }
 
@@ -262,7 +262,7 @@ export class PgRunContextRepository {
     includeSystemScope: boolean;
     maxMemories?: number;
     // The run/caller's project. Activates project cutting:
-    //   undefined -> no project filtering (legacy behavior)
+    //   undefined -> no project filtering (unscoped callers — agents/runs without a project scope)
     //   null      -> caller has no project: only project-free memory
     //   "P"       -> project P's memory (only if the user can access P) + project-free
     projectId?: string | null;
@@ -594,7 +594,7 @@ export class PgRunContextRepository {
 
     const params: unknown[] = [
       input.spaceId,
-      ["context_candidate", "supports", "mentions", "provenance"],
+      ["context_candidate", "supports", "mentions"],
     ];
     const targetPredicates = targets.map((target) => {
       const typeIndex = params.length + 1;
@@ -603,17 +603,31 @@ export class PgRunContextRepository {
       params.push(target.id);
       return `(el.target_type = $${typeIndex} AND el.target_id = $${idIndex})`;
     });
-    params.push(input.limit ?? 8);
+    const limit = input.limit ?? 8;
+    params.push(Math.min(Math.max(limit * 4, limit), 50));
 
     const result = await this.db.query<EvidenceContextRow>(
       `SELECT ev.id, ev.title, ev.content_excerpt, ev.evidence_type,
               ev.trust_level, ev.intake_item_id, ev.source_snapshot_id,
               ev.artifact_id, ev.source_uri,
+              COALESCE(ii.connection_id, ss.connection_id) AS source_connection_id,
               el.id AS link_id, el.link_type, el.target_type, el.target_id
          FROM extracted_evidence ev
          JOIN evidence_links el
            ON el.evidence_id = ev.id
           AND el.space_id = ev.space_id
+         LEFT JOIN intake_items ii
+           ON ii.space_id = ev.space_id
+          AND ii.id = ev.intake_item_id
+          AND ii.deleted_at IS NULL
+         LEFT JOIN source_snapshots ss
+           ON ss.space_id = ev.space_id
+          AND ss.id = ev.source_snapshot_id
+         LEFT JOIN source_connections sc
+           ON sc.space_id = ev.space_id
+          AND sc.id = COALESCE(ii.connection_id, ss.connection_id)
+          AND sc.status <> 'archived'
+          AND sc.deleted_at IS NULL
         WHERE ev.space_id = $1
           AND ev.status = 'active'
           AND ev.deleted_at IS NULL
@@ -625,19 +639,43 @@ export class PgRunContextRepository {
       params,
     );
 
+    const sourceConnectionIds = [
+      ...new Set(result.rows.map((row) => row.source_connection_id).filter((id): id is string => Boolean(id))),
+    ];
+    const [sourcePolicySnapshots, viewerSpaceRole] = await Promise.all([
+      loadSourcePolicySnapshots(this.db, input.spaceId, sourceConnectionIds),
+      sourceConnectionIds.length > 0
+        ? loadViewerSpaceRole(this.db, input.spaceId, input.userId)
+        : Promise.resolve(null),
+    ]);
     const seen = new Set<string>();
     const selections: ContextEvidenceSelection[] = [];
     for (const row of result.rows) {
       if (seen.has(row.id)) continue;
+      if (row.source_connection_id) {
+        const snapshot = sourcePolicySnapshots.get(row.source_connection_id);
+        if (!snapshot || !sourcePolicyAllowsRead(snapshot, {
+          viewerUserId: input.userId,
+          viewerSpaceRole,
+        })) {
+          continue;
+        }
+      }
       seen.add(row.id);
       if (input.runId) {
-        await this.insertUsedInContextEvidenceLink({
-          spaceId: input.spaceId,
-          evidenceId: row.id,
-          runId: input.runId,
-        });
+        try {
+          await this.insertUsedInContextEvidenceLink({
+            spaceId: input.spaceId,
+            evidenceId: row.id,
+            runId: input.runId,
+          });
+        } catch {
+          // used_in_context is a best-effort audit link; context selection has
+          // already passed the source read gate.
+        }
       }
       selections.push(evidenceSelectionFromRow(row));
+      if (selections.length >= limit) break;
     }
     return selections;
   }
@@ -658,17 +696,7 @@ export class PgRunContextRepository {
          FROM artifacts a
         WHERE a.space_id = $1
           AND a.id = ANY($2::varchar[])
-          AND (
-            a.visibility IN ('space_shared', 'public_template')
-            OR (
-              a.visibility = 'workspace_shared'
-              AND a.workspace_id IS NOT NULL
-              AND a.workspace_id = $4
-              AND ${workspaceProjectReadAccessSql({ spaceExpr: "a.space_id", workspaceExpr: "a.workspace_id", userExpr: "$3" })}
-            )
-            OR (a.owner_user_id IS NULL AND a.visibility NOT IN ('workspace_shared', 'restricted', 'selected_users'))
-            OR a.owner_user_id = $3
-          )`,
+          AND ${artifactVisibleSql({ userExpr: "$3", workspaceMatchExpr: "$4" })}`,
       [input.spaceId, ids, input.userId, input.workspaceId ?? null],
     );
     const byId = new Map(result.rows.map((row) => [row.id, row]));
@@ -1101,7 +1129,7 @@ export class PgRunContextRepository {
       targetSpaceId: grant.target_space_id,
       metadata: {
         access_mode: grant.access_mode,
-        raw_memory_included: false,
+        raw_private_memory_included: false,
       },
     });
 
@@ -1133,7 +1161,7 @@ export class PgRunContextRepository {
       metadata: {
         memory_count: memories.length,
         access_mode: "summary_only",
-        raw_memory_included: false,
+        raw_private_memory_included: false,
         personal_summary_persisted: false,
       },
     });
@@ -1147,7 +1175,7 @@ export class PgRunContextRepository {
         target_space_id: grant.target_space_id,
         access_mode: grant.access_mode,
         memory_count: memories.length,
-        raw_memory_included: false,
+        raw_private_memory_included: false,
         personal_summary_persisted: false,
       },
     };
@@ -1221,7 +1249,6 @@ export class PgRunContextRepository {
             OR owner_user_id = $3
             OR ($4::varchar IS NOT NULL AND workspace_id = $4)
             OR ($5::varchar IS NOT NULL AND agent_id = $5)
-            OR ($6::varchar IS NOT NULL AND capability_id = $6)
           )
         ORDER BY importance DESC, updated_at DESC
         LIMIT 50`,
@@ -1231,7 +1258,6 @@ export class PgRunContextRepository {
         input.userId,
         input.workspaceId,
         input.agentId,
-        input.capabilityId ?? null,
       ],
     );
     return result.rows;
@@ -1408,7 +1434,7 @@ export class PgRunContextRepository {
       ["normal", "sensitive"],
     ];
     addArrayFilter(where, params, "memory_layer", filter.memory_layers);
-    addArrayFilter(where, params, "memory_kind", filter.memory_kinds);
+    addArrayFilter(where, params, "memory_type", filter.memory_types);
     addArrayFilter(where, params, "namespace", filter.namespaces);
     const result = await this.db.query<ContextMemoryRow>(
       `SELECT ${CONTEXT_MEMORY_COLUMNS}
@@ -1444,7 +1470,7 @@ export class PgRunContextRepository {
       targetSpaceId: grant.target_space_id,
       metadata: {
         failure_stage: failureStage,
-        raw_memory_included: false,
+        raw_private_memory_included: false,
       },
     });
   }

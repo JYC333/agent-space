@@ -17,10 +17,8 @@ Proposals are the product review and application boundary for durable mutations.
 - Product-recognized proposal types are `memory_create`, `memory_update`,
   `memory_archive`, `policy_change`, `code_patch`, `egress_review`,
   `follow_up_task`, `agent_config_update`, `knowledge_create`,
-  `knowledge_update`, `knowledge_archive`, `knowledge_relation_create`,
-  `knowledge_relation_delete`, `claim_create`, `claim_update`,
-  `claim_archive`, `claim_relation_create`, `claim_relation_delete`,
-  `object_relation_create`, `object_relation_delete`,
+  `knowledge_update`, `knowledge_archive`, `claim_create`, `claim_update`,
+  `claim_archive`, `object_relation_create`, `object_relation_delete`,
   `claim_candidate_packet`, `memory_maintenance_packet`,
   `retrieval_maintenance_packet`, and `retrieval_diagnostics_packet`.
 - Registered server apply types include `memory_create`, `memory_update`,
@@ -29,7 +27,8 @@ Proposals are the product review and application boundary for durable mutations.
   workspace proposal types, and capability proposal types contributed through
   the server
   `ProposalApplierRegistry`. Unregistered proposal types fail closed on accept
-  until their owning domain registers a server applier.
+  until their owning domain registers a server applier. `egress_review` approval
+  rows are supported, but `egress_review` does not currently have a registered applier.
 - Accept returns the general `ProposalAcceptOut` response shape.
 - A proposal is never auto-applied.
 - `POST /api/v1/proposals/:proposalId/rollback` restores workspace files to their
@@ -48,10 +47,8 @@ Proposals are the product review and application boundary for durable mutations.
 - Knowledge proposal records are reviewable through the proposal API, and
   Knowledge apply is registered in the server applier registry for
   `knowledge_create`, `knowledge_update`, `knowledge_archive`,
-  `knowledge_relation_create`, `knowledge_relation_delete`, `claim_create`,
-  `claim_update`, `claim_archive`, `claim_relation_create`,
-  `claim_relation_delete`, `object_relation_create`, and
-  `object_relation_delete`.
+  `claim_create`, `claim_update`, `claim_archive`,
+  `object_relation_create`, and `object_relation_delete`.
 - Knowledge read and proposal creation endpoints are viewer-aware. Private and
   restricted Knowledge is owner-readable for the MVP; unauthorized same-space
   users receive 404 for item reads and cannot create update/archive/relation
@@ -75,18 +72,23 @@ Proposals are the product review and application boundary for durable mutations.
 - Retrieval maintenance and diagnostics packet apply records creator-owned
   review of owner-private retrieval work. A space admin cannot accept another
   user's private packet through the current appliers. Retrieval maintenance
-  packets may create child pending Knowledge relation proposals for supported
-  relation suggestions. Diagnostics packets only acknowledge review and do not
+  packets may create child pending `object_relation_create` proposals for
+  supported relation suggestions. Diagnostics packets only acknowledge review and do not
   write canonical Knowledge or Memory.
 - Claim Candidate Packet apply records creator-owned review of owner-private
   candidate claim work, or shared `space_ops` review when Brain Ops review mode
   allows it. Accepting a `claim_candidate_packet` creates child pending
-  `claim_create`, `claim_relation_create`, or `object_relation_create`
+  `claim_create` or `object_relation_create`
   proposals from valid candidates only; it does not directly write canonical
-  Claims, Claim Relations, Object Relations, Knowledge, or Memory. Invalid child
+  Claims, Object Relations, Knowledge, or Memory. Invalid child
   candidate payloads are skipped and recorded on the accepted packet payload as
   `skipped_child_proposal_count` plus bounded skip records, instead of being
   silently dropped.
+- Retrieval Brief gap analysis is not a separate proposal route. Brief
+  `uncited_claims`, contradictions, missing topics, stale refs, and thin refs
+  remain artifact metadata until a user/operator explicitly creates a
+  `claim_candidate_packet`, retrieval maintenance packet, diagnostics packet, or
+  Memory maintenance packet from selected artifacts/reports.
 - `policy_change`, `follow_up_task`, `agent_config_update`, and other
   non-memory target mutations are not currently registered server appliers. They
   fail closed until their owning domain registers a server applier.

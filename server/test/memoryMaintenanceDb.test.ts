@@ -105,7 +105,6 @@ async function insertMemory(input: InsertMemoryInput): Promise<void> {
     updated_at: input.updated_at ?? "2026-01-01T00:00:00.000Z",
     tags: [],
     memory_layer: "semantic",
-    memory_kind: "fact",
     source_trust: "user_confirmed",
     supersedes_memory_id: input.supersedes_memory_id ?? null,
   };

@@ -17,7 +17,7 @@ import {
 import { PgRunRepository } from "../runs/repository";
 import { runToOut } from "../runs/runReadModel";
 import { PgRunContextRepository } from "../context/repository";
-import { workspaceProjectReadAccessSql } from "../workspaces/access";
+import { artifactVisibleSql, taskVisibleSql } from "../access/visibility";
 import {
   bounded01,
   boardColumnOut,
@@ -46,7 +46,7 @@ import {
 export class PgTaskRepository {
   constructor(private readonly pool: Pool) {}
 
-  async listBoards(identity: SpaceUserIdentity, filters: { workspaceId: string | null; status: string | null; limit: number; offset: number }) {
+  async listBoards(identity: SpaceUserIdentity, filters: { workspaceId: string | null; projectId: string | null; status: string | null; limit: number; offset: number }) {
     const params: unknown[] = [identity.spaceId];
     const clauses = ["space_id = $1"];
     const add = (value: unknown) => {
@@ -54,6 +54,7 @@ export class PgTaskRepository {
       return `$${params.length}`;
     };
     if (filters.workspaceId) clauses.push(`workspace_id = ${add(filters.workspaceId)}`);
+    if (filters.projectId) clauses.push(`project_id = ${add(filters.projectId)}`);
     if (filters.status) clauses.push(`status = ${add(filters.status)}`);
     else clauses.push("deleted_at IS NULL");
     const where = `WHERE ${clauses.join(" AND ")}`;
@@ -73,14 +74,15 @@ export class PgTaskRepository {
       const boardId = randomUUID();
       await client.query(
         `INSERT INTO boards (
-           id, space_id, workspace_id, name, description, board_type, status,
+           id, space_id, workspace_id, project_id, name, description, board_type, status,
            default_view, sort_order, metadata_json, created_by_user_id,
            created_at, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::int, $10::jsonb, $11, $12, $12)`,
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::int, $11::jsonb, $12, $13, $13)`,
         [
           boardId,
           identity.spaceId,
           optionalString(body.workspace_id),
+          optionalString(body.project_id),
           requiredString(body.name, "name"),
           optionalString(body.description),
           optionalString(body.board_type) ?? "workspace",
@@ -128,13 +130,15 @@ export class PgTaskRepository {
       `UPDATE boards SET
          name = COALESCE($3, name),
          description = CASE WHEN $4::boolean THEN $5 ELSE description END,
-         board_type = COALESCE($6, board_type),
-         status = COALESCE($7, status),
-         default_view = CASE WHEN $8::boolean THEN $9 ELSE default_view END,
-         sort_order = CASE WHEN $10::boolean THEN $11::int ELSE sort_order END,
-         metadata_json = CASE WHEN $12::boolean THEN $13::jsonb ELSE metadata_json END,
-         deleted_at = CASE WHEN $14::boolean THEN $15::timestamptz ELSE deleted_at END,
-         updated_at = $16
+         workspace_id = CASE WHEN $6::boolean THEN $7 ELSE workspace_id END,
+         project_id = CASE WHEN $8::boolean THEN $9 ELSE project_id END,
+         board_type = COALESCE($10, board_type),
+         status = COALESCE($11, status),
+         default_view = CASE WHEN $12::boolean THEN $13 ELSE default_view END,
+         sort_order = CASE WHEN $14::boolean THEN $15::int ELSE sort_order END,
+         metadata_json = CASE WHEN $16::boolean THEN $17::jsonb ELSE metadata_json END,
+         deleted_at = CASE WHEN $18::boolean THEN $19::timestamptz ELSE deleted_at END,
+         updated_at = $20
        WHERE space_id = $1 AND id = $2`,
       [
         identity.spaceId,
@@ -142,6 +146,10 @@ export class PgTaskRepository {
         optionalString(body.name),
         Object.hasOwn(body, "description"),
         optionalString(body.description),
+        Object.hasOwn(body, "workspace_id"),
+        optionalString(body.workspace_id),
+        Object.hasOwn(body, "project_id"),
+        optionalString(body.project_id),
         optionalString(body.board_type),
         optionalString(body.status),
         Object.hasOwn(body, "default_view"),
@@ -160,12 +168,13 @@ export class PgTaskRepository {
 
   async listBoardTasks(identity: SpaceUserIdentity, boardId: string, limit: number, offset: number) {
     if (!(await this.getBoard(identity, boardId))) throw new HttpError(404, "Board not found");
-    return this.listTasks(identity, { boardId, workspaceId: null, status: null, assignedToMe: false, q: null, limit, offset });
+    return this.listTasks(identity, { boardId, workspaceId: null, projectId: null, status: null, assignedToMe: false, q: null, limit, offset });
   }
 
   async listTasks(identity: SpaceUserIdentity, filters: {
     boardId: string | null;
     workspaceId: string | null;
+    projectId: string | null;
     status: string | null;
     assignedToMe: boolean;
     q: string | null;
@@ -189,7 +198,7 @@ export class PgTaskRepository {
       "sm.user_id = $1",
       "sm.status = 'active'",
       "t.deleted_at IS NULL",
-      "(t.visibility IN ('space_shared', 'workspace_shared') OR t.created_by_user_id = $1 OR t.assigned_user_id = $1 OR t.claimed_by_user_id = $1)",
+      taskVisibleSql({ userExpr: "$1" }),
       "(t.assigned_user_id = $1 OR t.claimed_by_user_id = $1 OR t.created_by_user_id = $1)",
     ];
     if (filters.status) {
@@ -217,7 +226,7 @@ export class PgTaskRepository {
     const now = new Date().toISOString();
     const result = await this.pool.query<TaskRow>(
       `INSERT INTO tasks (
-         id, space_id, workspace_id, board_id, column_id, parent_task_id,
+         id, space_id, workspace_id, project_id, board_id, column_id, parent_task_id,
          title, description, task_type, status, priority, risk_level, visibility,
          created_by_user_id, assigned_user_id, assigned_agent_id,
          source_activity_id, source_run_id, source_proposal_id, source_artifact_id,
@@ -225,18 +234,19 @@ export class PgTaskRepository {
          due_at, start_after, max_runs, max_cost, max_duration_seconds,
          policy_json, metadata_json, tags, created_at, updated_at
        ) VALUES (
-         $1, $2, $3, $4, $5, $6,
-         $7, $8, $9, $10, $11, $12, $13,
-         $14, $15, $16,
-         $17, $18, $19, $20,
-         $21::jsonb, $22, $23::jsonb,
-         $24::timestamptz, $25::timestamptz, $26::int, $27::float, $28::int,
-         $29::jsonb, $30::jsonb, $31::jsonb, $32, $32
+         $1, $2, $3, $4, $5, $6, $7,
+         $8, $9, $10, $11, $12, $13, $14,
+         $15, $16, $17,
+         $18, $19, $20, $21,
+         $22::jsonb, $23, $24::jsonb,
+         $25::timestamptz, $26::timestamptz, $27::int, $28::float, $29::int,
+         $30::jsonb, $31::jsonb, $32::jsonb, $33, $33
        ) RETURNING ${TASK_COLUMNS}`,
       [
         randomUUID(),
         identity.spaceId,
         optionalString(body.workspace_id),
+        optionalString(body.project_id),
         optionalString(body.board_id),
         optionalString(body.column_id),
         optionalString(body.parent_task_id),
@@ -284,32 +294,33 @@ export class PgTaskRepository {
          title = COALESCE($3, title),
          description = CASE WHEN $4::boolean THEN $5 ELSE description END,
          workspace_id = CASE WHEN $6::boolean THEN $7 ELSE workspace_id END,
-         board_id = CASE WHEN $8::boolean THEN $9 ELSE board_id END,
-         column_id = CASE WHEN $10::boolean THEN $11 ELSE column_id END,
-         parent_task_id = CASE WHEN $12::boolean THEN $13 ELSE parent_task_id END,
-         task_type = COALESCE($14, task_type),
-         status = COALESCE($15, status),
-         priority = COALESCE($16, priority),
-         risk_level = COALESCE($17, risk_level),
-         assigned_user_id = CASE WHEN $18::boolean THEN $19 ELSE assigned_user_id END,
-         assigned_agent_id = CASE WHEN $20::boolean THEN $21 ELSE assigned_agent_id END,
-         claimed_by_user_id = CASE WHEN $22::boolean THEN $23 ELSE claimed_by_user_id END,
-         claimed_by_agent_id = CASE WHEN $24::boolean THEN $25 ELSE claimed_by_agent_id END,
-         completed_at = CASE WHEN $26::boolean THEN $27::timestamptz ELSE completed_at END,
-         cancelled_at = CASE WHEN $28::boolean THEN $29::timestamptz ELSE cancelled_at END,
-         blocked_reason = CASE WHEN $30::boolean THEN $31 ELSE blocked_reason END,
-         due_at = CASE WHEN $32::boolean THEN $33::timestamptz ELSE due_at END,
-         start_after = CASE WHEN $34::boolean THEN $35::timestamptz ELSE start_after END,
-         estimated_effort = CASE WHEN $36::boolean THEN $37 ELSE estimated_effort END,
-         actual_effort = CASE WHEN $38::boolean THEN $39 ELSE actual_effort END,
-         max_runs = CASE WHEN $40::boolean THEN $41::int ELSE max_runs END,
-         max_cost = CASE WHEN $42::boolean THEN $43::float ELSE max_cost END,
-         max_duration_seconds = CASE WHEN $44::boolean THEN $45::int ELSE max_duration_seconds END,
-         policy_json = CASE WHEN $46::boolean THEN $47::jsonb ELSE policy_json END,
-         metadata_json = CASE WHEN $48::boolean THEN $49::jsonb ELSE metadata_json END,
-         tags = CASE WHEN $50::boolean THEN $51::jsonb ELSE tags END,
-         deleted_at = CASE WHEN $52::boolean THEN $53::timestamptz ELSE deleted_at END,
-         updated_at = $54
+         project_id = CASE WHEN $8::boolean THEN $9 ELSE project_id END,
+         board_id = CASE WHEN $10::boolean THEN $11 ELSE board_id END,
+         column_id = CASE WHEN $12::boolean THEN $13 ELSE column_id END,
+         parent_task_id = CASE WHEN $14::boolean THEN $15 ELSE parent_task_id END,
+         task_type = COALESCE($16, task_type),
+         status = COALESCE($17, status),
+         priority = COALESCE($18, priority),
+         risk_level = COALESCE($19, risk_level),
+         assigned_user_id = CASE WHEN $20::boolean THEN $21 ELSE assigned_user_id END,
+         assigned_agent_id = CASE WHEN $22::boolean THEN $23 ELSE assigned_agent_id END,
+         claimed_by_user_id = CASE WHEN $24::boolean THEN $25 ELSE claimed_by_user_id END,
+         claimed_by_agent_id = CASE WHEN $26::boolean THEN $27 ELSE claimed_by_agent_id END,
+         completed_at = CASE WHEN $28::boolean THEN $29::timestamptz ELSE completed_at END,
+         cancelled_at = CASE WHEN $30::boolean THEN $31::timestamptz ELSE cancelled_at END,
+         blocked_reason = CASE WHEN $32::boolean THEN $33 ELSE blocked_reason END,
+         due_at = CASE WHEN $34::boolean THEN $35::timestamptz ELSE due_at END,
+         start_after = CASE WHEN $36::boolean THEN $37::timestamptz ELSE start_after END,
+         estimated_effort = CASE WHEN $38::boolean THEN $39 ELSE estimated_effort END,
+         actual_effort = CASE WHEN $40::boolean THEN $41 ELSE actual_effort END,
+         max_runs = CASE WHEN $42::boolean THEN $43::int ELSE max_runs END,
+         max_cost = CASE WHEN $44::boolean THEN $45::float ELSE max_cost END,
+         max_duration_seconds = CASE WHEN $46::boolean THEN $47::int ELSE max_duration_seconds END,
+         policy_json = CASE WHEN $48::boolean THEN $49::jsonb ELSE policy_json END,
+         metadata_json = CASE WHEN $50::boolean THEN $51::jsonb ELSE metadata_json END,
+         tags = CASE WHEN $52::boolean THEN $53::jsonb ELSE tags END,
+         deleted_at = CASE WHEN $54::boolean THEN $55::timestamptz ELSE deleted_at END,
+         updated_at = $56
        WHERE space_id = $1 AND id = $2`,
       [
         identity.spaceId,
@@ -319,6 +330,8 @@ export class PgTaskRepository {
         optionalString(body.description),
         Object.hasOwn(body, "workspace_id"),
         optionalString(body.workspace_id),
+        Object.hasOwn(body, "project_id"),
+        optionalString(body.project_id),
         Object.hasOwn(body, "board_id"),
         optionalString(body.board_id),
         Object.hasOwn(body, "column_id"),
@@ -401,11 +414,9 @@ export class PgTaskRepository {
         instruction: optionalString(body.instruction) ?? defaultTaskInstruction(task),
         scheduled_at: toDbDate(body.scheduled_at),
         parent_run_id: optionalString(body.parent_run_id),
-        adapter_type: optionalString(body.adapter_type),
         context_artifact_ids: contextArtifactIds,
       });
       const now = new Date().toISOString();
-      await client.query(`UPDATE runs SET task_id = $3, updated_at = $4 WHERE space_id = $1 AND id = $2`, [identity.spaceId, run.id, taskId, now]);
       await client.query(
         `INSERT INTO task_runs (id, space_id, task_id, run_id, role, created_at)
          VALUES ($1, $2, $3, $4, $5, $6)
@@ -457,38 +468,19 @@ export class PgTaskRepository {
          JOIN tasks t ON t.id = ta.task_id AND t.space_id = ta.space_id
          JOIN artifacts a ON a.id = ta.artifact_id AND a.space_id = ta.space_id
         WHERE ta.space_id = $1 AND ta.task_id = $2
-          AND (
-            a.visibility IN ('space_shared', 'public_template')
-            OR (
-              a.visibility = 'workspace_shared'
-              AND a.workspace_id IS NOT NULL
-              AND a.workspace_id = t.workspace_id
-              AND ${workspaceProjectReadAccessSql({ spaceExpr: "a.space_id", workspaceExpr: "a.workspace_id", userExpr: "$3" })}
-            )
-            OR (a.owner_user_id IS NULL AND a.visibility NOT IN ('workspace_shared', 'restricted', 'selected_users'))
-            OR a.owner_user_id = $3
-          )`,
+          AND ${artifactVisibleSql({ userExpr: "$3", workspaceMatchExpr: "t.workspace_id" })}`,
       [identity.spaceId, taskId, identity.userId],
     );
     const rows = await this.pool.query<TaskArtifactRow>(
-      `SELECT ta.id, ta.space_id, ta.task_id, ta.artifact_id, ta.role, ta.created_at,
-              a.space_id AS artifact_space_id, a.run_id, a.proposal_id, a.artifact_type,
+      `SELECT ta.id, ta.space_id, ta.task_id, ta.artifact_id, ta.run_id AS task_artifact_run_id,
+              ta.role, ta.created_at,
+              a.space_id AS artifact_space_id, a.run_id AS artifact_run_id, a.proposal_id, a.artifact_type,
               a.title, a.mime_type, a.visibility, a.created_at AS artifact_created_at
          FROM task_artifacts ta
          JOIN tasks t ON t.id = ta.task_id AND t.space_id = ta.space_id
          JOIN artifacts a ON a.id = ta.artifact_id AND a.space_id = ta.space_id
-        WHERE ta.space_id = $1 AND ta.task_id = $2
-          AND (
-            a.visibility IN ('space_shared', 'public_template')
-            OR (
-              a.visibility = 'workspace_shared'
-              AND a.workspace_id IS NOT NULL
-              AND a.workspace_id = t.workspace_id
-              AND ${workspaceProjectReadAccessSql({ spaceExpr: "a.space_id", workspaceExpr: "a.workspace_id", userExpr: "$3" })}
-            )
-            OR (a.owner_user_id IS NULL AND a.visibility NOT IN ('workspace_shared', 'restricted', 'selected_users'))
-            OR a.owner_user_id = $3
-          )
+       WHERE ta.space_id = $1 AND ta.task_id = $2
+          AND ${artifactVisibleSql({ userExpr: "$3", workspaceMatchExpr: "t.workspace_id" })}
         ORDER BY ta.created_at DESC, ta.id DESC
         LIMIT $4 OFFSET $5`,
       [identity.spaceId, taskId, identity.userId, limit, offset],
@@ -565,8 +557,9 @@ export class PgTaskRepository {
         `SELECT count(DISTINCT ta.artifact_id)::text AS total
            FROM task_artifacts ta
            JOIN artifacts a ON a.id = ta.artifact_id AND a.space_id = ta.space_id
-          WHERE ta.space_id = $1 AND ta.task_id = $2 AND ta.artifact_id::text = ANY($3::text[])`,
-        [identity.spaceId, taskId, distinct],
+          WHERE ta.space_id = $1 AND ta.task_id = $2 AND ta.artifact_id::text = ANY($3::text[])
+            AND ($4::varchar IS NULL OR ta.run_id = $4)`,
+        [identity.spaceId, taskId, distinct, runId],
       );
       if (countFromRow(linked.rows[0]) !== distinct.length) {
         throw new HttpError(422, "evidence_artifact_ids must be linked to the task through TaskArtifact");
@@ -656,12 +649,12 @@ async function getVisibleTaskRow(db: Queryable, identity: SpaceUserIdentity, tas
   return row;
 }
 
-function buildTaskWhere(identity: SpaceUserIdentity, filters: { boardId: string | null; workspaceId: string | null; status: string | null; assignedToMe: boolean; q: string | null }) {
+function buildTaskWhere(identity: SpaceUserIdentity, filters: { boardId: string | null; workspaceId: string | null; projectId: string | null; status: string | null; assignedToMe: boolean; q: string | null }) {
   const params: unknown[] = [identity.spaceId, identity.userId];
   const clauses = [
     "t.space_id = $1",
     "t.deleted_at IS NULL",
-    "(t.visibility IN ('space_shared', 'workspace_shared') OR t.created_by_user_id = $2 OR t.assigned_user_id = $2 OR t.claimed_by_user_id = $2)",
+    taskVisibleSql({ userExpr: "$2" }),
   ];
   const add = (value: unknown) => {
     params.push(value);
@@ -669,6 +662,7 @@ function buildTaskWhere(identity: SpaceUserIdentity, filters: { boardId: string 
   };
   if (filters.boardId) clauses.push(`t.board_id = ${add(filters.boardId)}`);
   if (filters.workspaceId) clauses.push(`t.workspace_id = ${add(filters.workspaceId)}`);
+  if (filters.projectId) clauses.push(`t.project_id = ${add(filters.projectId)}`);
   if (filters.status) clauses.push(`t.status = ${add(filters.status)}`);
   if (filters.assignedToMe) clauses.push("(t.assigned_user_id = $2 OR t.claimed_by_user_id = $2)");
   if (filters.q) clauses.push(`(t.title ILIKE ${add(`%${filters.q}%`)} OR t.description ILIKE $${params.length})`);

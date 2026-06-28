@@ -102,7 +102,6 @@ function activityRow(overrides: Record<string, unknown> = {}) {
     visibility: "space_shared",
     processed_at: null,
     discarded_at: null,
-    consolidation_status: "pending",
     ...overrides,
   };
 }
@@ -194,25 +193,6 @@ function claimRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function claimRelationRow(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "claim-relation-1",
-    space_id: "space-1",
-    from_claim_id: "claim-1",
-    to_claim_id: "claim-2",
-    relation_type: "supports",
-    status: "active",
-    confidence: 0.8,
-    evidence_summary: null,
-    source_proposal_id: null,
-    created_by_user_id: "user-1",
-    created_by_agent_id: null,
-    created_at: "2026-06-16T00:00:00.000Z",
-    updated_at: "2026-06-16T00:00:00.000Z",
-    ...overrides,
-  };
-}
-
 function objectRelationRow(overrides: Record<string, unknown> = {}) {
   return {
     id: "object-relation-1",
@@ -290,6 +270,8 @@ describe("Leaf domain repository behavior", () => {
   it("consolidates activity into a pending memory proposal with activity provenance", async () => {
     const db = new FakeDb((sql, params) => {
       if (sql.includes("FROM activity_records")) return [activityRow()];
+      if (sql.includes("FROM retrieval_aliases")) return [];
+      if (sql.includes("FROM retrieval_chunks")) return [];
       if (sql.includes("INSERT INTO proposals")) return [proposalRow(params)];
       if (sql.includes("UPDATE activity_records")) return [];
       throw new Error(`unexpected SQL: ${sql}`);
@@ -306,6 +288,67 @@ describe("Leaf domain repository behavior", () => {
         source_trust: "user_confirmed",
       }),
     ]);
+  });
+
+  it("pre-dedupes activity consolidation against visible memory", async () => {
+    let proposalInsertCount = 0;
+    let activityUpdateSql = "";
+    let activityUpdateParams: readonly unknown[] | null = null;
+    const db = new FakeDb((sql, params) => {
+      if (sql.includes("FROM activity_records")) return [activityRow()];
+      if (sql.includes("FROM retrieval_aliases")) return [];
+      if (sql.includes("FROM retrieval_chunks")) {
+        return [{
+          object_type: "memory_entry",
+          object_id: "memory-1",
+          object_kind: "experience",
+          object_kind_label: null,
+          title: "Existing memory",
+          source_connection_ids_json: [],
+          snippet: "Remember the sourced activity.",
+          matched_text: "Remember the sourced activity.",
+          matched_field: "plain_text",
+          updated_at: "2026-06-16T00:00:00.000Z",
+          rank: 1,
+        }];
+      }
+      if (sql.includes("FROM memory_entries")) {
+        return [{
+          id: "memory-1",
+          space_id: "space-1",
+          deleted_at: null,
+          sensitivity_level: "normal",
+          visibility: "space_shared",
+          owner_user_id: "user-1",
+          scope_type: "user",
+          workspace_id: null,
+          selected_user_ids: null,
+          project_id: null,
+          title: "Existing memory",
+          content: "Remember the sourced activity.",
+        }];
+      }
+      if (sql.includes("FROM retrieval_edges")) return [];
+      if (sql.includes("INSERT INTO memory_access_logs")) return [];
+      if (sql.startsWith("UPDATE memory_entries")) return [];
+      if (sql.includes("INSERT INTO proposals")) {
+        proposalInsertCount += 1;
+        return [proposalRow(params)];
+      }
+      if (sql.includes("UPDATE activity_records")) {
+        activityUpdateSql = sql;
+        activityUpdateParams = params;
+        return [];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const proposals = await new PgActivityRepository(db).consolidate(identity, "activity-1");
+
+    expect(proposals).toEqual([]);
+    expect(proposalInsertCount).toBe(0);
+    expect(activityUpdateSql).toContain("status = 'processed'");
+    expect(activityUpdateParams?.[0]).toBe("activity-1");
   });
 
   it("creates intake summary proposals with evidence and intake provenance", async () => {
@@ -422,6 +465,7 @@ describe("Leaf domain repository behavior", () => {
 
   it("creates Knowledge proposals with knowledge-specific provenance", async () => {
     const db = new FakeDb((sql, params) => {
+      if (sql.includes("FROM space_object_kinds")) return [];
       if (sql.includes("INSERT INTO proposals")) return [proposalRow(params)];
       throw new Error(`unexpected SQL: ${sql}`);
     });
@@ -440,6 +484,7 @@ describe("Leaf domain repository behavior", () => {
   it("creates Claim proposals with normalized sources", async () => {
     const payloads: Record<string, unknown>[] = [];
     const db = new FakeDb((sql, params) => {
+      if (sql.includes("FROM space_object_kinds")) return [];
       if (sql.includes("FROM source_connections")) {
         return [sourceConnectionRow()];
       }
@@ -479,7 +524,8 @@ describe("Leaf domain repository behavior", () => {
   });
 
   it("rejects claim source refs without a source connection", async () => {
-    const db = new FakeDb(() => {
+    const db = new FakeDb((sql) => {
+      if (sql.includes("FROM space_object_kinds")) return [];
       throw new Error("unexpected DB call");
     });
 
@@ -570,7 +616,7 @@ describe("Leaf domain repository behavior", () => {
     const db = new FakeDb((sql, params) => {
       const norm = sql.replace(/\s+/g, " ");
       if (norm.includes("FROM claims c")) return [claimRow()];
-      if (norm.includes("FROM claim_relations r")) {
+      if (norm.includes("FROM object_relations r")) {
         expect(sql).toContain("JOIN space_objects from_so");
         expect(sql).toContain("JOIN space_objects to_so");
         expect(sql).toContain("from_so.visibility IN ('space_shared', 'workspace_shared')");
@@ -580,7 +626,7 @@ describe("Leaf domain repository behavior", () => {
         expect(sql).toContain("from_so.deleted_at IS NULL");
         expect(sql).toContain("to_so.deleted_at IS NULL");
         expect(params).toEqual(["space-1", "user-1", "claim-1"]);
-        return [claimRelationRow()];
+        return [objectRelationRow({ id: "claim-relation-1" })];
       }
       throw new Error(`unexpected SQL: ${sql}`);
     });

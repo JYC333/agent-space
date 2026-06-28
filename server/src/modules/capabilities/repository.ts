@@ -14,7 +14,9 @@ import {
   type Queryable,
   type SpaceUserIdentity,
 } from "../routeUtils/common";
-import { PgProposalRepository } from "../proposals/repository";
+import { proposalToOut } from "../proposals/repository";
+import { insertProposalRow } from "../proposals/reviewPackets";
+import { assertProjectWriter } from "../projects/access";
 import { getBuiltInCapabilityDefinition } from "./registry";
 import type {
   CapabilityDefinition,
@@ -474,7 +476,7 @@ export class PgCapabilitiesRepository {
     projectId: string,
     body: Record<string, unknown>,
   ): Promise<ProjectWorkflowProfile> {
-    await this.requireProject(identity.spaceId, projectId);
+    await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
     const now = new Date().toISOString();
     const rows = await this.db.query<WorkflowProfileRow>(
       `INSERT INTO project_workflow_profiles (
@@ -503,7 +505,7 @@ export class PgCapabilitiesRepository {
     profileId: string,
     body: Record<string, unknown>,
   ): Promise<ProjectWorkflowProfile> {
-    await this.requireProject(identity.spaceId, projectId);
+    await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
     const current = await this.getWorkflowProfileRow(identity.spaceId, projectId, profileId);
     if (!current) throw new HttpError(404, "Workflow profile not found");
     const now = new Date().toISOString();
@@ -549,44 +551,22 @@ export class PgCapabilitiesRepository {
       project_id?: string | null;
     },
   ): Promise<ProposalOut> {
-    const proposalId = randomUUID();
-    const now = new Date().toISOString();
-    await this.db.query(
-      `INSERT INTO proposals (
-         id, space_id, created_by_run_id, proposal_type, status, risk_level,
-         urgency, preview, title, summary, payload_json, review_deadline,
-         expires_at, created_at, updated_at, reviewed_at, reviewed_by,
-         workspace_id, rationale, created_by_agent_id, created_by_user_id,
-         required_approver_role, visibility, project_id
-       ) VALUES (
-         $1, $2, NULL, $3, 'pending', $4,
-         $5, FALSE, $6, $7, $8::jsonb, NULL,
-         NULL, $9, $9, NULL, NULL,
-         NULL, $10, NULL, $11,
-         'owner', 'space_shared', $12
-       )`,
-      [
-        proposalId,
-        identity.spaceId,
-        input.proposal_type,
-        input.risk_level,
-        input.urgency,
-        input.title,
-        input.summary,
-        JSON.stringify(input.payload_json),
-        now,
-        input.rationale,
-        identity.userId,
-        input.project_id ?? null,
-      ],
-    );
-    const proposal = await new PgProposalRepository(this.db).getVisible(
-      identity.spaceId,
-      identity.userId,
-      proposalId,
-    );
-    if (!proposal) throw new Error("created proposal is not visible");
-    return proposal;
+    const now = new Date();
+    const row = await insertProposalRow(this.db, {
+      spaceId: identity.spaceId,
+      proposalType: input.proposal_type,
+      title: input.title,
+      summary: input.summary,
+      payload: input.payload_json,
+      rationale: input.rationale,
+      riskLevel: input.risk_level,
+      urgency: input.urgency,
+      projectId: input.project_id ?? null,
+      createdByUserId: identity.userId,
+      visibility: "space_shared",
+      requiredApproverRole: "owner",
+    });
+    return proposalToOut(row, now);
   }
 
   private async requireProject(spaceId: string, projectId: string): Promise<void> {

@@ -69,13 +69,12 @@ their existing apply gates.
 Run context selection reads only explicitly linked active evidence through the
 evidence selector. Runs do not read directly from the whole intake pool. Selector
 inputs are relevance/context candidate links only: `context_candidate`,
-`supports`, `mentions`, and `provenance`. Selected evidence references are
-frozen in `ContextSnapshot.included_evidence_refs_json` and in
-`source_refs_json`.
+`supports`, and `mentions`. Selected evidence references are frozen in
+`ContextSnapshot.included_evidence_refs_json` and in `source_refs_json`.
 
 When selected evidence is used in a run context, the original relevance link
-(`context_candidate`, `supports`, `mentions`, or `provenance`) remains
-unchanged, and an additional active `EvidenceLink` is recorded:
+(`context_candidate`, `supports`, or `mentions`) remains unchanged, and an
+additional active `EvidenceLink` is recorded:
 
 - `target_type="run"`
 - `target_id=<run_id>`
@@ -88,9 +87,9 @@ future contexts merely because it was used before.
 
 ## Provenance
 
-`EvidenceLink` is the relevance/context/provenance eligibility link between
-evidence and targets. It controls whether evidence may be selected for a run
-context.
+`EvidenceLink` is the relevance/context eligibility link between evidence and
+targets. It controls whether evidence may be selected for a run context.
+Accepted provenance belongs in `ProvenanceLink`.
 
 `ProvenanceLink` is the durable accepted-object audit chain, especially after a
 proposal is applied. It may point back to `activity`, `proposal`, `artifact`,

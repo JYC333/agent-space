@@ -23,8 +23,6 @@ export function knowledgeProvenance(item: KnowledgeItem): { label: string; value
     { label: 'created_by_user_id', value: item.created_by_user_id },
     { label: 'created_by_agent_id', value: item.created_by_agent_id },
     { label: 'created_by_run_id', value: item.created_by_run_id },
-    { label: 'source_activity_id', value: item.source_activity_id },
-    { label: 'source_artifact_id', value: item.source_artifact_id },
     { label: 'created_from_proposal_id', value: item.created_from_proposal_id },
     { label: 'approved_by_user_id', value: item.approved_by_user_id },
   ]
@@ -68,7 +66,6 @@ export default function KnowledgeDetailHeader({
         <p><span className="font-medium text-foreground">confidence</span> {item.confidence ?? '-'}</p>
         <p><span className="font-medium text-foreground">created</span> {fmt(item.created_at)}</p>
         <p><span className="font-medium text-foreground">updated</span> {fmt(item.updated_at)}</p>
-        {item.source_url && <p className="md:col-span-2 break-all"><span className="font-medium text-foreground">source_url</span> {item.source_url}</p>}
         {item.source_refs.length > 0 && (
           <pre className="md:col-span-2 whitespace-pre-wrap bg-muted/30 rounded-md p-2 border border-border">
             source_refs {JSON.stringify(item.source_refs, null, 2)}

@@ -8,7 +8,8 @@ import {
   type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
 import { PgRunRepository } from "../src/modules/runs/repository";
-import { PgRunJobRepository } from "../src/modules/runs/jobRepository";
+import { PgJobQueueRepository } from "../src/modules/jobs/repository";
+import { contextSnapshotToOut } from "../src/modules/runs/runReadModel";
 import {
   NonTerminalRunError,
   PostRunFinalizationService,
@@ -68,6 +69,7 @@ async function seedAgent(
     status: string;
     system_prompt: string | null;
     runtime_config_json: Record<string, unknown>;
+    skip_runtime_profile: boolean;
   }> = {},
 ): Promise<{ agentId: string; versionId: string }> {
   const agentId = overrides.agent_id ?? randomUUID();
@@ -97,6 +99,17 @@ async function seedAgent(
       JSON.stringify(overrides.runtime_config_json ?? {}),
     ],
   );
+  if (!overrides.skip_runtime_profile) {
+    const adapterType =
+      typeof overrides.runtime_config_json?.adapter_type === "string"
+        ? overrides.runtime_config_json.adapter_type
+        : "model_api";
+    await seedRuntimeProfile(agentId, {
+      adapter_type: adapterType,
+      runtime_config_json: { adapter_type: adapterType },
+      is_default: true,
+    });
+  }
   return { agentId, versionId };
 }
 
@@ -231,10 +244,40 @@ describe("runs repositories against real PostgreSQL", () => {
     expect(snapshot.rows[0]?.request_json).toMatchObject({
       context_artifact_ids: ["artifact-1", "artifact-2"],
     });
+    const snapshotRecord = await repo.getContextSnapshot("space-1", run.context_snapshot_id);
+    expect(contextSnapshotToOut(snapshotRecord)).toMatchObject({
+      id: run.context_snapshot_id,
+      run_id: run.id,
+      agent_id: agentId,
+      request_json: {
+        context_artifact_ids: ["artifact-1", "artifact-2"],
+      },
+    });
     await expect(repo.getRun("space-1", run.id)).resolves.toMatchObject({
       id: run.id,
       system_prompt: "You are a test agent.",
     });
+  });
+
+  it("requires an enabled runtime profile instead of falling back to AgentVersion runtime config", async (ctx) => {
+    if (!available) return ctx.skip();
+    const repo = new PgRunRepository(pool!);
+    const { agentId } = await seedAgent({
+      runtime_config_json: { adapter_type: "claude_code" },
+      skip_runtime_profile: true,
+    });
+
+    await expect(
+      repo.createQueuedRun({
+        agent_id: agentId,
+        space_id: "space-1",
+        user_id: "user-1",
+        mode: "live",
+        run_type: "agent",
+        trigger_origin: "manual",
+        prompt: "hi",
+      }),
+    ).rejects.toThrow("has no enabled runtime profile");
   });
 
   it("resolves the space default ModelProvider when the version has none", async (ctx) => {
@@ -298,11 +341,6 @@ describe("runs repositories against real PostgreSQL", () => {
     const repo = new PgRunRepository(pool!);
     const { agentId } = await seedAgent({
       runtime_config_json: { adapter_type: "model_api" },
-    });
-    await seedRuntimeProfile(agentId, {
-      name: "Default API",
-      adapter_type: "model_api",
-      is_default: true,
     });
     const profileId = await seedRuntimeProfile(agentId, {
       name: "CLI review",
@@ -640,7 +678,7 @@ describe("runs repositories against real PostgreSQL", () => {
 
   it("claims an agent_run job through the real CTE (no ambiguous id)", async (ctx) => {
     if (!available) return ctx.skip();
-    const jobs = new PgRunJobRepository(pool!);
+    const jobs = new PgJobQueueRepository(pool!);
     await seedJob({ job_type: "memory_consolidation", status: "pending" }); // must be ignored
     const target = await seedJob({ job_type: "agent_run", status: "pending" });
 
@@ -657,7 +695,7 @@ describe("runs repositories against real PostgreSQL", () => {
 
   it("reclaims stuck jobs through the multi-CTE statement", async (ctx) => {
     if (!available) return ctx.skip();
-    const jobs = new PgRunJobRepository(pool!);
+    const jobs = new PgJobQueueRepository(pool!);
     const old = new Date(Date.now() - 3600_000).toISOString();
     await seedJob({
       job_type: "agent_run",

@@ -52,8 +52,16 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
 class FakeRepo implements RunExecutionRepositoryPort {
   calls: string[] = [];
   terminalUpdates: RunTerminalUpdate[] = [];
+  degradedUpdates: Array<{
+    run_id: string;
+    space_id: string;
+    error_code: string;
+    error_message: string;
+  }> = [];
   run: RunRecord | null = run();
   lockAcquired = true;
+  failEvents = false;
+  failSteps = false;
 
   async getRun(spaceId: string, runId: string): Promise<RunRecord | null> {
     this.calls.push(`get:${spaceId}:${runId}`);
@@ -103,12 +111,58 @@ class FakeRepo implements RunExecutionRepositoryPort {
     return this.run;
   }
 
+  async markRunDegraded(input: {
+    run_id: string;
+    space_id: string;
+    completed_at: string;
+    error_code: string;
+    error_message: string;
+  }): Promise<RunRecord | null> {
+    this.calls.push(`degraded:${input.error_code}`);
+    if (!this.run || this.run.status !== "succeeded") return null;
+    this.degradedUpdates.push(input);
+    this.run = {
+      ...this.run,
+      status: "degraded",
+      ended_at: input.completed_at,
+      error_message: input.error_message,
+    };
+    return this.run;
+  }
+
+  async markRunWaitingForReview(input: {
+    run_id: string;
+    space_id: string;
+    approval_code: string;
+    message: string;
+    paused_at: string;
+  }): Promise<RunRecord | null> {
+    this.calls.push(`waiting_for_review:${input.approval_code}`);
+    if (!this.run || this.run.status !== "running") return null;
+    this.run = { ...this.run, status: "waiting_for_review" };
+    return this.run;
+  }
+
+  async grantRunApprovalAndRequeue(input: {
+    run_id: string;
+    space_id: string;
+    granted_by_user_id: string;
+    granted_at: string;
+  }): Promise<RunRecord | null> {
+    this.calls.push(`grant_approval:${input.run_id}`);
+    if (!this.run || this.run.status !== "waiting_for_review") return null;
+    this.run = { ...this.run, status: "queued" };
+    return this.run;
+  }
+
   async appendRunEvent(input: RunEventInput): Promise<unknown> {
+    if (this.failEvents) throw new Error("event write failed");
     this.calls.push(`event:${input.event_type}:${input.status}`);
     return {};
   }
 
   async createRunStep(input: RunStepInput): Promise<RunStepRecord> {
+    if (this.failSteps) throw new Error("step write failed");
     this.calls.push(`step:${input.step_type}:${input.status}`);
     return {
       id: "step-1",
@@ -130,6 +184,7 @@ class FakeRepo implements RunExecutionRepositoryPort {
     error_type?: string | null;
     error_message?: string | null;
   }): Promise<boolean> {
+    if (this.failSteps) throw new Error("step update failed");
     this.calls.push(`step_done:${input.status}`);
     return true;
   }
@@ -706,6 +761,109 @@ describe("RunOrchestrationService", () => {
     // Orchestration only appends a finalization event when finalization fails.
     expect(repo.calls).not.toContain("event:run_finalized:succeeded");
     expect(finalizations).toEqual([{ runId: "run-1", spaceId: "space-1" }]);
+  });
+
+  it("marks a successful adapter run degraded when materialization partially fails", async () => {
+    const repo = new FakeRepo();
+    const materializer = {
+      async materializeAdapterResult() {
+        return {
+          items: [
+            {
+              kind: "artifact",
+              status: "failed",
+              error_code: "output_artifact_materialization_error",
+              error_message: "artifact denied",
+            },
+          ],
+          errors: ["artifact:output_artifact_materialization_error:artifact denied"],
+        };
+      },
+      async finalizeRun() {
+        return {
+          kind: "activity",
+          status: "succeeded",
+          activity_id: "finalization-1",
+          metadata_json: { operation: "finalization.finalize" },
+        };
+      },
+    } as unknown as RunMaterializationService;
+    const service = new RunOrchestrationService(config(), repo, {
+      policyEnforcer: allowPolicy,
+      managedApi: {
+        executeRuntimeHost: async () => ({
+          success: true,
+          stdout: "done",
+          stderr: "",
+          output_text: "done",
+          output_json: { adapter_type: "ts_agent_host" },
+          exit_code: 0,
+          error_text: null,
+          error_code: null,
+          started_at: "2026-06-12T10:00:00.000Z",
+          completed_at: "2026-06-12T10:00:01.000Z",
+          model: "gpt-4o-mini",
+          usage: null,
+          events: [],
+          adapter_metadata: { adapter_type: "ts_agent_host" },
+          adapter_log_json: null,
+        }),
+      },
+      materializer,
+    });
+
+    await expect(
+      service.executeRun({
+        run_id: "run-1",
+        space_id: "space-1",
+        worker_id: "worker-1",
+        command_source: "job",
+      }),
+    ).resolves.toMatchObject({ status: "degraded" });
+    expect(repo.terminalUpdates[0]).toMatchObject({
+      status: "degraded",
+      output_json: {
+        materialization_errors: ["artifact:output_artifact_materialization_error:artifact denied"],
+      },
+    });
+  });
+
+  it("treats run step and event writes as best-effort around terminal status", async () => {
+    const repo = new FakeRepo();
+    repo.failEvents = true;
+    repo.failSteps = true;
+    const service = new RunOrchestrationService(config(), repo, {
+      policyEnforcer: allowPolicy,
+      managedApi: {
+        executeRuntimeHost: async () => ({
+          success: true,
+          stdout: "done",
+          stderr: "",
+          output_text: "done",
+          output_json: { adapter_type: "ts_agent_host" },
+          exit_code: 0,
+          error_text: null,
+          error_code: null,
+          started_at: "2026-06-12T10:00:00.000Z",
+          completed_at: "2026-06-12T10:00:01.000Z",
+          model: "gpt-4o-mini",
+          usage: null,
+          events: [],
+          adapter_metadata: { adapter_type: "ts_agent_host" },
+          adapter_log_json: null,
+        }),
+      },
+    });
+
+    await expect(
+      service.executeRun({
+        run_id: "run-1",
+        space_id: "space-1",
+        worker_id: "worker-1",
+        command_source: "job",
+      }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+    expect(repo.terminalUpdates[0]).toMatchObject({ status: "succeeded" });
   });
 
   it("fails closed before adapter invocation when policy denies the run", async () => {

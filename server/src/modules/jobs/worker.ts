@@ -139,16 +139,3 @@ export type AgentRunJobHandler = (
   job: JobEnvelopeForHandler,
 ) => Promise<JobHandlerResult>;
 
-/** @deprecated Use {@link JobWorker} — kept for runs module compatibility. */
-export class RunJobWorker extends JobWorker {
-  constructor(
-    queue: JobQueuePort,
-    workerId: string,
-    handler: AgentRunJobHandler,
-    heartbeatIntervalMs?: number,
-  ) {
-    const registry = new JobHandlerRegistry();
-    registry.register("agent_run", handler);
-    super(queue, registry, workerId, ["agent_run"], heartbeatIntervalMs);
-  }
-}

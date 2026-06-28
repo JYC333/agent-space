@@ -27,6 +27,7 @@ import {
 } from "./secretRefCrypto";
 import { mapProviderRowToDto } from "./dbReader";
 import { resolveNetworkProfileRepository } from "../networkProfiles";
+import { isSpaceOwnerOrAdmin } from "../access/roles";
 import {
   ROTATION_STRATEGIES,
   configRecord,
@@ -550,7 +551,7 @@ class PgProviderCommandStore implements ProviderCommandStore {
 
   private async canAdminSpace(userId: string, spaceId: string): Promise<boolean> {
     const role = await this.userSpaceRole(userId, spaceId);
-    return role === "owner" || role === "admin";
+    return isSpaceOwnerOrAdmin(role);
   }
 
   async grantProviderToSpace(

@@ -323,7 +323,10 @@ Materialization error codes → `tool` failure_layer (all via exact map):
 | Bridge (`create_from_run_evaluation`) | Artifacts linked to the evaluated Run via `Artifact.run_id` | No |
 | Manual (`create_manual_task_evaluation`) | Caller-supplied `evidence_artifact_ids` | Yes — all IDs must be linked through `TaskArtifact` |
 
-Bridge rows do not create `TaskArtifact` rows as a side effect.
+When a manual task evaluation also supplies `run_id`, that run must be linked to
+the task through `TaskRun`, and each evidence artifact must be linked through a
+`TaskArtifact` row whose `run_id` matches the evaluation run. Bridge rows do not
+create `TaskArtifact` rows as a side effect.
 
 ### Deterministic mapping from RunEvaluation.outcome_status
 

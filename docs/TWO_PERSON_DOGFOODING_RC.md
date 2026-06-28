@@ -395,10 +395,10 @@ curl -s "http://localhost:3000/api/v1/activity?space_id=<user-a-personal-space-i
 Trigger consolidation or create a proposal manually:
 ```bash
 # Consolidate activity into proposal
-curl -s -X POST "http://localhost:3000/api/v1/activity/consolidate" \
+curl -s -X POST "http://localhost:3000/api/v1/memory/consolidation/run" \
   -H "X-API-Key: <user-a-api-key>" \
   -H "Content-Type: application/json" \
-  -d '{"space_id": "<user-a-personal-space-id>"}'
+  -d '{"batch_limit": 50}'
 
 # Check proposals
 curl -s "http://localhost:3000/api/v1/proposals?space_id=<user-a-personal-space-id>" \
@@ -416,10 +416,14 @@ curl -s -X POST "http://localhost:3000/api/v1/proposals/<proposal-id>/accept" \
   -d '{"space_id": "<user-a-personal-space-id>"}'
 # Expected: 200 with resulting_memory_id
 
-# Confirm MemoryEntry has source_activity_id set
+# Confirm MemoryEntry exists and provenance_links carry the Activity source
 curl -s "http://localhost:3000/api/v1/memory/<memory-id>?space_id=<user-a-personal-space-id>" \
   -H "X-API-Key: <user-a-api-key>"
-# Expected: source_activity_id not null; source_trust present
+# Expected: source_trust present
+
+psql "$SERVER_DATABASE_URL" -c \
+  "select source_type, source_id from provenance_links where target_type = 'memory' and target_id = '<memory-id>';"
+# Expected: one row with source_type='activity' and source_id=<activity-id>
 ```
 
 ### Step 8 — Memory archive

@@ -35,12 +35,14 @@ division of responsibility. They must not duplicate the same payload:
 - **`RunEvent` is the append-only audit source of truth.** It carries the
   detailed phase payload — `summary`, `metadata_json`, exposure/trust levels,
   error codes — and is written through the server runs repository. Rows are never
-  updated or deleted.
+  updated or deleted. Event writes are best-effort and must not block terminal
+  run status writes.
 - **`RunStep` is the coarse lifecycle/status projection.** A step carries only
   `step_type`, `status`, `title`, structured FKs (artifact_id,
   proposal_id, …), timing, and `error_type`/`error_message`.
   RunStep writers must **not** receive `metadata_json` or `*_summary`
-  detail that already lives on a `RunEvent`.
+  detail that already lives on a `RunEvent`. Step writes are best-effort
+  lifecycle summaries.
 
 Rule of thumb: rich, queryable phase detail goes on `RunEvent`; a `RunStep` is a
 human-/UI-facing lifecycle marker. New orchestration code must not write the same
@@ -68,10 +70,13 @@ Run output materialization supports:
 - `output_json.proposed_changes` for proposal creation.
 - `produced_artifact_paths` from the runtime result for file-backed artifacts.
 
-Materialization records errors in `run.output_json.materialization_errors` when structured output cannot be safely converted into durable records. Safe records are still created when possible.
+Materialization records errors in `run.output_json.materialization_errors` when structured output cannot be safely converted into durable records. Safe records are still created when possible. If the adapter succeeds but artifact/proposal/finalization materialization partially fails, the run is marked `degraded`.
 
-Claim/ObjectRelation proposal materialization is packet-only: `claim_*`,
-`claim_relation_*`, and `object_relation_*` entries must carry a structured
+Artifact INSERTs run the `artifact.persist` policy gate first. Proposal INSERTs
+run the `proposal.create` policy gate first.
+
+Claim/ObjectRelation proposal materialization is packet-only: `claim_*` and
+`object_relation_*` entries must carry a structured
 `payload_json` or `payload` object with a matching `operation`. The materializer
 does not infer claims or relations from free text, gap-analysis strings, or flat
 proposal-envelope fields.
@@ -80,7 +85,10 @@ proposal-envelope fields.
 
 - Runtime/provider execution is outside the core product boundary and should be represented through adapter results.
 - Managed artifacts and proposals are durable product records.
-- Capability execution uses the same Run and adapter result path as other runtimes: `adapter_type="capability"` resolves an enabled local capability, stores its normalized result in `Run.output_json`, and materializes returned artifacts and activities.
+- Native capability execution is planned, not active. System bookkeeping runs may
+  carry `capability_id` / `capabilities_json` provenance, but they do not execute
+  `adapter_type="capability"`; that adapter spec remains disabled until a native
+  executor exists.
 - External workspace capabilities default **disabled**; enable state persists in `$AGENT_SPACE_HOME/config/settings.yaml` (`capabilities.enabled_external_capabilities`) and survives registry reload.
 - Disabled external capabilities fail at adapter resolution with `capability_disabled` before execution.
 

@@ -108,6 +108,7 @@ export async function runMemoryMaintenanceJobOnce(
       projectId: options.project_id ?? null,
       scanMode: "full",
       cursor: row.cursor,
+      excludePersonalVisibility: options.review_scope === "space_ops",
     });
     const scanOptions = {
       ...options,

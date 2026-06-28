@@ -5,6 +5,8 @@ import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
 import { introspectIdentity } from "../auth/identity";
 
+export { canReadByVisibility } from "../access/visibility";
+
 export interface QueryResult<Row> {
   rows: Row[];
   rowCount: number | null;
@@ -185,19 +187,6 @@ export function toDbDate(value: unknown): string | null {
   const date = new Date(text);
   if (Number.isNaN(date.getTime())) throw new HttpError(422, "invalid datetime");
   return date.toISOString();
-}
-
-export function canReadByVisibility(
-  visibility: string | null | undefined,
-  userId: string,
-  candidates: readonly (string | null | undefined)[],
-): boolean {
-  const value = (visibility || "space_shared").toLowerCase();
-  if (value === "space_shared" || value === "workspace_shared") return true;
-  if (value === "private" || value === "restricted" || value === "selected_users") {
-    return candidates.some((candidate) => candidate === userId);
-  }
-  return false;
 }
 
 export async function withDbTransaction<T>(

@@ -106,9 +106,9 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         query: optionalString(body.query) ?? optionalString(q.query),
         agentMemoryPolicy: null,
         includeSystemScope: true,
-        // Project cut only when the caller scopes the request to a project;
-        // absent project_id keeps the legacy (unfiltered) behavior.
-        projectId: projectId ?? undefined,
+        // null = project-free memories only; undefined = no filter (all space memories).
+        // Omitting project_id yields project-free context, not an unfiltered dump.
+        projectId: projectId ?? null,
       });
       const sessionSummary = await repo.loadLatestSessionSummary(identity.spaceId, sessionId);
       const evidenceSelections = await repo.selectEvidenceForContext({

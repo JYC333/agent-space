@@ -4,7 +4,8 @@ import type { ServerConfig } from "../../config";
 import type { ModuleContext } from "../../gateway/routeRegistry";
 import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
-import { authRepositoryFromConfig, introspectIdentity } from "../auth/identity";
+import { introspectIdentity } from "../auth/identity";
+import { requireSpaceOwnerOrAdmin } from "../routeUtils/access";
 import {
   NetworkProfileError,
   resolveNetworkProfileRepository,
@@ -75,41 +76,11 @@ function sendDomainError(reply: FastifyReply, error: unknown): FastifyReply {
   return reply.code(statusCode).send({ detail: message });
 }
 
-async function requireSpaceAdmin(
-  config: ServerConfig,
-  identity: { spaceId: string; userId: string },
-  reply: FastifyReply,
-): Promise<boolean> {
-  const repository = authRepositoryFromConfig(config);
-  if (!repository) {
-    sendErrorEnvelope(
-      reply,
-      502,
-      errorEnvelope("identity_unavailable", "Identity introspection failed"),
-    );
-    return false;
-  }
-  const space = await repository.getSpaceForUser(identity.userId, identity.spaceId);
-  if (!space) {
-    reply.code(404).send({ detail: "Space not found" });
-    return false;
-  }
-  if ("statusCode" in space) {
-    reply.code(space.statusCode).send({ detail: space.detail });
-    return false;
-  }
-  if (space.role !== "owner" && space.role !== "admin") {
-    reply.code(403).send({ detail: "Requires space owner or admin role" });
-    return false;
-  }
-  return true;
-}
-
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
   app.get("/api/v1/network-profiles", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    if (!(await requireSpaceAdmin(context.config, identity, reply))) return reply;
+    if (!(await requireSpaceOwnerOrAdmin(context.config, identity, reply))) return reply;
     try {
       return reply.send(await resolveNetworkProfileRepository(context.config).list(identity.spaceId));
     } catch (error) {
@@ -120,7 +91,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   app.post("/api/v1/network-profiles", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    if (!(await requireSpaceAdmin(context.config, identity, reply))) return reply;
+    if (!(await requireSpaceOwnerOrAdmin(context.config, identity, reply))) return reply;
     try {
       const body = await parseWith<NetworkProfileCreateInput>(
         "NetworkProfileCreateRequestSchema",
@@ -139,7 +110,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   app.get("/api/v1/network-profiles/:profileId", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    if (!(await requireSpaceAdmin(context.config, identity, reply))) return reply;
+    if (!(await requireSpaceOwnerOrAdmin(context.config, identity, reply))) return reply;
     try {
       const value = await resolveNetworkProfileRepository(context.config).get(
         identity.spaceId,
@@ -155,7 +126,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   app.patch("/api/v1/network-profiles/:profileId", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    if (!(await requireSpaceAdmin(context.config, identity, reply))) return reply;
+    if (!(await requireSpaceOwnerOrAdmin(context.config, identity, reply))) return reply;
     try {
       const body = await parseWith<NetworkProfileUpdateInput>(
         "NetworkProfileUpdateRequestSchema",
@@ -176,7 +147,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   app.delete("/api/v1/network-profiles/:profileId", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    if (!(await requireSpaceAdmin(context.config, identity, reply))) return reply;
+    if (!(await requireSpaceOwnerOrAdmin(context.config, identity, reply))) return reply;
     try {
       await resolveNetworkProfileRepository(context.config).delete(
         identity.spaceId,

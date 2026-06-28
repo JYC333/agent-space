@@ -47,8 +47,7 @@ export class IntakeExtractionWorker {
     const claimed = await this.db.query<ExtractionJobRow>(
       `UPDATE extraction_jobs
           SET status = 'running',
-              started_at = $3,
-              updated_at = $3
+              started_at = $3
         WHERE id = $1
           AND space_id = $2
           AND status = 'pending'
@@ -116,8 +115,7 @@ export class IntakeExtractionWorker {
           SET status = $3,
               completed_at = $4,
               error_code = $5,
-              error_message = $6,
-              updated_at = $4
+              error_message = $6
         WHERE id = $1 AND space_id = $2`,
       [jobId, spaceId, status, now, errorCode, errorMessage],
     );
@@ -154,11 +152,11 @@ export class IntakeExtractionWorker {
       `INSERT INTO extracted_evidence (
          id, space_id, intake_item_id, source_object_type, source_object_id,
          evidence_type, title, content_excerpt, content_hash, artifact_id,
-         extraction_method, confidence, status, metadata_json, created_at, updated_at
+         extraction_method, trust_level, confidence, status, metadata_json, created_at, updated_at
        ) VALUES (
          $1, $2, $3, 'intake_item', $3,
-         'text', $4, $5, $6, $7,
-         'full_text', 0.7, 'candidate', '{}'::jsonb, $8, $8
+         'document', $4, $5, $6, $7,
+         'full_text', 'normal', 0.7, 'candidate', '{}'::jsonb, $8, $8
        )`,
       [
         randomUUID(),
@@ -231,8 +229,8 @@ export class IntakeExtractionWorker {
          title, excerpt, status, read_status, content_state, retention_policy,
          metadata_json, created_at, updated_at
        ) VALUES (
-         $1, $2, 'internal', $3, $4,
-         $5, $6, 'active', 'unread', 'normalized', 'standard',
+         $1, $2, $3, $3, $4,
+         $5, $6, 'new', 'unread', 'normalized', 'standard',
          $7::jsonb, $8, $8
        )
        ON CONFLICT DO NOTHING`,
@@ -250,12 +248,12 @@ export class IntakeExtractionWorker {
     await this.db.query(
       `INSERT INTO extracted_evidence (
          id, space_id, intake_item_id, source_object_type, source_object_id,
-         evidence_type, title, content_excerpt, extraction_method, confidence,
-         status, metadata_json, created_at, updated_at
+         evidence_type, title, content_excerpt, extraction_method, trust_level,
+         confidence, status, metadata_json, created_at, updated_at
        ) VALUES (
          $1, $2, $3, $4, $5,
-         $6, $7, $8, 'internal_normalization', 0.8,
-         'candidate', '{}'::jsonb, $9, $9
+         $6, $7, $8, 'internal_normalization', 'normal',
+         0.8, 'candidate', '{}'::jsonb, $9, $9
        )`,
       [
         randomUUID(),
@@ -273,10 +271,9 @@ export class IntakeExtractionWorker {
       `UPDATE extraction_jobs
           SET intake_item_id = $3,
               items_seen = 1,
-              items_created = 1,
-              updated_at = $4
+              items_created = 1
         WHERE id = $1 AND space_id = $2`,
-      [job.id, job.space_id, itemId, now],
+      [job.id, job.space_id, itemId],
     );
   }
 
@@ -287,7 +284,8 @@ export class IntakeExtractionWorker {
   ): Promise<{ title: string; excerpt: string; evidenceType: string }> {
     if (sourceType === "activity_record") {
       const row = await this.db.query<{ title: string | null; content: string | null }>(
-        `SELECT title, content FROM activity_records WHERE space_id = $1 AND id = $2`,
+        `SELECT title, content FROM activity_records
+          WHERE space_id = $1 AND id = $2 AND status NOT IN ('archived', 'failed')`,
         [spaceId, sourceId],
       );
       const activity = row.rows[0];
@@ -385,7 +383,7 @@ export class IntakeExtractionWorker {
          exportable, preview, created_at, updated_at, visibility, trust_level
        ) VALUES (
          $1, $2, 'intake_raw_snapshot', $3, NULL, $4, 'text/html',
-         false, false, $6, $6, 'space_shared', 'medium'
+         false, false, $5, $5, 'space_shared', 'medium'
        )`,
       [artifactId, spaceId, title, relPath, now],
     );

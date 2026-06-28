@@ -1,13 +1,11 @@
-import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
 import { loadActionRegistry } from "../policy/actionRegistry";
 import { enforce } from "../policy/service";
-import {
-  proposalToOut,
-  type ProposalRow,
-} from "../proposals/repository";
+import { proposalToOut } from "../proposals/repository";
+import { insertProposalRow } from "../proposals/reviewPackets";
 import { canReadMemory, type MemoryAuthFields } from "./memoryReadAuth";
+import { canAccessProject } from "./projectAccess";
 
 import type {
   MemoryProposalArchiveCommand,
@@ -62,11 +60,12 @@ interface TargetMemoryRow extends MemoryAuthFields {
   memory_type: string;
   title: string | null;
   content: string | null;
+  project_id: string | null;
 }
 
 const TARGET_MEMORY_COLUMNS = `id, space_id, owner_user_id, workspace_id,
   scope_type, namespace, memory_type, title, content, visibility,
-  sensitivity_level, selected_user_ids, deleted_at`;
+  sensitivity_level, selected_user_ids, deleted_at, project_id`;
 
 const SENSITIVITY_LEVELS = new Set([
   "normal",
@@ -201,7 +200,6 @@ export class PgMemoryProposalRepository {
       "provenance_entries",
       "workspace_id",
       "memory_layer",
-      "memory_kind",
     ]);
     const payload: Record<string, unknown> = {
       operation: "update",
@@ -372,9 +370,9 @@ export class PgMemoryProposalRepository {
     const row = result.rows[0];
     if (!row) return null;
     const includeSystemScope = row.scope_type === "system";
-    return canReadMemory(row, { userId, spaceId, workspaceId, includeSystemScope })
-      ? row
-      : null;
+    if (!canReadMemory(row, { userId, spaceId, workspaceId, includeSystemScope })) return null;
+    if (row.project_id && !(await canAccessProject(this.db, spaceId, row.project_id, userId))) return null;
+    return row;
   }
 
   private async enforceProposalCreate(input: {
@@ -449,41 +447,18 @@ export class PgMemoryProposalRepository {
     sensitivityLevel: string | null;
   }): Promise<ProposalOut> {
     const now = new Date();
-    const nowIso = now.toISOString();
-    const result = await this.db.query<ProposalRow>(
-      `INSERT INTO proposals (
-         id, space_id, proposal_type, status, risk_level, urgency, preview,
-         title, summary, payload_json, review_deadline, expires_at, created_at,
-         updated_at, reviewed_at, reviewed_by, workspace_id, rationale,
-         created_by_agent_id, created_by_user_id, required_approver_role,
-         visibility, project_id
-       ) VALUES (
-         $1, $2, $3, 'pending', 'low', 'normal', false,
-         $4, NULL, $5::jsonb, NULL, NULL, $6,
-         $6, NULL, NULL, $7, $8,
-         NULL, $9, NULL,
-         'space_shared', NULL
-       )
-       RETURNING id, space_id, created_by_user_id, workspace_id,
-                 created_by_run_id, proposal_type, status, risk_level, urgency,
-                 preview, title, payload_json, rationale, visibility,
-                 review_deadline, expires_at, created_at, reviewed_at,
-                 project_id,
-                 NULL::varchar AS egress_approval_id,
-                 NULL::varchar AS egress_approval_status`,
-      [
-        randomUUID(),
-        input.spaceId,
-        input.proposalType,
-        input.title,
-        JSON.stringify(input.payload),
-        nowIso,
-        input.workspaceId,
-        input.rationale,
-        input.userId,
-      ],
-    );
-    return proposalToOut(result.rows[0]!, now);
+    const row = await insertProposalRow(this.db, {
+      spaceId: input.spaceId,
+      proposalType: input.proposalType,
+      title: input.title,
+      payload: input.payload,
+      rationale: input.rationale,
+      workspaceId: input.workspaceId,
+      createdByUserId: input.userId,
+      visibility: "space_shared",
+      riskLevel: "low",
+    });
+    return proposalToOut(row, now);
   }
 }
 

@@ -65,7 +65,7 @@ class FakeDb {
     if (norm.startsWith("SELECT id, name, domain") && norm.includes("FROM policies")) {
       return { rows: this._policies, rowCount: this._policies.length };
     }
-    if (norm.startsWith("SELECT id, title, content, namespace, memory_layer, memory_kind")) {
+    if (norm.startsWith("SELECT id, title, content, namespace, memory_layer, memory_type")) {
       return { rows: this._memories, rowCount: this._memories.length };
     }
     if (norm.startsWith("SELECT id, version, status, source_hash")) {
@@ -325,7 +325,7 @@ function mem(over: Partial<Record<string, unknown>> = {}): Record<string, unknow
     content: "Some workspace context.",
     namespace: "workspace.default",
     memory_layer: "semantic",
-    memory_kind: null,
+    memory_type: null,
     version: 1,
     ...over,
   };
@@ -336,9 +336,9 @@ describe("renderMemoryBundleContent", () => {
     expect(renderMemoryBundleContent([])).toBe("");
   });
 
-  it("formats a single memory using memory_kind as group", () => {
+  it("formats a single memory using memory_type as group", () => {
     const content = renderMemoryBundleContent([
-      mem({ memory_kind: "architecture", memory_layer: "semantic" }) as never,
+      mem({ memory_type: "architecture", memory_layer: "semantic" }) as never,
     ]);
     expect(content).toContain("## architecture");
     expect(content).toContain("**Default title**");
@@ -346,18 +346,18 @@ describe("renderMemoryBundleContent", () => {
     expect(content).toContain("Some workspace context.");
   });
 
-  it("falls back to namespace suffix when memory_kind is null", () => {
+  it("falls back to namespace suffix when memory_type is null", () => {
     const content = renderMemoryBundleContent([
-      mem({ memory_kind: null, namespace: "workspace.codebase" }) as never,
+      mem({ memory_type: null, namespace: "workspace.codebase" }) as never,
     ]);
     expect(content).toContain("## codebase");
   });
 
-  it("groups by memory_kind and sorts groups alphabetically", () => {
+  it("groups by memory_type and sorts groups alphabetically", () => {
     const memories = [
-      mem({ id: "m1", memory_kind: "procedure", title: "How to deploy" }),
-      mem({ id: "m2", memory_kind: "architecture", title: "System design" }),
-      mem({ id: "m3", memory_kind: "context", title: "Project background" }),
+      mem({ id: "m1", memory_type: "procedure", title: "How to deploy" }),
+      mem({ id: "m2", memory_type: "architecture", title: "System design" }),
+      mem({ id: "m3", memory_type: "context", title: "Project background" }),
     ];
     const content = renderMemoryBundleContent(memories as never[]);
     const archIdx = content.indexOf("## architecture");

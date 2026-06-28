@@ -116,13 +116,14 @@ Workspace-level roles:
 
 ## Cross-space provenance
 
-`source_pointers` records metadata that an object in one space references an object in another.
-The `/api/v1/source-pointers` API is membership-gated and metadata-only.
-**SourcePointer does not grant read access** — all reads still require membership, visibility,
-and policy checks in the source space. `memory.cross_space_read` remains deny-by-default.
-`PersonalMemoryGrant` is the explicit grant mechanism for allowing a shared-space run to use
-a user's personal-space private memory as reasoning-only context. Federation and
-`visibility=public` remain deferred. See `docs/PERSONAL_MEMORY_GRANT.md`,
+`source_pointers` records metadata that an object in one space references an object in
+another. `/api/v1/source-pointers` is metadata-only: create requires active membership in
+both spaces and validates source object existence.
+**SourcePointer does not grant read access** — all reads still require membership,
+visibility, and policy checks in the source space. `memory.cross_space_read` remains
+deny-by-default. `PersonalMemoryGrant` is the explicit grant mechanism for allowing a
+shared-space run to use a user's personal-space private memory as reasoning-only context.
+Federation and `visibility=public` remain deferred. See `docs/PERSONAL_MEMORY_GRANT.md`,
 `docs/SOURCE_POINTER.md`, `docs/TARGET_VIEW_MODEL.md`, and `docs/FEDERATED_ACCESS_MODEL.md`.
 
 ## See also

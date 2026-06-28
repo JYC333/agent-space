@@ -67,7 +67,7 @@ interface MemorySummaryRow {
   content: string | null;
   namespace: string | null;
   memory_layer: string | null;
-  memory_kind: string | null;
+  memory_type: string | null;
   visibility: string | null;
   sensitivity_level: string | null;
   version: number | string;
@@ -459,7 +459,7 @@ export class PgContextDigestService {
     scopeId: string,
   ): Promise<MemorySummaryRow[]> {
     const result = await this.db.query<MemorySummaryRow>(
-      `SELECT id, title, content, namespace, memory_layer, memory_kind,
+      `SELECT id, title, content, namespace, memory_layer, memory_type,
               visibility, sensitivity_level, version
          FROM memory_entries
         WHERE space_id = $1
@@ -644,7 +644,7 @@ export function renderMemoryBundleContent(memories: MemorySummaryRow[]): string 
 
   const byGroup = new Map<string, MemorySummaryRow[]>();
   for (const m of memories) {
-    const group = m.memory_kind ?? groupFromNamespace(m.namespace) ?? "general";
+    const group = m.memory_type ?? groupFromNamespace(m.namespace) ?? "general";
     const existing = byGroup.get(group) ?? [];
     existing.push(m);
     byGroup.set(group, existing);

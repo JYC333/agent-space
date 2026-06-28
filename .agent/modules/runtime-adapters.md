@@ -20,14 +20,12 @@ live in `server/src/modules/runtimeAdapters/specs.ts`. Specs define:
 - output parser and artifact strategy
 - frontend catalog metadata
 
-`RuntimeAdapter` database rows are no longer a product configuration surface.
-They remain only as legacy nullable foreign-key targets for trace/read-model
-compatibility. New product run creation and frontend configuration must resolve
-through an Agent's selected `AgentRuntimeProfile`. Server execution then uses
-the resulting `Run.adapter_type` plus the run's
-`runtime_profile_snapshot_json.runtime_config_json`, falling back to
-`AgentVersion.runtime_config_json` / `AgentVersion.runtime_policy_json` only
-for legacy runs or Agents without enabled profiles.
+Runtime adapter database rows are not part of the current product schema. Product
+run creation and frontend configuration resolve through an Agent's selected or
+default `AgentRuntimeProfile`. Server execution then uses the resulting
+`Run.adapter_type` plus the run's snapshotted
+`runtime_profile_snapshot_json.runtime_config_json`. Agents without an enabled
+runtime profile cannot create normal agent runs.
 
 The old `/api/v1/runtime-adapters` CRUD, detect, status, probe, and usage API
 is retired. Do not reintroduce instance-level runtime adapter configuration.
@@ -80,13 +78,11 @@ authority under `/api/v1/credentials/cli/*`. The frontend runtime page is
 ## Generic CLI Lifecycle
 
 1. server `runs` creates a run by resolving the final adapter/model binding
-   from the selected `AgentRuntimeProfile`, then legacy explicit run request
-   fields when no profile was selected, then `AgentVersion`, then space default
-   provider fallback. The chosen profile is snapshotted on the run. Execution
-   resolves the final adapter type from `Run.adapter_type`, then
-   `runtime_profile_snapshot_json.runtime_config_json.adapter_type`, then
-   `AgentVersion.runtime_config_json.adapter_type`, then
-   `AgentVersion.runtime_policy_json.default_adapter_type`, then `model_api`.
+   from the selected/default `AgentRuntimeProfile`, then space default provider
+   fallback when the adapter requires a provider. The chosen profile is
+   snapshotted on the run. Execution resolves the final adapter type from
+   `Run.adapter_type` and the immutable
+   `runtime_profile_snapshot_json.runtime_config_json`.
 2. `server/src/modules/runtimeAdapters` validates that the adapter exists
    and is implemented.
 3. Native adapters are planned; no native capability executor is active today.
@@ -99,8 +95,7 @@ authority under `/api/v1/credentials/cli/*`. The frontend runtime page is
    materialization in `codexProviderConfig.ts`.
 5. For local CLI runtimes, `RunOrchestrationService` resolves the run's
    effective tool version from immutable
-   `Run.runtime_profile_snapshot_json.runtime_config_json`, falling back to
-   `AgentVersion.runtime_config_json`, active-space
+   `Run.runtime_profile_snapshot_json.runtime_config_json`, active-space
    `space_runtime_tool_policies`, and installed instance tool versions.
    Disabled, disallowed, or missing versions fail closed before credential
    release. `RuntimeToolRegistry` then resolves that exact installed version
@@ -185,8 +180,8 @@ does not materialize it automatically. Claude Code also reruns its fixed
 postinstall script so the wrapper package places the native binary under
 `bin/claude.exe`. CLI login resolves the instance active binary through
 `RuntimeToolRegistry`. Runtime execution resolves the version pinned on
-`AgentVersion.runtime_config_json.runtime_tool_version`, after applying the
-active-space runtime policy. Neither path falls back to ambient PATH or
+`AgentRuntimeProfile.runtime_config_json.runtime_tool_version`, after applying
+the active-space runtime policy. Neither path falls back to ambient PATH or
 image-global installs.
 
 ## Space Runtime Version Policy
@@ -200,9 +195,8 @@ installs. Each space can set a policy row per CLI runtime:
   selected in that space. Empty means any installed version is allowed.
 
 Agent create/update resolves the effective CLI tool version and stores it on
-the default `AgentRuntimeProfile.runtime_config_json.runtime_tool_version`
-(and on `AgentVersion.runtime_config_json` for compatibility). Runs snapshot
-the selected profile at creation; HTTP workflow execution should select a
+the default `AgentRuntimeProfile.runtime_config_json.runtime_tool_version`. Runs
+snapshot the selected profile at creation; HTTP workflow execution selects a
 runtime profile instead of overriding adapter config. If the pinned version is
 later uninstalled, disabled, or removed from the space allowlist, the run fails
 closed with `runtime_tool_version_unavailable` before credential resolution.
@@ -212,18 +206,16 @@ closed with `runtime_tool_version_unavailable` before credential resolution.
 CLI credential profile ids are UUIDs from `cli_credential_profiles.id`.
 `AgentRuntimeProfile` stores the selected `credential_profile_id`; runs snapshot
 it at creation. When absent, execution falls back to the active-space default
-grant for that runtime. Legacy runs may still read the value from
-`AgentVersion.runtime_config_json`.
+grant for that runtime.
 
 CLI runs fail closed with `runtime_credential_profile_required` when a required
 profile is missing. No ambient HOME or inherited API-key fallback is allowed.
 `credential_id` remains reserved for DB/vault credentials and model-provider
 API keys.
 
-Credential audit rows record metadata only: legacy runtime adapter id when
-available, adapter type, credential profile id, trigger origin, fallback
-flags/reason, and cleanup status. Raw tokens, HOME paths, and credential file
-content are never stored.
+Credential audit rows record metadata only: adapter type, credential profile id,
+trigger origin, fallback flags/reason, and cleanup status. Raw tokens, HOME
+paths, and credential file content are never stored.
 
 ## Managed API Lifecycle
 
@@ -258,10 +250,8 @@ CLI adapters remain the broad tool-bearing agent loop path for the near term.
 Permission bypass is disabled by default. It can be used only when:
 
 - the spec declares support
-- the run's snapshotted runtime profile config, or legacy
-  `AgentVersion.runtime_config_json`, requests `permission_bypass`
-- the run's snapshotted runtime profile policy, or legacy
-  `AgentVersion.runtime_policy_json`, allows `allow_permission_bypass`
+- the run's snapshotted runtime profile config requests `permission_bypass`
+- the run's snapshotted runtime profile policy allows `allow_permission_bypass`
 - the run is high or critical risk
 - execution uses a worktree workspace
 

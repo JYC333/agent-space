@@ -16,7 +16,7 @@ import type { Queryable } from "../routeUtils/common";
 /**
  * Slice F packetization: the discovery report becomes an owner-private (or
  * `space_ops`) artifact plus a single batched `relation_discovery_packet`
- * proposal. Accepting the packet creates child pending `knowledge_relation_create`
+ * proposal. Accepting the packet creates child pending `object_relation_create`
  * / `knowledge_create` proposals — it never writes a canonical edge or item
  * directly. This is the one shared "review-scaling" packet entry point for
  * discovery, mirroring the Memory maintenance and Claim Candidate Packet flows.
@@ -62,7 +62,7 @@ export async function createRelationDiscoveryProposalPacket(
 ): Promise<string> {
   const ownerUserId = normalizedOwner(input.ownerUserId);
   const payload = packetPayload(input, ownerUserId);
-  return insertProposalRow(db, {
+  return (await insertProposalRow(db, {
     spaceId: input.spaceId,
     proposalType: RELATION_DISCOVERY_PACKET_PROPOSAL_TYPE,
     title: titleForReport(input.report),
@@ -72,7 +72,7 @@ export async function createRelationDiscoveryProposalPacket(
       "Review this candidate-relation discovery packet. Accepting creates child pending Knowledge relation/item proposals only; it does not write canonical Knowledge directly.",
     createdByUserId: ownerUserId,
     visibility: visibilityForReviewScope(input.reviewScope),
-  });
+  })).id;
 }
 
 export function registerRelationDiscoveryProposalAppliers(registry: {
@@ -158,27 +158,6 @@ function childDraft(candidate: Record<string, unknown>, context: ProposalApplyCo
     workspaceId: context.proposal.workspace_id ?? null,
     projectId: context.proposal.project_id,
   };
-  if (proposalType === "knowledge_relation_create") {
-    const fromItemId = stringValue(action.from_item_id);
-    const toItemId = stringValue(action.to_item_id);
-    const relationType = stringValue(action.relation_type);
-    if (!fromItemId || !toItemId || fromItemId === toItemId || !relationType) return null;
-    return {
-      ...common,
-      proposalType: "knowledge_relation_create",
-      title: stringValue(candidate.title) ?? "Discovered knowledge relation",
-      payload: {
-        operation: "relation_create",
-        from_item_id: fromItemId,
-        to_item_id: toItemId,
-        relation_type: relationType,
-        status: "active",
-        confidence: numericOrNull(action.confidence),
-        evidence_summary: stringValue(action.evidence_summary) ?? "Discovered candidate relation.",
-        metadata: baseMeta,
-      },
-    };
-  }
   if (proposalType === "object_relation_create") {
     const fromObjectId = stringValue(action.from_object_id);
     const toObjectId = stringValue(action.to_object_id);

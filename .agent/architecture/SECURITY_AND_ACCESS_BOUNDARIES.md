@@ -58,8 +58,10 @@ Rules:
 ## 3. Object Visibility
 
 The visibility values `private`, `restricted`, and `space_shared` are enforced by
-server module read-authority helpers. Unknown visibility values fail closed
-(return False). Enforcement must be applied at:
+server module read-authority helpers. Shared reusable predicates live in
+`server/src/modules/access/visibility.ts`: in-memory row checks
+(`canReadByVisibility`) and SQL predicates for space objects, tasks, and
+artifacts. Unknown visibility values fail closed. Enforcement must be applied at:
 
 - list endpoints
 - detail endpoints
@@ -74,6 +76,12 @@ no-oracle behavior — the caller cannot distinguish "not found" from "not permi
 `private` objects are accessible only to their `owner_user_id` (or `instructed_by_user_id`
 for runs). `restricted` objects behave like private for same-space non-owners. `space_shared`
 objects are accessible to all authenticated members of the same space.
+
+Space membership roles remain separate from persisted policy rows. Shared role
+helpers live in `server/src/modules/access/roles.ts`, and route-level
+owner/admin responses are centralized in `server/src/modules/routeUtils/access.ts`.
+These helpers do not replace `PolicyGateway`; sensitive action gates still go
+through the policy module.
 
 ---
 
@@ -97,14 +105,16 @@ Enforcement is at the SQL query layer: `Session.space_id == space_id` and
 
 Tasks enforce visibility on all read, mutation, and sub-resource paths.
 
-- `GET /tasks` and `GET /tasks/{id}`: visibility enforced via `_can_read_task()`.
+- `GET /tasks` and `GET /tasks/{id}`: visibility enforced via the shared task
+  visibility predicate plus task actor ownership (`created_by`, `assigned`,
+  `claimed`).
 - `PATCH /tasks/{id}` and `POST /tasks/{id}/runs`: visibility enforced before mutation.
 - Sub-resource endpoints (`GET /tasks/{id}/runs`, `/artifacts`, `/proposals`): `user_id`
-  is forwarded to `TaskService.get()` so `_can_read_task()` runs before the sub-resource
-  query.
-- `GET /boards/{board_id}/tasks`: `_can_read_task()` is applied per-row to the result set
-  before returning. Private and restricted tasks are filtered from the board view for
-  non-owners.
+  is forwarded to `TaskService.get()` so task visibility runs before the
+  sub-resource query.
+- `GET /boards/{board_id}/tasks`: task visibility is applied per-row to the
+  result set before returning. Private and restricted tasks are filtered from the
+  board view for non-owners.
 
 Private and restricted tasks are not readable or mutable by same-space non-owners.
 
@@ -114,7 +124,7 @@ Private and restricted tasks are not readable or mutable by same-space non-owner
 
 Activity records enforce visibility on read, mutation, and consolidation paths.
 
-- `GET /activity` and `GET /activity/{id}`: `can_read_scoped_object()` applied with
+- `GET /activity` and `GET /activity/{id}`: `canReadByVisibility()` applied with
   `viewer_user_id`.
 - `PATCH /activity/{id}/review` and `PATCH /activity/{id}/archive`: `viewer_user_id`
   forwarded to the service; non-owners of a private record receive 404.
@@ -274,7 +284,7 @@ user-centered, not request-space-centered.
 
 `GET /me/summary`, `/me/timeline`, `/me/tasks`, `/me/pending` are intentionally cross-space.
 They aggregate across all spaces the user is a member of (`_member_space_ids(db, user_id)`).
-Visibility filter (`can_read_scoped_object`) is applied to tasks and proposals. No raw
+Visibility filters are applied to tasks and proposals. No raw
 artifact payloads or full memory content is returned — pointer metadata only in timeline.
 
 ### 8c. Source Pointers

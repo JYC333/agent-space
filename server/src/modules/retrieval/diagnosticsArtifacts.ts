@@ -25,7 +25,7 @@ export async function createRetrievalDiagnosticsProposalPacket(
 ): Promise<string> {
   const ownerUserId = normalizedOwner(input.ownerUserId);
   const payload = diagnosticsPacketPayload(input, ownerUserId);
-  return insertProposalRow(db, {
+  return (await insertProposalRow(db, {
     spaceId: input.spaceId,
     proposalType: RETRIEVAL_DIAGNOSTICS_PACKET_PROPOSAL_TYPE,
     title: titleForReport(input.report),
@@ -35,7 +35,7 @@ export async function createRetrievalDiagnosticsProposalPacket(
       "Review this retrieval diagnostics packet. Accepting the packet records review acknowledgement only; it does not write canonical Knowledge or Memory.",
     createdByUserId: ownerUserId,
     visibility: visibilityForReviewScope(input.reviewScope),
-  });
+  })).id;
 }
 
 export function registerRetrievalDiagnosticsProposalAppliers(registry: {

@@ -219,15 +219,16 @@ export const pluginService = {
     const descriptor = getOfficialPlugin(pluginId);
     if (!descriptor) return { exists: false, installed: false, enabled: false };
 
+    // User-scoped plugins require a concrete userId — fail closed when absent.
+    if (descriptor.scope === "user" && !userId) {
+      return { exists: true, installed: false, enabled: false };
+    }
+
     const install = await pluginRepository.findInstall(db, pluginId);
     const installed = install?.status === "active";
     if (!installed) return { exists: true, installed: false, enabled: false };
 
-    const { scopeSpaceId, scopeUserId } = scopeKeys(
-      descriptor,
-      spaceId,
-      userId ?? "",
-    );
+    const { scopeSpaceId, scopeUserId } = scopeKeys(descriptor, spaceId, userId ?? "");
     const row = await pluginRepository.findEnablement(db, pluginId, scopeSpaceId, scopeUserId);
     if (!row) return { exists: true, installed, enabled: descriptor.default_enabled };
     return { exists: true, installed, enabled: row.enabled };

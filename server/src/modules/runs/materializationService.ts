@@ -19,6 +19,7 @@ import {
 } from "./repository";
 import { assertProjectInSpace } from "../projects/access";
 import { loadProtocol } from "../providers/protocolRuntime";
+import { insertProposalRow } from "../proposals/reviewPackets";
 
 export interface RunMaterializationResult {
   items: RunMaterializationItemSummary[];
@@ -40,13 +41,9 @@ const SUPPORTED_PROPOSAL_TYPES = new Set([
   "knowledge_create",
   "knowledge_update",
   "knowledge_archive",
-  "knowledge_relation_create",
-  "knowledge_relation_delete",
   "claim_create",
   "claim_update",
   "claim_archive",
-  "claim_relation_create",
-  "claim_relation_delete",
   "object_relation_create",
   "object_relation_delete",
   "follow_up_task",
@@ -57,8 +54,6 @@ const STRUCTURED_PACKET_PROPOSAL_TYPES = new Set([
   "claim_create",
   "claim_update",
   "claim_archive",
-  "claim_relation_create",
-  "claim_relation_delete",
   "object_relation_create",
   "object_relation_delete",
 ]);
@@ -397,19 +392,50 @@ export class RunMaterializationService {
   }): Promise<string> {
     const id = randomUUID();
     const now = new Date().toISOString();
+    const workspaceId = input.workspaceId ?? input.run.workspace_id ?? null;
+    const visibility = input.visibility ?? "space_shared";
+    const policy = await this.policyEnforcer({
+      action: "artifact.persist",
+      actor_type: "run",
+      actor_id: input.run.id,
+      space_id: input.run.space_id,
+      resource_type: "artifact",
+      resource_id: id,
+      resource_space_id: input.run.space_id,
+      run_id: input.run.id,
+      context: {
+        artifact_type: input.artifactType,
+        title: input.title,
+        mime_type: input.mimeType,
+        visibility,
+        workspace_id: workspaceId,
+        project_id: input.run.project_id ?? null,
+        storage_path: input.storagePath,
+        content_inline: input.content !== null,
+      },
+      metadata_json: {
+        artifact_type: input.artifactType,
+        visibility,
+        workspace_id: workspaceId,
+      },
+      force_record: true,
+    });
+    if (policy.status !== "allow") {
+      throw new Error(policy.message ?? policy.error_code ?? "artifact.persist denied by policy");
+    }
     await this.db.query(
       `INSERT INTO artifacts (
          id, space_id, run_id, proposal_id, artifact_type, title, content,
          storage_ref, storage_path, mime_type, exportable, export_formats_json,
          canonical_format, preview, relevant_period_start, relevant_period_end,
          created_at, updated_at, metadata_json, visibility, owner_user_id,
-         source_execution_plane_id, trust_level, project_id, workspace_id
+         trust_level, project_id, workspace_id
        ) VALUES (
          $1, $2, $3, NULL, $4, $5, $6,
          NULL, $7, $8, true, $9::jsonb,
          NULL, $10, NULL, NULL,
          $11, $11, $12::jsonb, $13, $14,
-         NULL, 'medium', $15, $16
+         'medium', $15, $16
        )`,
       [
         id,
@@ -424,10 +450,10 @@ export class RunMaterializationService {
         input.preview,
         now,
         JSON.stringify(sanitizeEvidenceJson(input.metadata)),
-        input.visibility ?? "space_shared",
+        visibility,
         input.run.instructed_by_user_id ?? null,
         input.run.project_id ?? null,
-        input.workspaceId ?? input.run.workspace_id ?? null,
+        workspaceId,
       ],
     );
     return id;
@@ -447,43 +473,24 @@ export class RunMaterializationService {
     workspaceId: string | null;
     projectId: string | null;
   }): Promise<string> {
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    await this.db.query(
-      `INSERT INTO proposals (
-         id, space_id, created_by_run_id, proposal_type, status, risk_level,
-         urgency, preview, title, summary, payload_json, review_deadline,
-         expires_at, created_at, updated_at, reviewed_at, reviewed_by,
-         workspace_id, rationale, created_by_agent_id, created_by_user_id,
-         required_approver_role, visibility, project_id
-       ) VALUES (
-         $1, $2, $3, $4, 'pending', $5,
-         $6, $7, $8, $9, $10::jsonb, NULL,
-         NULL, $11, $11, NULL, NULL,
-         $12, $13, $14, $15,
-         NULL, $16, $17
-       )`,
-      [
-        id,
-        input.run.space_id,
-        input.run.id,
-        input.proposalType,
-        input.riskLevel,
-        input.urgency,
-        input.preview,
-        input.title,
-        input.summary,
-        JSON.stringify(input.payload),
-        now,
-        input.workspaceId,
-        input.rationale,
-        input.run.agent_id,
-        input.run.instructed_by_user_id ?? null,
-        input.visibility,
-        input.projectId,
-      ],
-    );
-    return id;
+    const row = await insertProposalRow(this.db, {
+      spaceId: input.run.space_id,
+      createdByRunId: input.run.id,
+      proposalType: input.proposalType,
+      title: input.title,
+      summary: input.summary,
+      payload: input.payload,
+      rationale: input.rationale,
+      riskLevel: input.riskLevel,
+      urgency: input.urgency,
+      preview: input.preview,
+      visibility: input.visibility,
+      workspaceId: input.workspaceId,
+      projectId: input.projectId,
+      createdByAgentId: input.run.agent_id ?? null,
+      createdByUserId: input.run.instructed_by_user_id ?? null,
+    });
+    return row.id;
   }
 }
 

@@ -12,8 +12,9 @@ the catalog lives in `server/src/modules/runtimeAdapters/specs.ts`.
 Specs cover credential mode, sandbox requirement, context
 target, invocation template, permission bypass capability, usage behavior,
 output parser, and catalog display.
-`RuntimeAdapter` rows no longer configure space-local instances. They remain
-only as legacy nullable FK targets for trace/read-model compatibility.
+Runtime adapter database rows are not part of the current product schema. Runtime
+selection uses an Agent's selected/default `AgentRuntimeProfile`, which is
+snapshotted onto each run.
 
 `GenericCliRuntimeAdapter` executes all implemented local CLI specs through the
 same command rendering, credential, context, subprocess, output parser, and

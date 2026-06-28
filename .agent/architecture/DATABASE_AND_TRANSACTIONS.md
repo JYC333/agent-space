@@ -125,7 +125,7 @@ Required pattern:
   `PRE_MIGRATION_BACKUP=1` or `--pre-migration-backup`.
 - **Fresh-instance bootstrap** is server-owned: on an empty migrated DB it
   idempotently ensures the default personal space, default owner user + active
-  membership, and default execution planes — the usable initial state.
+  membership, system memories, and default note collections — the usable initial state.
 - PostgreSQL data lives under `$ASPACE_ROOT/<mode>/db/postgres` (bind-mounted into the postgres container).
 - Database dumps live under `$ASPACE_ROOT/<mode>/db/dumps`.
 - Local test mode reaches the server API through the frontend proxy at `localhost:3100/api/v1`; compose-internal web traffic uses `http://server:8010`.

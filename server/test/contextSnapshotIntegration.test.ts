@@ -55,13 +55,18 @@ const SPACE = "space-1";
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    "TRUNCATE context_snapshots, context_snapshot_items CASCADE",
+    "TRUNCATE context_snapshots, context_snapshot_items, memory_entries, memory_access_logs CASCADE",
   );
   // Seed the empty snapshot normally created by run creation.
   await pool.query(
     `INSERT INTO context_snapshots (id, space_id, source_refs_json, created_at)
      VALUES ($1, $2, '[]'::jsonb, now())`,
     [SNAPSHOT, SPACE],
+  );
+  await pool.query(
+    `INSERT INTO memory_entries (id, space_id, access_count)
+     VALUES ($1, $2, 0)`,
+    ["11111111-1111-1111-1111-111111111111", SPACE],
   );
 });
 
@@ -71,6 +76,9 @@ describe("PgContextSnapshotRepository against real Postgres", () => {
     await repo.persistChatSnapshot({
       contextSnapshotId: SNAPSHOT,
       spaceId: SPACE,
+      runId: "run-1",
+      userId: "user-1",
+      agentId: "agent-1",
       tokenEstimate: 10,
       requestJson: { user_message: "hi", max_tokens: 4000 },
       items: [
@@ -118,6 +126,17 @@ describe("PgContextSnapshotRepository against real Postgres", () => {
     expect(items.rows).toHaveLength(2);
     expect(items.rows[0]).toMatchObject({ item_type: "memory", metadata_json: { k: "v" } });
     expect(items.rows[1]).toMatchObject({ item_type: "workspace", item_id: null });
+
+    const access = await pool.query<{ memory_id: string; run_id: string | null; access_type: string }>(
+      "SELECT memory_id, run_id, access_type FROM memory_access_logs",
+    );
+    expect(access.rows).toEqual([
+      {
+        memory_id: "11111111-1111-1111-1111-111111111111",
+        run_id: "run-1",
+        access_type: "context_injection",
+      },
+    ]);
   });
 
   it("persists token_estimate with no items (empty selection skips the insert)", async () => {
@@ -125,6 +144,9 @@ describe("PgContextSnapshotRepository against real Postgres", () => {
     await repo.persistChatSnapshot({
       contextSnapshotId: SNAPSHOT,
       spaceId: SPACE,
+      runId: "run-empty",
+      userId: "user-1",
+      agentId: null,
       tokenEstimate: 0,
       requestJson: { user_message: "hi" },
       items: [],
@@ -146,6 +168,9 @@ describe("PgContextSnapshotRepository against real Postgres", () => {
     await repo.persistChatSnapshot({
       contextSnapshotId: SNAPSHOT,
       spaceId: "space-2",
+      runId: "run-2",
+      userId: "user-1",
+      agentId: null,
       tokenEstimate: 99,
       requestJson: {},
       items: [],
@@ -163,6 +188,9 @@ describe("PgContextSnapshotRepository against real Postgres", () => {
       repo.persistChatSnapshot({
         contextSnapshotId: SNAPSHOT,
         spaceId: SPACE,
+        runId: "run-invalid",
+        userId: "user-1",
+        agentId: null,
         tokenEstimate: 1,
         requestJson: {},
         items: [

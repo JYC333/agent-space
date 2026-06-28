@@ -27,7 +27,7 @@ import {
   query as routeQuery,
   sendRouteError,
 } from "../routeUtils/common";
-import { proposalToOut, type ProposalRow } from "../proposals/repository";
+import { PgProposalRepository } from "../proposals/repository";
 import { PgAgentChatRepository, PgAgentRepository } from "./repository";
 import {
   ChatContextCandidateCollector,
@@ -188,26 +188,13 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const agent = await agentRepository().get(identity.spaceId, agentId);
       if (!agent) return reply.code(404).send({ detail: "Agent not found" });
       const status = q.status === "all" ? null : q.status ?? "pending";
-      const filters: string[] = [
-        "space_id = $1",
-        "(created_by_agent_id = $2 OR (payload_json->>'agent_id') = $2)",
-      ];
-      const values: unknown[] = [identity.spaceId, agentId];
-      if (status) {
-        values.push(status);
-        filters.push(`status = $${values.length}`);
-      }
-      const db = dbPool(context.config);
-      const rows = await db.query<ProposalRow>(
-        `SELECT *
-           FROM proposals
-          WHERE ${filters.join(" AND ")}
-          ORDER BY created_at DESC, id DESC
-          LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
-        [...values, page.limit, page.offset],
-      );
-      const now = new Date();
-      return reply.send(rows.rows.map((row) => proposalToOut(row, now)));
+      const proposalRepository = new PgProposalRepository(dbPool(context.config));
+      return reply.send(await proposalRepository.listVisible(identity.spaceId, identity.userId, {
+        status,
+        agentId,
+        limit: page.limit,
+        offset: page.offset,
+      }));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -517,11 +504,8 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         scheduled_at: stringValue(body.scheduled_at),
         parent_run_id: stringValue(body.parent_run_id),
         runtime_profile_id: stringValue(body.runtime_profile_id),
-        adapter_type: stringValue(body.adapter_type),
         capability_id: stringValue(body.capability_id),
         capabilities_json: optionalArrayBody(body, "capabilities_json"),
-        model_provider_id: stringValue(body.model_provider_id),
-        model: stringValue(body.model),
         context_artifact_ids: contextArtifactIds,
       });
       return reply.code(201).send(runToOut(run));
@@ -775,6 +759,9 @@ async function prepareChatRun(
     await services.snapshots.persistChatSnapshot({
       contextSnapshotId: created.context_snapshot_id,
       spaceId: input.spaceId,
+      runId: created.id,
+      userId: input.userId,
+      agentId: created.agent_id ?? input.agentId,
       tokenEstimate: bundle.token_count + conversationWindow.token_count,
       // Mirrors the ContextRequest persisted by the legacy prepare-run path
       // (request defaults, not policy-resolved).

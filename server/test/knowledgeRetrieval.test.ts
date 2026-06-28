@@ -358,7 +358,6 @@ class ProjectionFakeDb implements Queryable {
       content: "Alpha links to [[Beta]] and [Source](https://example.test/source).",
       plain_text: "Alpha links to [[Beta]] and [Source](https://example.test/source).",
       excerpt: "Alpha links",
-      source_url: null,
     }],
     [ITEM_B, {
       id: ITEM_B,
@@ -375,14 +374,13 @@ class ProjectionFakeDb implements Queryable {
       content: "Beta target content.",
       plain_text: "Beta target content.",
       excerpt: "Beta target",
-      source_url: null,
     }],
   ]);
   relationRows: Array<Record<string, unknown>> = [];
 
   async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
     const norm = sql.replace(/\s+/g, " ").trim();
-    if (norm.includes("INSERT INTO memory_entries") || norm.includes("INSERT INTO knowledge_item_relations")) {
+    if (norm.includes("INSERT INTO memory_entries") || norm.includes("INSERT INTO object_relations")) {
       this.forbiddenWrites.push(norm);
       throw new Error("forbidden canonical write");
     }
@@ -456,9 +454,6 @@ class ProjectionFakeDb implements Queryable {
       const rows = dedupeTargets(candidates.flatMap((candidate) => this.aliasTargets.get(candidate) ?? []));
       return result(rows as Row[]);
     }
-    if (norm.startsWith("SELECT from_item_id, to_item_id")) {
-      return result(this.relationRows as Row[]);
-    }
     if (norm.startsWith("SELECT source_type, source_id, target_type")) {
       return result([] as Row[]);
     }
@@ -469,7 +464,7 @@ class ProjectionFakeDb implements Queryable {
       return result([] as Row[]);
     }
     if (norm.startsWith("SELECT r.from_object_id")) {
-      return result([] as Row[]);
+      return result(this.relationRows as Row[]);
     }
     if (norm.startsWith("INSERT INTO retrieval_edges")) {
       const edge = {
@@ -827,7 +822,7 @@ describe("Knowledge zero-LLM retrieval", () => {
     expect(out.items[0].snippet).not.toContain("Sensitive subject label");
   });
 
-  it("creates retrieval edges from wikilinks and markdown links without accepted KnowledgeItemRelation writes", async () => {
+  it("creates retrieval edges from wikilinks and markdown links without canonical relation writes", async () => {
     const db = new ProjectionFakeDb();
     db.aliasTargets.set(normalizeAlias("Beta"), [{ object_type: "knowledge_item", object_id: ITEM_B }]);
     db.aliasTargets.set(normalizeAlias("https://example.test/source"), [{ object_type: "source", object_id: SOURCE_A }]);
@@ -853,11 +848,13 @@ describe("Knowledge zero-LLM retrieval", () => {
     expect(db.forbiddenWrites).toHaveLength(0);
   });
 
-  it("projects an accepted KnowledgeItemRelation into a retrieval edge", async () => {
+  it("projects an active ObjectRelation into a retrieval edge", async () => {
     const db = new ProjectionFakeDb();
     db.relationRows = [{
-      from_item_id: ITEM_A,
-      to_item_id: ITEM_B,
+      from_object_id: ITEM_A,
+      from_object_type: "knowledge_item",
+      to_object_id: ITEM_B,
+      to_object_type: "knowledge_item",
       relation_type: "supports",
       confidence: 0.8,
       evidence_summary: "accepted",
@@ -869,7 +866,7 @@ describe("Knowledge zero-LLM retrieval", () => {
       from_object_id: ITEM_A,
       to_object_id: ITEM_B,
       relation_type: "supports",
-      edge_origin: "accepted_relation_projection",
+      edge_origin: "object_relation_projection",
       edge_status: "derived",
     }));
   });
@@ -1060,7 +1057,7 @@ describe("Knowledge zero-LLM retrieval", () => {
     expect(out.items).toHaveLength(0);
   });
 
-  it("projection does not create MemoryEntry or accepted KnowledgeItemRelation rows", async () => {
+  it("projection does not create MemoryEntry or ObjectRelation rows", async () => {
     const db = new ProjectionFakeDb();
 
     await new RetrievalProjectionService(db, knowledgeRetrievalRegistry).reindex(SPACE_A, "knowledge_item", ITEM_A);
@@ -1090,7 +1087,7 @@ describe("Knowledge zero-LLM retrieval", () => {
       to_object_type: "knowledge_item",
       to_object_id: ITEM_B,
       relation_type: "supports",
-      edge_origin: "accepted_relation_projection",
+      edge_origin: "object_relation_projection",
       confidence: 1,
     });
 
@@ -1139,7 +1136,7 @@ describe("Knowledge zero-LLM retrieval", () => {
       to_object_type: "knowledge_item",
       to_object_id: midId,
       relation_type: "supports",
-      edge_origin: "accepted_relation_projection",
+      edge_origin: "object_relation_projection",
       confidence: 1,
     });
     db.edges.push({
@@ -1149,7 +1146,7 @@ describe("Knowledge zero-LLM retrieval", () => {
       to_object_type: "knowledge_item",
       to_object_id: farId,
       relation_type: "supports",
-      edge_origin: "accepted_relation_projection",
+      edge_origin: "object_relation_projection",
       confidence: 1,
     });
 
@@ -1233,7 +1230,7 @@ describe("Knowledge zero-LLM retrieval", () => {
       to_object_type: "knowledge_item",
       to_object_id: ITEM_B,
       relation_type: "supports",
-      edge_origin: "accepted_relation_projection",
+      edge_origin: "object_relation_projection",
       confidence: 1,
     });
 
@@ -1274,7 +1271,7 @@ describe("Knowledge zero-LLM retrieval", () => {
       to_object_type: "knowledge_item",
       to_object_id: ITEM_B,
       relation_type: "supports",
-      edge_origin: "accepted_relation_projection",
+      edge_origin: "object_relation_projection",
       confidence: 1,
     });
 
@@ -1318,7 +1315,7 @@ describe("Knowledge zero-LLM retrieval", () => {
       to_object_type: "knowledge_item",
       to_object_id: ITEM_B,
       relation_type: "supports",
-      edge_origin: "accepted_relation_projection",
+      edge_origin: "object_relation_projection",
       confidence: 1,
     });
 
@@ -1353,7 +1350,7 @@ describe("Knowledge zero-LLM retrieval", () => {
       to_object_type: "knowledge_item",
       to_object_id: ITEM_B,
       relation_type: "supports",
-      edge_origin: "accepted_relation_projection",
+      edge_origin: "object_relation_projection",
       confidence: 1,
     });
 

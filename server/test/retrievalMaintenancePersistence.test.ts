@@ -37,12 +37,12 @@ function report(): MaintenanceReport {
         ],
         reason: "suggested related_to relation from extracted links",
         proposed_action: {
-          proposal_type: "knowledge_relation_create",
+          proposal_type: "object_relation_create",
           title: "Relate: A -> B",
           payload: {
-            operation: "relation_create",
-            from_item_id: "item-a",
-            to_item_id: "item-b",
+            operation: "object_relation_create",
+            from_object_id: "item-a",
+            to_object_id: "item-b",
             relation_type: "related_to",
             status: "candidate",
             confidence: null,
@@ -176,7 +176,7 @@ describe("retrieval maintenance persistence", () => {
       },
     });
     expect(db.calls.some((call) => /INSERT INTO knowledge_items/.test(call.sql))).toBe(false);
-    expect(db.calls.some((call) => /INSERT INTO knowledge_item_relations/.test(call.sql))).toBe(false);
+    expect(db.calls.some((call) => /INSERT INTO object_relations/.test(call.sql))).toBe(false);
     const update = db.calls.find((call) => /UPDATE proposals/.test(call.sql));
     expect(update).toBeDefined();
     const finalPayload = JSON.parse(String(update!.params[2]));

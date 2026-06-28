@@ -108,14 +108,12 @@ function memory(over: Partial<ContextMemoryRow> = {}): ContextMemoryRow {
     version: 1,
     tags: [],
     memory_layer: "semantic",
-    memory_kind: "preference",
     source_trust: "internal_system",
     created_from_proposal_id: null,
     root_memory_id: null,
     supersedes_memory_id: null,
     project_id: null,
     agent_id: "agent-1",
-    capability_id: null,
     access_count: 0,
     last_accessed_at: null,
     last_retrieved_at: null,
@@ -197,7 +195,7 @@ class FakeContextRepo extends PgRunContextRepository {
       target_space_id: "space-1",
       access_mode: "summary_only",
       memory_count: 1,
-      raw_memory_included: false,
+      raw_private_memory_included: false,
       personal_summary_persisted: false,
     } satisfies PersonalGrantMetadata,
   };
@@ -417,7 +415,7 @@ describe("ContextPrepareService", () => {
       expect.objectContaining({
         source_type: "personal_memory_grant",
         grant_id: "grant-1",
-        raw_memory_included: false,
+        raw_private_memory_included: false,
         personal_summary_persisted: false,
       }),
     );
@@ -427,7 +425,7 @@ describe("ContextPrepareService", () => {
     expect(snapshot.retrievalTrace[0]).toMatchObject({
       personal_memory_grant: {
         grant_id: "grant-1",
-        raw_memory_included: false,
+        raw_private_memory_included: false,
         personal_summary_persisted: false,
       },
     });

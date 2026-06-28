@@ -4,6 +4,7 @@ export interface BoardRow {
   id: string;
   space_id: string;
   workspace_id: string | null;
+  project_id: string | null;
   name: string;
   description: string | null;
   board_type: string;
@@ -39,6 +40,7 @@ export interface TaskRow {
   id: string;
   space_id: string;
   workspace_id: string | null;
+  project_id: string | null;
   board_id: string | null;
   column_id: string | null;
   parent_task_id: string | null;
@@ -103,10 +105,11 @@ export interface TaskArtifactRow {
   space_id: string;
   task_id: string;
   artifact_id: string;
+  task_artifact_run_id: string | null;
   role: string;
   created_at: unknown;
   artifact_space_id: string;
-  run_id: string | null;
+  artifact_run_id: string | null;
   proposal_id: string | null;
   artifact_type: string;
   title: string;
@@ -136,7 +139,7 @@ export interface TaskProposalRow {
 }
 
 export const BOARD_COLUMNS = `
-  id, space_id, workspace_id, name, description, board_type, status,
+  id, space_id, workspace_id, project_id, name, description, board_type, status,
   default_view, sort_order, metadata_json, created_by_user_id,
   created_by_agent_id, created_at, updated_at, deleted_at
 `;
@@ -148,7 +151,7 @@ export const BOARD_COLUMN_COLUMNS = `
 `;
 
 export const TASK_COLUMNS = `
-  id, space_id, workspace_id, board_id, column_id, parent_task_id,
+  id, space_id, workspace_id, project_id, board_id, column_id, parent_task_id,
   title, description, task_type, status, priority, risk_level, visibility,
   created_by_user_id, created_by_agent_id, assigned_user_id, assigned_agent_id,
   claimed_by_user_id, claimed_by_agent_id, source_activity_id, source_run_id,

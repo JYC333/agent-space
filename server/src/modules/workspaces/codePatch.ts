@@ -22,6 +22,7 @@ import type {
 import { runGit, gitOutput } from "./git";
 import { validatePath } from "./pathPolicy";
 import { PgWorkspaceRepository, workspaceAbsoluteRoot } from "./repository";
+import { insertProposalRow } from "../proposals/reviewPackets";
 
 const MAX_PATCH_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -162,7 +163,6 @@ export async function collectAndCreateCodePatchProposal(input: {
     };
   }
 
-  const proposalId = randomUUID();
   const now = new Date().toISOString();
   const payload: CodePatchPayload = {
     patch: { operations: collected.operations },
@@ -179,29 +179,21 @@ export async function collectAndCreateCodePatchProposal(input: {
       reason: "The code patch collector records git text changes; dedicated patch validation remains deferred.",
     },
   };
-  await input.db.query(
-    `INSERT INTO proposals (
-       id, space_id, created_by_run_id, created_by_user_id, proposal_type, status,
-       risk_level, urgency, preview, title, summary, payload_json, workspace_id,
-       visibility, created_at, updated_at
-     ) VALUES (
-       $1, $2, $3, $4, 'code_patch', 'pending',
-       $5, 'normal', false, $6, $7, $8::jsonb, $9,
-       'space_shared', $10, $10
-     )`,
-    [
-      proposalId,
-      input.run.space_id,
-      input.run.id,
-      input.run.instructed_by_user_id ?? null,
-      collected.skipped.length > 0 ? "high" : "medium",
-      "Review workspace code patch",
-      `Run ${input.run.id} changed ${collected.operations.length} workspace file(s).`,
-      JSON.stringify(payload),
-      input.run.workspace_id,
-      now,
-    ],
-  );
+  const proposalRow = await insertProposalRow(input.db, {
+    spaceId: input.run.space_id,
+    createdByRunId: input.run.id,
+    createdByUserId: input.run.instructed_by_user_id ?? null,
+    proposalType: "code_patch",
+    title: "Review workspace code patch",
+    summary: `Run ${input.run.id} changed ${collected.operations.length} workspace file(s).`,
+    payload,
+    rationale: "Workspace code changes collected from run worktree.",
+    riskLevel: collected.skipped.length > 0 ? "high" : "medium",
+    workspaceId: input.run.workspace_id,
+    visibility: "space_shared",
+    createdAt: now,
+  });
+  const proposalId = proposalRow.id;
   await linkTaskProposal(input.db, input.run.space_id, input.run.id, proposalId, now);
 
   const item: RunMaterializationItemSummary = {
@@ -365,25 +357,16 @@ async function applyCodePatchProposal(context: ProposalApplyContext): Promise<Pr
 
   const tx = new CodePatchFileTransaction(root, workspace.workspace_type);
   let applied: Array<{ path: string; sha256: string }> = [];
+  let proposalPayloadPatch: Record<string, unknown>;
   try {
     applied = await tx.apply(operations);
     const now = new Date().toISOString();
-    const nextPayload = {
+    proposalPayloadPatch = {
       ...payload,
       applied_paths: applied.map((file) => file.path),
       applied_files: applied,
       applied_at: now,
     };
-    await context.db.query(
-      `UPDATE proposals
-          SET status = 'accepted',
-              reviewed_at = $3,
-              reviewed_by = $4,
-              payload_json = $5::jsonb,
-              updated_at = $3
-        WHERE id = $1 AND space_id = $2`,
-      [proposal.id, proposal.space_id, now, context.userId, JSON.stringify(nextPayload)],
-    );
     await context.db.query(
       `INSERT INTO activity_records (
          id, space_id, source_run_id, user_id, workspace_id, activity_type,
@@ -430,6 +413,7 @@ async function applyCodePatchProposal(context: ProposalApplyContext): Promise<Pr
       code_patch_files: applied,
     },
     rollback: () => tx.rollback(),
+    proposalPayloadPatch,
   };
 }
 

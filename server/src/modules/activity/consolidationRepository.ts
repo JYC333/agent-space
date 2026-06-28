@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { Queryable } from "../routeUtils/common";
 import type { SpaceUserIdentity } from "../routeUtils/common";
 import { TRUST_BY_SOURCE_TYPE } from "./repository";
+import { assessActivityMemoryDuplicate } from "./memoryDedup";
+import { insertProposalRow } from "../proposals/reviewPackets";
 
 interface ActivityRow {
   id: string;
@@ -16,14 +18,19 @@ interface ActivityRow {
   content: string | null;
   source_trust: string | null;
   source_url: string | null;
-  consolidation_status: string;
   status: string;
 }
 
 const ACTIVITY_COLUMNS = `
   id, space_id, user_id, owner_user_id, subject_user_id, workspace_id, project_id,
-  activity_type, title, content, source_trust, source_url, consolidation_status, status
+  activity_type, title, content, source_trust, source_url, status
 `;
+
+interface DedupedActivity {
+  activity_id: string;
+  create_safety: string;
+  match_ids: string[];
+}
 
 export class PgActivityConsolidationRepository {
   constructor(private readonly db: Queryable) {}
@@ -38,6 +45,7 @@ export class PgActivityConsolidationRepository {
     const proposalsCreated: string[] = [];
     const activitiesProcessed: string[] = [];
     const activitiesSkipped: string[] = [];
+    const activitiesDeduped: DedupedActivity[] = [];
     const activitiesFailed: string[] = [];
 
     const params: unknown[] = [input.spaceId];
@@ -51,7 +59,7 @@ export class PgActivityConsolidationRepository {
       `SELECT ${ACTIVITY_COLUMNS}
          FROM activity_records
         WHERE space_id = $1
-          AND consolidation_status = 'pending'
+          AND status = 'raw'
           ${idFilter}
         ORDER BY created_at ASC
         LIMIT $${params.length}`,
@@ -67,17 +75,32 @@ export class PgActivityConsolidationRepository {
       try {
         const content = (activity.content ?? "").trim();
         if (!content) {
-          await this.markConsolidation(activity.id, input.spaceId, "skipped");
+          await this.markActivityStatus(activity.id, input.spaceId, "processed");
           activitiesSkipped.push(activity.id);
           continue;
         }
+        const duplicate = await assessActivityMemoryDuplicate(this.db, {
+          spaceId: input.spaceId,
+          viewerUserId: input.actingUserId,
+          title: activity.title,
+          content: activity.content,
+        });
+        if (duplicate.duplicate) {
+          await this.markActivityStatus(activity.id, input.spaceId, "processed");
+          activitiesDeduped.push({
+            activity_id: activity.id,
+            create_safety: duplicate.createSafety,
+            match_ids: duplicate.matchIds,
+          });
+          continue;
+        }
         const proposalId = await this.insertMemoryProposal(identity, activity);
-        await this.markConsolidation(activity.id, input.spaceId, "proposals_generated");
+        await this.markActivityStatus(activity.id, input.spaceId, "proposals_generated");
         proposalsCreated.push(proposalId);
         activitiesProcessed.push(activity.id);
       } catch {
         activitiesFailed.push(activity.id);
-        await this.markConsolidation(activity.id, input.spaceId, "failed");
+        await this.markActivityStatus(activity.id, input.spaceId, "failed");
       }
     }
 
@@ -86,30 +109,24 @@ export class PgActivityConsolidationRepository {
       proposals_created: proposalsCreated,
       activities_processed: activitiesProcessed,
       activities_skipped: activitiesSkipped,
+      activities_deduped: activitiesDeduped,
       activities_failed: activitiesFailed,
     };
   }
 
-  private async markConsolidation(
+  private async markActivityStatus(
     activityId: string,
     spaceId: string,
-    consolidationStatus: string,
+    status: "processed" | "proposals_generated" | "failed",
   ): Promise<void> {
     const now = new Date().toISOString();
-    const status =
-      consolidationStatus === "proposals_generated"
-        ? "proposals_generated"
-        : consolidationStatus === "skipped"
-          ? "processed"
-          : undefined;
     await this.db.query(
       `UPDATE activity_records
-          SET consolidation_status = $3,
-              processed_at = $4,
-              status = COALESCE($5, status),
+          SET status = $3,
+              processed_at = CASE WHEN $3 IN ('processed', 'proposals_generated') THEN $4::timestamptz ELSE processed_at END,
               updated_at = $4
         WHERE id = $1 AND space_id = $2`,
-      [activityId, spaceId, consolidationStatus, now, status ?? null],
+      [activityId, spaceId, status, now],
     );
   }
 
@@ -117,53 +134,41 @@ export class PgActivityConsolidationRepository {
     identity: SpaceUserIdentity,
     activity: ActivityRow,
   ): Promise<string> {
-    const proposalId = randomUUID();
-    const now = new Date().toISOString();
-    const payload = {
-      operation: "create",
-      proposed_content: activity.content ?? "",
-      memory_type: "experience",
-      target_scope: "user",
-      target_namespace: "activity.consolidation",
-      target_visibility: "private",
-      owner_user_id: activity.owner_user_id ?? activity.user_id ?? identity.userId,
-      subject_user_id: activity.subject_user_id ?? activity.user_id ?? identity.userId,
-      source_activity_id: activity.id,
-      activity_source_trust:
-        activity.source_trust ?? TRUST_BY_SOURCE_TYPE[activity.activity_type] ?? "untrusted_external",
-      provenance_entries: [
-        {
-          source_type: "activity",
-          source_id: activity.id,
-          source_trust:
-            activity.source_trust ?? TRUST_BY_SOURCE_TYPE[activity.activity_type] ?? "untrusted_external",
-          evidence_json: {
-            activity_type: activity.activity_type,
-            source_url: activity.source_url,
+    const row = await insertProposalRow(this.db, {
+      spaceId: identity.spaceId,
+      proposalType: "memory_create",
+      title: activity.title || `Activity: ${(activity.content ?? "").slice(0, 80)}`,
+      rationale: "Activity consolidation generated a memory proposal.",
+      payload: {
+        operation: "create",
+        proposed_content: activity.content ?? "",
+        memory_type: "experience",
+        target_scope: "user",
+        target_namespace: "activity.consolidation",
+        owner_user_id: activity.owner_user_id ?? activity.user_id ?? identity.userId,
+        subject_user_id: activity.subject_user_id ?? activity.user_id ?? identity.userId,
+        source_activity_id: activity.id,
+        activity_source_trust:
+          activity.source_trust ?? TRUST_BY_SOURCE_TYPE[activity.activity_type] ?? "untrusted_external",
+        provenance_entries: [
+          {
+            source_type: "activity",
+            source_id: activity.id,
+            source_trust:
+              activity.source_trust ?? TRUST_BY_SOURCE_TYPE[activity.activity_type] ?? "untrusted_external",
+            evidence_json: {
+              activity_type: activity.activity_type,
+              source_url: activity.source_url,
+            },
           },
-        },
-      ],
-    };
-    await this.db.query(
-      `INSERT INTO proposals (
-         id, space_id, proposal_type, status, title, rationale, payload_json,
-         created_by_user_id, workspace_id, project_id, created_at, updated_at
-       ) VALUES (
-         $1, $2, 'memory_create', 'pending', $3, $4, $5::jsonb,
-         $6, $7, $8, $9, $9
-       )`,
-      [
-        proposalId,
-        identity.spaceId,
-        activity.title || `Activity: ${(activity.content ?? "").slice(0, 80)}`,
-        "Activity consolidation generated a memory proposal.",
-        JSON.stringify(payload),
-        identity.userId,
-        activity.workspace_id,
-        activity.project_id,
-        now,
-      ],
-    );
-    return proposalId;
+        ],
+      },
+      createdByUserId: identity.userId,
+      workspaceId: activity.workspace_id,
+      projectId: activity.project_id,
+      visibility: "space_shared",
+      riskLevel: "low",
+    });
+    return row.id;
   }
 }

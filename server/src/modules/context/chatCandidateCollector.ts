@@ -112,6 +112,7 @@ export class ChatContextCandidateCollector {
     if (allowed.has("knowledge_item")) {
       const rows = await this.repo.selectKnowledgeItems(
         request.space_id,
+        request.user_id,
         message,
         maxItems,
       );
@@ -130,6 +131,7 @@ export class ChatContextCandidateCollector {
     if (allowed.has("activity_record")) {
       const rows = await this.repo.selectActivityRecords(
         request.space_id,
+        request.user_id,
         maxItems,
       );
       pushItems(

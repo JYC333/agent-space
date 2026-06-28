@@ -2,6 +2,7 @@ import {
   HttpError,
   type Queryable,
 } from "../routeUtils/common";
+import { isSpaceOwnerOrAdmin } from "../access/roles";
 
 export async function assertProjectInSpace(
   db: Queryable,
@@ -51,7 +52,7 @@ export async function canWriteProject(
     [spaceId, userId],
   );
   const role = spaceRole.rows[0]?.role;
-  if (role === "owner" || role === "admin") return true;
+  if (isSpaceOwnerOrAdmin(role)) return true;
 
   const projectRole = await db.query<{ role: string }>(
     `SELECT role
@@ -124,7 +125,7 @@ export async function isProjectOwnerLevel(
     [spaceId, userId],
   );
   const role = spaceRole.rows[0]?.role;
-  return role === "owner" || role === "admin";
+  return isSpaceOwnerOrAdmin(role);
 }
 
 export async function assertProjectOwnerLevel(

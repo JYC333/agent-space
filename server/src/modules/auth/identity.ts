@@ -131,10 +131,12 @@ export async function introspectIdentity(
     return { ok: false, reason: "unavailable", statusCode: 502, body: "" };
   }
   const query = request.query as Record<string, unknown> | undefined;
+  const requestedSpaceHeader = headerValue(request.headers["x-agent-space-id"]);
   return repository.resolveIdentity({
     authorization: headerValue(request.headers.authorization),
     sessionToken: cookieValue(headerValue(request.headers.cookie), SESSION_COOKIE),
-    requestedSpaceId: typeof query?.space_id === "string" ? query.space_id : undefined,
+    requestedSpaceId:
+      requestedSpaceHeader ?? (typeof query?.space_id === "string" ? query.space_id : undefined),
   });
 }
 
@@ -411,7 +413,7 @@ export class PgAuthRepository implements AuthRepository {
     const res = await this.pool.query<UserRow>(
       `SELECT id, email, display_name, avatar_url, created_at, last_login_at
          FROM users
-        WHERE id = $1
+        WHERE id = $1 AND status = 'active'
         LIMIT 1`,
       [userId],
     );

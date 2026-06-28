@@ -1,5 +1,6 @@
 import type { Queryable } from "../routeUtils/common";
 import type { RetrievalSourceEgressPolicy } from "../retrievalEgress/egressPolicy";
+import { isSpaceOwnerOrAdmin } from "../access/roles";
 
 const SOURCE_EGRESS_CLASSES = [
   "internal_only",
@@ -175,7 +176,7 @@ export function sourcePolicyAllowsRead(
   if (snapshot.allowedReaderUserIds.includes(context.viewerUserId)) return true;
   return (
     snapshot.allowSpaceAdmins &&
-    (context.viewerSpaceRole === "owner" || context.viewerSpaceRole === "admin")
+    isSpaceOwnerOrAdmin(context.viewerSpaceRole)
   );
 }
 

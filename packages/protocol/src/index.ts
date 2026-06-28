@@ -84,7 +84,7 @@ export * from "./claimBrainLoop.js";
 // Candidate-relation discovery pipeline contracts (Slice F)
 export * from "./relationDiscovery.js";
 
-// Object schema / Brain Shape Registry contracts (Slice G1)
+// Object schema / Brain Shape Registry contracts
 export * from "./objectSchema.js";
 
 // Official Optional Module (plugin) control-plane contracts

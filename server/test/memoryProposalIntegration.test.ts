@@ -112,10 +112,8 @@ describe("PgMemoryProposalRepository against real Postgres", () => {
       owner_user_id: null,
       selected_user_ids: null,
       last_confirmed_at: null,
-      source_proposal_id: null,
       workspace_id: null,
       memory_layer: null,
-      memory_kind: null,
       actor_user_id: null,
       provenance_entries: [
         {
@@ -177,7 +175,6 @@ describe("PgMemoryProposalRepository against real Postgres", () => {
       selected_user_ids: null,
       workspace_id: null,
       memory_layer: null,
-      memory_kind: null,
       actor_user_id: null,
       provenance_entries: [],
     });
@@ -233,7 +230,6 @@ describe("PgMemoryProposalRepository against real Postgres", () => {
         selected_user_ids: null,
         workspace_id: null,
         memory_layer: null,
-        memory_kind: null,
         actor_user_id: null,
         provenance_entries: [],
       }),

@@ -1,8 +1,13 @@
 import type { BrainOpsReviewMode, BrainOpsScanMode } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { Queryable } from "../routeUtils/common";
 import { readSpaceRetrievalSettings } from "../retrieval/settings";
+import {
+  isKnownSpaceRole,
+  isSpaceOwnerOrAdmin,
+  type SpaceRole,
+} from "../access/roles";
 
-export type SpaceRole = "owner" | "admin" | "reviewer" | "member" | "guest";
+export type { SpaceRole } from "../access/roles";
 
 export interface BrainOpsPacketReviewProposal {
   space_id: string;
@@ -73,7 +78,7 @@ export async function readSpaceRole(
     [spaceId, userId],
   );
   const role = result.rows[0]?.role;
-  return isSpaceRole(role) ? role : null;
+  return isKnownSpaceRole(role) ? role : null;
 }
 
 export function roleCanReviewSpaceOps(
@@ -81,7 +86,7 @@ export function roleCanReviewSpaceOps(
   mode: BrainOpsReviewMode,
 ): boolean {
   if (!role || mode === "private_only") return false;
-  if (role === "owner" || role === "admin") return mode === "admins" || mode === "members";
+  if (isSpaceOwnerOrAdmin(role)) return mode === "admins" || mode === "members";
   if (mode !== "members") return false;
   return role === "reviewer" || role === "member";
 }
@@ -91,7 +96,7 @@ export function roleCanInitiateBrainOpsScan(
   mode: BrainOpsScanMode,
 ): boolean {
   if (!role) return false;
-  if (role === "owner" || role === "admin") return true;
+  if (isSpaceOwnerOrAdmin(role)) return true;
   if (mode !== "members") return false;
   return role === "reviewer" || role === "member";
 }
@@ -99,8 +104,4 @@ export function roleCanInitiateBrainOpsScan(
 export function isSpaceOpsPacket(proposal: BrainOpsPacketReviewProposal): boolean {
   const payload = proposal.payload_json ?? {};
   return proposal.visibility === "space_shared" && payload.review_scope === "space_ops";
-}
-
-function isSpaceRole(value: unknown): value is SpaceRole {
-  return value === "owner" || value === "admin" || value === "reviewer" || value === "member" || value === "guest";
 }

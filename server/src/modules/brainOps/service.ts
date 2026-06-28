@@ -340,7 +340,7 @@ export class BrainOpsService {
               NULL::int AS missing_chunk_count
          FROM retrieval_objects
         WHERE space_id = $1
-          AND status = 'active'
+          AND status <> 'archived'
           AND object_type = ANY($2::varchar[])
           AND source_updated_at IS NOT NULL
           AND indexed_at < source_updated_at
@@ -366,7 +366,7 @@ export class BrainOpsService {
           AND rc.space_id = ro.space_id
           AND rc.embedding IS NULL
         WHERE ro.space_id = $1
-          AND ro.status = 'active'
+          AND ro.status <> 'archived'
           AND ro.object_type = ANY($2::varchar[])
         GROUP BY ro.id, ro.object_type, ro.object_id, ro.indexed_at, ro.source_updated_at, ro.source_connection_ids_json
         ORDER BY count(rc.id) DESC, ro.object_id ASC
@@ -420,7 +420,7 @@ export class BrainOpsService {
               max(source_updated_at) AS newest_source_updated_at
          FROM retrieval_objects
         WHERE space_id = $1
-          AND status = 'active'
+          AND status <> 'archived'
         GROUP BY object_type
         ORDER BY object_type`,
       [spaceId],

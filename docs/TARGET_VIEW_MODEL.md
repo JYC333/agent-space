@@ -157,16 +157,14 @@ without copying it. `context_sources` is not in the canonical schema.
 - Activate `memory.cross_space_read` (that domain remains deferred / deny-by-default).
 - Be implemented as a JOIN that bypasses `MemoryRetriever` space_id hard filters.
 
-**Current implementation status:** `source_pointers` table, ORM model,
-`app.source_pointers.service`, and membership-gated HTTP API (`/api/v1/source-pointers`).
-Create/list/get/delete manage pointer metadata only; they do not resolve source content.
-`granted_by_user_id` is server-assigned from the authenticated user (not client-writable).
-`metadata_json` is bounded safe metadata only: content-bearing keys rejected recursively,
-UTF-8 JSON byte cap, max string length, max total dict/list items, JSON-compatible types only.
-SourcePointer rows do not grant cross-space reads, do not implement federation, and do not
-enable public publishing. `PersonalMemoryGrant` is the separate explicit grant mechanism —
-see `docs/PERSONAL_MEMORY_GRANT.md`. Federation and `visibility=public` remain deferred.
-See `docs/SOURCE_POINTER.md` and `docs/FEDERATED_ACCESS_MODEL.md`.
+**Current implementation status:** Implemented as a local metadata-only API and
+`source_pointers` table. Create is gated by active membership in both owner and source
+spaces, validates source object existence, and rejects content-bearing or grant-derived
+metadata keys recursively. SourcePointer still does not resolve source content, grant reads,
+implement federation, or enable public publishing. `PersonalMemoryGrant` is the separate
+explicit grant mechanism - see `docs/PERSONAL_MEMORY_GRANT.md`. Federation and
+`visibility=public` remain deferred. See `docs/SOURCE_POINTER.md` and
+`docs/FEDERATED_ACCESS_MODEL.md`.
 
 **Note on federation:** Multi-deployment federation is explicitly deferred. See
 `docs/FEDERATED_ACCESS_MODEL.md`.
@@ -208,5 +206,5 @@ artifacts back to sources without granting read access.
 | PersonalView | Future — not implemented; see `docs/FUTURE_ROADMAP.md` |
 | ExecutionContext | Partial — `instructed_by_user_id` flow active; cross-space auth via `PersonalMemoryGrant` |
 | ParticipationRecord | Future — not implemented; see `docs/FUTURE_ROADMAP.md` |
-| SourcePointer / Federated Pointer | Implemented — metadata API + service; reads/federation deferred |
+| SourcePointer / Federated Pointer | Implemented — metadata API only; reads/federation deferred |
 | PublishProjection | Deferred — see `docs/PUBLISH_PROJECTION.md`; no `visibility=public` |

@@ -46,8 +46,8 @@ export default function KnowledgeRelationsPanel({
       {!loading && !error && relations.length > 0 && (
         <div className="divide-y divide-border mt-3">
           {relations.map(r => {
-            const currentSide = r.from_item_id === currentItemId ? 'from' : 'to'
-            const otherId = currentSide === 'from' ? r.to_item_id : r.from_item_id
+            const currentSide = r.from_object_id === currentItemId ? 'from' : 'to'
+            const otherId = currentSide === 'from' ? r.to_object_id : r.from_object_id
             return (
               <div key={r.id} className="py-3 text-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -62,8 +62,8 @@ export default function KnowledgeRelationsPanel({
                 </div>
                 <div className="grid gap-1 mt-2 text-xs text-muted-foreground">
                   <p>relation_id <span className="font-mono select-all text-foreground">{r.id}</span></p>
-                  <p>from_item_id <span className="font-mono select-all text-foreground">{r.from_item_id}</span></p>
-                  <p>to_item_id <span className="font-mono select-all text-foreground">{r.to_item_id}</span></p>
+                  <p>from_object_id <span className="font-mono select-all text-foreground">{r.from_object_id}</span></p>
+                  <p>to_object_id <span className="font-mono select-all text-foreground">{r.to_object_id}</span></p>
                   <p>other endpoint <span className="font-mono select-all text-foreground">{otherId}</span></p>
                 </div>
                 {r.evidence_summary && <p className="text-muted-foreground mt-2">{r.evidence_summary}</p>}

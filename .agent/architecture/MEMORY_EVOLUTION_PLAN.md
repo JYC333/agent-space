@@ -44,7 +44,7 @@ Track A does not:
 - Auto-inject Knowledge, Notes, Sources, or retrieval results into
   ContextBuilder.
 - Add vector search, pgvector, embeddings, rerankers, or LLM synthesis.
-- Turn heuristic links into accepted canonical `KnowledgeItemRelation` rows.
+- Turn heuristic links into accepted canonical `ObjectRelation` rows.
 - Revive the removed `context_sources` table.
 
 The Knowledge retrieval projection is derived data. It can be rebuilt from

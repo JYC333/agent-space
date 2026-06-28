@@ -81,18 +81,16 @@ output_policy:
   required_run_outputs: []
   allowed_output_types:
     - chat_message
-    - task_create_proposal
-    - idea_create_proposal
-    - memory_update_proposal
-    - knowledge_item_proposal
+    - follow_up_task
+    - memory_update
+    - knowledge_create
     - noop
   default_review_mode:
     chat_message: auto
     noop: auto
-    task_create_proposal: review
-    idea_create_proposal: review
-    memory_update_proposal: review
-    knowledge_item_proposal: review
+    follow_up_task: review
+    memory_update: review
+    knowledge_create: review
 
 schedule_defaults:
   enabled: false

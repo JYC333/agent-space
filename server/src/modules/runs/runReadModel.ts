@@ -1,6 +1,7 @@
 import { getRuntimeAdapterSpec } from "../runtimeAdapters";
 import type {
   ArtifactSummaryRecord,
+  ContextSnapshotRecord,
   ModelProviderSummaryRecord,
   ProposalSummaryRecord,
   RunEventDetailRecord,
@@ -108,6 +109,44 @@ export function runFinalizationToOut(row: RunFinalizationRecord): Record<string,
     error_json: row.error_json ?? null,
     metadata_json: row.metadata_json ?? null,
     finalized_at: row.finalized_at,
+    created_at: row.created_at,
+  };
+}
+
+export function contextSnapshotToOut(row: ContextSnapshotRecord | null): Record<string, unknown> | null {
+  if (!row) return null;
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    run_id: row.run_id,
+    agent_id: row.agent_id,
+    session_id: row.session_id,
+    source_refs_json: row.source_refs_json ?? [],
+    compiled_summary: row.compiled_summary,
+    token_estimate: row.token_estimate,
+    relevant_period_start: row.relevant_period_start,
+    relevant_period_end: row.relevant_period_end,
+    compiled_prefix_text: row.compiled_prefix_text,
+    compiled_tail_text: row.compiled_tail_text,
+    compiled_prefix_ref: row.compiled_prefix_ref,
+    compiled_tail_ref: row.compiled_tail_ref,
+    prefix_hash: row.prefix_hash,
+    tail_hash: row.tail_hash,
+    compiler_version: row.compiler_version,
+    retrieval_trace_json: row.retrieval_trace_json ?? null,
+    token_budget_json: row.token_budget_json ?? null,
+    policy_bundle_version: row.policy_bundle_version,
+    memory_digest_version: row.memory_digest_version,
+    workspace_digest_version: row.workspace_digest_version,
+    included_memory_refs_json: row.included_memory_refs_json ?? null,
+    included_evidence_refs_json: row.included_evidence_refs_json ?? null,
+    included_file_refs_json: row.included_file_refs_json ?? null,
+    included_doc_refs_json: row.included_doc_refs_json ?? null,
+    redactions_json: row.redactions_json ?? null,
+    data_exposure_level: row.data_exposure_level,
+    rendered_context_uri: row.rendered_context_uri,
+    rendered_context_text: row.rendered_context_text,
+    request_json: row.request_json ?? null,
     created_at: row.created_at,
   };
 }

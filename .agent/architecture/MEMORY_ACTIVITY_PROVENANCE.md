@@ -17,7 +17,9 @@ Sessions must not be used as generic raw-capture storage for non-chat content.
 
 ```
 ActivityRecord (raw capture)
-  ↓ ActivityConsolidationService → MemoryCandidateClassifier → MemoryProposalProducer
+  ↓ ActivityConsolidationService
+  ↓ visible Memory create-safety pre-dedupe
+  ↓ MemoryCandidateClassifier → MemoryProposalProducer
 Proposal (pending; payload_json.provenance_entries contains activity entry)
   ↓ SourceMonitoringService gate
   ↓ PgProposalApplyService.accept
@@ -76,16 +78,19 @@ accepted into Memory or Knowledge.
 | `consolidation_run_id` | Which consolidation run produced this proposal. |
 | `activity_batch_hash` | Hash of contributing activity IDs. |
 | `source_run_id` (stored payload, normalized on read) | Denormalized run reference; normalized into `provenance_entries` at build time. |
-| `source_activity_id` (stored payload, normalized on read) | Normalized into `provenance_entries` via `provenance_entries_from_payload`; stripped from new proposals by `strip_flat_provenance_keys`. |
+| `source_activity_id` (stored payload, normalized on read) | Compatibility shortcut on pending proposals; normalized into `provenance_entries` via `provenance_entries_from_payload`. Active Memory provenance is not stored on `memory_entries.source_activity_id`. |
 
 ### MemoryEntry — Approved Knowledge Layer
 
 | Field | Responsibility |
 |---|---|
 | `source_trust` | Dominant trust level from accepted provenance_entries. |
-| `source_activity_id` | FK to originating ActivityRecord. Preserved from `first_activity_id(provenance_entries)` at apply time. |
-| `created_from_proposal_id` / `source_proposal_id` | Links MemoryEntry back to accepted Proposal. |
+| `created_from_proposal_id` | Links MemoryEntry back to accepted Proposal. |
 | `last_verified_at` | Last time this memory claim was explicitly verified. |
+
+Activity, Artifact, Run, and evidence provenance for accepted Memory is stored
+in `provenance_links` attached to the MemoryEntry, not duplicated onto
+`memory_entries`.
 
 ## Trust Vocabulary
 
@@ -139,12 +144,16 @@ Current enforcement:
 - External and internal source material enters `IntakeItem`, `SourceSnapshot`, `ExtractionJob`, and `ExtractedEvidence` rows.
 - `EvidenceLink` controls which active evidence can be selected into a `ContextSnapshot`.
   Selector input link types are limited to `context_candidate`, `supports`,
-  `mentions`, and `provenance`.
+  `contradicts`, `derived_from`, and `mentions`. Accepted source lineage belongs
+  in `provenance_links`, not `evidence_links`.
 - `used_in_context` links are audit-only records of prior context use. They are
   not selector inputs.
 - Internal run/activity/artifact records are valid intake sources via
   `source_object_type`/`source_object_id`, not fake internal URLs.
 - `source_uri` remains external HTTP/HTTPS only.
+- `ActivityConsolidationService` runs visible Memory create-safety before
+  `MemoryProposalProducer`; duplicate visible Memory marks the Activity
+  `processed` and does not create another proposal.
 - `ActivityConsolidationService` → `MemoryProposalProducer` is the only pipeline that creates Proposal rows from Activity. Proposals remain `pending` until explicitly accepted.
 - `ProposalApplyService.apply` is the only path that creates active `MemoryEntry` from a proposal.
 - No code path creates active Memory from intake/evidence payload without proposal.
@@ -156,9 +165,9 @@ Future automated intake work must enter the Intake/Activity → proposal path be
 | Question | Answer source |
 |---|---|
 | Which Activity generated this proposal? | `Proposal.payload_json["provenance_entries"]` with `source_type="activity"` |
-| What source kind / URL was involved? | `ActivityRecord.activity_type`, `ActivityRecord.source_url` via `source_activity_id` |
+| What source kind / URL was involved? | Pending: `Proposal.payload_json["provenance_entries"]` or compatibility `source_activity_id`; accepted: `provenance_links` source row → `ActivityRecord.activity_type`, `ActivityRecord.source_url` |
 | What trust state was known? | `Proposal.payload_json["provenance_entries"][*].source_trust`, `source_monitoring_result` |
 | Was SourceMonitoring run? | `Proposal.payload_json["source_monitoring_result"]` |
-| Which Proposal approved it? | `MemoryEntry.source_proposal_id` |
+| Which Proposal approved it? | `MemoryEntry.created_from_proposal_id` |
 | Which MemoryEntry was created? | `Proposal.resulting_memory_id` (set at accept time) |
 | What ProvenanceLinks survive after apply? | `ProvenanceLink` rows with `target_type="memory"`, `target_id=memory.id` |

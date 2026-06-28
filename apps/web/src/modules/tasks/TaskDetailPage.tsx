@@ -284,6 +284,10 @@ export default function TaskDetailPage() {
                 </Link>
                 <div className="flex gap-1.5 mt-1 flex-wrap">
                   <Badge variant="secondary">{row.artifact.artifact_type}</Badge>
+                  {row.run_id && <Badge variant="outline">run: {row.run_id.slice(0, 8)}…</Badge>}
+                  {row.artifact.run_id && row.artifact.run_id !== row.run_id && (
+                    <Badge variant="muted">produced: {row.artifact.run_id.slice(0, 8)}…</Badge>
+                  )}
                   <ScopeBadge visibility={row.artifact.visibility} omitShared />
                   {row.artifact.preview && <PreviewBadge />}
                   <span className="text-xs text-muted-foreground">{fmt(row.created_at)}</span>

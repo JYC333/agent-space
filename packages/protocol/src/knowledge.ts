@@ -108,7 +108,6 @@ const ClaimResolutionStateSchema = z.enum(CLAIM_RESOLUTION_STATE_VALUES);
 const ClaimEvidenceRoleSchema = z.enum(CLAIM_EVIDENCE_ROLE_VALUES);
 const ClaimSourceRefTypeSchema = z.enum(CLAIM_SOURCE_REF_TYPE_VALUES);
 const ClaimSourceTrustSchema = z.enum(CLAIM_SOURCE_TRUST_VALUES);
-const ClaimRelationTypeSchema = z.enum(CLAIM_RELATION_TYPE_VALUES);
 const ObjectRelationTypeSchema = z.enum(OBJECT_RELATION_TYPE_VALUES);
 const ObjectRelationStatusSchema = z.enum(OBJECT_RELATION_STATUS_VALUES);
 const RelationCreateStatusSchema = z.enum(["candidate", "active"]);
@@ -357,21 +356,6 @@ export const ClaimArchiveProposalPayloadSchema = PacketSystemFieldsSchema.extend
   proposed_content: z.string().optional(),
 }).strict();
 
-export const ClaimRelationCreateProposalPayloadSchema = PacketSystemFieldsSchema.extend({
-  operation: z.literal("claim_relation_create"),
-  from_claim_id: IdSchema,
-  to_claim_id: IdSchema,
-  relation_type: ClaimRelationTypeSchema,
-  status: RelationCreateStatusSchema.optional(),
-  confidence: z.number().min(0).max(1).optional(),
-  evidence_summary: z.string().optional(),
-}).strict();
-
-export const ClaimRelationDeleteProposalPayloadSchema = PacketSystemFieldsSchema.extend({
-  operation: z.literal("claim_relation_delete"),
-  relation_id: IdSchema,
-}).strict();
-
 export const ObjectRelationCreateProposalPayloadSchema = PacketSystemFieldsSchema.extend({
   operation: z.literal("object_relation_create"),
   from_object_id: IdSchema,
@@ -394,8 +378,6 @@ export const ClaimObjectProposalPayloadSchema = z.union([
   ClaimCreateProposalPayloadSchema,
   ClaimUpdateProposalPayloadSchema,
   ClaimArchiveProposalPayloadSchema,
-  ClaimRelationCreateProposalPayloadSchema,
-  ClaimRelationDeleteProposalPayloadSchema,
   ObjectRelationCreateProposalPayloadSchema,
   ObjectRelationDeleteProposalPayloadSchema,
 ]);

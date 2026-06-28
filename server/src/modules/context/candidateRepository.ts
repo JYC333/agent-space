@@ -6,7 +6,8 @@ import {
   type Queryable,
 } from "../memory/repository";
 import { accessibleProjectIds } from "../memory/projectAccess";
-import { canReadMemory } from "../memory/memoryReadAuth";
+import { canReadMemory, summaryOnlyRedactContent } from "../memory/memoryReadAuth";
+import { canReadByVisibility } from "../access/visibility";
 import {
   loadSourceConnectionIdsForTargets,
   loadSourcePolicySnapshots,
@@ -28,8 +29,9 @@ import {
  * so only the memory / knowledge / source / activity selectors fire in this
  * path.
  *
- * Memory reads are intentionally **not** access-logged here; only full-run
- * context preparation logs `context_injection`.
+ * Memory candidates are intentionally **not** access-logged here. The final
+ * selected chat bundle is logged by `PgContextSnapshotRepository` after
+ * `buildChatContext` applies budget/dedup, using `context_injection`.
  * `canReadMemory` plus the project-level ACL is the read-authorization
  * boundary.
  *
@@ -58,7 +60,8 @@ const KNOWLEDGE_KINDS = [
 export interface CandidateRow {
   item_id: string;
   title: string | null;
-  text: string;
+  /** null when content is withheld (e.g. summary_only visibility for non-owner). */
+  text: string | null;
   source_connection_ids: string[];
 }
 
@@ -151,7 +154,7 @@ export class PgChatCandidateRepository {
     return visible.slice(0, limit).map((row) => ({
       item_id: row.id,
       title: row.title,
-      text: row.content ?? "",
+      text: summaryOnlyRedactContent(row, userId) ? null : (row.content ?? ""),
       source_connection_ids: [],
     }));
   }
@@ -162,6 +165,7 @@ export class PgChatCandidateRepository {
    */
   async selectKnowledgeItems(
     spaceId: string,
+    userId: string,
     message: string,
     limit: number,
   ): Promise<CandidateRow[]> {
@@ -179,8 +183,12 @@ export class PgChatCandidateRepository {
       id: string;
       title: string | null;
       content: string | null;
+      visibility: string | null;
+      owner_user_id: string | null;
+      created_by_user_id: string | null;
     }>(
-      `SELECT ki.object_id AS id, so.title, ki.content
+      `SELECT ki.object_id AS id, so.title, ki.content,
+              so.visibility, so.owner_user_id, so.created_by_user_id
          FROM knowledge_items ki
          JOIN space_objects so ON so.id = ki.object_id AND so.space_id = ki.space_id
         WHERE ${where.join(" AND ")}
@@ -189,13 +197,16 @@ export class PgChatCandidateRepository {
         LIMIT ${clampLimit(limit)}`,
       params,
     );
+    const visible = result.rows.filter((row) =>
+      canReadByVisibility(row.visibility, userId, [row.owner_user_id, row.created_by_user_id]),
+    );
     const sourceIdsByTarget = await loadSourceConnectionIdsForTargets(
       this.db,
       spaceId,
       "knowledge",
-      result.rows.map((row) => row.id),
+      visible.map((row) => row.id),
     );
-    return result.rows.map((row) => ({
+    return visible.map((row) => ({
       item_id: row.id,
       title: row.title,
       text: row.content ?? "",
@@ -274,28 +285,35 @@ export class PgChatCandidateRepository {
     }));
   }
 
-  /** Recent activity records. */
+  /** Recent activity records readable by the given user. */
   async selectActivityRecords(
     spaceId: string,
+    userId: string,
     limit: number,
   ): Promise<CandidateRow[]> {
     const result = await this.db.query<{
       id: string;
       title: string | null;
       content: string | null;
+      visibility: string;
+      owner_user_id: string | null;
     }>(
-      `SELECT id, title, content FROM activity_records
+      `SELECT id, title, content, visibility, owner_user_id
+         FROM activity_records
         WHERE space_id = $1
+          AND status NOT IN ('archived', 'failed')
         ORDER BY occurred_at DESC
         LIMIT ${clampLimit(limit)}`,
       [spaceId],
     );
-    return result.rows.map((row) => ({
-      item_id: row.id,
-      title: row.title,
-      text: row.content ?? "",
-      source_connection_ids: [],
-    }));
+    return result.rows
+      .filter((row) => canReadByVisibility(row.visibility, userId, [row.owner_user_id]))
+      .map((row) => ({
+        item_id: row.id,
+        title: row.title,
+        text: row.content ?? "",
+        source_connection_ids: [],
+      }));
   }
 
   async loadSourcePolicySnapshots(

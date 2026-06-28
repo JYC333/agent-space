@@ -154,9 +154,9 @@ describe("Slice F relation discovery (real Postgres)", () => {
 
     expect(report.candidates).toHaveLength(1);
     expect(report.candidates[0]!.proposed_action).toMatchObject({
-      proposal_type: "knowledge_relation_create",
-      from_item_id: "item-a",
-      to_item_id: "item-b",
+      proposal_type: "object_relation_create",
+      from_object_id: "item-a",
+      to_object_id: "item-b",
     });
   });
 

@@ -2,8 +2,8 @@
 
 Status: current-state architecture. The Phase 1-5 backend foundation is
 implemented in the baseline schema/backend. Claims are global
-`space_objects`-backed atoms, and FK-backed `object_relations` exist alongside
-the older direct-CRUD `entity_links` working-link layer.
+`space_objects`-backed atoms, and FK-backed `object_relations` is the canonical
+relation graph for Knowledge, Claims, Sources, and Notes.
 
 Deferred product work: frontend claim workspaces, full source monitoring /
 source-drift evaluation, richer Context Brief claim-review UX beyond the
@@ -18,7 +18,7 @@ model, not as a generic root object table. The implemented backend shape is now:
 space_objects
 -> knowledge_items / notes / sources / future people/assets/events/tasks...
 -> global claims
--> claim_sources / claim_relations / object_relations
+-> claim_sources / object_relations
 ```
 
 Knowledge remains the first product surface that creates and displays claim
@@ -37,14 +37,12 @@ Current Knowledge-adjacent tables:
 |---|---|
 | `space_objects` | Common identity/status/visibility root for Knowledge items, Notes, Sources, and future core objects. |
 | `knowledge_items` | Proposal-gated canonical Wiki page extension. Uses `knowledge_kind`; `claim` is not a valid kind. |
-| `knowledge_item_relations` | Governed Wiki item-to-item semantic graph. |
 | `knowledge_item_sources` | Wiki item-to-source evidence links. |
 | `notes` | Direct-CRUD working knowledge extension attached to `space_objects`, intentionally separate from governed Wiki items. |
 | `sources` | Evidence/provenance extension attached to `space_objects`, not a `KnowledgeItem` type. |
-| `entity_links` | Polymorphic working links across notes, wiki items, sources, projects, workspaces, activities, runs, and proposals. |
-| `provenance_links` / `evidence_links` | Generic provenance/evidence links, not claim-specific evidence semantics. |
-| `claims` / `claim_sources` / `claim_relations` | Proposal-gated global semantic atoms, evidence/source paths, and claim-to-claim edges. |
-| `object_relations` | Proposal-gated FK-backed object graph edges over `space_objects`. |
+| `provenance_links` / `evidence_links` | Provenance lineage and candidate/context evidence links. Evidence links are not accepted object lineage. |
+| `claims` / `claim_sources` | Proposal-gated global semantic atoms and curated evidence/source paths. |
+| `object_relations` | Proposal-gated FK-backed object graph edges over `space_objects`; the only canonical relation graph. |
 | `retrieval_objects` | Derived retrieval index with closed object types: `knowledge_item`, `note`, `source`, `claim`, `memory_entry`, `project_public_summary`. |
 
 Current independent roots that should not be folded into Knowledge include
@@ -58,7 +56,8 @@ Knowledge is already a first-level product module:
 - API routes use `/api/v1/knowledge`.
 - Frontend routes use `/knowledge`, `/knowledge/wiki`, `/knowledge/notes`,
   `/knowledge/sources`, and `/knowledge/cards`.
-- Proposal types use `knowledge_*` for governed Wiki item writes and relations.
+- Proposal types use `knowledge_*` for governed Wiki item writes. Relations use
+  `object_relation_create` / `object_relation_delete`.
 - Protocol and retrieval types expose `knowledge_item`, `note`, `source`, and
   `claim` for the Knowledge retrieval surface.
 - Artifact links and retrieval citations resolve Knowledge objects by their
@@ -93,16 +92,12 @@ still describe a claim, but a durable fact/claim atom needs different behavior:
 - source-policy revalidation,
 - retrieval as an assertion rather than as a document.
 
-### `entity_links` is not enough for the future root
+### `object_relations` is the relation root
 
-`entity_links` is useful today, but it is not a full `object_relations` layer:
-
-- it has polymorphic string endpoints, not FK-backed root object ids;
-- it only covers the current object type enum;
-- it does not provide shared identity, status, visibility, ownership, or
-  lifecycle fields;
-- it is a working relation layer, while some future relations need governed
-  proposal flow.
+`object_relations` replaced the older polymorphic and per-domain relation tables.
+Relation proposals resolve to FK-backed `space_objects` endpoints, and retrieval
+uses `retrieval_edges` only as a rebuildable projection of active
+`object_relations` plus curated source links.
 
 ### gbrain lessons apply only at the constraint layer
 
@@ -130,7 +125,7 @@ extension tables.
 
 ### 3. Claims must be global, not `knowledge_claims`
 
-Use `claims`, `claim_sources`, and `claim_relations`, not
+Use `claims`, `claim_sources`, and `object_relations`, not
 `knowledge_claims`. Knowledge can be the first UI and proposal source, but a
 claim may be about a project, person, task, event, asset, source, artifact,
 memory-derived summary, or Wiki item.
@@ -219,8 +214,6 @@ Fields that belong here:
 - `verification_status`
 - `reflection_status`
 - `root_item_id`, `supersedes_item_id`, `redirect_to_item_id`, `version`
-- `source_url`
-- `source_activity_id`, `source_artifact_id`
 - `created_from_proposal_id`, `approved_by_user_id`
 - `deprecated_at`
 
@@ -314,31 +307,10 @@ Implemented fields:
 `provenance_links` and `evidence_links` can still exist for generic provenance,
 but claim truth/evidence semantics should be represented here.
 
-### `claim_relations`
-
-Claim-to-claim semantic edges.
-
-Implemented fields:
-
-- `id`
-- `space_id`
-- `from_claim_id`
-- `to_claim_id`
-- `relation_type`: `supports`, `contradicts`, `supersedes`, `refines`,
-  `same_as`, `depends_on`, `derived_from`
-- `confidence`
-- `status`: `candidate`, `active`, `rejected`, `archived`
-- `source_proposal_id`
-- `created_at`, `updated_at`
-
-The "about" relationship is normally `claims.subject_object_id`, not a
-claim-to-claim relation.
-Create packets currently accept `candidate` or `active`; `rejected` and
-`archived` are stored lifecycle states for later review/delete flows.
-
 ### `object_relations`
 
-FK-backed successor to or governed counterpart of `entity_links`.
+FK-backed canonical graph for object-to-object edges, including claim-to-claim
+semantic edges.
 
 Implemented fields:
 
@@ -358,9 +330,8 @@ Implemented fields:
 - `created_by_user_id`, `created_by_agent_id`
 - `created_at`, `updated_at`
 
-`entity_links` remains the direct-CRUD note/source working-link layer. It was
-not turned into a facade in Phase 5. `object_relations` is the governed,
-proposal-gated FK graph layer for durable cross-object relations.
+`object_relations` is the governed, proposal-gated FK graph layer for durable
+cross-object relations.
 Create packets currently accept `candidate` or `active`; delete/archive flows
 move accepted rows out of the active graph.
 
@@ -389,8 +360,8 @@ All canonical claim writes are proposal-gated:
    hints when the source text supplies them, and governed claim source refs only
    for source connections with current source-policy snapshots.
 3. A reviewer accepts, edits, rejects, links, or supersedes the proposed atoms.
-4. The proposal applier writes `claims`, `claim_sources`, `claim_relations`,
-   and any `object_relations` in one transaction.
+4. The proposal applier writes `claims`, `claim_sources`, and any
+   `object_relations` in one transaction.
 5. Retrieval projection indexes accepted active claims only after canonical
    write.
 
@@ -399,8 +370,6 @@ Implemented proposal type names:
 - `claim_create`
 - `claim_update`
 - `claim_archive`
-- `claim_relation_create`
-- `claim_relation_delete`
 - `object_relation_create`
 - `object_relation_delete`
 - `claim_candidate_packet` (review packet; accepting creates child pending
@@ -440,7 +409,7 @@ Context Brief findings map to claim work as follows:
   unless evidence is available; structured or inferable entries can include
   holder/perspective, validity/observation time, and source refs for reviewer
   confirmation.
-- `contradictions`: proposed `claim_relations` with
+- `contradictions`: proposed `object_relations` with
   `relation_type=contradicts` only when the brief identifies two canonical
   claim ids; otherwise a review note asking the reviewer to inspect the
   conflicting sources first.
@@ -476,7 +445,7 @@ leak hidden claim existence, counts, or text, and neither writes canonical state
   owner-private or `space_ops` `claim_contradiction_report` artifact. That report
   becomes proposals only through the existing Claim Candidate Packet flow, which
   now consumes `claim_contradiction_report` artifacts and turns each finding into
-  a `claim_relation_create` (contradicts) candidate. There is no new claim
+  an `object_relation_create` (contradicts) candidate. There is no new claim
   proposal type — the only canonical-write path stays the proposal-gated packet.
 
 ## Implementation Record
@@ -511,7 +480,7 @@ leak hidden claim existence, counts, or text, and neither writes canonical state
 
 ### Phase 4: add global claims
 
-- Implemented: added `claims`, `claim_sources`, and `claim_relations`.
+- Implemented: added `claims`, `claim_sources`, and canonical `object_relations`.
 - Implemented: added proposal packet types and appliers for claim writes.
 - Implemented: claim proposal creation and apply enforce the claim status
   transition rules, terminal archive semantics, and supersession successor
@@ -526,8 +495,8 @@ leak hidden claim existence, counts, or text, and neither writes canonical state
 ### Phase 5: replace or scope generic relations
 
 - Implemented: introduced `object_relations` for FK-backed object graph edges.
-- Implemented decision: keep `entity_links` as a separate direct-CRUD working
-  link table; do not make it a facade over `object_relations` in this phase.
+- Implemented decision: retire the separate direct-CRUD relation tables and use
+  `object_relations` for governed FK-backed cross-object graph writes.
 - Implemented: object relation read/apply results expose `retrieval_projected`
   so callers can distinguish canonical wide graph rows from relations currently
   projected into the Knowledge retrieval graph.
@@ -545,10 +514,11 @@ leak hidden claim existence, counts, or text, and neither writes canonical state
 ## Deferred Follow-Up Work
 
 - Full gbrain-style dynamic schema packs remain rejected as the runtime model.
-- Brain Shape Registry implementation for per-space `object_kind` definitions,
-  field schemas, or claim subtype validation. The design lives in
-  [`SCHEMA_PACKS_AND_OBJECT_SHAPE.md`](SCHEMA_PACKS_AND_OBJECT_SHAPE.md);
-  canonical claim writes still stay proposal-gated.
+- Brain Shape Registry foundations for per-space `object_kind` definitions and
+  field schemas are implemented in the Knowledge-owned object-kind registry and
+  summarized in [`RETRIEVAL_AND_BRAIN_LAYER.md`](RETRIEVAL_AND_BRAIN_LAYER.md).
+  Claim subtype validation can build on those registry facts, but canonical
+  claim writes still stay proposal-gated.
 - People/assets/events/tasks product modules.
 - Full source monitoring / source-drift evaluator for claim evidence. Runtime
   read/egress revalidation exists, but source-policy change detection and

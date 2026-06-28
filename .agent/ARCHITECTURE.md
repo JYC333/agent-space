@@ -47,8 +47,8 @@
 │     server/migrations + future module         │
 ├─────────────────────────────────────────────────────┤
 │   5. Knowledge Layer  [MVP IMPLEMENTED]              │
-│     KnowledgeItem, KnowledgeItemRelation,           │
-│     Source, KnowledgeItemSource                     │
+│     KnowledgeItem, ObjectRelation, Source,          │
+│     KnowledgeItemSource, note_links                 │
 │     Structured, agent-generated, proposal-gated     │
 │     server/src/modules/knowledge              │
 ├─────────────────────────────────────────────────────┤

@@ -13,7 +13,9 @@ import {
   type SpaceUserIdentity,
   type Queryable,
 } from "../routeUtils/common";
-import { proposalToOut, type ProposalRow } from "../proposals/repository";
+import { spaceObjectVisibleSql } from "../access/visibility";
+import { proposalToOut } from "../proposals/repository";
+import { insertProposalRow } from "../proposals/reviewPackets";
 import type { ProposalOut } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { RETRIEVAL_OBJECT_TYPE_VALUES } from "../retrieval/objectTypes";
 import {
@@ -22,11 +24,9 @@ import {
   canReadClaim,
   canReadKnowledge,
   claimOut,
-  claimRelationOut,
   claimSourceOut,
   claimSummaryOut,
   confidence,
-  entityLinkOut,
   knowledgeItemOut,
   knowledgeSummaryOut,
   normalizeDates,
@@ -34,7 +34,6 @@ import {
   noteOut,
   noteSummaryOut,
   objectRelationOut,
-  relationOut,
   sourceOut,
   sourceSummaryOut,
 } from "./knowledgeRepositoryMappers";
@@ -44,19 +43,15 @@ import {
   CLAIM_EVIDENCE_ROLES,
   CLAIM_FROM,
   CLAIM_KINDS,
-  CLAIM_RELATION_COLUMNS,
-  CLAIM_RELATION_TYPES,
   CLAIM_RESOLUTION_STATES,
   CLAIM_SOURCE_COLUMNS,
   CLAIM_SOURCE_REF_TYPES,
   CLAIM_SOURCE_TRUST_LEVELS,
   CLAIM_STATUSES,
   CONTENT_FORMATS,
-  ENTITY_LINK_COLUMNS,
   KNOWLEDGE_ITEM_FROM,
   KNOWLEDGE_ITEM_COLUMNS,
   KNOWLEDGE_KINDS,
-  KNOWLEDGE_RELATION_COLUMNS,
   KNOWLEDGE_VISIBILITIES,
   NOTE_FROM,
   NOTE_COLLECTION_COLUMNS,
@@ -69,12 +64,9 @@ import {
   SOURCE_COLUMNS,
   SOURCE_STATUSES,
   SOURCE_TYPES,
-  type ClaimRelationRow,
   type ClaimRow,
   type ClaimSourceRow,
-  type EntityLinkRow,
   type KnowledgeItemRow,
-  type KnowledgeRelationRow,
   type NoteCollectionRow,
   type NoteRow,
   type ObjectRelationRow,
@@ -140,6 +132,22 @@ interface SpaceObjectKindRelationHintRow {
   direction: string;
   confidence_default: number | string;
   required: boolean;
+}
+
+interface NoteLinkRow {
+  id: string;
+  space_id: string;
+  from_object_id: string;
+  from_object_type: string;
+  to_object_id: string;
+  to_object_type: string;
+  relation_type: string;
+  status: string;
+  confidence: number | string | null;
+  metadata_json: unknown;
+  created_by_user_id: string | null;
+  created_at: unknown;
+  updated_at: unknown;
 }
 
 const OBJECT_KIND_COLUMNS = `
@@ -524,36 +532,79 @@ export class PgKnowledgeRepository {
   async itemRelations(identity: SpaceUserIdentity, itemId: string): Promise<Record<string, unknown>[]> {
     const item = await this.getVisibleItemRow(identity, itemId);
     if (!item) throw new HttpError(404, "Knowledge item not found");
-    const rows = await this.db.query<KnowledgeRelationRow>(
-      `SELECT ${KNOWLEDGE_RELATION_COLUMNS}
-         FROM knowledge_item_relations
-        WHERE space_id = $1 AND (from_item_id = $2 OR to_item_id = $2)
-          AND status <> 'archived'
-        ORDER BY updated_at DESC, id DESC`,
-      [identity.spaceId, itemId],
+    const rows = await this.db.query<ObjectRelationRow>(
+      `SELECT r.id, r.space_id,
+              r.from_object_id, from_so.object_type AS from_object_type,
+              r.to_object_id, to_so.object_type AS to_object_type,
+              r.relation_type, r.status, r.confidence, r.evidence_summary,
+              r.source_claim_id, r.source_object_id, r.source_proposal_id,
+              r.metadata_json, r.created_by_user_id, r.created_by_agent_id,
+              r.created_at, r.updated_at
+         FROM object_relations r
+         JOIN space_objects from_so
+           ON from_so.id = r.from_object_id
+          AND from_so.space_id = r.space_id
+          AND from_so.object_type = 'knowledge_item'
+          AND from_so.deleted_at IS NULL
+         JOIN space_objects to_so
+           ON to_so.id = r.to_object_id
+          AND to_so.space_id = r.space_id
+          AND to_so.object_type = 'knowledge_item'
+          AND to_so.deleted_at IS NULL
+        WHERE r.space_id = $1
+          AND (r.from_object_id = $3 OR r.to_object_id = $3)
+          AND r.status <> 'archived'
+          AND ${this.readableSpaceObjectClause("from_so")}
+          AND ${this.readableSpaceObjectClause("to_so")}
+        ORDER BY r.updated_at DESC, r.id DESC`,
+      [identity.spaceId, identity.userId, itemId],
     );
-    return rows.rows.map(relationOut);
+    return rows.rows.map(objectRelationAsKnowledgeRelationOut);
   }
 
   async entityLinks(identity: SpaceUserIdentity, filters: Record<string, string | undefined>): Promise<Record<string, unknown>[]> {
-    const params: unknown[] = [identity.spaceId];
-    const clauses = ["space_id = $1"];
+    const params: unknown[] = [identity.spaceId, identity.userId];
+    const clauses = [
+      "r.space_id = $1",
+      this.readableSpaceObjectClause("from_so"),
+      this.readableSpaceObjectClause("to_so"),
+    ];
     const add = (value: unknown): string => {
       params.push(value);
       return `$${params.length}`;
     };
-    for (const key of ["source_type", "source_id", "target_type", "target_id", "status"]) {
-      const value = optionalString(filters[key]);
-      if (value) clauses.push(`${key} = ${add(value)}`);
-    }
-    const rows = await this.db.query<EntityLinkRow>(
-      `SELECT ${ENTITY_LINK_COLUMNS}
-         FROM entity_links
+    const sourceType = optionalString(filters.source_type);
+    const sourceId = optionalString(filters.source_id);
+    const targetType = optionalString(filters.target_type);
+    const targetId = optionalString(filters.target_id);
+    const status = optionalString(filters.status);
+    if (sourceType) clauses.push(`from_so.object_type = ${add(sourceType)}`);
+    if (sourceId) clauses.push(`r.from_object_id = ${add(sourceId)}`);
+    if (targetType) clauses.push(`to_so.object_type = ${add(targetType)}`);
+    if (targetId) clauses.push(`r.to_object_id = ${add(targetId)}`);
+    if (status) clauses.push(`r.status = ${add(status)}`);
+    const rows = await this.db.query<ObjectRelationRow>(
+      `SELECT r.id, r.space_id,
+              r.from_object_id, from_so.object_type AS from_object_type,
+              r.to_object_id, to_so.object_type AS to_object_type,
+              r.relation_type, r.status, r.confidence, r.evidence_summary,
+              r.source_claim_id, r.source_object_id, r.source_proposal_id,
+              r.metadata_json, r.created_by_user_id, r.created_by_agent_id,
+              r.created_at, r.updated_at
+         FROM object_relations r
+         JOIN space_objects from_so
+           ON from_so.id = r.from_object_id
+          AND from_so.space_id = r.space_id
+          AND from_so.deleted_at IS NULL
+         JOIN space_objects to_so
+           ON to_so.id = r.to_object_id
+          AND to_so.space_id = r.space_id
+          AND to_so.deleted_at IS NULL
         WHERE ${clauses.join(" AND ")}
-        ORDER BY created_at DESC, id DESC`,
+        ORDER BY r.created_at DESC, r.id DESC`,
       params,
     );
-    return rows.rows.map(entityLinkOut);
+    return rows.rows.map(objectRelationAsEntityLinkOut);
   }
 
   async listClaims(identity: SpaceUserIdentity, filters: {
@@ -595,37 +646,34 @@ export class PgKnowledgeRepository {
   async claimRelations(identity: SpaceUserIdentity, claimId: string): Promise<Record<string, unknown>[]> {
     const claim = await this.getVisibleClaimRow(identity, claimId);
     if (!claim) throw new HttpError(404, "Claim not found");
-    const rows = await this.db.query<ClaimRelationRow>(
-      `SELECT r.id, r.space_id, r.from_claim_id, r.to_claim_id,
+    const rows = await this.db.query<ObjectRelationRow>(
+      `SELECT r.id, r.space_id,
+              r.from_object_id, from_so.object_type AS from_object_type,
+              r.to_object_id, to_so.object_type AS to_object_type,
               r.relation_type, r.status, r.confidence, r.evidence_summary,
-              r.source_proposal_id, r.created_by_user_id,
-              r.created_by_agent_id, r.created_at, r.updated_at
-         FROM claim_relations r
-         JOIN claims from_claim
-           ON from_claim.object_id = r.from_claim_id
-          AND from_claim.space_id = r.space_id
+              r.source_claim_id, r.source_object_id, r.source_proposal_id,
+              r.metadata_json, r.created_by_user_id, r.created_by_agent_id,
+              r.created_at, r.updated_at
+         FROM object_relations r
          JOIN space_objects from_so
-           ON from_so.id = from_claim.object_id
-          AND from_so.space_id = from_claim.space_id
+           ON from_so.id = r.from_object_id
+          AND from_so.space_id = r.space_id
           AND from_so.object_type = 'claim'
           AND from_so.deleted_at IS NULL
-         JOIN claims to_claim
-           ON to_claim.object_id = r.to_claim_id
-          AND to_claim.space_id = r.space_id
          JOIN space_objects to_so
-           ON to_so.id = to_claim.object_id
-          AND to_so.space_id = to_claim.space_id
+           ON to_so.id = r.to_object_id
+          AND to_so.space_id = r.space_id
           AND to_so.object_type = 'claim'
           AND to_so.deleted_at IS NULL
         WHERE r.space_id = $1
-          AND (r.from_claim_id = $3 OR r.to_claim_id = $3)
+          AND (r.from_object_id = $3 OR r.to_object_id = $3)
           AND r.status <> 'archived'
           AND ${this.readableSpaceObjectClause("from_so")}
           AND ${this.readableSpaceObjectClause("to_so")}
         ORDER BY r.updated_at DESC, r.id DESC`,
       [identity.spaceId, identity.userId, claimId],
     );
-    return rows.rows.map(claimRelationOut);
+    return rows.rows.map(objectRelationAsClaimRelationOut);
   }
 
   async objectRelations(identity: SpaceUserIdentity, filters: Record<string, string | undefined>): Promise<Record<string, unknown>[]> {
@@ -844,58 +892,6 @@ export class PgKnowledgeRepository {
     });
   }
 
-  async proposeClaimRelation(identity: SpaceUserIdentity, body: Record<string, unknown>): Promise<ProposalOut> {
-    const fromClaimId = requiredString(body.from_claim_id, "from_claim_id");
-    const toClaimId = requiredString(body.to_claim_id, "to_claim_id");
-    if (fromClaimId === toClaimId) throw new HttpError(422, "claim relation endpoints must differ");
-    const relationType = requiredString(body.relation_type, "relation_type");
-    if (!CLAIM_RELATION_TYPES.has(relationType)) throw new HttpError(422, "invalid relation_type");
-    const status = optionalString(body.status) ?? "active";
-    if (!RELATION_CREATE_STATUSES.has(status)) throw new HttpError(422, "invalid relation status");
-    const fromClaim = await this.getVisibleClaimRow(identity, fromClaimId);
-    const toClaim = await this.getVisibleClaimRow(identity, toClaimId);
-    if (!fromClaim || !toClaim || !canMutateClaim(fromClaim, identity.userId) || !canMutateClaim(toClaim, identity.userId)) {
-      throw new HttpError(404, "Claim relation endpoint not found");
-    }
-    return this.insertKnowledgeProposal(identity, {
-      proposalType: "claim_relation_create",
-      title: `Relate claims: ${fromClaim.title} -> ${toClaim.title}`,
-      payload: {
-        operation: "claim_relation_create",
-        from_claim_id: fromClaimId,
-        to_claim_id: toClaimId,
-        relation_type: relationType,
-        status,
-        confidence: confidence(body.confidence),
-        evidence_summary: optionalString(body.evidence_summary),
-      },
-      rationale: optionalString(body.rationale) ?? "Claim relation requested.",
-      workspaceId: fromClaim.workspace_id,
-      projectId: fromClaim.primary_project_id,
-    });
-  }
-
-  async proposeClaimRelationArchive(identity: SpaceUserIdentity, relationId: string): Promise<ProposalOut> {
-    const relation = await this.getClaimRelationRow(identity, relationId);
-    if (!relation) throw new HttpError(404, "Claim relation not found");
-    const fromClaim = await this.getVisibleClaimRow(identity, relation.from_claim_id);
-    const toClaim = await this.getVisibleClaimRow(identity, relation.to_claim_id);
-    if (!fromClaim || !toClaim || !canMutateClaim(fromClaim, identity.userId) || !canMutateClaim(toClaim, identity.userId)) {
-      throw new HttpError(404, "Claim relation not found");
-    }
-    return this.insertKnowledgeProposal(identity, {
-      proposalType: "claim_relation_delete",
-      title: "Archive claim relation",
-      payload: {
-        operation: "claim_relation_delete",
-        relation_id: relationId,
-      },
-      rationale: "Claim relation archive requested.",
-      workspaceId: fromClaim.workspace_id,
-      projectId: fromClaim.primary_project_id,
-    });
-  }
-
   async proposeObjectRelation(identity: SpaceUserIdentity, body: Record<string, unknown>): Promise<ProposalOut> {
     const fromObjectId = requiredString(body.from_object_id, "from_object_id");
     const toObjectId = requiredString(body.to_object_id, "to_object_id");
@@ -1030,56 +1026,6 @@ export class PgKnowledgeRepository {
       rationale: "Knowledge archive requested.",
       workspaceId: item.workspace_id,
       projectId: item.project_id,
-    });
-  }
-
-  async proposeRelation(identity: SpaceUserIdentity, body: Record<string, unknown>): Promise<ProposalOut> {
-    const fromItemId = requiredString(body.from_item_id, "from_item_id");
-    const toItemId = requiredString(body.to_item_id, "to_item_id");
-    const relationType = requiredString(body.relation_type, "relation_type");
-    if (!RELATION_TYPES.has(relationType)) throw new HttpError(422, "invalid relation_type");
-    const fromItem = await this.getVisibleItemRow(identity, fromItemId);
-    const toItem = await this.getVisibleItemRow(identity, toItemId);
-    if (!fromItem || !toItem) throw new HttpError(404, "Knowledge relation endpoint not found");
-    if (!canMutateKnowledge(fromItem, identity.userId) || !canMutateKnowledge(toItem, identity.userId)) {
-      throw new HttpError(404, "Knowledge relation endpoint not found");
-    }
-    return this.insertKnowledgeProposal(identity, {
-      proposalType: "knowledge_relation_create",
-      title: `Relate: ${fromItem.title} -> ${toItem.title}`,
-      payload: {
-        operation: "relation_create",
-        from_item_id: fromItemId,
-        to_item_id: toItemId,
-        relation_type: relationType,
-        status: optionalString(body.status) ?? "active",
-        confidence: confidence(body.confidence),
-        evidence_summary: optionalString(body.evidence_summary),
-      },
-      rationale: optionalString(body.rationale) ?? "Knowledge relation requested.",
-      workspaceId: fromItem.workspace_id,
-      projectId: fromItem.project_id,
-    });
-  }
-
-  async proposeRelationArchive(identity: SpaceUserIdentity, relationId: string): Promise<ProposalOut> {
-    const relation = await this.getRelationRow(identity, relationId);
-    if (!relation) throw new HttpError(404, "Knowledge relation not found");
-    const fromItem = await this.getVisibleItemRow(identity, relation.from_item_id);
-    const toItem = await this.getVisibleItemRow(identity, relation.to_item_id);
-    if (!fromItem || !toItem || !canMutateKnowledge(fromItem, identity.userId) || !canMutateKnowledge(toItem, identity.userId)) {
-      throw new HttpError(404, "Knowledge relation not found");
-    }
-    return this.insertKnowledgeProposal(identity, {
-      proposalType: "knowledge_relation_delete",
-      title: "Archive knowledge relation",
-      payload: {
-        operation: "relation_delete",
-        relation_id: relationId,
-      },
-      rationale: "Knowledge relation archive requested.",
-      workspaceId: fromItem.workspace_id,
-      projectId: fromItem.project_id,
     });
   }
 
@@ -1530,15 +1476,31 @@ export class PgKnowledgeRepository {
 
   async noteLinks(identity: SpaceUserIdentity, noteId: string, backlinks = false): Promise<Record<string, unknown>[]> {
     if (!(await this.getNoteRow(identity, noteId))) throw new HttpError(404, "Note not found");
-    const rows = await this.db.query<EntityLinkRow>(
-      `SELECT ${ENTITY_LINK_COLUMNS}
-         FROM entity_links
-        WHERE space_id = $1
-          AND ${backlinks ? "target_type = 'note' AND target_id = $2" : "source_type = 'note' AND source_id = $2"}
-        ORDER BY created_at DESC, id DESC`,
-      [identity.spaceId, noteId],
+    const rows = await this.db.query<NoteLinkRow>(
+      `SELECT nl.id, nl.space_id,
+              nl.from_object_id, from_so.object_type AS from_object_type,
+              nl.to_object_id, to_so.object_type AS to_object_type,
+              nl.link_type AS relation_type, nl.status, nl.confidence,
+              nl.metadata_json, nl.created_by_user_id,
+              nl.created_at, nl.updated_at
+         FROM note_links nl
+         JOIN space_objects from_so
+           ON from_so.id = nl.from_object_id
+          AND from_so.space_id = nl.space_id
+          AND from_so.deleted_at IS NULL
+         JOIN space_objects to_so
+           ON to_so.id = nl.to_object_id
+          AND to_so.space_id = nl.space_id
+          AND to_so.deleted_at IS NULL
+        WHERE nl.space_id = $1
+          AND nl.status = 'active'
+          AND ${backlinks ? "to_so.object_type = 'note' AND nl.to_object_id = $3" : "from_so.object_type = 'note' AND nl.from_object_id = $3"}
+          AND ${this.readableSpaceObjectClause("from_so")}
+          AND ${this.readableSpaceObjectClause("to_so")}
+        ORDER BY nl.created_at DESC, nl.id DESC`,
+      [identity.spaceId, identity.userId, noteId],
     );
-    return rows.rows.map(entityLinkOut);
+    return rows.rows.map(noteLinkAsEntityLinkOut);
   }
 
   async createNoteLink(identity: SpaceUserIdentity, noteId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -1550,30 +1512,47 @@ export class PgKnowledgeRepository {
     const sourceId = direction === "incoming" ? targetId : noteId;
     const finalTargetType = direction === "incoming" ? "note" : targetType;
     const finalTargetId = direction === "incoming" ? noteId : targetId;
+    const sourceObject = await this.requireVisibleSpaceObject(identity, sourceId, "Note link source not found");
+    const targetObject = await this.requireVisibleSpaceObject(identity, finalTargetId, "Note link target not found");
+    if (sourceObject.object_type !== sourceType || targetObject.object_type !== finalTargetType) {
+      throw new HttpError(404, "Note link endpoint not found");
+    }
+    const linkType = optionalString(body.link_type) ?? "related_to";
+    if (!RELATION_TYPES.has(linkType) && !OBJECT_RELATION_TYPES.has(linkType)) {
+      throw new HttpError(422, "invalid link_type");
+    }
     const now = new Date().toISOString();
-    const result = await this.db.query<EntityLinkRow>(
-      `INSERT INTO entity_links (
-         id, space_id, source_type, source_id, target_type, target_id,
-         link_type, confidence, status, created_by_user_id, created_at
+    const result = await this.db.query<NoteLinkRow>(
+      `INSERT INTO note_links (
+         id, space_id, from_object_id, from_object_type, to_object_id, to_object_type,
+         link_type, status, confidence, metadata_json, created_by_user_id,
+         created_at, updated_at
        ) VALUES (
          $1, $2, $3, $4, $5, $6,
-         $7, $8, 'accepted', $9, $10
+         $7, 'active', $8, $9, $10,
+         $11, $11
        )
-       RETURNING ${ENTITY_LINK_COLUMNS}`,
+       RETURNING id, space_id,
+                 from_object_id, from_object_type,
+                 to_object_id, to_object_type,
+                 link_type AS relation_type, status, confidence,
+                 metadata_json, created_by_user_id,
+                 created_at, updated_at`,
       [
         randomUUID(),
         identity.spaceId,
-        sourceType,
         sourceId,
-        finalTargetType,
+        sourceType,
         finalTargetId,
-        optionalString(body.link_type) ?? "related_to",
+        finalTargetType,
+        linkType,
         confidence(body.confidence),
+        JSON.stringify({ link_origin: "note_link_ui", canonical_graph: false }),
         identity.userId,
         now,
       ],
     );
-    const row = entityLinkOut(result.rows[0]!);
+    const row = noteLinkAsEntityLinkOut(result.rows[0]!);
     await this.safeReindex((p) => p.reindex(identity.spaceId, "note", noteId));
     await this.reindexLinkedTarget(identity.spaceId, finalTargetType, finalTargetId);
     return row;
@@ -1581,21 +1560,38 @@ export class PgKnowledgeRepository {
 
   async deleteNoteLink(identity: SpaceUserIdentity, noteId: string, linkId: string): Promise<void> {
     if (!(await this.getNoteRow(identity, noteId))) throw new HttpError(404, "Note not found");
-    const deleted = await this.db.query<{
-      source_type: string;
-      source_id: string;
-      target_type: string;
-      target_id: string;
+    const links = await this.db.query<{
+      from_object_type: string;
+      from_object_id: string;
+      to_object_type: string;
+      to_object_id: string;
     }>(
-      `DELETE FROM entity_links
-        WHERE id = $1 AND space_id = $2
-          AND ((source_type = 'note' AND source_id = $3) OR (target_type = 'note' AND target_id = $3))
-        RETURNING source_type, source_id, target_type, target_id`,
+      `SELECT from_so.object_type AS from_object_type, nl.from_object_id,
+              to_so.object_type AS to_object_type, nl.to_object_id
+         FROM note_links nl
+         JOIN space_objects from_so ON from_so.id = nl.from_object_id AND from_so.space_id = nl.space_id
+         JOIN space_objects to_so ON to_so.id = nl.to_object_id AND to_so.space_id = nl.space_id
+        WHERE nl.id = $1 AND nl.space_id = $2
+          AND ((from_so.object_type = 'note' AND nl.from_object_id = $3) OR (to_so.object_type = 'note' AND nl.to_object_id = $3))`,
       [linkId, identity.spaceId, noteId],
     );
-    for (const row of deleted.rows) {
-      await this.reindexLinkedTarget(identity.spaceId, row.source_type, row.source_id);
-      await this.reindexLinkedTarget(identity.spaceId, row.target_type, row.target_id);
+    await this.db.query(
+      `DELETE FROM note_links
+        WHERE id = $1 AND space_id = $2
+          AND EXISTS (
+            SELECT 1 FROM space_objects from_so, space_objects to_so
+             WHERE from_so.id = note_links.from_object_id
+               AND from_so.space_id = note_links.space_id
+               AND to_so.id = note_links.to_object_id
+               AND to_so.space_id = note_links.space_id
+               AND ((from_so.object_type = 'note' AND note_links.from_object_id = $3)
+                 OR (to_so.object_type = 'note' AND note_links.to_object_id = $3))
+          )`,
+      [linkId, identity.spaceId, noteId],
+    );
+    for (const row of links.rows) {
+      await this.reindexLinkedTarget(identity.spaceId, row.from_object_type, row.from_object_id);
+      await this.reindexLinkedTarget(identity.spaceId, row.to_object_type, row.to_object_id);
     }
   }
 
@@ -1634,7 +1630,7 @@ export class PgKnowledgeRepository {
     const params: unknown[] = [identity.spaceId, identity.userId];
     const clauses = [
       "ki.space_id = $1",
-      "(so.visibility IN ('space_shared', 'workspace_shared') OR so.owner_user_id = $2 OR so.created_by_user_id = $2)",
+      this.readableSpaceObjectClause("so"),
     ];
     const add = (value: unknown): string => {
       params.push(value);
@@ -1678,7 +1674,7 @@ export class PgKnowledgeRepository {
   }
 
   private readableSpaceObjectClause(alias: string, userParam = "$2"): string {
-    return `(${alias}.visibility IN ('space_shared', 'workspace_shared') OR ${alias}.owner_user_id = ${userParam} OR ${alias}.created_by_user_id = ${userParam})`;
+    return spaceObjectVisibleSql(alias, userParam);
   }
 
   private async getVisibleItemRow(identity: SpaceUserIdentity, itemId: string): Promise<KnowledgeItemRow | null> {
@@ -1690,16 +1686,6 @@ export class PgKnowledgeRepository {
     );
     const row = result.rows[0];
     return row && canReadKnowledge(row, identity.userId) ? row : null;
-  }
-
-  private async getRelationRow(identity: SpaceUserIdentity, relationId: string): Promise<KnowledgeRelationRow | null> {
-    const result = await this.db.query<KnowledgeRelationRow>(
-      `SELECT ${KNOWLEDGE_RELATION_COLUMNS}
-         FROM knowledge_item_relations
-        WHERE id = $1 AND space_id = $2`,
-      [relationId, identity.spaceId],
-    );
-    return result.rows[0] ?? null;
   }
 
   private async getVisibleClaimRow(identity: SpaceUserIdentity, claimId: string): Promise<ClaimRow | null> {
@@ -1715,25 +1701,26 @@ export class PgKnowledgeRepository {
 
   private async hasActiveSupersedingClaimRelation(spaceId: string, claimId: string): Promise<boolean> {
     const result = await this.db.query<{ id: string }>(
-      `SELECT id FROM claim_relations
+      `SELECT r.id
+         FROM object_relations r
+         JOIN space_objects from_so
+           ON from_so.id = r.from_object_id
+          AND from_so.space_id = r.space_id
+          AND from_so.object_type = 'claim'
+          AND from_so.deleted_at IS NULL
+         JOIN space_objects to_so
+           ON to_so.id = r.to_object_id
+          AND to_so.space_id = r.space_id
+          AND to_so.object_type = 'claim'
+          AND to_so.deleted_at IS NULL
         WHERE space_id = $1
-          AND to_claim_id = $2
-          AND relation_type = 'supersedes'
-          AND status = 'active'
+          AND r.to_object_id = $2
+          AND r.relation_type = 'supersedes'
+          AND r.status = 'active'
         LIMIT 1`,
       [spaceId, claimId],
     );
     return Boolean(result.rows[0]);
-  }
-
-  private async getClaimRelationRow(identity: SpaceUserIdentity, relationId: string): Promise<ClaimRelationRow | null> {
-    const result = await this.db.query<ClaimRelationRow>(
-      `SELECT ${CLAIM_RELATION_COLUMNS}
-         FROM claim_relations
-        WHERE id = $1 AND space_id = $2`,
-      [relationId, identity.spaceId],
-    );
-    return result.rows[0] ?? null;
   }
 
   private async getObjectRelationRow(identity: SpaceUserIdentity, relationId: string): Promise<ObjectRelationRow | null> {
@@ -2162,43 +2149,19 @@ export class PgKnowledgeRepository {
     riskLevel?: "low" | "medium" | "high" | "critical";
   }): Promise<ProposalOut> {
     const now = new Date();
-    const nowIso = now.toISOString();
-    const result = await this.db.query<ProposalRow>(
-      `INSERT INTO proposals (
-         id, space_id, proposal_type, status, risk_level, urgency, preview,
-         title, summary, payload_json, review_deadline, expires_at, created_at,
-         updated_at, reviewed_at, reviewed_by, workspace_id, rationale,
-         created_by_agent_id, created_by_user_id, required_approver_role,
-         visibility, project_id
-       ) VALUES (
-         $1, $2, $3, 'pending', $11, 'normal', false,
-         $4, NULL, $5::jsonb, NULL, NULL, $6,
-         $6, NULL, NULL, $7, $8,
-         NULL, $9, NULL,
-         'space_shared', $10
-       )
-       RETURNING id, space_id, created_by_user_id, workspace_id,
-                 created_by_run_id, proposal_type, status, risk_level, urgency,
-                 preview, title, payload_json, rationale, visibility,
-                 review_deadline, expires_at, created_at, reviewed_at,
-                 project_id,
-                 NULL::varchar AS egress_approval_id,
-                 NULL::varchar AS egress_approval_status`,
-      [
-        randomUUID(),
-        inputIdentity.spaceId,
-        input.proposalType,
-        input.title,
-        JSON.stringify(input.payload),
-        nowIso,
-        input.workspaceId,
-        input.rationale,
-        inputIdentity.userId,
-        input.projectId,
-        input.riskLevel ?? "low",
-      ],
-    );
-    return proposalToOut(result.rows[0]!, now);
+    const row = await insertProposalRow(this.db, {
+      spaceId: inputIdentity.spaceId,
+      proposalType: input.proposalType,
+      title: input.title,
+      payload: input.payload,
+      rationale: input.rationale,
+      workspaceId: input.workspaceId,
+      projectId: input.projectId,
+      createdByUserId: inputIdentity.userId,
+      visibility: "space_shared",
+      riskLevel: input.riskLevel ?? "low",
+    });
+    return proposalToOut(row, now);
   }
 }
 
@@ -2497,6 +2460,75 @@ function objectKindActivationStatus(value: unknown): "active" {
   const status = requiredString(value, "status");
   if (status !== "active") throw new HttpError(422, "object kind update status can only be active");
   return status;
+}
+
+function objectRelationAsKnowledgeRelationOut(row: ObjectRelationRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    from_item_id: row.from_object_id,
+    to_item_id: row.to_object_id,
+    relation_type: row.relation_type,
+    status: row.status,
+    confidence: row.confidence,
+    evidence_summary: row.evidence_summary,
+    source_proposal_id: row.source_proposal_id,
+    created_by_user_id: row.created_by_user_id,
+    created_by_agent_id: row.created_by_agent_id,
+    created_from_assessment_id: null,
+    created_at: dateIso(row.created_at),
+    updated_at: dateIso(row.updated_at),
+  };
+}
+
+function objectRelationAsClaimRelationOut(row: ObjectRelationRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    from_claim_id: row.from_object_id,
+    to_claim_id: row.to_object_id,
+    relation_type: row.relation_type,
+    status: row.status,
+    confidence: row.confidence,
+    evidence_summary: row.evidence_summary,
+    source_proposal_id: row.source_proposal_id,
+    created_by_user_id: row.created_by_user_id,
+    created_by_agent_id: row.created_by_agent_id,
+    created_at: dateIso(row.created_at),
+    updated_at: dateIso(row.updated_at),
+  };
+}
+
+function objectRelationAsEntityLinkOut(row: ObjectRelationRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    source_type: row.from_object_type,
+    source_id: row.from_object_id,
+    target_type: row.to_object_type,
+    target_id: row.to_object_id,
+    link_type: row.relation_type,
+    confidence: row.confidence,
+    status: row.status,
+    created_by_user_id: row.created_by_user_id,
+    created_at: dateIso(row.created_at),
+  };
+}
+
+function noteLinkAsEntityLinkOut(row: NoteLinkRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    source_type: row.from_object_type,
+    source_id: row.from_object_id,
+    target_type: row.to_object_type,
+    target_id: row.to_object_id,
+    link_type: row.relation_type,
+    confidence: row.confidence,
+    status: row.status,
+    created_by_user_id: row.created_by_user_id,
+    created_at: dateIso(row.created_at),
+  };
 }
 
 function objectKindConfigInput(value: unknown, field: string): Record<string, unknown> {

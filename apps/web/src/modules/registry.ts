@@ -35,7 +35,8 @@ export interface Module {
    * Backend capability ID this entry is backed by.
    * undefined = no formal capability (core UI feature).
    *
-   * NOTE: Capability is an agent AI skill descriptor (catalog/capabilities/).
+   * NOTE: Capability is an agent AI skill descriptor
+   * (capability-definitions / workflow framework).
    * It is NOT the same as an official optional module. Do not use this field
    * to represent official optional module enablement — use pluginId for that.
    */
@@ -134,9 +135,9 @@ export interface Module {
  *   - Reserved for a future plugin package system with sandboxing/SDK.
  *   - Do NOT implement third-party plugin loading in this registry.
  *
- * NOTE: Capabilities (source: 'installed' was previously described as capability-backed)
- * are agent AI skills, NOT product modules. Do not confuse GET /api/v1/capabilities
- * (agent skill catalog) with GET /api/v1/plugins/effective (official module control plane).
+ * NOTE: Capabilities are agent AI skills, NOT product modules. Do not confuse
+ * GET /api/v1/capability-definitions (agent skill framework) with
+ * GET /api/v1/plugins/effective (official module control plane).
  *
  * ── State semantics ─────────────────────────────────────────────────────────
  *   planned   = not yet built ("soon" badge, non-interactive, dev concern)

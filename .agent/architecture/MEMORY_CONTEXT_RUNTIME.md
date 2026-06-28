@@ -20,7 +20,10 @@ Persistent, approved, scoped knowledge. Key invariants:
 | Private memory only in personal space | Policy hard invariant + memory proposal/apply validation |
 | Deleted rows invisible | `deleted_at IS NULL` filter in every retrieval query |
 
-Key columns: `scope_type` (user / workspace / agent / system / capability), `memory_layer` (semantic / episodic / procedural), `visibility`, `status` (proposed / active / archived / superseded), `version`, `fitness_score`, `source_proposal_id`.
+Key columns: `scope_type` (user / workspace / agent / system / capability),
+`memory_type` (public category), `memory_layer` (semantic / episodic),
+`visibility`, `status` (proposed / active / archived / superseded),
+`version`, `fitness_score`, and `created_from_proposal_id`.
 
 ### Active memory write boundary
 
@@ -30,7 +33,7 @@ direct update/delete path for `memory_entries`.
 
 **Allowed active-memory write paths:**
 
-| Path | Entry point | source_proposal_id | source_trust | Notes |
+| Path | Entry point | created_from_proposal_id | source_trust | Notes |
 |------|------------|-------------------|--------------|-------|
 | Proposal apply | `server/src/modules/proposals/applyService.ts` + memory applier | set | from proposal payload | Normal product write boundary |
 | System seed / bootstrap | server seed/migration code | not set | `"internal_system"` | Bootstrap only; must not be called from product or agent paths |
@@ -610,7 +613,8 @@ Supported proposal types:
 - `policy_change` → creates / supersedes `Policy` row
 - `code_patch` -> dispatches through `ProposalApplierRegistry` to the memory-owned
   code-patch proposal applier
-- `egress_review` → metadata-only update on `PersonalMemoryGrant`
+- `egress_granting_user` approvals → metadata-only `proposal_approvals` rows; no
+  `egress_review` applier is registered yet
 
 After applying `memory_create` / `memory_update` / `memory_archive`:
 - Calls the digest dirty-marker for affected workspace/agent memory scopes

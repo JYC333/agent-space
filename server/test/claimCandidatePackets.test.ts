@@ -77,13 +77,14 @@ class ClaimCandidatePacketFakeDb implements Queryable {
     }
     if (norm.startsWith("INSERT INTO proposals")) {
       const payload = JSON.parse(String(params[10]));
-      this.insertedProposals.push({
+      const row: StoredProposal = {
         id: String(params[0]),
         proposal_type: String(params[3]),
         payload_json: payload,
         visibility: String(params[15] ?? "private"),
-      });
-      return { rows: [], rowCount: 1 };
+      };
+      this.insertedProposals.push(row);
+      return { rows: [row] as unknown as Row[], rowCount: 1 };
     }
     if (norm.startsWith("UPDATE proposals")) {
       this.updatedProposalPayload = JSON.parse(String(params[2]));
@@ -274,7 +275,7 @@ describe("Claim Candidate Packets", () => {
       ]),
     );
     expect(candidates.some((candidate) =>
-      (candidate.proposed_action as Record<string, unknown> | null)?.proposal_type === "claim_relation_create")).toBe(true);
+      (candidate.proposed_action as Record<string, unknown> | null)?.proposal_type === "object_relation_create")).toBe(true);
   });
 
   it("enriches brief claim candidates with holder, validity, and governed source refs", async () => {
@@ -429,10 +430,10 @@ describe("Claim Candidate Packets", () => {
       },
     });
     expect(db.insertedProposals.filter((proposal) => proposal.proposal_type === "claim_create")).toHaveLength(1);
-    expect(db.insertedProposals.filter((proposal) => proposal.proposal_type === "claim_relation_create")).toHaveLength(1);
+    expect(db.insertedProposals.filter((proposal) => proposal.proposal_type === "object_relation_create")).toHaveLength(1);
     expect(db.calls.some((call) => /INSERT INTO claims/.test(call.sql))).toBe(false);
     expect(db.calls.some((call) => /INSERT INTO object_relations/.test(call.sql))).toBe(false);
-    expect(db.updatedProposalPayload).toMatchObject({
+    expect(result.proposalPayloadPatch).toMatchObject({
       generated_child_proposal_count: 2,
       skipped_child_proposal_count: 0,
       canonical_write_performed: false,
@@ -554,7 +555,7 @@ describe("Claim Candidate Packets", () => {
         skipped_child_proposal_count: 1,
       },
     });
-    expect(db.updatedProposalPayload).toMatchObject({
+    expect(result.proposalPayloadPatch).toMatchObject({
       generated_child_proposal_count: 0,
       skipped_child_proposal_count: 1,
       skipped_child_proposals: [
@@ -613,7 +614,7 @@ describe("Claim Candidate Packets", () => {
       skipped_child_proposal_count: 1,
     });
     expect(db.insertedProposals).toHaveLength(0);
-    expect(db.updatedProposalPayload).toMatchObject({
+    expect(result.proposalPayloadPatch).toMatchObject({
       skipped_child_proposals: [
         expect.objectContaining({
           candidate_id: "candidate-mismatch",

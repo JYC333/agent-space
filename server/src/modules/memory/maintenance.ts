@@ -18,6 +18,11 @@ export interface MemoryMaintenanceScanInput {
   projectId?: string | null;
   scanMode?: "recent" | "full";
   cursor?: string | null;
+  /**
+   * When true (space_ops review scope), exclude private and restricted memories
+   * so the caller's personal memory titles do not appear in space-shared reports.
+   */
+  excludePersonalVisibility?: boolean;
 }
 
 export interface MemoryMaintenanceScanResult {
@@ -138,6 +143,10 @@ export class MemoryMaintenanceService {
   ): Promise<VisibleMemory[]> {
     const readable = candidates.filter((row) => {
       if (isExcludedMaintenanceRow(row)) return false;
+      if (input.excludePersonalVisibility) {
+        const vis = (row.visibility ?? "private").toLowerCase();
+        if (vis === "private" || vis === "restricted" || vis === "selected_users") return false;
+      }
       return canReadMemory(row, { userId: input.userId, spaceId: input.spaceId });
     });
     const projectAccessible = await accessibleProjectIds(

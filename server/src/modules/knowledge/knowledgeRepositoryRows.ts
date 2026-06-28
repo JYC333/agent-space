@@ -22,13 +22,10 @@ export interface KnowledgeItemRow {
   reflection_status: string;
   tags_json: unknown;
   confidence: number | null;
-  source_url: string | null;
   owner_user_id: string | null;
   created_by_user_id: string | null;
   created_by_agent_id: string | null;
   created_by_run_id: string | null;
-  source_activity_id: string | null;
-  source_artifact_id: string | null;
   created_from_proposal_id: string | null;
   approved_by_user_id: string | null;
   version: unknown;
@@ -196,20 +193,6 @@ export interface NoteCollectionRow {
   updated_at: unknown;
 }
 
-export interface EntityLinkRow {
-  id: string;
-  space_id: string;
-  source_type: string;
-  source_id: string;
-  target_type: string;
-  target_id: string;
-  link_type: string;
-  confidence: number | null;
-  status: string;
-  created_by_user_id: string | null;
-  created_at: unknown;
-}
-
 export interface ProvenanceLinkRow {
   source_type: string;
   source_id: string;
@@ -225,9 +208,9 @@ export const KNOWLEDGE_ITEM_COLUMNS = `
   so.title, ki.content, ki.content_json, ki.content_format,
   ki.content_schema_version, ki.plain_text, so.summary AS excerpt,
   so.status, so.visibility, ki.verification_status, ki.reflection_status,
-  ki.tags_json, ki.confidence, ki.source_url, so.owner_user_id,
+  ki.tags_json, ki.confidence, so.owner_user_id,
   so.created_by_user_id, so.created_by_agent_id, so.created_by_run_id,
-  ki.source_activity_id, ki.source_artifact_id, ki.created_from_proposal_id,
+  ki.created_from_proposal_id,
   ki.approved_by_user_id, ki.version, so.created_at, so.updated_at,
   so.archived_at, ki.deprecated_at
 `;
@@ -320,11 +303,6 @@ export const NOTE_COLLECTION_COLUMNS = `
   is_hidden, created_at, updated_at
 `;
 
-export const ENTITY_LINK_COLUMNS = `
-  id, space_id, source_type, source_id, target_type, target_id, link_type,
-  confidence, status, created_by_user_id, created_at
-`;
-
 export const KNOWLEDGE_KINDS = new Set(["concept", "lesson", "procedure", "decision", "question", "answer", "summary"]);
 export const CONTENT_FORMATS = new Set(["markdown", "plain", "prosemirror_json"]);
 export const KNOWLEDGE_VISIBILITIES = new Set(["private", "space_shared", "workspace_shared", "restricted"]);
@@ -336,7 +314,6 @@ export const CLAIM_RESOLUTION_STATES = new Set(["unreviewed", "confirmed", "cont
 export const CLAIM_EVIDENCE_ROLES = new Set(["supports", "contradicts", "mentions", "derived_from", "cites", "summarizes"]);
 export const CLAIM_SOURCE_REF_TYPES = new Set(["activity", "artifact", "run_event", "extracted_evidence", "source_snapshot", "external_pointer", "intake_item"]);
 export const CLAIM_SOURCE_TRUST_LEVELS = new Set(["trusted", "normal", "untrusted", "unknown"]);
-export const CLAIM_RELATION_TYPES = new Set(["supports", "contradicts", "supersedes", "refines", "same_as", "depends_on", "derived_from"]);
 export const OBJECT_RELATION_TYPES = new Set(["related_to", "references", "depends_on", "part_of", "source_for", "derived_from", "about", "supports", "contradicts", "supersedes", "refines", "same_as"]);
 export const OBJECT_RELATION_STATUSES = new Set(["candidate", "active", "rejected", "archived"]);
 export const RELATION_TYPES = new Set([
