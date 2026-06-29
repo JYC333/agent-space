@@ -141,19 +141,15 @@ Communicate through Unix socket only. Accepts structured allowlisted jobs only.
 
 ### Common
 - `AGENT_SPACE_ENV=dev|test|prod`
-- `INSTANCE_ROOT=/instance`
-- `STORAGE_ROOT=/instance/storage`
-- `LOG_ROOT=/instance/logs`
-- `DATABASE_URL=...`
-- `FRONTEND_URL=...`
-- `BACKEND_URL=...`
+- `AGENT_SPACE_HOME=/aspace` (mode root bind-mounted into containers)
+- `SERVER_DATABASE_URL=postgres://...`
+- `FRONTEND_URL=http://localhost:3000`
+- `INSTANCE_ADMIN_EMAIL=<admin email>`
 
 ### Self-Evolution
 - `ENABLE_SYSTEM_EVOLUTION=true`
-- `SYSTEM_CORE_REPO_PATH=/path/to/agent-space-repo` (must be an existing git repo)
+- `SYSTEM_CORE_OWNER_EMAIL=<developer email>` (falls back to `INSTANCE_ADMIN_EMAIL`)
 - `SYSTEM_CORE_BASE_BRANCH=master`
-- `INSTANCE_ADMIN_EMAIL=<developer email>`
-- `SYSTEM_EVOLUTION_SANDBOX_ROOT=~/.aspace/dev/sandboxes/system-evolution`
 
 ## System-Core Workspace Policy
 

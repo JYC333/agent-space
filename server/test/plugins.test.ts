@@ -2,7 +2,7 @@
  * Tests for the official optional modules (plugins) framework.
  *
  * Covers:
- *   - Registry: descriptor uniqueness, dairy exists and is disabled by default
+ *   - Registry: descriptor uniqueness, diary exists and is disabled by default
  *   - Service: list, effective map, enable, disable, settings patch
  *   - Guards: disabled guard fails closed, enabled guard passes
  *   - Cross-space leakage prevention
@@ -25,7 +25,7 @@ import {
 import { pluginService } from "../src/modules/plugins/service";
 import { installOfficialPlugin } from "../src/modules/plugins/installer";
 import { BUILT_IN_PLUGINS } from "../src/modules/plugins/builtInPlugins";
-import { DAIRY_PLUGIN_ID } from "../src/modules/plugins/official/dairy";
+import { DIARY_PLUGIN_ID } from "../src/modules/plugins/official/diary";
 import type {
   AgentSpacePlugin,
   PluginHostContext,
@@ -47,20 +47,20 @@ describe("OfficialPluginRegistry", () => {
     expect(() => assertPluginRegistryIntegrity()).not.toThrow();
   });
 
-  it("contains dairy", () => {
-    const descriptor = getOfficialPlugin(DAIRY_PLUGIN_ID);
+  it("contains diary", () => {
+    const descriptor = getOfficialPlugin(DIARY_PLUGIN_ID);
     expect(descriptor).toBeDefined();
-    expect(descriptor!.id).toBe(DAIRY_PLUGIN_ID);
-    expect(descriptor!.name).toBe("Dairy");
+    expect(descriptor!.id).toBe(DIARY_PLUGIN_ID);
+    expect(descriptor!.name).toBe("Diary");
   });
 
-  it("dairy is disabled by default", () => {
-    const descriptor = getOfficialPlugin(DAIRY_PLUGIN_ID);
+  it("diary is disabled by default", () => {
+    const descriptor = getOfficialPlugin(DIARY_PLUGIN_ID);
     expect(descriptor!.default_enabled).toBe(false);
   });
 
-  it("dairy scope is user (personal, cross-space)", () => {
-    const descriptor = getOfficialPlugin(DAIRY_PLUGIN_ID);
+  it("diary scope is user (personal, cross-space)", () => {
+    const descriptor = getOfficialPlugin(DIARY_PLUGIN_ID);
     expect(descriptor!.scope).toBe("user");
   });
 
@@ -198,29 +198,29 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool!.query("DROP TABLE IF EXISTS dairy_reflections");
-  await pool!.query("DROP TABLE IF EXISTS dairy_entries");
+  await pool!.query("DROP TABLE IF EXISTS diary_reflections");
+  await pool!.query("DROP TABLE IF EXISTS diary_entries");
   await pool!.query("DELETE FROM plugin_migrations");
   await pool!.query("DELETE FROM plugin_installs");
   await pool!.query("DELETE FROM official_plugin_events");
   await pool!.query("DELETE FROM official_plugin_enablements");
 });
 
-async function installDairy(): Promise<void> {
-  await installOfficialPlugin(db, DAIRY_PLUGIN_ID, BUILT_IN_PLUGINS, {
+async function installDiary(): Promise<void> {
+  await installOfficialPlugin(db, DIARY_PLUGIN_ID, BUILT_IN_PLUGINS, {
     actorUserId: USER_1,
     source: "official",
   });
 }
 
-async function insertDairyEntry(
+async function insertDiaryEntry(
   userId: string,
   date: string,
   content: string,
 ): Promise<string> {
   const id = randomUUID();
   const result = await pool!.query<{ id: string }>(
-    `INSERT INTO dairy_entries (id, user_id, entry_date, content)
+    `INSERT INTO diary_entries (id, user_id, entry_date, content)
      VALUES ($1, $2, $3::date, $4)
      RETURNING id`,
     [id, userId, date, content],
@@ -228,9 +228,9 @@ async function insertDairyEntry(
   return result.rows[0]!.id;
 }
 
-async function buildDairyJobHandler(jobType: string): Promise<PluginJobHandler> {
-  const plugin = BUILT_IN_PLUGINS.find((candidate) => candidate.id === DAIRY_PLUGIN_ID);
-  if (!plugin) throw new Error("dairy plugin runtime not loaded");
+async function buildDiaryJobHandler(jobType: string): Promise<PluginJobHandler> {
+  const plugin = BUILT_IN_PLUGINS.find((candidate) => candidate.id === DIARY_PLUGIN_ID);
+  if (!plugin) throw new Error("diary plugin runtime not loaded");
 
   const app = Fastify({ logger: false });
   const handlers = new Map<string, PluginJobHandler>();
@@ -276,13 +276,13 @@ function testPluginHostContext(
 }
 
 describe("pluginService.listPlugins", () => {
-  it("returns dairy as disabled when no row exists", async () => {
+  it("returns diary as disabled when no row exists", async () => {
     const items = await pluginService.listPlugins(db, SPACE_A, USER_1);
-    const dairy = items.find((i) => i.descriptor.id === DAIRY_PLUGIN_ID);
-    expect(dairy).toBeDefined();
-    expect(dairy!.effective.installed).toBe(false);
-    expect(dairy!.effective.enabled).toBe(false);
-    expect(dairy!.effective.has_row).toBe(false);
+    const diary = items.find((i) => i.descriptor.id === DIARY_PLUGIN_ID);
+    expect(diary).toBeDefined();
+    expect(diary!.effective.installed).toBe(false);
+    expect(diary!.effective.enabled).toBe(false);
+    expect(diary!.effective.has_row).toBe(false);
   });
 
   it("returns all descriptors", async () => {
@@ -295,22 +295,22 @@ describe("pluginService.listPlugins", () => {
 });
 
 describe("pluginService.installPlugin", () => {
-  it("installs dairy and creates plugin-owned tables through plugin migrations", async () => {
-    await installDairy();
+  it("installs diary and creates plugin-owned tables through plugin migrations", async () => {
+    await installDiary();
 
     const install = await pool!.query(
       "SELECT * FROM plugin_installs WHERE plugin_id = $1 AND status = 'active'",
-      [DAIRY_PLUGIN_ID],
+      [DIARY_PLUGIN_ID],
     );
     expect(install.rowCount).toBe(1);
 
     const migrations = await pool!.query(
       "SELECT * FROM plugin_migrations WHERE plugin_id = $1 AND migration_id = $2",
-      [DAIRY_PLUGIN_ID, "0001_create_dairy_tables"],
+      [DIARY_PLUGIN_ID, "0001_create_diary_tables"],
     );
     expect(migrations.rowCount).toBe(1);
 
-    await pool!.query("INSERT INTO dairy_entries (user_id, entry_date, content) VALUES ($1, $2::date, $3)", [
+    await pool!.query("INSERT INTO diary_entries (user_id, entry_date, content) VALUES ($1, $2::date, $3)", [
       USER_1,
       "2026-06-19",
       "Installed table works",
@@ -318,17 +318,17 @@ describe("pluginService.installPlugin", () => {
   });
 
   it("fails when an already-applied plugin migration checksum changes", async () => {
-    await installDairy();
-    const dairyPlugin = BUILT_IN_PLUGINS.find((plugin) => plugin.id === DAIRY_PLUGIN_ID)!;
-    const migration = dairyPlugin.migrations![0]!;
+    await installDiary();
+    const diaryPlugin = BUILT_IN_PLUGINS.find((plugin) => plugin.id === DIARY_PLUGIN_ID)!;
+    const migration = diaryPlugin.migrations![0]!;
 
     await expect(
       installOfficialPlugin(
         db,
-        DAIRY_PLUGIN_ID,
+        DIARY_PLUGIN_ID,
         [
           {
-            ...dairyPlugin,
+            ...diaryPlugin,
             migrations: [
               {
                 ...migration,
@@ -342,22 +342,22 @@ describe("pluginService.installPlugin", () => {
           source: "official",
         },
       ),
-    ).rejects.toThrow("Plugin migration checksum mismatch: dairy/0001_create_dairy_tables");
+    ).rejects.toThrow("Plugin migration checksum mismatch: diary/0001_create_diary_tables");
   });
 });
 
 describe("pluginService.enablePlugin", () => {
   it("fails closed when the plugin is not installed", async () => {
     await expect(
-      pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {}),
-    ).rejects.toThrow("Plugin is not installed: dairy");
+      pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {}),
+    ).rejects.toThrow("Plugin is not installed: diary");
   });
 
   it("persists enablement state", async () => {
-    await installDairy();
+    await installDiary();
     const result = await pluginService.enablePlugin(
       db,
-      DAIRY_PLUGIN_ID,
+      DIARY_PLUGIN_ID,
       SPACE_A,
       USER_1,
       {},
@@ -367,17 +367,17 @@ describe("pluginService.enablePlugin", () => {
   });
 
   it("can be re-read after enable", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
-    const item = await pluginService.getPlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1);
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
+    const item = await pluginService.getPlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1);
     expect(item.effective.enabled).toBe(true);
   });
 
   it("stores initial settings merged with defaults", async () => {
-    await installDairy();
+    await installDiary();
     const result = await pluginService.enablePlugin(
       db,
-      DAIRY_PLUGIN_ID,
+      DIARY_PLUGIN_ID,
       SPACE_A,
       USER_1,
       { settings: { daily_reminder_enabled: true } },
@@ -388,10 +388,10 @@ describe("pluginService.enablePlugin", () => {
   });
 
   it("listPlugins uses the descriptor scope when duplicate-scope rows exist", async () => {
-    await installDairy();
+    await installDiary();
     await pluginService.enablePlugin(
       db,
-      DAIRY_PLUGIN_ID,
+      DIARY_PLUGIN_ID,
       SPACE_A,
       USER_1,
       { settings: { daily_reminder_enabled: true } },
@@ -400,23 +400,23 @@ describe("pluginService.enablePlugin", () => {
       `INSERT INTO official_plugin_enablements
          (id, space_id, user_id, plugin_id, enabled, visible, settings_json, created_at, updated_at)
        VALUES ($1, $2, NULL, $3, false, true, '{}'::jsonb, now(), now())`,
-      ["wrong-scope-row", SPACE_A, DAIRY_PLUGIN_ID],
+      ["wrong-scope-row", SPACE_A, DIARY_PLUGIN_ID],
     );
 
     const items = await pluginService.listPlugins(db, SPACE_A, USER_1);
-    const dairy = items.find((i) => i.descriptor.id === DAIRY_PLUGIN_ID);
-    expect(dairy?.effective.enabled).toBe(true);
-    expect(dairy?.effective.settings.daily_reminder_enabled).toBe(true);
+    const diary = items.find((i) => i.descriptor.id === DIARY_PLUGIN_ID);
+    expect(diary?.effective.enabled).toBe(true);
+    expect(diary?.effective.settings.daily_reminder_enabled).toBe(true);
   });
 });
 
 describe("pluginService.disablePlugin", () => {
   it("persists disabled state after enable", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
     const result = await pluginService.disablePlugin(
       db,
-      DAIRY_PLUGIN_ID,
+      DIARY_PLUGIN_ID,
       SPACE_A,
       USER_1,
     );
@@ -425,24 +425,24 @@ describe("pluginService.disablePlugin", () => {
   });
 
   it("does not delete data — row still exists after disable", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
-    await pluginService.disablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1);
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
+    await pluginService.disablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1);
     const rows = await pool!.query(
       "SELECT * FROM official_plugin_enablements WHERE plugin_id = $1",
-      [DAIRY_PLUGIN_ID],
+      [DIARY_PLUGIN_ID],
     );
     expect(rows.rowCount).toBeGreaterThan(0);
   });
 
   it("preserves settings when disabling without a settings body", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {
       settings: { daily_reminder_enabled: true },
     });
     const result = await pluginService.disablePlugin(
       db,
-      DAIRY_PLUGIN_ID,
+      DIARY_PLUGIN_ID,
       SPACE_A,
       USER_1,
     );
@@ -453,11 +453,11 @@ describe("pluginService.disablePlugin", () => {
 
 describe("pluginService.patchSettings", () => {
   it("patches settings_json", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
     const result = await pluginService.patchSettings(
       db,
-      DAIRY_PLUGIN_ID,
+      DIARY_PLUGIN_ID,
       SPACE_A,
       USER_1,
       { daily_reminder_enabled: true, ai_reflection_enabled: true },
@@ -469,7 +469,7 @@ describe("pluginService.patchSettings", () => {
   it("creates row if not exists when patching settings", async () => {
     const result = await pluginService.patchSettings(
       db,
-      DAIRY_PLUGIN_ID,
+      DIARY_PLUGIN_ID,
       SPACE_A,
       USER_1,
       { include_in_context: true },
@@ -487,10 +487,10 @@ describe("pluginService.isEnabled (guard helper)", () => {
     expect(result.enabled).toBe(false);
   });
 
-  it("returns enabled=false for dairy before any row", async () => {
+  it("returns enabled=false for diary before any row", async () => {
     const result = await pluginService.isEnabled(
       db,
-      DAIRY_PLUGIN_ID,
+      DIARY_PLUGIN_ID,
       SPACE_A,
       USER_1,
     );
@@ -500,11 +500,11 @@ describe("pluginService.isEnabled (guard helper)", () => {
   });
 
   it("returns enabled=true after enabling", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
     const result = await pluginService.isEnabled(
       db,
-      DAIRY_PLUGIN_ID,
+      DIARY_PLUGIN_ID,
       SPACE_A,
       USER_1,
     );
@@ -514,12 +514,12 @@ describe("pluginService.isEnabled (guard helper)", () => {
   });
 
   it("returns enabled=false after disabling", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
-    await pluginService.disablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1);
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
+    await pluginService.disablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1);
     const result = await pluginService.isEnabled(
       db,
-      DAIRY_PLUGIN_ID,
+      DIARY_PLUGIN_ID,
       SPACE_A,
       USER_1,
     );
@@ -530,12 +530,12 @@ describe("pluginService.isEnabled (guard helper)", () => {
 
 describe("user-scope cross-space behaviour", () => {
   it("enabling (user-scope) is visible from any space for the same user", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
     // user-scope: enabled for USER_1 regardless of which space we check from
     const resultB = await pluginService.isEnabled(
       db,
-      DAIRY_PLUGIN_ID,
+      DIARY_PLUGIN_ID,
       SPACE_B,
       USER_1,
     );
@@ -543,11 +543,11 @@ describe("user-scope cross-space behaviour", () => {
   });
 
   it("enabling for user 1 does not affect user 2", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
     const result2 = await pluginService.isEnabled(
       db,
-      DAIRY_PLUGIN_ID,
+      DIARY_PLUGIN_ID,
       SPACE_A,
       USER_2,
     );
@@ -555,68 +555,68 @@ describe("user-scope cross-space behaviour", () => {
   });
 
   it("getEffectiveMap reflects user-scope enablement across spaces", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
     // same user, different space context — should see enabled because it's user-scoped
     const mapB = await pluginService.getEffectiveMap(db, SPACE_B, USER_1);
-    expect(mapB[DAIRY_PLUGIN_ID]?.enabled).toBe(true);
+    expect(mapB[DIARY_PLUGIN_ID]?.enabled).toBe(true);
   });
 
   it("getEffectiveMap returns disabled for a different user", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
     const mapUser2 = await pluginService.getEffectiveMap(db, SPACE_A, USER_2);
-    expect(mapUser2[DAIRY_PLUGIN_ID]?.enabled).toBe(false);
+    expect(mapUser2[DIARY_PLUGIN_ID]?.enabled).toBe(false);
   });
 });
 
 describe("plugin events audit log", () => {
   it("inserts an enabled event when enabling", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
     const result = await pool!.query(
       "SELECT * FROM official_plugin_events WHERE plugin_id = $1 AND event_type = 'enabled'",
-      [DAIRY_PLUGIN_ID],
+      [DIARY_PLUGIN_ID],
     );
     expect(result.rowCount).toBeGreaterThan(0);
   });
 
   it("inserts a disabled event when disabling", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
-    await pluginService.disablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1);
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
+    await pluginService.disablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1);
     const result = await pool!.query(
       "SELECT * FROM official_plugin_events WHERE plugin_id = $1 AND event_type = 'disabled'",
-      [DAIRY_PLUGIN_ID],
+      [DIARY_PLUGIN_ID],
     );
     expect(result.rowCount).toBeGreaterThan(0);
   });
 
   it("inserts a settings_updated event when patching settings", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
-    await pluginService.patchSettings(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
+    await pluginService.patchSettings(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {
       daily_reminder_enabled: true,
     });
     const result = await pool!.query(
       "SELECT * FROM official_plugin_events WHERE plugin_id = $1 AND event_type = 'settings_updated'",
-      [DAIRY_PLUGIN_ID],
+      [DIARY_PLUGIN_ID],
     );
     expect(result.rowCount).toBeGreaterThan(0);
   });
 });
 
-describe("dairy reflection job settings", () => {
+describe("diary reflection job settings", () => {
   it("skips reflection generation when ai_reflection_enabled is not set", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {});
-    const currentEntryId = await insertDairyEntry(USER_1, "2026-06-19", "Today");
-    await insertDairyEntry(USER_1, "2025-06-19", "Past entry");
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {});
+    const currentEntryId = await insertDiaryEntry(USER_1, "2026-06-19", "Today");
+    await insertDiaryEntry(USER_1, "2025-06-19", "Past entry");
 
-    const handler = await buildDairyJobHandler("dairy_reflection");
+    const handler = await buildDiaryJobHandler("diary_reflection");
     const result = await handler({
       job_id: "job-1",
-      job_type: "dairy_reflection",
+      job_type: "diary_reflection",
       payload: {
         user_id: USER_1,
         entry_id: currentEntryId,
@@ -626,22 +626,22 @@ describe("dairy reflection job settings", () => {
     });
 
     expect(result).toEqual({ skipped: true, reason: "reflection_disabled" });
-    const reflections = await pool!.query("SELECT * FROM dairy_reflections");
+    const reflections = await pool!.query("SELECT * FROM diary_reflections");
     expect(reflections.rowCount).toBe(0);
   });
 
   it("writes a reflection only when ai_reflection_enabled is true", async () => {
-    await installDairy();
-    await pluginService.enablePlugin(db, DAIRY_PLUGIN_ID, SPACE_A, USER_1, {
+    await installDiary();
+    await pluginService.enablePlugin(db, DIARY_PLUGIN_ID, SPACE_A, USER_1, {
       settings: { ai_reflection_enabled: true },
     });
-    const currentEntryId = await insertDairyEntry(USER_1, "2026-06-19", "Today");
-    await insertDairyEntry(USER_1, "2025-06-19", "Past entry");
+    const currentEntryId = await insertDiaryEntry(USER_1, "2026-06-19", "Today");
+    await insertDiaryEntry(USER_1, "2025-06-19", "Past entry");
 
-    const handler = await buildDairyJobHandler("dairy_reflection");
+    const handler = await buildDiaryJobHandler("diary_reflection");
     const result = await handler({
       job_id: "job-2",
-      job_type: "dairy_reflection",
+      job_type: "diary_reflection",
       payload: {
         user_id: USER_1,
         entry_id: currentEntryId,
@@ -652,7 +652,7 @@ describe("dairy reflection job settings", () => {
 
     expect((result as Record<string, unknown>)["past_entries_count"]).toBe(1);
     const reflections = await pool!.query<{ content: string; ai_model: string | null }>(
-      "SELECT content, ai_model FROM dairy_reflections",
+      "SELECT content, ai_model FROM diary_reflections",
     );
     expect(reflections.rowCount).toBe(1);
     expect(reflections.rows[0]?.content).toContain("Past entry");

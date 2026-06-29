@@ -31,7 +31,7 @@ User input
 | Agents module | Agent CRUD + delegation policy enforcement |
 | Runs module | Create and list queued Runs, link tasks, manage snapshots |
 | `RunOrchestrationService` | Adapter dispatch, sandbox routing, terminal status updates |
-| `EvolutionRunService` | Create proposal-first evolution runs, artifacts, and reviewable proposals without direct mutation |
+| `EvolutionRunService` | Create `run_type='evolution'` runs, selector decisions, and review artifacts without direct mutation |
 
 ## Agent kernel vs adapter boundary
 
@@ -61,15 +61,18 @@ Agents can delegate to other agents. The kernel enforces:
 - `agents` — agent profiles, model config, memory policy, runtime policy
 - `tasks` + `agent_runs` + `tool_calls` + `artifacts` — run logging
 - `approvals` — general-purpose approval records
-- `evolution_targets` + `evolution_signals` — product targets and evidence for reviewable evolution
+- `evolution_targets` + `evolution_signals` + `evolution_strategy_assets` + `evolution_selector_decisions` + `evolution_experiences` — evolution targets, evidence, strategies, choices, and validated experience
 
 ## Evolution Module
 
 Evolution is a first-level product module at `/evolution`. It reads
-`/api/v1/evolution` DTOs for overview counts, targets, signals, runs, proposals,
-and validation metrics. Triggering an evolution review creates a Run plus
-artifacts and a pending Proposal; it does not directly mutate prompts, memory,
-capabilities, policies, files, or code.
+`/api/v1/evolution` DTOs for overview counts, targets, signals, strategies,
+selector decisions, experiences, runs, proposals, and validation metrics.
+Triggering an evolution review creates a real `run_type='evolution'` Run, stores
+an `evolution_plan.prompt.v1` prompt on that Run, records a selector decision,
+and writes an `evolution_plan.v1` artifact. Proposal creation is used only when
+an existing proposal applier supports the target change; v1 does not directly
+mutate prompts, memory, capabilities, policies, files, or code.
 
 ## Space model
 

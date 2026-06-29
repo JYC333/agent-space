@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
-  BrainOpsReviewMode,
-  BrainOpsScanMode,
+  ContextOpsReviewMode,
+  ContextOpsScanMode,
   RetrievalCalibrationMechanic,
   RetrievalRuntimeRankingConfig,
   RetrievalSearchMode,
@@ -22,8 +22,8 @@ export interface SpaceRetrievalSettingsOut {
   include_trace: boolean;
   external_egress_enabled: boolean;
   retrieval_tool_mode: RetrievalToolMode;
-  brain_ops_review_mode: BrainOpsReviewMode;
-  brain_ops_scan_mode: BrainOpsScanMode;
+  context_ops_review_mode: ContextOpsReviewMode;
+  context_ops_scan_mode: ContextOpsScanMode;
   embedding_dimensions: number;
   max_results_default: number;
   ranking_config: RetrievalRuntimeRankingConfig;
@@ -40,8 +40,8 @@ export interface ResolvedSpaceRetrievalSettings {
   includeTrace: boolean;
   externalEgressEnabled: boolean;
   retrievalToolMode: RetrievalToolMode;
-  brainOpsReviewMode: BrainOpsReviewMode;
-  brainOpsScanMode: BrainOpsScanMode;
+  contextOpsReviewMode: ContextOpsReviewMode;
+  contextOpsScanMode: ContextOpsScanMode;
   embeddingDimensions: number;
   maxResultsDefault: number;
   rankingConfig: RetrievalRuntimeRankingConfig;
@@ -76,8 +76,8 @@ interface SpaceRetrievalSettingsRow {
   include_trace: boolean;
   external_egress_enabled: boolean;
   retrieval_tool_mode: RetrievalToolMode;
-  brain_ops_review_mode: BrainOpsReviewMode;
-  brain_ops_scan_mode: BrainOpsScanMode;
+  context_ops_review_mode: ContextOpsReviewMode;
+  context_ops_scan_mode: ContextOpsScanMode;
   embedding_dimensions: number | string;
   max_results_default: number | string;
   ranking_config_json: unknown;
@@ -125,8 +125,8 @@ export const DEFAULT_SPACE_RETRIEVAL_SETTINGS: ResolvedSpaceRetrievalSettings = 
   includeTrace: false,
   externalEgressEnabled: true,
   retrievalToolMode: "off",
-  brainOpsReviewMode: "private_only",
-  brainOpsScanMode: "admins",
+  contextOpsReviewMode: "private_only",
+  contextOpsScanMode: "admins",
   embeddingDimensions: DEFAULT_EMBED_DIMENSIONS,
   maxResultsDefault: 50,
   rankingConfig: DEFAULT_RETRIEVAL_RANKING_CONFIG,
@@ -148,7 +148,7 @@ export async function getOrCreateSpaceRetrievalSettings(
     `INSERT INTO space_retrieval_settings (
         id, space_id, default_search_mode, rerank_enabled,
         query_rewrite_enabled, query_rewrite_default, use_query_cache,
-        include_trace, external_egress_enabled, retrieval_tool_mode, brain_ops_review_mode, brain_ops_scan_mode,
+        include_trace, external_egress_enabled, retrieval_tool_mode, context_ops_review_mode, context_ops_scan_mode,
         embedding_dimensions, max_results_default, ranking_config_json, created_at, updated_at
       )
       VALUES ($1, $2, 'hybrid', false, false, false, true, false, true, 'off', 'private_only', 'admins', $3, 50, $4::jsonb, now(), now())
@@ -178,8 +178,8 @@ export async function updateSpaceRetrievalSettings(
     includeTrace: patch.include_trace ?? current.include_trace,
     externalEgressEnabled: patch.external_egress_enabled ?? current.external_egress_enabled,
     retrievalToolMode: patch.retrieval_tool_mode ?? current.retrieval_tool_mode,
-    brainOpsReviewMode: patch.brain_ops_review_mode ?? current.brain_ops_review_mode,
-    brainOpsScanMode: patch.brain_ops_scan_mode ?? current.brain_ops_scan_mode,
+    contextOpsReviewMode: patch.context_ops_review_mode ?? current.context_ops_review_mode,
+    contextOpsScanMode: patch.context_ops_scan_mode ?? current.context_ops_scan_mode,
     embeddingDimensions: patch.embedding_dimensions ?? Number(current.embedding_dimensions),
     maxResultsDefault: patch.max_results_default ?? Number(current.max_results_default),
     rankingConfig: await normalizeRankingConfigForUpdate(
@@ -199,8 +199,8 @@ export async function updateSpaceRetrievalSettings(
             include_trace = $7,
             external_egress_enabled = $8,
             retrieval_tool_mode = $9,
-            brain_ops_review_mode = $10,
-            brain_ops_scan_mode = $11,
+            context_ops_review_mode = $10,
+            context_ops_scan_mode = $11,
             embedding_dimensions = $12,
             max_results_default = $13,
             ranking_config_json = $14::jsonb,
@@ -209,7 +209,7 @@ export async function updateSpaceRetrievalSettings(
       RETURNING space_id, default_search_mode, rerank_enabled,
                 query_rewrite_enabled, query_rewrite_default, use_query_cache,
                 include_trace, external_egress_enabled, retrieval_tool_mode,
-                brain_ops_review_mode, brain_ops_scan_mode, embedding_dimensions, max_results_default,
+                context_ops_review_mode, context_ops_scan_mode, embedding_dimensions, max_results_default,
                 ranking_config_json, created_at, updated_at`,
     [
       spaceId,
@@ -221,8 +221,8 @@ export async function updateSpaceRetrievalSettings(
       next.includeTrace,
       next.externalEgressEnabled,
       next.retrievalToolMode,
-      next.brainOpsReviewMode,
-      next.brainOpsScanMode,
+      next.contextOpsReviewMode,
+      next.contextOpsScanMode,
       next.embeddingDimensions,
       next.maxResultsDefault,
       JSON.stringify(next.rankingConfig),
@@ -257,7 +257,7 @@ async function selectSettingsRow(
     `SELECT space_id, default_search_mode, rerank_enabled,
             query_rewrite_enabled, query_rewrite_default, use_query_cache,
             include_trace, external_egress_enabled, retrieval_tool_mode,
-            brain_ops_review_mode, brain_ops_scan_mode, embedding_dimensions, max_results_default,
+            context_ops_review_mode, context_ops_scan_mode, embedding_dimensions, max_results_default,
             ranking_config_json, created_at, updated_at
        FROM space_retrieval_settings
       WHERE space_id = $1
@@ -277,8 +277,8 @@ function resolvedFromRow(row: SpaceRetrievalSettingsRow): ResolvedSpaceRetrieval
     includeTrace: row.include_trace,
     externalEgressEnabled: row.external_egress_enabled,
     retrievalToolMode: row.retrieval_tool_mode,
-    brainOpsReviewMode: row.brain_ops_review_mode,
-    brainOpsScanMode: row.brain_ops_scan_mode,
+    contextOpsReviewMode: row.context_ops_review_mode,
+    contextOpsScanMode: row.context_ops_scan_mode,
     embeddingDimensions: Number(row.embedding_dimensions),
     maxResultsDefault: Number(row.max_results_default),
     rankingConfig: normalizeRuntimeRankingConfig(row.ranking_config_json),
@@ -296,8 +296,8 @@ function outFromRow(row: SpaceRetrievalSettingsRow): SpaceRetrievalSettingsOut {
     include_trace: row.include_trace,
     external_egress_enabled: row.external_egress_enabled,
     retrieval_tool_mode: row.retrieval_tool_mode,
-    brain_ops_review_mode: row.brain_ops_review_mode,
-    brain_ops_scan_mode: row.brain_ops_scan_mode,
+    context_ops_review_mode: row.context_ops_review_mode,
+    context_ops_scan_mode: row.context_ops_scan_mode,
     embedding_dimensions: Number(row.embedding_dimensions),
     max_results_default: Number(row.max_results_default),
     ranking_config: normalizeRuntimeRankingConfig(row.ranking_config_json),

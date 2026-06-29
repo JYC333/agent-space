@@ -9,8 +9,10 @@ import {
   requiredString,
   resolveIdentity as resolveRouteIdentity,
   sendRouteError,
+  HttpError,
   type SpaceUserIdentity,
 } from "../routeUtils/common";
+import { loadProtocol } from "../providers/protocolRuntime";
 import { getBuiltInCapabilityPack, listBuiltInCapabilityPacks } from "./packRegistry";
 import { PgCapabilitiesRepository } from "./repository";
 import { CapabilitiesService } from "./service";
@@ -136,6 +138,55 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const found = getBuiltInWorkflowTemplate(params(request).workflowTemplateId ?? "");
     if (!found) return reply.code(404).send({ detail: "Workflow template not found" });
     return reply.send(found);
+  });
+
+  app.get("/api/v1/capabilities/skills/index", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const protocol = await loadProtocol();
+      const result = await service(context).listSkillLibraryIndex(identity);
+      return reply.send(protocol.SkillLibraryIndexResponseSchema.parse(result));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/capabilities/skills/:skillPackageId/local-overlay", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const protocol = await loadProtocol();
+      const overlay = await service(context).getSkillLocalOverlay(
+        identity,
+        params(request).skillPackageId ?? "",
+        query(request),
+      );
+      if (!overlay) return reply.code(404).send({ detail: "Skill local overlay not found" });
+      return reply.send(protocol.SkillLocalOverlaySchema.parse(overlay));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.put("/api/v1/capabilities/skills/:skillPackageId/local-overlay", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    try {
+      const protocol = await loadProtocol();
+      const parsed = protocol.SkillLocalOverlayUpsertRequestSchema.safeParse(jsonBody(request));
+      if (!parsed.success) {
+        throw new HttpError(422, parsed.error.issues[0]?.message ?? "invalid skill overlay request");
+      }
+      const overlay = await service(context).upsertSkillLocalOverlay(
+        identity,
+        params(request).skillPackageId ?? "",
+        parsed.data,
+      );
+      return reply.send(protocol.SkillLocalOverlaySchema.parse(overlay));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
   });
 
   app.get("/api/v1/projects/:projectId/workflow-profiles", async (request, reply) => {

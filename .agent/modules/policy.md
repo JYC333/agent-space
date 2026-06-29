@@ -146,7 +146,7 @@ Memory/Retrieval review packet actions keep private packet creator-only
 authorization in their appliers. Space-wide review is a separate explicit path:
 only `visibility = space_shared` packets with payload
 `review_scope = space_ops` can be accepted by non-creators, and only when the
-Space `brain_ops_review_mode` setting permits that reviewer role.
+Space `context_ops_review_mode` setting permits that reviewer role.
 | `capability.update` | capability | high | require_approval | via `proposal.apply` |
 | `runtime_skill.binding_update` | runtime_skill_binding | high | require_approval | via `proposal.apply` |
 | `automation.create` | automation | high | require_approval | `server/src/modules/automations/service.ts` via `enforce()` |

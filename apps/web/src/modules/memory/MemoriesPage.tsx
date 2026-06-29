@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { Activity, Brain, ChevronLeft, ChevronRight, FileText, FolderKanban, Loader2, PackageCheck, RefreshCw, Search, Wrench, X } from 'lucide-react'
+import { Activity, ChevronLeft, ChevronRight, FileText, FolderKanban, Loader2, PackageCheck, RefreshCw, Search, Wrench, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { knowledgeApi, memoryApi, spacesApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -120,7 +120,7 @@ export default function MemoriesPage() {
   }, [activeSpaceId])
 
   const spaceOpsReviewAllowed = retrievalSettings
-    ? retrievalSettings.brain_ops_review_mode !== 'private_only'
+    ? retrievalSettings.context_ops_review_mode !== 'private_only'
     : true
 
   useEffect(() => {
@@ -316,7 +316,7 @@ export default function MemoriesPage() {
             border: '1px solid color-mix(in oklch, var(--primary) 35%, transparent)',
           }}
         >
-          <Brain className="size-5 text-accent-foreground" />
+          <Activity className="size-5 text-accent-foreground" />
         </div>
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Memories</h1>

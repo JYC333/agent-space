@@ -44,8 +44,8 @@ function scanPermissionDb(role = "member", scanMode: "admins" | "members" = "adm
             include_trace: false,
             external_egress_enabled: true,
             retrieval_tool_mode: "off",
-            brain_ops_review_mode: "private_only",
-            brain_ops_scan_mode: scanMode,
+            context_ops_review_mode: "private_only",
+            context_ops_scan_mode: scanMode,
             embedding_dimensions: 2560,
             max_results_default: 50,
             created_at: "2026-06-26T00:00:00.000Z",
@@ -59,6 +59,32 @@ function scanPermissionDb(role = "member", scanMode: "admins" | "members" = "adm
       }
       return { rows: [], rowCount: 0 };
     },
+  };
+}
+
+function proposalRow(params: readonly unknown[]) {
+  return {
+    id: params[0],
+    space_id: params[1],
+    created_by_user_id: params[14],
+    workspace_id: params[12],
+    created_by_run_id: params[2],
+    proposal_type: params[3],
+    status: params[4],
+    risk_level: params[5],
+    urgency: params[6],
+    preview: params[7],
+    title: params[8],
+    payload_json: JSON.parse(String(params[10] ?? "{}")),
+    rationale: params[13],
+    visibility: params[15],
+    review_deadline: null,
+    expires_at: null,
+    created_at: "2026-06-26T00:00:00.000Z",
+    reviewed_at: null,
+    project_id: params[16],
+    egress_approval_id: null,
+    egress_approval_status: null,
   };
 }
 
@@ -223,7 +249,7 @@ describe("Knowledge retrieval routes", () => {
     });
 
     expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ detail: "Requires space owner/admin role or enabled Brain Ops member scan access" });
+    expect(res.json()).toEqual({ detail: "Requires space owner/admin role or enabled Context Ops member scan access" });
   });
 
   it("creates claim candidate packets through the HTTP route", async () => {
@@ -235,6 +261,7 @@ describe("Knowledge retrieval routes", () => {
         calls.push({ sql, params });
         const norm = sql.replace(/\s+/g, " ").trim();
         if (norm === "BEGIN" || norm === "COMMIT" || norm === "ROLLBACK") return { rows: [], rowCount: 0 };
+        if (norm.startsWith("INSERT INTO proposals")) return { rows: [proposalRow(params)], rowCount: 1 };
         if (norm.startsWith("SELECT id, artifact_type, title, visibility, metadata_json FROM artifacts")) {
           return {
             rows: [{
@@ -296,6 +323,7 @@ describe("Knowledge retrieval routes", () => {
         calls.push({ sql, params });
         const norm = sql.replace(/\s+/g, " ").trim();
         if (norm === "BEGIN" || norm === "COMMIT" || norm === "ROLLBACK") return { rows: [], rowCount: 0 };
+        if (norm.startsWith("INSERT INTO proposals")) return { rows: [proposalRow(params)], rowCount: 1 };
         if (norm.startsWith("SELECT id, artifact_type, title, visibility, metadata_json FROM artifacts")) {
           return {
             rows: [{
@@ -330,8 +358,8 @@ describe("Knowledge retrieval routes", () => {
               include_trace: false,
               external_egress_enabled: true,
               retrieval_tool_mode: "off",
-              brain_ops_review_mode: "admins",
-              brain_ops_scan_mode: "admins",
+              context_ops_review_mode: "admins",
+              context_ops_scan_mode: "admins",
               embedding_dimensions: 2560,
               max_results_default: 50,
               created_at: "2026-06-26T00:00:00.000Z",

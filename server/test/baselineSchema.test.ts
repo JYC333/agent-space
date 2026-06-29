@@ -39,6 +39,9 @@ const REPRESENTATIVE_TABLES = [
   "retrieval_feedback_events",
   "model_providers",
   "policy_decision_records",
+  "evolution_strategy_assets",
+  "evolution_experiences",
+  "evolution_selector_decisions",
 ];
 
 let container: StartedPostgreSqlContainer | undefined;
@@ -164,6 +167,35 @@ describe("server runner applies the baseline schema", () => {
     expect(baseline).toContain("FOREIGN KEY (collection_id, space_id) REFERENCES public.note_collections(id, space_id)");
     expect(baseline).toContain("FOREIGN KEY (note_id, space_id) REFERENCES public.notes(object_id, space_id)");
     expect(baseline).toContain("FOREIGN KEY (parent_id, space_id) REFERENCES public.note_collections(id, space_id)");
+  });
+
+  it("keeps evolution core schema and built-in strategies in the baseline", () => {
+    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    expect(baseline).toContain("CREATE TABLE public.evolution_strategy_assets");
+    expect(baseline).toContain("CREATE TABLE public.evolution_experiences");
+    expect(baseline).toContain("CREATE TABLE public.evolution_selector_decisions");
+    expect(baseline).toContain("ck_evolution_strategy_assets_target_type");
+    expect(baseline).toContain("ck_evolution_strategy_assets_risk_level");
+    expect(baseline).toContain("ck_evolution_experiences_outcome_status");
+    expect(baseline).toContain("uq_evolution_strategy_assets_system_key");
+    expect(baseline).toContain("uq_evolution_strategy_assets_space_key");
+    expect(baseline).toContain("ix_evolution_selector_decisions_space_target_created");
+    expect(baseline).toContain("evolution_selector_decisions_selected_strategy_asset_id_fkey");
+
+    for (const key of [
+      "repair.runtime_failure",
+      "repair.validation_failure",
+      "optimize.prompt_asset",
+      "optimize.tool_usage",
+      "harden.policy_boundary",
+      "improve.capability_gap",
+      "review.open_skill_import",
+      "maintain.memory_health",
+      "maintain.knowledge_retrieval",
+      "solidifyExperience.successful_run",
+    ]) {
+      expect(baseline).toContain(key);
+    }
   });
 
   it("applies the baseline and creates representative server-owned tables", async () => {

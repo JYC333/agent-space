@@ -158,7 +158,7 @@ export const RetrievalGapAnalysisSchema = z
     stale: z.array(RetrievalGapItemSchema).default([]),
     thin: z.array(RetrievalGapItemSchema).default([]),
     low_coverage: z.boolean().default(false),
-    // LLM signals ("what the brain doesn't know"); empty when synthesis did not run.
+    // LLM signals ("what the compiled context does not cover"); empty when synthesis did not run.
     uncited_claims: z.array(z.string()).default([]),
     contradictions: z.array(z.string()).default([]),
     missing_topics: z.array(z.string()).default([]),
@@ -204,7 +204,7 @@ export const RetrievalBriefResponseSchema = z
   .passthrough();
 export type RetrievalBriefResponse = z.infer<typeof RetrievalBriefResponseSchema>;
 
-// ── Maintenance scan (W7, "dream cycle"): a READ-ONLY, batched report of review
+// ── Maintenance scan (W7, "context review cycle"): a READ-ONLY, batched report of review
 // candidates over the derived projection — duplicates, orphan pages, thin pages,
 // and suggested relations. It never writes canonical data; acting on a finding
 // stays on the existing proposal/approval flow.
@@ -546,11 +546,11 @@ export const RetrievalToolModeSchema = z.enum([
 ]);
 export type RetrievalToolMode = z.infer<typeof RetrievalToolModeSchema>;
 
-export const BrainOpsReviewModeSchema = z.enum(["private_only", "admins", "members"]);
-export type BrainOpsReviewMode = z.infer<typeof BrainOpsReviewModeSchema>;
+export const ContextOpsReviewModeSchema = z.enum(["private_only", "admins", "members"]);
+export type ContextOpsReviewMode = z.infer<typeof ContextOpsReviewModeSchema>;
 
-export const BrainOpsScanModeSchema = z.enum(["admins", "members"]);
-export type BrainOpsScanMode = z.infer<typeof BrainOpsScanModeSchema>;
+export const ContextOpsScanModeSchema = z.enum(["admins", "members"]);
+export type ContextOpsScanMode = z.infer<typeof ContextOpsScanModeSchema>;
 
 export const SpaceRetrievalSettingsSchema = z.object({
   space_id: IdSchema,
@@ -566,10 +566,10 @@ export const SpaceRetrievalSettingsSchema = z.object({
   external_egress_enabled: z.boolean(),
   // Managed-run retrieval tool exposure (default `off`).
   retrieval_tool_mode: RetrievalToolModeSchema,
-  // Space-wide Brain Ops packet review. Private packets remain creator-only.
-  brain_ops_review_mode: BrainOpsReviewModeSchema,
-  // Brain Ops scan initiation. Reindex routes remain owner/admin-only.
-  brain_ops_scan_mode: BrainOpsScanModeSchema,
+  // Space-wide Context Ops packet review. Private packets remain creator-only.
+  context_ops_review_mode: ContextOpsReviewModeSchema,
+  // Context Ops scan initiation. Reindex routes remain owner/admin-only.
+  context_ops_scan_mode: ContextOpsScanModeSchema,
   embedding_dimensions: z
     .number()
     .int()
@@ -592,8 +592,8 @@ export const SpaceRetrievalSettingsUpdateSchema = z
     include_trace: z.boolean().optional(),
     external_egress_enabled: z.boolean().optional(),
     retrieval_tool_mode: RetrievalToolModeSchema.optional(),
-    brain_ops_review_mode: BrainOpsReviewModeSchema.optional(),
-    brain_ops_scan_mode: BrainOpsScanModeSchema.optional(),
+    context_ops_review_mode: ContextOpsReviewModeSchema.optional(),
+    context_ops_scan_mode: ContextOpsScanModeSchema.optional(),
     embedding_dimensions: z
       .number()
       .int()

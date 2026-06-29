@@ -15,6 +15,8 @@ import { RunMaterializationService } from "./materializationService";
 import { sharedCliProcessRegistry } from "./processRegistry";
 import { ContextPrepareService } from "../context";
 import { PgCodePatchCollector, PgWorkspaceManager } from "../workspaces";
+import { EvolutionRepository } from "../evolution/repository";
+import { EvolutionSolidifier } from "../evolution/solidifier";
 import {
   NonTerminalRunError,
   PostRunFinalizationService,
@@ -340,7 +342,11 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const runId = params(request).runId ?? "";
     const repository = PgRunRepository.fromConfig(context.config);
     try {
-      const finalization = await new PostRunFinalizationService(repository).finalize(
+      const db = dbPool(context.config);
+      const finalization = await new PostRunFinalizationService(
+        repository,
+        new EvolutionSolidifier(new EvolutionRepository(db)),
+      ).finalize(
         runId,
         identity.spaceId,
       );

@@ -60,6 +60,29 @@ files under the package root are fetched within size caps. Non-text assets are
 recorded as inventory metadata when available, but they are not executed or
 installed.
 
+### SkillLocalOverlay
+
+`skill_local_overlays` stores local configuration for an imported
+`SkillPackage`. It is scoped by `space`, `user`, `project`, `workspace`, or
+`agent`, and is intentionally separate from `skill_packages.normalized_json`.
+
+The overlay may store alias/display name, endpoint defaults, credential/profile
+reference, default scope, runtime preference, and user preferences. It must not
+embed provider secrets; secret-bearing keys such as API keys, passwords, or
+access tokens are rejected at the API boundary. Public or imported skill
+snapshots remain immutable source material, while overlays capture local
+binding choices and private environment names.
+
+API:
+
+- `GET /api/v1/capabilities/skills/index` returns a lightweight Skill Library
+  Index with effective name/alias plus the active space overlay.
+- `GET /api/v1/capabilities/skills/:skillPackageId/local-overlay` reads the
+  active overlay for the requested scope.
+- `PUT /api/v1/capabilities/skills/:skillPackageId/local-overlay` upserts or
+  archives the local overlay. It does not mutate `normalized_json` and does not
+  create/enable capabilities.
+
 ### CapabilityDefinition
 
 `CapabilityDefinition` is the canonical agent-space ability object. It defines
@@ -189,6 +212,9 @@ plugin boundary:
   review/convert proposal actions, and imported package details including
   requested permissions, package root/hash/source, instructions, diagnostics,
   and package file risk inventory.
+- The Context Workspace page consumes the Skill Library Index as a lighter
+  directory view. It can show active local overlays but does not collapse Open
+  Skill, Capability, runtime skill, or official optional module boundaries.
 - Artifact detail pages render `research_brief.v1`,
   `research_source_table.v1`, and `research_idea_candidates.v1` as structured
   JSON-aware views when possible, with inline text fallback when the content is
@@ -252,6 +278,10 @@ one.
 - Skill import approval, capability install/update/enable/disable, and runtime
   skill binding changes go through `proposal.apply` and registered proposal
   appliers.
+- Skill local overlays are configuration, not capability trust grants. They do
+  not approve a skill, convert a skill, enable a capability, or bypass proposal
+  review. Capability conversion and enablement continue through existing
+  `capability_overlays` / proposal boundaries.
 - Conversion requests create a `capability_install` proposal. Applying it
   produces a disabled draft capability version plus disabled runtime bindings;
   requesting direct enablement during conversion (`enable_for_project_id`) fails

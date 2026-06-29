@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Send, Sparkles, ChevronRight, Inbox, ListTodo, AlertTriangle, BrainCircuit,
+  Send, Sparkles, ChevronRight, Inbox, ListTodo, AlertTriangle,
   Loader2, Clock, Cpu,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -383,18 +383,18 @@ function SuggestedActions({ suggestions, onGo }: { suggestions: Suggestion[]; on
 
 /* ── Right panel ─────────────────────────────────────────────────────────────── */
 function RightPanel({
-  summary, pending, tasks, onOpen, onGo, canUseBrainOps,
+  summary, pending, tasks, onOpen, onGo, canUseContextOps,
 }: {
   summary: MeSummaryOut
   pending: MePendingProposalItem[]
   tasks: MeTaskItem[]
   onOpen: (spaceId: string, path: string) => void
   onGo: (path: string) => void
-  canUseBrainOps: boolean
+  canUseContextOps: boolean
 }) {
   const activeRuns = summary.recent_runs.filter(r => r.status === 'running' || r.status === 'queued')
-  const brainLayerItems = [
-    ...(canUseBrainOps ? [{ label: 'Brain Ops', path: '/brain-ops' }] : []),
+  const contextLayerItems = [
+    ...(canUseContextOps ? [{ label: 'Context Health', path: '/context-ops' }] : []),
     { label: 'Maintenance scans', path: '/automations' },
     { label: 'Briefs and reports', path: '/artifacts' },
     { label: 'Source governance', path: '/intake' },
@@ -444,14 +444,14 @@ function RightPanel({
       </Card>
 
       <Card className="p-4 flex flex-col gap-2.5">
-        <span className="text-[11px] font-bold tracking-[.1em] uppercase text-muted-foreground">Brain layer</span>
-        {brainLayerItems.map(item => (
+        <span className="text-[11px] font-bold tracking-[.1em] uppercase text-muted-foreground">Context layer</span>
+        {contextLayerItems.map(item => (
           <button
             key={item.path}
             onClick={() => onGo(item.path)}
             className="text-left rounded-md -mx-1 px-1 py-1 hover:bg-accent transition-colors flex items-center gap-2"
           >
-            <BrainCircuit className="size-3.5 text-muted-foreground" />
+            <Cpu className="size-3.5 text-muted-foreground" />
             <span className="text-[12px] text-foreground">{item.label}</span>
           </button>
         ))}
@@ -468,8 +468,8 @@ export default function HomePage() {
   const preferredSpace = spaces.find(space => space.id === preferredSpaceId)
   const canManagePreferredSpace = preferredSpace?.role === 'owner' || preferredSpace?.role === 'admin'
   const preferredSpaceCanMemberReview = preferredSpace?.role === 'reviewer' || preferredSpace?.role === 'member'
-  const [preferredBrainOpsReviewMode, setPreferredBrainOpsReviewMode] = useState<'private_only' | 'admins' | 'members'>('private_only')
-  const [preferredBrainOpsScanMode, setPreferredBrainOpsScanMode] = useState<'admins' | 'members'>('admins')
+  const [preferredContextOpsReviewMode, setPreferredContextOpsReviewMode] = useState<'private_only' | 'admins' | 'members'>('private_only')
+  const [preferredContextOpsScanMode, setPreferredContextOpsScanMode] = useState<'admins' | 'members'>('admins')
 
   const [summary, setSummary] = useState<MeSummaryOut | null>(null)
   const [timeline, setTimeline] = useState<MeTimelineEntry[]>([])
@@ -503,8 +503,8 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!preferredSpaceId) {
-      setPreferredBrainOpsReviewMode('private_only')
-      setPreferredBrainOpsScanMode('admins')
+      setPreferredContextOpsReviewMode('private_only')
+      setPreferredContextOpsScanMode('admins')
       return
     }
     let cancelled = false
@@ -512,13 +512,13 @@ export default function HomePage() {
       try {
         const settings = await spacesApi.getRetrievalSettings(preferredSpaceId)
         if (!cancelled) {
-          setPreferredBrainOpsReviewMode(settings.brain_ops_review_mode)
-          setPreferredBrainOpsScanMode(settings.brain_ops_scan_mode)
+          setPreferredContextOpsReviewMode(settings.context_ops_review_mode)
+          setPreferredContextOpsScanMode(settings.context_ops_scan_mode)
         }
       } catch {
         if (!cancelled) {
-          setPreferredBrainOpsReviewMode('private_only')
-          setPreferredBrainOpsScanMode('admins')
+          setPreferredContextOpsReviewMode('private_only')
+          setPreferredContextOpsScanMode('admins')
         }
       }
     })()
@@ -542,9 +542,9 @@ export default function HomePage() {
 
   const displayName = currentUser?.display_name ?? 'there'
   const s = summary
-  const canUsePreferredBrainOps = canManagePreferredSpace || (
+  const canUsePreferredContextOps = canManagePreferredSpace || (
     preferredSpaceCanMemberReview
-    && (preferredBrainOpsReviewMode === 'members' || preferredBrainOpsScanMode === 'members')
+    && (preferredContextOpsReviewMode === 'members' || preferredContextOpsScanMode === 'members')
   )
 
   const suggestions: Suggestion[] = useMemo(() => {
@@ -553,7 +553,7 @@ export default function HomePage() {
     if (s.pending_proposals_count > 0) out.push({ id: 'review', label: 'Review pending proposals', reason: `${s.pending_proposals_count} waiting across your spaces`, to: '/proposals' })
     if (s.recent_runs.some(r => r.status === 'failed')) out.push({ id: 'failed', label: 'Inspect failed runs', reason: 'One or more recent runs failed', to: '/runs' })
     if (s.assigned_tasks_count > 0) out.push({ id: 'tasks', label: 'Pick up your tasks', reason: `${s.assigned_tasks_count} assigned to you`, to: '/tasks' })
-    out.push({ id: 'brain-artifacts', label: 'Review brain-layer artifacts', reason: 'Open saved Context Briefs, eval diagnostics, and maintenance reports', to: '/artifacts' })
+    out.push({ id: 'context-artifacts', label: 'Review context artifacts', reason: 'Open saved Context Briefs, eval diagnostics, and maintenance reports', to: '/artifacts' })
     out.push({ id: 'capture', label: 'Process your captures', reason: 'Open the Inbox to triage and consolidate', to: '/activity' })
     return out
   }, [s])
@@ -608,7 +608,7 @@ export default function HomePage() {
           tasks={tasks}
           onOpen={openInSpace}
           onGo={goList}
-          canUseBrainOps={canUsePreferredBrainOps}
+          canUseContextOps={canUsePreferredContextOps}
         />
       )}
     </div>

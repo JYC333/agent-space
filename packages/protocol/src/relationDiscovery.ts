@@ -8,7 +8,7 @@
  * wiring; the public HTTP route rejects the flag until that adapter exists. It
  * produces a single batched, confidence-tiered proposal packet of candidate
  * `object_relation_create` edges (and, optionally, candidate `knowledge_item`
- * stubs for unresolved targets). It is the proposal-gated analogue of gbrain's
+ * stubs for unresolved targets). It is the proposal-gated analogue of the context-and-retrieval design's
  * self-wiring graph: discovery NEVER writes an edge or item directly — accepting
  * the packet only creates child pending proposals, which still go through normal
  * review. Discovery is access-safe: only visible source text and only visible

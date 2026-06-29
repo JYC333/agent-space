@@ -47,8 +47,8 @@ its "everything here was reviewed" guarantee, so Notes get their own lightweight
 
 Capture / Activity is *raw material* upstream of all of this and is not Knowledge.
 
-Backend and API naming uses `knowledge`; space-specific product labels (e.g. "Second
-Brain") are presentation concerns. Knowledge is distinct from Memory: Memory is agent
+Backend and API naming uses `knowledge`; space-specific product labels are
+presentation concerns. Knowledge is distinct from Memory: Memory is agent
 context; Knowledge is durable content for people to inspect, revise, relate, and reuse.
 
 No removed route or compatibility alias exists. The API path is `/api/v1/knowledge`;
@@ -117,7 +117,7 @@ constrained by `(parent_id, space_id)` so folder trees cannot cross spaces.
   `/api/v1/knowledge/summary`
 - Knowledge proposal apply handlers for wiki, claim/object-relation writes, and
   Claim Candidate Packets
-- Brain Shape Registry / object-kind registry routes and appliers:
+- Object Schema Registry / object-kind registry routes and appliers:
   owner/admin proposal routes for `object_kind_create`, `object_kind_update`
   (including draft activation), `object_kind_deprecate`, and
   `object_kind_archive`; member-visible registry reads; object-schema
@@ -161,9 +161,9 @@ Knowledge is the first consumer of the shared retrieval engine
 (`knowledge/retrievalAdapter.ts`) for `KnowledgeItem`, `Note`, `Source`, and
 `Claim`. The engine is generic and domain-agnostic; the adapter owns all
 Knowledge-specific SQL and the visibility revalidation gate. See
-[RETRIEVAL_AND_BRAIN_LAYER.md](../architecture/RETRIEVAL_AND_BRAIN_LAYER.md)
-for the engine/adapter boundary and the full retrieval + brain-layer
-architecture. The Brain Shape Registry foundation is also served from the
+[CONTEXT_AND_RETRIEVAL_LAYER.md](../architecture/CONTEXT_AND_RETRIEVAL_LAYER.md)
+for the engine/adapter boundary and the full retrieval + context-layer
+architecture. The Object Schema Registry foundation is also served from the
 Knowledge module: `space_object_kinds` registry rows are read in the current
 space, and owner/admin proposal routes create, update/activate, deprecate, or
 archive object kinds through registered proposal appliers. The registry stores
@@ -173,8 +173,8 @@ schema export/import serializes registry definitions; import creates draft
 object-kind proposals and never activates definitions directly. This registry is
 object schema config only; it does not add retrieval object types or write
 canonical Knowledge, Memory, Claim, Project, relation, or retrieval projection
-rows. Follow-up retrieval/brain-layer quality work and non-goals are tracked in
-[ROADMAP_AND_FUTURE_RISKS.md](../architecture/ROADMAP_AND_FUTURE_RISKS.md#retrieval-and-brain-layer-stabilization).
+rows. Follow-up retrieval/context-layer quality work and non-goals are tracked in
+[ROADMAP_AND_FUTURE_RISKS.md](../architecture/ROADMAP_AND_FUTURE_RISKS.md#retrieval-and-context-layer-stabilization).
 Canonical lifecycle ownership does not change:
 KnowledgeItem writes remain proposal-gated, Notes and Sources remain direct CRUD,
 and retrieval projection rows are derived indexes that can be rebuilt from the

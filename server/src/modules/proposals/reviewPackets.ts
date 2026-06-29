@@ -2,18 +2,18 @@ import { randomUUID } from "node:crypto";
 import type { ProposalAcceptResultType } from "@agent-space/protocol" with {
   "resolution-mode": "import",
 };
-import { assertCanReviewBrainOpsPacket } from "../brainOps/reviewPolicy";
+import { assertCanReviewContextOpsPacket } from "../contextOps/reviewPolicy";
 import type { Queryable } from "../routeUtils/common";
 import type { ProposalApplyContext, ProposalApplyResult } from "./applierRegistry";
 import type { ProposalRow } from "./repository";
 
 /**
- * Shared plumbing for review/brain-layer proposal packets.
+ * Shared plumbing for review/context-layer proposal packets.
  *
  * Every packet writer (memory maintenance, claim candidate, claim contradiction,
  * relation discovery, retrieval maintenance) writes the same 24-column
  * `proposals` row and, on accept, runs the same skeleton: validate the operation,
- * gate review through `assertCanReviewBrainOpsPacket`, fan the packet into child
+ * gate review through `assertCanReviewContextOpsPacket`, fan the packet into child
  * pending proposals, then mark the packet accepted with the generated child ids.
  * This module owns that one INSERT and that one accept-skeleton so the
  * positional-parameter ordering and the `canonical_write_performed` /
@@ -194,7 +194,7 @@ export async function acceptReviewPacket(
 ): Promise<ProposalApplyResult> {
   const payload = context.proposal.payload_json ?? {};
   if (payload.operation !== options.expectedOperation) throw options.invalidPayload();
-  await assertCanReviewBrainOpsPacket(context.db, context.proposal, context.userId, options.privateMessage);
+  await assertCanReviewContextOpsPacket(context.db, context.proposal, context.userId, options.privateMessage);
 
   const built = await options.build(payload, context);
   const childProposalIds: string[] = [];

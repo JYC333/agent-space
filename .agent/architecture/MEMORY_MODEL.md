@@ -56,4 +56,4 @@ When a `memory_create` carries no explicit visibility, the default is **space-ty
 
 ## Non-goals
 
-No full RBAC, no `MemoryAccessGrant` table, no redesign of the global proposal system, evolver, frontend, or runtime adapters. Keep read-audit ORM names aligned with the canonical `MemoryReadTrace` model.
+No full RBAC, no `MemoryAccessGrant` table, no redesign of the global proposal system, native memory-health evolution loop, frontend, or runtime adapters. Keep read-audit ORM names aligned with the canonical `MemoryReadTrace` model.

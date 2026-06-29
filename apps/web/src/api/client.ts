@@ -28,9 +28,11 @@ import type {
   EgressApprovalRequest, ProposalApprovalResponse,
   EvolutionSummaryOut, EvolutionTarget, EvolutionTargetCreateBody, EvolutionTargetUpdateBody, EvolutionSignal, EvolutionSignalCreateBody,
   EvolutionRunListItem, EvolutionRunResult, EvolutionProposal, EvolutionValidationResult,
+  EvolutionStrategy, EvolutionSelectorDecision, EvolutionExperience,
   Project, ProjectCreate, ProjectUpdate, ProjectWorkspaceLinkCreate, ProjectWorkspaceLinkOut, ProjectSummary,
   CapabilityDefinition, CapabilityPackDescriptor, WorkflowTemplate, ProjectWorkflowProfile, WorkflowRunDraftRequest, WorkflowRunDraftResponse,
   SkillImportPreviewResponse, SkillPackage, SkillImportApprovalProposalResponse, SkillConvertToCapabilityResponse,
+  SkillLibraryIndexResponse, SkillLocalOverlay, SkillLocalOverlayUpsertRequest,
   SourceConnector, SourceConnection, SourceConnectionCreate, IntakeItem, ExtractionJob,
   ExtractedEvidence, EvidenceLink, WorkspaceIntakeProfile, WorkspaceSourceBinding,
   SummaryRunRequest, SummaryRunOut,
@@ -46,14 +48,16 @@ import type {
   SpaceObjectKindStatus, SpaceObjectKindUpdateProposalRequest,
   ObjectSchemaExportManifest, ObjectSchemaImportRequest, ObjectSchemaImportResponse,
   ObjectSchemaSuggestionScanRequest, ObjectSchemaSuggestionScanResponse,
-  BrainOpsSummary, BrainOpsDrilldown, BrainOpsDrilldownSection,
-  BrainOpsDreamCycleV2Request, BrainOpsDreamCycleV2Response,
-  BrainThinkRequest, BrainThinkResponse,
+  ContextOpsSummary, ContextOpsDrilldown, ContextOpsDrilldownSection,
+  ContextReviewCycleRequest, ContextReviewCycleResponse,
+  AskSpaceRequest, AskSpaceResponse,
   ClaimCandidatePacketCreateRequest, ClaimCandidatePacketCreateResponse,
   ClaimContradictionScanRequest, ClaimContradictionScanResponse,
   RelationDiscoveryScanRequest, RelationDiscoveryScanResponse,
   ContextArtifactRevocation, ContextArtifactRevocationCreateRequest, ContextArtifactRevocationListResponse,
+  ContextEffectiveRoutingResponse, ContextProfile, ContextProfileListResponse, ContextProfileUpsertRequest, ContextRoutingUpdateRequest,
   MemoryAccessLogListResponse, MemoryMaintenanceJob, MemoryMaintenanceJobRunResponse, MemoryMaintenanceReport, MemoryMaintenanceScanRequest,
+  ContextOpsContextObservationScanRequest, ContextOpsContextObservationScanResponse,
 } from '../types/api'
 
 const BASE = '/api/v1'
@@ -584,8 +588,35 @@ export const evolutionApi = {
     if (params.offset !== undefined) q.offset = String(params.offset)
     return get<EvolutionRunListItem[]>('/evolution/runs?' + new URLSearchParams(q))
   },
-  runTarget: (targetId: string, body: { engine?: string } = {}) =>
+  runTarget: (targetId: string, body: {
+    agent_id?: string
+    mode?: 'dry_run'
+    runtime_profile_id?: string | null
+    workspace_id?: string | null
+    project_id?: string | null
+    context_artifact_ids?: string[]
+  } = {}) =>
     post<EvolutionRunResult>(`/evolution/targets/${targetId}/run`, body),
+  strategies: (params: { status?: string; target_type?: string; limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    if (params.target_type !== undefined) q.target_type = params.target_type
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<EvolutionStrategy[]>('/evolution/strategies?' + new URLSearchParams(q))
+  },
+  selectorDecisions: (params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<EvolutionSelectorDecision[]>('/evolution/selector-decisions?' + new URLSearchParams(q))
+  },
+  experiences: (params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<EvolutionExperience[]>('/evolution/experiences?' + new URLSearchParams(q))
+  },
   proposals: (params: { limit?: number; offset?: number } = {}) => {
     const q: Record<string, string> = {}
     if (params.limit !== undefined) q.limit = String(params.limit)
@@ -694,6 +725,17 @@ export const capabilitiesFrameworkApi = {
     get<Page<SkillPackage>>('/skill-packages'),
   getSkillPackage: (id: string) =>
     get<SkillPackage>(`/skill-packages/${encodeURIComponent(id)}`),
+  listSkillLibraryIndex: () =>
+    get<SkillLibraryIndexResponse>('/capabilities/skills/index'),
+  getSkillLocalOverlay: (skillPackageId: string, params: { scope_type?: string; scope_id?: string | null } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.scope_type !== undefined) q.scope_type = params.scope_type
+    if (params.scope_id !== undefined && params.scope_id !== null) q.scope_id = params.scope_id
+    const suffix = new URLSearchParams(q).toString()
+    return get<SkillLocalOverlay>(`/capabilities/skills/${encodeURIComponent(skillPackageId)}/local-overlay${suffix ? `?${suffix}` : ''}`)
+  },
+  updateSkillLocalOverlay: (skillPackageId: string, data: SkillLocalOverlayUpsertRequest) =>
+    put<SkillLocalOverlay>(`/capabilities/skills/${encodeURIComponent(skillPackageId)}/local-overlay`, data),
   createSkillReviewProposal: (skillPackageId: string) =>
     post<SkillImportApprovalProposalResponse>(`/skill-packages/${encodeURIComponent(skillPackageId)}/review-proposal`),
   convertSkillToCapability: (skillPackageId: string, data: { capability_id?: string; namespace?: string; enable_for_project_id?: string | null; create_runtime_bindings?: boolean } = {}) =>
@@ -723,6 +765,20 @@ export const projectWorkflowProfilesApi = {
 export const contextApi = {
   build: (data: { workspace_id?: string | null; project_id?: string | null; session_id?: string | null; capability_id?: string | null; query?: string | null; context_artifact_ids?: string[] }) =>
     post<ContextPackage>('/context/build', data),
+  listProfiles: (params: { scope_type?: string; scope_id?: string; status?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.scope_type !== undefined) q.scope_type = params.scope_type
+    if (params.scope_id !== undefined) q.scope_id = params.scope_id
+    if (params.status !== undefined) q.status = params.status
+    const suffix = new URLSearchParams(q).toString()
+    return get<ContextProfileListResponse>(`/context/profiles${suffix ? `?${suffix}` : ''}`)
+  },
+  updateProfile: (data: ContextProfileUpsertRequest) =>
+    put<ContextProfile>('/context/profiles', data),
+  getWorkspaceRouting: (workspaceId: string) =>
+    get<ContextEffectiveRoutingResponse>(`/context/workspaces/${encodeURIComponent(workspaceId)}/routing`),
+  updateWorkspaceRouting: (workspaceId: string, data: ContextRoutingUpdateRequest) =>
+    put<ContextEffectiveRoutingResponse>(`/context/workspaces/${encodeURIComponent(workspaceId)}/routing`, data),
   listArtifactRevocations: (params: { workspace_id?: string | null; project_id?: string | null; artifact_ids?: string[] } = {}) => {
     const q: Record<string, string> = {}
     if (params.workspace_id) q.workspace_id = params.workspace_id
@@ -738,25 +794,27 @@ export const contextApi = {
   },
 }
 
-export const brainOpsApi = {
+export const contextOpsApi = {
   summary: (params: { window_days?: number; limit?: number } = {}) => {
     const q: Record<string, string> = {}
     if (params.window_days !== undefined) q.window_days = String(params.window_days)
     if (params.limit !== undefined) q.limit = String(params.limit)
     const suffix = new URLSearchParams(q).toString()
-    return get<BrainOpsSummary>(`/brain-ops/summary${suffix ? `?${suffix}` : ''}`)
+    return get<ContextOpsSummary>(`/context-ops/summary${suffix ? `?${suffix}` : ''}`)
   },
-  drilldown: (section: BrainOpsDrilldownSection, params: { limit?: number } = {}) => {
+  drilldown: (section: ContextOpsDrilldownSection, params: { limit?: number } = {}) => {
     const q: Record<string, string> = { section }
     if (params.limit !== undefined) q.limit = String(params.limit)
-    return get<BrainOpsDrilldown>(`/brain-ops/drilldown?${new URLSearchParams(q).toString()}`)
+    return get<ContextOpsDrilldown>(`/context-ops/drilldown?${new URLSearchParams(q).toString()}`)
   },
-  dreamCycleV2: (data: BrainOpsDreamCycleV2Request = {}) =>
-    post<BrainOpsDreamCycleV2Response>('/brain-ops/dream-cycle-v2', data),
+  reviewCycleRun: (data: ContextReviewCycleRequest = {}) =>
+    post<ContextReviewCycleResponse>('/context-ops/review-cycle/run', data),
+  contextObservationScan: (data: ContextOpsContextObservationScanRequest = {}) =>
+    post<ContextOpsContextObservationScanResponse>('/context-ops/context-observations/scan', data),
 }
 
-export const brainThinkApi = {
-  think: (data: BrainThinkRequest) => post<BrainThinkResponse>('/brain/think', data),
+export const askSpaceApi = {
+  think: (data: AskSpaceRequest) => post<AskSpaceResponse>('/ask-space/think', data),
 }
 
 export const runtimeToolsApi = {
@@ -1343,8 +1401,8 @@ export const dailyReportApi = {
     get<DailyReportArtifactItem[]>(`/daily-capture-report/reports?limit=${limit}`),
 }
 
-// ── dairy ─────────────────────────────────────────────────────────────────
-export interface DairyEntry {
+// ── diary ─────────────────────────────────────────────────────────────────
+export interface DiaryEntry {
   id: string
   user_id: string
   entry_date: string
@@ -1353,7 +1411,7 @@ export interface DairyEntry {
   updated_at: string
 }
 
-export interface DairyReflection {
+export interface DiaryReflection {
   id: string
   entry_id: string
   reflection_date: string
@@ -1362,20 +1420,20 @@ export interface DairyReflection {
   created_at: string
 }
 
-export const dairyApi = {
-  today: () => get<{ date: string; entry: DairyEntry | null }>('/dairy/today'),
+export const diaryApi = {
+  today: () => get<{ date: string; entry: DiaryEntry | null }>('/diary/today'),
   listEntries: (params: { limit?: number; before?: string } = {}) => {
     const q = new URLSearchParams()
     if (params.limit) q.set('limit', String(params.limit))
     if (params.before) q.set('before', params.before)
-    return get<{ entries: DairyEntry[] }>(`/dairy/entries${q.size ? '?' + q : ''}`)
+    return get<{ entries: DiaryEntry[] }>(`/diary/entries${q.size ? '?' + q : ''}`)
   },
   saveEntry: (date: string, content: string) =>
-    put<{ entry: DairyEntry }>(`/dairy/entries/${encodeURIComponent(date)}`, { content }),
+    put<{ entry: DiaryEntry }>(`/diary/entries/${encodeURIComponent(date)}`, { content }),
   deleteEntry: (date: string) =>
-    del<{ deleted: boolean }>(`/dairy/entries/${encodeURIComponent(date)}`),
+    del<{ deleted: boolean }>(`/diary/entries/${encodeURIComponent(date)}`),
   onThisDay: (date: string) =>
-    get<{ date: string; entries: DairyEntry[] }>(`/dairy/on-this-day?date=${encodeURIComponent(date)}`),
+    get<{ date: string; entries: DiaryEntry[] }>(`/diary/on-this-day?date=${encodeURIComponent(date)}`),
   reflections: (date: string) =>
-    get<{ entry_date: string; reflections: DairyReflection[] }>(`/dairy/entries/${encodeURIComponent(date)}/reflections`),
+    get<{ entry_date: string; reflections: DiaryReflection[] }>(`/diary/entries/${encodeURIComponent(date)}/reflections`),
 }

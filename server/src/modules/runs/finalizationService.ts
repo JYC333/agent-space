@@ -4,6 +4,7 @@ import {
   type RunFinalizationRecord,
   type RunRecord,
 } from "./repository";
+import type { EvolutionRunEvaluationForSolidifier } from "../evolution/solidifier";
 
 export const RUN_FINALIZER_VERSION = "post_run_finalization.v1";
 
@@ -63,8 +64,17 @@ const EXACT_ERROR_CODE_MAP: Record<string, { layer: string; reason: string }> = 
 export class RunNotFoundError extends Error {}
 export class NonTerminalRunError extends Error {}
 
+export interface EvolutionRunEvaluationSolidifier {
+  solidifyFromRunEvaluation(
+    evaluation: EvolutionRunEvaluationForSolidifier,
+  ): Promise<{ id: string } | null>;
+}
+
 export class PostRunFinalizationService {
-  constructor(private readonly repository: PgRunRepository) {}
+  constructor(
+    private readonly repository: PgRunRepository,
+    private readonly evolutionSolidifier?: EvolutionRunEvaluationSolidifier,
+  ) {}
 
   async finalize(runId: string, spaceId: string): Promise<RunFinalizationRecord> {
     const run = await this.repository.getRun(spaceId, runId);
@@ -90,6 +100,7 @@ export class PostRunFinalizationService {
       spaceId,
       evaluation,
     );
+    const evolutionExperience = await this.evolutionSolidifier?.solidifyFromRunEvaluation(evaluation) ?? null;
     const skippedReasons = taskBridge.skippedReason ? [taskBridge.skippedReason] : [];
     const finalization = await this.repository.insertRunFinalization({
       space_id: spaceId,
@@ -103,7 +114,10 @@ export class PostRunFinalizationService {
       failure_reason_code: evaluation.failure_reason_code,
       trajectory_status: evaluation.trajectory_status,
       skipped_reasons_json: skippedReasons,
-      metadata_json: { finalizer_version: RUN_FINALIZER_VERSION },
+      metadata_json: {
+        finalizer_version: RUN_FINALIZER_VERSION,
+        evolution_experience_id: evolutionExperience?.id ?? null,
+      },
       finalized_at: now,
       created_at: now,
     });
@@ -117,6 +131,7 @@ export class PostRunFinalizationService {
           run_finalization_id: finalization.id,
           run_evaluation_id: evaluation.id,
           task_evaluation_id: taskBridge.taskEvaluationId,
+          evolution_experience_id: evolutionExperience?.id ?? null,
           skipped_reasons: skippedReasons,
           finalizer_version: RUN_FINALIZER_VERSION,
         },

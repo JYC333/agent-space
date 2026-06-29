@@ -129,7 +129,7 @@ export async function runRecallCases(
  * Graded eval runner: runs each case through the service and reports the full
  * metric set (recall / precision / MRR / nDCG @k). Unlike `runRecallCases` (which
  * gates the deterministic arms at exact recall == 1), this is for the
- * gbrain-evals-tier benches that track graded quality with tolerance bands —
+ * retrieval eval benches that track graded quality with tolerance bands —
  * NamedThing, relational, staleness, and per-mode precision/recall comparisons.
  */
 export async function runGradedCases(

@@ -10,7 +10,7 @@ Scoped, long-term context for agents and users. Not raw data — curated, approv
 - Context memory providers and repositories
 - `ContextBuilder` / context repository — assembles ContextPackage; hard-filters before ranking; resolves ContextAttachments; logs injected memory
 - `ContextCompiler` — security-scans, budget-trims, writes vendor files to sandbox
-- `MemoryEvolver` — fitness-based memory lifecycle; produces archive Proposals, not direct writes
+- Memory-health evolution signals and `EvolutionExperience` records — proposal-gated lifecycle guidance, not direct writes
 - `ContextSnapshot` — frozen audit record of run input; populated before adapter execution
 - `MemoryCandidateValidator` — gates activity-sourced candidates before Proposal creation
 - `MemoryProposalProducer` — creates Proposals from validated candidates
@@ -57,7 +57,7 @@ MemoryReadTrace:
 1. `ContextBuilder.build(space_id, user_id, workspace_id, attachments=[...])`
 2. Hard-filters by space/scope/subject/visibility before ranking; logs all injected memory
 3. Returns `ContextPackage`; populates `ContextSnapshot` before adapter execution
-4. `ContextCompiler.compile()` → scans content → applies budget → writes CLAUDE.md / SOUL.md to sandbox
+4. `ContextCompiler.compile()` → scans content → applies budget → writes CLAUDE.md plus Agent Persona Prompt sidecar (`SOUL.md`) to sandbox when applicable
 
 **Public write → Proposal flow:**
 1. `POST /memory` → `memory_create` Proposal (pending, not active MemoryEntry)
@@ -102,16 +102,16 @@ duplicated onto MemoryEntry rows; read/audit code follows `provenance_links`.
 
 Memory is a consumer of the shared retrieval engine
 (`server/src/modules/retrieval/`; see
-[RETRIEVAL_AND_BRAIN_LAYER.md](../architecture/RETRIEVAL_AND_BRAIN_LAYER.md) for
-the engine/adapter boundary and the full retrieval + brain-layer architecture),
+[CONTEXT_AND_RETRIEVAL_LAYER.md](../architecture/CONTEXT_AND_RETRIEVAL_LAYER.md) for
+the engine/adapter boundary and the full retrieval + context-layer architecture),
 scoped to two **current-space, human-facing** surfaces: advisory create-safety /
 duplicate detection, and a retrieval-backed memory search. It is **not** a
 ContextBuilder candidate source, and it does **not** do cross-space retrieval.
 Those remain deferred (see
 [MEMORY_EVOLUTION_PLAN.md](../architecture/MEMORY_EVOLUTION_PLAN.md) Track B); do
 not widen this surface without a design that covers them explicitly. The
-retrieval and brain-layer roadmap
-([ROADMAP_AND_FUTURE_RISKS.md](../architecture/ROADMAP_AND_FUTURE_RISKS.md#retrieval-and-brain-layer-stabilization))
+context and retrieval roadmap
+([ROADMAP_AND_FUTURE_RISKS.md](../architecture/ROADMAP_AND_FUTURE_RISKS.md#retrieval-and-context-layer-stabilization))
 keeps Memory a separate canonical domain with its own search/review/brief
 surfaces: a shared retrieval engine must not collapse Memory into Knowledge or
 silently promote between them.

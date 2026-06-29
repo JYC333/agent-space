@@ -20,6 +20,8 @@ import {
 import { assertProjectInSpace } from "../projects/access";
 import { loadProtocol } from "../providers/protocolRuntime";
 import { insertProposalRow } from "../proposals/reviewPackets";
+import { EvolutionRepository } from "../evolution/repository";
+import { EvolutionSolidifier } from "../evolution/solidifier";
 
 export interface RunMaterializationResult {
   items: RunMaterializationItemSummary[];
@@ -64,6 +66,7 @@ export class RunMaterializationService {
     private readonly db: Queryable,
     private readonly finalizer: RunFinalizer = new PostRunFinalizationService(
       new PgRunRepository(db),
+      new EvolutionSolidifier(new EvolutionRepository(db)),
     ),
     policyEnforcer?: MaterializationPolicyEnforcer,
   ) {

@@ -6,7 +6,7 @@ import { HttpError } from "../routeUtils/common";
 import { enforce } from "../policy";
 import { loadActionRegistry } from "../policy/actionRegistry";
 import { computeDecision } from "../policy/gateway";
-import { runBrainOpsDreamCycleV2 } from "../brainOps/dreamCycle";
+import { runContextReviewCycle } from "../contextOps/reviewCycle";
 import {
   RetrievalMaintenanceService,
   createRetrievalMaintenanceProposalPacket,
@@ -28,12 +28,12 @@ const VALID_TRIGGER_TYPES = new Set(["manual", "schedule"]);
 const VALID_STATUSES = new Set(["active", "paused", "archived"]);
 const AUTOMATION_TARGET_AGENT_RUN = "agent_run";
 const AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE = "knowledge_retrieval_maintenance";
-const AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2 = "brain_ops_dream_cycle_v2";
+const AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE = "context_ops_review_cycle";
 const AUTOMATION_SCHEDULE_HANDLED = Symbol("automation_schedule_handled");
 const VALID_AUTOMATION_TARGETS = new Set([
   AUTOMATION_TARGET_AGENT_RUN,
   AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE,
-  AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2,
+  AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE,
 ]);
 const CREATE_KEYS = new Set([
   "name",
@@ -242,8 +242,8 @@ export class AutomationService {
       }
       return result;
     }
-    if (targetType === AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2) {
-      const result = await this.executeDreamCycleFire(auto, input, triggerType, preflightSnapshot);
+    if (targetType === AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE) {
+      const result = await this.executeContextReviewCycleFire(auto, input, triggerType, preflightSnapshot);
       if (triggerType === "manual") {
         await this.repo.recordFire(input.spaceId, auto.id);
       }
@@ -298,8 +298,8 @@ export class AutomationService {
           await this.executeMaintenanceFire(auto, fireInput, "schedule", preflightSnapshot, {
             advanceSchedule: true,
           });
-        } else if (targetType === AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2) {
-          await this.executeDreamCycleFire(auto, fireInput, "schedule", preflightSnapshot, {
+        } else if (targetType === AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE) {
+          await this.executeContextReviewCycleFire(auto, fireInput, "schedule", preflightSnapshot, {
             advanceSchedule: true,
           });
         } else {
@@ -499,7 +499,7 @@ export class AutomationService {
     }
   }
 
-  private async executeDreamCycleFire(
+  private async executeContextReviewCycleFire(
     auto: AutomationRow,
     input: {
       spaceId: string;
@@ -522,10 +522,10 @@ export class AutomationService {
         agent_id: auto.agent_id,
         workspace_id: auto.workspace_id,
         trigger_origin: "automation",
-        prompt: "Run Brain Ops Dream Cycle Lite v2.",
-        instruction: "Persist aggregate Brain Ops reports and review packets without direct canonical writes.",
-        capability_id: "brain_ops.dream_cycle_lite_v2",
-        capabilities_json: ["brain_ops.dream_cycle_lite_v2"],
+        prompt: "Run Context Review Cycle.",
+        instruction: "Persist aggregate Context Ops reports and review packets without direct canonical writes.",
+        capability_id: "context_ops.review_cycle",
+        capabilities_json: ["context_ops.review_cycle"],
         source: triggerType === "schedule" ? "scheduled" : "managed",
       });
       const automationRunId = await automations.createAutomationRun({
@@ -539,25 +539,25 @@ export class AutomationService {
     });
 
     try {
-      const request = dreamCycleRequestFromConfig(auto.config_json);
+      const request = reviewCycleRequestFromConfig(auto.config_json);
       const result = await withTransaction(pool, async (client) => {
-        const dreamResult = await runBrainOpsDreamCycleV2(client, {
+        const reviewResult = await runContextReviewCycle(client, {
           spaceId: input.spaceId,
           userId: input.actorUserId,
           request,
           runId: started.runId,
         });
-        const terminalStatus = dreamResult.degraded ? "degraded" : "succeeded";
+        const terminalStatus = reviewResult.degraded ? "degraded" : "succeeded";
         await new PgRunRepository(client).markRunTerminal({
           run_id: started.runId,
           space_id: input.spaceId,
           status: terminalStatus,
-          output_text: dreamResult.degraded
-            ? "Brain Ops Dream Cycle Lite v2 completed with warnings."
-            : "Brain Ops Dream Cycle Lite v2 completed.",
+          output_text: reviewResult.degraded
+            ? "Context Review Cycle completed with warnings."
+            : "Context Review Cycle completed.",
           output_json: {
-            automation_target: AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2,
-            brain_ops_dream_cycle_v2: dreamResult,
+            automation_target: AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE,
+            context_ops_review_cycle: reviewResult,
           },
           exit_code: 0,
           completed_at: new Date().toISOString(),
@@ -565,18 +565,18 @@ export class AutomationService {
         if (options.advanceSchedule) {
           await new PgAutomationRepository(client).advanceSchedule(auto);
         }
-        return dreamResult;
+        return reviewResult;
       });
       return {
         run_id: started.runId,
         automation_run_id: started.automationRunId,
         trigger_origin: "automation",
         preflight_executable: Boolean(preflightSnapshot.executable),
-        target_type: AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2,
+        target_type: AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE,
         artifact_id: result.artifact_id,
         proposal_id: result.claim_candidates.proposal_id,
         artifact_ids: {
-          dream_cycle_report: result.artifact_id,
+          context_review_cycle_report: result.artifact_id,
           retrieval_maintenance: result.retrieval_maintenance.artifact_id,
           diagnostics: result.diagnostics.artifact_id,
           memory_maintenance: result.memory_maintenance.artifact_id,
@@ -606,13 +606,13 @@ export class AutomationService {
           run_id: started.runId,
           space_id: input.spaceId,
           status: "failed",
-          output_text: "Brain Ops Dream Cycle Lite v2 failed.",
+          output_text: "Context Review Cycle failed.",
           output_json: {
-            automation_target: AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2,
+            automation_target: AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE,
           },
           error_json: {
-            error_code: "brain_ops_dream_cycle_v2_automation_failed",
-            error_text: error instanceof Error ? error.message : "Dream cycle failed",
+            error_code: "context_ops_review_cycle_automation_failed",
+            error_text: error instanceof Error ? error.message : "Context review cycle failed",
           },
           exit_code: 1,
           completed_at: new Date().toISOString(),
@@ -622,7 +622,7 @@ export class AutomationService {
         }
       });
       if (options.advanceSchedule) {
-        throw markScheduleHandled(error, "Dream cycle failed");
+        throw markScheduleHandled(error, "Context review cycle failed");
       }
       throw error;
     }
@@ -830,12 +830,12 @@ export class AutomationService {
         shouldCreateMaintenancePacket(input.configJson),
       );
     }
-    if (input.targetType === AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2) {
-      return this.runDreamCyclePreflight(
+    if (input.targetType === AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE) {
+      return this.runContextReviewCyclePreflight(
         input.spaceId,
         input.actorUserId,
         input.agentId,
-        dreamCycleRequestFromConfig(input.configJson),
+        reviewCycleRequestFromConfig(input.configJson),
       );
     }
     return this.runPreflight(
@@ -894,44 +894,44 @@ export class AutomationService {
     return snapshot;
   }
 
-  private async runDreamCyclePreflight(
+  private async runContextReviewCyclePreflight(
     spaceId: string,
     actorUserId: string,
     agentId: string,
-    request: ReturnType<typeof dreamCycleRequestFromConfig>,
+    request: ReturnType<typeof reviewCycleRequestFromConfig>,
   ): Promise<Record<string, unknown>> {
     const membershipRole = await this.repo.getMembershipRole(spaceId, actorUserId);
     const errors: string[] = [];
     let hasPermissionError = false;
     if (membershipRole !== "owner" && membershipRole !== "admin") {
       hasPermissionError = true;
-      errors.push("Brain Ops Dream Cycle automation requires space owner or admin authority");
+      errors.push("Context Review Cycle automation requires space owner or admin authority");
     }
     if (request.review_scope === "space_ops" && this.config.databaseUrl) {
       const settings = await readSpaceRetrievalSettings(getDbPool(this.config.databaseUrl), spaceId);
-      if (settings.brainOpsReviewMode === "private_only") {
-        errors.push("Brain Ops Dream Cycle space_ops review requires Brain Ops review mode to allow admins");
+      if (settings.contextOpsReviewMode === "private_only") {
+        errors.push("Context Review Cycle space_ops review requires Context Ops review mode to allow admins");
       }
     }
     const agent = await this.repo.getAgentPreflight(spaceId, agentId);
     if (!agent) {
-      errors.push("Brain Ops Dream Cycle automation requires an existing attribution Agent");
+      errors.push("Context Review Cycle automation requires an existing attribution Agent");
     } else {
       if (agent.status !== "active") {
-        errors.push(`Brain Ops Dream Cycle attribution Agent is not active (status=${agent.status})`);
+        errors.push(`Context Review Cycle attribution Agent is not active (status=${agent.status})`);
       }
       if (!agent.current_version_id) {
-        errors.push("Brain Ops Dream Cycle attribution Agent has no current version");
+        errors.push("Context Review Cycle attribution Agent has no current version");
       } else if (!agent.version_id) {
-        errors.push("Brain Ops Dream Cycle attribution Agent current version was not found");
+        errors.push("Context Review Cycle attribution Agent current version was not found");
       }
     }
     const snapshot = {
       executable: errors.length === 0,
-      target_type: AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2,
-      dream_cycle_preflight: {
+      target_type: AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE,
+      context_review_cycle_preflight: {
         executable: errors.length === 0,
-        scope: "brain_ops",
+        scope: "context_ops",
         attribution_agent_id: agentId,
         attribution_agent_status: agent?.status ?? null,
         attribution_agent_version_id: agent?.current_version_id ?? null,
@@ -954,7 +954,7 @@ export class AutomationService {
 type AutomationTargetType =
   | typeof AUTOMATION_TARGET_AGENT_RUN
   | typeof AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE
-  | typeof AUTOMATION_TARGET_BRAIN_OPS_DREAM_CYCLE_V2;
+  | typeof AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE;
 type ScheduleHandledError = Error & { [AUTOMATION_SCHEDULE_HANDLED]?: true };
 
 function automationTargetType(configJson: Record<string, unknown> | null | undefined): AutomationTargetType {
@@ -977,7 +977,7 @@ function shouldCreateMaintenancePacket(configJson: Record<string, unknown> | nul
   return recordValue(configJson).create_packet === true;
 }
 
-function dreamCycleRequestFromConfig(configJson: Record<string, unknown> | null | undefined): {
+function reviewCycleRequestFromConfig(configJson: Record<string, unknown> | null | undefined): {
   window_days: number;
   artifact_limit: number;
   create_packets: boolean;

@@ -3,14 +3,14 @@
 Status: forward-looking plan, updated 2026-06-21.
 
 This document describes planned Memory-quality work. It is distinct from the
-Knowledge retrieval substrate + brain layer in
-[`RETRIEVAL_AND_BRAIN_LAYER.md`](RETRIEVAL_AND_BRAIN_LAYER.md).
+Knowledge retrieval substrate + context layer in
+[`CONTEXT_AND_RETRIEVAL_LAYER.md`](CONTEXT_AND_RETRIEVAL_LAYER.md).
 
-The original gbrain absorption plan mixed near-term retrieval mechanics with
+The earlier retrieval absorption plan mixed near-term retrieval mechanics with
 future Memory evolution. Current direction splits that work into two tracks:
 
 - Track A: the Knowledge retrieval substrate — **implemented and superseded** by
-  [`RETRIEVAL_AND_BRAIN_LAYER.md`](RETRIEVAL_AND_BRAIN_LAYER.md); the Phase-1-only
+  [`CONTEXT_AND_RETRIEVAL_LAYER.md`](CONTEXT_AND_RETRIEVAL_LAYER.md); the Phase-1-only
   scope below (no vector/rerank/synthesis) is historical — those have since shipped.
 - Track B: later Memory quality and retrieval integration (still forward-looking).
 
@@ -20,7 +20,7 @@ rules remain unchanged.
 ## Track A: Knowledge Retrieval Substrate (implemented; historical)
 
 > Implemented and superseded — see
-> [`RETRIEVAL_AND_BRAIN_LAYER.md`](RETRIEVAL_AND_BRAIN_LAYER.md) for current state.
+> [`CONTEXT_AND_RETRIEVAL_LAYER.md`](CONTEXT_AND_RETRIEVAL_LAYER.md) for current state.
 > The "Track A does not …" list below captured the original Phase-1 (zero-LLM)
 > scope; vector search, embeddings, rerankers, query rewrite, and LLM synthesis
 > have since been added under their own boundaries. Kept for historical context.
@@ -31,14 +31,14 @@ Track A starts with Knowledge-owned objects only:
 - `Note`
 - `Source`
 
-It absorbs gbrain-style mechanics such as deterministic alias matching,
-normalized text search, markdown/wikilink extraction, retrieval graph expansion,
-rank fusion, and evidence/create-safety contracts.
+It uses agent-space-native mechanics for deterministic alias matching, normalized
+text search, markdown/wikilink extraction, retrieval graph expansion, rank
+fusion, and evidence/create-safety contracts.
 
 Track A does not:
 
-- Add gbrain as a dependency.
-- Make gbrain the system of record.
+- Add an external retrieval runtime as a dependency.
+- Make an external retrieval runtime the system of record.
 - Index MemoryEntry rows.
 - Change Memory write paths.
 - Auto-inject Knowledge, Notes, Sources, or retrieval results into
@@ -75,7 +75,7 @@ Any Memory-side implementation must preserve:
 
 ## Future Memory Work
 
-The useful gbrain-style ideas for later Memory work remain:
+The useful context and retrieval ideas for later Memory work remain:
 
 - Evidence contracts for retrieval results and proposal review.
 - Create-safety signals for duplicate Memory proposals.

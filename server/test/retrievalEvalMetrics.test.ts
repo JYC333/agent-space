@@ -6,7 +6,7 @@ import {
   reciprocalRank,
 } from "./support/retrievalEval";
 
-// Pure metric math for the gbrain-evals-tier harness. No DB / no provider — these
+// Pure metric math for the retrieval eval harness. No DB / no provider — these
 // guard the scoring functions the benches rely on (recall / precision / MRR / nDCG),
 // so a bench threshold means what it says.
 

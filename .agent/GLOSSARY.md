@@ -52,7 +52,7 @@ Proposal has explicit temporal fields: `created_at`, `decided_at`, `deadline` (s
 Assembles a `ContextPackage` from MemoryStore for a space/user/workspace. Enforces space isolation. Resolves ContextAttachments. Logs all memory access.
 
 **Context Compiler**
-Translates a ContextPackage into a vendor instruction file (CLAUDE.md, AGENTS.md, SOUL.md, etc.) written to the sandbox. Runs security scanning, enforces token budgets, and loads `.agent/` docs progressively.
+Translates a ContextPackage into a vendor instruction file (CLAUDE.md, AGENTS.md, prompt.md, plus adapter sidecars such as the Agent Persona Prompt `SOUL.md`) written to the sandbox. Runs security scanning, enforces token budgets, and loads `.agent/` docs progressively.
 
 **Context Snapshot**
 Frozen ContextPackage captured at run-start. Immutable — memory writes during the run do not mutate it. Stored in `context_snapshots` for audit.

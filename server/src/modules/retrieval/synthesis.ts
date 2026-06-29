@@ -9,10 +9,10 @@ import { candidateKey } from "./searchInternals";
 import type { RevalidatedObject, ScoredCandidate } from "./types";
 
 /**
- * Context Brief synthesis (W6 of the brain-layer roadmap).
+ * Context Brief synthesis (W6 of the context-layer roadmap).
  *
- * gbrain's `think` is the brain layer over raw retrieval: a synthesized, CITED
- * answer plus a gap analysis ("what the brain does not know"). agent-space
+ * Ask Space is the context layer over raw retrieval: a synthesized, CITED
+ * answer plus a gap analysis ("what the compiled context does not cover"). agent-space
  * mirrors that as a brief, with the same safety contracts as the reranker:
  *
  *  - **revalidate-before-synthesis (invariant 1/2).** The synthesizer only ever
@@ -26,7 +26,7 @@ import type { RevalidatedObject, ScoredCandidate } from "./types";
  *    invents (out of range) is dropped — the brief never points at an object the
  *    viewer did not already receive.
  *  - **advisory only (invariant 6).** Gap findings are returned, not written:
- *    the dream cycle (W7) turns them into batched review candidates; the brief
+ *    the context review cycle (W7) turns them into batched review candidates; the brief
  *    never makes a canonical write.
  *
  * The engine owns the access-safe seam + the deterministic assembly; the provider

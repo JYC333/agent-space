@@ -14,7 +14,7 @@ function pluginIcon(name: string): LucideIcon {
 export interface PluginNavItem {
   id: string
   label: string
-  /** Logical top-level path, e.g. '/dairy'. Never space-scoped. */
+  /** Logical top-level path, e.g. '/diary'. Never space-scoped. */
   path: string
   icon: string
 }

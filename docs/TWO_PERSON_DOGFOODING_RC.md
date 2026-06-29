@@ -116,7 +116,7 @@ Do not rely on any of these for daily dogfood workflows.
 
 **UI status of planned-but-not-built surfaces:**
 
-- `LLM Wiki` — registry entry with `planned: true`; displays "soon" badge; non-interactive.
+- `Knowledge` — registry entry with `planned: true`; displays "soon" badge; non-interactive.
 - `Cards` — registry entry with `planned: true`; displays "soon" badge; non-interactive.
 - `Time` — registry entry with `planned: true`; displays "soon" badge; non-interactive.
 

@@ -1,5 +1,5 @@
 import type { OfficialPluginDescriptor } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import { dairyDescriptor } from "./official/dairy";
+import { diaryDescriptor } from "./official/diary";
 
 /**
  * Static in-memory registry of official optional modules bundled with this
@@ -14,7 +14,7 @@ import { dairyDescriptor } from "./official/dairy";
  *   5. Add installer-managed plugin migrations for any plugin-owned domain tables.
  */
 const OFFICIAL_PLUGINS: readonly OfficialPluginDescriptor[] = [
-  dairyDescriptor,
+  diaryDescriptor,
 ];
 
 /** All registered official plugin descriptors, indexed by id for O(1) lookup. */

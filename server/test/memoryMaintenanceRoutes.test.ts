@@ -35,7 +35,7 @@ function fakePool(
   options: {
     failOnProposalInsert?: boolean;
     role?: "owner" | "admin" | "reviewer" | "member" | "guest";
-    brainOpsScanMode?: "admins" | "members";
+    contextOpsScanMode?: "admins" | "members";
   } = {},
 ): { calls: CapturedQuery[]; pool: unknown } {
   const calls: CapturedQuery[] = [];
@@ -44,6 +44,34 @@ function fakePool(
     const normalized = sql.replace(/\s+/g, " ").trim();
     if (options.failOnProposalInsert && normalized.startsWith("INSERT INTO proposals")) {
       throw new Error("proposal insert failed");
+    }
+    if (normalized.startsWith("INSERT INTO proposals")) {
+      return {
+        rows: [{
+          id: params[0],
+          space_id: params[1],
+          created_by_user_id: params[14],
+          workspace_id: params[12],
+          created_by_run_id: params[2],
+          proposal_type: params[3],
+          status: params[4],
+          risk_level: params[5],
+          urgency: params[6],
+          preview: params[7],
+          title: params[8],
+          payload_json: JSON.parse(String(params[10] ?? "{}")),
+          rationale: params[13],
+          visibility: params[15],
+          review_deadline: null,
+          expires_at: null,
+          created_at: "2026-06-26T00:00:00.000Z",
+          reviewed_at: null,
+          project_id: params[16],
+          egress_approval_id: null,
+          egress_approval_status: null,
+        }],
+        rowCount: 1,
+      };
     }
     if (/FROM space_retrieval_settings/.test(normalized)) {
       return {
@@ -57,8 +85,8 @@ function fakePool(
           include_trace: false,
           external_egress_enabled: true,
           retrieval_tool_mode: "off",
-          brain_ops_review_mode: "private_only",
-          brain_ops_scan_mode: options.brainOpsScanMode ?? "admins",
+          context_ops_review_mode: "private_only",
+          context_ops_scan_mode: options.contextOpsScanMode ?? "admins",
           embedding_dimensions: 2560,
           max_results_default: 50,
           created_at: "2026-06-26T00:00:00.000Z",
@@ -414,9 +442,9 @@ describe("Memory maintenance routes", () => {
     expect(getDbPool).not.toHaveBeenCalled();
   });
 
-  it("rejects member scans unless Brain Ops member scan initiation is enabled", async () => {
+  it("rejects member scans unless Context Ops member scan initiation is enabled", async () => {
     __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const db = fakePool([row()], { role: "member", brainOpsScanMode: "admins" });
+    const db = fakePool([row()], { role: "member", contextOpsScanMode: "admins" });
     vi.mocked(getDbPool).mockReturnValue(db.pool as never);
     app = buildServer(config(), { logger: false });
 
@@ -431,9 +459,9 @@ describe("Memory maintenance routes", () => {
     expect(db.calls.some((call) => /FROM memory_entries/.test(call.sql))).toBe(false);
   });
 
-  it("allows member scans when Brain Ops member scan initiation is enabled", async () => {
+  it("allows member scans when Context Ops member scan initiation is enabled", async () => {
     __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const db = fakePool([row()], { role: "member", brainOpsScanMode: "members" });
+    const db = fakePool([row()], { role: "member", contextOpsScanMode: "members" });
     vi.mocked(getDbPool).mockReturnValue(db.pool as never);
     app = buildServer(config(), { logger: false });
 

@@ -10,8 +10,8 @@ import { enforceRetrievalToolCallPolicy, type RetrievalToolPolicyAction } from "
 /**
  * Agent-space-controlled retrieval tool surface (W10).
  *
- * gbrain exposes the brain as an MCP tool layer for external CLIs. agent-space
- * deliberately does NOT (vendor tools are adapters, never the system of record):
+ * Managed runs do not expose retrieval as an external MCP server. Vendor tools
+ * are adapters, never the system of record:
  * instead this in-platform service is the governed entrypoint a managed run uses
  * to call retrieval / Context Brief. Its governance contract:
  *

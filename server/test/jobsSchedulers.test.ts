@@ -551,7 +551,7 @@ describe("AutomationService policy preflight", () => {
     });
   });
 
-  it("creates Brain Ops Dream Cycle automations with Dream Cycle preflight", async () => {
+  it("creates Context Review Cycle automations with Context Review Cycle preflight", async () => {
     vi.mocked(enforce).mockResolvedValue({ status: "allow" });
     const repo = new FakeAutomationRepository(sampleAutomation(), "owner");
     const service = new AutomationService(configWithoutDb, repo);
@@ -559,10 +559,10 @@ describe("AutomationService policy preflight", () => {
       spaceId: "space-1",
       ownerUserId: "owner-1",
       body: {
-        name: "Brain Ops Dream Cycle",
+        name: "Context Review Cycle",
         agent_id: "agent-1",
         config_json: {
-          target_type: "brain_ops_dream_cycle_v2",
+          target_type: "context_ops_review_cycle",
           create_packets: true,
           include_memory_maintenance: true,
         },
@@ -570,14 +570,14 @@ describe("AutomationService policy preflight", () => {
     });
 
     expect(vi.mocked(enforce).mock.calls[0]?.[2].context).toMatchObject({
-      target_type: "brain_ops_dream_cycle_v2",
+      target_type: "context_ops_review_cycle",
       membership_role: "owner",
     });
     expect(repo.createInputs[0]?.preflightSnapshot).toMatchObject({
       executable: true,
-      target_type: "brain_ops_dream_cycle_v2",
-      dream_cycle_preflight: {
-        scope: "brain_ops",
+      target_type: "context_ops_review_cycle",
+      context_review_cycle_preflight: {
+        scope: "context_ops",
         persist_report: true,
         create_packets: true,
         review_scope: "private",
@@ -608,7 +608,7 @@ describe("AutomationService policy preflight", () => {
     expect(repo.createInputs).toHaveLength(0);
   });
 
-  it("rejects Brain Ops Dream Cycle automations for non-admin space members", async () => {
+  it("rejects Context Review Cycle automations for non-admin space members", async () => {
     vi.mocked(enforce).mockResolvedValue({ status: "allow" });
     const repo = new FakeAutomationRepository(sampleAutomation(), "member");
     const service = new AutomationService(configWithoutDb, repo);
@@ -617,9 +617,9 @@ describe("AutomationService policy preflight", () => {
         spaceId: "space-1",
         ownerUserId: "member-1",
         body: {
-          name: "Brain Ops Dream Cycle",
+          name: "Context Review Cycle",
           agent_id: "agent-1",
-          config_json: { target_type: "brain_ops_dream_cycle_v2" },
+          config_json: { target_type: "context_ops_review_cycle" },
         },
       }),
     ).rejects.toMatchObject({
@@ -629,7 +629,7 @@ describe("AutomationService policy preflight", () => {
     expect(repo.createInputs).toHaveLength(0);
   });
 
-  it("rejects invalid Brain Ops Dream Cycle config fields", async () => {
+  it("rejects invalid Context Review Cycle config fields", async () => {
     vi.mocked(enforce).mockResolvedValue({ status: "allow" });
     const repo = new FakeAutomationRepository(sampleAutomation(), "owner");
     const service = new AutomationService(configWithoutDb, repo);
@@ -638,10 +638,10 @@ describe("AutomationService policy preflight", () => {
         spaceId: "space-1",
         ownerUserId: "owner-1",
         body: {
-          name: "Brain Ops Dream Cycle",
+          name: "Context Review Cycle",
           agent_id: "agent-1",
           config_json: {
-            target_type: "brain_ops_dream_cycle_v2",
+            target_type: "context_ops_review_cycle",
             review_scope: "everyone",
           },
         },

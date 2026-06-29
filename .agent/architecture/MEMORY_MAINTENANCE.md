@@ -8,9 +8,9 @@ Memory maintenance is separate from Knowledge retrieval maintenance. Memory can
 carry private, selected-user, summary-only, restricted, highly restricted,
 system, template, project-scoped, and per-user content. The default implemented
 surface is therefore a private review path initiated by a space owner/admin.
-`space_retrieval_settings.brain_ops_scan_mode = members` additionally permits
+`space_retrieval_settings.context_ops_scan_mode = members` additionally permits
 active members/reviewers to initiate their own scans. A caller may explicitly
-ask for a shared `space_ops` report/packet only when the Space Brain Ops review
+ask for a shared `space_ops` report/packet only when the Space Context Ops review
 setting allows that reviewer; this does not scan other users' private Memory.
 
 ## Source Of Truth
@@ -55,9 +55,9 @@ Implemented endpoints:
 The route resolves the authenticated user and current space through the normal
 Memory route identity path. It requires `SERVER_DATABASE_URL`; without it the
 route returns 502. Scan initiation is gated by
-`space_retrieval_settings.brain_ops_scan_mode`: `admins` permits owners/admins;
+`space_retrieval_settings.context_ops_scan_mode`: `admins` permits owners/admins;
 `members` also permits active members/reviewers. This gate is separate from
-`brain_ops_review_mode`, which controls shared packet review.
+`context_ops_review_mode`, which controls shared packet review.
 
 Request schema (`MemoryMaintenanceScanRequestSchema`):
 
@@ -75,7 +75,7 @@ Request schema (`MemoryMaintenanceScanRequestSchema`):
 
 `create_packet=true` with `persist_report=false` is rejected with 422 because
 packets point at a persisted report artifact. `review_scope=space_ops` is
-rejected unless `space_retrieval_settings.brain_ops_review_mode` allows the
+rejected unless `space_retrieval_settings.context_ops_review_mode` allows the
 current reviewer.
 
 Response schema (`MemoryMaintenanceReportSchema`) contains findings, counts,
@@ -85,15 +85,15 @@ optional `job_status`, and `access_safety`.
 
 Durable job create (`MemoryMaintenanceJobCreateRequestSchema`) accepts the same
 options as the scan route except `cursor` and `job_id`; `scan_mode` is fixed to
-`full`. Creating a job requires the same Brain Ops scan initiation authority as
-manual scan. `review_scope=space_ops` additionally requires Brain Ops review
+`full`. Creating a job requires the same Context Ops scan initiation authority as
+manual scan. `review_scope=space_ops` additionally requires Context Ops review
 permission, matching manual scan.
 
 Job responses (`MemoryMaintenanceJobSchema`) expose only job metadata: id,
 space/user pointers, `status`, `review_scope`, normalized scan options, stored
 cursor, accumulated scanned/finding totals, last report/proposal ids, bounded
 error message, and timestamps. `GET` returns jobs owned by the caller, or
-`space_ops` jobs visible to a reviewer allowed by Brain Ops review settings.
+`space_ops` jobs visible to a reviewer allowed by Context Ops review settings.
 `POST .../:jobId/run` advances one page inside a DB transaction and returns the
 updated job plus the page report, or `report = null` when the job was already
 terminal.
@@ -138,8 +138,8 @@ first-class job console on the Memory page yet; the page's visible product
 surface remains manual scan/cursor continuation plus the access-log inspector.
 
 The Memory page reads Space retrieval settings and keeps `space_ops` review
-scope unavailable when `brain_ops_review_mode = private_only`, so the UI fails
-early instead of relying only on the route's 403. Brain Ops summary reports
+scope unavailable when `context_ops_review_mode = private_only`, so the UI fails
+early instead of relying only on the route's 403. Context Ops summary reports
 `memory_provenance.inspector_available = true` and links to the Memory page
 inspector, but the inspector itself lives on the Memory page so it can use
 Memory-specific readability and project-gate expectations.
@@ -376,7 +376,7 @@ Accepting a packet:
 - requires the accepting user to match `created_by_user_id` for private packets
 - allows a non-creator only when the proposal is `visibility = space_shared`,
   payload `review_scope = space_ops`, and
-  `space_retrieval_settings.brain_ops_review_mode` permits that role
+  `space_retrieval_settings.context_ops_review_mode` permits that role
 - updates the proposal to `status = accepted`
 - records `reviewed_at`, `reviewed_by`, `accepted_by_user_id`, and
   `accepted_at`

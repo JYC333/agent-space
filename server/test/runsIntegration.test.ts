@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 import {
   PostgreSqlContainer,
@@ -540,13 +540,23 @@ describe("runs repositories against real PostgreSQL", () => {
       status: "succeeded",
     });
 
-    const service = new PostRunFinalizationService(repo);
+    const evolutionSolidifier = {
+      solidifyFromRunEvaluation: vi.fn().mockResolvedValue({ id: "experience-1" }),
+    };
+    const service = new PostRunFinalizationService(repo, evolutionSolidifier);
     const first = await service.finalize(runId, "space-1");
     const second = await service.finalize(runId, "space-1");
 
     expect(second.id).toBe(first.id);
     expect(first.status).toBe("completed");
     expect(first.outcome_status).toBe("passed");
+    expect(first.metadata_json).toMatchObject({ evolution_experience_id: "experience-1" });
+    expect(evolutionSolidifier.solidifyFromRunEvaluation).toHaveBeenCalledTimes(1);
+    expect(evolutionSolidifier.solidifyFromRunEvaluation).toHaveBeenCalledWith(expect.objectContaining({
+      run_id: runId,
+      space_id: "space-1",
+      outcome_status: "passed",
+    }));
     const evaluations = await repo.listRunEvaluations("space-1", runId);
     expect(evaluations).toHaveLength(1);
     expect(evaluations[0].outcome_status).toBe("passed");

@@ -4,8 +4,6 @@
  * On server startup (when ENABLE_SYSTEM_EVOLUTION=true), validates that the
  * agent-space repo clone exists, then registers it as a system_core workspace
  * in the owner's personal space. Idempotent — safe to call on every startup.
- *
- * Ported from core/backend/app/workspaces/system_core.py.
  */
 
 import { execFile } from "node:child_process";
@@ -131,8 +129,8 @@ export async function upsertSystemCoreWorkspace(
       SYSTEM_CORE_WORKSPACE_ID,
       input.spaceId,
       input.userId,
-      "Agent Space",
-      "Agent-space self-evolution workspace — managed by agent-space",
+      "agent-space",
+      "System core: agent-space self-evolution workspace",
       input.workspaceDir,
       input.baseBranch,
     ],

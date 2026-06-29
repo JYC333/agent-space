@@ -21,7 +21,7 @@ import { EMBED_DIMENSIONS } from "../src/modules/retrievalEmbedding/config";
 import { runGradedCases, type EvalCase } from "./support/retrievalEval";
 import { insertKnowledgeItem } from "./support/knowledgeFixtures";
 
-// gbrain-evals-tier benches over real Postgres + pgvector. Beyond the recall@k
+// Retrieval eval benches over real Postgres + pgvector. Beyond the recall@k
 // gate (retrievalEvalDb), these track graded quality (MRR / nDCG), entity recall
 // under distractor pressure (NamedThing), relational recall, recency/staleness,
 // per-mode precision↔recall tradeoff, and — as a hard gate — that no cross-space

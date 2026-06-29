@@ -11,10 +11,88 @@ import {
 } from "../routeUtils/common";
 import { buildContextPackage } from "./contextPackage";
 import { ContextDigestRefreshService } from "./digestService";
+import { PgContextProfileRepository } from "./profiles";
 import { PgRunContextRepository } from "./repository";
 import { loadProtocol } from "../providers/protocolRuntime";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
+  app.get("/api/v1/context/profiles", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = query(request);
+      const repo = PgContextProfileRepository.fromConfig(context.config);
+      const items = await repo.list(identity, {
+        scopeType: optionalString(q.scope_type),
+        scopeId: optionalString(q.scope_id),
+        status: optionalString(q.status),
+      });
+      const protocol = await loadProtocol();
+      return reply.send(protocol.ContextProfileListResponseSchema.parse({ items }));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.put("/api/v1/context/profiles", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const protocol = await loadProtocol();
+      const parsed = protocol.ContextProfileUpsertRequestSchema.safeParse(jsonBody(request));
+      if (!parsed.success) {
+        throw new HttpError(422, parsed.error.issues[0]?.message ?? "invalid context profile request");
+      }
+      const repo = PgContextProfileRepository.fromConfig(context.config);
+      const profile = await repo.upsert(identity, parsed.data);
+      return reply.send(protocol.ContextProfileSchema.parse(profile));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/context/workspaces/:workspaceId/routing", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const workspaceId = optionalString(params(request).workspaceId);
+      if (!workspaceId) throw new HttpError(422, "workspace_id is required");
+      const repo = PgContextProfileRepository.fromConfig(context.config);
+      const result = await repo.getWorkspaceRouting(identity, workspaceId);
+      const protocol = await loadProtocol();
+      return reply.send(protocol.ContextEffectiveRoutingResponseSchema.parse(result));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.put("/api/v1/context/workspaces/:workspaceId/routing", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const workspaceId = optionalString(params(request).workspaceId);
+      if (!workspaceId) throw new HttpError(422, "workspace_id is required");
+      const protocol = await loadProtocol();
+      const parsed = protocol.ContextRoutingUpdateRequestSchema.safeParse(jsonBody(request));
+      if (!parsed.success) {
+        throw new HttpError(422, parsed.error.issues[0]?.message ?? "invalid context routing request");
+      }
+      const repo = PgContextProfileRepository.fromConfig(context.config);
+      await repo.upsert(identity, {
+        scope_type: "workspace",
+        scope_id: workspaceId,
+        status: "active",
+        version: parsed.data.routing_manifest_json.version,
+        context_pack_json: parsed.data.context_pack_json,
+        routing_manifest_json: parsed.data.routing_manifest_json,
+      });
+      const result = await repo.getWorkspaceRouting(identity, workspaceId);
+      return reply.send(protocol.ContextEffectiveRoutingResponseSchema.parse(result));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
   app.get("/api/v1/context/artifact-revocations", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;

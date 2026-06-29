@@ -31,7 +31,9 @@ agent-space/
 │   └── scripts/      # start.sh, db/, system/
 ├── docs/             # Architecture and design documentation
 │
-├── server/    # TypeScript API backend and migration owner
+├── server/           # TypeScript API backend and migration owner
+├── packages/         # Shared packages
+│   └── protocol/     # Wire contract types — single public entry point
 ├── catalog/          # Built-in system definitions
 │   ├── agent_templates/
 │   └── capabilities/

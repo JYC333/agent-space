@@ -4,15 +4,15 @@ import { join } from "node:path";
 
 export default function setupOfficialPlugins(): void {
   const serverRoot = join(__dirname, "..");
-  const dairyRuntime = join(
+  const diaryRuntime = join(
     serverRoot,
     "dist",
     "official-plugins",
-    "dairy",
+    "diary",
     "server",
     "index.js",
   );
-  if (existsSync(dairyRuntime)) return;
+  if (existsSync(diaryRuntime)) return;
 
   execFileSync(process.execPath, ["scripts/build-official-plugins.mjs"], {
     cwd: serverRoot,

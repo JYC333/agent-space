@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { BarChart3, BrainCircuit, FilePlus2, FileSearch, FolderKanban, Loader2, Package, SlidersHorizontal, X } from 'lucide-react'
+import { BarChart3, FilePlus2, FileSearch, FolderKanban, Loader2, Package, SlidersHorizontal, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { artifactsApi, knowledgeApi, workspacesApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -362,7 +362,7 @@ export default function ArtifactsPage() {
                 create packet
               </label>
               <Button size="sm" onClick={generateDiagnostics} disabled={generating || !activeSpaceId}>
-                {generating ? <Loader2 className="size-3.5 animate-spin" /> : <BrainCircuit className="size-3.5" />}
+                {generating ? <Loader2 className="size-3.5 animate-spin" /> : <FilePlus2 className="size-3.5" />}
                 Generate
               </Button>
             </div>

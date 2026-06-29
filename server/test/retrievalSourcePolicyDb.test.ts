@@ -6,7 +6,7 @@ import {
   type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
 import { migrate } from "../src/db/migrator";
-import { BrainOpsService } from "../src/modules/brainOps";
+import { ContextOpsService } from "../src/modules/contextOps";
 import { RetrievalMaintenanceService, RetrievalProjectionService, RetrievalSearchService } from "../src/modules/retrieval";
 import { knowledgeRetrievalRegistry } from "../src/modules/knowledge/retrievalAdapter";
 import { insertKnowledgeItem } from "./support/knowledgeFixtures";
@@ -17,7 +17,7 @@ import { insertKnowledgeItem } from "./support/knowledgeFixtures";
 //        search fails closed for a non-allowed reader.
 //   G1 — the maintenance scan applies the same source read policy and never
 //        surfaces a source-restricted object to a non-allowed operator.
-//   G5 — Brain Ops drill-down object lists apply the same source read policy.
+//   G5 — Context Ops drill-down object lists apply the same source read policy.
 // Both knowledge items are canonically space_shared, so ONLY the source policy
 // differentiates the restricted object — isolating the gate under test.
 
@@ -229,10 +229,10 @@ describe("Retrieval source policy closure (real Postgres)", () => {
     expect(readerIds).not.toContain("restricted-doc"); // source-restricted ⇒ never surfaced
   });
 
-  it("G5: Brain Ops drill-down hides the source-restricted object from a non-allowed operator", async () => {
+  it("G5: Context Ops drill-down hides the source-restricted object from a non-allowed operator", async () => {
     if (!available || !pool) return;
     await seedRestrictedAndOpen();
-    const service = new BrainOpsService(pool);
+    const service = new ContextOpsService(pool);
 
     const ownerDrilldown = await service.getDrilldown({
       spaceId: SPACE,

@@ -21,7 +21,7 @@ export interface PluginGuardOptions {
  *
  * Usage in a route handler:
  *   const allowed = await requireOfficialPluginEnabled(config, request, reply, {
- *     pluginId: "dairy",
+ *     pluginId: "diary",
  *   });
  *   if (!allowed) return;
  *

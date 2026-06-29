@@ -24,7 +24,7 @@ import {
 } from "../retrieval";
 import { readSpaceRetrievalPrompt } from "../retrieval/prompts";
 import { readSpaceRetrievalSettings, resolveRetrievalSearchControls } from "../retrieval/settings";
-import { canInitiateBrainOpsScan, canReviewSpaceOpsPackets } from "../brainOps/reviewPolicy";
+import { canInitiateContextOpsScan, canReviewSpaceOpsPackets } from "../contextOps/reviewPolicy";
 import { withDbTransaction } from "../routeUtils/common";
 import { requireSpaceOwnerOrAdmin } from "../routeUtils/access";
 import { enqueueRetrievalEmbeddingBackfill } from "../retrievalEmbedding/job";
@@ -557,15 +557,15 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
           .send({ detail: "create_packet requires persist_report" });
       }
       const pool = getDbPool(context.config.databaseUrl);
-      const canScan = await canInitiateBrainOpsScan(pool, identity.spaceId, identity.userId);
+      const canScan = await canInitiateContextOpsScan(pool, identity.spaceId, identity.userId);
       if (!canScan) {
-        return reply.code(403).send({ detail: "Requires space owner/admin role or enabled Brain Ops member scan access" });
+        return reply.code(403).send({ detail: "Requires space owner/admin role or enabled Context Ops member scan access" });
       }
       const reviewScope = body.review_scope ?? "private";
       if (reviewScope === "space_ops") {
         const allowed = await canReviewSpaceOpsPackets(pool, identity.spaceId, identity.userId);
         if (!allowed) {
-          return reply.code(403).send({ detail: "space-wide Brain Ops review is not enabled for this reviewer" });
+          return reply.code(403).send({ detail: "space-wide Context Ops review is not enabled for this reviewer" });
         }
       }
       const scanInput = {
@@ -651,14 +651,14 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         return reply.code(422).send({ detail: "create_packet requires persist_report" });
       }
       const pool = getDbPool(context.config.databaseUrl);
-      const canScan = await canInitiateBrainOpsScan(pool, identity.spaceId, identity.userId);
+      const canScan = await canInitiateContextOpsScan(pool, identity.spaceId, identity.userId);
       if (!canScan) {
-        return reply.code(403).send({ detail: "Requires space owner/admin role or enabled Brain Ops member scan access" });
+        return reply.code(403).send({ detail: "Requires space owner/admin role or enabled Context Ops member scan access" });
       }
       if (body.review_scope === "space_ops") {
         const allowed = await canReviewSpaceOpsPackets(pool, identity.spaceId, identity.userId);
         if (!allowed) {
-          return reply.code(403).send({ detail: "space-wide Brain Ops review is not enabled for this reviewer" });
+          return reply.code(403).send({ detail: "space-wide Context Ops review is not enabled for this reviewer" });
         }
       }
       const job = await createMemoryMaintenanceJob(pool, {
@@ -704,9 +704,9 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     try {
       const protocol = await loadProtocol();
       const pool = getDbPool(context.config.databaseUrl);
-      const canScan = await canInitiateBrainOpsScan(pool, identity.spaceId, identity.userId);
+      const canScan = await canInitiateContextOpsScan(pool, identity.spaceId, identity.userId);
       if (!canScan) {
-        return reply.code(403).send({ detail: "Requires space owner/admin role or enabled Brain Ops member scan access" });
+        return reply.code(403).send({ detail: "Requires space owner/admin role or enabled Context Ops member scan access" });
       }
       const includeSpaceOps = await canReviewSpaceOpsPackets(pool, identity.spaceId, identity.userId);
       const result = await withDbTransaction(pool, async (client) =>

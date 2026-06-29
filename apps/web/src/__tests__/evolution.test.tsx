@@ -3,9 +3,12 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import type {
+  EvolutionExperience,
   EvolutionProposal,
   EvolutionRunListItem,
+  EvolutionSelectorDecision,
   EvolutionSignal,
+  EvolutionStrategy,
   EvolutionSummaryOut,
   EvolutionTarget,
   EvolutionValidationResult,
@@ -29,6 +32,9 @@ const { evolutionApiMock, providersApiMock, proposalsApiMock } = vi.hoisted(() =
     signals: vi.fn(),
     targetSignals: vi.fn(),
     createSignal: vi.fn(),
+    strategies: vi.fn(),
+    selectorDecisions: vi.fn(),
+    experiences: vi.fn(),
     runs: vi.fn(),
     proposals: vi.fn(),
     validation: vi.fn(),
@@ -76,6 +82,9 @@ interface MockEvolutionData {
   summary?: EvolutionSummaryOut
   targets?: EvolutionTarget[]
   signals?: EvolutionSignal[]
+  strategies?: EvolutionStrategy[]
+  selectorDecisions?: EvolutionSelectorDecision[]
+  experiences?: EvolutionExperience[]
   runs?: EvolutionRunListItem[]
   proposals?: EvolutionProposal[]
   validationResults?: EvolutionValidationResult[]
@@ -101,6 +110,9 @@ function mockEvolutionData({
   summary = emptySummary,
   targets = [],
   signals = [],
+  strategies = [],
+  selectorDecisions = [],
+  experiences = [],
   runs = [],
   proposals = [],
   validationResults = [],
@@ -127,7 +139,7 @@ function mockEvolutionData({
     id: 'target-created',
     space_id: 'personal-1',
     target_name: 'Created Target',
-    target_type: 'prompt',
+    target_type: 'agent_version',
     target_ref_type: 'capability',
     target_ref_id: 'created-capability',
     capability_key: 'created-capability',
@@ -141,7 +153,7 @@ function mockEvolutionData({
     recent_signal_count: 0,
     last_run_at: null,
     engine_policy_json: {},
-    metadata_json: {},
+    metadata_json: { agent_id: 'agent-1' },
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
   })
@@ -153,7 +165,7 @@ function mockEvolutionData({
     space_id: 'personal-1',
     target_id: 'target-1',
     target_name: 'Capture Memory Extraction',
-    target_type: 'prompt',
+    target_type: 'agent_version',
     capability_key: 'capture-memory-extraction',
     signal_type: 'memory_candidate_rejected',
     source_type: 'manual',
@@ -163,6 +175,9 @@ function mockEvolutionData({
     payload_json: {},
     created_at: '2026-01-01T00:00:00Z',
   })
+  evolutionApiMock.strategies.mockResolvedValue(strategies)
+  evolutionApiMock.selectorDecisions.mockResolvedValue(selectorDecisions)
+  evolutionApiMock.experiences.mockResolvedValue(experiences)
   evolutionApiMock.runs.mockResolvedValue(runs)
   evolutionApiMock.proposals.mockResolvedValue(proposals)
   evolutionApiMock.validation.mockResolvedValue(validationResults)
@@ -170,12 +185,11 @@ function mockEvolutionData({
   evolutionApiMock.runTarget.mockResolvedValue({
     run_id: 'run-1',
     target_id: 'target-1',
-    context_artifact_id: 'ctx-1',
-    report_artifact_id: 'report-1',
-    revision_artifact_id: 'revision-1',
-    proposal_id: 'proposal-1',
-    proposal_type: 'prompt_update',
+    selector_decision_id: 'decision-1',
+    selected_strategy_key: 'repair.runtime_failure',
     run_status: 'succeeded',
+    proposal_ids: [],
+    is_fallback_agent: false,
   })
 }
 
@@ -202,10 +216,10 @@ describe('Evolution module', () => {
   it('renders the /evolution page and empty states from empty backend arrays', async () => {
     renderPage()
 
-    expect(await screen.findByRole('heading', { name: 'Evolution' })).toBeInTheDocument()
-    expect(screen.getByText('Target-scoped review loops for prompts, capabilities, agents, workflows, and policies.')).toBeInTheDocument()
-    expect(await screen.findByText('No active targets.')).toBeInTheDocument()
-    expect(screen.getByText('No target selected.')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '自进化' })).toBeInTheDocument()
+    expect(screen.getByText('改进目标、触发信号、策略选择、验证经验和待审核改进的审计闭环。')).toBeInTheDocument()
+    expect(await screen.findByText('暂无活跃目标。')).toBeInTheDocument()
+    expect(screen.getByText('未选择改进目标。')).toBeInTheDocument()
   })
 
   it('renders overview counts from backend summary', async () => {
@@ -220,7 +234,7 @@ describe('Evolution module', () => {
 
     renderPage()
 
-    expect(await screen.findByText('Active targets')).toBeInTheDocument()
+    expect(await screen.findAllByText('改进目标')).not.toHaveLength(0)
     expect(screen.getByText('2')).toBeInTheDocument()
     expect(screen.getByText('7')).toBeInTheDocument()
     expect(screen.getByText('1')).toBeInTheDocument()
@@ -239,7 +253,7 @@ describe('Evolution module', () => {
         id: 'target-1',
         space_id: null,
         target_name: 'Capture Memory Extraction',
-        target_type: 'prompt',
+        target_type: 'agent_version',
         target_ref_type: 'capability',
         target_ref_id: 'capture-memory-extraction',
         capability_key: 'capture-memory-extraction',
@@ -253,7 +267,7 @@ describe('Evolution module', () => {
         recent_signal_count: 1,
         last_run_at: '2026-01-01T00:00:00Z',
         engine_policy_json: {},
-        metadata_json: {},
+        metadata_json: { agent_id: 'agent-1' },
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-01T00:00:00Z',
       }],
@@ -262,7 +276,7 @@ describe('Evolution module', () => {
         space_id: 'personal-1',
         target_id: 'target-1',
         target_name: 'Capture Memory Extraction',
-        target_type: 'prompt',
+        target_type: 'agent_version',
         capability_key: 'capture-memory-extraction',
         signal_type: 'exploration_misclassified_as_decision',
         source_type: 'proposal',
@@ -276,26 +290,93 @@ describe('Evolution module', () => {
         run_id: 'run-123456789',
         target_id: 'target-1',
         target_name: 'Capture Memory Extraction',
-        target_type: 'prompt',
+        target_type: 'agent_version',
         capability_key: 'capture-memory-extraction',
-        engine: 'llm_prompt_review',
-        status: 'succeeded',
+        strategy_key: 'repair.runtime_failure',
+        engine: 'codex_cli',
+        status: 'waiting_for_review',
         created_at: '2026-01-03T00:00:00Z',
         started_at: '2026-01-03T00:00:00Z',
-        artifact_count: 3,
-        proposal_id: 'proposal-123456789',
+        artifact_count: 1,
       }],
       proposals: [{
         id: 'proposal-123456789',
-        proposal_type: 'prompt_update',
+        proposal_type: 'capability_update',
         target_id: 'target-1',
         target_name: 'Capture Memory Extraction',
-        target_type: 'prompt',
+        target_type: 'agent_version',
         capability_key: 'capture-memory-extraction',
         status: 'pending',
-        summary: 'Evolution engine proposed a scoped prompt revision.',
+        summary: 'Evolution strategy produced a review-gated capability update.',
         created_at: '2026-01-03T00:00:00Z',
         created_by_run_id: 'run-123456789',
+      }],
+      strategies: [{
+        id: 'strategy-1',
+        space_id: null,
+        strategy_key: 'repair.runtime_failure',
+        name: 'Repair runtime failure',
+        description: 'Inspect failed runtime evidence and propose a correction path.',
+        category: 'repair',
+        target_type: 'system',
+        status: 'active',
+        risk_level: 'medium',
+        signals_match: ['runtime_failure'],
+        preconditions_json: {},
+        strategy_steps: ['collect_run_trace'],
+        constraints: ['do_not_mutate_target_directly'],
+        validation_policy_json: {},
+        tool_policy_json: {},
+        routing_hint_json: {},
+        provenance_type: 'built_in',
+        source_ref_json: {},
+        success_count: 2,
+        failure_count: 0,
+        confidence_score: 0.61,
+        last_selected_at: '2026-01-03T00:00:00Z',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-03T00:00:00Z',
+      }],
+      selectorDecisions: [{
+        id: 'decision-123456789',
+        space_id: 'personal-1',
+        target_id: 'target-1',
+        target_name: 'Capture Memory Extraction',
+        target_type: 'agent_version',
+        run_id: 'run-123456789',
+        selected_strategy_asset_id: 'strategy-1',
+        selected_strategy_key: 'repair.runtime_failure',
+        selected_strategy_name: 'Repair runtime failure',
+        candidate_strategy_ids: ['strategy-1'],
+        input_signal_ids: ['signal-1'],
+        decision_reason: 'Selected repair.runtime_failure from 1 compatible active strategies.',
+        score_trace_json: {},
+        rejected_reasons_json: [],
+        created_at: '2026-01-03T00:00:00Z',
+      }],
+      experiences: [{
+        id: 'experience-123456789',
+        space_id: 'personal-1',
+        strategy_asset_id: 'strategy-1',
+        strategy_key: 'repair.runtime_failure',
+        strategy_name: 'Repair runtime failure',
+        target_id: 'target-1',
+        target_name: 'Capture Memory Extraction',
+        source_run_id: 'run-123456789',
+        source_proposal_id: null,
+        experience_key: 'repair.runtime_failure/run-123456789',
+        summary: 'Runtime repair plan passed review.',
+        trigger_signals: ['signal-1'],
+        outcome_status: 'success',
+        confidence_score: 0.7,
+        blast_radius_json: {},
+        validation_trace_json: {},
+        execution_trace_json: {},
+        lessons: ['Keep the change scoped.'],
+        anti_patterns: [],
+        environment_fingerprint_json: {},
+        provenance_type: 'run_observed',
+        created_at: '2026-01-04T00:00:00Z',
       }],
       validationResults: [{
         metric_id: 'memory_candidate_reject_rate',
@@ -321,16 +402,25 @@ describe('Evolution module', () => {
     expect(await screen.findAllByText('Capture Memory Extraction')).not.toHaveLength(0)
     expect(evolutionApi.targetSignals).toHaveBeenCalledWith('target-1', { limit: 50 })
 
-    await user.click(screen.getByRole('tab', { name: 'Signals' }))
-    expect(await screen.findByText('exploration_misclassified_as_decision')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: '触发信号' }))
+    expect(await screen.findAllByText('exploration_misclassified_as_decision')).not.toHaveLength(0)
 
-    await user.click(screen.getByRole('tab', { name: 'Runs' }))
-    expect(screen.getByText('llm_prompt_review')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: '选择的策略' }))
+    expect(screen.getByText('repair.runtime_failure')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('tab', { name: 'Proposals' }))
-    expect(screen.getByText('prompt_update')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: '选择记录' }))
+    expect(screen.getByText('Selected repair.runtime_failure from 1 compatible active strategies.')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('tab', { name: 'Validation' }))
+    await user.click(screen.getByRole('tab', { name: '验证经验' }))
+    expect(screen.getByText('Runtime repair plan passed review.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: '运行记录' }))
+    expect(screen.getByText('codex_cli')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: '待审核改进' }))
+    expect(screen.getByText('capability_update')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: '验证' }))
     expect(screen.getByText('Memory candidate reject rate')).toBeInTheDocument()
     expect(screen.getByText('memory_candidate_reject_rate')).toBeInTheDocument()
     expect(screen.getByText('0.25')).toBeInTheDocument()
@@ -342,7 +432,7 @@ describe('Evolution module', () => {
         id: 'target-1',
         space_id: null,
         target_name: 'Capture Memory Extraction',
-        target_type: 'prompt',
+        target_type: 'agent_version',
         target_ref_type: 'capability',
         target_ref_id: 'capture-memory-extraction',
         capability_key: 'capture-memory-extraction',
@@ -356,7 +446,7 @@ describe('Evolution module', () => {
         recent_signal_count: 1,
         last_run_at: null,
         engine_policy_json: {},
-        metadata_json: {},
+        metadata_json: { agent_id: 'agent-1' },
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-01T00:00:00Z',
       }],
@@ -365,9 +455,9 @@ describe('Evolution module', () => {
     const user = userEvent.setup()
 
     expect(await screen.findAllByText('Capture Memory Extraction')).not.toHaveLength(0)
-    await user.click(screen.getByRole('button', { name: /Copy target/i }))
-    expect(screen.getByRole('heading', { name: 'Copy target' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /Create target/i }))
+    await user.click(screen.getByRole('button', { name: /复制目标/i }))
+    expect(screen.getByRole('heading', { name: '复制改进目标' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /创建目标/i }))
 
     await waitFor(() => expect(evolutionApi.createTarget).toHaveBeenCalled())
     expect(evolutionApi.updateTarget).not.toHaveBeenCalled()
@@ -385,7 +475,7 @@ describe('Evolution module', () => {
         id: 'target-1',
         space_id: null,
         target_name: 'Capture Memory Extraction',
-        target_type: 'prompt',
+        target_type: 'agent_version',
         target_ref_type: 'capability',
         target_ref_id: 'capture-memory-extraction',
         capability_key: 'capture-memory-extraction',
@@ -399,7 +489,7 @@ describe('Evolution module', () => {
         recent_signal_count: 1,
         last_run_at: null,
         engine_policy_json: {},
-        metadata_json: {},
+        metadata_json: { agent_id: 'agent-1' },
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-01T00:00:00Z',
       }],
@@ -407,11 +497,11 @@ describe('Evolution module', () => {
 
     renderPage()
     expect(await screen.findAllByText('Capture Memory Extraction')).not.toHaveLength(0)
-    const button = screen.getByRole('button', { name: /Create LLM review/i })
+    const button = screen.getByRole('button', { name: /创建改进计划/i })
     fireEvent.click(button)
 
     await waitFor(() => expect(evolutionApi.runTarget).toHaveBeenCalled())
-    expect(evolutionApi.runTarget).toHaveBeenCalledWith('target-1', { engine: 'llm_prompt_review' })
+    expect(evolutionApi.runTarget).toHaveBeenCalledWith('target-1', { agent_id: 'agent-1', mode: 'dry_run' })
     expect(evolutionApi.summary).toHaveBeenCalledTimes(2)
     expect(proposalsApi.accept).not.toHaveBeenCalled()
     expect(proposalsApi.reject).not.toHaveBeenCalled()

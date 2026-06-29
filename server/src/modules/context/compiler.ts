@@ -1,8 +1,9 @@
 import { mkdir, writeFile, chmod, readFile } from "node:fs/promises";
-import { join, basename, resolve, relative } from "node:path";
-import type { ContextCompileTarget, ContextPackage } from "@agent-space/protocol" with {
+import { join, resolve, relative } from "node:path";
+import type { ContextCompileTarget, ContextPackage, ContextRoutingManifest } from "@agent-space/protocol" with {
   "resolution-mode": "import",
 };
+import { selectAgentDocPaths } from "./routingManifest";
 
 const DEFAULT_BUDGET_CHARS = 128_000;
 
@@ -47,33 +48,6 @@ const PER_SECTION_CAPS: Record<string, number> = {
 };
 
 const MANDATORY_SECTIONS = new Set(["task", "runtime_skills"]);
-
-const ROOT_DOCS = [
-  "INDEX.md",
-  "ARCHITECTURE.md",
-  "BOUNDARIES.md",
-  "COMMANDS.md",
-  "GLOSSARY.md",
-];
-
-const FILE_TO_MODULE_DOCS: Record<string, string[]> = {
-  "models.py": ["space.md", "agents.md", "memory.md", "proposals.md"],
-  "schemas.py": ["space.md", "agents.md", "memory.md"],
-  "runner.py": ["agents.md", "sandbox.md"],
-  "sandbox_manager.py": ["sandbox.md"],
-  "context_builder.py": ["memory.md", "context-compiler.md"],
-  "context_compiler.py": ["context-compiler.md"],
-  "agent_service.py": ["agents.md"],
-  "engine.py": ["policy.md"],
-  "rules.py": ["policy.md"],
-  "path_policy.py": ["sandbox.md"],
-  "reflector.py": ["memory.md", "proposals.md"],
-  "evolver.py": ["memory.md"],
-  "proposals.py": ["proposals.md", "memory.md"],
-  activity: ["activity-inbox.md"],
-  credentials: ["credentials.md"],
-  capabilities: ["capabilities.md"],
-};
 
 const INSTRUCTION_FILENAME: Record<string, string> = {
   claude: "CLAUDE.md",
@@ -124,10 +98,9 @@ except Exception:
     print('')
 " 2>/dev/null <<< "$input")
 [[ -z "$file_path" ]] && exit 0
-basename_file=$(basename "$file_path")
-case "$basename_file" in
-  models.py|schemas.py|context_builder.py|context_compiler.py)
-    echo "DOCS SYNC: '$basename_file' edited inside sandbox. Mention relevant .agent docs in your output."
+case "$file_path" in
+  */server/src/modules/*|*/packages/protocol/src/*|*/apps/web/src/modules/*)
+    echo "DOCS SYNC: '$file_path' edited inside sandbox. Mention relevant .agent docs or context routing updates in your output."
     ;;
 esac
 exit 0
@@ -155,11 +128,13 @@ export class ContextCompiler {
     stablePrefixText?: string | null;
     dynamicTailText?: string | null;
     runtimeSkillText?: string | null;
+    routingManifest?: ContextRoutingManifest | null;
   }): Promise<CompiledContext> {
     const target = normalizeTarget(input.target);
     const agentDocs = await loadAgentDocs(
       input.workspacePath ?? null,
       input.touchedFiles ?? [],
+      input.routingManifest ?? null,
     );
     const sections =
       input.stablePrefixText !== undefined || input.dynamicTailText !== undefined
@@ -184,11 +159,11 @@ export class ContextCompiler {
       await writeFile(instructionFilePath, fullMarkdown, "utf8");
 
       if (target === "claude") {
-        const soul = renderSoul(input.context);
-        if (soul) {
+        const agentPersona = renderAgentPersona(input.context);
+        if (agentPersona) {
           await writeFile(
             join(input.sandboxDir, "SOUL.md"),
-            VENDOR_FILE_HEADER + soul,
+            VENDOR_FILE_HEADER + agentPersona,
             "utf8",
           );
         }
@@ -229,27 +204,13 @@ export async function assertSandboxOnly(
 async function loadAgentDocs(
   workspacePath: string | null,
   touchedFiles: readonly string[],
+  routingManifest: ContextRoutingManifest | null,
 ): Promise<Record<string, string>> {
   if (!workspacePath) return {};
   const docs: Record<string, string> = {};
-  const agentDir = join(workspacePath, ".agent");
-  for (const name of ROOT_DOCS) {
-    await readOptional(join(agentDir, name)).then((content) => {
-      if (content) docs[`.agent/${name}`] = content;
-    });
-  }
-  const modules = new Set<string>();
-  for (const file of touchedFiles) {
-    const base = basename(file);
-    for (const [pattern, names] of Object.entries(FILE_TO_MODULE_DOCS)) {
-      if (base === pattern || file.includes(pattern)) {
-        names.forEach((name) => modules.add(name));
-      }
-    }
-  }
-  for (const name of modules) {
-    await readOptional(join(agentDir, "modules", name)).then((content) => {
-      if (content) docs[`.agent/modules/${name}`] = content;
+  for (const path of selectAgentDocPaths({ manifest: routingManifest, touchedFiles })) {
+    await readOptional(join(workspacePath, path)).then((content) => {
+      if (content) docs[path] = content;
     });
   }
   return docs;
@@ -484,7 +445,7 @@ function renderAttachments(attachments: readonly unknown[]): string {
     .join("\n\n");
 }
 
-function renderSoul(context: ContextPackage): string {
+function renderAgentPersona(context: ContextPackage): string {
   const lines = context.agent_memory
     .map((item) => recordValue(item))
     .filter((item) => ["preference", "procedural"].includes(stringValue(item.type) ?? ""))

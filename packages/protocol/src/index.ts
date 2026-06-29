@@ -72,19 +72,22 @@ export * from "./projects.js";
 // Memory + sessions contracts
 export * from "./memorySessions.js";
 
-// Brain Ops read-model contracts
-export * from "./brainOps.js";
+// Context workspace/profile contracts
+export * from "./contextProfiles.js";
 
-// Brain Think / Ask Brain unified entry-point contracts
-export * from "./brainThink.js";
+// Context Ops read-model contracts
+export * from "./contextOps.js";
+
+// Ask Space unified entry-point contracts
+export * from "./askSpace.js";
 
 // Claim trajectory + contradiction loop contracts (Slice E)
-export * from "./claimBrainLoop.js";
+export * from "./claimReviewLoop.js";
 
 // Candidate-relation discovery pipeline contracts (Slice F)
 export * from "./relationDiscovery.js";
 
-// Object schema / Brain Shape Registry contracts
+// Object schema / Object Schema Registry contracts
 export * from "./objectSchema.js";
 
 // Official Optional Module (plugin) control-plane contracts

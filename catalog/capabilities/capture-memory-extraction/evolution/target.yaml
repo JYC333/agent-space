@@ -1,10 +1,21 @@
-target_type: prompt
+target_type: agent_version
 capability_key: capture-memory-extraction
 risk_level: medium
-allowed_proposal_types:
-  - prompt_update
-allowed_engines:
-  - llm_prompt_review
+engine_policy:
+  max_strategy_risk: medium
+  allow_direct_apply: false
+  allowed_strategy_categories:
+    - optimize
+    - maintain
+    - repair
+preferred_strategy_keys:
+  - optimize.prompt_asset
+  - maintain.memory_health
+proposal_boundary:
+  direct_apply: false
+  review_artifact_only_for:
+    - prompt_update
+    - agent_config_update
 validation:
   window: 14d
   metrics:

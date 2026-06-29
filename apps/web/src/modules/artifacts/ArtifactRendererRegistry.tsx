@@ -1024,7 +1024,7 @@ function ObjectSchemaSuggestionReportRenderer({ artifact }: ArtifactRendererProp
   )
 }
 
-function BrainThinkSessionRenderer({ artifact }: ArtifactRendererProps) {
+function AskSpaceSessionRenderer({ artifact }: ArtifactRendererProps) {
   const parsed = parseJsonContent(artifact)
   if (!isRecord(parsed)) return <InlineTextArtifact artifact={artifact} />
 
@@ -1101,7 +1101,7 @@ function BrainThinkSessionRenderer({ artifact }: ArtifactRendererProps) {
 
 const REGISTRY: Record<string, ArtifactRenderer> = {
   'research_brief.v1': ResearchBriefRenderer,
-  'brain_think_session': BrainThinkSessionRenderer,
+  'ask_space_session': AskSpaceSessionRenderer,
   'research_source_table.v1': SourceTableRenderer,
   'research_idea_candidates.v1': IdeaCandidatesRenderer,
   'retrieval_brief': RetrievalBriefRenderer,

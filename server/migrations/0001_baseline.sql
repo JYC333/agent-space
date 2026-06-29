@@ -168,7 +168,7 @@ CREATE TABLE public.agents (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     visibility character varying(32) NOT NULL,
-    CONSTRAINT ck_agents_agent_kind CHECK (((agent_kind)::text = ANY ((ARRAY['standard'::character varying, 'system_assistant'::character varying])::text[]))),
+    CONSTRAINT ck_agents_agent_kind CHECK (((agent_kind)::text = ANY ((ARRAY['standard'::character varying, 'system_assistant'::character varying, 'system_evolver'::character varying])::text[]))),
     CONSTRAINT ck_agents_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'inactive'::character varying, 'archived'::character varying, 'disabled'::character varying])::text[])))
 );
 
@@ -600,6 +600,31 @@ CREATE TABLE public.context_digests (
 
 
 --
+-- Name: context_profiles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.context_profiles (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    scope_type character varying(32) NOT NULL,
+    scope_id character varying(128),
+    status character varying(32) NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    context_pack_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    routing_manifest_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_by_user_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_context_profiles_context_pack_object CHECK ((jsonb_typeof(context_pack_json) = 'object'::text)),
+    CONSTRAINT ck_context_profiles_routing_manifest_object CHECK ((jsonb_typeof(routing_manifest_json) = 'object'::text)),
+    CONSTRAINT ck_context_profiles_scope_id CHECK (((scope_type)::text = 'space'::text AND scope_id IS NULL) OR ((scope_type)::text <> 'space'::text AND scope_id IS NOT NULL)),
+    CONSTRAINT ck_context_profiles_scope_type CHECK (((scope_type)::text = ANY ((ARRAY['space'::character varying, 'project'::character varying, 'workspace'::character varying, 'agent'::character varying, 'user'::character varying])::text[]))),
+    CONSTRAINT ck_context_profiles_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'archived'::character varying])::text[]))),
+    CONSTRAINT ck_context_profiles_version_positive CHECK ((version >= 1))
+);
+
+
+--
 -- Name: context_snapshot_items; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -746,6 +771,94 @@ CREATE TABLE public.evolution_signals (
     severity character varying(32) NOT NULL,
     summary text,
     payload_json jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: evolution_strategy_assets; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.evolution_strategy_assets (
+    id character varying(36) NOT NULL,
+    space_id character varying(36),
+    strategy_key character varying(128) NOT NULL,
+    name character varying(256) NOT NULL,
+    description text,
+    category character varying(32) NOT NULL,
+    target_type character varying(64) NOT NULL,
+    status character varying(32) DEFAULT 'draft'::character varying NOT NULL,
+    risk_level character varying(32) NOT NULL,
+    signals_match_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    preconditions_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    strategy_steps_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    constraints_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    validation_policy_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    tool_policy_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    routing_hint_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    provenance_type character varying(32) NOT NULL,
+    source_ref_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    success_count integer DEFAULT 0 NOT NULL,
+    failure_count integer DEFAULT 0 NOT NULL,
+    confidence_score double precision DEFAULT 0.5 NOT NULL,
+    last_selected_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_evolution_strategy_assets_category CHECK (((category)::text = ANY ((ARRAY['repair'::character varying, 'optimize'::character varying, 'innovate'::character varying, 'maintain'::character varying, 'harden'::character varying, 'review'::character varying])::text[]))),
+    CONSTRAINT ck_evolution_strategy_assets_confidence_score CHECK (((confidence_score >= (0)::double precision) AND (confidence_score <= (1)::double precision))),
+    CONSTRAINT ck_evolution_strategy_assets_counts CHECK (((success_count >= 0) AND (failure_count >= 0))),
+    CONSTRAINT ck_evolution_strategy_assets_provenance_type CHECK (((provenance_type)::text = ANY ((ARRAY['built_in'::character varying, 'user_authored'::character varying, 'imported'::character varying, 'evolved'::character varying, 'distilled'::character varying])::text[]))),
+    CONSTRAINT ck_evolution_strategy_assets_risk_level CHECK (((risk_level)::text = ANY ((ARRAY['low'::character varying, 'medium'::character varying, 'high'::character varying, 'critical'::character varying])::text[]))),
+    CONSTRAINT ck_evolution_strategy_assets_status CHECK (((status)::text = ANY ((ARRAY['draft'::character varying, 'active'::character varying, 'disabled'::character varying, 'archived'::character varying])::text[]))),
+    CONSTRAINT ck_evolution_strategy_assets_target_type CHECK (((target_type)::text = ANY ((ARRAY['agent_version'::character varying, 'capability'::character varying, 'runtime_skill_binding'::character varying, 'memory'::character varying, 'knowledge'::character varying, 'workflow'::character varying, 'workspace'::character varying, 'system'::character varying])::text[])))
+);
+
+
+--
+-- Name: evolution_experiences; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.evolution_experiences (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    strategy_asset_id character varying(36),
+    target_id character varying(36),
+    source_run_id character varying(36),
+    source_proposal_id character varying(36),
+    experience_key character varying(160) NOT NULL,
+    summary text NOT NULL,
+    trigger_signals_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    outcome_status character varying(32) NOT NULL,
+    confidence_score double precision DEFAULT 0.5 NOT NULL,
+    blast_radius_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    validation_trace_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    execution_trace_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    lessons_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    anti_patterns_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    environment_fingerprint_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    provenance_type character varying(32) NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_evolution_experiences_confidence_score CHECK (((confidence_score >= (0)::double precision) AND (confidence_score <= (1)::double precision))),
+    CONSTRAINT ck_evolution_experiences_outcome_status CHECK (((outcome_status)::text = ANY ((ARRAY['success'::character varying, 'failed'::character varying, 'partial'::character varying, 'unknown'::character varying])::text[]))),
+    CONSTRAINT ck_evolution_experiences_provenance_type CHECK (((provenance_type)::text = ANY ((ARRAY['run_observed'::character varying, 'proposal_accepted'::character varying, 'imported'::character varying, 'user_authored'::character varying])::text[])))
+);
+
+
+--
+-- Name: evolution_selector_decisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.evolution_selector_decisions (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    target_id character varying(36) NOT NULL,
+    run_id character varying(36),
+    selected_strategy_asset_id character varying(36),
+    candidate_strategy_ids_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    input_signal_ids_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    decision_reason text,
+    score_trace_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    rejected_reasons_json jsonb DEFAULT '[]'::jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL
 );
 
@@ -2204,6 +2317,28 @@ CREATE TABLE public.skill_packages (
 
 
 --
+-- Name: skill_local_overlays; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.skill_local_overlays (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    skill_package_id character varying(36) NOT NULL,
+    scope_type character varying(32) NOT NULL,
+    scope_id character varying(128),
+    overlay_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    status character varying(32) NOT NULL,
+    created_by_user_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_skill_local_overlays_overlay_object CHECK ((jsonb_typeof(overlay_json) = 'object'::text)),
+    CONSTRAINT ck_skill_local_overlays_scope_id CHECK (((scope_type)::text = 'space'::text AND scope_id IS NULL) OR ((scope_type)::text <> 'space'::text AND scope_id IS NOT NULL)),
+    CONSTRAINT ck_skill_local_overlays_scope_type CHECK (((scope_type)::text = ANY ((ARRAY['space'::character varying, 'project'::character varying, 'workspace'::character varying, 'agent'::character varying, 'user'::character varying])::text[]))),
+    CONSTRAINT ck_skill_local_overlays_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'archived'::character varying])::text[])))
+);
+
+
+--
 -- Name: skill_package_files; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2502,16 +2637,16 @@ CREATE TABLE public.space_retrieval_settings (
     include_trace boolean DEFAULT false NOT NULL,
     external_egress_enabled boolean DEFAULT true NOT NULL,
     retrieval_tool_mode character varying(32) DEFAULT 'off'::character varying NOT NULL,
-    brain_ops_review_mode character varying(32) DEFAULT 'private_only'::character varying NOT NULL,
-    brain_ops_scan_mode character varying(32) DEFAULT 'admins'::character varying NOT NULL,
+    context_ops_review_mode character varying(32) DEFAULT 'private_only'::character varying NOT NULL,
+    context_ops_scan_mode character varying(32) DEFAULT 'admins'::character varying NOT NULL,
     embedding_dimensions integer DEFAULT 2560 NOT NULL,
     max_results_default integer DEFAULT 50 NOT NULL,
     ranking_config_json jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_space_retrieval_settings_embedding_dimensions CHECK (((embedding_dimensions >= 64) AND (embedding_dimensions <= 4096))),
-    CONSTRAINT ck_space_retrieval_settings_brain_ops_review_mode CHECK (((brain_ops_review_mode)::text = ANY ((ARRAY['private_only'::character varying, 'admins'::character varying, 'members'::character varying])::text[]))),
-    CONSTRAINT ck_space_retrieval_settings_brain_ops_scan_mode CHECK (((brain_ops_scan_mode)::text = ANY ((ARRAY['admins'::character varying, 'members'::character varying])::text[]))),
+    CONSTRAINT ck_space_retrieval_settings_context_ops_review_mode CHECK (((context_ops_review_mode)::text = ANY ((ARRAY['private_only'::character varying, 'admins'::character varying, 'members'::character varying])::text[]))),
+    CONSTRAINT ck_space_retrieval_settings_context_ops_scan_mode CHECK (((context_ops_scan_mode)::text = ANY ((ARRAY['admins'::character varying, 'members'::character varying])::text[]))),
     CONSTRAINT ck_space_retrieval_settings_max_results_default CHECK (((max_results_default >= 1) AND (max_results_default <= 50))),
     CONSTRAINT ck_space_retrieval_settings_retrieval_tool_mode CHECK (((retrieval_tool_mode)::text = ANY ((ARRAY['off'::character varying, 'manual_tool_only'::character varying, 'preflight_search'::character varying, 'preflight_brief'::character varying])::text[]))),
     CONSTRAINT ck_space_retrieval_settings_search_mode CHECK (((default_search_mode)::text = ANY ((ARRAY['exact'::character varying, 'lexical'::character varying, 'hybrid'::character varying, 'hybrid_rerank'::character varying])::text[])))
@@ -3150,6 +3285,14 @@ ALTER TABLE ONLY public.context_digests
 
 
 --
+-- Name: context_profiles context_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.context_profiles
+    ADD CONSTRAINT context_profiles_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: context_snapshot_items context_snapshot_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3196,6 +3339,30 @@ ALTER TABLE ONLY public.evidence_links
 
 ALTER TABLE ONLY public.evolution_signals
     ADD CONSTRAINT evolution_signals_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: evolution_strategy_assets evolution_strategy_assets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_strategy_assets
+    ADD CONSTRAINT evolution_strategy_assets_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: evolution_experiences evolution_experiences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_experiences
+    ADD CONSTRAINT evolution_experiences_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: evolution_selector_decisions evolution_selector_decisions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_selector_decisions
+    ADD CONSTRAINT evolution_selector_decisions_pkey PRIMARY KEY (id);
 
 
 --
@@ -3718,6 +3885,14 @@ ALTER TABLE ONLY public.sessions
 
 ALTER TABLE ONLY public.skill_packages
     ADD CONSTRAINT skill_packages_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: skill_local_overlays skill_local_overlays_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.skill_local_overlays
+    ADD CONSTRAINT skill_local_overlays_pkey PRIMARY KEY (id);
 
 
 --
@@ -5130,6 +5305,27 @@ CREATE INDEX ix_context_digests_status ON public.context_digests USING btree (st
 
 
 --
+-- Name: ix_context_profiles_scope; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_context_profiles_scope ON public.context_profiles USING btree (space_id, scope_type, scope_id);
+
+
+--
+-- Name: ix_context_profiles_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_context_profiles_status ON public.context_profiles USING btree (status);
+
+
+--
+-- Name: uq_context_profiles_active_scope; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_context_profiles_active_scope ON public.context_profiles USING btree (space_id, scope_type, COALESCE(scope_id, ''::character varying)) WHERE ((status)::text = 'active'::text);
+
+
+--
 -- Name: uq_context_digests_current_scope; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5345,6 +5541,66 @@ CREATE INDEX ix_evolution_signals_space_target_type_created ON public.evolution_
 --
 
 CREATE INDEX ix_evolution_signals_target_id ON public.evolution_signals USING btree (target_id);
+
+
+--
+-- Name: ix_evolution_strategy_assets_space_status_category_target; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_evolution_strategy_assets_space_status_category_target ON public.evolution_strategy_assets USING btree (space_id, status, category, target_type);
+
+
+--
+-- Name: ix_evolution_strategy_assets_strategy_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_evolution_strategy_assets_strategy_key ON public.evolution_strategy_assets USING btree (strategy_key);
+
+
+--
+-- Name: uq_evolution_strategy_assets_space_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_evolution_strategy_assets_space_key ON public.evolution_strategy_assets USING btree (space_id, strategy_key) WHERE (space_id IS NOT NULL);
+
+
+--
+-- Name: uq_evolution_strategy_assets_system_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_evolution_strategy_assets_system_key ON public.evolution_strategy_assets USING btree (strategy_key) WHERE (space_id IS NULL);
+
+
+--
+-- Name: ix_evolution_experiences_space_strategy_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_evolution_experiences_space_strategy_created ON public.evolution_experiences USING btree (space_id, strategy_asset_id, created_at DESC);
+
+
+--
+-- Name: ix_evolution_experiences_space_source_run; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_evolution_experiences_space_source_run ON public.evolution_experiences USING btree (space_id, source_run_id);
+
+-- Name: uq_evolution_experiences_space_key; Type: INDEX; Schema: public; Owner: -
+
+CREATE UNIQUE INDEX uq_evolution_experiences_space_key ON public.evolution_experiences USING btree (space_id, experience_key);
+
+
+--
+-- Name: ix_evolution_selector_decisions_space_target_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_evolution_selector_decisions_space_target_created ON public.evolution_selector_decisions USING btree (space_id, target_id, created_at DESC);
+
+
+--
+-- Name: ix_evolution_selector_decisions_space_run; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_evolution_selector_decisions_space_run ON public.evolution_selector_decisions USING btree (space_id, run_id);
 
 
 --
@@ -7592,6 +7848,34 @@ CREATE INDEX ix_skill_packages_status ON public.skill_packages USING btree (stat
 
 
 --
+-- Name: ix_skill_local_overlays_package_scope; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_skill_local_overlays_package_scope ON public.skill_local_overlays USING btree (space_id, skill_package_id, scope_type, scope_id);
+
+
+--
+-- Name: ix_skill_local_overlays_scope; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_skill_local_overlays_scope ON public.skill_local_overlays USING btree (space_id, scope_type, scope_id);
+
+
+--
+-- Name: ix_skill_local_overlays_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_skill_local_overlays_status ON public.skill_local_overlays USING btree (status);
+
+
+--
+-- Name: uq_skill_local_overlays_active_scope; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_skill_local_overlays_active_scope ON public.skill_local_overlays USING btree (space_id, skill_package_id, scope_type, COALESCE(scope_id, ''::character varying)) WHERE ((status)::text = 'active'::text);
+
+
+--
 -- Name: ix_skill_package_files_kind; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8473,6 +8757,10 @@ CREATE INDEX plugin_migrations_plugin_id_idx ON public.plugin_migrations USING b
 
 CREATE UNIQUE INDEX uq_agents_system_assistant_per_space ON public.agents USING btree (space_id) WHERE (((agent_kind)::text = 'system_assistant'::text) AND ((status)::text = 'active'::text));
 
+-- Name: uq_agents_system_evolver_per_space; Type: INDEX; Schema: public; Owner: -
+
+CREATE UNIQUE INDEX uq_agents_system_evolver_per_space ON public.agents USING btree (space_id) WHERE (((agent_kind)::text = 'system_evolver'::text) AND ((status)::text = 'active'::text));
+
 
 --
 -- Name: uq_agent_runtime_profiles_default_per_agent; Type: INDEX; Schema: public; Owner: -
@@ -9033,6 +9321,22 @@ ALTER TABLE ONLY public.context_digests
 
 
 --
+-- Name: context_profiles context_profiles_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.context_profiles
+    ADD CONSTRAINT context_profiles_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: context_profiles context_profiles_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.context_profiles
+    ADD CONSTRAINT context_profiles_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
 -- Name: context_snapshot_items context_snapshot_items_context_snapshot_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9136,6 +9440,86 @@ ALTER TABLE ONLY public.evolution_signals
 
 ALTER TABLE ONLY public.evolution_signals
     ADD CONSTRAINT evolution_signals_target_id_fkey FOREIGN KEY (target_id) REFERENCES public.evolution_targets(id);
+
+
+--
+-- Name: evolution_strategy_assets evolution_strategy_assets_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_strategy_assets
+    ADD CONSTRAINT evolution_strategy_assets_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: evolution_experiences evolution_experiences_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_experiences
+    ADD CONSTRAINT evolution_experiences_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: evolution_experiences evolution_experiences_strategy_asset_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_experiences
+    ADD CONSTRAINT evolution_experiences_strategy_asset_id_fkey FOREIGN KEY (strategy_asset_id) REFERENCES public.evolution_strategy_assets(id) ON DELETE SET NULL;
+
+
+--
+-- Name: evolution_experiences evolution_experiences_target_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_experiences
+    ADD CONSTRAINT evolution_experiences_target_id_fkey FOREIGN KEY (target_id) REFERENCES public.evolution_targets(id) ON DELETE SET NULL;
+
+
+--
+-- Name: evolution_experiences evolution_experiences_source_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_experiences
+    ADD CONSTRAINT evolution_experiences_source_run_id_fkey FOREIGN KEY (source_run_id) REFERENCES public.runs(id) ON DELETE SET NULL;
+
+
+--
+-- Name: evolution_experiences evolution_experiences_source_proposal_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_experiences
+    ADD CONSTRAINT evolution_experiences_source_proposal_id_fkey FOREIGN KEY (source_proposal_id) REFERENCES public.proposals(id) ON DELETE SET NULL;
+
+
+--
+-- Name: evolution_selector_decisions evolution_selector_decisions_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_selector_decisions
+    ADD CONSTRAINT evolution_selector_decisions_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: evolution_selector_decisions evolution_selector_decisions_target_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_selector_decisions
+    ADD CONSTRAINT evolution_selector_decisions_target_id_fkey FOREIGN KEY (target_id) REFERENCES public.evolution_targets(id);
+
+
+--
+-- Name: evolution_selector_decisions evolution_selector_decisions_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_selector_decisions
+    ADD CONSTRAINT evolution_selector_decisions_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.runs(id) ON DELETE SET NULL;
+
+
+--
+-- Name: evolution_selector_decisions evolution_selector_decisions_selected_strategy_asset_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.evolution_selector_decisions
+    ADD CONSTRAINT evolution_selector_decisions_selected_strategy_asset_id_fkey FOREIGN KEY (selected_strategy_asset_id) REFERENCES public.evolution_strategy_assets(id) ON DELETE SET NULL;
 
 
 --
@@ -10969,6 +11353,30 @@ ALTER TABLE ONLY public.skill_packages
 
 
 --
+-- Name: skill_local_overlays skill_local_overlays_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.skill_local_overlays
+    ADD CONSTRAINT skill_local_overlays_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: skill_local_overlays skill_local_overlays_skill_package_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.skill_local_overlays
+    ADD CONSTRAINT skill_local_overlays_skill_package_id_fkey FOREIGN KEY (skill_package_id) REFERENCES public.skill_packages(id) ON DELETE CASCADE;
+
+
+--
+-- Name: skill_local_overlays skill_local_overlays_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.skill_local_overlays
+    ADD CONSTRAINT skill_local_overlays_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
 -- Name: skill_package_files skill_package_files_skill_package_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11646,6 +12054,169 @@ ALTER TABLE ONLY public.workspaces
 
 ALTER TABLE ONLY public.workspaces
     ADD CONSTRAINT workspaces_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Built-in evolution strategy assets.
+--
+
+INSERT INTO public.evolution_strategy_assets (
+    id, space_id, strategy_key, name, description, category, target_type, status,
+    risk_level, signals_match_json, preconditions_json, strategy_steps_json,
+    constraints_json, validation_policy_json, tool_policy_json, routing_hint_json,
+    provenance_type, source_ref_json, success_count, failure_count, confidence_score,
+    last_selected_at, created_at, updated_at
+) VALUES
+(
+    '00000000-0000-4000-8000-000000000101', NULL, 'repair.runtime_failure',
+    'Repair runtime failure',
+    'Inspect failed runtime evidence and propose the smallest reviewable correction path.',
+    'repair', 'system', 'active', 'medium',
+    '["runtime_failure","adapter_failed","run_failed","tool_error"]'::jsonb,
+    '{"requires_recent_signal": true}'::jsonb,
+    '["collect_run_trace","identify_failure_layer","draft_minimal_repair_plan","require_validation_before_apply"]'::jsonb,
+    '["do_not_mutate_target_directly","use_existing_run_artifact_proposal_boundaries"]'::jsonb,
+    '{"requires_run_trace": true, "requires_validation": true}'::jsonb,
+    '{"allow_direct_apply": false}'::jsonb,
+    '{"preferred_run_mode": "dry_run"}'::jsonb,
+    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.55,
+    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
+),
+(
+    '00000000-0000-4000-8000-000000000102', NULL, 'repair.validation_failure',
+    'Repair validation failure',
+    'Use validation evidence to narrow an improvement target and create a reviewable repair plan.',
+    'repair', 'system', 'active', 'medium',
+    '["validation_failure","run_validation_failed","evaluation_failed","proposal_rejected"]'::jsonb,
+    '{"requires_validation_trace": true}'::jsonb,
+    '["summarize_validation_failure","compare_expected_vs_observed","draft_repair_plan","record_review_artifact"]'::jsonb,
+    '["do_not_weaken_validation_policy","do_not_apply_without_approval"]'::jsonb,
+    '{"requires_validation_trace": true, "minimum_evidence_count": 1}'::jsonb,
+    '{"allow_direct_apply": false}'::jsonb,
+    '{"preferred_run_mode": "dry_run"}'::jsonb,
+    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.55,
+    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
+),
+(
+    '00000000-0000-4000-8000-000000000103', NULL, 'optimize.prompt_asset',
+    'Optimize prompt asset',
+    'Improve prompt-like agent or capability assets through review artifacts and proposal-gated changes.',
+    'optimize', 'agent_version', 'active', 'medium',
+    '["stable_preference_missed","user_repeated_same_correction","prompt_gap","proposal_edited"]'::jsonb,
+    '{"requires_target_owner_review": true}'::jsonb,
+    '["collect_corrections","summarize_prompt_gap","draft_prompt_revision_artifact","route_to_supported_proposal_type"]'::jsonb,
+    '["do_not_create_prompt_update_without_registered_applier","preserve_policy_ceiling"]'::jsonb,
+    '{"requires_before_after_review": true}'::jsonb,
+    '{"allow_direct_apply": false}'::jsonb,
+    '{"preferred_artifact_type": "evolution_plan.v1"}'::jsonb,
+    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.5,
+    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
+),
+(
+    '00000000-0000-4000-8000-000000000104', NULL, 'optimize.tool_usage',
+    'Optimize tool usage',
+    'Review tool-use evidence and propose safer or more effective capability/runtime binding changes.',
+    'optimize', 'runtime_skill_binding', 'active', 'high',
+    '["tool_error","tool_overuse","tool_missing","runtime_skill_binding_gap"]'::jsonb,
+    '{"requires_runtime_binding_context": true}'::jsonb,
+    '["summarize_tool_trace","identify_binding_gap","draft_runtime_skill_binding_review","require_proposal_gate"]'::jsonb,
+    '["do_not_grant_new_tools_directly","do_not_expand_permissions_without_proposal"]'::jsonb,
+    '{"requires_policy_review_for_permission_change": true}'::jsonb,
+    '{"allow_direct_apply": false, "permission_expansion_requires_high_risk": true}'::jsonb,
+    '{"preferred_proposal_type": "runtime_skill_binding_update"}'::jsonb,
+    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.5,
+    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
+),
+(
+    '00000000-0000-4000-8000-000000000105', NULL, 'harden.policy_boundary',
+    'Harden policy boundary',
+    'Prioritize fail-closed review when signals indicate a policy, permission, sandbox, or credential boundary risk.',
+    'harden', 'system', 'active', 'high',
+    '["policy_boundary","policy_denied","permission_boundary","sandbox_boundary","credential_boundary"]'::jsonb,
+    '{"requires_boundary_signal": true}'::jsonb,
+    '["collect_boundary_evidence","classify_invariant","draft_hardening_plan","require_owner_review"]'::jsonb,
+    '["do_not_reduce_policy_risk","do_not_bypass_policy_gateway","do_not_auto_apply"]'::jsonb,
+    '{"requires_policy_trace": true, "requires_owner_review": true}'::jsonb,
+    '{"allow_direct_apply": false, "force_review": true}'::jsonb,
+    '{"preferred_run_status": "waiting_for_review"}'::jsonb,
+    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.65,
+    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
+),
+(
+    '00000000-0000-4000-8000-000000000106', NULL, 'improve.capability_gap',
+    'Improve capability gap',
+    'Convert repeated capability-gap signals into a reviewed capability install/update/enable plan.',
+    'innovate', 'capability', 'active', 'high',
+    '["capability_gap","missing_capability","workflow_gap","user_improvement_request"]'::jsonb,
+    '{"requires_reviewable_capability_boundary": true}'::jsonb,
+    '["summarize_gap","map_to_existing_capability","draft_capability_change_plan","route_through_capability_proposal"]'::jsonb,
+    '["external_skills_default_disabled","do_not_enable_capability_directly"]'::jsonb,
+    '{"requires_capability_lifecycle": true}'::jsonb,
+    '{"allow_direct_apply": false, "external_source_untrusted": true}'::jsonb,
+    '{"preferred_proposal_types": ["capability_install","capability_update","capability_enable"]}'::jsonb,
+    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.5,
+    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
+),
+(
+    '00000000-0000-4000-8000-000000000107', NULL, 'review.open_skill_import',
+    'Review Open Skill import',
+    'Treat external skill material as untrusted source and produce proposal-gated review steps.',
+    'review', 'capability', 'active', 'high',
+    '["open_skill_imported","external_skill_detected","skill_risk_warning","script_files_detected"]'::jsonb,
+    '{"requires_skill_package_snapshot": true}'::jsonb,
+    '["summarize_import_snapshot","surface_risk_warnings","draft_review_packet","keep_capability_disabled_until_approved"]'::jsonb,
+    '["do_not_execute_imported_scripts","do_not_auto_enable_external_skill"]'::jsonb,
+    '{"requires_source_snapshot": true, "requires_risk_scan": true}'::jsonb,
+    '{"allow_direct_apply": false, "scripts_executable": false}'::jsonb,
+    '{"preferred_proposal_types": ["skill_import_approve","capability_install"]}'::jsonb,
+    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.6,
+    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
+),
+(
+    '00000000-0000-4000-8000-000000000108', NULL, 'maintain.memory_health',
+    'Maintain memory health',
+    'Use memory quality signals to create review packets or memory proposals without direct memory writes.',
+    'maintain', 'memory', 'active', 'medium',
+    '["memory_health","duplicate_memory","stale_memory","thin_memory","memory_candidate_rejected"]'::jsonb,
+    '{"requires_visible_memory_scope": true}'::jsonb,
+    '["collect_memory_findings","group_reviewable_candidates","draft_memory_maintenance_packet","preserve_proposal_gate"]'::jsonb,
+    '["do_not_write_active_memory_directly","log_memory_reads_through_memory_boundary"]'::jsonb,
+    '{"requires_memory_read_boundary": true}'::jsonb,
+    '{"allow_direct_apply": false}'::jsonb,
+    '{"preferred_proposal_type": "memory_maintenance_packet"}'::jsonb,
+    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.55,
+    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
+),
+(
+    '00000000-0000-4000-8000-000000000109', NULL, 'maintain.knowledge_retrieval',
+    'Maintain knowledge retrieval',
+    'Review retrieval quality signals and produce diagnostics or maintenance proposals through existing boundaries.',
+    'maintain', 'knowledge', 'active', 'medium',
+    '["retrieval_gap","low_retrieval_quality","missing_relation","knowledge_retrieval"]'::jsonb,
+    '{"requires_retrieval_trace": true}'::jsonb,
+    '["collect_retrieval_trace","identify_missing_or_noisy_sources","draft_retrieval_maintenance_packet","require_review"]'::jsonb,
+    '["do_not_promote_knowledge_to_memory_directly","do_not_trust_derived_index_without_revalidation"]'::jsonb,
+    '{"requires_retrieval_evidence": true}'::jsonb,
+    '{"allow_direct_apply": false}'::jsonb,
+    '{"preferred_proposal_type": "retrieval_maintenance_packet"}'::jsonb,
+    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.55,
+    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
+),
+(
+    '00000000-0000-4000-8000-000000000110', NULL, 'solidifyExperience.successful_run',
+    'Solidify Experience successful run',
+    'Turn accepted or validated run outcomes into reusable EvolutionExperience records.',
+    'maintain', 'system', 'active', 'low',
+    '["run_succeeded","proposal_accepted","validation_passed","experience_candidate"]'::jsonb,
+    '{"requires_validated_outcome": true}'::jsonb,
+    '["extract_outcome_trace","summarize_lessons","record_evolution_experience","update_strategy_confidence"]'::jsonb,
+    '["do_not_mutate_behavior_from_experience","record_experience_only"]'::jsonb,
+    '{"requires_success_or_partial_outcome": true}'::jsonb,
+    '{"allow_direct_apply": false}'::jsonb,
+    '{"service": "ExperienceSolidifier"}'::jsonb,
+    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.6,
+    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
+);
 
 
 --

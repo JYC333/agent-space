@@ -130,6 +130,30 @@ export class CapabilitiesService {
     return this.repository.getSkillPackage(identity, skillPackageId);
   }
 
+  listSkillLibraryIndex(identity: SpaceUserIdentity) {
+    return this.repository.listSkillLibraryIndex(identity);
+  }
+
+  getSkillLocalOverlay(
+    identity: SpaceUserIdentity,
+    skillPackageId: string,
+    query: Record<string, unknown>,
+  ) {
+    return this.repository.getSkillLocalOverlay(identity, skillPackageId, {
+      scope_type: optionalString(query.scope_type),
+      scope_id: optionalString(query.scope_id),
+    });
+  }
+
+  upsertSkillLocalOverlay(
+    identity: SpaceUserIdentity,
+    skillPackageId: string,
+    body: Record<string, unknown>,
+  ) {
+    assertNoEmbeddedOverlaySecrets(body.overlay_json);
+    return this.repository.upsertSkillLocalOverlay(identity, skillPackageId, body as never);
+  }
+
   async listWorkflowProfiles(identity: SpaceUserIdentity, projectId: string) {
     return this.repository.listWorkflowProfiles(identity, projectId);
   }
@@ -304,6 +328,23 @@ function normalizeWorkflowProfileConfig(value: unknown): Record<string, unknown>
     throw new HttpError(422, "output_artifact_types must be strings");
   }
   return config;
+}
+
+function assertNoEmbeddedOverlaySecrets(value: unknown): void {
+  const record = optionalObject(value);
+  if (!record) return;
+  const stack: Record<string, unknown>[] = [record];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    for (const [key, item] of Object.entries(current)) {
+      if (/^(api[_-]?key|secret|password|access[_-]?token|refresh[_-]?token|auth[_-]?token|bearer[_-]?token)$/i.test(key)) {
+        throw new HttpError(422, "skill overlay must reference credentials instead of embedding secrets");
+      }
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        stack.push(item as Record<string, unknown>);
+      }
+    }
+  }
 }
 
 function validateOutputArtifactTypes(

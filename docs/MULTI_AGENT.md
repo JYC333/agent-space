@@ -141,7 +141,7 @@ is the per-space **system-managed default Assistant Agent** instead.
 
 ### knowledge_curator (knowledge)
 
-- Organizes RM Wiki items, relations, and source links
+- Organizes Knowledge items, relations, and source links
 - Proposes the appropriate semantic KnowledgeItem type (experience / reflection / lesson /
   procedure / decision / question / summary / generic), plus relations and source links
 - A source is **not** a KnowledgeItem type; an answer is represented as a **relation**

@@ -10,10 +10,10 @@ import {
 import type { RevalidatedObject } from "./types";
 
 /**
- * Retrieval maintenance scan — the "dream cycle" review-candidate generator (W7).
+ * Retrieval maintenance scan — the "context review cycle" review-candidate generator (W7).
  *
- * gbrain's maintenance loop dedups pages, fixes links, flags contradictions, etc.
- * agent-space mirrors the low-risk, derived-only half of that as a READ-ONLY scan
+ * The maintenance loop dedups pages, fixes links, flags contradictions, etc.
+ * agent-space implements the low-risk, derived-only half as a READ-ONLY scan
  * over the retrieval projection that emits BATCHED review candidates. Hard rules
  * (invariant 6):
  *

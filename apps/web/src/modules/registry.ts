@@ -154,13 +154,13 @@ export const MODULE_REGISTRY: Module[] = [
   // GET /api/v1/plugins/effective. Direct navigation to a disabled plugin route
   // shows a disabled-module stub, not a generic 404.
   {
-    id: 'dairy', label: 'Dairy', path: '/dairy',
+    id: 'diary', label: 'Diary', path: '/diary',
     section: 'capture', group: 'daily', icon: 'book',
     description: 'Personal diary with same-day history across years. Supports AI reflection, daily reminders, and opt-in memory proposals after your review.',
-    source: 'official_plugin', pluginId: 'dairy', capabilityId: undefined,
+    source: 'official_plugin', pluginId: 'diary', capabilityId: undefined,
     enabled: false, visible: true, planned: false,
     perspectiveType: 'personal',
-    component: lazy(() => import('../plugins/dairy/DairyPageAdapter')),
+    component: lazy(() => import('../plugins/diary/DiaryPageAdapter')),
   },
 
   // ── Daily ─────────────────────────────────────────────────────────────────
@@ -317,22 +317,22 @@ export const MODULE_REGISTRY: Module[] = [
     component: lazy(() => import('./memory/MemoryModule')),
   },
   {
-    id: 'ask_brain', label: 'Ask Brain', path: '/ask-brain',
+    id: 'ask_space', label: 'Ask Space', path: '/ask-space',
     section: 'knowledge', group: 'knowledge', icon: 'sparkles', accent: true,
     description: 'Ask one question and get a cited, gap-aware answer across Knowledge, Memory, and Project summaries.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
-    component: lazy(() => import('./brain_think/BrainThinkPage')),
+    component: lazy(() => import('./ask_space/AskSpacePage')),
   },
   {
-    id: 'brain_ops', label: 'Brain Ops', path: '/brain-ops',
-    section: 'knowledge', group: 'knowledge', icon: 'brain-circuit',
+    id: 'context_ops', label: 'Context Health', path: '/context-ops',
+    section: 'knowledge', group: 'knowledge', icon: 'activity',
     description: 'Inspect retrieval health, diagnostics, maintenance, feedback, and memory provenance aggregates.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
-    component: lazy(() => import('./brain_ops/BrainOpsPage')),
+    component: lazy(() => import('./context_ops/ContextOpsPage')),
   },
 
   // ── Agents (execution & infrastructure) ─────────────────────────────────────
@@ -391,6 +391,15 @@ export const MODULE_REGISTRY: Module[] = [
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
     component: lazy(() => import('./workspaces/WorkspacesPage')),
+  },
+  {
+    id: 'context_workspace', label: 'Context Workspace', path: '/context-workspace',
+    section: 'agents', group: 'workspace', icon: 'route',
+    description: 'Configure workspace context packs, routing manifests, skill overlays, observations, and review queues.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    component: lazy(() => import('./context_workspace/ContextWorkspacePage')),
   },
   {
     id: 'workspace_console', label: 'Console', path: '/workspace-console',

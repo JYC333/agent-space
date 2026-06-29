@@ -41,8 +41,8 @@ import { agentsModule } from "../modules/agents";
 import { personalMemoryGrantsModule } from "../modules/personalMemoryGrants";
 import { memoryModule } from "../modules/memory";
 import { contextModule } from "../modules/context";
-import { brainOpsModule } from "../modules/brainOps";
-import { brainThinkModule } from "../modules/brainThink";
+import { contextOpsModule } from "../modules/contextOps";
+import { askSpaceModule } from "../modules/askSpace";
 import { activityModule } from "../modules/activity";
 import { sourcePointersModule } from "../modules/sourcePointers";
 import { intakeModule } from "../modules/intake";
@@ -109,8 +109,8 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   personalMemoryGrantsModule,
   memoryModule,
   contextModule,
-  brainOpsModule,
-  brainThinkModule,
+  contextOpsModule,
+  askSpaceModule,
   activityModule,
   sourcePointersModule,
   intakeModule,
@@ -128,7 +128,7 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   // Official optional module control plane.
   // Must appear before optional product modules that depend on the plugin guard.
   pluginsModule,
-  // Note: official optional product modules (e.g. dairy) are no longer in
+  // Note: official optional product modules (e.g. diary) are no longer in
   // SERVER_MODULES. They are loaded and activated via the PluginHost after this list.
 ];
 

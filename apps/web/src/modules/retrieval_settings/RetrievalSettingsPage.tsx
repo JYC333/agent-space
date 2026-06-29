@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { BrainCircuit, ChevronDown, ChevronRight, Database, Search, ShieldAlert, SlidersHorizontal } from 'lucide-react'
+import { ChevronDown, ChevronRight, Database, Search, ShieldAlert, SlidersHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
 import { providersApi, spacesApi, type ModelProviderOut, type ProviderTaskPolicyOut } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
 import type {
-  BrainOpsReviewMode,
-  BrainOpsScanMode,
+  ContextOpsReviewMode,
+  ContextOpsScanMode,
   MemberRole,
   RetrievalCalibrationMechanic,
   RetrievalRankingMechanicState,
@@ -38,13 +38,13 @@ const RETRIEVAL_TOOL_MODE_OPTIONS: Array<{ value: RetrievalToolMode; label: stri
   { value: 'preflight_brief', label: 'Preflight brief' },
 ]
 
-const BRAIN_OPS_REVIEW_MODE_OPTIONS: Array<{ value: BrainOpsReviewMode; label: string }> = [
+const CONTEXT_OPS_REVIEW_MODE_OPTIONS: Array<{ value: ContextOpsReviewMode; label: string }> = [
   { value: 'private_only', label: 'Private only' },
   { value: 'admins', label: 'Owners + admins' },
   { value: 'members', label: 'Space members' },
 ]
 
-const BRAIN_OPS_SCAN_MODE_OPTIONS: Array<{ value: BrainOpsScanMode; label: string }> = [
+const CONTEXT_OPS_SCAN_MODE_OPTIONS: Array<{ value: ContextOpsScanMode; label: string }> = [
   { value: 'admins', label: 'Owners + admins' },
   { value: 'members', label: 'Space members' },
 ]
@@ -245,7 +245,7 @@ function TaskPolicyEditor({
       )}
       {kind === 'rerank' && (
         <div className="flex items-start gap-2 rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-          <BrainCircuit className="mt-0.5 size-3.5 shrink-0" />
+          <Search className="mt-0.5 size-3.5 shrink-0" />
           <span>
             Native rerank uses a provider rerank endpoint. Chat-only providers are kept out of this slot.
           </span>
@@ -498,8 +498,8 @@ export default function RetrievalSettingsPage() {
         include_trace: settings.include_trace,
         external_egress_enabled: settings.external_egress_enabled,
         retrieval_tool_mode: settings.retrieval_tool_mode,
-        brain_ops_review_mode: settings.brain_ops_review_mode,
-        brain_ops_scan_mode: settings.brain_ops_scan_mode,
+        context_ops_review_mode: settings.context_ops_review_mode,
+        context_ops_scan_mode: settings.context_ops_scan_mode,
         embedding_dimensions: parsedDimensions,
         max_results_default: parsedMax,
         ranking_config: settings.ranking_config,
@@ -682,7 +682,7 @@ export default function RetrievalSettingsPage() {
 
           <Card>
             <CardTitle className="flex items-center gap-2">
-              <BrainCircuit className="size-3.5" /> Models
+              <Database className="size-3.5" /> Models
             </CardTitle>
             <div className="space-y-3">
               {RETRIEVAL_TASKS.map(item => (
@@ -734,32 +734,32 @@ export default function RetrievalSettingsPage() {
               <div className="rounded-md border border-border p-3">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <div className="text-sm font-medium text-foreground">Brain Ops review</div>
+                    <div className="text-sm font-medium text-foreground">Context Ops review</div>
                     <div className="text-xs text-muted-foreground">
-                      Controls who can open Brain Ops shared review data and accept explicit space_ops packets. Private packets remain creator-only.
+                      Controls who can open Context Ops shared review data and accept explicit space_ops packets. Private packets remain creator-only.
                     </div>
                   </div>
                   <Select
-                    value={settings.brain_ops_review_mode}
-                    options={BRAIN_OPS_REVIEW_MODE_OPTIONS}
+                    value={settings.context_ops_review_mode}
+                    options={CONTEXT_OPS_REVIEW_MODE_OPTIONS}
                     disabled={readOnly || saving}
-                    onChange={value => patch('brain_ops_review_mode', value as BrainOpsReviewMode)}
+                    onChange={value => patch('context_ops_review_mode', value as ContextOpsReviewMode)}
                   />
                 </div>
               </div>
               <div className="rounded-md border border-border p-3">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <div className="text-sm font-medium text-foreground">Brain Ops scan initiation</div>
+                    <div className="text-sm font-medium text-foreground">Context Ops scan initiation</div>
                     <div className="text-xs text-muted-foreground">
                       Controls who can start retrieval diagnostics and maintenance scans. Reindex stays owner/admin-only.
                     </div>
                   </div>
                   <Select
-                    value={settings.brain_ops_scan_mode}
-                    options={BRAIN_OPS_SCAN_MODE_OPTIONS}
+                    value={settings.context_ops_scan_mode}
+                    options={CONTEXT_OPS_SCAN_MODE_OPTIONS}
                     disabled={readOnly || saving}
-                    onChange={value => patch('brain_ops_scan_mode', value as BrainOpsScanMode)}
+                    onChange={value => patch('context_ops_scan_mode', value as ContextOpsScanMode)}
                   />
                 </div>
               </div>
@@ -796,7 +796,7 @@ export default function RetrievalSettingsPage() {
             >
               <span className="min-w-0">
                 <CardTitle className="flex items-center gap-2">
-                  <BrainCircuit className="size-3.5" /> Advanced rewrite prompt
+                  <SlidersHorizontal className="size-3.5" /> Advanced rewrite prompt
                 </CardTitle>
                 <span className="mt-1 block text-xs text-muted-foreground">
                   View or edit the prompt template used by the query rewrite chat model.

@@ -76,7 +76,7 @@ Proposals are the product review and application boundary for durable mutations.
   supported relation suggestions. Diagnostics packets only acknowledge review and do not
   write canonical Knowledge or Memory.
 - Claim Candidate Packet apply records creator-owned review of owner-private
-  candidate claim work, or shared `space_ops` review when Brain Ops review mode
+  candidate claim work, or shared `space_ops` review when Context Ops review mode
   allows it. Accepting a `claim_candidate_packet` creates child pending
   `claim_create` or `object_relation_create`
   proposals from valid candidates only; it does not directly write canonical

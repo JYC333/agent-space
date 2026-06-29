@@ -3,7 +3,7 @@
 Status: implemented first pass (2026-06-25)
 
 This document defines the source / connector permission model used by intake
-connections before broad ingestion-heavy brain work expands. Code remains the
+connections before broad ingestion-heavy context work expands. Code remains the
 source of truth; active enforcement points are
 `server/src/modules/intake/sourceConsent.ts`,
 `server/src/modules/retrieval/sourcePolicy.ts`, and
@@ -186,7 +186,7 @@ Implemented in the retrieval MVP:
 - Claim evidence rendering: the direct `GET /knowledge/claims/:id/sources` route
   (and the embedded claim-sources list) drops `claim_sources` rows whose
   `source_connection_id` denies the viewer, fail-closed.
-- Brain Ops drill-down object lists revalidate every listed object through the
+- Context Ops drill-down object lists revalidate every listed object through the
   adapter gate and the source read gate before returning a title.
 - Context artifact attachment: a non-creator attaching a source-derived artifact
   (e.g. a Context Brief that records the `source_connection_ids` it synthesized
@@ -312,7 +312,7 @@ time, exposes the normalized fields in the Intake UI, enforces the policy on
 connected intake retention escalation, worker-side full-text/snapshot writes,
 connected summary proposal creation, source-aware retrieval reads, context
 artifact attachment, DB-backed chat candidates with explicit source ids,
-maintenance/Brain Ops reads, claim evidence rendering, and retrieval provider
+maintenance/Context Ops reads, claim evidence rendering, and retrieval provider
 content egress. Future work is mostly connector scheduler edge cases and product
 surfaces that do not exist yet. A dedicated source table should be considered
 only if multiple connectors need to share one consent grant or if source

@@ -64,8 +64,8 @@ function auth(role: "owner" | "admin" | "reviewer" | "member" | "guest" = "admin
 }
 
 function settingsRow(
-  brainOpsReviewMode: "private_only" | "admins" | "members" = "private_only",
-  brainOpsScanMode: "admins" | "members" = "admins",
+  contextOpsReviewMode: "private_only" | "admins" | "members" = "private_only",
+  contextOpsScanMode: "admins" | "members" = "admins",
 ) {
   return {
     space_id: "space-1",
@@ -77,8 +77,8 @@ function settingsRow(
     include_trace: false,
     external_egress_enabled: true,
     retrieval_tool_mode: "off",
-    brain_ops_review_mode: brainOpsReviewMode,
-    brain_ops_scan_mode: brainOpsScanMode,
+    context_ops_review_mode: contextOpsReviewMode,
+    context_ops_scan_mode: contextOpsScanMode,
     embedding_dimensions: 2560,
     max_results_default: 10,
     created_at: "2026-06-12T10:00:00.000Z",

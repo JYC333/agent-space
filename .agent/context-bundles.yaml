@@ -230,7 +230,7 @@ activity:
 knowledge:
   docs:
     - .agent/modules/knowledge-base.md
-    - .agent/architecture/RETRIEVAL_AND_BRAIN_LAYER.md
+    - .agent/architecture/CONTEXT_AND_RETRIEVAL_LAYER.md
     - .agent/modules/activity-inbox.md
     - .agent/modules/proposals.md
     - .agent/decisions/0007-plugin-module-architecture.md

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -1538,6 +1538,56 @@ describe("ContextCompiler", () => {
         },
       }),
     ).rejects.toThrow(/refuses to write/);
+  });
+
+  it("loads .agent docs through routing manifests instead of legacy Python filenames", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aspace-context-routing-"));
+    const workspace = join(root, "workspace");
+    const sandbox = join(root, "sandbox");
+    await mkdir(join(workspace, ".agent", "modules"), { recursive: true });
+    await mkdir(sandbox, { recursive: true });
+    await writeFile(join(workspace, ".agent", "INDEX.md"), "Root index doc", "utf8");
+    await writeFile(
+      join(workspace, ".agent", "modules", "context-compiler.md"),
+      "TS context compiler routing doc",
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, ".agent", "modules", "memory.md"),
+      "Legacy Python models.py doc",
+      "utf8",
+    );
+
+    const compiler = new ContextCompiler();
+    const compiled = await compiler.compile({
+      target: "codex_cli",
+      taskGoal: "Touch context routing",
+      sandboxDir: sandbox,
+      workspacePath: workspace,
+      touchedFiles: ["server/src/modules/context/models.py"],
+      context: {
+        user_memory: [],
+        workspace_memory: [],
+        capability_memory: [],
+        agent_memory: [],
+        system_policy: [],
+        recent_session_summary: [],
+        relevant_episodes: [],
+        evidence_items: [],
+        attachments: [],
+        active_policies: [],
+        stable_prefix_refs: [],
+        dynamic_tail_refs: [],
+        source_refs: [],
+        retrieval_trace: {},
+        token_budget: {},
+        personal_context_block: "",
+      },
+    });
+
+    const instructionText = await readFile(compiled.instruction_file_path!, "utf8");
+    expect(instructionText).toContain("TS context compiler routing doc");
+    expect(instructionText).not.toContain("Legacy Python models.py doc");
   });
 
   it("renders explicit artifact attachments into compiled vendor context files", async () => {

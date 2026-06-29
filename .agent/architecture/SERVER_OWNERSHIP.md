@@ -31,7 +31,7 @@ Rules:
 | Sessions | Public list/get/create session commands, list/add messages, latest-summary read, condenser preset-prompt reads, summary condense/create writes (`condenseSession`: `llm.v1` via the `session_condense` job with scenario profiles plus per-agent prompt overrides, deterministic `pattern.v1` fallback), and session reflection proposal creation | — |
 | Assistant chat | External Personal Assistant chat turn orchestration and queued run creation for server context chat turns | — |
 | Context | Native chat-path candidate collection (`modules/context`: memory/knowledge/source/activity reads), frontend context preview build route, budget/dedup loop, selected-item snapshot persistence, full-run context package assembly, context evidence selection/`used_in_context` link recording for existing evidence, memory context-injection logs, `context_snapshots` population, and vendor runtime file rendering to sandboxes | Digest refresh jobs |
-| Memory read/write boundary | `/memory` list/get/search, read-access logging, public memory create/update/archive proposal creation, batch activity consolidation via `POST /memory/consolidation/run` | Memory quality/evolution jobs (digest refresh, evolver, source-monitoring producers) |
+| Memory read/write boundary | `/memory` list/get/search, read-access logging, public memory create/update/archive proposal creation, batch activity consolidation via `POST /memory/consolidation/run` | Memory quality/evolution jobs (digest refresh, memory-health solidification, source-monitoring producers) |
 | Memory apply | Accepted `memory_create` / `memory_update` / `memory_archive` apply after the proposal-apply policy gate | Personal-memory egress-context placement, active-policy private-placement overlay, workspace/agent-scope digest invalidation |
 | Activity | DB-backed `/activity*` capture/list/detail/upload/review/archive, source-pointer list/create/delete, per-activity consolidation, and summary artifact/proposal creation with activity/evidence/intake provenance | LLM summarization quality improvements beyond the current classifier pipeline |
 | Intake | DB-backed `/intake*` connector/connection config, manual URL intake, extraction-job audit records, candidate evidence/evidence links, workspace intake profiles/bindings, summary artifact/proposal creation, and in-process extraction polling | External fetch fidelity beyond the current extraction worker |
@@ -40,7 +40,7 @@ Rules:
 | Artifacts | Client-facing `GET /artifacts`, `GET /artifacts/{id}`, `GET /artifacts/{id}/export`, and run-scoped artifact routes, including scoped visibility checks and managed-storage export path guards | — |
 | Projects | DB-backed `/projects*` project CRUD, archive, summary, and project-workspace links | — |
 | Capabilities / templates | Catalog-backed `/capabilities*` and `/agent-templates*` product routes | Capability/template authoring remains file/catalog controlled |
-| Evolution | `/evolution*` target/signal read/write surfaces and manual review-request recording | Full automated evolution execution loop |
+| Evolution | `/evolution*` target/signal surfaces, strategy assets, selector decisions, experiences, review prompts, real `run_type='evolution'` run creation, and review artifact recording | Automatic apply/deploy/code-merge loops and unregistered proposal appliers |
 | Personal memory grants | `/personal-memory-grants*` preview/create/list/revoke/audit for run-scoped summary-only grants | Raw personal-memory egress apply path remains fail-closed |
 | Workspaces / sandbox | DB-backed `/workspaces*`, workspace profile list/create/read/update, workspace snapshot-retention settings (`snapshot_retention_days`, `snapshot_max_count`), workspace-console read routes, runtime status/session stubs, PathPolicy, workspace read policy audit, worktree prepare/cleanup, sandbox GC, worktree code_patch collection, accepted `code_patch` proposal apply through `workspace.write_patch` (with pre-apply `code_patch_snapshots` capture), and user-facing rollback via `POST /api/v1/proposals/{id}/rollback` | Workspace-console session execution writes remain feature-not-implemented |
 | Deployment | Server-owned `/deployments/jobs*` edge routes, core deployer socket client, and job-type allowlist for `rebuild_agent_space`, `restart_agent_space`, and `health_check` | Deployer remains a separate host/sidecar process; deployment job persistence/proposal flow remains deferred because the current API is a feature-not-implemented stub |
@@ -60,7 +60,7 @@ The active route-registered server modules are: `system`, `auth`,
 `spaces`, `catalog`, `capabilities`, `streaming`, `notifications`, `runtimeTools`,
 `networkProfiles`, `providers`, `runtime_tool_bindings`, `runtimeHost`, `runs`,
 `artifacts`, `projects`, `policy`, `proposals`, `sessions`, `agentTemplates`, `agents`,
-`personalMemoryGrants`, `memory`, `context`, `brainOps`, `brainThink`, `activity`,
+`personalMemoryGrants`, `memory`, `context`, `contextOps`, `askSpace`, `activity`,
 `source_pointers`, `intake`, `knowledge`, `evolution`, `tasks`, `workspace_profiles`,
 `workspaces`, `jobs`, `automations`, `dailyReports`, `backups`, `deployment`,
 `frontendSupport`, and `plugins`.
@@ -74,7 +74,7 @@ TypeScript backend cutover failed:
 
 - DB-persisted API-key storage; the API-key routes return the canonical
   feature-gated response while the schema has no `api_keys` table;
-- memory digest refresh, evolver, source-monitoring producers, and quality loops;
+- memory digest refresh, memory-health solidification, source-monitoring producers, and quality loops;
 - non-memory/non-knowledge/non-task/non-code-patch proposal target appliers;
 - deployer host/sidecar process internals and deferred deployment job persistence.
 

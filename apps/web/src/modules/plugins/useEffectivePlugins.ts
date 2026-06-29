@@ -38,7 +38,7 @@ export interface UseEffectivePluginsResult {
  *
  * Usage:
  *   const { isEnabled, isVisible, loading } = useEffectivePlugins()
- *   const showDairy = isEnabled('dairy')
+ *   const showDiary = isEnabled('diary')
  */
 export function useEffectivePlugins(): UseEffectivePluginsResult {
   const [plugins, setPlugins] = useState<EffectivePluginMap>({})

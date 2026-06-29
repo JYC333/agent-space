@@ -1,16 +1,17 @@
 # Module: Context Compiler
 
 ## Purpose
-Translate a ContextPackage into a CLI-specific instruction file written to the sandbox. Security scanning, token budgeting, trust labels, and `.agent/` doc loading happen here.
+Translate a ContextPackage into a CLI-specific instruction file written to the sandbox. Security scanning, token budgeting, trust labels, and routing-manifest-driven `.agent/` doc loading happen here.
 
 ## Owns
 - `ContextCompiler` class, `TargetFormat` enum, `CompiledContext` dataclass
 - Security scanning of all content before inclusion (via `server/src/modules/context/compiler.ts`)
 - Token/character budget enforcement (128k chars default, priority-ordered truncation)
 - Trust label annotation per section (`[system]`, `[user]`, `[workspace]`, etc.)
-- Progressive `.agent/` doc loading (root docs always; module docs when `touched_files` matches)
+- DB-authoritative Context Profiles (`context_profiles`) for Space/Project/Workspace/Agent/User context packs and routing manifests
+- Progressive `.agent/` doc loading (default docs plus routing-manifest matches from touched TS/web/protocol paths)
 - Vendor file header marking files as generated, not source of truth
-- SOUL.md generation from agent-scoped identity memories
+- Agent Persona Prompt (`SOUL.md`) generation from agent-scoped identity memories
 - Sandbox hook scripts (PostToolUse docs-sync reminders)
 - Explicit artifact-backed context attachments selected by
   `context_artifact_ids`; the compiler consumes resolved attachments and does
@@ -20,11 +21,11 @@ Translate a ContextPackage into a CLI-specific instruction file written to the s
 
 | Target | File(s) written |
 |---|---|
-| `claude` | `CLAUDE.md` + `SOUL.md` (if agent identity present) |
+| `claude` | `CLAUDE.md` + Agent Persona Prompt sidecar (`SOUL.md`, if agent identity present) |
 | `codex` | `AGENTS.md` |
 | `cursor` | `.cursorrules` |
 | `generic` | `CONTEXT.md` |
-| `soul` | `SOUL.md` |
+| `soul` | Agent Persona Prompt (`SOUL.md`) |
 | `prompt` | `prompt.md` |
 
 ## Section Priority (lower = kept first when budget exceeded)
@@ -49,12 +50,38 @@ Translate a ContextPackage into a CLI-specific instruction file written to the s
 ContextBuilder.build(attachments=[...], workspace_path=...) → ContextPackage
      ↓
 ContextCompiler.compile(context, target, task_goal, sandbox_dir,
-                         workspace_path, touched_files)
+                         workspace_path, touched_files, routing_manifest)
      ↓
 {sandbox_dir}/CLAUDE.md  (or AGENTS.md etc.)
-{sandbox_dir}/SOUL.md    (if agent identity present)
+{sandbox_dir}/SOUL.md    (Agent Persona Prompt sidecar, if agent identity present)
 {sandbox_dir}/.claude/settings.json + hooks/check-docs-sync.sh
 ```
+
+## Context Profiles And Routing Manifest
+
+`context_profiles` is the authority for editable context workspace configuration.
+Profiles are scoped by `space`, `project`, `workspace`, `agent`, or `user`, with
+JSON object fields:
+
+- `context_pack_json` — startup/context-pack metadata such as title, notes,
+  observation policy, and whether the skill index should be exposed.
+- `routing_manifest_json` — explicit routing rules from repo paths to `.agent`
+  docs and optional bundle ids.
+
+`ContextPrepareService` loads Space, Project, Workspace, Agent, and User
+profiles for the run, merges them with `DEFAULT_CONTEXT_ROUTING_MANIFEST`, and
+passes the effective manifest into `ContextCompiler`. The compiler no longer
+routes by legacy Python basenames such as `models.py`, `schemas.py`, or
+`context_builder.py`; it matches explicit path globs such as
+`server/src/modules/context/**`, `server/src/gateway/routeRegistry.ts`,
+`packages/protocol/src/**`, and `apps/web/src/modules/**`.
+
+Routing manifests may only reference `.agent/*.md|yaml|yml` paths. Absolute
+paths, `..`, and non-`.agent` docs are ignored/rejected by the manifest
+normalizer. The generated `AGENTS.md`, `CLAUDE.md`, generated runtime skill
+files, and hook files remain adapter outputs written into the sandbox only. They
+are not an import path back into Memory, Knowledge, Capability, or the real
+workspace.
 
 ## Explicit artifact attachments
 
@@ -127,6 +154,8 @@ model-visible context.
 
 ## Invariants
 - Vendor files are never written to the real workspace
+- Markdown/vendor files are not authoritative memory or routing state; DB
+  profiles and approved Memory/Knowledge/Capability rows are authoritative
 - Changes agents make to generated files do not propagate to active memory
 - Compiled content (prefix + tail) is stored in `ContextSnapshot` columns for audit
 - Snapshot population failure blocks adapter execution
@@ -135,9 +164,11 @@ model-visible context.
 ## Related Files
 - `server/src/modules/context/compiler.ts`
 - `server/src/modules/context/prepareService.ts`
+- `server/src/modules/context/profiles.ts` — `context_profiles` repository and HTTP shape helpers
+- `server/src/modules/context/routingManifest.ts` — default TS/web routing, merge, and doc-path validation
 - `server/src/modules/context/digestService.ts` — digest generation, dirty-marking, scope-disable
 - `server/src/modules/memory/` — memory read auth and context logs
-- `server/migrations/` — `ContextSnapshot`, `ContextDigest`
+- `server/migrations/` — `ContextSnapshot`, `ContextDigest`, `context_profiles`
 - `server/src/modules/runs/` — run context preparation integration
 - `.agent/context-bundles.yaml`
 

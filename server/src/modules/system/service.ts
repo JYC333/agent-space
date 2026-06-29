@@ -11,7 +11,7 @@
  *
  *   GET /api/v1/plugins is the OFFICIAL OPTIONAL MODULE control plane — it returns
  *   descriptors and per-space/user enablement state for optional product features
- *   such as dairy. These are NOT listed here as always-on features.
+ *   such as diary. These are NOT listed here as always-on features.
  *
  *   GET /api/v1/catalog (catalog module) lists CAPABILITY manifests — agent AI skill
  *   descriptors. Also NOT product plugins.

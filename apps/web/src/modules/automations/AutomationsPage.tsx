@@ -1,5 +1,5 @@
 import { useState, useEffect, useId } from 'react'
-import { Archive, BrainCircuit, Clock, Loader2, Pause, Play, Plus, ShieldCheck } from 'lucide-react'
+import { Archive, Clock, Loader2, Pause, Play, Plus, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { automationsApi, agentsApi } from '../../api/client'
 import type { AutomationOut, AutomationTargetType, AutomationTriggerType, AgentOut } from '../../types/api'
@@ -44,19 +44,19 @@ function cfgBoolDefault(cfg: Record<string, unknown> | null, key: string, fallba
 function automationTarget(auto: AutomationOut): AutomationTargetType {
   const target = cfgString(auto.config_json, 'target_type') || cfgString(auto.config_json, 'target')
   if (target === 'knowledge_retrieval_maintenance') return 'knowledge_retrieval_maintenance'
-  if (target === 'brain_ops_dream_cycle_v2') return 'brain_ops_dream_cycle_v2'
+  if (target === 'context_ops_review_cycle') return 'context_ops_review_cycle'
   return 'agent_run'
 }
 
 function shortTargetLabel(target: AutomationTargetType): string {
   if (target === 'knowledge_retrieval_maintenance') return 'knowledge maintenance'
-  if (target === 'brain_ops_dream_cycle_v2') return 'brain ops dream cycle'
+  if (target === 'context_ops_review_cycle') return 'context ops review cycle'
   return 'agent run'
 }
 
 function defaultName(target: AutomationTargetType): string {
   if (target === 'knowledge_retrieval_maintenance') return 'Knowledge maintenance scan'
-  if (target === 'brain_ops_dream_cycle_v2') return 'Brain Ops Dream Cycle'
+  if (target === 'context_ops_review_cycle') return 'Context Review Cycle'
   return 'Automation'
 }
 
@@ -84,7 +84,7 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
 
   function handleTargetChange(next: AutomationTargetType) {
     setTargetType(next)
-    if (next === 'brain_ops_dream_cycle_v2') {
+    if (next === 'context_ops_review_cycle') {
       setCreatePacket(true)
       setIncludeMemoryMaintenance(true)
     }
@@ -103,7 +103,7 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
     if (targetType === 'knowledge_retrieval_maintenance') {
       config.create_packet = createPacket
     }
-    if (targetType === 'brain_ops_dream_cycle_v2') {
+    if (targetType === 'context_ops_review_cycle') {
       config.create_packets = createPacket
       config.include_memory_maintenance = includeMemoryMaintenance
     }
@@ -156,7 +156,7 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
         <select value={targetType} onChange={e => handleTargetChange(e.target.value as AutomationTargetType)} className={selectCls}>
           <option value="agent_run">Agent run</option>
           <option value="knowledge_retrieval_maintenance">Knowledge maintenance scan</option>
-          <option value="brain_ops_dream_cycle_v2">Brain Ops Dream Cycle</option>
+          <option value="context_ops_review_cycle">Context Review Cycle</option>
         </select>
       </div>
 
@@ -227,9 +227,9 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
               onChange={e => setCreatePacket(e.target.checked)}
               className="mt-1"
             />
-            <span>{targetType === 'brain_ops_dream_cycle_v2' ? 'Create Dream Cycle review packets after saving reports.' : 'Create a maintenance proposal packet after saving the private report.'}</span>
+            <span>{targetType === 'context_ops_review_cycle' ? 'Create Context Review Cycle review packets after saving reports.' : 'Create a maintenance proposal packet after saving the private report.'}</span>
           </label>
-          {targetType === 'brain_ops_dream_cycle_v2' && (
+          {targetType === 'context_ops_review_cycle' && (
             <label className="flex items-start gap-2 text-sm">
               <input
                 type="checkbox"
@@ -296,9 +296,9 @@ function AutomationCard({ auto, agentName, onChanged }: {
       )}
       {target !== 'agent_run' && (
         <p className="text-xs mb-3 flex items-center gap-1.5 text-muted-foreground">
-          <BrainCircuit className="size-3.5" />
-          {target === 'brain_ops_dream_cycle_v2'
-            ? `Dream Cycle report${cfgBool(auto.config_json, 'create_packets') ? ' + review packets' : ''} · memory ${cfgBoolDefault(auto.config_json, 'include_memory_maintenance', true) ? 'on' : 'off'}`
+          <ShieldCheck className="size-3.5" />
+          {target === 'context_ops_review_cycle'
+            ? `Context Review Cycle report${cfgBool(auto.config_json, 'create_packets') ? ' + review packets' : ''} · memory ${cfgBoolDefault(auto.config_json, 'include_memory_maintenance', true) ? 'on' : 'off'}`
             : `Private report${cfgBool(auto.config_json, 'create_packet') ? ' + proposal packet' : ''}`}
         </p>
       )}

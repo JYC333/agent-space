@@ -485,7 +485,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     current_enforcement_point:
       "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
-      "Review a retrieval maintenance packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Brain Ops review setting to allow the reviewer. Accepting may create child pending Knowledge relation proposals but does not directly write canonical Knowledge.",
+      "Review a retrieval maintenance packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Context Ops review setting to allow the reviewer. Accepting may create child pending Knowledge relation proposals but does not directly write canonical Knowledge.",
     lifecycle_status: "wired_via_proposal",
     record_failure_mode: "best_effort",
   },
@@ -500,7 +500,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     current_enforcement_point:
       "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
-      "Acknowledge a Memory maintenance packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Brain Ops review setting to allow the reviewer. Accepting records review acknowledgement only and performs no canonical Memory writes.",
+      "Acknowledge a Memory maintenance packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Context Ops review setting to allow the reviewer. Accepting records review acknowledgement only and performs no canonical Memory writes.",
     lifecycle_status: "wired_via_proposal",
     record_failure_mode: "best_effort",
   },
@@ -515,7 +515,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     current_enforcement_point:
       "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
-      "Acknowledge a retrieval diagnostics packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Brain Ops review setting to allow the reviewer. Accepting records review acknowledgement only and performs no canonical Knowledge or Memory writes.",
+      "Acknowledge a retrieval diagnostics packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Context Ops review setting to allow the reviewer. Accepting records review acknowledgement only and performs no canonical Knowledge or Memory writes.",
     lifecycle_status: "wired_via_proposal",
     record_failure_mode: "best_effort",
   },
@@ -530,7 +530,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     current_enforcement_point:
       "server/src/modules/proposals/applyService.ts via proposal.apply",
     description:
-      "Review a candidate-relation discovery packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Brain Ops review setting to allow the reviewer. Accepting creates child pending object_relation_create / knowledge_create proposals for supported candidates and does not directly write canonical Knowledge.",
+      "Review a candidate-relation discovery packet. Private packets remain creator-only; explicit space_shared space_ops packets require the Context Ops review setting to allow the reviewer. Accepting creates child pending object_relation_create / knowledge_create proposals for supported candidates and does not directly write canonical Knowledge.",
     lifecycle_status: "wired_via_proposal",
     record_failure_mode: "best_effort",
   },

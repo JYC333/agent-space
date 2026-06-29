@@ -53,8 +53,8 @@ import {
   persistRetrievalBriefArtifact,
 } from "../retrieval";
 import { createClaimCandidatePacketFromArtifacts } from "./claimCandidatePackets";
-import { buildClaimTrajectory, scanClaimContradictions } from "./claimBrainLoop";
-import { persistClaimContradictionReportArtifact } from "./claimBrainLoopArtifacts";
+import { buildClaimTrajectory, scanClaimContradictions } from "./claimReviewLoop";
+import { persistClaimContradictionReportArtifact } from "./claimReviewLoopArtifacts";
 import { runRelationDiscoveryScan } from "./relationDiscovery";
 import {
   createRelationDiscoveryProposalPacket,
@@ -66,7 +66,7 @@ import {
 } from "./objectSchemaSuggestions";
 import { readSpaceRetrievalPrompt } from "../retrieval/prompts";
 import { readSpaceRetrievalSettings, resolveRetrievalSearchControls } from "../retrieval/settings";
-import { canInitiateBrainOpsScan, canReviewSpaceOpsPackets } from "../brainOps/reviewPolicy";
+import { canInitiateContextOpsScan, canReviewSpaceOpsPackets } from "../contextOps/reviewPolicy";
 import { enqueueRetrievalEmbeddingBackfill } from "../retrievalEmbedding/job";
 import { ProviderQueryEmbedder } from "../retrievalEmbedding/queryEmbedder";
 import { ProviderReranker } from "../retrievalRerank/providerReranker";
@@ -336,17 +336,17 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  // Maintenance scan (W7 "dream cycle"): a read-only, batched report of review
+  // Maintenance scan (W7 "context review cycle"): a read-only, batched report of review
   // candidates (duplicates, orphans, thin pages, suggested relations) over the
   // derived projection. It writes NOTHING canonical — acting on a finding stays
   // on the proposal/approval flow. Owner/admin only, and every finding is
   // revalidated through the same read gate as search (no private-title leak).
-  // Member/reviewer initiation is allowed only when the Space Brain Ops scan
+  // Member/reviewer initiation is allowed only when the Space Context Ops scan
   // setting opts into member scans.
   app.post("/api/v1/knowledge/retrieval/maintenance/scan", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    if (!(await requireBrainOpsScanRole(context.config, identity, reply))) return reply;
+    if (!(await requireContextOpsScanRole(context.config, identity, reply))) return reply;
     try {
       const protocol = await loadProtocol();
       const body = parseRetrievalMaintenanceScanBody(
@@ -357,7 +357,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       if (reviewScope === "space_ops") {
         const allowed = await canReviewSpaceOpsPackets(dbPool(context.config), identity.spaceId, identity.userId);
         if (!allowed) {
-          throw new HttpError(403, "space-wide Brain Ops review is not enabled for this reviewer");
+          throw new HttpError(403, "space-wide Context Ops review is not enabled for this reviewer");
         }
       }
       const pool = dbPool(context.config);
@@ -447,7 +447,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   app.post("/api/v1/knowledge/retrieval/eval/calibration-decisions", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    if (!(await requireBrainOpsScanRole(context.config, identity, reply))) return reply;
+    if (!(await requireContextOpsScanRole(context.config, identity, reply))) return reply;
     try {
       const protocol = await loadProtocol();
       const body = parseRetrievalCalibrationDecisionBody(
@@ -459,7 +459,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       if (reviewScope === "space_ops") {
         const allowed = await canReviewSpaceOpsPackets(pool, identity.spaceId, identity.userId);
         if (!allowed) {
-          throw new HttpError(403, "space-wide Brain Ops review is not enabled for this reviewer");
+          throw new HttpError(403, "space-wide Context Ops review is not enabled for this reviewer");
         }
       }
       const settings = await readSpaceRetrievalSettings(pool, identity.spaceId);
@@ -492,7 +492,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   app.post("/api/v1/knowledge/retrieval/eval/diagnostics/report", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    if (!(await requireBrainOpsScanRole(context.config, identity, reply))) return reply;
+    if (!(await requireContextOpsScanRole(context.config, identity, reply))) return reply;
     try {
       const protocol = await loadProtocol();
       const body = parseRetrievalEvalDiagnosticsReportBody(
@@ -503,7 +503,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       if (reviewScope === "space_ops") {
         const allowed = await canReviewSpaceOpsPackets(dbPool(context.config), identity.spaceId, identity.userId);
         if (!allowed) {
-          throw new HttpError(403, "space-wide Brain Ops review is not enabled for this reviewer");
+          throw new HttpError(403, "space-wide Context Ops review is not enabled for this reviewer");
         }
       }
       const pool = dbPool(context.config);
@@ -575,7 +575,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   app.post("/api/v1/knowledge/claims/candidate-packets", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    if (!(await requireBrainOpsScanRole(context.config, identity, reply))) return reply;
+    if (!(await requireContextOpsScanRole(context.config, identity, reply))) return reply;
     try {
       const protocol = await loadProtocol();
       const body = parseClaimCandidatePacketCreateBody(
@@ -585,7 +585,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       if (body.review_scope === "space_ops") {
         const allowed = await canReviewSpaceOpsPackets(dbPool(context.config), identity.spaceId, identity.userId);
         if (!allowed) {
-          throw new HttpError(403, "space-wide Brain Ops review is not enabled for this reviewer");
+          throw new HttpError(403, "space-wide Context Ops review is not enabled for this reviewer");
         }
       }
       const result = await withDbTransaction(dbPool(context.config), async (client) =>
@@ -607,7 +607,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   });
 
   // Slice E: advisory claim trajectory. Read-only and viewer-gated (the service
-  // only loads visible claims), so it needs no Brain Ops scan authority.
+  // only loads visible claims), so it needs no Context Ops scan authority.
   app.get("/api/v1/knowledge/claims/trajectory", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
@@ -638,12 +638,12 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   });
 
   // Slice E: deterministic, access-safe contradiction-discovery scan. Gated by
-  // Brain Ops scan authority; optionally fans findings into a Claim Candidate
+  // Context Ops scan authority; optionally fans findings into a Claim Candidate
   // Packet so the only canonical write path stays the proposal-gated packet flow.
   app.post("/api/v1/knowledge/claims/contradiction-scan", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    if (!(await requireBrainOpsScanRole(context.config, identity, reply))) return reply;
+    if (!(await requireContextOpsScanRole(context.config, identity, reply))) return reply;
     try {
       const protocol = await loadProtocol();
       const body = parseClaimContradictionScanBody(
@@ -655,7 +655,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       if (body.review_scope === "space_ops") {
         const allowed = await canReviewSpaceOpsPackets(pool, identity.spaceId, identity.userId);
         if (!allowed) {
-          throw new HttpError(403, "space-wide Brain Ops review is not enabled for this reviewer");
+          throw new HttpError(403, "space-wide Context Ops review is not enabled for this reviewer");
         }
       }
       const report = await scanClaimContradictions(pool, {
@@ -714,13 +714,13 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  // Slice F: deterministic candidate-relation discovery scan. Gated by Brain Ops
+  // Slice F: deterministic candidate-relation discovery scan. Gated by Context Ops
   // scan authority; emits a single batched proposal packet — never a direct edge
   // or item write.
   app.post("/api/v1/knowledge/relations/discovery-scan", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    if (!(await requireBrainOpsScanRole(context.config, identity, reply))) return reply;
+    if (!(await requireContextOpsScanRole(context.config, identity, reply))) return reply;
     try {
       const protocol = await loadProtocol();
       const body = parseRelationDiscoveryScanBody(
@@ -732,7 +732,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       if (body.review_scope === "space_ops") {
         const allowed = await canReviewSpaceOpsPackets(pool, identity.spaceId, identity.userId);
         if (!allowed) {
-          throw new HttpError(403, "space-wide Brain Ops review is not enabled for this reviewer");
+          throw new HttpError(403, "space-wide Context Ops review is not enabled for this reviewer");
         }
       }
       const { report } = await runRelationDiscoveryScan(pool, {
@@ -937,7 +937,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   app.post("/api/v1/knowledge/object-schema/suggestions/scan", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    if (!(await requireBrainOpsScanRole(context.config, identity, reply))) return reply;
+    if (!(await requireContextOpsScanRole(context.config, identity, reply))) return reply;
     try {
       const protocol = await loadProtocol();
       const body = parseObjectSchemaSuggestionScanRequest(
@@ -948,7 +948,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       if (body.review_scope === "space_ops") {
         const allowed = await canReviewSpaceOpsPackets(pool, identity.spaceId, identity.userId);
         if (!allowed) {
-          throw new HttpError(403, "space-wide Brain Ops review is not enabled for this reviewer");
+          throw new HttpError(403, "space-wide Context Ops review is not enabled for this reviewer");
         }
       }
       const report = await scanObjectSchemaSuggestions(pool, {
@@ -1556,7 +1556,7 @@ async function requireSpaceMaintenanceRole(
   return requireSpaceOwnerOrAdmin(config, identity, reply);
 }
 
-async function requireBrainOpsScanRole(
+async function requireContextOpsScanRole(
   config: ServerConfig,
   identity: { spaceId: string; userId: string },
   reply: FastifyReply,
@@ -1576,9 +1576,9 @@ async function requireBrainOpsScanRole(
     return false;
   }
   if (isSpaceOwnerOrAdmin(space.role)) return true;
-  const allowed = await canInitiateBrainOpsScan(dbPool(config), identity.spaceId, identity.userId);
+  const allowed = await canInitiateContextOpsScan(dbPool(config), identity.spaceId, identity.userId);
   if (!allowed) {
-    reply.code(403).send({ detail: "Requires space owner/admin role or enabled Brain Ops member scan access" });
+    reply.code(403).send({ detail: "Requires space owner/admin role or enabled Context Ops member scan access" });
     return false;
   }
   return true;

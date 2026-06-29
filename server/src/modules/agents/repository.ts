@@ -817,6 +817,68 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
     });
   }
 
+  async getSystemEvolver(spaceId: string): Promise<AgentOut | null> {
+    const result = await this.pool.query<AgentRecord>(
+      `SELECT ${AGENT_COLUMNS}
+         FROM agents a
+         LEFT JOIN agent_versions av ON av.id = a.current_version_id
+${DEFAULT_RUNTIME_PROFILE_JOIN}
+         LEFT JOIN model_providers mp ON mp.id = COALESCE(arp.model_provider_id, av.model_provider_id)
+        WHERE a.space_id = $1
+          AND a.agent_kind = 'system_evolver'
+          AND a.status = 'active'
+        ORDER BY a.created_at ASC
+        LIMIT 1`,
+      [spaceId],
+    );
+    return result.rows[0] ? agentOut(result.rows[0]) : null;
+  }
+
+  async ensureSystemEvolver(spaceId: string): Promise<AgentOut> {
+    const existing = await this.getSystemEvolver(spaceId);
+    if (existing) return existing;
+    return withTransaction(this.pool, async (client) => {
+      const current = await client.query<AgentRecord>(
+        `SELECT ${AGENT_COLUMNS}
+           FROM agents a
+           LEFT JOIN agent_versions av ON av.id = a.current_version_id
+${DEFAULT_RUNTIME_PROFILE_JOIN}
+           LEFT JOIN model_providers mp ON mp.id = COALESCE(arp.model_provider_id, av.model_provider_id)
+          WHERE a.space_id = $1
+            AND a.agent_kind = 'system_evolver'
+            AND a.status = 'active'
+          ORDER BY a.created_at ASC
+          LIMIT 1`,
+        [spaceId],
+      );
+      if (current.rows[0]) return agentOut(current.rows[0]);
+      return this.createAgentWithVersion(client, {
+        spaceId,
+        ownerUserId: null,
+        name: "System Evolver",
+        description: "System-managed evolution agent for this space.",
+        visibility: "space_shared",
+        roleInstruction: null,
+        status: "active",
+        agentKind: "system_evolver",
+        systemPrompt: "You are the system evolution agent. Analyze signals and produce structured evolution plans.",
+        modelProviderId: null,
+        modelName: null,
+        modelConfigJson: DEFAULT_MODEL_CONFIG,
+        runtimeConfigJson: DEFAULT_RUNTIME_CONFIG,
+        contextPolicyJson: {},
+        memoryPolicyJson: DEFAULT_MEMORY_POLICY,
+        capabilitiesJson: [],
+        toolPermissionsJson: {},
+        runtimePolicyJson: buildRuntimePolicy("model_api", null),
+        toolPolicyJson: {},
+        outputPolicyJson: {},
+        scheduleConfigJson: {},
+        outputSchemaJson: {},
+      });
+    });
+  }
+
   async getAssistantSettings(spaceId: string): Promise<AssistantSettingsRecord> {
     const existing = await this.pool.query<AssistantSettingsRecord>(
       `SELECT ${SETTINGS_COLUMNS}

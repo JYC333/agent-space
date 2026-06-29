@@ -4,10 +4,10 @@ import { MODULE_REGISTRY, modulesWithEffectivePlugins } from '../modules/registr
 describe('module registry official plugin overlay', () => {
   it('overlays official plugin enabled and visible state from the backend map', () => {
     const modules = modulesWithEffectivePlugins(MODULE_REGISTRY, {
-      dairy: { enabled: true, visible: false },
+      diary: { enabled: true, visible: false },
     })
 
-    const diary = modules.find(module => module.id === 'dairy')
+    const diary = modules.find(module => module.id === 'diary')
     expect(diary?.enabled).toBe(true)
     expect(diary?.visible).toBe(false)
   })

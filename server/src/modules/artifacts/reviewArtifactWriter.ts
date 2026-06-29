@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Queryable } from "../routeUtils/common";
 
 /**
- * Shared writer for the review/brain-layer artifact rows.
+ * Shared writer for the review/context-layer artifact rows.
  *
  * Every report / packet / brief / eval / explain / session artifact writes the
  * exact same `artifacts` row; the only differences are values

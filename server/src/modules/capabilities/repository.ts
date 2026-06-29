@@ -28,7 +28,14 @@ import type {
   SkillPackageFilePreview,
   SkillRiskLevel,
 } from "./types";
-import type { ProposalOut } from "@agent-space/protocol" with { "resolution-mode": "import" };
+import type {
+  ProposalOut,
+  SkillLibraryIndexResponse,
+  SkillLocalOverlay,
+  SkillLocalOverlayConfig,
+  SkillLocalOverlayScope,
+  SkillLocalOverlayStatus,
+} from "@agent-space/protocol" with { "resolution-mode": "import" };
 
 interface SkillPackageRow {
   id: string;
@@ -94,14 +101,34 @@ interface SkillPackageFileRow {
   created_at: unknown;
 }
 
+interface SkillLocalOverlayRow {
+  id: string;
+  space_id: string;
+  skill_package_id: string;
+  scope_type: SkillLocalOverlayScope;
+  scope_id: string | null;
+  overlay_json: unknown;
+  status: SkillLocalOverlayStatus;
+  created_by_user_id: string | null;
+  created_at: unknown;
+  updated_at: unknown;
+}
+
 const SKILL_PACKAGE_COLUMNS = `
   id, source_id, package_name, version, license, raw_storage_ref,
   manifest_json, normalized_json, risk_level, status, created_at, updated_at
 `;
 
+const SKILL_PACKAGE_COLUMNS_SP = prefixedColumns(SKILL_PACKAGE_COLUMNS, "sp");
+
 const SKILL_PACKAGE_FILE_COLUMNS = `
   id, skill_package_id, path, kind, content_hash, content_type, byte_length,
   storage_ref, included, executable, risk_flags_json, created_at
+`;
+
+const SKILL_LOCAL_OVERLAY_COLUMNS = `
+  id, space_id, skill_package_id, scope_type, scope_id, overlay_json, status,
+  created_by_user_id, created_at, updated_at
 `;
 
 const WORKFLOW_PROFILE_COLUMNS = `
@@ -200,6 +227,131 @@ export class PgCapabilitiesRepository {
         metadata_json: objectValue(row.source_metadata_json),
       },
     };
+  }
+
+  async listSkillLibraryIndex(identity: SpaceUserIdentity): Promise<SkillLibraryIndexResponse> {
+    const rows = await this.db.query<SkillPackageRow & { overlay_json: unknown; overlay_id: string | null }>(
+      `SELECT ${SKILL_PACKAGE_COLUMNS_SP},
+              slo.id AS overlay_id,
+              slo.overlay_json
+         FROM skill_packages sp
+         LEFT JOIN skill_local_overlays slo
+           ON slo.skill_package_id = sp.id
+          AND slo.space_id = sp.space_id
+          AND slo.scope_type = 'space'
+          AND slo.scope_id IS NULL
+          AND slo.status = 'active'
+        WHERE sp.space_id = $1
+        ORDER BY sp.updated_at DESC, sp.created_at DESC, sp.id DESC
+        LIMIT 200`,
+      [identity.spaceId],
+    );
+    const items = await Promise.all(rows.rows.map(async (row) => {
+      const pkg = skillPackageOut(row) as SkillLibraryIndexResponse["items"][number]["skill_package"];
+      const overlay = row.overlay_id
+        ? await this.getSkillLocalOverlay(identity, row.id, { scope_type: "space", scope_id: null })
+        : null;
+      const normalized = objectValue(row.normalized_json);
+      const overlayConfig: Record<string, unknown> = overlay?.overlay_json ?? {};
+      const displayName = optionalString(overlayConfig.display_name) ?? optionalString(normalized.name) ?? pkg.package_name;
+      const alias = optionalString(overlayConfig.alias);
+      return {
+        skill_package: pkg,
+        overlay,
+        effective_name: displayName,
+        effective_alias: alias,
+        requested_permissions: Array.isArray(normalized.requested_permissions)
+          ? normalized.requested_permissions.filter((item): item is string => typeof item === "string")
+          : [],
+      };
+    }));
+    return { items };
+  }
+
+  async getSkillLocalOverlay(
+    identity: SpaceUserIdentity,
+    skillPackageId: string,
+    input: { scope_type?: string | null; scope_id?: string | null } = {},
+  ): Promise<SkillLocalOverlay | null> {
+    await this.requireSkillPackage(identity, skillPackageId);
+    const scopeType = ensureOverlayScope(input.scope_type ?? "space");
+    const scopeId = normalizeOverlayScopeId(scopeType, input.scope_id ?? null, identity.userId);
+    await this.ensureOverlayScopeExists(identity, scopeType, scopeId);
+    const row = await this.db.query<SkillLocalOverlayRow>(
+      `SELECT ${SKILL_LOCAL_OVERLAY_COLUMNS}
+         FROM skill_local_overlays
+        WHERE space_id = $1
+          AND skill_package_id = $2
+          AND scope_type = $3
+          AND COALESCE(scope_id, '') = COALESCE($4::varchar, '')
+          AND status = 'active'
+        LIMIT 1`,
+      [identity.spaceId, skillPackageId, scopeType, scopeId],
+    );
+    return row.rows[0] ? skillLocalOverlayOut(row.rows[0]) : null;
+  }
+
+  async upsertSkillLocalOverlay(
+    identity: SpaceUserIdentity,
+    skillPackageId: string,
+    body: {
+      scope_type: SkillLocalOverlayScope;
+      scope_id?: string | null;
+      status: SkillLocalOverlayStatus;
+      overlay_json: SkillLocalOverlayConfig;
+    },
+  ): Promise<SkillLocalOverlay> {
+    await this.requireSkillPackage(identity, skillPackageId);
+    const scopeType = ensureOverlayScope(body.scope_type);
+    const scopeId = normalizeOverlayScopeId(scopeType, body.scope_id ?? null, identity.userId);
+    await this.ensureOverlayScopeExists(identity, scopeType, scopeId);
+    const status = ensureOverlayStatus(body.status);
+    const now = new Date().toISOString();
+    if (status === "archived") {
+      const archived = await this.db.query<SkillLocalOverlayRow>(
+        `UPDATE skill_local_overlays
+            SET status = 'archived', updated_at = $5
+          WHERE space_id = $1 AND skill_package_id = $2 AND scope_type = $3
+            AND COALESCE(scope_id, '') = COALESCE($4::varchar, '')
+            AND status = 'active'
+          RETURNING ${SKILL_LOCAL_OVERLAY_COLUMNS}`,
+        [identity.spaceId, skillPackageId, scopeType, scopeId, now],
+      );
+      if (!archived.rows[0]) throw new HttpError(404, "Active skill overlay not found");
+      return skillLocalOverlayOut(archived.rows[0]);
+    }
+    const updated = await this.db.query<SkillLocalOverlayRow>(
+      `UPDATE skill_local_overlays
+          SET overlay_json = $5::jsonb,
+              updated_at = $6
+        WHERE space_id = $1 AND skill_package_id = $2 AND scope_type = $3
+          AND COALESCE(scope_id, '') = COALESCE($4::varchar, '')
+          AND status = 'active'
+        RETURNING ${SKILL_LOCAL_OVERLAY_COLUMNS}`,
+      [identity.spaceId, skillPackageId, scopeType, scopeId, JSON.stringify(body.overlay_json ?? {}), now],
+    );
+    if (updated.rows[0]) return skillLocalOverlayOut(updated.rows[0]);
+    const inserted = await this.db.query<SkillLocalOverlayRow>(
+      `INSERT INTO skill_local_overlays (
+         id, space_id, skill_package_id, scope_type, scope_id, overlay_json,
+         status, created_by_user_id, created_at, updated_at
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6::jsonb,
+         'active', $7, $8, $8
+       )
+       RETURNING ${SKILL_LOCAL_OVERLAY_COLUMNS}`,
+      [
+        randomUUID(),
+        identity.spaceId,
+        skillPackageId,
+        scopeType,
+        scopeId,
+        JSON.stringify(body.overlay_json ?? {}),
+        identity.userId,
+        now,
+      ],
+    );
+    return skillLocalOverlayOut(inserted.rows[0]!);
   }
 
   async saveImportedSkill(
@@ -577,6 +729,43 @@ export class PgCapabilitiesRepository {
     if (!rows.rows[0]) throw new HttpError(404, "Project not found");
   }
 
+  private async requireSkillPackage(identity: SpaceUserIdentity, skillPackageId: string): Promise<void> {
+    const rows = await this.db.query<{ id: string }>(
+      `SELECT id FROM skill_packages WHERE id = $1 AND space_id = $2 LIMIT 1`,
+      [skillPackageId, identity.spaceId],
+    );
+    if (!rows.rows[0]) throw new HttpError(404, "Skill package not found");
+  }
+
+  private async ensureOverlayScopeExists(
+    identity: SpaceUserIdentity,
+    scopeType: SkillLocalOverlayScope,
+    scopeId: string | null,
+  ): Promise<void> {
+    if (scopeType === "space") return;
+    if (!scopeId) throw new HttpError(422, "scope_id is required for this scope_type");
+    if (scopeType === "user") {
+      if (scopeId !== identity.userId) throw new HttpError(403, "skill overlay user scope must be the current user");
+      return;
+    }
+    const table =
+      scopeType === "workspace"
+        ? "workspaces"
+        : scopeType === "project"
+          ? "projects"
+          : scopeType === "agent"
+            ? "agents"
+            : null;
+    if (!table) throw new HttpError(422, "unsupported scope_type");
+    const found = await this.db.query<{ id: string }>(
+      `SELECT id FROM ${table}
+        WHERE id = $1 AND space_id = $2
+        LIMIT 1`,
+      [scopeId, identity.spaceId],
+    );
+    if (!found.rows[0]) throw new HttpError(404, `${scopeType} not found`);
+  }
+
   private async getWorkflowProfileRow(
     spaceId: string,
     projectId: string,
@@ -928,6 +1117,13 @@ function skillPackageFileOut(row: SkillPackageFileRow): Record<string, unknown> 
   };
 }
 
+function prefixedColumns(columns: string, tableAlias: string): string {
+  return columns
+    .split(",")
+    .map((column) => `${tableAlias}.${column.trim()}`)
+    .join(", ");
+}
+
 function packageFileSummary(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -958,6 +1154,47 @@ function skillPackageOut(row: SkillPackageRow): Record<string, unknown> {
     created_at: dateIso(row.created_at),
     updated_at: dateIso(row.updated_at),
   };
+}
+
+function skillLocalOverlayOut(row: SkillLocalOverlayRow): SkillLocalOverlay {
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    skill_package_id: row.skill_package_id,
+    scope_type: row.scope_type,
+    scope_id: row.scope_id,
+    overlay_json: objectValue(row.overlay_json) as SkillLocalOverlayConfig,
+    status: row.status,
+    created_by_user_id: row.created_by_user_id,
+    created_at: dateIso(row.created_at) ?? "",
+    updated_at: dateIso(row.updated_at) ?? "",
+  };
+}
+
+function ensureOverlayScope(value: string): SkillLocalOverlayScope {
+  if (["space", "project", "workspace", "agent", "user"].includes(value)) {
+    return value as SkillLocalOverlayScope;
+  }
+  throw new HttpError(422, "scope_type must be one of space, project, workspace, agent, user");
+}
+
+function ensureOverlayStatus(value: string): SkillLocalOverlayStatus {
+  if (value === "active" || value === "archived") return value;
+  throw new HttpError(422, "status must be active or archived");
+}
+
+function normalizeOverlayScopeId(
+  scopeType: SkillLocalOverlayScope,
+  scopeId: string | null,
+  userId: string,
+): string | null {
+  if (scopeType === "space") {
+    if (scopeId) throw new HttpError(422, "space skill overlay must not include scope_id");
+    return null;
+  }
+  if (scopeType === "user" && !scopeId) return userId;
+  if (!scopeId) throw new HttpError(422, "scope_id is required for this scope_type");
+  return scopeId;
 }
 
 function workflowProfileOut(row: WorkflowProfileRow): ProjectWorkflowProfile {

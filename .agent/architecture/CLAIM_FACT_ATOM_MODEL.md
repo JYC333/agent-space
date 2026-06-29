@@ -99,11 +99,11 @@ Relation proposals resolve to FK-backed `space_objects` endpoints, and retrieval
 uses `retrieval_edges` only as a rebuildable projection of active
 `object_relations` plus curated source links.
 
-### gbrain lessons apply only at the constraint layer
+### Constraint Lessons Apply Only At The Constraint Layer
 
-Agent Space should borrow gbrain's discipline around small canonical types,
-aliases/subtypes, migration review, and audit. It should not copy gbrain's
-page-oriented schema-pack runtime as the authoritative application model.
+Agent Space should keep discipline around small canonical types, aliases/subtypes,
+migration review, and audit. It should not copy a page-oriented schema-pack
+runtime as the authoritative application model.
 
 The relevant lesson is "constrain type proliferation." The answer here is a
 small fixed root object taxonomy and fixed claim kinds, not per-space dynamic
@@ -251,7 +251,7 @@ Implemented fields:
 - `created_at`, `updated_at`, `archived_at`
 
 Candidate claims should live in proposal payloads or private review artifacts
-until accepted. Do not index rejected or unaccepted candidates as brain facts.
+until accepted. Do not index rejected or unaccepted candidates as context facts.
 
 Implemented claim status transitions:
 
@@ -421,7 +421,7 @@ Context Brief findings map to claim work as follows:
 
 ## Claim Trajectory And Contradiction Loop
 
-Implemented in `server/src/modules/knowledge/claimBrainLoop.ts`. Both passes only
+Implemented in `server/src/modules/knowledge/claimReviewLoop.ts`. Both passes only
 read viewer-visible claims through the readable space-object gate, so neither can
 leak hidden claim existence, counts, or text, and neither writes canonical state.
 
@@ -431,7 +431,7 @@ leak hidden claim existence, counts, or text, and neither writes canonical state
   `valid_from`/`observed_at`/`created_at`. Holder display labels resolve through
   viewer-visible `holder_object_id` space objects and otherwise fall back to the
   non-object holder type. Exposed at `GET
-  /api/v1/knowledge/claims/trajectory` and attached to Brain Think's claim
+  /api/v1/knowledge/claims/trajectory` and attached to Ask Space's claim
   provenance behind `include_claim_trajectory`.
 - `scanClaimContradictions` runs a deterministic judge (negation / numeric
   opposition) over source-policy-filtered visible active claims, groups by
@@ -441,7 +441,7 @@ leak hidden claim existence, counts, or text, and neither writes canonical state
   `llm_judge_enabled=true` with 422; the service-level hook remains injectable
   for tests and internal callers. Any enabled implementation receives only
   source-policy-allowed visible claims plus current source-policy snapshots. `POST
-  /api/v1/knowledge/claims/contradiction-scan` (Brain Ops scan-gated) persists an
+  /api/v1/knowledge/claims/contradiction-scan` (Context Ops scan-gated) persists an
   owner-private or `space_ops` `claim_contradiction_report` artifact. That report
   becomes proposals only through the existing Claim Candidate Packet flow, which
   now consumes `claim_contradiction_report` artifacts and turns each finding into
@@ -513,16 +513,16 @@ leak hidden claim existence, counts, or text, and neither writes canonical state
 
 ## Deferred Follow-Up Work
 
-- Full gbrain-style dynamic schema packs remain rejected as the runtime model.
-- Brain Shape Registry foundations for per-space `object_kind` definitions and
+- Full dynamic schema packs remain rejected as the runtime model.
+- Object Schema Registry foundations for per-space `object_kind` definitions and
   field schemas are implemented in the Knowledge-owned object-kind registry and
-  summarized in [`RETRIEVAL_AND_BRAIN_LAYER.md`](RETRIEVAL_AND_BRAIN_LAYER.md).
+  summarized in [`CONTEXT_AND_RETRIEVAL_LAYER.md`](CONTEXT_AND_RETRIEVAL_LAYER.md).
   Claim subtype validation can build on those registry facts, but canonical
   claim writes still stay proposal-gated.
 - People/assets/events/tasks product modules.
 - Full source monitoring / source-drift evaluator for claim evidence. Runtime
   read/egress revalidation exists, but source-policy change detection and
-  scheduled claim-source review remain Brain-layer follow-up work.
+  scheduled claim-source review remain Context-layer follow-up work.
 - Frontend claim workspace and richer Context Brief claim-review UX. Structured
   proposal packets exist; productized review/transformation workflows remain
   deferred.

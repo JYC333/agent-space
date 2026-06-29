@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Copy as CopyIcon, GitBranch, Loader2, Pencil, Play, Plus, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
-import { evolutionApi, providersApi, type ModelProviderOut } from '../../api/client'
-import { SpaceLink as Link } from '../../core/spaceNav'
+import { evolutionApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
 import type {
+  EvolutionExperience,
   EvolutionProposal,
   EvolutionRunListItem,
+  EvolutionSelectorDecision,
   EvolutionSignal,
+  EvolutionStrategy,
   EvolutionSummaryOut,
   EvolutionTarget,
   EvolutionTargetCreateBody,
@@ -27,7 +29,10 @@ import {
   type TargetListTab,
   EvolutionProposalsList,
   EvolutionRunsList,
+  EvolutionSelectorDecisionsList,
   EvolutionSignalsList,
+  EvolutionStrategiesList,
+  EvolutionExperiencesList,
   EvolutionValidationPanel,
   OverviewCards,
   SectionCard,
@@ -52,10 +57,12 @@ export default function EvolutionPage() {
   const [activeTargets, setActiveTargets] = useState<EvolutionTarget[]>([])
   const [archivedTargets, setArchivedTargets] = useState<EvolutionTarget[]>([])
   const [targetSignals, setTargetSignals] = useState<EvolutionSignal[]>([])
+  const [strategies, setStrategies] = useState<EvolutionStrategy[]>([])
+  const [selectorDecisions, setSelectorDecisions] = useState<EvolutionSelectorDecision[]>([])
+  const [experiences, setExperiences] = useState<EvolutionExperience[]>([])
   const [runs, setRuns] = useState<EvolutionRunListItem[]>([])
   const [proposals, setProposals] = useState<EvolutionProposal[]>([])
   const [validationResults, setValidationResults] = useState<EvolutionValidationResult[]>([])
-  const [modelProviders, setModelProviders] = useState<ModelProviderOut[]>([])
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null)
   const [targetLoading, setTargetLoading] = useState(false)
   const [detailTab, setDetailTab] = useState<DetailTab>('definition')
@@ -90,9 +97,20 @@ export default function EvolutionPage() {
     () => validationResults.filter(result => result.target_id === selectedTargetId),
     [validationResults, selectedTargetId],
   )
-  const defaultModelProvider = useMemo(
-    () => modelProviders.find(provider => provider.enabled && provider.is_default && provider.has_api_key) ?? null,
-    [modelProviders],
+  const selectedSelectorDecisions = useMemo(
+    () => selectorDecisions.filter(decision => decision.target_id === selectedTargetId),
+    [selectorDecisions, selectedTargetId],
+  )
+  const selectedExperiences = useMemo(
+    () => experiences.filter(experience => experience.target_id === selectedTargetId),
+    [experiences, selectedTargetId],
+  )
+  const selectedAgentId = useMemo(
+    () => {
+      const value = selectedTarget?.metadata_json.agent_id
+      return typeof value === 'string' && value.trim() ? value.trim() : null
+    },
+    [selectedTarget],
   )
 
   const load = useCallback(async () => {
@@ -101,33 +119,48 @@ export default function EvolutionPage() {
       setActiveTargets([])
       setArchivedTargets([])
       setTargetSignals([])
+      setStrategies([])
+      setSelectorDecisions([])
+      setExperiences([])
       setRuns([])
       setProposals([])
       setValidationResults([])
-      setModelProviders([])
       setSelectedTargetId(null)
       setLoading(false)
       return
     }
     setLoading(true)
     try {
-      const [nextSummary, nextTargets, nextRuns, nextProposals, nextValidationResults, nextProviders] = await Promise.all([
+      const [
+        nextSummary,
+        nextTargets,
+        nextStrategies,
+        nextSelectorDecisions,
+        nextExperiences,
+        nextRuns,
+        nextProposals,
+        nextValidationResults,
+      ] = await Promise.all([
         evolutionApi.summary(),
         evolutionApi.targets(),
+        evolutionApi.strategies({ status: 'active', limit: 100 }),
+        evolutionApi.selectorDecisions({ limit: 50 }),
+        evolutionApi.experiences({ limit: 50 }),
         evolutionApi.runs({ limit: 50 }),
         evolutionApi.proposals({ limit: 50 }),
         evolutionApi.validation(),
-        providersApi.list(),
       ])
       const nextActiveTargets = nextTargets.filter(target => target.status !== 'archived')
       const nextArchivedTargets = nextTargets.filter(target => target.status === 'archived')
       setSummary(nextSummary)
       setActiveTargets(nextActiveTargets)
       setArchivedTargets(nextArchivedTargets)
+      setStrategies(nextStrategies)
+      setSelectorDecisions(nextSelectorDecisions)
+      setExperiences(nextExperiences)
       setRuns(nextRuns)
       setProposals(nextProposals)
       setValidationResults(nextValidationResults)
-      setModelProviders(nextProviders)
       setSelectedTargetId(current => {
         if (nextTargets.length === 0) return null
         if (current && nextTargets.some(target => target.id === current)) return current
@@ -139,10 +172,12 @@ export default function EvolutionPage() {
       setActiveTargets([])
       setArchivedTargets([])
       setTargetSignals([])
+      setStrategies([])
+      setSelectorDecisions([])
+      setExperiences([])
       setRuns([])
       setProposals([])
       setValidationResults([])
-      setModelProviders([])
       setSelectedTargetId(null)
     } finally {
       setLoading(false)
@@ -184,8 +219,10 @@ export default function EvolutionPage() {
   async function runTarget(targetId: string) {
     setRunningTargetId(targetId)
     try {
-      await evolutionApi.runTarget(targetId, { engine: 'llm_prompt_review' })
-      toast.success('LLM review created a proposal.')
+      const result = await evolutionApi.runTarget(targetId, { agent_id: selectedAgentId ?? undefined, mode: 'dry_run' })
+      const fallbackNote = result.is_fallback_agent ? '（使用系统默认 Evolver）' : ''
+      const proposalNote = result.proposal_ids.length > 0 ? `，已创建 ${result.proposal_ids.length} 个提案` : ''
+      toast.success(`运行完成${fallbackNote}${proposalNote}。`)
       await load()
       await loadTargetSignals(targetId)
     } catch (e) {
@@ -296,7 +333,7 @@ export default function EvolutionPage() {
     selectedTarget?.enabled
     && selectedTarget.status === 'active'
     && selectedTarget.recent_signal_count > 0
-    && defaultModelProvider,
+    && selectedAgentId,
   )
   const runningSelected = runningTargetId === selectedTargetId
 
@@ -314,11 +351,11 @@ export default function EvolutionPage() {
             <GitBranch className="size-5 text-accent-foreground" />
           </div>
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">Evolution</h1>
+            <h1 className="text-xl font-semibold tracking-tight">自进化</h1>
             <p className="text-sm text-muted-foreground">
-              Target-scoped review loops for prompts, capabilities, agents, workflows, and policies.
+              改进目标、触发信号、策略选择、验证经验和待审核改进的审计闭环。
             </p>
-            <p className="text-xs text-muted-foreground">Viewing: {viewSpaceName}</p>
+            <p className="text-xs text-muted-foreground">当前空间：{viewSpaceName}</p>
           </div>
         </div>
         <Button size="sm" variant="outline" onClick={load} disabled={loading || !viewSpaceId}>
@@ -338,15 +375,15 @@ export default function EvolutionPage() {
           <OverviewCards summary={summary} />
 
           <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-            <SectionCard title="Targets" count={visibleTargets.length}>
+            <SectionCard title="改进目标" count={visibleTargets.length}>
               <Button size="sm" variant="outline" className="mb-3 w-full justify-center" onClick={() => openTargetDialog('create')} disabled={!viewSpaceId}>
                 <Plus className="size-3.5" />
-                New target
+                新建目标
               </Button>
               <Tabs value={targetListTab} onValueChange={value => setTargetListTab(value as TargetListTab)}>
                 <TabsList className="mb-3 grid w-full grid-cols-2">
-                  <TabsTrigger value="active">Active {activeTargets.length}</TabsTrigger>
-                  <TabsTrigger value="archived">Archived {archivedTargets.length}</TabsTrigger>
+                  <TabsTrigger value="active">活跃 {activeTargets.length}</TabsTrigger>
+                  <TabsTrigger value="archived">归档 {archivedTargets.length}</TabsTrigger>
                 </TabsList>
                 <TabsContent value="active">
                   <TargetList
@@ -354,8 +391,8 @@ export default function EvolutionPage() {
                     selectedTargetId={selectedTargetId}
                     onSelect={setSelectedTargetId}
                     onConfigure={target => openTargetDialog('edit', target)}
-                    emptyTitle="No active targets."
-                    emptyDescription="Active and paused targets appear here."
+                    emptyTitle="暂无活跃目标。"
+                    emptyDescription="活跃或暂停的改进目标会显示在这里。"
                   />
                 </TabsContent>
                 <TabsContent value="archived">
@@ -364,8 +401,8 @@ export default function EvolutionPage() {
                     selectedTargetId={selectedTargetId}
                     onSelect={setSelectedTargetId}
                     onConfigure={target => openTargetDialog('edit', target)}
-                    emptyTitle="No archived targets."
-                    emptyDescription="Archived targets are kept separately from active work."
+                    emptyTitle="暂无归档目标。"
+                    emptyDescription="归档目标会和当前改进工作分开显示。"
                   />
                 </TabsContent>
               </Tabs>
@@ -378,14 +415,14 @@ export default function EvolutionPage() {
                     <div className="min-w-0 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="secondary">{selectedTarget.target_type}</Badge>
-                        <Badge variant={riskVariant(selectedTarget.risk_level)}>{selectedTarget.risk_level} risk</Badge>
+                        <Badge variant={riskVariant(selectedTarget.risk_level)}>{selectedTarget.risk_level} 风险级别</Badge>
                         <StatusBadge status={selectedTarget.enabled ? selectedTarget.status : 'disabled'} />
                       </div>
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                        <span>scope {selectedTarget.scope ?? '-'}</span>
-                        <span>version {selectedTarget.current_version ?? selectedTarget.current_version_id ?? '-'}</span>
-                        <span>signals {selectedTarget.recent_signal_count}</span>
-                        <span>last run {fmt(selectedTarget.last_run_at)}</span>
+                        <span>范围 {selectedTarget.scope ?? '-'}</span>
+                        <span>版本 {selectedTarget.current_version ?? selectedTarget.current_version_id ?? '-'}</span>
+                        <span>触发信号 {selectedTarget.recent_signal_count}</span>
+                        <span>最近运行 {fmt(selectedTarget.last_run_at)}</span>
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -395,7 +432,7 @@ export default function EvolutionPage() {
                         onClick={() => openTargetDialog('edit', selectedTarget)}
                       >
                         <Pencil className="size-3.5" />
-                        Edit target
+                        编辑目标
                       </Button>
                       <Button
                         size="sm"
@@ -403,58 +440,65 @@ export default function EvolutionPage() {
                         onClick={() => openTargetDialog('copy', selectedTarget)}
                       >
                         <CopyIcon className="size-3.5" />
-                        Copy target
+                        复制目标
                       </Button>
                       {selectedTarget.status === 'archived' ? (
                         <Button size="sm" variant="outline" onClick={() => restoreTarget(selectedTarget)} disabled={savingTarget}>
-                          Restore
+                          恢复
                         </Button>
                       ) : (
                         <>
                           <Button size="sm" variant="outline" onClick={() => toggleTargetEnabled(selectedTarget)} disabled={savingTarget}>
-                            {selectedTarget.enabled ? 'Deactivate' : 'Activate'}
+                            {selectedTarget.enabled ? '停用' : '启用'}
                           </Button>
                           <Button size="sm" variant="outline" onClick={() => archiveTarget(selectedTarget)} disabled={savingTarget}>
-                            Archive
+                            归档
                           </Button>
                         </>
                       )}
                       <Button size="sm" variant="outline" onClick={() => setSignalOpen(true)}>
                         <Plus className="size-3.5" />
-                        Record signal
+                        记录信号
                       </Button>
                       <Button size="sm" variant="outline" disabled={!canRunSelected || runningSelected} onClick={() => runTarget(selectedTarget.id)}>
                         {runningSelected ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-                        Create LLM review
+                        创建改进计划
                       </Button>
-                      {!defaultModelProvider && (
-                        <Button size="sm" variant="outline" asChild>
-                          <Link to="/providers">Configure model</Link>
-                        </Button>
-                      )}
                     </div>
                   </div>
                   {selectedTarget.recent_signal_count === 0 && selectedTarget.enabled && selectedTarget.status === 'active' && (
-                    <p className="text-xs text-muted-foreground">Review creation requires at least one signal for this target.</p>
+                    <p className="text-xs text-muted-foreground">创建改进计划需要至少一个触发信号。</p>
                   )}
-                  {!defaultModelProvider && (
-                    <p className="text-xs text-muted-foreground">LLM review requires an enabled default model provider with an API key.</p>
+                  {!selectedAgentId && (
+                    <p className="text-xs text-muted-foreground">创建改进计划需要在目标 metadata 中提供 agent_id，或由调用方在请求体中提供。</p>
                   )}
 
                   <Tabs value={detailTab} onValueChange={value => setDetailTab(value as DetailTab)}>
                     <TabsList className="flex h-auto w-full flex-wrap justify-start">
-                      <TabsTrigger value="definition">Definition</TabsTrigger>
-                      <TabsTrigger value="signals">Signals</TabsTrigger>
-                      <TabsTrigger value="runs">Runs</TabsTrigger>
-                      <TabsTrigger value="proposals">Proposals</TabsTrigger>
-                      <TabsTrigger value="validation">Validation</TabsTrigger>
+                      <TabsTrigger value="definition">定义</TabsTrigger>
+                      <TabsTrigger value="signals">触发信号</TabsTrigger>
+                      <TabsTrigger value="strategies">选择的策略</TabsTrigger>
+                      <TabsTrigger value="decisions">选择记录</TabsTrigger>
+                      <TabsTrigger value="experiences">验证经验</TabsTrigger>
+                      <TabsTrigger value="runs">运行记录</TabsTrigger>
+                      <TabsTrigger value="proposals">待审核改进</TabsTrigger>
+                      <TabsTrigger value="validation">验证</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="definition" className="mt-4">
-                      <TargetDefinition target={selectedTarget} modelProvider={defaultModelProvider} />
+                      <TargetDefinition target={selectedTarget} />
                     </TabsContent>
                     <TabsContent value="signals" className="mt-4">
                       <EvolutionSignalsList signals={targetSignals} loading={targetLoading} />
+                    </TabsContent>
+                    <TabsContent value="strategies" className="mt-4">
+                      <EvolutionStrategiesList strategies={strategies} />
+                    </TabsContent>
+                    <TabsContent value="decisions" className="mt-4">
+                      <EvolutionSelectorDecisionsList decisions={selectedSelectorDecisions} />
+                    </TabsContent>
+                    <TabsContent value="experiences" className="mt-4">
+                      <EvolutionExperiencesList experiences={selectedExperiences} />
                     </TabsContent>
                     <TabsContent value="runs" className="mt-4">
                       <EvolutionRunsList runs={selectedRuns} />
@@ -468,7 +512,7 @@ export default function EvolutionPage() {
                   </Tabs>
                 </div>
               ) : (
-                <EmptyState title="No target selected." description="Select or register a target first." />
+                <EmptyState title="未选择改进目标。" description="先选择或注册一个目标。" />
               )}
             </SectionCard>
           </div>

@@ -357,11 +357,11 @@ export interface RetrievalBriefResponse {
   artifact_id?: string
   artifact_error?: string
 }
-// ── Brain Think / Ask Brain (Slice A) ──────────────────────────────────────
-export type BrainThinkDomain = 'knowledge' | 'memory' | 'project'
-export interface BrainThinkRequest {
+// ── Ask Space (Slice A) ─────────────────────────────────────────────────
+export type AskSpaceDomain = 'knowledge' | 'memory' | 'project'
+export interface AskSpaceRequest {
   query: string
-  domains?: BrainThinkDomain[]
+  domains?: AskSpaceDomain[]
   max_results_per_domain?: number
   mode?: RetrievalSearchMode
   include_trace?: boolean
@@ -371,21 +371,21 @@ export interface BrainThinkRequest {
   combine_include_memory?: boolean
   include_claim_trajectory?: boolean
 }
-export interface BrainThinkClaimTrajectorySignal {
+export interface AskSpaceClaimTrajectorySignal {
   kind: string
   from_claim_id: string
   to_claim_id: string
   summary: string
   confidence_tier: 'high' | 'medium' | 'low'
 }
-export interface BrainThinkClaimTrajectory {
+export interface AskSpaceClaimTrajectory {
   claim_id: string
   subject_object_id: string | null
   subject_text: string | null
-  signals: BrainThinkClaimTrajectorySignal[]
+  signals: AskSpaceClaimTrajectorySignal[]
 }
-export interface BrainThinkDomainSection {
-  domain: BrainThinkDomain
+export interface AskSpaceDomainSection {
+  domain: AskSpaceDomain
   object_types: RetrievalObjectType[]
   brief: RetrievalBrief | null
   items: RetrievalSearchResult[]
@@ -394,39 +394,39 @@ export interface BrainThinkDomainSection {
   artifact_error?: string
   error_code?: string
 }
-export interface BrainThinkGapSummary {
+export interface AskSpaceGapSummary {
   stale_count: number
   thin_count: number
-  low_coverage_domains: BrainThinkDomain[]
+  low_coverage_domains: AskSpaceDomain[]
   uncited_claim_count: number
   contradiction_count: number
   missing_topic_count: number
 }
-export interface BrainThinkProvenanceItem {
-  domain: BrainThinkDomain
+export interface AskSpaceProvenanceItem {
+  domain: AskSpaceDomain
   object_type: RetrievalObjectType
   object_id: string
   title: string
 }
-export type BrainThinkFollowUpKind = 'claim_candidate_packet' | 'maintenance_scan'
-export interface BrainThinkFollowUp {
-  kind: BrainThinkFollowUpKind
+export type AskSpaceFollowUpKind = 'claim_candidate_packet' | 'maintenance_scan'
+export interface AskSpaceFollowUp {
+  kind: AskSpaceFollowUpKind
   label: string
   reason?: string
   source_artifact_ids: string[]
 }
-export interface BrainThinkResponse {
+export interface AskSpaceResponse {
   generated_at: string
   space_id: string
   query: string
-  requested_domains: BrainThinkDomain[]
-  domains: BrainThinkDomainSection[]
+  requested_domains: AskSpaceDomain[]
+  domains: AskSpaceDomainSection[]
   synthesized: boolean
   combined_answer: string | null
-  gap_summary: BrainThinkGapSummary
-  provenance: BrainThinkProvenanceItem[]
-  claim_trajectories: BrainThinkClaimTrajectory[]
-  follow_ups: BrainThinkFollowUp[]
+  gap_summary: AskSpaceGapSummary
+  provenance: AskSpaceProvenanceItem[]
+  claim_trajectories: AskSpaceClaimTrajectory[]
+  follow_ups: AskSpaceFollowUp[]
   session_artifact_id?: string
   session_artifact_error?: string
   canonical_write_performed: false
@@ -599,8 +599,8 @@ export interface SpaceRetrievalSettings {
   include_trace: boolean
   external_egress_enabled: boolean
   retrieval_tool_mode: RetrievalToolMode
-  brain_ops_review_mode: BrainOpsReviewMode
-  brain_ops_scan_mode: BrainOpsScanMode
+  context_ops_review_mode: ContextOpsReviewMode
+  context_ops_scan_mode: ContextOpsScanMode
   embedding_dimensions: number
   max_results_default: number
   ranking_config: RetrievalRuntimeRankingConfig
@@ -608,8 +608,8 @@ export interface SpaceRetrievalSettings {
   updated_at: string
 }
 export type RetrievalToolMode = 'off' | 'manual_tool_only' | 'preflight_search' | 'preflight_brief'
-export type BrainOpsReviewMode = 'private_only' | 'admins' | 'members'
-export type BrainOpsScanMode = 'admins' | 'members'
+export type ContextOpsReviewMode = 'private_only' | 'admins' | 'members'
+export type ContextOpsScanMode = 'admins' | 'members'
 export type SpaceRetrievalSettingsUpdate = Partial<Pick<
   SpaceRetrievalSettings,
   | 'default_search_mode'
@@ -620,8 +620,8 @@ export type SpaceRetrievalSettingsUpdate = Partial<Pick<
   | 'include_trace'
   | 'external_egress_enabled'
   | 'retrieval_tool_mode'
-  | 'brain_ops_review_mode'
-  | 'brain_ops_scan_mode'
+  | 'context_ops_review_mode'
+  | 'context_ops_scan_mode'
   | 'embedding_dimensions'
   | 'max_results_default'
   | 'ranking_config'
@@ -2108,23 +2108,22 @@ export interface EvolutionRunListItem {
   target_name: string | null
   target_type: string | null
   capability_key: string | null
+  strategy_key?: string | null
   engine: string | null
   status: string
   created_at: string
   started_at: string | null
   artifact_count: number
-  proposal_id: string | null
 }
 
 export interface EvolutionRunResult {
   run_id: string
   target_id: string
-  context_artifact_id: string
-  report_artifact_id: string
-  revision_artifact_id: string
-  proposal_id: string
-  proposal_type: string
+  selector_decision_id: string
+  selected_strategy_key: string | null
   run_status: string
+  proposal_ids: string[]
+  is_fallback_agent: boolean
 }
 
 export interface EvolutionProposal {
@@ -2138,6 +2137,76 @@ export interface EvolutionProposal {
   summary: string | null
   created_at: string
   created_by_run_id: string | null
+}
+
+export interface EvolutionStrategy {
+  id: string
+  space_id: string | null
+  strategy_key: string
+  name: string
+  description: string | null
+  category: string
+  target_type: string
+  status: string
+  risk_level: string
+  signals_match: string[]
+  preconditions_json: Record<string, unknown>
+  strategy_steps: string[]
+  constraints: string[]
+  validation_policy_json: Record<string, unknown>
+  tool_policy_json: Record<string, unknown>
+  routing_hint_json: Record<string, unknown>
+  provenance_type: string
+  source_ref_json: Record<string, unknown>
+  success_count: number
+  failure_count: number
+  confidence_score: number
+  last_selected_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface EvolutionSelectorDecision {
+  id: string
+  space_id: string
+  target_id: string
+  target_name: string | null
+  target_type: string | null
+  run_id: string | null
+  selected_strategy_asset_id: string | null
+  selected_strategy_key: string | null
+  selected_strategy_name: string | null
+  candidate_strategy_ids: unknown[]
+  input_signal_ids: unknown[]
+  decision_reason: string | null
+  score_trace_json: Record<string, unknown>
+  rejected_reasons_json: unknown[]
+  created_at: string
+}
+
+export interface EvolutionExperience {
+  id: string
+  space_id: string
+  strategy_asset_id: string | null
+  strategy_key: string | null
+  strategy_name: string | null
+  target_id: string | null
+  target_name: string | null
+  source_run_id: string | null
+  source_proposal_id: string | null
+  experience_key: string
+  summary: string
+  trigger_signals: unknown[]
+  outcome_status: string
+  confidence_score: number
+  blast_radius_json: Record<string, unknown>
+  validation_trace_json: Record<string, unknown>
+  execution_trace_json: Record<string, unknown>
+  lessons: unknown[]
+  anti_patterns: unknown[]
+  environment_fingerprint_json: Record<string, unknown>
+  provenance_type: string
+  created_at: string
 }
 
 export interface EvolutionValidationResult {
@@ -2592,6 +2661,51 @@ export interface SkillPackage {
   package_files?: SkillPackageFile[]
 }
 
+export type SkillLocalOverlayScope = 'space' | 'project' | 'workspace' | 'agent' | 'user'
+export type SkillLocalOverlayStatus = 'active' | 'archived'
+
+export interface SkillLocalOverlayConfig {
+  alias?: string | null
+  display_name?: string | null
+  endpoint_defaults?: Record<string, unknown>
+  credential_ref?: string | null
+  default_scope?: string | null
+  runtime_preference?: string | null
+  user_preferences?: Record<string, unknown>
+}
+
+export interface SkillLocalOverlay {
+  id: string
+  space_id: string
+  skill_package_id: string
+  scope_type: SkillLocalOverlayScope
+  scope_id: string | null
+  overlay_json: SkillLocalOverlayConfig
+  status: SkillLocalOverlayStatus
+  created_by_user_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SkillLocalOverlayUpsertRequest {
+  scope_type: SkillLocalOverlayScope
+  scope_id?: string | null
+  status?: SkillLocalOverlayStatus
+  overlay_json?: SkillLocalOverlayConfig
+}
+
+export interface SkillLibraryIndexItem {
+  skill_package: SkillPackage
+  overlay: SkillLocalOverlay | null
+  effective_name: string
+  effective_alias: string | null
+  requested_permissions: string[]
+}
+
+export interface SkillLibraryIndexResponse {
+  items: SkillLibraryIndexItem[]
+}
+
 export interface SkillImportPreviewResponse {
   source: Partial<Omit<SkillSource, 'id' | 'fetched_at'>>
   normalized_skill: NormalizedSkill
@@ -2619,6 +2733,72 @@ export interface ContextPackage {
   attachments: Record<string, unknown>[]
 }
 
+export type ContextProfileScope = 'space' | 'project' | 'workspace' | 'agent' | 'user'
+export type ContextProfileStatus = 'active' | 'archived'
+
+export interface ContextRoutingRule {
+  id?: string
+  path_glob: string
+  module_id?: string
+  agent_doc_paths?: string[]
+  context_bundle_id?: string
+  priority?: number
+}
+
+export interface ContextRoutingManifest {
+  version?: number
+  rules?: ContextRoutingRule[]
+  default_agent_doc_paths?: string[]
+}
+
+export interface ContextPackConfig {
+  title?: string
+  startup_protocol?: string
+  skill_index_enabled?: boolean
+  observation_policy?: 'disabled' | 'manual' | 'scheduled'
+  notes?: string
+  [key: string]: unknown
+}
+
+export interface ContextProfile {
+  id: string
+  space_id: string
+  scope_type: ContextProfileScope
+  scope_id: string | null
+  status: ContextProfileStatus
+  version: number
+  context_pack_json: ContextPackConfig
+  routing_manifest_json: ContextRoutingManifest
+  created_by_user_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ContextProfileListResponse {
+  items: ContextProfile[]
+}
+
+export interface ContextProfileUpsertRequest {
+  scope_type: ContextProfileScope
+  scope_id?: string | null
+  status?: ContextProfileStatus
+  version?: number
+  context_pack_json?: ContextPackConfig
+  routing_manifest_json?: ContextRoutingManifest
+}
+
+export interface ContextRoutingUpdateRequest {
+  context_pack_json?: ContextPackConfig
+  routing_manifest_json: ContextRoutingManifest
+}
+
+export interface ContextEffectiveRoutingResponse {
+  workspace_id: string
+  profiles: ContextProfile[]
+  effective_manifest: ContextRoutingManifest
+  selected_agent_doc_paths: string[]
+}
+
 export type ContextArtifactRevocationScope = 'workspace' | 'project'
 
 export interface ContextArtifactRevocation {
@@ -2643,9 +2823,9 @@ export interface ContextArtifactRevocationListResponse {
   items: ContextArtifactRevocation[]
 }
 
-export type BrainOpsCountMap = Record<string, number>
+export type ContextOpsCountMap = Record<string, number>
 
-export interface BrainOpsArtifactSummary {
+export interface ContextOpsArtifactSummary {
   artifact_id: string
   artifact_type: string
   title: string
@@ -2655,7 +2835,7 @@ export interface BrainOpsArtifactSummary {
   finding_count: number | null
 }
 
-export interface BrainOpsPacketSummary {
+export interface ContextOpsPacketSummary {
   proposal_id: string
   proposal_type: string
   status: string
@@ -2664,13 +2844,13 @@ export interface BrainOpsPacketSummary {
   report_artifact_id: string | null
 }
 
-export interface BrainOpsSummary {
+export interface ContextOpsSummary {
   generated_at: string
   space_id: string
   owner_user_id: string
   window_days: number
   index_freshness: {
-    object_counts: BrainOpsCountMap
+    object_counts: ContextOpsCountMap
     stale_projection_count: number
     source_connected_object_count: number
     oldest_indexed_at: string | null
@@ -2683,7 +2863,7 @@ export interface BrainOpsSummary {
     missing_embedding_chunks: number
     claimed_chunks: number
     attempted_chunks: number
-    missing_by_object_type: BrainOpsCountMap
+    missing_by_object_type: ContextOpsCountMap
   }
   source_policy_warnings: {
     active_source_connections: number
@@ -2691,27 +2871,27 @@ export interface BrainOpsSummary {
     reader_restricted_source_count: number
     external_egress_disabled_source_count: number
     derived_writes_disabled_source_count: number
-    warning_counts: BrainOpsCountMap
+    warning_counts: ContextOpsCountMap
   }
   maintenance: {
     recent_report_count: number
-    finding_counts: BrainOpsCountMap
+    finding_counts: ContextOpsCountMap
     pending_packet_count: number
-    recent_packets: BrainOpsPacketSummary[]
+    recent_packets: ContextOpsPacketSummary[]
   }
   diagnostics: {
     recent_report_count: number
-    diagnostic_code_counts: BrainOpsCountMap
+    diagnostic_code_counts: ContextOpsCountMap
     latest_report_artifact_id: string | null
     latest_generated_at: string | null
     trend_metric_deltas: Record<string, number>
     insufficient_trend_sample: boolean
   }
-  recent_context_briefs: BrainOpsArtifactSummary[]
+  recent_context_briefs: ContextOpsArtifactSummary[]
   retrieval_feedback: {
     recent_event_count: number
-    signal_counts: BrainOpsCountMap
-    surface_counts: BrainOpsCountMap
+    signal_counts: ContextOpsCountMap
+    surface_counts: ContextOpsCountMap
     window_days: number
   }
   memory_provenance: {
@@ -2722,7 +2902,7 @@ export interface BrainOpsSummary {
   }
 }
 
-export type BrainOpsDrilldownSection =
+export type ContextOpsDrilldownSection =
   | 'index_freshness'
   | 'embedding_backlog'
   | 'source_warnings'
@@ -2731,7 +2911,7 @@ export type BrainOpsDrilldownSection =
   | 'explain_reports'
   | 'recent_briefs'
 
-export interface BrainOpsDrilldownObject {
+export interface ContextOpsDrilldownObject {
   object_type: string
   object_id: string
   title: string
@@ -2740,7 +2920,7 @@ export interface BrainOpsDrilldownObject {
   missing_chunk_count: number | null
 }
 
-export interface BrainOpsSourceWarningDetail {
+export interface ContextOpsSourceWarningDetail {
   source_connection_id: string
   name: string
   owner_user_id: string
@@ -2748,16 +2928,56 @@ export interface BrainOpsSourceWarningDetail {
   warnings: string[]
 }
 
-export interface BrainOpsDrilldown {
+export interface ContextOpsDrilldown {
   generated_at: string
   space_id: string
-  section: BrainOpsDrilldownSection
+  section: ContextOpsDrilldownSection
   limit: number
   truncated: boolean
-  objects: BrainOpsDrilldownObject[]
-  sources: BrainOpsSourceWarningDetail[]
-  artifacts: BrainOpsArtifactSummary[]
-  packets: BrainOpsPacketSummary[]
+  objects: ContextOpsDrilldownObject[]
+  sources: ContextOpsSourceWarningDetail[]
+  artifacts: ContextOpsArtifactSummary[]
+  packets: ContextOpsPacketSummary[]
+}
+
+export interface ContextOpsContextObservationScanRequest {
+  window_days?: number
+  limit?: number
+  persist_report?: boolean
+}
+
+export type ContextObservationSeverity = 'red' | 'yellow' | 'green'
+
+export interface ContextObservationItem {
+  severity: ContextObservationSeverity
+  title: string
+  summary: string
+  source_refs: Record<string, unknown>[]
+  suggested_target: 'memory' | 'knowledge' | 'capability' | 'assistant_preference' | 'review_only'
+}
+
+export interface ContextOpsContextObservationReport {
+  kind: 'context_observation_report'
+  version: 1
+  generated_at: string
+  space_id: string
+  owner_user_id: string
+  window_days: number
+  observations: ContextObservationItem[]
+  counts: ContextOpsCountMap
+  source_refs: Record<string, unknown>[]
+  access_safety: {
+    aggregate_or_review_refs_only: true
+    raw_private_content_included: false
+    canonical_write_performed: false
+  }
+  canonical_write_performed: false
+}
+
+export interface ContextOpsContextObservationScanResponse {
+  report: ContextOpsContextObservationReport
+  artifact_id: string | null
+  canonical_write_performed: false
 }
 
 export interface Feature {
@@ -3225,7 +3445,7 @@ export interface ProjectSummary {
 
 // ── Automations ─────────────────────────────────────────────────────────────
 export type AutomationTriggerType = 'manual' | 'schedule'
-export type AutomationTargetType = 'agent_run' | 'knowledge_retrieval_maintenance' | 'brain_ops_dream_cycle_v2'
+export type AutomationTargetType = 'agent_run' | 'knowledge_retrieval_maintenance' | 'context_ops_review_cycle'
 
 export interface AutomationOut {
   id: string
@@ -3278,7 +3498,7 @@ export interface AutomationFireResult {
   warnings?: Array<{ stage: string; error_code: string; message: string }>
 }
 
-export interface BrainOpsDreamCycleV2Request {
+export interface ContextReviewCycleRequest {
   window_days?: number
   artifact_limit?: number
   create_packets?: boolean
@@ -3291,7 +3511,7 @@ export interface BrainOpsDreamCycleV2Request {
   max_claim_candidates?: number
 }
 
-export interface BrainOpsDreamCycleV2Response {
+export interface ContextReviewCycleResponse {
   artifact_id: string
   review_scope: 'private' | 'space_ops'
   retrieval_maintenance: Record<string, unknown>

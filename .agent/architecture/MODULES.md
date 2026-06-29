@@ -73,7 +73,7 @@ Core modules are `always_on=True`. Optional product routes are still mounted by 
 | `source_pointers` | product | `/source-pointers*` | empty | Metadata-only cross-space provenance pointers; no read grant. |
 | `intake` | product | `/intake*` | empty | Source connections, intake items, extraction evidence, trust helpers, summary runs. |
 | `knowledge` | product | `/knowledge*`, `/notes/collections*` | empty | Knowledge items, notes, sources, entity links, source links, read model, and proposal appliers. |
-| `evolution` | capability | `/evolution*` | empty | Evolution targets/signals, validation reads, and prompt-update proposal applier. |
+| `evolution` | capability | `/evolution*` | empty | Evolution targets/signals, strategy assets, selector decisions, experiences, review prompts, validation reads, and review artifacts. |
 | `tasks` | product | `/tasks*`, `/boards*`, `/me/tasks` | empty | Boards, tasks, task-run links, task evaluation, run-finalized hook. |
 | `workspace_profiles` | product | `/workspace-profiles*` | empty | Workspace profile list/create/read/update. |
 | `workspaces` | product | `/workspaces*`, `/workspace-console*` | yes | Workspace records, system-core workspace logic, PathPolicy, sandbox/worktree helpers, and workspace-console read routes. There is no separate workspace-console route module. |

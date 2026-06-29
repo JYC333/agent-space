@@ -125,6 +125,77 @@ export const SkillPackageFileSchema = SkillPackageFilePreviewSchema.extend({
 }).passthrough();
 export type SkillPackageFile = z.infer<typeof SkillPackageFileSchema>;
 
+export const SkillLocalOverlayScopeSchema = z.enum([
+  "space",
+  "project",
+  "workspace",
+  "agent",
+  "user",
+]);
+export type SkillLocalOverlayScope = z.infer<typeof SkillLocalOverlayScopeSchema>;
+
+export const SkillLocalOverlayStatusSchema = z.enum(["active", "archived"]);
+export type SkillLocalOverlayStatus = z.infer<typeof SkillLocalOverlayStatusSchema>;
+
+export const SkillLocalOverlayConfigSchema = z
+  .object({
+    alias: z.string().max(128).nullable().optional(),
+    display_name: z.string().max(256).nullable().optional(),
+    endpoint_defaults: JsonObjectSchema.default({}),
+    credential_ref: z.string().max(256).nullable().optional(),
+    default_scope: z.string().max(128).nullable().optional(),
+    runtime_preference: z.string().max(128).nullable().optional(),
+    user_preferences: JsonObjectSchema.default({}),
+  })
+  .strict();
+export type SkillLocalOverlayConfig = z.infer<typeof SkillLocalOverlayConfigSchema>;
+
+export const SkillLocalOverlaySchema = z
+  .object({
+    id: IdSchema,
+    space_id: IdSchema,
+    skill_package_id: IdSchema,
+    scope_type: SkillLocalOverlayScopeSchema,
+    scope_id: IdSchema.nullable(),
+    overlay_json: SkillLocalOverlayConfigSchema,
+    status: SkillLocalOverlayStatusSchema,
+    created_by_user_id: IdSchema.nullable(),
+    created_at: ISODateTimeSchema,
+    updated_at: ISODateTimeSchema,
+  })
+  .passthrough();
+export type SkillLocalOverlay = z.infer<typeof SkillLocalOverlaySchema>;
+
+export const SkillLocalOverlayUpsertRequestSchema = z
+  .object({
+    scope_type: SkillLocalOverlayScopeSchema,
+    scope_id: IdSchema.nullable().optional(),
+    status: SkillLocalOverlayStatusSchema.default("active"),
+    overlay_json: SkillLocalOverlayConfigSchema.default({}),
+  })
+  .strict();
+export type SkillLocalOverlayUpsertRequest = z.infer<
+  typeof SkillLocalOverlayUpsertRequestSchema
+>;
+
+export const SkillLibraryIndexItemSchema = z
+  .object({
+    skill_package: SkillPackageSchema,
+    overlay: SkillLocalOverlaySchema.nullable(),
+    effective_name: z.string(),
+    effective_alias: z.string().nullable(),
+    requested_permissions: z.array(z.string()).default([]),
+  })
+  .passthrough();
+export type SkillLibraryIndexItem = z.infer<typeof SkillLibraryIndexItemSchema>;
+
+export const SkillLibraryIndexResponseSchema = z
+  .object({
+    items: z.array(SkillLibraryIndexItemSchema),
+  })
+  .passthrough();
+export type SkillLibraryIndexResponse = z.infer<typeof SkillLibraryIndexResponseSchema>;
+
 export const SkillImportPreviewRequestSchema = z.object({
   url: z.string().min(1),
   source_type: SkillSourceTypeSchema.optional(),

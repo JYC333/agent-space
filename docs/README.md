@@ -39,8 +39,8 @@ This is the index for design and operations docs. The root
 |---|---|
 | [MULTI_AGENT.md](MULTI_AGENT.md) | Multi-agent runtime and delegation model |
 | [CAPABILITY_SYSTEM.md](CAPABILITY_SYSTEM.md) | Capability manifests, registry, enable state, execution |
-| [EVOLVER_INTEGRATION.md](EVOLVER_INTEGRATION.md) | Evolver integration |
-| [SELF_EVOLUTION.md](SELF_EVOLUTION.md) | Self-evolution constraints and gates |
+| [EVOLUTION_CORE.md](EVOLUTION_CORE.md) | Evolution core — source of truth for targets, signals, strategies, runs, experiences |
+| [SELF_EVOLUTION.md](SELF_EVOLUTION.md) | Self-evolution deployment: worktrees, deployer jobs, merge flow |
 | [DAILY_CAPTURE_REPORT.md](DAILY_CAPTURE_REPORT.md) | Daily capture/report behavior |
 
 ## Operations
@@ -56,4 +56,4 @@ This is the index for design and operations docs. The root
 |---|---|
 | [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md) | Explicitly deferred work items |
 | [MEMORY_CONTEXT_ROADMAP.md](MEMORY_CONTEXT_ROADMAP.md) | Memory context future directions |
-| [architecture/evolution-substrate.md](architecture/evolution-substrate.md) | Evolution substrate notes |
+| [architecture/evolution-substrate.md](architecture/evolution-substrate.md) | Evolution substrate pointer → see EVOLUTION_CORE.md |

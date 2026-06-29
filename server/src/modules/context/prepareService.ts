@@ -14,6 +14,8 @@ import { enforce } from "../policy/service";
 import { assertSandboxOnly, ContextCompiler, type CompiledContext } from "./compiler";
 import { buildContextPackage } from "./contextPackage";
 import { resolveReadableScopes } from "./contextRepositoryHelpers";
+import { PgContextProfileRepository } from "./profiles";
+import { DEFAULT_CONTEXT_ROUTING_MANIFEST } from "./routingManifest";
 import {
   PgRunContextRepository,
   type ContextDigestRow,
@@ -308,6 +310,8 @@ export class ContextPrepareService {
           run.prompt ?? "",
           pkg.personal_context_block,
         );
+        const routingManifest = await this.loadRoutingManifestForRun(run, userId);
+        const touchedFiles = contextTouchedFilesForRun(run);
         let compiled: CompiledContext | null = null;
         if (input.sandboxCwd && input.targetFormat) {
           compiled = await this.compiler.compile({
@@ -316,6 +320,8 @@ export class ContextPrepareService {
             taskGoal: composedRuntimePrompt,
             sandboxDir: input.sandboxCwd,
             workspacePath: input.workspacePath,
+            touchedFiles,
+            routingManifest,
             stablePrefixText: stableText,
             dynamicTailText: compilerDynamicTailText,
             runtimeSkillText,
@@ -349,6 +355,14 @@ export class ContextPrepareService {
         ),
       );
     }
+  }
+
+  private async loadRoutingManifestForRun(
+    run: RunContextRecord,
+    userId: string | null,
+  ) {
+    if (!this.config.databaseUrl) return DEFAULT_CONTEXT_ROUTING_MANIFEST;
+    return PgContextProfileRepository.fromConfig(this.config).loadEffectiveManifestForRun(run, userId);
   }
 
   private async enforceContextInjectMemory(run: RunContextRecord): Promise<void> {
@@ -1014,6 +1028,14 @@ function allDigests(bundle: DigestBundle): ContextDigestRow[] {
 function contextArtifactIdsForRun(run: RunContextRecord): string[] {
   const request = recordValue(run.request_json);
   return arrayOfStrings(request.context_artifact_ids).slice(0, 8);
+}
+
+function contextTouchedFilesForRun(run: RunContextRecord): string[] {
+  const request = recordValue(run.request_json);
+  return [
+    ...arrayOfStrings(request.touched_files),
+    ...arrayOfStrings(request.context_touched_files),
+  ].slice(0, 100);
 }
 
 function composeRuntimePrompt(userPrompt: string, personalContextBlock: string): string {

@@ -2,11 +2,13 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Loader2 } from 'lucide-react'
 import { SpaceLink as Link } from '../../core/spaceNav'
 import { errMsg } from '../../lib/utils'
-import type { ModelProviderOut } from '../../api/client'
 import type {
+  EvolutionExperience,
   EvolutionProposal,
   EvolutionRunListItem,
+  EvolutionSelectorDecision,
   EvolutionSignal,
+  EvolutionStrategy,
   EvolutionSummaryOut,
   EvolutionTarget,
   EvolutionTargetCreateBody,
@@ -39,25 +41,30 @@ export const EMPTY_SUMMARY: EvolutionSummaryOut = {
 }
 
 const SIGNAL_TYPE_LABELS: Record<string, string> = {
-  memory_candidate_proposed: 'Memory candidate proposed',
-  memory_candidate_rejected: 'Memory candidate rejected',
-  memory_candidate_edited: 'Memory candidate edited',
-  stable_preference_missed: 'Stable preference missed',
-  exploration_misclassified_as_decision: 'Exploration misclassified',
-  temporary_note_saved_as_memory: 'Temporary note saved',
-  proposal_rejected: 'Proposal rejected',
-  user_repeated_same_correction: 'Repeated correction',
-  run_validation_failed: 'Validation failed',
+  runtime_failure: '运行失败',
+  adapter_failed: '适配器失败',
+  tool_error: '工具错误',
+  validation_failure: '验证失败',
+  run_validation_failed: '运行验证失败',
+  proposal_rejected: '改进被拒绝',
+  stable_preference_missed: '稳定偏好遗漏',
+  prompt_gap: '提示资产缺口',
+  user_repeated_same_correction: '重复修正',
+  capability_gap: '能力缺口',
+  policy_boundary: '策略边界',
+  memory_health: '记忆健康',
+  retrieval_gap: '检索缺口',
+  review_requested: '请求审核',
 }
 
 const SIGNAL_TYPES = Object.entries(SIGNAL_TYPE_LABELS).map(([value, label]) => ({ value, label }))
 
 const SIGNAL_SEVERITIES = ['low', 'medium', 'high', 'critical'].map(value => ({ value, label: value }))
-export type DetailTab = 'definition' | 'signals' | 'runs' | 'proposals' | 'validation'
+export type DetailTab = 'definition' | 'signals' | 'strategies' | 'decisions' | 'experiences' | 'runs' | 'proposals' | 'validation'
 export type TargetDialogMode = 'create' | 'copy' | 'edit'
 export type TargetListTab = 'active' | 'archived'
 
-const TARGET_TYPES = ['prompt', 'capability', 'agent_profile', 'workflow', 'policy'].map(value => ({ value, label: value }))
+const TARGET_TYPES = ['agent_version', 'capability', 'runtime_skill_binding', 'memory', 'knowledge', 'workflow', 'workspace', 'system'].map(value => ({ value, label: value }))
 const RISK_LEVELS = ['low', 'medium', 'high', 'critical'].map(value => ({ value, label: value }))
 const TARGET_STATUSES = ['active', 'paused', 'archived'].map(value => ({ value, label: value }))
 const ENABLED_OPTIONS = [
@@ -65,8 +72,9 @@ const ENABLED_OPTIONS = [
   { value: 'false', label: 'Disabled' },
 ]
 const DEFAULT_ENGINE_POLICY = {
-  allowed_engines: ['llm_prompt_review'],
-  allowed_proposal_types: ['prompt_update'],
+  max_strategy_risk: 'medium',
+  allow_direct_apply: false,
+  allowed_strategy_categories: ['repair', 'optimize', 'maintain', 'harden', 'review', 'innovate'],
 }
 const DEFAULT_VALIDATION = {
   window: '14d',
@@ -126,10 +134,10 @@ export function riskVariant(risk: string): 'default' | 'secondary' | 'muted' | '
 
 export function OverviewCards({ summary }: { summary: EvolutionSummaryOut }) {
   const cards = [
-    { label: 'Active targets', value: summary.active_targets, empty: 'No active targets' },
-    { label: 'Signals collected', value: summary.signals_collected, empty: 'No signals yet' },
-    { label: 'Pending evolution proposals', value: summary.pending_proposals, empty: 'No pending proposals' },
-    { label: 'Recent evolution runs', value: summary.recent_runs, empty: 'No recent runs' },
+    { label: '改进目标', value: summary.active_targets, empty: '暂无改进目标' },
+    { label: '触发信号', value: summary.signals_collected, empty: '暂无触发信号' },
+    { label: '待审核改进', value: summary.pending_proposals, empty: '暂无待审核改进' },
+    { label: '运行记录', value: summary.recent_runs, empty: '暂无运行记录' },
   ]
   return (
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -137,7 +145,7 @@ export function OverviewCards({ summary }: { summary: EvolutionSummaryOut }) {
         <Card key={card.label} className="mb-0 p-4">
           <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{card.label}</div>
           <div className="mt-2 text-2xl font-semibold leading-none" style={{ fontFamily: 'var(--font-mono)' }}>{card.value}</div>
-          <div className="mt-1 text-xs text-muted-foreground">{card.value === 0 ? card.empty : 'Current space'}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{card.value === 0 ? card.empty : '当前空间'}</div>
         </Card>
       ))}
     </div>
@@ -169,7 +177,7 @@ export function TargetList({
   onSelect,
   onConfigure,
   emptyTitle = 'No targets.',
-  emptyDescription = 'Registered evolution targets appear here.',
+  emptyDescription = 'Registered improvement targets appear here.',
 }: {
   targets: EvolutionTarget[]
   selectedTargetId: string | null
@@ -208,7 +216,7 @@ export function TargetList({
             <div className="mt-2 flex flex-wrap gap-1.5">
               <Badge variant="secondary">{target.target_type}</Badge>
               <Badge variant={riskVariant(target.risk_level)}>{target.risk_level}</Badge>
-              <Badge variant="outline">{target.recent_signal_count} signals</Badge>
+              <Badge variant="outline">{target.recent_signal_count} 触发信号</Badge>
             </div>
             <p className="mt-2 truncate text-xs text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
               {target.capability_key ?? target.target_ref_id ?? target.id}
@@ -230,7 +238,7 @@ export function TargetList({
                 }}
                 className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
               >
-                Edit
+                编辑
               </span>
             </div>
           </button>
@@ -252,8 +260,8 @@ export function EvolutionSignalsList({ signals, loading }: { signals: EvolutionS
   if (signals.length === 0) {
     return (
       <EmptyState
-        title="No signals for this target."
-        description="Typed evidence for this target appears here."
+        title="暂无触发信号。"
+        description="这个目标的类型化证据会显示在这里。"
       />
     )
   }
@@ -269,7 +277,7 @@ export function EvolutionSignalsList({ signals, loading }: { signals: EvolutionS
           <p className="mt-1 text-xs text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>{signal.signal_type}</p>
           <p className="mt-2 text-sm text-muted-foreground">{signal.summary ?? 'No summary provided.'}</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {signal.source_type}{signal.source_id ? ` ${shortId(signal.source_id)}` : ''} - {fmt(signal.created_at)}
+            证据 {signal.source_type}{signal.source_id ? ` ${shortId(signal.source_id)}` : ''} - {fmt(signal.created_at)}
           </p>
         </div>
       ))}
@@ -281,8 +289,8 @@ export function EvolutionRunsList({ runs }: { runs: EvolutionRunListItem[] }) {
   if (runs.length === 0) {
     return (
       <EmptyState
-        title="No runs for this target."
-        description="Review runs appear here."
+        title="暂无运行记录。"
+        description="自进化运行会显示在这里。"
       />
     )
   }
@@ -294,20 +302,17 @@ export function EvolutionRunsList({ runs }: { runs: EvolutionRunListItem[] }) {
             <div className="flex flex-wrap items-center gap-2">
               <StatusBadge status={run.status} />
               <Badge variant="outline">{run.engine ?? 'unknown engine'}</Badge>
+              {run.strategy_key && <Badge variant="secondary">{run.strategy_key}</Badge>}
               <span className="font-mono text-xs text-muted-foreground">{shortId(run.run_id)}</span>
             </div>
             <p className="text-sm font-medium text-foreground">{displayTargetName(run)}</p>
             <p className="text-xs text-muted-foreground">
-              created {fmt(run.created_at)} - started {fmt(run.started_at)} - artifacts {run.artifact_count}
+              创建 {fmt(run.created_at)} - 启动 {fmt(run.started_at)} - artifact {run.artifact_count}
             </p>
-            {run.proposal_id && (
-              <Link to={`/proposals/${run.proposal_id}`} className="text-xs text-accent-foreground hover:underline">
-                Proposal {shortId(run.proposal_id)}
-              </Link>
-            )}
+
           </div>
           <Button size="sm" variant="outline" asChild>
-            <Link to={`/runs/${run.run_id}`}>Open run</Link>
+            <Link to={`/runs/${run.run_id}`}>打开运行</Link>
           </Button>
         </div>
       ))}
@@ -319,8 +324,8 @@ export function EvolutionProposalsList({ proposals }: { proposals: EvolutionProp
   if (proposals.length === 0) {
     return (
       <EmptyState
-        title="No proposals for this target."
-        description="Reviewable changes appear here."
+        title="暂无待审核改进。"
+        description="通过 proposal 边界创建的改进会显示在这里。"
       />
     )
   }
@@ -335,8 +340,101 @@ export function EvolutionProposalsList({ proposals }: { proposals: EvolutionProp
               {displayTargetName(proposal)}
             </Link>
           </div>
-          <p className="mt-2 text-sm text-muted-foreground">{proposal.summary ?? 'No summary provided.'}</p>
-          <p className="mt-1 text-xs text-muted-foreground">created {fmt(proposal.created_at)}</p>
+          <p className="mt-2 text-sm text-muted-foreground">{proposal.summary ?? '暂无摘要。'}</p>
+          <p className="mt-1 text-xs text-muted-foreground">创建 {fmt(proposal.created_at)}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function EvolutionStrategiesList({ strategies }: { strategies: EvolutionStrategy[] }) {
+  if (strategies.length === 0) {
+    return (
+      <EmptyState
+        title="暂无可用策略。"
+        description="内置或空间级 EvolutionStrategy 会显示在这里。"
+      />
+    )
+  }
+  return (
+    <div className="divide-y divide-border">
+      {strategies.map(strategy => (
+        <div key={strategy.id} className="py-3 first:pt-0 last:pb-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">{strategy.category}</Badge>
+            <Badge variant={riskVariant(strategy.risk_level)}>{strategy.risk_level}</Badge>
+            <StatusBadge status={strategy.status} />
+            <span className="text-sm font-medium text-foreground">{strategy.name}</span>
+          </div>
+          <p className="mt-1 font-mono text-xs text-muted-foreground">{strategy.strategy_key}</p>
+          <p className="mt-2 text-sm text-muted-foreground">{strategy.description ?? '暂无描述。'}</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <Badge variant="outline">{strategy.target_type}</Badge>
+            <Badge variant="outline">confidence {strategy.confidence_score.toFixed(2)}</Badge>
+            <Badge variant="outline">success {strategy.success_count}</Badge>
+            <Badge variant="outline">failure {strategy.failure_count}</Badge>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function EvolutionSelectorDecisionsList({ decisions }: { decisions: EvolutionSelectorDecision[] }) {
+  if (decisions.length === 0) {
+    return (
+      <EmptyState
+        title="暂无选择记录。"
+        description="EvolutionSelector 选择策略后的审计记录会显示在这里。"
+      />
+    )
+  }
+  return (
+    <div className="divide-y divide-border">
+      {decisions.map(decision => (
+        <div key={decision.id} className="py-3 first:pt-0 last:pb-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">{decision.selected_strategy_key ?? 'no_strategy'}</Badge>
+            <span className="font-mono text-xs text-muted-foreground">{shortId(decision.id)}</span>
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">{decision.decision_reason ?? '暂无选择理由。'}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            候选 {decision.candidate_strategy_ids.length} - 证据 {decision.input_signal_ids.length} - {fmt(decision.created_at)}
+          </p>
+          {decision.run_id && (
+            <Link to={`/runs/${decision.run_id}`} className="mt-1 inline-block text-xs text-accent-foreground hover:underline">
+              运行记录 {shortId(decision.run_id)}
+            </Link>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function EvolutionExperiencesList({ experiences }: { experiences: EvolutionExperience[] }) {
+  if (experiences.length === 0) {
+    return (
+      <EmptyState
+        title="暂无验证经验。"
+        description="EvolutionSolidifier 固化后的验证经验会显示在这里。"
+      />
+    )
+  }
+  return (
+    <div className="divide-y divide-border">
+      {experiences.map(experience => (
+        <div key={experience.id} className="py-3 first:pt-0 last:pb-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge status={experience.outcome_status} />
+            <Badge variant="secondary">{experience.strategy_key ?? 'unknown_strategy'}</Badge>
+            <span className="font-mono text-xs text-muted-foreground">{experience.experience_key}</span>
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">{experience.summary}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            confidence {experience.confidence_score.toFixed(2)} - 证据 {experience.trigger_signals.length} - {fmt(experience.created_at)}
+          </p>
         </div>
       ))}
     </div>
@@ -400,7 +498,7 @@ export function TargetConfigDialog({
   const isEdit = mode === 'edit'
   const isCopy = mode === 'copy'
   const [targetName, setTargetName] = useState('')
-  const [targetType, setTargetType] = useState('prompt')
+  const [targetType, setTargetType] = useState('agent_version')
   const [targetRefType, setTargetRefType] = useState('capability')
   const [targetRefId, setTargetRefId] = useState('')
   const [capabilityKey, setCapabilityKey] = useState('')
@@ -416,14 +514,9 @@ export function TargetConfigDialog({
   useEffect(() => {
     if (!open) return
     const meta = target?.metadata_json ?? {}
-    const displayName = typeof meta.display_name === 'string'
-      ? meta.display_name
-      : typeof meta.name === 'string'
-        ? meta.name
-        : ''
-    const nextName = target ? (displayName || target.target_name || '') : ''
+    const nextName = target ? (target.target_name || '') : ''
     setTargetName(mode === 'copy' && nextName ? `${nextName} copy` : nextName)
-    setTargetType(target?.target_type ?? 'prompt')
+    setTargetType(target?.target_type ?? 'agent_version')
     setTargetRefType(target?.target_ref_type ?? 'capability')
     setTargetRefId(target?.target_ref_id ?? '')
     setCapabilityKey(target?.capability_key ?? '')
@@ -492,76 +585,76 @@ export function TargetConfigDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isCopy ? 'Copy target' : isEdit ? 'Edit target' : 'New target'}</DialogTitle>
+          <DialogTitle>{isCopy ? '复制改进目标' : isEdit ? '编辑改进目标' : '新建改进目标'}</DialogTitle>
           <DialogDescription>
-            Configure a target instance and its validation evaluators for this space.
+            配置自进化可以审计的目标、风险级别和验证策略。
           </DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={submit}>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>Name</Label>
+              <Label>名称</Label>
               <Input value={targetName} onChange={event => setTargetName(event.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>Target type</Label>
+              <Label>目标类型</Label>
               <Select value={targetType} onChange={setTargetType} options={TARGET_TYPES} />
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-1.5">
-              <Label>Reference type</Label>
+              <Label>引用类型</Label>
               <Input value={targetRefType} onChange={event => setTargetRefType(event.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>Reference ID</Label>
+              <Label>引用 ID</Label>
               <Input value={targetRefId} onChange={event => setTargetRefId(event.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>Capability key</Label>
+              <Label>能力 key</Label>
               <Input value={capabilityKey} onChange={event => setCapabilityKey(event.target.value)} />
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-1.5">
-              <Label>Risk</Label>
+              <Label>风险级别</Label>
               <Select value={riskLevel} onChange={setRiskLevel} options={RISK_LEVELS} />
             </div>
             <div className="space-y-1.5">
-              <Label>Status</Label>
+              <Label>状态</Label>
               <Select value={status} onChange={setStatus} options={TARGET_STATUSES} />
             </div>
             <div className="space-y-1.5">
-              <Label>Enabled</Label>
+              <Label>启用</Label>
               <Select value={enabled} onChange={setEnabled} options={ENABLED_OPTIONS} />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>Purpose</Label>
+            <Label>目的</Label>
             <Textarea value={purpose} onChange={event => setPurpose(event.target.value)} rows={3} />
           </div>
           <div className="space-y-1.5">
-            <Label>Constraints</Label>
+            <Label>约束</Label>
             <Textarea value={constraints} onChange={event => setConstraints(event.target.value)} rows={5} />
           </div>
           <div className="grid gap-3 lg:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>Engine policy JSON</Label>
+              <Label>策略边界 JSON</Label>
               <Textarea value={enginePolicyJson} onChange={event => setEnginePolicyJson(event.target.value)} rows={9} className="font-mono text-xs" />
             </div>
             <div className="space-y-1.5">
-              <Label>Validation JSON</Label>
+              <Label>验证 JSON</Label>
               <Textarea value={validationJson} onChange={event => setValidationJson(event.target.value)} rows={9} className="font-mono text-xs" />
             </div>
           </div>
           {error && <p className="text-xs text-destructive">{error}</p>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-              Cancel
+              取消
             </Button>
             <Button type="submit" disabled={saving}>
               {saving && <Loader2 className="size-3.5 animate-spin" />}
-              {isEdit ? 'Save target' : 'Create target'}
+              {isEdit ? '保存目标' : '创建目标'}
             </Button>
           </DialogFooter>
         </form>
@@ -570,46 +663,45 @@ export function TargetConfigDialog({
   )
 }
 
-export function TargetDefinition({ target, modelProvider }: { target: EvolutionTarget; modelProvider: ModelProviderOut | null }) {
+export function TargetDefinition({ target }: { target: EvolutionTarget }) {
   const enginePolicy = target.engine_policy_json ?? {}
-  const allowedEngines = Array.isArray(enginePolicy.allowed_engines) ? enginePolicy.allowed_engines.join(', ') : 'llm_prompt_review'
-  const modelLabel = modelProvider
-    ? `${modelProvider.name}${modelProvider.default_model ? ` / ${modelProvider.default_model}` : ''}`
-    : 'Not configured'
+  const maxStrategyRisk = typeof enginePolicy.max_strategy_risk === 'string' ? enginePolicy.max_strategy_risk : target.risk_level
+  const agentId = typeof target.metadata_json.agent_id === 'string' ? target.metadata_json.agent_id : null
   const rows = [
-    ['Scope', target.scope ?? '-'],
-    ['Type', target.target_type],
-    ['Reference', target.target_ref_id ?? '-'],
-    ['Capability', target.capability_key ?? '-'],
-    ['Current version', target.current_version ?? target.current_version_id ?? '-'],
-    ['Last run', fmt(target.last_run_at)],
+    ['范围', target.scope ?? '-'],
+    ['类型', target.target_type],
+    ['引用', target.target_ref_id ?? '-'],
+    ['能力', target.capability_key ?? '-'],
+    ['当前版本', target.current_version ?? target.current_version_id ?? '-'],
+    ['agent_id', agentId ?? '-'],
+    ['最近运行', fmt(target.last_run_at)],
   ]
   return (
     <div className="space-y-4">
       {target.purpose && <p className="text-sm text-muted-foreground">{target.purpose}</p>}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-md border border-border p-3">
-          <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Review engine</div>
-          <div className="mt-1 text-sm text-foreground" style={{ fontFamily: 'var(--font-mono)' }}>{allowedEngines}</div>
+          <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">选择的策略</div>
+          <div className="mt-1 text-sm text-foreground" style={{ fontFamily: 'var(--font-mono)' }}>EvolutionSelector</div>
         </div>
         <div className="rounded-md border border-border p-3">
-          <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Model provider</div>
-          <div className="mt-1 text-sm text-foreground">{modelLabel}</div>
+          <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">风险级别</div>
+          <div className="mt-1 text-sm text-foreground">{maxStrategyRisk}</div>
         </div>
         <div className="rounded-md border border-border p-3">
-          <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Review input</div>
-          <div className="mt-1 text-sm text-foreground">Current prompt + typed signals</div>
+          <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">证据</div>
+          <div className="mt-1 text-sm text-foreground">目标 metadata + 触发信号</div>
         </div>
         <div className="rounded-md border border-border p-3">
-          <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Output</div>
-          <div className="mt-1 text-sm text-foreground">Pending prompt revision proposal</div>
+          <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">输出</div>
+          <div className="mt-1 text-sm text-foreground">待审核 plan artifact</div>
         </div>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         {rows.map(([label, value]) => (
           <div key={label} className="rounded-md border border-border p-3">
             <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{label}</div>
-            <div className="mt-1 break-words text-sm text-foreground" style={{ fontFamily: label === 'Reference' || label === 'Capability' ? 'var(--font-mono)' : undefined }}>
+            <div className="mt-1 break-words text-sm text-foreground" style={{ fontFamily: label === '引用' || label === '能力' || label === 'agent_id' ? 'var(--font-mono)' : undefined }}>
               {value}
             </div>
           </div>
@@ -667,9 +759,9 @@ export function SignalDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Record signal</DialogTitle>
+          <DialogTitle>记录触发信号</DialogTitle>
           <DialogDescription>
-            A signal is typed evidence for a target, not a keyword.
+            触发信号是目标的类型化证据，不是自动写入或自动应用。
           </DialogDescription>
         </DialogHeader>
         <form
@@ -687,40 +779,40 @@ export function SignalDialog({
           }}
         >
           <div className="space-y-1.5">
-            <Label>Target</Label>
+            <Label>改进目标</Label>
             <Input value={target ? displayTargetName(target) : ''} disabled />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>Evidence type</Label>
+              <Label>证据类型</Label>
               <Select value={signalType} onChange={setSignalType} options={SIGNAL_TYPES} />
             </div>
             <div className="space-y-1.5">
-              <Label>Severity</Label>
+              <Label>严重性</Label>
               <Select value={severity} onChange={setSeverity} options={SIGNAL_SEVERITIES} />
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>Source type</Label>
+              <Label>来源类型</Label>
               <Input value={sourceType} onChange={event => setSourceType(event.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>Source ID</Label>
+              <Label>来源 ID</Label>
               <Input value={sourceId} onChange={event => setSourceId(event.target.value)} />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>Summary</Label>
+            <Label>摘要</Label>
             <Textarea value={summary} onChange={event => setSummary(event.target.value)} />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-              Cancel
+              取消
             </Button>
             <Button type="submit" disabled={saving || !target}>
               {saving && <Loader2 className="size-3.5 animate-spin" />}
-              Save signal
+              保存信号
             </Button>
           </DialogFooter>
         </form>

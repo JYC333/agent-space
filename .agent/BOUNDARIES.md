@@ -34,7 +34,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 **B10** — Agents do not directly write active memory. All memory updates must go through the proposal → user approval → activation flow.
 
-**B11** — Every memory read must be logged in `MemoryReadTrace` (table `memory_access_logs`). This feeds the MemoryEvolver fitness function.
+**B11** — Every memory read must be logged in `MemoryReadTrace` (table `memory_access_logs`). These traces can feed evolution signals and memory-health experiences, but they do not bypass Memory read/write governance.
 
 **B12** — External chat capture (e.g. conversation imports) must create activity records first, not active memory.
 

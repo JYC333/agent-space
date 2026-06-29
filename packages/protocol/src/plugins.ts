@@ -32,7 +32,7 @@ export type OfficialPluginCategory =
  *          Team/collaborative tools. Controlled by space admin.
  *
  * user   → one enablement row per (plugin_id, user_id); space_id NULL, user_id NOT NULL
- *          Personal tools (e.g. dairy). Enabled once, works across all spaces.
+ *          Personal tools (e.g. diary). Enabled once, works across all spaces.
  *          Data belongs to the user, not any specific space.
  */
 export type OfficialPluginScope = "space" | "user";

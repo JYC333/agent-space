@@ -96,7 +96,7 @@ describe("knowledge retrieval protocol contracts", () => {
     ).toBe(true);
   });
 
-  it("parses Brain Ops review and scan settings", () => {
+  it("parses Context Ops review and scan settings", () => {
     const settings = SpaceRetrievalSettingsSchema.parse({
       space_id: "space-1",
       default_search_mode: "hybrid",
@@ -107,8 +107,8 @@ describe("knowledge retrieval protocol contracts", () => {
       include_trace: false,
       external_egress_enabled: true,
       retrieval_tool_mode: "off",
-      brain_ops_review_mode: "members",
-      brain_ops_scan_mode: "members",
+      context_ops_review_mode: "members",
+      context_ops_scan_mode: "members",
       embedding_dimensions: 2560,
       max_results_default: 10,
       ranking_config: {
@@ -126,8 +126,8 @@ describe("knowledge retrieval protocol contracts", () => {
       updated_at: "2026-06-26T00:00:00.000Z",
     });
 
-    expect(settings.brain_ops_review_mode).toBe("members");
-    expect(settings.brain_ops_scan_mode).toBe("members");
+    expect(settings.context_ops_review_mode).toBe("members");
+    expect(settings.context_ops_scan_mode).toBe("members");
     expect(settings.ranking_config.mechanics.semantic_results_cache.state).toBe("disabled");
   });
 

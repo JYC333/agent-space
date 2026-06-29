@@ -66,8 +66,8 @@ const baseSettings = {
   include_trace: false,
   external_egress_enabled: true,
   retrieval_tool_mode: 'off',
-  brain_ops_review_mode: 'admins',
-  brain_ops_scan_mode: 'admins',
+  context_ops_review_mode: 'admins',
+  context_ops_scan_mode: 'admins',
   embedding_dimensions: 2560,
   max_results_default: 50,
   ranking_config: {
@@ -135,7 +135,7 @@ describe('MemoriesPage maintenance and access-log UI', () => {
   it('keeps space_ops unavailable when shared review is private_only', async () => {
     vi.mocked(spacesApi.getRetrievalSettings).mockResolvedValue({
       ...baseSettings,
-      brain_ops_review_mode: 'private_only',
+      context_ops_review_mode: 'private_only',
     })
 
     renderPage()
