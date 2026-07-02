@@ -97,7 +97,8 @@ Rules (clean model — no old paths):
   `uq_agents_system_assistant_per_space` + resolve-before-create). It is minted from the internal
   `personal_assistant` seed spec via copy-on-create; there is no global default-agent or hardcoded
   built-in-agent semantics, and users cannot create duplicate Assistants from a template.
-- **Assistant preferences are a soft layer, never policy.** `space_assistant_settings`
+- **Assistant preferences are a soft layer, never policy.** The
+  `agent.default_assistant.settings` space-scoped setting
   (`GET`/`PATCH /api/v1/agents/default-assistant/settings`) holds
   response style, verbosity, default context toggles, default project, proposal style, and soft
   model preferences. These shape default UI/context behavior only — they are never merged into the
@@ -355,7 +356,7 @@ The per-space default Assistant Agent (`agent_kind="system_assistant"`, system-o
 per space) is resolved/created on demand by the server agents module
 (`GET`/`POST /api/v1/agents/default-assistant`) from the internal `personal_assistant` seed spec —
 it is an ordinary copy-on-create Agent at runtime, not a special runtime path. Users configure soft
-Assistant **preferences** (`space_assistant_settings`), never the core prompt or hard policy.
+Assistant **preferences** (`agent.default_assistant.settings`), never the core prompt or hard policy.
 
 Memory reflection (`POST /sessions/{id}/reflect`) is an explicit **internal service**
 (the memory consolidation/reflection path via the `memory.reflect` capability) — it does not run

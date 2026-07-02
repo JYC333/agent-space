@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
@@ -56,7 +57,7 @@ beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
     `TRUNCATE retrieval_objects, retrieval_aliases, retrieval_chunks, retrieval_edges,
-              memory_access_logs, memory_entries, project_members, projects, users, spaces CASCADE`,
+              memory_access_logs, memory_entries, project_members, projects, space_memberships, users, spaces CASCADE`,
   );
   // A multi-member (household) space so project gating is meaningful; a personal
   // space would grant its sole member access to every project.
@@ -70,6 +71,14 @@ beforeEach(async () => {
       `INSERT INTO users (id, display_name, status, created_at, updated_at)
        VALUES ($1, 'User', 'active', now(), now())`,
       [id],
+    );
+  }
+  // project_members(space_id, user_id) FKs to space_memberships(space_id, user_id).
+  for (const id of [OWNER, OTHER]) {
+    await pool.query(
+      `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+       VALUES ($1, $2, $3, 'member', 'active', now(), now())`,
+      [randomUUID(), SPACE, id],
     );
   }
 });
@@ -88,7 +97,7 @@ async function addProjectMember(userId: string): Promise<void> {
   await pool!.query(
     `INSERT INTO project_members (id, space_id, project_id, user_id, role, status, created_at, updated_at)
      VALUES ($1, $2, $3, $4, 'member', 'active', now(), now())`,
-    [`${PROJECT}-${userId}`.slice(0, 36), SPACE, PROJECT, userId],
+    [randomUUID(), SPACE, PROJECT, userId],
   );
 }
 

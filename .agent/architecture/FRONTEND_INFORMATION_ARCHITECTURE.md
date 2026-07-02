@@ -103,7 +103,7 @@ accept/reject, intake, projects, providers, runtime, recent. Writes default to t
 Two stable tiers plus per-scene context (`src/core/navigation.tsx`, `src/components/shell/`):
 
 - **Global Rail** (`RAIL_ITEMS`) — narrow, icon-only desktop rail of major destinations, Home
-  first and stable: Home · Inbox · Review · Knowledge · Tasks · Projects · Agents · Workspaces · Settings.
+  first and stable: Home · Inbox · Intake · Review · Knowledge · Tasks · Projects · Agents · Workspaces · Settings.
   Collapsible/expandable. On mobile this becomes the bottom tab bar (`MOBILE_TAB_ITEMS`).
 - **Scene Sidebar** (`SCENES`) — second-level navigation for the current scene, changes by
   scene (Inbox / Review / Agents / Workspaces). Collapsible; when collapsed the expand
@@ -155,7 +155,7 @@ not be navigable.
 | Workspaces | Enabled | Functional |
 | Workspace Console | Enabled | Functional |
 | Workspace Snapshot Settings | Enabled | Space-admin-only UI for snapshot retention policy (`/workspace-snapshot-settings`); configures `snapshot_retention_days` / `snapshot_max_count` at space and per-workspace level |
-| Retrieval Settings | Enabled | Space-scoped UI for `space_retrieval_settings`, `space_retrieval_prompts`, and retrieval `provider_task_policies` (`/retrieval-settings`); members can view retrieval models and the advanced collapsed rewrite prompt, while owner/admin users can edit default search mode, retrieval embedding dimensions/models, native rerank model, query-rewrite chat model and prompt, rerank/rewrite availability, rewrite/cache/trace defaults, and default result budget |
+| Retrieval Settings | Enabled | Space-scoped UI for the `retrieval.space.settings` scoped setting, `space_retrieval_prompts`, and retrieval `provider_task_policies` (`/retrieval-settings`); members can view retrieval models and the advanced collapsed rewrite prompt, while owner/admin users can edit default search mode, retrieval embedding dimensions/models, native rerank model, query-rewrite chat model and prompt, rerank/rewrite availability, rewrite/cache/trace defaults, and default result budget |
 | Settings | Enabled | Functional |
 | Capabilities | Enabled | Capability/skill control-plane; developer-heavy but user-visible for review |
 | Providers | Enabled | Functional; provider cards and create/edit forms show capability labels for Chat, Embeddings, and Native rerank so retrieval-only providers are not confused with ordinary chat providers |
@@ -163,6 +163,7 @@ not be navigable.
 | **Home** (user-scoped) | Enabled | Cross-space command center at `/home`; **not** a Space, not in the switcher |
 | **Today** (Space) | Enabled | Space-scoped dashboard at `/spaces/:spaceId/today` for the active Space |
 | **Inbox** (Activity) | Enabled | Capture intake (rail label "Inbox"; route `/activity`) |
+| **Intake** | Enabled | Space-scoped information stream control plane at `/intake`; owns RSS/Atom/web page connections, candidate items, evidence, scan state, and source governance. Project pages consume Intake summaries and link back here for management. |
 | **Review** (Proposals + Memory) | Enabled | Governance area (rail label "Review"; routes `/proposals` and `/memory`). The scene sidebar links real surfaces; proposal-type filters live inside `/proposals`. |
 | **Knowledge** | Enabled | First-level unified module (rail label "Knowledge"; route `/knowledge`). `/knowledge` redirects to the last-used workspace (default `/knowledge/notes`); `/knowledge/home` is an optional overview hub, never the forced landing. Sub-areas switch via an in-header breadcrumb (no scene sidebar): **Notes** (working-knowledge workspace — configurable collection tree + open-note tabs), **Wiki** (canonical, KnowledgeItem-backed, `/knowledge/wiki`), **Sources** (backend source CRUD exists; current frontend is list-only evidence browsing), **Cards** |
 | **Cards** | `enabled: false, visible: false` | Standalone module hidden; surfaced as the Knowledge › Cards placeholder until the spaced-repetition model exists |
@@ -218,7 +219,9 @@ The frontend is ready for personal dogfooding. The core product loop is usable:
 - Project detail pages include a Research workflow panel that creates
   optional project-scoped saved workflow presets, builds run drafts directly
   from templates or saved presets, and queues normal agent runs. Runtime profile
-  selection is hidden when an Agent has only one enabled default runtime. The
+  selection is hidden when an Agent has only one enabled default runtime. Project
+  pages show read-only Intake consumption summaries and hand off source management
+  to `/intake?project_id=...`; they do not create RSS/source connections. The
   Capabilities page is the imported skill/package review surface, and Artifacts
   render structured Research outputs when possible.
 

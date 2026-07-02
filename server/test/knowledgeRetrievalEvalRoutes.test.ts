@@ -68,19 +68,20 @@ function settingsRow(
   contextOpsScanMode: "admins" | "members" = "admins",
 ) {
   return {
-    space_id: "space-1",
-    default_search_mode: "hybrid",
-    rerank_enabled: false,
-    query_rewrite_enabled: false,
-    query_rewrite_default: false,
-    use_query_cache: true,
-    include_trace: false,
-    external_egress_enabled: true,
-    retrieval_tool_mode: "off",
-    context_ops_review_mode: contextOpsReviewMode,
-    context_ops_scan_mode: contextOpsScanMode,
-    embedding_dimensions: 2560,
-    max_results_default: 10,
+    settings_json: {
+      default_search_mode: "hybrid",
+      rerank_enabled: false,
+      query_rewrite_enabled: false,
+      query_rewrite_default: false,
+      use_query_cache: true,
+      include_trace: false,
+      external_egress_enabled: true,
+      retrieval_tool_mode: "off",
+      context_ops_review_mode: contextOpsReviewMode,
+      context_ops_scan_mode: contextOpsScanMode,
+      embedding_dimensions: 2560,
+      max_results_default: 10,
+    },
     created_at: "2026-06-12T10:00:00.000Z",
     updated_at: "2026-06-12T10:00:00.000Z",
   };
@@ -93,7 +94,7 @@ describe("Knowledge retrieval eval report route", () => {
     vi.mocked(getDbPool).mockReturnValue({
       async query(sql: string, params: readonly unknown[] = []) {
         calls.push({ sql, params });
-        if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
+        if (/FROM settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
         return { rows: [], rowCount: 1 };
       },
     } as never);
@@ -151,7 +152,7 @@ describe("Knowledge retrieval eval report route", () => {
     vi.mocked(getDbPool).mockReturnValue({
       async query(sql: string, params: readonly unknown[] = []) {
         calls.push({ sql, params });
-        if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
+        if (/FROM settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
         if (/SELECT id, artifact_type, visibility\s+FROM artifacts/.test(sql)) {
           expect(params[4]).toEqual(["private", "space_shared"]);
           return {
@@ -224,7 +225,7 @@ describe("Knowledge retrieval eval report route", () => {
     vi.mocked(getDbPool).mockReturnValue({
       async query(sql: string, params: readonly unknown[] = []) {
         calls.push({ sql, params });
-        if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow("admins")], rowCount: 1 };
+        if (/FROM settings/.test(sql)) return { rows: [settingsRow("admins")], rowCount: 1 };
         if (/FROM space_memberships/.test(sql)) return { rows: [{ role: "admin" }], rowCount: 1 };
         if (/SELECT id, artifact_type, visibility\s+FROM artifacts/.test(sql)) {
           expect(params[4]).toEqual(["space_shared"]);
@@ -261,7 +262,7 @@ describe("Knowledge retrieval eval report route", () => {
     vi.mocked(getDbPool).mockReturnValue({
       async query(sql: string, params: readonly unknown[] = []) {
         calls.push({ sql, params });
-        if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
+        if (/FROM settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
         return { rows: [], rowCount: 0 };
       },
     } as never);
@@ -293,7 +294,7 @@ describe("Knowledge retrieval eval report route", () => {
     vi.mocked(getDbPool).mockReturnValue({
       async query(sql: string, params: readonly unknown[] = []) {
         calls.push({ sql, params });
-        if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
+        if (/FROM settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
         return { rows: [], rowCount: 0 };
       },
     } as never);
@@ -341,7 +342,7 @@ describe("Knowledge retrieval eval report route", () => {
     vi.mocked(getDbPool).mockReturnValue({
       async query(sql: string, params: readonly unknown[] = []) {
         calls.push({ sql, params });
-        if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
+        if (/FROM settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
         if (/FROM artifacts/.test(sql)) {
           if (/created_at </.test(sql)) return { rows: [], rowCount: 0 };
           return {
@@ -445,6 +446,9 @@ describe("Knowledge retrieval eval report route", () => {
     const client = {
       async query(sql: string, params: readonly unknown[] = []) {
         calls.push({ sql, params });
+        // Every INSERT this fake handles puts the generated id first; echo
+        // it back so callers relying on `RETURNING id` get a usable row.
+        if (/^\s*INSERT/i.test(sql)) return { rows: [{ id: params[0] }], rowCount: 1 };
         return { rows: [], rowCount: 1 };
       },
       release() {},
@@ -452,7 +456,7 @@ describe("Knowledge retrieval eval report route", () => {
     vi.mocked(getDbPool).mockReturnValue({
       async query(sql: string, params: readonly unknown[] = []) {
         calls.push({ sql, params });
-        if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
+        if (/FROM settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
         if (/FROM artifacts/.test(sql)) {
           if (/created_at </.test(sql)) return { rows: [], rowCount: 0 };
           return {
@@ -508,7 +512,7 @@ describe("Knowledge retrieval eval report route", () => {
     vi.mocked(getDbPool).mockReturnValue({
       async query(sql: string, params: readonly unknown[] = []) {
         calls.push({ sql, params });
-        if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow("private_only", "admins")], rowCount: 1 };
+        if (/FROM settings/.test(sql)) return { rows: [settingsRow("private_only", "admins")], rowCount: 1 };
         if (/FROM space_memberships/.test(sql)) return { rows: [{ role: "member" }], rowCount: 1 };
         return { rows: [], rowCount: 0 };
       },
@@ -532,7 +536,7 @@ describe("Knowledge retrieval eval report route", () => {
     vi.mocked(getDbPool).mockReturnValue({
       async query(sql: string, params: readonly unknown[] = []) {
         calls.push({ sql, params });
-        if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow("private_only", "members")], rowCount: 1 };
+        if (/FROM settings/.test(sql)) return { rows: [settingsRow("private_only", "members")], rowCount: 1 };
         if (/FROM space_memberships/.test(sql)) return { rows: [{ role: "member" }], rowCount: 1 };
         if (/FROM artifacts/.test(sql)) {
           if (/created_at </.test(sql)) return { rows: [], rowCount: 0 };
@@ -571,7 +575,7 @@ describe("Knowledge retrieval eval report route", () => {
     vi.mocked(getDbPool).mockReturnValue({
       async query(sql: string, params: readonly unknown[] = []) {
         calls.push({ sql, params });
-        if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow("private_only")], rowCount: 1 };
+        if (/FROM settings/.test(sql)) return { rows: [settingsRow("private_only")], rowCount: 1 };
         return { rows: [], rowCount: 0 };
       },
     } as never);

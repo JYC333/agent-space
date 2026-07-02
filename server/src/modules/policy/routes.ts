@@ -55,6 +55,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
           proposal_id: req.proposal_id,
           proposal_type: req.proposal_type,
           declared_risk: req.risk_level ?? null,
+          required_approver_role: req.required_approver_role ?? null,
           proposal_payload: req.payload ?? null,
           metadata_json: req.metadata_json ?? null,
         },

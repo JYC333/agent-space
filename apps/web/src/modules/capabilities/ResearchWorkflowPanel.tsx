@@ -35,9 +35,9 @@ interface ResearchWorkflowPanelProps {
 }
 
 const SOURCE_MODE_OPTIONS = [
-  { value: 'project_sources', label: 'Project sources' },
+  { value: 'project_sources', label: 'Linked project context' },
   { value: 'runtime_native', label: 'Runtime native' },
-  { value: 'manual_urls', label: 'Manual URLs' },
+  { value: 'manual_urls', label: 'Prompt URLs' },
 ]
 
 function stringArray(value: unknown): string[] {

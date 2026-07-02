@@ -49,6 +49,20 @@ function intakeConfig(): ServerConfig {
     agentSpaceEnv: "",
     appVersion: null,
     enableSystemEvolution: false,
+    customSourceAllowedLanguages: ["typescript_node"],
+    customSourceNetworkHardDenyRules: [],
+    customSourceTimeoutMsMax: 30_000,
+    customSourceOutputBytesMax: 1_048_576,
+    customSourceDownloadBytesMax: 5_242_880,
+    customSourceLogBytesMax: 65_536,
+    customSourceMaxFiles: 50,
+    customSourceBrowserAutomationAvailable: false,
+    customSourceShellAvailable: false,
+    customSourceDependencyInstallationAvailable: false,
+    customSourceGenerateRateLimitPerHour: 30,
+    customSourceArtifactRetentionEnabled: true,
+    customSourceArtifactRetentionDays: 30,
+    customSourceArtifactRetentionIntervalSeconds: 3600,
     systemCoreOwnerEmail: null,
     systemCoreBaseBranch: "main",
     backupEnabled: false,
@@ -67,6 +81,9 @@ class FakeDb implements Queryable {
   constructor(private readonly handler: (sql: string, params: readonly unknown[]) => unknown[]) {}
 
   async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
+    if (sql.includes("FROM scheduler_tasks")) {
+      return { rows: [] as Row[], rowCount: 0 };
+    }
     return { rows: this.handler(sql, params) as Row[], rowCount: null };
   }
 }
@@ -106,27 +123,33 @@ function activityRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Positions match insertProposalRow's INSERT column order
+// (server/src/modules/proposals/reviewPackets.ts): id, space_id,
+// created_by_run_id, proposal_type, status, risk_level, urgency, preview,
+// title, summary, payload_json, created_at, workspace_id, rationale,
+// created_by_user_id, visibility, project_id, created_by_agent_id,
+// required_approver_role.
 function proposalRow(params: readonly unknown[]) {
   return {
     id: String(params[0] ?? "proposal-1"),
     space_id: String(params[1] ?? "space-1"),
-    created_by_user_id: typeof params[8] === "string" ? params[8] : "user-1",
-    workspace_id: typeof params[6] === "string" ? params[6] : null,
-    created_by_run_id: null,
-    proposal_type: String(params[2] ?? "memory_create"),
-    status: "pending",
-    risk_level: "low",
-    urgency: "normal",
-    preview: false,
-    title: String(params[3] ?? "Proposal"),
-    payload_json: JSON.parse(String(params[4] ?? "{}")) as Record<string, unknown>,
-    rationale: String(params[7] ?? ""),
-    visibility: "space_shared",
+    created_by_run_id: typeof params[2] === "string" ? params[2] : null,
+    proposal_type: String(params[3] ?? "memory_create"),
+    status: typeof params[4] === "string" ? params[4] : "pending",
+    risk_level: typeof params[5] === "string" ? params[5] : "low",
+    urgency: typeof params[6] === "string" ? params[6] : "normal",
+    preview: Boolean(params[7] ?? false),
+    title: String(params[8] ?? "Proposal"),
+    payload_json: JSON.parse(String(params[10] ?? "{}")) as Record<string, unknown>,
+    rationale: String(params[13] ?? ""),
+    visibility: typeof params[15] === "string" ? params[15] : "space_shared",
     review_deadline: null,
     expires_at: null,
-    created_at: String(params[5] ?? "2026-06-16T00:00:00.000Z"),
+    created_at: String(params[11] ?? "2026-06-16T00:00:00.000Z"),
     reviewed_at: null,
-    project_id: typeof params[9] === "string" ? params[9] : null,
+    workspace_id: typeof params[12] === "string" ? params[12] : null,
+    created_by_user_id: typeof params[14] === "string" ? params[14] : "user-1",
+    project_id: typeof params[16] === "string" ? params[16] : null,
     egress_approval_id: null,
     egress_approval_status: null,
   };
@@ -251,6 +274,30 @@ function sourceConnectionRow(policyOverrides: Record<string, unknown> = {}) {
   };
 }
 
+function extractionJobRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "job-1",
+    space_id: "space-1",
+    connection_id: null,
+    intake_item_id: "item-1",
+    source_snapshot_id: null,
+    source_object_type: null,
+    source_object_id: null,
+    job_type: "extract_text",
+    status: "pending",
+    started_at: null,
+    completed_at: null,
+    items_seen: null,
+    items_created: null,
+    items_updated: null,
+    error_code: null,
+    error_message: null,
+    metadata_json: {},
+    created_at: "2026-06-16T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 describe("Leaf domain repository behavior", () => {
   it("captures raw input as an activity record", async () => {
     const db = new FakeDb((sql) => {
@@ -362,8 +409,8 @@ describe("Leaf domain repository behavior", () => {
       }
       if (sql.includes("INSERT INTO artifacts")) return [];
       if (sql.includes("INSERT INTO proposals")) {
-        proposalPayloads.push(JSON.parse(String(params[4])) as Record<string, unknown>);
-        return [{ id: `${params[2]}-proposal` }];
+        proposalPayloads.push(JSON.parse(String(params[10])) as Record<string, unknown>);
+        return [{ id: `${params[3]}-proposal` }];
       }
       throw new Error(`unexpected SQL: ${sql}`);
     });
@@ -423,6 +470,43 @@ describe("Leaf domain repository behavior", () => {
     })).rejects.toThrow("Source retention policy does not allow full_text");
   });
 
+  it("queues extract_text for an individual metadata intake item", async () => {
+    const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
+    const db = new FakeDb((sql, params) => {
+      calls.push({ sql, params });
+      if (sql.includes("FROM intake_items")) return [intakeItemRow({ content_state: "metadata_only" })];
+      if (sql.includes("UPDATE intake_items")) return [];
+      if (sql.includes("FROM extraction_jobs")) return [];
+      if (sql.includes("INSERT INTO extraction_jobs")) return [extractionJobRow()];
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    await new PgIntakeRepository(db, intakeConfig()).itemAction(identity, "item-1", {
+      action: "queue_content",
+    });
+
+    const insert = calls.find((call) => call.sql.includes("INSERT INTO extraction_jobs"));
+    expect(insert?.params[4]).toBe("extract_text");
+    expect(insert?.params[3]).toBe("item-1");
+  });
+
+  it("does not queue duplicate extract_text jobs when one is already active", async () => {
+    const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
+    const db = new FakeDb((sql, params) => {
+      calls.push({ sql, params });
+      if (sql.includes("FROM intake_items")) return [intakeItemRow({ content_state: "metadata_only" })];
+      if (sql.includes("UPDATE intake_items")) return [];
+      if (sql.includes("FROM extraction_jobs")) return [{ id: "job-active" }];
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    await new PgIntakeRepository(db, intakeConfig()).itemAction(identity, "item-1", {
+      action: "queue_content",
+    });
+
+    expect(calls.some((call) => call.sql.includes("INSERT INTO extraction_jobs"))).toBe(false);
+  });
+
   it("blocks source-derived summary proposals unless the source policy allows the target", async () => {
     const db = new FakeDb((sql) => {
       if (sql.includes("FROM intake_items")) {
@@ -450,7 +534,7 @@ describe("Leaf domain repository behavior", () => {
       if (sql.includes("FROM source_connections")) {
         return [sourceConnectionRow({ allowed_import_targets: ["activity", "source_artifact", "memory_proposal", "knowledge"] })];
       }
-      if (sql.includes("INSERT INTO proposals")) return [{ id: `${params[2]}-proposal` }];
+      if (sql.includes("INSERT INTO proposals")) return [{ id: `${params[3]}-proposal` }];
       throw new Error(`unexpected SQL: ${sql}`);
     });
 
@@ -489,7 +573,7 @@ describe("Leaf domain repository behavior", () => {
         return [sourceConnectionRow()];
       }
       if (sql.includes("INSERT INTO proposals")) {
-        payloads.push(JSON.parse(String(params[4])) as Record<string, unknown>);
+        payloads.push(JSON.parse(String(params[10])) as Record<string, unknown>);
         return [proposalRow(params)];
       }
       throw new Error(`unexpected SQL: ${sql}`);
@@ -561,7 +645,7 @@ describe("Leaf domain repository behavior", () => {
         }];
       }
       if (sql.includes("INSERT INTO proposals")) {
-        payloads.push(JSON.parse(String(params[4])) as Record<string, unknown>);
+        payloads.push(JSON.parse(String(params[10])) as Record<string, unknown>);
         return [proposalRow(params)];
       }
       throw new Error(`unexpected SQL: ${sql}`);

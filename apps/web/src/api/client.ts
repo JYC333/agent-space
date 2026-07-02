@@ -35,6 +35,14 @@ import type {
   SkillLibraryIndexResponse, SkillLocalOverlay, SkillLocalOverlayUpsertRequest,
   SourceConnector, SourceConnection, SourceConnectionCreate, IntakeItem, ExtractionJob,
   ExtractedEvidence, EvidenceLink, WorkspaceIntakeProfile, WorkspaceSourceBinding,
+  CustomSourceActivationResult, CustomSourceCreateDraftRequest, CustomSourceHandlerRun,
+  CustomSourceHandlerSummary, CustomSourceHandlerVersion, CustomSourceInstanceRunnerSettings,
+  CustomSourceInstanceRunnerSettingsUpdate,
+  CustomSourceSpacePolicy, CustomSourceSpacePolicyUpdate, CustomSourceTestOutcome,
+  SourceRecipeActivationResult, SourceRecipeCreateRequest, SourceRecipeCreateResponse,
+  SourceRecipeDryRunResponse, SourceRecipePlanRequest, SourceRecipePlanResponse,
+  SourceRecipePipelineBridgeRequest, SourceRecipePipelineBridgeResponse,
+  SourceRecipeVersion, SourceRunSummary,
   SummaryRunRequest, SummaryRunOut,
   DailyCaptureReportSettingOut, DailyCaptureReportSettingUpdate,
   DailyReportRunRequest, DailyReportRunResponse, DailyReportArtifactItem,
@@ -58,6 +66,11 @@ import type {
   ContextEffectiveRoutingResponse, ContextProfile, ContextProfileListResponse, ContextProfileUpsertRequest, ContextRoutingUpdateRequest,
   MemoryAccessLogListResponse, MemoryMaintenanceJob, MemoryMaintenanceJobRunResponse, MemoryMaintenanceReport, MemoryMaintenanceScanRequest,
   ContextOpsContextObservationScanRequest, ContextOpsContextObservationScanResponse,
+  ReaderDocumentPayload, ReaderAnnotation, ReaderAnnotationsResponse,
+  ReaderAnnotationCreate, ReaderAnnotationUpdate,
+  ReaderCommentThread, ReaderComment, ReaderCommentCreate, ReaderCommentUpdate, ReaderThreadUpdate,
+  ReaderCreateEvidenceRequest, ReaderCreatedEvidence,
+  ReaderCreateProposalRequest, ReaderCreatedProposal,
 } from '../types/api'
 
 const BASE = '/api/v1'
@@ -1010,26 +1023,87 @@ export const intakeApi = {
   },
   createConnection: (body: SourceConnectionCreate) =>
     post<SourceConnection>('/intake/connections', body),
+  getConnection: (id: string) =>
+    get<SourceConnection>(`/intake/connections/${id}`),
   updateConnection: (id: string, body: Partial<SourceConnectionCreate> & { status?: string }) =>
     patch<SourceConnection>(`/intake/connections/${id}`, body),
   scanConnection: (id: string) =>
     post<ExtractionJob>(`/intake/connections/${id}/scan`),
+  sourceRuns: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<SourceRunSummary>>(`/intake/connections/${connectionId}/source-runs?` + new URLSearchParams(q))
+  },
+
+  createCustomSourceDraft: (body: CustomSourceCreateDraftRequest) =>
+    post<SourceConnection>('/intake/custom-sources/drafts', body),
+  customSourceSummary: (connectionId: string) =>
+    get<CustomSourceHandlerSummary>(`/intake/connections/${connectionId}/custom-source`),
+  customSourceVersions: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<CustomSourceHandlerVersion>>(`/intake/connections/${connectionId}/handler-versions?` + new URLSearchParams(q))
+  },
+  customSourceRuns: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<CustomSourceHandlerRun>>(`/intake/connections/${connectionId}/handler-runs?` + new URLSearchParams(q))
+  },
+  generateCustomSourceHandler: (connectionId: string, body: { capture_policy?: string; retention_policy?: string } = {}) =>
+    post<CustomSourceHandlerVersion>(`/intake/custom-sources/${connectionId}/generate-handler`, body),
+  testCustomSourceHandler: (connectionId: string, body: { handler_version_id: string; fixture_html?: string }) =>
+    post<CustomSourceTestOutcome>(`/intake/custom-sources/${connectionId}/test-handler`, body),
+  activateCustomSourceHandler: (connectionId: string, body: { handler_version_id: string }) =>
+    post<CustomSourceActivationResult>(`/intake/custom-sources/${connectionId}/activate`, body),
+  customSourceSpacePolicy: () =>
+    get<CustomSourceSpacePolicy>('/intake/custom-source-settings/space'),
+  customSourceInstanceRunnerSettings: () =>
+    get<CustomSourceInstanceRunnerSettings>('/intake/custom-source-settings/instance'),
+  updateCustomSourceInstanceRunnerSettings: (body: CustomSourceInstanceRunnerSettingsUpdate) =>
+    put<CustomSourceInstanceRunnerSettings>('/intake/custom-source-settings/instance', body),
+  updateCustomSourceSpacePolicy: (body: CustomSourceSpacePolicyUpdate) =>
+    put<CustomSourceSpacePolicy>('/intake/custom-source-settings/space', body),
+  planSourceRecipe: (body: SourceRecipePlanRequest) =>
+    post<SourceRecipePlanResponse>('/intake/source-recipes/plan', body),
+  createSourceRecipe: (body: SourceRecipeCreateRequest) =>
+    post<SourceRecipeCreateResponse>('/intake/source-recipes', body),
+  dryRunSourceRecipe: (connectionId: string, body: { recipe_version_id: string; fixture_content?: string }) =>
+    post<SourceRecipeDryRunResponse>(`/intake/source-recipes/${connectionId}/dry-run`, body),
+  activateSourceRecipe: (connectionId: string, body: { recipe_version_id: string }) =>
+    post<SourceRecipeActivationResult>(`/intake/source-recipes/${connectionId}/activate`, body),
+  bridgePipelineSourceRecipe: (connectionId: string, body: SourceRecipePipelineBridgeRequest = {}) =>
+    post<SourceRecipePipelineBridgeResponse>(`/intake/custom-sources/${connectionId}/bridge-pipeline`, body),
+  sourceRecipeVersions: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<SourceRecipeVersion>>(`/intake/connections/${connectionId}/recipe-versions?` + new URLSearchParams(q))
+  },
 
   items: (params: {
     status?: string
     connection_id?: string
+    project_id?: string
     content_state?: string
+    q?: string
     limit?: number
     offset?: number
   } = {}) => {
     const q: Record<string, string> = {}
     if (params.status !== undefined) q.status = params.status
     if (params.connection_id !== undefined) q.connection_id = params.connection_id
+    if (params.project_id !== undefined) q.project_id = params.project_id
     if (params.content_state !== undefined) q.content_state = params.content_state
+    if (params.q !== undefined) q.q = params.q
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
     return get<Page<IntakeItem>>('/intake/items?' + new URLSearchParams(q))
   },
+  getItem: (id: string) =>
+    get<IntakeItem>(`/intake/items/${id}`),
   createManualUrl: (body: { url: string; title?: string; connection_id?: string | null; queue_content?: boolean }) =>
     post<IntakeItem>('/intake/items/manual-url', body),
   itemAction: (id: string, action: string) =>
@@ -1054,11 +1128,13 @@ export const intakeApi = {
   runJob: (id: string) =>
     post<ExtractionJob>(`/intake/jobs/${id}/run`),
 
-  evidence: (params: { status?: string; evidence_type?: string; intake_item_id?: string; limit?: number; offset?: number } = {}) => {
+  evidence: (params: { status?: string; evidence_type?: string; intake_item_id?: string; project_id?: string; connection_id?: string; limit?: number; offset?: number } = {}) => {
     const q: Record<string, string> = {}
     if (params.status !== undefined) q.status = params.status
     if (params.evidence_type !== undefined) q.evidence_type = params.evidence_type
     if (params.intake_item_id !== undefined) q.intake_item_id = params.intake_item_id
+    if (params.project_id !== undefined) q.project_id = params.project_id
+    if (params.connection_id !== undefined) q.connection_id = params.connection_id
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
     return get<Page<ExtractedEvidence>>('/intake/evidence?' + new URLSearchParams(q))
@@ -1097,10 +1173,11 @@ export const intakeApi = {
     extraction_policy?: Record<string, unknown>
     context_policy?: Record<string, unknown>
   }) => post<WorkspaceIntakeProfile>('/intake/workspace-profiles', body),
-  workspaceBindings: (params: { workspace_id?: string; source_connection_id?: string } = {}) => {
+  workspaceBindings: (params: { workspace_id?: string; source_connection_id?: string; project_id?: string } = {}) => {
     const q: Record<string, string> = {}
     if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
     if (params.source_connection_id !== undefined) q.source_connection_id = params.source_connection_id
+    if (params.project_id !== undefined) q.project_id = params.project_id
     return get<WorkspaceSourceBinding[]>('/intake/workspace-source-bindings?' + new URLSearchParams(q))
   },
   createWorkspaceBinding: (body: {
@@ -1115,6 +1192,47 @@ export const intakeApi = {
   }) => post<WorkspaceSourceBinding>('/intake/workspace-source-bindings', body),
   summarize: (body: SummaryRunRequest) =>
     post<SummaryRunOut>('/intake/summary-runs', body),
+}
+
+// ── Intake Reader ─────────────────────────────────────────────────────────
+export const intakeReaderApi = {
+  getDocument: (documentType: string, documentId: string) =>
+    get<ReaderDocumentPayload>(`/intake/reader/documents/${documentType}/${documentId}`),
+
+  listAnnotations: (documentType: string, documentId: string) =>
+    get<ReaderAnnotationsResponse>(`/intake/reader/documents/${documentType}/${documentId}/annotations`),
+
+  createAnnotation: (body: ReaderAnnotationCreate) =>
+    post<ReaderAnnotation>('/intake/reader/annotations', body),
+
+  updateAnnotation: (annotationId: string, body: ReaderAnnotationUpdate) =>
+    patch<ReaderAnnotation>(`/intake/reader/annotations/${annotationId}`, body),
+
+  deleteAnnotation: (annotationId: string) =>
+    del(`/intake/reader/annotations/${annotationId}`),
+
+  listThreads: (annotationId: string) =>
+    get<{ items: ReaderCommentThread[] }>(`/intake/reader/annotations/${annotationId}/threads`),
+
+  createComment: (annotationId: string, body: ReaderCommentCreate) =>
+    post<{ thread: ReaderCommentThread }>(`/intake/reader/annotations/${annotationId}/comments`, body),
+
+  updateComment: (commentId: string, body: ReaderCommentUpdate) =>
+    patch<ReaderComment>(`/intake/reader/comments/${commentId}`, body),
+
+  updateThread: (threadId: string, body: ReaderThreadUpdate) =>
+    patch<ReaderCommentThread>(`/intake/reader/comment-threads/${threadId}`, body),
+
+  createEvidence: (annotationId: string, body: ReaderCreateEvidenceRequest) =>
+    post<ReaderCreatedEvidence>(`/intake/reader/annotations/${annotationId}/evidence`, body),
+
+  createProposal: (annotationId: string, body: ReaderCreateProposalRequest) =>
+    post<ReaderCreatedProposal>(`/intake/reader/annotations/${annotationId}/proposals`, body),
+
+  listByProject: (projectId: string, limit?: number) =>
+    get<{ items: ReaderAnnotation[] }>(
+      `/intake/reader/annotations?project_id=${encodeURIComponent(projectId)}${limit != null ? `&limit=${limit}` : ''}`,
+    ),
 }
 
 // ── Workspace Console ─────────────────────────────────────────────────────

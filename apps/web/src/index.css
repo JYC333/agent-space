@@ -334,6 +334,235 @@ pre {
   font-size: 0.9em;
 }
 
+/* ── Intake Reader workspace ──────────────────────────────────────────────── */
+
+/* Centered long-form reading column. */
+.reader-column {
+  max-width: 72ch;
+}
+
+/* .reader-surface is the read-only ProseMirror element itself. */
+.reader-surface {
+  font-size: 15px;
+  line-height: 1.82;
+  outline: none;
+}
+
+.reader-surface > * + * {
+  margin-top: 1.45em;
+}
+
+.reader-surface p {
+  margin: 0;
+}
+
+.reader-surface a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+/* Blocks are annotation targets: hover reveals them without turning
+   paragraphs into heavy cards. Negative inline margins keep text aligned. */
+.reader-surface > * {
+  border-radius: calc(var(--radius) - 2px);
+  padding-inline: 0.625rem;
+  margin-inline: -0.625rem;
+  transition: background-color 120ms ease;
+}
+
+.reader-surface > *:hover {
+  background: color-mix(in oklch, var(--foreground) 4%, transparent);
+}
+
+.reader-surface h1,
+.reader-surface h2,
+.reader-surface h3 {
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.reader-surface h1 { font-size: 1.5rem; }
+.reader-surface h2 { font-size: 1.25rem; }
+.reader-surface h3 { font-size: 1.05rem; }
+
+.reader-surface ul,
+.reader-surface ol {
+  padding-left: 1.55rem;
+  margin-block: 0;
+}
+
+.reader-surface ul { list-style: disc; }
+.reader-surface ol { list-style: decimal; }
+
+.reader-surface li + li {
+  margin-top: 0.35em;
+}
+
+.reader-surface li > ul,
+.reader-surface li > ol {
+  margin-top: 0.4em;
+}
+
+.reader-surface blockquote {
+  border-left: 3px solid var(--border);
+  color: var(--muted-foreground);
+  padding-left: 0.9rem;
+}
+
+.reader-surface img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 70vh;
+  object-fit: contain;
+  margin-inline: auto;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+}
+
+.reader-surface .reader-image-missing {
+  display: block;
+  min-height: 2.5rem;
+  border: 1px dashed var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--muted);
+}
+
+.reader-surface hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.reader-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.reader-surface table.reader-table {
+  width: 100%;
+  min-width: max-content;
+  border-collapse: collapse;
+  font-size: 0.95em;
+  line-height: 1.55;
+}
+
+.reader-surface .reader-table th,
+.reader-surface .reader-table td {
+  border: 1px solid var(--border);
+  padding: 0.7rem 0.85rem;
+  vertical-align: top;
+}
+
+.reader-surface .reader-table th {
+  background: color-mix(in oklch, var(--primary) 7%, var(--background));
+  font-weight: 650;
+  text-align: left;
+}
+
+.reader-surface .reader-table tr:nth-child(even) td {
+  background: color-mix(in oklch, var(--foreground) 3%, transparent);
+}
+
+.reader-surface .reader-table p {
+  margin: 0;
+}
+
+.reader-surface .reader-table p + p {
+  margin-top: 0.45em;
+}
+
+.reader-surface pre {
+  overflow-x: auto;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--muted);
+  padding: 0.9rem;
+}
+
+/* Inline annotation decorations. The decoration sets
+   --reader-annotation-color per annotation type or stored color. */
+.reader-highlight {
+  --reader-annotation-color: #fde047;
+  background: color-mix(in srgb, var(--reader-annotation-color) 28%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--reader-annotation-color) 60%, transparent);
+  border-radius: 2px;
+  padding-block: 0.1em;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.reader-highlight:hover {
+  background: color-mix(in srgb, var(--reader-annotation-color) 42%, transparent);
+}
+
+.reader-highlight-selected {
+  background: color-mix(in srgb, var(--reader-annotation-color) 55%, transparent);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--reader-annotation-color) 85%, transparent);
+}
+
+/* Keyboard paragraph-focus indicator (Readwise-style block focus). */
+.reader-surface > .reader-block-focused {
+  background: color-mix(in oklch, var(--primary) 7%, transparent);
+  box-shadow: inset 2.5px 0 0 var(--primary);
+}
+
+/* Floating selection toolbar. */
+.reader-selection-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+  z-index: 50;
+}
+
+.reader-selection-toolbar-floating {
+  position: fixed;
+}
+
+/* Fallback when no usable selection rect exists (and small viewports). */
+.reader-selection-toolbar-docked {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.reader-inspector {
+  width: 360px;
+  flex-shrink: 0;
+}
+
+/* Mobile: single-column reader, inspector becomes a bottom sheet. */
+@media (max-width: 768px) {
+  .reader-inspector {
+    position: fixed;
+    inset-inline: 0;
+    bottom: 0;
+    width: auto;
+    height: auto;
+    max-height: 65vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    border-top-left-radius: var(--radius-lg);
+    border-top-right-radius: var(--radius-lg);
+    box-shadow: 0 -8px 24px rgb(0 0 0 / 0.25);
+    z-index: 40;
+  }
+
+  .reader-selection-toolbar-docked {
+    max-width: calc(100vw - 2rem);
+  }
+}
+
 .rich-text-editor-surface pre code {
   border: 0;
   padding: 0;

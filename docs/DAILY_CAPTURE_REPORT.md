@@ -3,7 +3,9 @@
 ## Overview
 
 Daily Capture Report is a built-in optional feature (not a plugin or capability). It is
-controlled by a per-user/per-space feature toggle stored in `daily_capture_report_settings`.
+controlled by per-user/per-space settings stored under the scoped settings key
+`daily_capture_report.settings`; scheduler state is stored separately in
+the scheduler-owned `scheduler_tasks` table.
 
 When enabled, the scheduler enqueues a `daily_capture_report` job each day at the
 configured local time. A manual run can always be triggered via
@@ -36,14 +38,14 @@ DailyCaptureReportService.generate_for_date()
 - **No direct Memory or Knowledge writes.** All durable writes require the user to review
   and accept proposals via the standard Proposal workflow.
 - **Experience proposals are optional and review-gated.** Default: enabled.
-- **Memory proposals are optional and review-gated.** Default: **disabled**.
+- **Memory proposals are optional and review-gated.** Default: enabled.
 - **Provenance trust is not upgraded by the report run or artifact.** Memory proposals carry
   `source_trust=user_confirmed` from the original `user_capture` Activity rows.
   The report run and artifact are stored as `source_refs_metadata`, not as trust-bearing
   provenance entries.
 - **Idempotency.** For a given space/user/date, a second run without `force=True` returns the
   existing artifact and does not create duplicate artifacts or proposals.
-- **Scheduler jobs are idempotent.** Each setting's `next_run_at` is committed immediately
+- **Scheduler jobs are idempotent.** Each scheduler task's `next_run_at` is committed immediately
   after a successful enqueue, not after all settings. A duplicate scan skips already-advanced
   slots; a failed enqueue leaves `next_run_at` unchanged so the slot is retried next scan.
 - **No removed `/activity/{id}/process` endpoint.** That route was removed. Use `/review` for
@@ -54,16 +56,17 @@ DailyCaptureReportService.generate_for_date()
 | Field | Default | Notes |
 |---|---|---|
 | `enabled` | `false` | Controls scheduled execution. Manual runs are always allowed. |
-| `local_time` | `08:00` | HH:MM in the user's timezone |
+| `local_time` | `09:00` | HH:MM in the user's timezone |
 | `timezone` | `UTC` | IANA timezone name. Invalid values are rejected at the API layer and skipped by the scheduler. |
 | `include_source_types` | `["user_capture"]` | Activity source types to include |
 | `create_experience_proposals` | `true` | Whether to create experience knowledge proposals |
-| `create_memory_proposals` | `false` | Whether to create memory proposals |
-| `experience_confidence_threshold` | `0.75` | Min LLM confidence to include experience candidate |
-| `memory_confidence_threshold` | `0.85` | Min LLM confidence to include memory candidate |
+| `create_memory_proposals` | `true` | Whether to create memory proposals |
+| `experience_confidence_threshold` | `0.6` | Min LLM confidence to include experience candidate |
+| `memory_confidence_threshold` | `0.7` | Min LLM confidence to include memory candidate |
 | `max_experience_proposals_per_day` | `5` | Cap on experience proposals per run |
 | `max_memory_proposals_per_day` | `3` | Cap on memory proposals per run |
-| `next_run_at` | computed | Next scheduled UTC time; shown in the Settings UI. |
+| `last_report_date` | computed | Last successfully persisted report date; stored in `scheduler_tasks.state_json`. |
+| `next_run_at` | computed | Next scheduled UTC time; stored in `scheduler_tasks.next_run_at` and shown in the Settings UI. |
 
 ## API
 
@@ -129,7 +132,9 @@ The scheduler scans immediately on startup, then sleeps between subsequent scans
 
 `server/src/modules/dailyReports/`
 
-- `service.ts` — report/settings service
+- `repository.ts` — scoped user settings plus scheduler task state access
+- `service.ts` — report generation service
 - `routes.ts` — HTTP routes
 - `index.ts` — module registration
 - `server/src/modules/jobs/` — durable job handler/worker registry
+- `server/src/modules/scheduler/` — scheduler task state store and periodic tick registry

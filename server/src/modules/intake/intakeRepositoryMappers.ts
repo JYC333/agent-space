@@ -50,6 +50,11 @@ export function connectionOut(row: SourceConnectionRow) {
     config_json: row.config_json ?? {},
     last_checked_at: dateIso(row.last_checked_at),
     next_check_at: dateIso(row.next_check_at),
+    handler_kind: row.handler_kind,
+    active_handler_version_id: row.active_handler_version_id,
+    active_recipe_version_id: row.active_recipe_version_id,
+    repair_status: row.repair_status,
+    last_handler_run_id: row.last_handler_run_id,
     created_at: dateIso(row.created_at),
     updated_at: dateIso(row.updated_at),
   };

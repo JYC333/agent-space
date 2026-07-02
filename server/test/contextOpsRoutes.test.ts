@@ -92,22 +92,23 @@ class EmptyContextOpsDb {
   ): Promise<{ rows: Row[]; rowCount: number | null }> {
     this.calls.push({ sql, params });
     const norm = sql.replace(/\s+/g, " ").trim();
-    if (/FROM space_retrieval_settings/.test(norm)) {
+    if (/FROM settings/.test(norm)) {
       return {
         rows: [{
-          space_id: "space-1",
-          default_search_mode: "hybrid",
-          rerank_enabled: false,
-          query_rewrite_enabled: false,
-          query_rewrite_default: false,
-          use_query_cache: true,
-          include_trace: false,
-          external_egress_enabled: true,
-          retrieval_tool_mode: "off",
-          context_ops_review_mode: this.contextOpsReviewMode,
-          context_ops_scan_mode: this.contextOpsScanMode,
-          embedding_dimensions: 2560,
-          max_results_default: 50,
+          settings_json: {
+            default_search_mode: "hybrid",
+            rerank_enabled: false,
+            query_rewrite_enabled: false,
+            query_rewrite_default: false,
+            use_query_cache: true,
+            include_trace: false,
+            external_egress_enabled: true,
+            retrieval_tool_mode: "off",
+            context_ops_review_mode: this.contextOpsReviewMode,
+            context_ops_scan_mode: this.contextOpsScanMode,
+            embedding_dimensions: 2560,
+            max_results_default: 50,
+          },
           created_at: "2026-06-18T00:00:00.000Z",
           updated_at: "2026-06-18T00:00:00.000Z",
         }] as Row[],

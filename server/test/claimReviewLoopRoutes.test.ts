@@ -53,19 +53,20 @@ function auth(role: "owner" | "admin" | "reviewer" | "member" | "guest" = "admin
 
 function settingsRow() {
   return {
-    space_id: "space-1",
-    default_search_mode: "hybrid",
-    rerank_enabled: false,
-    query_rewrite_enabled: false,
-    query_rewrite_default: false,
-    use_query_cache: true,
-    include_trace: false,
-    external_egress_enabled: true,
-    retrieval_tool_mode: "off",
-    context_ops_review_mode: "private_only",
-    context_ops_scan_mode: "admins",
-    embedding_dimensions: 2560,
-    max_results_default: 10,
+    settings_json: {
+      default_search_mode: "hybrid",
+      rerank_enabled: false,
+      query_rewrite_enabled: false,
+      query_rewrite_default: false,
+      use_query_cache: true,
+      include_trace: false,
+      external_egress_enabled: true,
+      retrieval_tool_mode: "off",
+      context_ops_review_mode: "private_only",
+      context_ops_scan_mode: "admins",
+      embedding_dimensions: 2560,
+      max_results_default: 10,
+    },
     created_at: "2026-06-12T10:00:00.000Z",
     updated_at: "2026-06-12T10:00:00.000Z",
   };
@@ -194,7 +195,7 @@ describe("contradiction-scan route", () => {
   it("rejects a member without Context Ops scan access (403)", async () => {
     __setAuthRepositoryForTests(auth("guest"));
     mockPool((sql) => {
-      if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
+      if (/FROM settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
       if (/FROM space_memberships/.test(sql)) return { rows: [{ role: "guest" }], rowCount: 1 };
       return undefined;
     });
@@ -212,7 +213,7 @@ describe("contradiction-scan route", () => {
   it("rejects llm_judge_enabled until the provider adapter is wired", async () => {
     __setAuthRepositoryForTests(auth("admin"));
     mockPool((sql) => {
-      if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
+      if (/FROM settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
       if (/FROM space_memberships/.test(sql)) return { rows: [{ role: "admin" }], rowCount: 1 };
       return undefined;
     });
@@ -297,7 +298,7 @@ describe("relation discovery-scan route", () => {
   it("rejects llm_extraction_enabled until the provider adapter is wired", async () => {
     __setAuthRepositoryForTests(auth("admin"));
     mockPool((sql) => {
-      if (/FROM space_retrieval_settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
+      if (/FROM settings/.test(sql)) return { rows: [settingsRow()], rowCount: 1 };
       if (/FROM space_memberships/.test(sql)) return { rows: [{ role: "admin" }], rowCount: 1 };
       return undefined;
     });

@@ -14,4 +14,11 @@ export {
 export { PgJobQueueRepository, type JobRecord, type EnqueueJobInput } from "./repository";
 export { JobWorker } from "./worker";
 export { startJobsWorker, buildJobHandlerRegistry, type JobsWorkerHandle } from "./workerRuntime";
-export { SchedulerRegistry, startSchedulerRegistry, type ScheduledTask } from "./schedulerRegistry";
+export { SchedulerRegistry, startSchedulerRegistry, type ScheduledTask } from "../scheduler/registry";
+export {
+  PgSchedulerTaskStore,
+  type SchedulerTaskRow,
+  type SchedulerTaskScopeType,
+  type SchedulerTaskStatus,
+  type SchedulerTaskUpsertInput,
+} from "../scheduler/taskStore";

@@ -25,7 +25,7 @@ import type {
   ResolvedIdentity,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { JobEnvelopeForHandler, JobHandler } from "../../jobs/handlerRegistry";
-import type { ScheduledTask } from "../../jobs/schedulerRegistry";
+import type { ScheduledTask } from "../../scheduler/registry";
 import type { ProposalApplier, ProposalApplyContext, ProposalApplyResult } from "../../proposals/applierRegistry";
 import { getDbPool } from "../../../db/pool";
 import { resolveIdentity, sendRouteError, jsonBody } from "../../routeUtils/common";

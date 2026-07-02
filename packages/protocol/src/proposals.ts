@@ -87,6 +87,8 @@ export const ProposalAcceptResultTypeSchema = z.enum([
   "retrieval_maintenance_packet",
   "retrieval_diagnostics_packet",
   "relation_discovery_packet",
+  "custom_source_handler_version",
+  "source_recipe_version",
 ]);
 export type ProposalAcceptResultType = z.infer<
   typeof ProposalAcceptResultTypeSchema

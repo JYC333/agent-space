@@ -19,9 +19,17 @@ function fakeDb(): Queryable & { calls: CapturedQuery[] } {
   const calls: CapturedQuery[] = [];
   return {
     calls,
-    async query(sql: string, params: readonly unknown[] = []) {
+    async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
       calls.push({ sql, params });
-      return { rows: [], rowCount: 1 };
+      // Every INSERT this fake handles (proposals, artifacts) puts the
+      // generated id first; echo it back so callers relying on
+      // `RETURNING id` (e.g. insertProposalRow) get a usable row. The
+      // lineage-key lookup SELECT must keep returning "not found" so
+      // create-packet calls don't short-circuit on a fake match.
+      if (/^\s*INSERT/i.test(sql)) {
+        return { rows: [{ id: params[0] }] as Row[], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
     },
   };
 }
@@ -108,7 +116,9 @@ describe("retrieval maintenance persistence", () => {
 
     expect(proposalId).toMatch(/[0-9a-f-]{36}/);
     const artifactParams = db.calls[0]!.params;
-    const proposalParams = db.calls[1]!.params;
+    // db.calls[1] is createRetrievalMaintenanceProposalPacket's internal
+    // lineage-key dedup lookup (a SELECT); the INSERT is [2].
+    const proposalParams = db.calls[2]!.params;
     expect(artifactParams[2]).toBe("run-1");
     expect(proposalParams[2]).toBe("run-1");
     expect(JSON.parse(String(artifactParams[13]))).toMatchObject({ run_id: "run-1" });
@@ -126,8 +136,9 @@ describe("retrieval maintenance persistence", () => {
     });
 
     expect(proposalId).toMatch(/[0-9a-f-]{36}/);
-    expect(db.calls).toHaveLength(1);
-    const params = db.calls[0]!.params;
+    // db.calls[0] is the internal lineage-key dedup lookup (a SELECT).
+    expect(db.calls).toHaveLength(2);
+    const params = db.calls[1]!.params;
     expect(params[1]).toBe("space-1");
     expect(params[3]).toBe(RETRIEVAL_MAINTENANCE_PACKET_PROPOSAL_TYPE);
     expect(params[14]).toBe("user-1");
@@ -177,9 +188,10 @@ describe("retrieval maintenance persistence", () => {
     });
     expect(db.calls.some((call) => /INSERT INTO knowledge_items/.test(call.sql))).toBe(false);
     expect(db.calls.some((call) => /INSERT INTO object_relations/.test(call.sql))).toBe(false);
-    const update = db.calls.find((call) => /UPDATE proposals/.test(call.sql));
-    expect(update).toBeDefined();
-    const finalPayload = JSON.parse(String(update!.params[2]));
-    expect(finalPayload.generated_child_proposal_ids).toHaveLength(1);
+    // The applier only returns proposalPayloadPatch; ProposalApplyService
+    // is the layer that actually issues `UPDATE proposals` from that patch,
+    // and is covered by its own tests — this test exercises the applier in
+    // isolation.
+    expect(result.proposalPayloadPatch?.generated_child_proposal_ids).toHaveLength(1);
   });
 });

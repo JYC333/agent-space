@@ -29,6 +29,11 @@ export interface SourceConnectionRow {
   config_json: unknown;
   last_checked_at: unknown;
   next_check_at: unknown;
+  handler_kind: string;
+  active_handler_version_id: string | null;
+  active_recipe_version_id: string | null;
+  repair_status: string;
+  last_handler_run_id: string | null;
   created_at: unknown;
   updated_at: unknown;
 }
@@ -167,8 +172,47 @@ export interface WorkspaceBindingRow {
   updated_at: unknown;
 }
 
+const CONNECTION_TABLE_COLUMNS = [
+  "id",
+  "space_id",
+  "connector_id",
+  "owner_user_id",
+  "credential_id",
+  "name",
+  "endpoint_url",
+  "status",
+  "fetch_frequency",
+  "capture_policy",
+  "trust_level",
+  "topic_hints_json",
+  "consent_json",
+  "policy_json",
+  "config_json",
+  "handler_kind",
+  "active_handler_version_id",
+  "active_recipe_version_id",
+  "repair_status",
+  "last_handler_run_id",
+  "created_at",
+  "updated_at",
+];
+
+const CONNECTION_SCHEDULE_SELECT_COLUMNS = [
+  "NULL::timestamptz AS last_checked_at",
+  "NULL::timestamptz AS next_check_at",
+];
+
 export const CONNECTOR_COLUMNS = `id, connector_key, display_name, connector_type, ingestion_mode, status, capabilities_json, config_schema_json, created_at, updated_at`;
-export const CONNECTION_COLUMNS = `id, space_id, connector_id, owner_user_id, credential_id, name, endpoint_url, status, fetch_frequency, capture_policy, trust_level, topic_hints_json, consent_json, policy_json, config_json, last_checked_at, next_check_at, created_at, updated_at`;
+export const CONNECTION_COLUMNS = [
+  ...CONNECTION_TABLE_COLUMNS,
+  ...CONNECTION_SCHEDULE_SELECT_COLUMNS,
+].join(", ");
+export function connectionColumnsForAlias(alias: string): string {
+  return [
+    ...CONNECTION_TABLE_COLUMNS.map((column) => `${alias}.${column}`),
+    ...CONNECTION_SCHEDULE_SELECT_COLUMNS,
+  ].join(", ");
+}
 export const ITEM_COLUMNS = `id, space_id, connection_id, item_type, source_object_type, source_object_id, title, source_uri, canonical_uri, source_domain, source_external_id, author, occurred_at, first_seen_at, last_seen_at, content_hash, excerpt, status, read_status, content_state, retention_policy, relevance_score, novelty_score, raw_artifact_id, extracted_artifact_id, summary_artifact_id, search_index_ref, embedding_index_ref, metadata_json, created_at, updated_at`;
 export const JOB_COLUMNS = `id, space_id, connection_id, intake_item_id, source_snapshot_id, source_object_type, source_object_id, job_type, status, started_at, completed_at, items_seen, items_created, items_updated, error_code, error_message, metadata_json, created_at`;
 export const EVIDENCE_COLUMNS = `id, space_id, intake_item_id, extraction_job_id, source_snapshot_id, source_object_type, source_object_id, evidence_type, title, content_excerpt, content_hash, artifact_id, source_uri, source_title, source_author, occurred_at, trust_level, extraction_method, confidence, status, metadata_json, created_by_user_id, created_by_agent_id, created_by_run_id, created_at, updated_at`;

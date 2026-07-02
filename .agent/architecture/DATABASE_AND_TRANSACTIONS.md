@@ -148,6 +148,72 @@ Current local deployment assumes one server process owns bootstrap and scheduler
 - Avoid long transactions and transaction-spanning external calls.
 - Do not rely on application-only `MAX()+1` ordering for distributed writers without a future lock/constraint note. Current `RunStep.step_index` uses `MAX()+1` — a documented distributed-runner risk.
 
+## Scoped Settings Store
+
+Low-frequency instance, space, user, and space-user settings use the
+generic `settings(scope_type, scope_id, settings_key, settings_json)` table.
+Business modules must not hand-write `settings` table CRUD. They define a typed
+descriptor with a stable key, scope type, defaults, parser, and serializer, then
+read/write through `server/src/modules/settings/ScopedSettingsStore`.
+Use the settings module helpers to encode composite `space_user` scope ids.
+
+The store owns row identity, create-if-missing, upsert, timestamp updates,
+`updated_by_user_id`, and JSON-object normalization. Owning modules still own
+business validation and public response shapes. This keeps one table for sparse
+settings without turning it into a generic domain service or moving product
+rules out of their owning modules. Scheduler cursor/state belongs in the
+scheduler task store, not in scoped user setting rows.
+
+When adding a new setting:
+
+- Reuse `server/src/modules/settings/ScopedSettingsStore`; do not add
+  feature-specific tables such as `space_<feature>_settings`,
+  `user_<feature>_settings`, or `instance_<feature>_settings`.
+- Define a typed descriptor with a stable `settings_key`, exact scope
+  (`instance`, `space`, `user`, or `space_user`), defaults, parser, and
+  serializer. Register shared keys in `server/src/modules/settings/keys.ts`
+  when they are consumed outside one module.
+- Keep business authorization and response shape in the owning module. The
+  generic store owns persistence mechanics only.
+- Use env/config only for deployment hard limits or process wiring. Runtime
+  product policy that an instance admin, space admin, or user can configure
+  belongs in scoped settings.
+
+## Scheduler Task Store
+
+Per-scope scheduler cursors and state use the scheduler-owned
+`scheduler_tasks` table, keyed by `(task_type, task_key)`. Scheduler fan-out
+features define a stable task type and task key, while `scheduler_tasks` owns
+`next_run_at`, `last_run_at`, status, scope identity, and task-local
+`state_json`.
+
+Business modules must not create one scheduler state table per feature. They
+read/write scheduler task rows through `server/src/modules/scheduler/PgSchedulerTaskStore`
+and keep product settings in scoped settings or domain tables. The durable
+`jobs` table remains the execution queue; `scheduler_tasks` is only scheduler
+cursor/state metadata used to decide when to enqueue or fire work.
+Current recurring scheduler cursors include daily capture reports
+(`daily_capture_report`), automation schedules (`automation`), and intake
+source connection scans (`source_connection_scan`).
+Do not move execution-queue timestamps such as `jobs.scheduled_at` or
+domain work-item due timestamps such as `memory_maintenance_jobs.run_after`
+into `scheduler_tasks`; those rows are the work being processed, not the
+recurring scheduler cursor that discovers work.
+
+When adding a new scheduler:
+
+- Put the in-process task registration and lifecycle wiring in
+  `server/src/modules/scheduler`, with tick behavior delegated to the owning
+  product module.
+- Store recurring cursor/state in `scheduler_tasks` via `PgSchedulerTaskStore`.
+  Do not add feature-specific scheduler state tables or recurring cursor columns
+  such as `next_run_at`, `next_check_at`, `last_run_at`, or `last_checked_at`
+  to product tables.
+- Use a stable `task_type` and `task_key`, plus the correct scope columns
+  (`space_id`, `user_id`) so rows can be inspected and controlled later.
+- Keep `jobs` for execution queue rows and retries. A scheduler may enqueue a
+  job, but the scheduler cursor must remain separate from the queued work.
+
 ## Anti-Patterns
 
 - A massive `DatabaseService` or `DatabaseOperations` class owning everything.

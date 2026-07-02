@@ -11,6 +11,7 @@ import {
   assertValidTimezone,
   computeInitialNextRunAt,
   localDayUtcBounds,
+  PgDailyReportSettingsRepository,
 } from "./repository";
 
 export interface DailyReportResult {
@@ -415,11 +416,12 @@ export class DailyCaptureReportService {
       [runId, endedAt],
     );
     const nextRunAt = computeInitialNextRunAt(input.setting, new Date(endedAt));
-    await db.query(
-      `UPDATE daily_capture_report_settings
-          SET last_report_date = $3, next_run_at = $5, updated_at = $4
-        WHERE space_id = $1 AND user_id = $2`,
-      [input.spaceId, input.userId, input.localDate, endedAt, nextRunAt],
+    await new PgDailyReportSettingsRepository(db).recordReportCompleted(
+      input.spaceId,
+      input.userId,
+      input.localDate,
+      nextRunAt,
+      endedAt,
     );
 
     return {

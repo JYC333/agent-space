@@ -9,6 +9,13 @@ import {
   resolveRuntimeToolVersionForSpace,
 } from "../runtimeTools/policies";
 import {
+  ScopedSettingsStore,
+  SETTINGS_KEYS,
+  defineScopedSetting,
+  settingsRecord,
+  type ScopedSettingsRead,
+} from "../settings";
+import {
   BUILTIN_RUNTIME_ADAPTER_SPECS,
   type RuntimeAdapterType,
 } from "../runtimeAdapters/specs";
@@ -227,11 +234,100 @@ function versionColumns(alias: string): string {
   return VERSION_COLUMN_NAMES.map((column) => `${alias}.${column}`).join(", ");
 }
 
-const SETTINGS_COLUMNS = `
-  id, space_id, assistant_agent_id, response_style, verbosity,
-  default_context_toggles_json, default_project_id, proposal_style,
-  model_preferences_json, created_at, updated_at
-`;
+const ASSISTANT_SETTINGS_KEY = SETTINGS_KEYS.assistantDefault;
+
+const ASSISTANT_RESPONSE_STYLES = new Set(["neutral", "friendly", "direct", "formal"]);
+const ASSISTANT_VERBOSITY_OPTIONS = new Set(["concise", "balanced", "detailed"]);
+const ASSISTANT_PROPOSAL_STYLES = new Set(["proactive", "balanced", "conservative"]);
+
+interface AssistantSettingsValue {
+  assistant_agent_id: string | null;
+  response_style: string | null;
+  verbosity: string | null;
+  default_context_toggles_json: Record<string, boolean>;
+  default_project_id: string | null;
+  proposal_style: string | null;
+  model_preferences_json: Record<string, unknown>;
+}
+
+const ASSISTANT_SETTINGS_DEFAULTS: AssistantSettingsValue = {
+  assistant_agent_id: null,
+  response_style: null,
+  verbosity: null,
+  default_context_toggles_json: {},
+  default_project_id: null,
+  proposal_style: null,
+  model_preferences_json: {},
+};
+
+const ASSISTANT_SETTINGS_DEFINITION = defineScopedSetting<AssistantSettingsValue>({
+  key: ASSISTANT_SETTINGS_KEY,
+  scopeType: "space",
+  defaults: ASSISTANT_SETTINGS_DEFAULTS,
+  parse: parseAssistantSettings,
+  serialize: assistantSettingsJson,
+});
+
+function enumStringOrNull(value: unknown, allowed: ReadonlySet<string>, field: string): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") return null;
+  if (allowed.has(value)) return value;
+  throw new HttpError(422, `Invalid assistant ${field}`);
+}
+
+function parseAssistantSettings(value: unknown): AssistantSettingsValue {
+  const settings = settingsRecord(value);
+  return {
+    assistant_agent_id: stringOrNull(settings.assistant_agent_id),
+    response_style: enumStringOrNull(settings.response_style, ASSISTANT_RESPONSE_STYLES, "response_style"),
+    verbosity: enumStringOrNull(settings.verbosity, ASSISTANT_VERBOSITY_OPTIONS, "verbosity"),
+    default_context_toggles_json: booleanRecord(settings.default_context_toggles_json),
+    default_project_id: stringOrNull(settings.default_project_id),
+    proposal_style: enumStringOrNull(settings.proposal_style, ASSISTANT_PROPOSAL_STYLES, "proposal_style"),
+    model_preferences_json: recordValue(settings.model_preferences_json) ?? {},
+  };
+}
+
+function assistantSettingsJson(value: AssistantSettingsValue): Record<string, unknown> {
+  return {
+    assistant_agent_id: value.assistant_agent_id,
+    response_style: value.response_style,
+    verbosity: value.verbosity,
+    default_context_toggles_json: value.default_context_toggles_json,
+    default_project_id: value.default_project_id,
+    proposal_style: value.proposal_style,
+    model_preferences_json: value.model_preferences_json,
+  };
+}
+
+function booleanRecord(value: unknown): Record<string, boolean> {
+  const record = recordValue(value) ?? {};
+  const output: Record<string, boolean> = {};
+  for (const [key, item] of Object.entries(record)) {
+    if (typeof item === "boolean") output[key] = item;
+  }
+  return output;
+}
+
+function assistantSettingsRecordFromRead(
+  spaceId: string,
+  read: ScopedSettingsRead<AssistantSettingsValue>,
+): AssistantSettingsRecord {
+  if (!read.row) throw new Error("assistant settings row was not created");
+  return {
+    id: read.row.id,
+    space_id: spaceId,
+    assistant_agent_id: read.value.assistant_agent_id,
+    response_style: read.value.response_style,
+    verbosity: read.value.verbosity,
+    default_context_toggles_json: read.value.default_context_toggles_json,
+    default_project_id: read.value.default_project_id,
+    proposal_style: read.value.proposal_style,
+    model_preferences_json: read.value.model_preferences_json,
+    created_at: read.row.created_at,
+    updated_at: read.row.updated_at,
+  };
+}
 
 export interface AgentChatRecord {
   id: string;
@@ -880,67 +976,52 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
   }
 
   async getAssistantSettings(spaceId: string): Promise<AssistantSettingsRecord> {
-    const existing = await this.pool.query<AssistantSettingsRecord>(
-      `SELECT ${SETTINGS_COLUMNS}
-         FROM space_assistant_settings
-        WHERE space_id = $1
-        LIMIT 1`,
-      [spaceId],
-    );
-    if (existing.rows[0]) return existing.rows[0];
+    const store = new ScopedSettingsStore(this.pool);
+    const existing = await store.get(ASSISTANT_SETTINGS_DEFINITION, spaceId);
+    if (existing.row) return assistantSettingsRecordFromRead(spaceId, existing);
     const assistant = await this.getDefaultAssistant(spaceId);
-    const now = new Date().toISOString();
-    const inserted = await this.pool.query<AssistantSettingsRecord>(
-      `INSERT INTO space_assistant_settings (
-         id, space_id, assistant_agent_id, default_context_toggles_json,
-         model_preferences_json, created_at, updated_at
-       ) VALUES ($1, $2, $3, '{}'::jsonb, '{}'::jsonb, $4, $4)
-       ON CONFLICT (space_id) DO UPDATE
-          SET assistant_agent_id = COALESCE(space_assistant_settings.assistant_agent_id, EXCLUDED.assistant_agent_id),
-              updated_at = EXCLUDED.updated_at
-       RETURNING ${SETTINGS_COLUMNS}`,
-      [randomUUID(), spaceId, assistant?.id ?? null, now],
-    );
-    return inserted.rows[0]!;
+    const created = await store.createIfMissing(ASSISTANT_SETTINGS_DEFINITION, spaceId, {
+      ...ASSISTANT_SETTINGS_DEFAULTS,
+      assistant_agent_id: assistant?.id ?? null,
+    });
+    return assistantSettingsRecordFromRead(spaceId, created);
   }
 
   async updateAssistantSettings(
     spaceId: string,
     patch: Record<string, unknown>,
+    options: { actorUserId?: string | null } = {},
   ): Promise<AssistantSettingsRecord> {
     const existing = await this.getAssistantSettings(spaceId);
     const assistant = existing.assistant_agent_id ? null : await this.getDefaultAssistant(spaceId);
-    const result = await this.pool.query<AssistantSettingsRecord>(
-      `UPDATE space_assistant_settings
-          SET assistant_agent_id = COALESCE(assistant_agent_id, $2),
-              response_style = CASE WHEN $3::boolean THEN $4 ELSE response_style END,
-              verbosity = CASE WHEN $5::boolean THEN $6 ELSE verbosity END,
-              default_context_toggles_json = CASE WHEN $7::boolean THEN $8::jsonb ELSE default_context_toggles_json END,
-              default_project_id = CASE WHEN $9::boolean THEN $10 ELSE default_project_id END,
-              proposal_style = CASE WHEN $11::boolean THEN $12 ELSE proposal_style END,
-              model_preferences_json = CASE WHEN $13::boolean THEN $14::jsonb ELSE model_preferences_json END,
-              updated_at = $15
-        WHERE space_id = $1
-        RETURNING ${SETTINGS_COLUMNS}`,
-      [
-        spaceId,
-        assistant?.id ?? null,
-        Object.hasOwn(patch, "response_style"),
-        stringOrNull(patch.response_style),
-        Object.hasOwn(patch, "verbosity"),
-        stringOrNull(patch.verbosity),
-        Object.hasOwn(patch, "default_context_toggles_json"),
-        JSON.stringify(recordValue(patch.default_context_toggles_json) ?? {}),
-        Object.hasOwn(patch, "default_project_id"),
-        stringOrNull(patch.default_project_id),
-        Object.hasOwn(patch, "proposal_style"),
-        stringOrNull(patch.proposal_style),
-        Object.hasOwn(patch, "model_preferences_json"),
-        JSON.stringify(recordValue(patch.model_preferences_json) ?? {}),
-        new Date().toISOString(),
-      ],
+    const next: AssistantSettingsValue = {
+      assistant_agent_id: existing.assistant_agent_id ?? assistant?.id ?? null,
+      response_style: Object.hasOwn(patch, "response_style")
+        ? enumStringOrNull(patch.response_style, ASSISTANT_RESPONSE_STYLES, "response_style")
+        : existing.response_style,
+      verbosity: Object.hasOwn(patch, "verbosity")
+        ? enumStringOrNull(patch.verbosity, ASSISTANT_VERBOSITY_OPTIONS, "verbosity")
+        : existing.verbosity,
+      default_context_toggles_json: Object.hasOwn(patch, "default_context_toggles_json")
+        ? booleanRecord(patch.default_context_toggles_json)
+        : booleanRecord(existing.default_context_toggles_json),
+      default_project_id: Object.hasOwn(patch, "default_project_id")
+        ? stringOrNull(patch.default_project_id)
+        : existing.default_project_id,
+      proposal_style: Object.hasOwn(patch, "proposal_style")
+        ? enumStringOrNull(patch.proposal_style, ASSISTANT_PROPOSAL_STYLES, "proposal_style")
+        : existing.proposal_style,
+      model_preferences_json: Object.hasOwn(patch, "model_preferences_json")
+        ? recordValue(patch.model_preferences_json) ?? {}
+        : recordValue(existing.model_preferences_json) ?? {},
+    };
+    const result = await new ScopedSettingsStore(this.pool).upsert(
+      ASSISTANT_SETTINGS_DEFINITION,
+      spaceId,
+      next,
+      { updatedByUserId: options.actorUserId ?? null },
     );
-    return result.rows[0]!;
+    return assistantSettingsRecordFromRead(spaceId, result);
   }
 
   private async validateModelSelection(

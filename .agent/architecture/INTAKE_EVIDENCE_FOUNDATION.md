@@ -18,8 +18,17 @@ There is no Area concept in this foundation.
   stored in `Artifact`.
 - `ExtractionJob` audits scans, manual URL intake, extraction, snapshots, and
   internal normalization jobs.
+- Structured reader documents are extracted artifacts owned by Intake. New
+  full-text extraction writes `artifact_type="intake_reader_document"` with
+  `canonical_format="reader_document_json"` and `mime_type="application/json"`.
+  The JSON contains `plain_text` plus read-only Tiptap `content_json`.
+  Older `artifact_type="intake_extracted_text"` text artifacts remain readable
+  for compatibility.
 - `ExtractedEvidence` is the citable context unit derived from intake, activity,
   artifacts, run events, files, logs, or documents.
+- Intake reader annotations and comments are Intake-owned records over reader
+  documents. They may create candidate evidence or Memory/Knowledge proposals,
+  but they do not directly write durable Memory or Knowledge.
 - `EvidenceLink` links one evidence item to multiple targets such as space,
   workspace, project, user, agent, run, proposal, artifact, memory, knowledge,
   or task. Service-layer validation requires each non-space target to exist in
@@ -58,6 +67,25 @@ Knowledge, policy, tasks, files, or capabilities.
 Internal display references belong in metadata such as
 `metadata_json.internal_ref`, not in fake `run://`, `artifact://`,
 `activity://`, or `file://` URIs.
+
+## Reader extraction
+
+Reader extraction preserves article structure for human reading while keeping a
+plain-text contract for anchors and hashes:
+
+- HTML extraction prefers readable page bodies (`article`, `main`, role `main`,
+  then `body`) and drops scripts, styles, frames, and other non-reader content.
+- Headings, paragraphs, lists, blockquotes, code blocks, horizontal rules,
+  links, and images are normalized into Tiptap JSON.
+- Image handling is remote-reference only. Intake stores resolved `http`/`https`
+  image URLs in JSON; it does not download, cache, or store image binaries in
+  this path.
+- `plain_text` is stored alongside `content_json` so reader annotations can
+  continue to use stable UTF-16 text ranges and server-side verification.
+- Re-extracting an already extracted item is allowed. It queues another
+  `extract_text` job, creates a fresh extracted snapshot/artifact, and updates
+  the item pointer. Existing annotations remain as records; anchors may become
+  `unverified` if the source content changed.
 
 ## Boundaries
 

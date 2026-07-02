@@ -23,32 +23,60 @@ function settingsRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function settingsJson(overrides: Record<string, unknown> = {}) {
+  const row = settingsRow(overrides);
+  return {
+    default_search_mode: row.default_search_mode,
+    rerank_enabled: row.rerank_enabled,
+    query_rewrite_enabled: row.query_rewrite_enabled,
+    query_rewrite_default: row.query_rewrite_default,
+    use_query_cache: row.use_query_cache,
+    include_trace: row.include_trace,
+    external_egress_enabled: row.external_egress_enabled,
+    retrieval_tool_mode: row.retrieval_tool_mode,
+    context_ops_review_mode: row.context_ops_review_mode,
+    context_ops_scan_mode: row.context_ops_scan_mode,
+    embedding_dimensions: row.embedding_dimensions,
+    max_results_default: row.max_results_default,
+    ranking_config: row.ranking_config_json,
+  };
+}
+
+function storageRow(settings: Record<string, unknown>) {
+  return {
+    id: "settings-1",
+    scope_type: "space",
+    scope_id: "space-1",
+    settings_key: "retrieval.space.settings",
+    settings_json: settings,
+    updated_by_user_id: null,
+    created_at: "2026-06-26T00:00:00.000Z",
+    updated_at: "2026-06-26T00:01:00.000Z",
+  };
+}
+
 class FakeDb {
   constructor(private readonly artifact: Record<string, unknown> | null) {}
-  current = settingsRow();
+  current: Record<string, unknown> = settingsJson();
 
   async query<Row = Record<string, unknown>>(
     sql: string,
     params: readonly unknown[] = [],
   ): Promise<{ rows: Row[]; rowCount: number | null }> {
     const norm = sql.replace(/\s+/g, " ").trim();
-    if (norm.startsWith("INSERT INTO space_retrieval_settings")) {
-      return { rows: [] as Row[], rowCount: 0 };
+    if (norm.startsWith("INSERT INTO settings")) {
+      this.current = JSON.parse(String(params[4] ?? "{}")) as Record<string, unknown>;
+      return norm.includes("RETURNING")
+        ? { rows: [storageRow(this.current)] as Row[], rowCount: 1 }
+        : { rows: [] as Row[], rowCount: 0 };
     }
-    if (/SELECT .* FROM space_retrieval_settings/.test(norm)) {
-      return { rows: [this.current] as Row[], rowCount: 1 };
+    if (/SELECT .* FROM settings/.test(norm)) {
+      return { rows: [storageRow(this.current)] as Row[], rowCount: 1 };
     }
     if (/FROM artifacts/.test(norm)) {
       return this.artifact?.visibility === "space_shared"
         ? { rows: [this.artifact] as Row[], rowCount: 1 }
         : { rows: [] as Row[], rowCount: 0 };
-    }
-    if (norm.startsWith("UPDATE space_retrieval_settings")) {
-      this.current = settingsRow({
-        ranking_config_json: JSON.parse(String(params[13])),
-        updated_at: "2026-06-26T00:01:00.000Z",
-      });
-      return { rows: [this.current] as Row[], rowCount: 1 };
     }
     return { rows: [] as Row[], rowCount: 0 };
   }

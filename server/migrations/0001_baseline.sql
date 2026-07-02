@@ -289,8 +289,6 @@ CREATE TABLE public.automations (
     status character varying(32) DEFAULT 'active'::character varying NOT NULL,
     preflight_snapshot_json jsonb,
     config_json jsonb,
-    next_run_at timestamp with time zone,
-    last_fired_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_automations_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'paused'::character varying, 'archived'::character varying])::text[]))),
@@ -703,31 +701,26 @@ CREATE TABLE public.credentials (
 
 
 --
--- Name: daily_capture_report_settings; Type: TABLE; Schema: public; Owner: -
+-- Name: scheduler_tasks; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.daily_capture_report_settings (
+CREATE TABLE public.scheduler_tasks (
     id character varying(36) NOT NULL,
-    space_id character varying(36) NOT NULL,
-    user_id character varying(36) NOT NULL,
-    enabled boolean NOT NULL,
-    local_time character varying(5) NOT NULL,
-    timezone character varying(64) NOT NULL,
-    include_source_types_json jsonb CONSTRAINT daily_capture_report_setting_include_source_types_json_not_null NOT NULL,
-    create_experience_proposals boolean CONSTRAINT daily_capture_report_settin_create_experience_proposal_not_null NOT NULL,
-    create_memory_proposals boolean NOT NULL,
-    experience_confidence_threshold double precision CONSTRAINT daily_capture_report_settin_experience_confidence_thre_not_null NOT NULL,
-    memory_confidence_threshold double precision CONSTRAINT daily_capture_report_settin_memory_confidence_threshol_not_null NOT NULL,
-    max_experience_proposals_per_day integer CONSTRAINT daily_capture_report_settin_max_experience_proposals_p_not_null NOT NULL,
-    max_memory_proposals_per_day integer CONSTRAINT daily_capture_report_settin_max_memory_proposals_per_d_not_null NOT NULL,
-    last_report_date character varying(10),
+    task_type character varying(128) NOT NULL,
+    task_key character varying(256) NOT NULL,
+    scope_type character varying(32) NOT NULL,
+    scope_id character varying(128) NOT NULL,
+    space_id character varying(36),
+    user_id character varying(36),
+    status character varying(32) NOT NULL,
     next_run_at timestamp with time zone,
+    last_run_at timestamp with time zone,
+    state_json jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_daily_capture_report_settings_experience_threshold CHECK (((experience_confidence_threshold >= (0.0)::double precision) AND (experience_confidence_threshold <= (1.0)::double precision))),
-    CONSTRAINT ck_daily_capture_report_settings_max_experience CHECK (((max_experience_proposals_per_day >= 0) AND (max_experience_proposals_per_day <= 20))),
-    CONSTRAINT ck_daily_capture_report_settings_max_memory CHECK (((max_memory_proposals_per_day >= 0) AND (max_memory_proposals_per_day <= 10))),
-    CONSTRAINT ck_daily_capture_report_settings_memory_threshold CHECK (((memory_confidence_threshold >= (0.0)::double precision) AND (memory_confidence_threshold <= (1.0)::double precision)))
+    CONSTRAINT ck_scheduler_tasks_scope_type CHECK (((scope_type)::text = ANY ((ARRAY['instance'::character varying, 'space'::character varying, 'user'::character varying, 'space_user'::character varying])::text[]))),
+    CONSTRAINT ck_scheduler_tasks_state_json_object CHECK ((jsonb_typeof(state_json) = 'object'::text)),
+    CONSTRAINT ck_scheduler_tasks_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'paused'::character varying, 'archived'::character varying])::text[])))
 );
 
 
@@ -2405,15 +2398,136 @@ CREATE TABLE public.source_connections (
     consent_json jsonb NOT NULL,
     policy_json jsonb NOT NULL,
     config_json jsonb NOT NULL,
-    last_checked_at timestamp with time zone,
-    next_check_at timestamp with time zone,
+    handler_kind character varying(32) NOT NULL DEFAULT 'built_in',
+    active_handler_version_id character varying(36),
+    active_recipe_version_id character varying(36),
+    repair_status character varying(32) NOT NULL DEFAULT 'ok',
+    last_handler_run_id character varying(36),
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     deleted_at timestamp with time zone,
     CONSTRAINT ck_source_connections_capture_policy CHECK (((capture_policy)::text = ANY ((ARRAY['metadata_only'::character varying, 'excerpt_only'::character varying, 'auto_extract_relevant'::character varying, 'auto_extract_all_text'::character varying, 'archive_all_snapshots'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_fetch_frequency CHECK (((fetch_frequency)::text = ANY ((ARRAY['manual'::character varying, 'hourly'::character varying, 'daily'::character varying, 'weekly'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'paused'::character varying, 'archived'::character varying])::text[]))),
-    CONSTRAINT ck_source_connections_trust_level CHECK (((trust_level)::text = ANY ((ARRAY['trusted'::character varying, 'normal'::character varying, 'untrusted'::character varying])::text[])))
+    CONSTRAINT ck_source_connections_trust_level CHECK (((trust_level)::text = ANY ((ARRAY['trusted'::character varying, 'normal'::character varying, 'untrusted'::character varying])::text[]))),
+    CONSTRAINT ck_source_connections_handler_kind CHECK (((handler_kind)::text = ANY ((ARRAY['built_in'::character varying, 'generated_custom'::character varying, 'recipe'::character varying])::text[]))),
+    CONSTRAINT ck_source_connections_repair_status CHECK (((repair_status)::text = ANY ((ARRAY['ok'::character varying, 'repair_required'::character varying, 'repair_pending'::character varying, 'disabled'::character varying])::text[])))
+);
+
+--
+-- Name: source_handler_versions; Type: TABLE; Schema: public; Owner: -
+--
+-- Generated, source-specific handler code versions for Intake Custom
+-- Source. See .agent/architecture/INTAKE_CUSTOM_SOURCE_HANDLERS.md. Handler
+-- code never writes this table directly.
+--
+
+CREATE TABLE public.source_handler_versions (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_connection_id character varying(36) NOT NULL,
+    version_number integer NOT NULL,
+    language character varying(32) NOT NULL,
+    entrypoint character varying(512) NOT NULL,
+    handler_artifact_id character varying(36),
+    manifest_json jsonb NOT NULL,
+    input_schema_json jsonb,
+    output_schema_json jsonb,
+    policy_envelope_json jsonb NOT NULL,
+    requested_capabilities_json jsonb,
+    checksum character varying(128) NOT NULL,
+    status character varying(32) NOT NULL,
+    created_by_user_id character varying(36),
+    created_by_run_id character varying(36),
+    proposal_id character varying(36),
+    test_result_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    activated_at timestamp with time zone,
+    superseded_at timestamp with time zone,
+    CONSTRAINT source_handler_versions_pkey PRIMARY KEY (id),
+    CONSTRAINT uq_source_handler_versions_connection_version UNIQUE (source_connection_id, version_number),
+    CONSTRAINT ck_source_handler_versions_language CHECK (((language)::text = ANY ((ARRAY['typescript_node'::character varying, 'declarative_pipeline_v1'::character varying])::text[]))),
+    CONSTRAINT ck_source_handler_versions_status CHECK (((status)::text = ANY ((ARRAY['draft'::character varying, 'test_failed'::character varying, 'pending_approval'::character varying, 'active'::character varying, 'superseded'::character varying, 'disabled'::character varying])::text[]))),
+    CONSTRAINT ck_source_handler_versions_version_number CHECK ((version_number > 0))
+);
+
+--
+-- Name: source_recipe_versions; Type: TABLE; Schema: public; Owner: -
+--
+-- Level 2 Source recipes: versioned, structured recipe JSON interpreted by
+-- trusted server code (no generated/untrusted code). Recipe sources use
+-- source_connections.handler_kind = 'recipe' and active_recipe_version_id;
+-- generated-handler (Level 3) sources keep using
+-- source_handler_versions/active_handler_version_id unchanged.
+--
+
+CREATE TABLE public.source_recipe_versions (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_connection_id character varying(36) NOT NULL,
+    version_number integer NOT NULL,
+    recipe_json jsonb NOT NULL,
+    policy_envelope_json jsonb NOT NULL,
+    primitive_versions_json jsonb,
+    status character varying(32) NOT NULL,
+    created_by_user_id character varying(36),
+    proposal_id character varying(36),
+    test_result_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    activated_at timestamp with time zone,
+    superseded_at timestamp with time zone,
+    CONSTRAINT source_recipe_versions_pkey PRIMARY KEY (id),
+    CONSTRAINT uq_source_recipe_versions_connection_version UNIQUE (source_connection_id, version_number),
+    CONSTRAINT ck_source_recipe_versions_status CHECK (((status)::text = ANY ((ARRAY['draft'::character varying, 'test_failed'::character varying, 'pending_approval'::character varying, 'active'::character varying, 'superseded'::character varying, 'disabled'::character varying])::text[]))),
+    CONSTRAINT ck_source_recipe_versions_version_number CHECK ((version_number > 0))
+);
+
+--
+-- Name: source_handler_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_handler_runs (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_connection_id character varying(36) NOT NULL,
+    handler_version_id character varying(36) NOT NULL,
+    extraction_job_id character varying(36),
+    status character varying(32) NOT NULL,
+    input_artifact_id character varying(36),
+    output_artifact_id character varying(36),
+    logs_artifact_id character varying(36),
+    failure_class character varying(64),
+    failure_detail_json jsonb,
+    validation_result_json jsonb,
+    resource_usage_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    started_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    CONSTRAINT source_handler_runs_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_source_handler_runs_status CHECK (((status)::text = ANY ((ARRAY['queued'::character varying, 'running'::character varying, 'succeeded'::character varying, 'failed'::character varying, 'validation_failed'::character varying, 'blocked'::character varying])::text[])))
+);
+
+--
+-- Name: settings; Type: TABLE; Schema: public; Owner: -
+--
+-- Generic scoped settings store for low-frequency product/admin settings.
+-- scope_type/scope_id supports instance, space, user, and space_user
+-- settings without adding one singleton table per feature.
+--
+
+CREATE TABLE public.settings (
+    id character varying(36) NOT NULL,
+    scope_type character varying(32) NOT NULL,
+    scope_id character varying(128) NOT NULL,
+    settings_key character varying(128) NOT NULL,
+    settings_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    updated_by_user_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT settings_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_settings_json_object CHECK ((jsonb_typeof(settings_json) = 'object'::text)),
+    CONSTRAINT ck_settings_scope_type CHECK (((scope_type)::text = ANY ((ARRAY['instance'::character varying, 'space'::character varying, 'user'::character varying, 'space_user'::character varying])::text[]))),
+    CONSTRAINT uq_settings_scope_key UNIQUE (scope_type, scope_id, settings_key)
 );
 
 
@@ -2477,7 +2591,7 @@ CREATE TABLE public.source_snapshots (
     metadata_json jsonb,
     captured_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_source_snapshots_capture_method CHECK (((capture_method)::text = ANY ((ARRAY['manual'::character varying, 'connection_scan'::character varying, 'full_text'::character varying, 'snapshot'::character varying, 'internal'::character varying])::text[]))),
+    CONSTRAINT ck_source_snapshots_capture_method CHECK (((capture_method)::text = ANY ((ARRAY['manual'::character varying, 'connection_scan'::character varying, 'full_text'::character varying, 'snapshot'::character varying, 'internal'::character varying, 'custom_source_handler'::character varying, 'source_recipe'::character varying])::text[]))),
     CONSTRAINT ck_source_snapshots_snapshot_type CHECK (((snapshot_type)::text = ANY ((ARRAY['metadata'::character varying, 'raw'::character varying, 'extracted'::character varying, 'summary'::character varying])::text[]))),
     CONSTRAINT ck_source_snapshots_trust_level CHECK (((trust_level)::text = ANY ((ARRAY['trusted'::character varying, 'normal'::character varying, 'untrusted'::character varying])::text[])))
 );
@@ -2623,37 +2737,6 @@ CREATE TABLE public.retrieval_feedback_events (
 
 
 --
--- Name: space_retrieval_settings; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.space_retrieval_settings (
-    id character varying(36) NOT NULL,
-    space_id character varying(36) NOT NULL,
-    default_search_mode character varying(32) DEFAULT 'hybrid'::character varying NOT NULL,
-    rerank_enabled boolean DEFAULT false NOT NULL,
-    query_rewrite_enabled boolean DEFAULT false NOT NULL,
-    query_rewrite_default boolean DEFAULT false NOT NULL,
-    use_query_cache boolean DEFAULT true NOT NULL,
-    include_trace boolean DEFAULT false NOT NULL,
-    external_egress_enabled boolean DEFAULT true NOT NULL,
-    retrieval_tool_mode character varying(32) DEFAULT 'off'::character varying NOT NULL,
-    context_ops_review_mode character varying(32) DEFAULT 'private_only'::character varying NOT NULL,
-    context_ops_scan_mode character varying(32) DEFAULT 'admins'::character varying NOT NULL,
-    embedding_dimensions integer DEFAULT 2560 NOT NULL,
-    max_results_default integer DEFAULT 50 NOT NULL,
-    ranking_config_json jsonb DEFAULT '{}'::jsonb NOT NULL,
-    created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_space_retrieval_settings_embedding_dimensions CHECK (((embedding_dimensions >= 64) AND (embedding_dimensions <= 4096))),
-    CONSTRAINT ck_space_retrieval_settings_context_ops_review_mode CHECK (((context_ops_review_mode)::text = ANY ((ARRAY['private_only'::character varying, 'admins'::character varying, 'members'::character varying])::text[]))),
-    CONSTRAINT ck_space_retrieval_settings_context_ops_scan_mode CHECK (((context_ops_scan_mode)::text = ANY ((ARRAY['admins'::character varying, 'members'::character varying])::text[]))),
-    CONSTRAINT ck_space_retrieval_settings_max_results_default CHECK (((max_results_default >= 1) AND (max_results_default <= 50))),
-    CONSTRAINT ck_space_retrieval_settings_retrieval_tool_mode CHECK (((retrieval_tool_mode)::text = ANY ((ARRAY['off'::character varying, 'manual_tool_only'::character varying, 'preflight_search'::character varying, 'preflight_brief'::character varying])::text[]))),
-    CONSTRAINT ck_space_retrieval_settings_search_mode CHECK (((default_search_mode)::text = ANY ((ARRAY['exact'::character varying, 'lexical'::character varying, 'hybrid'::character varying, 'hybrid_rerank'::character varying])::text[])))
-);
-
-
---
 -- Name: space_retrieval_prompts; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2668,28 +2751,6 @@ CREATE TABLE public.space_retrieval_prompts (
     CONSTRAINT ck_space_retrieval_prompts_task CHECK (((task)::text = ANY ((ARRAY['query_rewrite'::character varying])::text[]))),
     CONSTRAINT ck_space_retrieval_prompts_system_prompt CHECK ((length(btrim(system_prompt)) > 0)),
     CONSTRAINT ck_space_retrieval_prompts_user_template CHECK ((strpos(user_template, '{query}'::text) > 0))
-);
-
-
---
--- Name: space_assistant_settings; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.space_assistant_settings (
-    id character varying(36) NOT NULL,
-    space_id character varying(36) NOT NULL,
-    assistant_agent_id character varying(36),
-    response_style character varying(32),
-    verbosity character varying(32),
-    default_context_toggles_json jsonb NOT NULL,
-    default_project_id character varying(36),
-    proposal_style character varying(32),
-    model_preferences_json jsonb NOT NULL,
-    created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_space_assistant_settings_proposal_style CHECK (((proposal_style IS NULL) OR ((proposal_style)::text = ANY ((ARRAY['proactive'::character varying, 'balanced'::character varying, 'conservative'::character varying])::text[])))),
-    CONSTRAINT ck_space_assistant_settings_response_style CHECK (((response_style IS NULL) OR ((response_style)::text = ANY ((ARRAY['neutral'::character varying, 'friendly'::character varying, 'direct'::character varying, 'formal'::character varying])::text[])))),
-    CONSTRAINT ck_space_assistant_settings_verbosity CHECK (((verbosity IS NULL) OR ((verbosity)::text = ANY ((ARRAY['concise'::character varying, 'balanced'::character varying, 'detailed'::character varying])::text[]))))
 );
 
 
@@ -3317,11 +3378,11 @@ ALTER TABLE ONLY public.credentials
 
 
 --
--- Name: daily_capture_report_settings daily_capture_report_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: scheduler_tasks scheduler_tasks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.daily_capture_report_settings
-    ADD CONSTRAINT daily_capture_report_settings_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.scheduler_tasks
+    ADD CONSTRAINT scheduler_tasks_pkey PRIMARY KEY (id);
 
 
 
@@ -4016,27 +4077,11 @@ ALTER TABLE ONLY public.retrieval_feedback_events
 
 
 --
--- Name: space_retrieval_settings space_retrieval_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.space_retrieval_settings
-    ADD CONSTRAINT space_retrieval_settings_pkey PRIMARY KEY (id);
-
-
---
 -- Name: space_retrieval_prompts space_retrieval_prompts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.space_retrieval_prompts
     ADD CONSTRAINT space_retrieval_prompts_pkey PRIMARY KEY (id);
-
-
---
--- Name: space_assistant_settings space_assistant_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.space_assistant_settings
-    ADD CONSTRAINT space_assistant_settings_pkey PRIMARY KEY (id);
 
 
 --
@@ -4154,11 +4199,11 @@ ALTER TABLE ONLY public.card_review_states
 
 
 --
--- Name: daily_capture_report_settings uq_daily_capture_report_settings_space_user; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: scheduler_tasks uq_scheduler_tasks_type_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.daily_capture_report_settings
-    ADD CONSTRAINT uq_daily_capture_report_settings_space_user UNIQUE (space_id, user_id);
+ALTER TABLE ONLY public.scheduler_tasks
+    ADD CONSTRAINT uq_scheduler_tasks_type_key UNIQUE (task_type, task_key);
 
 
 --
@@ -4261,27 +4306,11 @@ ALTER TABLE ONLY public.session_summaries
 
 
 --
--- Name: space_retrieval_settings uq_space_retrieval_settings_space_id; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.space_retrieval_settings
-    ADD CONSTRAINT uq_space_retrieval_settings_space_id UNIQUE (space_id);
-
-
---
 -- Name: space_retrieval_prompts uq_space_retrieval_prompts_space_task; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.space_retrieval_prompts
     ADD CONSTRAINT uq_space_retrieval_prompts_space_task UNIQUE (space_id, task);
-
-
---
--- Name: space_assistant_settings uq_space_assistant_settings_space_id; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.space_assistant_settings
-    ADD CONSTRAINT uq_space_assistant_settings_space_id UNIQUE (space_id);
 
 
 --
@@ -4836,13 +4865,6 @@ CREATE INDEX ix_automations_agent_id ON public.automations USING btree (agent_id
 
 
 --
--- Name: ix_automations_next_run_at; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_automations_next_run_at ON public.automations USING btree (next_run_at);
-
-
---
 -- Name: ix_automations_owner_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5389,24 +5411,24 @@ CREATE INDEX ix_credentials_owner_user_id ON public.credentials USING btree (own
 
 
 --
--- Name: ix_daily_capture_report_settings_next_run_at; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_scheduler_tasks_due; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_daily_capture_report_settings_next_run_at ON public.daily_capture_report_settings USING btree (next_run_at);
-
-
---
--- Name: ix_daily_capture_report_settings_space_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_daily_capture_report_settings_space_id ON public.daily_capture_report_settings USING btree (space_id);
+CREATE INDEX ix_scheduler_tasks_due ON public.scheduler_tasks USING btree (task_type, status, next_run_at);
 
 
 --
--- Name: ix_daily_capture_report_settings_user_id; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_scheduler_tasks_space_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_daily_capture_report_settings_user_id ON public.daily_capture_report_settings USING btree (user_id);
+CREATE INDEX ix_scheduler_tasks_space_id ON public.scheduler_tasks USING btree (space_id);
+
+
+--
+-- Name: ix_scheduler_tasks_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_scheduler_tasks_user_id ON public.scheduler_tasks USING btree (user_id);
 
 
 
@@ -7939,20 +7961,6 @@ CREATE INDEX ix_source_connections_deleted_at ON public.source_connections USING
 
 
 --
--- Name: ix_source_connections_due; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_source_connections_due ON public.source_connections USING btree (status, next_check_at);
-
-
---
--- Name: ix_source_connections_next_check_at; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_source_connections_next_check_at ON public.source_connections USING btree (next_check_at);
-
-
---
 -- Name: ix_source_connections_owner_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8253,31 +8261,10 @@ CREATE INDEX ix_retrieval_feedback_events_space_created ON public.retrieval_feed
 
 
 --
--- Name: ix_space_retrieval_settings_space_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_space_retrieval_settings_space_id ON public.space_retrieval_settings USING btree (space_id);
-
-
---
 -- Name: ix_space_retrieval_prompts_space_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX ix_space_retrieval_prompts_space_id ON public.space_retrieval_prompts USING btree (space_id);
-
-
---
--- Name: ix_space_assistant_settings_assistant_agent_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_space_assistant_settings_assistant_agent_id ON public.space_assistant_settings USING btree (assistant_agent_id);
-
-
---
--- Name: ix_space_assistant_settings_space_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_space_assistant_settings_space_id ON public.space_assistant_settings USING btree (space_id);
 
 
 --
@@ -9369,19 +9356,19 @@ ALTER TABLE ONLY public.credentials
 
 
 --
--- Name: daily_capture_report_settings daily_capture_report_settings_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: scheduler_tasks scheduler_tasks_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.daily_capture_report_settings
-    ADD CONSTRAINT daily_capture_report_settings_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+ALTER TABLE ONLY public.scheduler_tasks
+    ADD CONSTRAINT scheduler_tasks_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
 
 
 --
--- Name: daily_capture_report_settings daily_capture_report_settings_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: scheduler_tasks scheduler_tasks_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.daily_capture_report_settings
-    ADD CONSTRAINT daily_capture_report_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
+ALTER TABLE ONLY public.scheduler_tasks
+    ADD CONSTRAINT scheduler_tasks_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
 
 
 
@@ -11561,27 +11548,11 @@ ALTER TABLE ONLY public.retrieval_feedback_events
 
 
 --
--- Name: space_retrieval_settings space_retrieval_settings_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.space_retrieval_settings
-    ADD CONSTRAINT space_retrieval_settings_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
-
-
---
 -- Name: space_retrieval_prompts space_retrieval_prompts_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.space_retrieval_prompts
     ADD CONSTRAINT space_retrieval_prompts_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
-
-
---
--- Name: space_assistant_settings space_assistant_settings_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.space_assistant_settings
-    ADD CONSTRAINT space_assistant_settings_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
 
 
 --
@@ -12056,167 +12027,209 @@ ALTER TABLE ONLY public.workspaces
     ADD CONSTRAINT workspaces_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
 
 
+
 --
--- Built-in evolution strategy assets.
+-- Name: reader_annotations; Type: TABLE; Schema: public; Owner: -
 --
 
-INSERT INTO public.evolution_strategy_assets (
-    id, space_id, strategy_key, name, description, category, target_type, status,
-    risk_level, signals_match_json, preconditions_json, strategy_steps_json,
-    constraints_json, validation_policy_json, tool_policy_json, routing_hint_json,
-    provenance_type, source_ref_json, success_count, failure_count, confidence_score,
-    last_selected_at, created_at, updated_at
-) VALUES
-(
-    '00000000-0000-4000-8000-000000000101', NULL, 'repair.runtime_failure',
-    'Repair runtime failure',
-    'Inspect failed runtime evidence and propose the smallest reviewable correction path.',
-    'repair', 'system', 'active', 'medium',
-    '["runtime_failure","adapter_failed","run_failed","tool_error"]'::jsonb,
-    '{"requires_recent_signal": true}'::jsonb,
-    '["collect_run_trace","identify_failure_layer","draft_minimal_repair_plan","require_validation_before_apply"]'::jsonb,
-    '["do_not_mutate_target_directly","use_existing_run_artifact_proposal_boundaries"]'::jsonb,
-    '{"requires_run_trace": true, "requires_validation": true}'::jsonb,
-    '{"allow_direct_apply": false}'::jsonb,
-    '{"preferred_run_mode": "dry_run"}'::jsonb,
-    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.55,
-    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
-),
-(
-    '00000000-0000-4000-8000-000000000102', NULL, 'repair.validation_failure',
-    'Repair validation failure',
-    'Use validation evidence to narrow an improvement target and create a reviewable repair plan.',
-    'repair', 'system', 'active', 'medium',
-    '["validation_failure","run_validation_failed","evaluation_failed","proposal_rejected"]'::jsonb,
-    '{"requires_validation_trace": true}'::jsonb,
-    '["summarize_validation_failure","compare_expected_vs_observed","draft_repair_plan","record_review_artifact"]'::jsonb,
-    '["do_not_weaken_validation_policy","do_not_apply_without_approval"]'::jsonb,
-    '{"requires_validation_trace": true, "minimum_evidence_count": 1}'::jsonb,
-    '{"allow_direct_apply": false}'::jsonb,
-    '{"preferred_run_mode": "dry_run"}'::jsonb,
-    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.55,
-    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
-),
-(
-    '00000000-0000-4000-8000-000000000103', NULL, 'optimize.prompt_asset',
-    'Optimize prompt asset',
-    'Improve prompt-like agent or capability assets through review artifacts and proposal-gated changes.',
-    'optimize', 'agent_version', 'active', 'medium',
-    '["stable_preference_missed","user_repeated_same_correction","prompt_gap","proposal_edited"]'::jsonb,
-    '{"requires_target_owner_review": true}'::jsonb,
-    '["collect_corrections","summarize_prompt_gap","draft_prompt_revision_artifact","route_to_supported_proposal_type"]'::jsonb,
-    '["do_not_create_prompt_update_without_registered_applier","preserve_policy_ceiling"]'::jsonb,
-    '{"requires_before_after_review": true}'::jsonb,
-    '{"allow_direct_apply": false}'::jsonb,
-    '{"preferred_artifact_type": "evolution_plan.v1"}'::jsonb,
-    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.5,
-    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
-),
-(
-    '00000000-0000-4000-8000-000000000104', NULL, 'optimize.tool_usage',
-    'Optimize tool usage',
-    'Review tool-use evidence and propose safer or more effective capability/runtime binding changes.',
-    'optimize', 'runtime_skill_binding', 'active', 'high',
-    '["tool_error","tool_overuse","tool_missing","runtime_skill_binding_gap"]'::jsonb,
-    '{"requires_runtime_binding_context": true}'::jsonb,
-    '["summarize_tool_trace","identify_binding_gap","draft_runtime_skill_binding_review","require_proposal_gate"]'::jsonb,
-    '["do_not_grant_new_tools_directly","do_not_expand_permissions_without_proposal"]'::jsonb,
-    '{"requires_policy_review_for_permission_change": true}'::jsonb,
-    '{"allow_direct_apply": false, "permission_expansion_requires_high_risk": true}'::jsonb,
-    '{"preferred_proposal_type": "runtime_skill_binding_update"}'::jsonb,
-    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.5,
-    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
-),
-(
-    '00000000-0000-4000-8000-000000000105', NULL, 'harden.policy_boundary',
-    'Harden policy boundary',
-    'Prioritize fail-closed review when signals indicate a policy, permission, sandbox, or credential boundary risk.',
-    'harden', 'system', 'active', 'high',
-    '["policy_boundary","policy_denied","permission_boundary","sandbox_boundary","credential_boundary"]'::jsonb,
-    '{"requires_boundary_signal": true}'::jsonb,
-    '["collect_boundary_evidence","classify_invariant","draft_hardening_plan","require_owner_review"]'::jsonb,
-    '["do_not_reduce_policy_risk","do_not_bypass_policy_gateway","do_not_auto_apply"]'::jsonb,
-    '{"requires_policy_trace": true, "requires_owner_review": true}'::jsonb,
-    '{"allow_direct_apply": false, "force_review": true}'::jsonb,
-    '{"preferred_run_status": "waiting_for_review"}'::jsonb,
-    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.65,
-    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
-),
-(
-    '00000000-0000-4000-8000-000000000106', NULL, 'improve.capability_gap',
-    'Improve capability gap',
-    'Convert repeated capability-gap signals into a reviewed capability install/update/enable plan.',
-    'innovate', 'capability', 'active', 'high',
-    '["capability_gap","missing_capability","workflow_gap","user_improvement_request"]'::jsonb,
-    '{"requires_reviewable_capability_boundary": true}'::jsonb,
-    '["summarize_gap","map_to_existing_capability","draft_capability_change_plan","route_through_capability_proposal"]'::jsonb,
-    '["external_skills_default_disabled","do_not_enable_capability_directly"]'::jsonb,
-    '{"requires_capability_lifecycle": true}'::jsonb,
-    '{"allow_direct_apply": false, "external_source_untrusted": true}'::jsonb,
-    '{"preferred_proposal_types": ["capability_install","capability_update","capability_enable"]}'::jsonb,
-    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.5,
-    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
-),
-(
-    '00000000-0000-4000-8000-000000000107', NULL, 'review.open_skill_import',
-    'Review Open Skill import',
-    'Treat external skill material as untrusted source and produce proposal-gated review steps.',
-    'review', 'capability', 'active', 'high',
-    '["open_skill_imported","external_skill_detected","skill_risk_warning","script_files_detected"]'::jsonb,
-    '{"requires_skill_package_snapshot": true}'::jsonb,
-    '["summarize_import_snapshot","surface_risk_warnings","draft_review_packet","keep_capability_disabled_until_approved"]'::jsonb,
-    '["do_not_execute_imported_scripts","do_not_auto_enable_external_skill"]'::jsonb,
-    '{"requires_source_snapshot": true, "requires_risk_scan": true}'::jsonb,
-    '{"allow_direct_apply": false, "scripts_executable": false}'::jsonb,
-    '{"preferred_proposal_types": ["skill_import_approve","capability_install"]}'::jsonb,
-    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.6,
-    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
-),
-(
-    '00000000-0000-4000-8000-000000000108', NULL, 'maintain.memory_health',
-    'Maintain memory health',
-    'Use memory quality signals to create review packets or memory proposals without direct memory writes.',
-    'maintain', 'memory', 'active', 'medium',
-    '["memory_health","duplicate_memory","stale_memory","thin_memory","memory_candidate_rejected"]'::jsonb,
-    '{"requires_visible_memory_scope": true}'::jsonb,
-    '["collect_memory_findings","group_reviewable_candidates","draft_memory_maintenance_packet","preserve_proposal_gate"]'::jsonb,
-    '["do_not_write_active_memory_directly","log_memory_reads_through_memory_boundary"]'::jsonb,
-    '{"requires_memory_read_boundary": true}'::jsonb,
-    '{"allow_direct_apply": false}'::jsonb,
-    '{"preferred_proposal_type": "memory_maintenance_packet"}'::jsonb,
-    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.55,
-    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
-),
-(
-    '00000000-0000-4000-8000-000000000109', NULL, 'maintain.knowledge_retrieval',
-    'Maintain knowledge retrieval',
-    'Review retrieval quality signals and produce diagnostics or maintenance proposals through existing boundaries.',
-    'maintain', 'knowledge', 'active', 'medium',
-    '["retrieval_gap","low_retrieval_quality","missing_relation","knowledge_retrieval"]'::jsonb,
-    '{"requires_retrieval_trace": true}'::jsonb,
-    '["collect_retrieval_trace","identify_missing_or_noisy_sources","draft_retrieval_maintenance_packet","require_review"]'::jsonb,
-    '["do_not_promote_knowledge_to_memory_directly","do_not_trust_derived_index_without_revalidation"]'::jsonb,
-    '{"requires_retrieval_evidence": true}'::jsonb,
-    '{"allow_direct_apply": false}'::jsonb,
-    '{"preferred_proposal_type": "retrieval_maintenance_packet"}'::jsonb,
-    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.55,
-    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
-),
-(
-    '00000000-0000-4000-8000-000000000110', NULL, 'solidifyExperience.successful_run',
-    'Solidify Experience successful run',
-    'Turn accepted or validated run outcomes into reusable EvolutionExperience records.',
-    'maintain', 'system', 'active', 'low',
-    '["run_succeeded","proposal_accepted","validation_passed","experience_candidate"]'::jsonb,
-    '{"requires_validated_outcome": true}'::jsonb,
-    '["extract_outcome_trace","summarize_lessons","record_evolution_experience","update_strategy_confidence"]'::jsonb,
-    '["do_not_mutate_behavior_from_experience","record_experience_only"]'::jsonb,
-    '{"requires_success_or_partial_outcome": true}'::jsonb,
-    '{"allow_direct_apply": false}'::jsonb,
-    '{"service": "ExperienceSolidifier"}'::jsonb,
-    'built_in', '{"source": "agent_space_native_seed"}'::jsonb, 0, 0, 0.6,
-    NULL, '2026-06-29 00:00:00+00', '2026-06-29 00:00:00+00'
+CREATE TABLE public.reader_annotations (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    intake_item_id character varying(36),
+    artifact_id character varying(36),
+    source_snapshot_id character varying(36),
+    annotation_type character varying(32) NOT NULL,
+    quote_text text NOT NULL,
+    anchor_json jsonb NOT NULL,
+    color character varying(32),
+    label character varying(128),
+    visibility character varying(32) NOT NULL DEFAULT 'private',
+    status character varying(32) NOT NULL DEFAULT 'active',
+    anchor_state character varying(32) NOT NULL DEFAULT 'unverified',
+    created_by_user_id character varying(36) NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_reader_annotations_annotation_type CHECK (((annotation_type)::text = ANY ((ARRAY['highlight'::character varying, 'comment'::character varying, 'excerpt'::character varying, 'bookmark'::character varying])::text[]))),
+    CONSTRAINT ck_reader_annotations_visibility CHECK (((visibility)::text = ANY ((ARRAY['private'::character varying, 'space_shared'::character varying])::text[]))),
+    CONSTRAINT ck_reader_annotations_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'archived'::character varying])::text[]))),
+    CONSTRAINT ck_reader_annotations_anchor_state CHECK (((anchor_state)::text = ANY ((ARRAY['verified'::character varying, 'unverified'::character varying])::text[]))),
+    CONSTRAINT ck_reader_annotations_one_target CHECK (
+        ((intake_item_id IS NOT NULL)::integer + (artifact_id IS NOT NULL)::integer + (source_snapshot_id IS NOT NULL)::integer) = 1
+    ),
+    CONSTRAINT ck_reader_annotations_anchor_json CHECK ((jsonb_typeof(anchor_json) = 'object'::text))
 );
+
+ALTER TABLE ONLY public.reader_annotations
+    ADD CONSTRAINT reader_annotations_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.reader_annotations
+    ADD CONSTRAINT reader_annotations_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+ALTER TABLE ONLY public.reader_annotations
+    ADD CONSTRAINT reader_annotations_intake_item_id_fkey FOREIGN KEY (intake_item_id) REFERENCES public.intake_items(id);
+
+ALTER TABLE ONLY public.reader_annotations
+    ADD CONSTRAINT reader_annotations_artifact_id_fkey FOREIGN KEY (artifact_id) REFERENCES public.artifacts(id);
+
+ALTER TABLE ONLY public.reader_annotations
+    ADD CONSTRAINT reader_annotations_source_snapshot_id_fkey FOREIGN KEY (source_snapshot_id) REFERENCES public.source_snapshots(id);
+
+ALTER TABLE ONLY public.reader_annotations
+    ADD CONSTRAINT reader_annotations_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+CREATE INDEX ix_reader_annotations_space_intake_item ON public.reader_annotations USING btree (space_id, intake_item_id, status);
+CREATE INDEX ix_reader_annotations_space_artifact ON public.reader_annotations USING btree (space_id, artifact_id, status);
+CREATE INDEX ix_reader_annotations_space_snapshot ON public.reader_annotations USING btree (space_id, source_snapshot_id, status);
+CREATE INDEX ix_reader_annotations_space_user ON public.reader_annotations USING btree (space_id, created_by_user_id, status);
+CREATE INDEX ix_reader_annotations_space_visibility ON public.reader_annotations USING btree (space_id, visibility, status);
+
+
+--
+-- Name: reader_comment_threads; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.reader_comment_threads (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    annotation_id character varying(36) NOT NULL,
+    status character varying(32) NOT NULL DEFAULT 'open',
+    created_by_user_id character varying(36) NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_reader_comment_threads_status CHECK (((status)::text = ANY ((ARRAY['open'::character varying, 'resolved'::character varying, 'archived'::character varying])::text[])))
+);
+
+ALTER TABLE ONLY public.reader_comment_threads
+    ADD CONSTRAINT reader_comment_threads_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.reader_comment_threads
+    ADD CONSTRAINT reader_comment_threads_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+ALTER TABLE ONLY public.reader_comment_threads
+    ADD CONSTRAINT reader_comment_threads_annotation_id_fkey FOREIGN KEY (annotation_id) REFERENCES public.reader_annotations(id);
+
+ALTER TABLE ONLY public.reader_comment_threads
+    ADD CONSTRAINT reader_comment_threads_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+CREATE INDEX ix_reader_comment_threads_space_annotation ON public.reader_comment_threads USING btree (space_id, annotation_id, status);
+CREATE INDEX ix_reader_comment_threads_space_user ON public.reader_comment_threads USING btree (space_id, created_by_user_id, status);
+
+
+--
+-- Name: reader_comments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.reader_comments (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    thread_id character varying(36) NOT NULL,
+    body text NOT NULL,
+    status character varying(32) NOT NULL DEFAULT 'active',
+    created_by_user_id character varying(36) NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_reader_comments_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'archived'::character varying])::text[])))
+);
+
+ALTER TABLE ONLY public.reader_comments
+    ADD CONSTRAINT reader_comments_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.reader_comments
+    ADD CONSTRAINT reader_comments_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+ALTER TABLE ONLY public.reader_comments
+    ADD CONSTRAINT reader_comments_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES public.reader_comment_threads(id);
+
+ALTER TABLE ONLY public.reader_comments
+    ADD CONSTRAINT reader_comments_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+CREATE INDEX ix_reader_comments_space_thread ON public.reader_comments USING btree (space_id, thread_id, status);
+CREATE INDEX ix_reader_comments_space_user ON public.reader_comments USING btree (space_id, created_by_user_id, status);
+
+--
+-- Intake Custom Source handler constraints and indexes.
+--
+
+ALTER TABLE ONLY public.source_handler_versions
+    ADD CONSTRAINT source_handler_versions_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+ALTER TABLE ONLY public.source_handler_versions
+    ADD CONSTRAINT source_handler_versions_source_connection_id_fkey FOREIGN KEY (source_connection_id) REFERENCES public.source_connections(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.source_handler_versions
+    ADD CONSTRAINT source_handler_versions_handler_artifact_id_fkey FOREIGN KEY (handler_artifact_id) REFERENCES public.artifacts(id);
+
+ALTER TABLE ONLY public.source_handler_versions
+    ADD CONSTRAINT source_handler_versions_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+ALTER TABLE ONLY public.source_handler_versions
+    ADD CONSTRAINT source_handler_versions_created_by_run_id_fkey FOREIGN KEY (created_by_run_id) REFERENCES public.runs(id);
+
+ALTER TABLE ONLY public.source_handler_versions
+    ADD CONSTRAINT source_handler_versions_proposal_id_fkey FOREIGN KEY (proposal_id) REFERENCES public.proposals(id);
+
+CREATE INDEX ix_source_handler_versions_space_id ON public.source_handler_versions USING btree (space_id);
+CREATE INDEX ix_source_handler_versions_source_connection_id ON public.source_handler_versions USING btree (source_connection_id);
+CREATE INDEX ix_source_handler_versions_status ON public.source_handler_versions USING btree (status);
+
+ALTER TABLE ONLY public.source_recipe_versions
+    ADD CONSTRAINT source_recipe_versions_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+ALTER TABLE ONLY public.source_recipe_versions
+    ADD CONSTRAINT source_recipe_versions_source_connection_id_fkey FOREIGN KEY (source_connection_id) REFERENCES public.source_connections(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.source_recipe_versions
+    ADD CONSTRAINT source_recipe_versions_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+ALTER TABLE ONLY public.source_recipe_versions
+    ADD CONSTRAINT source_recipe_versions_proposal_id_fkey FOREIGN KEY (proposal_id) REFERENCES public.proposals(id);
+
+CREATE INDEX ix_source_recipe_versions_space_id ON public.source_recipe_versions USING btree (space_id);
+CREATE INDEX ix_source_recipe_versions_connection ON public.source_recipe_versions USING btree (source_connection_id);
+
+ALTER TABLE ONLY public.source_handler_runs
+    ADD CONSTRAINT source_handler_runs_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+ALTER TABLE ONLY public.source_handler_runs
+    ADD CONSTRAINT source_handler_runs_source_connection_id_fkey FOREIGN KEY (source_connection_id) REFERENCES public.source_connections(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.source_handler_runs
+    ADD CONSTRAINT source_handler_runs_handler_version_id_fkey FOREIGN KEY (handler_version_id) REFERENCES public.source_handler_versions(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.source_handler_runs
+    ADD CONSTRAINT source_handler_runs_extraction_job_id_fkey FOREIGN KEY (extraction_job_id) REFERENCES public.extraction_jobs(id) ON DELETE SET NULL;
+
+ALTER TABLE ONLY public.source_handler_runs
+    ADD CONSTRAINT source_handler_runs_input_artifact_id_fkey FOREIGN KEY (input_artifact_id) REFERENCES public.artifacts(id);
+
+ALTER TABLE ONLY public.source_handler_runs
+    ADD CONSTRAINT source_handler_runs_output_artifact_id_fkey FOREIGN KEY (output_artifact_id) REFERENCES public.artifacts(id);
+
+ALTER TABLE ONLY public.source_handler_runs
+    ADD CONSTRAINT source_handler_runs_logs_artifact_id_fkey FOREIGN KEY (logs_artifact_id) REFERENCES public.artifacts(id);
+
+CREATE INDEX ix_source_handler_runs_space_id ON public.source_handler_runs USING btree (space_id);
+CREATE INDEX ix_source_handler_runs_source_connection_id ON public.source_handler_runs USING btree (source_connection_id);
+CREATE INDEX ix_source_handler_runs_handler_version_id ON public.source_handler_runs USING btree (handler_version_id);
+CREATE INDEX ix_source_handler_runs_status ON public.source_handler_runs USING btree (status);
+
+ALTER TABLE ONLY public.source_connections
+    ADD CONSTRAINT source_connections_active_handler_version_id_fkey FOREIGN KEY (active_handler_version_id) REFERENCES public.source_handler_versions(id) ON DELETE SET NULL;
+
+ALTER TABLE ONLY public.source_connections
+    ADD CONSTRAINT source_connections_last_handler_run_id_fkey FOREIGN KEY (last_handler_run_id) REFERENCES public.source_handler_runs(id) ON DELETE SET NULL;
+
+CREATE INDEX ix_source_connections_active_handler_version_id ON public.source_connections USING btree (active_handler_version_id);
+ALTER TABLE ONLY public.source_connections
+    ADD CONSTRAINT source_connections_active_recipe_version_id_fkey FOREIGN KEY (active_recipe_version_id) REFERENCES public.source_recipe_versions(id) ON DELETE SET NULL;
+
+CREATE INDEX ix_source_connections_active_recipe_version_id ON public.source_connections USING btree (active_recipe_version_id);
+
+ALTER TABLE ONLY public.settings
+    ADD CONSTRAINT settings_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public.users(id);
+
+CREATE INDEX ix_settings_scope ON public.settings USING btree (scope_type, scope_id);
+CREATE INDEX ix_settings_key ON public.settings USING btree (settings_key);
 
 
 --

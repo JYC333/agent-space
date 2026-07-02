@@ -30,7 +30,7 @@ function tableOf(sql: string): string {
   if (sql.includes("FROM provenance_links")) return "provenance_links";
   if (sql.includes("FROM source_connections")) return "source_connections";
   if (sql.includes("FROM space_memberships")) return "space_memberships";
-  if (sql.includes("FROM space_retrieval_settings")) return "space_retrieval_settings";
+  if (sql.includes("FROM settings")) return "settings";
   if (sql.includes("FROM spaces")) return "spaces";
   if (sql.includes("FROM project_public_summaries")) return "project_public_summaries";
   if (sql.includes("FROM projects")) return "projects";
@@ -325,7 +325,7 @@ describe("ChatContextCandidateCollector", () => {
     const db = new FakeDb({
       policy: [{ context_policy_json: { sources: ["memory"] } }],
       memory_entries: [memoryRow({ id: "m1", owner_user_id: "user-1" })],
-      space_retrieval_settings: [{ external_egress_enabled: false }],
+      settings: [{ settings_json: { external_egress_enabled: false } }],
     });
 
     const result = await collector(db).fetchCandidates(request);
@@ -346,7 +346,7 @@ describe("ChatContextCandidateCollector", () => {
         },
       ],
       source_connections: [sourceConnection({ id: "source-external" })],
-      space_retrieval_settings: [{ external_egress_enabled: false }],
+      settings: [{ settings_json: { external_egress_enabled: false } }],
     });
 
     const result = await collector(db).fetchCandidates(request);

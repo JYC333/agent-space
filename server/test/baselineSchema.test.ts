@@ -6,11 +6,11 @@ import {
   PostgreSqlContainer,
   type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
-import { migrate } from "../src/db/migrator";
+import { loadMigrations, migrate } from "../src/db/migrator";
 
 // Empty-DB migration test. Applies the committed consolidated baseline
-// (server/migrations/*.sql) to a fresh Postgres via the server migration
-// runner and asserts it applies cleanly and idempotently.
+// (`server/migrations/0001_baseline.sql`) to a fresh Postgres via the server
+// migration runner and asserts it applies cleanly and idempotently.
 //
 // Verifies the runner creates representative server-owned tables from the
 // baseline. Skips gracefully without Docker.
@@ -26,6 +26,8 @@ const REPRESENTATIVE_TABLES = [
   "memory_entries",
   "runs",
   "proposals",
+  "settings",
+  "scheduler_tasks",
   "knowledge_items",
   "claims",
   "claim_sources",
@@ -38,6 +40,7 @@ const REPRESENTATIVE_TABLES = [
   "retrieval_edges",
   "retrieval_feedback_events",
   "model_providers",
+  "source_recipe_versions",
   "policy_decision_records",
   "evolution_strategy_assets",
   "evolution_experiences",
@@ -89,7 +92,7 @@ function tableDefinition(sql: string, table: string): string {
 }
 
 describe("server runner applies the baseline schema", () => {
-  it("uses the single committed baseline migration", () => {
+  it("keeps 0001_baseline.sql as the consolidated baseline for a fresh database", () => {
     const migrationFiles = readdirSync(MIGRATIONS_DIR)
       .filter((name) => /^\d+_.+\.sql$/.test(name))
       .sort();
@@ -182,6 +185,10 @@ describe("server runner applies the baseline schema", () => {
     expect(baseline).toContain("ix_evolution_selector_decisions_space_target_created");
     expect(baseline).toContain("evolution_selector_decisions_selected_strategy_asset_id_fkey");
 
+    // Built-in strategy keys are seed data, not schema — they're upserted at
+    // runtime by runBuiltInSeeds (server/src/db/seeds.ts), not embedded in
+    // the migration. Check the seed source instead of the baseline SQL.
+    const seedsSource = readFileSync(join(process.cwd(), "src/db/seeds.ts"), "utf8");
     for (const key of [
       "repair.runtime_failure",
       "repair.validation_failure",
@@ -194,15 +201,28 @@ describe("server runner applies the baseline schema", () => {
       "maintain.knowledge_retrieval",
       "solidifyExperience.successful_run",
     ]) {
-      expect(baseline).toContain(key);
+      expect(seedsSource).toContain(key);
     }
+  });
+
+  it("keeps Source Recipe schema in the consolidated baseline", () => {
+    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const sourceConnections = tableDefinition(baseline, "source_connections");
+    const sourceHandlerVersions = tableDefinition(baseline, "source_handler_versions");
+    expect(baseline).toContain("CREATE TABLE public.source_recipe_versions");
+    expect(sourceConnections).toContain("active_recipe_version_id character varying(36)");
+    expect(sourceConnections).toContain("'recipe'::character varying");
+    expect(sourceHandlerVersions).toContain("'declarative_pipeline_v1'::character varying");
+    expect(baseline).toContain("source_connections_active_recipe_version_id_fkey");
+    expect(baseline).toContain("'source_recipe'::character varying");
   });
 
   it("applies the baseline and creates representative server-owned tables", async () => {
     if (!available || !pool) return;
 
+    const expectedVersions = loadMigrations(MIGRATIONS_DIR).map((f) => f.version);
     const result = await migrate(pool, MIGRATIONS_DIR);
-    expect(result.all).toEqual(["0001"]);
+    expect(result.all).toEqual(expectedVersions);
     expect(result.applied).toContain("0001");
 
     const recorded = await pool.query(
@@ -214,7 +234,7 @@ describe("server runner applies the baseline schema", () => {
     for (const t of REPRESENTATIVE_TABLES) {
       expect(tables).toContain(t);
     }
-  });
+  }, 15_000);
 
   it("enforces object kind registry constraints in Postgres", async () => {
     if (!available || !pool) return;
@@ -309,7 +329,7 @@ describe("server runner applies the baseline schema", () => {
          'kind-archived-reuse', 'space-1', 'email', 'Email replacement', 'source', 'active', now(), now()
        )`,
     )).rejects.toThrow();
-  });
+  }, 15_000);
 
   it("is idempotent on an already-migrated database", async () => {
     if (!available || !pool) return;
@@ -322,5 +342,5 @@ describe("server runner applies the baseline schema", () => {
     for (const t of REPRESENTATIVE_TABLES) {
       expect(tables).toContain(t);
     }
-  });
+  }, 15_000);
 });

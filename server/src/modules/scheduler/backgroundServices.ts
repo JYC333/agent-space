@@ -1,14 +1,25 @@
 import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
-import { startSchedulerRegistry, type ScheduledTask } from "./schedulerRegistry";
+import { startSchedulerRegistry, type ScheduledTask } from "./registry";
 import { scanDailyReportsAndEnqueue } from "../dailyReports/scheduler";
 import { scanAutomationsAndFire } from "../automations/scheduler";
 import { runScheduledBackup } from "../backups/service";
 import { IntakeExtractionWorker } from "../intake/extractionWorker";
+import { enqueueDueSourceConnectionScans } from "../intake/scanSchedule";
+import {
+  enqueueDueCustomSourceHandlerRuns,
+  reclaimStuckCustomSourceHandlerRuns,
+} from "../intake/customSourceScanSchedule";
+import { runPendingCustomSourceHandlerRuns } from "../intake/customSourceScanWorker";
+import {
+  enqueueDueSourceRecipeScans,
+  runPendingSourceRecipeScans,
+} from "../intake/sourceRecipes/recipeScanWorker";
+import { pruneSupersededCustomSourceHandlerArtifacts } from "../intake/customSourceArtifactRetention";
 import { runDueMemoryMaintenanceJobs } from "../memory/maintenanceJobs";
 import { withDbTransaction } from "../routeUtils/common";
-import { PgJobQueueRepository } from "./repository";
-import { startJobsWorker, type JobsWorkerHandle } from "./workerRuntime";
+import { PgJobQueueRepository } from "../jobs/repository";
+import { startJobsWorker, type JobsWorkerHandle } from "../jobs/workerRuntime";
 import type { PluginHost } from "../plugins/host";
 
 export interface BackgroundServicesHandle {
@@ -85,10 +96,35 @@ export function startBackgroundServices(
       name: "intake_extraction_scheduler",
       intervalSeconds: config.intakeExtractionSchedulerIntervalSeconds,
       run: async () => {
+        const enqueued = await enqueueDueIntakeSourceScans(config);
+        if (enqueued > 0) log?.info(`[scheduler] intake enqueued ${enqueued} source scan job(s)`);
         const processed = await processPendingIntakeJobs(config, log);
         if (processed > 0) log?.info(`[scheduler] intake processed ${processed} extraction job(s)`);
+        const customDb = getDbPool(config.databaseUrl!);
+        const reclaimed = await reclaimStuckCustomSourceHandlerRuns(customDb);
+        if (reclaimed > 0) log?.warn(`[scheduler] custom source reclaimed ${reclaimed} stuck run(s)`);
+        const customEnqueued = await enqueueDueCustomSourceHandlerRuns(customDb);
+        if (customEnqueued > 0) log?.info(`[scheduler] custom source enqueued ${customEnqueued} handler run(s)`);
+        const customProcessed = await runPendingCustomSourceHandlerRuns(customDb, config);
+        if (customProcessed > 0) log?.info(`[scheduler] custom source processed ${customProcessed} handler run(s)`);
+        const recipeEnqueued = await enqueueDueSourceRecipeScans(customDb);
+        if (recipeEnqueued > 0) log?.info(`[scheduler] source recipe enqueued ${recipeEnqueued} scan job(s)`);
+        const recipeProcessed = await runPendingSourceRecipeScans(customDb, config);
+        if (recipeProcessed > 0) log?.info(`[scheduler] source recipe processed ${recipeProcessed} scan job(s)`);
       },
       runOnStart: true,
+    });
+  }
+
+  if (config.customSourceArtifactRetentionEnabled && config.databaseUrl) {
+    tasks.push({
+      name: "custom_source_artifact_retention",
+      intervalSeconds: config.customSourceArtifactRetentionIntervalSeconds,
+      run: async () => {
+        const pruned = await pruneSupersededCustomSourceHandlerArtifacts(getDbPool(config.databaseUrl!), config);
+        if (pruned > 0) log?.info(`[scheduler] custom_source_artifact_retention pruned ${pruned} artifact(s)`);
+      },
+      runOnStart: false,
     });
   }
 
@@ -122,6 +158,11 @@ export async function pruneMemoryAccessLogs(config: ServerConfig): Promise<numbe
   return result.rowCount ?? 0;
 }
 
+export async function enqueueDueIntakeSourceScans(config: ServerConfig): Promise<number> {
+  if (!config.databaseUrl) return 0;
+  return enqueueDueSourceConnectionScans(getDbPool(config.databaseUrl), 25);
+}
+
 async function processPendingIntakeJobs(
   config: ServerConfig,
   log?: { warn(message: string): void },
@@ -133,6 +174,12 @@ async function processPendingIntakeJobs(
     `SELECT id, space_id
        FROM extraction_jobs
       WHERE status = 'pending'
+        AND COALESCE(metadata_json->>'implementation', '') <> 'recipe'
+        AND NOT EXISTS (
+          SELECT 1
+            FROM source_handler_runs shr
+           WHERE shr.extraction_job_id = extraction_jobs.id
+        )
       ORDER BY created_at ASC
       LIMIT 10`,
   );

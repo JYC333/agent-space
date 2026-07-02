@@ -292,6 +292,10 @@ const PROPOSAL_TYPE_RISK: Record<string, RiskLevel> = {
   capability_enable: "high",
   capability_disable: "medium",
   runtime_skill_binding_update: "high",
+  custom_source_policy_delta: "medium",
+  custom_source_credentialed_source: "high",
+  custom_source_repair_activation: "medium",
+  source_recipe_activation: "medium",
 };
 
 export const SUPPORTED_PROPOSAL_TYPES: ReadonlySet<string> = new Set(
@@ -335,6 +339,7 @@ export interface ProposalApplyInput {
   proposal_id: string;
   proposal_type: string;
   declared_risk: string | null | undefined;
+  required_approver_role?: string | null | undefined;
   proposal_payload: Record<string, unknown> | null | undefined;
   metadata_json?: Record<string, unknown> | null | undefined;
 }
@@ -376,12 +381,14 @@ export function checkProposalApplyPolicy(
   }
 
   const risk = effectiveProposalRisk(input.proposal_type, input.declared_risk);
+  const requiredApproverRole = normalizeRequiredApproverRole(input.required_approver_role);
 
   const meta = (membershipRole: string | null): Record<string, unknown> => ({
     proposal_type: input.proposal_type,
     membership_role: membershipRole,
     effective_risk: risk,
     proposal_declared_risk: input.declared_risk ?? null,
+    proposal_required_approver_role: input.required_approver_role ?? null,
     default_type_risk: PROPOSAL_TYPE_RISK[input.proposal_type] ?? "high",
     supported_apply_type: true,
   });
@@ -399,6 +406,7 @@ export function checkProposalApplyPolicy(
       proposal_type: input.proposal_type,
       approval_capability: approvalCapability,
       audit_code: "no_membership",
+      required_approver_role: requiredApproverRole,
       space_id: input.space_id,
       actor_id: input.user_id,
       actor_type: "user",
@@ -406,14 +414,35 @@ export function checkProposalApplyPolicy(
     });
   }
 
+  if (requiredApproverRole && !roleSatisfiesRequiredApprover(role, requiredApproverRole)) {
+    return makeDecision({
+      decision: "require_approval",
+      message: `User has ${pyRepr(role)} role; proposal requires ${requiredApproverRole} approval`,
+      risk_level: risk,
+      reason_code: "insufficient_required_approver_role",
+      policy_rule_id: "proposal_apply_required_role",
+      action: "proposal.apply",
+      resource_type: resourceType,
+      resource_id: input.proposal_id,
+      proposal_type: input.proposal_type,
+      required_approver_role: requiredApproverRole,
+      approval_capability: approvalCapability,
+      audit_code: "insufficient_required_approver_role",
+      space_id: input.space_id,
+      actor_id: input.user_id,
+      actor_type: "user",
+      metadata_json: meta(role),
+    });
+  }
+
   if (role === "owner") {
-    return approveProposal(input, risk, "owner", "approved_owner", "proposal_apply_owner_allow", meta);
+    return approveProposal(input, risk, "owner", "approved_owner", "proposal_apply_owner_allow", meta, requiredApproverRole);
   }
   if (role === "admin" && RISK_RANK[risk] <= RISK_RANK[ADMIN_MAX_RISK]) {
-    return approveProposal(input, risk, "admin", "approved_admin", "proposal_apply_admin_allow", meta);
+    return approveProposal(input, risk, "admin", "approved_admin", "proposal_apply_admin_allow", meta, requiredApproverRole);
   }
   if (role === "reviewer" && RISK_RANK[risk] <= RISK_RANK[REVIEWER_MAX_RISK]) {
-    return approveProposal(input, risk, "reviewer", "approved_reviewer", "proposal_apply_reviewer_allow", meta);
+    return approveProposal(input, risk, "reviewer", "approved_reviewer", "proposal_apply_reviewer_allow", meta, requiredApproverRole);
   }
 
   return makeDecision({
@@ -426,6 +455,7 @@ export function checkProposalApplyPolicy(
     resource_type: resourceType,
     resource_id: input.proposal_id,
     proposal_type: input.proposal_type,
+    required_approver_role: requiredApproverRole,
     approval_capability: approvalCapability,
     audit_code: "insufficient_role",
     space_id: input.space_id,
@@ -442,6 +472,7 @@ function approveProposal(
   auditCode: string,
   ruleId: string,
   meta: (r: string | null) => Record<string, unknown>,
+  requiredApproverRole: string | null,
 ): PolicyDecision {
   return makeDecision({
     decision: "allow",
@@ -453,6 +484,7 @@ function approveProposal(
     resource_type: "proposal",
     resource_id: input.proposal_id,
     proposal_type: input.proposal_type,
+    required_approver_role: requiredApproverRole,
     approval_capability: "approve_proposal",
     audit_code: auditCode,
     space_id: input.space_id,
@@ -460,6 +492,26 @@ function approveProposal(
     actor_type: "user",
     metadata_json: meta(role),
   });
+}
+
+function normalizeRequiredApproverRole(role: string | null | undefined): "owner" | "admin" | "reviewer" | null {
+  if (!role) return null;
+  if (role === "owner" || role === "admin" || role === "reviewer") return role;
+  return "owner";
+}
+
+function roleSatisfiesRequiredApprover(
+  actorRole: string,
+  requiredRole: "owner" | "admin" | "reviewer",
+): boolean {
+  return roleRank(actorRole) >= roleRank(requiredRole);
+}
+
+function roleRank(role: string): number {
+  if (role === "owner") return 3;
+  if (role === "admin") return 2;
+  if (role === "reviewer") return 1;
+  return 0;
 }
 
 export { isAllowed };

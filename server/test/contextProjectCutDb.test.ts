@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
@@ -61,12 +62,20 @@ beforeEach(async () => {
       [id],
     );
   }
+  // project_members(space_id, user_id) FKs to space_memberships(space_id, user_id).
+  for (const id of [VIEWER, OTHER]) {
+    await pool.query(
+      `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+       VALUES ($1, $2, $3, 'member', 'active', now(), now())`,
+      [randomUUID(), SPACE, id],
+    );
+  }
   // Both projects owned by OTHER, so VIEWER needs explicit membership to access.
-  for (const id of [PROJ_P, PROJ_Q]) {
+  for (const [id, name] of [[PROJ_P, "P"], [PROJ_Q, "Q"]] as const) {
     await pool.query(
       `INSERT INTO projects (id, space_id, owner_user_id, name, status, created_at, updated_at)
-       VALUES ($1, $2, $3, 'P', 'active', now(), now())`,
-      [id, SPACE, OTHER],
+       VALUES ($1, $2, $3, $4, 'active', now(), now())`,
+      [id, SPACE, OTHER, name],
     );
   }
   // VIEWER-owned, user-scope memories so symbolMatch surfaces them deterministically.

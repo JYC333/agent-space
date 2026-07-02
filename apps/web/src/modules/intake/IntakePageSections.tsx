@@ -1,10 +1,12 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import {
   Archive,
   Bookmark,
+  BookOpen,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Code2,
   FileText,
   Folder,
   Link2,
@@ -28,19 +30,26 @@ import type {
   ExtractedEvidence,
   ExtractionJob,
   IntakeItem,
+  SourceRecipeActivationResult,
+  SourceRecipeDryRunResult,
+  SourceRecipePlanResponse,
   SourceConnection,
-  SourceConnector,
   Workspace,
   WorkspaceIntakeProfile,
   WorkspaceSourceBinding,
 } from '../../types/api'
 import { IntakeSummaryLinks } from './IntakeSummaryLinks'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import {
   CAPTURE_POLICIES,
   FREQUENCIES,
+  textExtractionDisabledReason,
+  textExtractionActionLabel,
   evidenceLinked,
   fmt,
+  minimumRetentionForCapturePolicy,
   preview,
+  retentionAtLeast,
   short,
   type EvidenceFilter,
   type IntakeSummaryResult,
@@ -48,6 +57,14 @@ import {
 } from './intakePageModel'
 
 type SelectOption = { value: string; label: string }
+
+const SOURCE_TYPE_OPTIONS = [
+  { value: 'auto', label: 'Auto-detect' },
+  { value: 'rss', label: 'RSS feed' },
+  { value: 'atom', label: 'Atom feed' },
+  { value: 'web_list', label: 'Web list' },
+  { value: 'web_page', label: 'Web page' },
+]
 
 export function IntakePageHeader(props: {
   activeSpaceId: string
@@ -69,7 +86,7 @@ export function IntakePageHeader(props: {
         </div>
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Intake</h1>
-          <p className="text-sm text-muted-foreground">Source connections, candidate items, and citable evidence.</p>
+          <p className="text-sm text-muted-foreground">Sources, captured items, and citable evidence.</p>
           <p className="text-xs text-muted-foreground">Viewing: {props.activeSpaceName ?? props.activeSpaceId}</p>
         </div>
       </div>
@@ -97,11 +114,11 @@ export function ManualUrlCard(props: {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Manual URL</CardTitle>
+        <CardTitle>Save URL</CardTitle>
       </CardHeader>
       <form className="space-y-3" onSubmit={props.onSubmit}>
         <div className="space-y-1.5">
-          <Label>URL</Label>
+          <Label>Page URL</Label>
           <Input
             value={props.manualUrl}
             onChange={event => props.onManualUrlChange(event.target.value)}
@@ -118,7 +135,7 @@ export function ManualUrlCard(props: {
           />
         </div>
         <div className="space-y-1.5">
-          <Label>Connection</Label>
+          <Label>Attach to source</Label>
           <Select
             options={props.connectionOptions}
             value={props.manualConnectionId}
@@ -143,46 +160,49 @@ export function ManualUrlCard(props: {
   )
 }
 
-export function ConnectionCard(props: {
-  connectorOptions: SelectOption[]
-  connectorKey: string
-  connectionName: string
+export function CreateSourceCard(props: {
+  name: string
   endpointUrl: string
   fetchFrequency: string
   capturePolicy: string
-  selectedConnector: SourceConnector | null
+  sourceType: string
+  listSelector: string
+  plan: SourceRecipePlanResponse | null
+  dryRun: SourceRecipeDryRunResult | null
+  activation: SourceRecipeActivationResult | null
   busy: string | null
-  onConnectorKeyChange: (value: string) => void
-  onConnectionNameChange: (value: string) => void
+  onNameChange: (value: string) => void
   onEndpointUrlChange: (value: string) => void
   onFetchFrequencyChange: (value: string) => void
   onCapturePolicyChange: (value: string) => void
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+  onSourceTypeChange: (value: string) => void
+  onListSelectorChange: (value: string) => void
+  onPreview: (event: FormEvent<HTMLFormElement>) => void
+  onCreateActivate: () => void
 }) {
+  const isBusy = props.busy === 'recipe:plan' || props.busy === 'recipe:create'
+  const canCreate = Boolean(props.plan) && props.plan?.preview.status === 'succeeded' && props.busy !== 'recipe:create'
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Connection</CardTitle>
+        <CardTitle>Create Source</CardTitle>
       </CardHeader>
-      <form className="space-y-3" onSubmit={props.onSubmit}>
+      <form className="space-y-3" onSubmit={props.onPreview}>
         <div className="space-y-1.5">
-          <Label>Connector</Label>
-          <Select options={props.connectorOptions} value={props.connectorKey} onChange={props.onConnectorKeyChange} />
-        </div>
-        <div className="space-y-1.5">
-          <Label>Name</Label>
-          <Input
-            value={props.connectionName}
-            onChange={event => props.onConnectionNameChange(event.target.value)}
-            placeholder={props.selectedConnector?.display_name ?? 'Connection'}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label>Endpoint</Label>
+          <Label>Source URL</Label>
           <Input
             value={props.endpointUrl}
             onChange={event => props.onEndpointUrlChange(event.target.value)}
             placeholder="https://example.com/feed.xml"
+            required
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Name</Label>
+          <Input
+            value={props.name}
+            onChange={event => props.onNameChange(event.target.value)}
+            placeholder="Source name"
           />
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -195,13 +215,210 @@ export function ConnectionCard(props: {
             <Select options={CAPTURE_POLICIES} value={props.capturePolicy} onChange={props.onCapturePolicyChange} />
           </div>
         </div>
-        <Button className="w-full" disabled={props.busy === 'connection:create'}>
-          <Radio className="size-4" />
-          Create connection
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label>Source type</Label>
+            <Select options={SOURCE_TYPE_OPTIONS} value={props.sourceType} onChange={props.onSourceTypeChange} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>List item class</Label>
+            <Input
+              value={props.listSelector}
+              onChange={event => props.onListSelectorChange(event.target.value)}
+              placeholder="article"
+              disabled={props.sourceType !== 'web_list'}
+            />
+          </div>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Button type="submit" variant="outline" disabled={props.busy === 'recipe:plan' || !props.endpointUrl.trim()}>
+            <Sparkles className="size-4" />
+            Preview
+          </Button>
+          <Button type="button" disabled={!canCreate || isBusy} onClick={props.onCreateActivate}>
+            <CheckCircle2 className="size-4" />
+            Create and activate
+          </Button>
+        </div>
+      </form>
+
+      {props.plan && (
+        <div className="mt-4 space-y-3 rounded-md border border-border bg-muted/20 p-3">
+          <div className="flex flex-wrap gap-1.5">
+            <Badge variant="outline">{sourcePlanKindLabel(props.plan.source_type)}</Badge>
+            <Badge variant="muted">{sourcePlanLevelLabel(props.plan.source_type)}</Badge>
+            <Badge variant={props.plan.preview.status === 'succeeded' ? 'secondary' : 'warning'}>{props.plan.preview.status}</Badge>
+            <Badge variant="muted">{props.plan.preview.item_count} sample items</Badge>
+            <Badge variant="muted">{props.plan.analysis.network_access}</Badge>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {props.plan.analysis.primitives.map(primitive => (
+              <Badge key={primitive} variant="outline">{sourcePrimitiveLabel(primitive)}</Badge>
+            ))}
+          </div>
+          <SourceRecipeSampleItems items={props.plan.preview.sample_items} />
+          {props.plan.preview.warnings.length > 0 && (
+            <ul className="space-y-1 text-xs text-muted-foreground">
+              {props.plan.preview.warnings.slice(0, 3).map((warning, index) => (
+                <li key={`${warning}-${index}`}>{warning}</li>
+              ))}
+            </ul>
+          )}
+          {props.plan.preview.error && <p className="text-xs text-destructive">{props.plan.preview.error}</p>}
+        </div>
+      )}
+
+      {props.dryRun && (
+        <div className="mt-3 rounded-md border border-border bg-muted/20 p-3">
+          <div className="flex flex-wrap gap-1.5">
+            <Badge variant={props.dryRun.status === 'succeeded' ? 'secondary' : 'warning'}>preview {props.dryRun.status}</Badge>
+            <Badge variant="muted">{props.dryRun.item_count} items</Badge>
+          </div>
+          {props.dryRun.errors.length > 0 && <p className="mt-2 text-xs text-destructive">{props.dryRun.errors[0]}</p>}
+        </div>
+      )}
+
+      {props.activation && (
+        <div className="mt-3 rounded-md border border-border bg-muted/20 p-3">
+          <div className="flex flex-wrap gap-1.5">
+            <Badge variant={props.activation.status === 'active' ? 'secondary' : 'warning'}>{props.activation.status}</Badge>
+            <Badge variant="outline">v{props.activation.recipe_version.version_number}</Badge>
+            {props.activation.proposal_id && <Badge variant="muted">proposal {short(props.activation.proposal_id)}</Badge>}
+          </div>
+          {props.activation.deltas.length > 0 && (
+            <p className="mt-2 text-xs text-muted-foreground">{props.activation.deltas[0]}</p>
+          )}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function SourceRecipeSampleItems({ items }: { items: Array<{ title?: string; source_uri?: string; excerpt?: string | null }> }) {
+  if (items.length === 0) {
+    return <p className="text-xs text-muted-foreground">No sample items.</p>
+  }
+  return (
+    <div className="space-y-2">
+      {items.slice(0, 3).map((item, index) => (
+        <div key={`${item.source_uri ?? item.title ?? index}`} className="rounded-md border border-border bg-background/60 p-2">
+          <p className="text-sm font-medium line-clamp-1">{item.title || 'Untitled item'}</p>
+          <p className="text-xs text-muted-foreground line-clamp-2">{preview(item.excerpt, item.source_uri ?? '')}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function sourcePlanKindLabel(sourceType: string) {
+  if (sourceType === 'rss') return 'Feed source'
+  if (sourceType === 'atom') return 'Feed source'
+  if (sourceType === 'web_list') return 'Recipe source'
+  if (sourceType === 'web_page') return 'Recipe source'
+  return 'Source'
+}
+
+function sourcePlanLevelLabel(sourceType: string) {
+  if (sourceType === 'rss' || sourceType === 'atom') return 'Level 1'
+  if (sourceType === 'web_list' || sourceType === 'web_page') return 'Level 2'
+  return 'Auto-detected'
+}
+
+function sourcePrimitiveLabel(primitive: string) {
+  if (primitive === 'parse_rss') return 'RSS parser'
+  if (primitive === 'parse_atom') return 'Atom parser'
+  if (primitive === 'fetch_page') return 'Fetch source'
+  if (primitive === 'extract_list') return 'List extractor'
+  if (primitive === 'extract_single') return 'Page extractor'
+  if (primitive === 'follow_link') return 'Link follower'
+  if (primitive === 'download_asset') return 'Asset downloader'
+  if (primitive === 'paginate') return 'Paginator'
+  if (primitive === 'dedupe') return 'Dedupe'
+  return primitive.replace(/_/g, ' ')
+}
+
+export function AdvancedSourceHandlerCard(props: {
+  name: string
+  endpointUrl: string
+  fetchFrequency: string
+  listSelector: string
+  busy: string | null
+  onNameChange: (value: string) => void
+  onEndpointUrlChange: (value: string) => void
+  onFetchFrequencyChange: (value: string) => void
+  onListSelectorChange: (value: string) => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Advanced Source Handler</CardTitle>
+      </CardHeader>
+      <form className="space-y-3" onSubmit={props.onSubmit}>
+        <div className="space-y-1.5">
+          <Label>Source name</Label>
+          <Input
+            value={props.name}
+            onChange={event => props.onNameChange(event.target.value)}
+            placeholder="Research feed"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Endpoint URL</Label>
+          <Input
+            value={props.endpointUrl}
+            onChange={event => props.onEndpointUrlChange(event.target.value)}
+            placeholder="https://example.com/articles"
+            required
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label>Frequency</Label>
+            <Select options={FREQUENCIES} value={props.fetchFrequency} onChange={props.onFetchFrequencyChange} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>List selector</Label>
+            <Input
+              value={props.listSelector}
+              onChange={event => props.onListSelectorChange(event.target.value)}
+              placeholder="article"
+            />
+          </div>
+        </div>
+        <Button className="w-full" disabled={props.busy === 'custom-source:create'}>
+          <Code2 className="size-4" />
+          Create handler source
         </Button>
       </form>
     </Card>
   )
+}
+
+export function AdvancedSourceTools(props: { children: ReactNode }) {
+  return (
+    <details className="rounded-md border border-border bg-muted/20 p-3">
+      <summary className="cursor-pointer text-sm font-medium">Advanced</summary>
+      <div className="mt-3 space-y-6">
+        {props.children}
+      </div>
+    </details>
+  )
+}
+
+function sourceListKindLabel(connection: SourceConnection, backendKey: string) {
+  const sourceType = sourceTypeFromConfig(connection.config_json)
+  if (sourceType === 'rss' || sourceType === 'atom') return 'Feed source'
+  if (connection.handler_kind === 'generated_custom') return 'Advanced handler'
+  if (backendKey === 'rss' || backendKey === 'atom') return 'Feed source'
+  if (sourceType === 'web_list' || sourceType === 'web_page' || connection.handler_kind === 'recipe') return 'Recipe source'
+  if (backendKey === 'web_page') return 'Web source'
+  return 'Built-in source'
+}
+
+function sourceTypeFromConfig(config: Record<string, unknown> | null | undefined) {
+  const value = config?.source_type
+  return typeof value === 'string' ? value : null
 }
 
 export function WorkspaceRoutingCard(props: {
@@ -230,7 +447,7 @@ export function WorkspaceRoutingCard(props: {
           <Select options={props.workspaceOptions} value={props.workspaceId} onChange={props.onWorkspaceIdChange} />
         </div>
         <div className="space-y-1.5">
-          <Label>Connection</Label>
+          <Label>Source</Label>
           <Select
             options={props.connectionOptions}
             value={props.bindingConnectionId}
@@ -256,7 +473,7 @@ export function WorkspaceRoutingCard(props: {
             onClick={props.onCreateWorkspaceBinding}
           >
             <Link2 className="size-4" />
-            Bind
+            Bind source
           </Button>
         </div>
         <div className="flex gap-1.5 flex-wrap">
@@ -268,35 +485,37 @@ export function WorkspaceRoutingCard(props: {
   )
 }
 
-export function ConnectionsSection(props: {
+export function SourcesSection(props: {
   connections: SourceConnection[]
   loading: boolean
   busy: string | null
-  connectorName: (connection: SourceConnection) => string
+  sourceBackendKey: (connection: SourceConnection) => string
   onScanConnection: (connection: SourceConnection) => void
   onUpdateConnection: (connection: SourceConnection, status: 'active' | 'paused' | 'archived') => void
   onSaveGovernance: (
     connection: SourceConnection,
-    body: { consent: Record<string, unknown>; policy: Record<string, unknown> },
+    body: { capture_policy?: string; consent: Record<string, unknown>; policy: Record<string, unknown> },
   ) => void
 }) {
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Connections</h2>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Sources</h2>
           <p className="text-xs text-muted-foreground">{props.connections.length} configured</p>
         </div>
       </div>
       {props.loading ? (
         <Card><p className="text-muted-foreground text-center py-8 text-sm">Loading...</p></Card>
       ) : props.connections.length === 0 ? (
-        <EmptyState title="No connections" description="Create a source connection or save a manual URL." />
+        <EmptyState title="No sources" description="Create a source or save a URL." />
       ) : (
         <div className="grid gap-3 lg:grid-cols-2">
           {props.connections.map(connection => {
-            const key = props.connectorName(connection)
-            const canScan = key === 'rss' || key === 'atom'
+            const key = props.sourceBackendKey(connection)
+            const isCustomSource = connection.handler_kind === 'generated_custom' || (!connection.handler_kind && key === 'custom_source')
+            const isRecipeSource = connection.handler_kind === 'recipe'
+            const canScan = key === 'rss' || key === 'atom' || key === 'web_page' || (isCustomSource && Boolean(connection.active_handler_version_id)) || (isRecipeSource && Boolean(connection.active_recipe_version_id))
             return (
               <Card key={connection.id} className="mb-0">
                 <div className="flex items-start justify-between gap-3">
@@ -307,14 +526,21 @@ export function ConnectionsSection(props: {
                   <StatusBadge status={connection.status} />
                 </div>
                 <div className="flex gap-1.5 flex-wrap mt-3">
-                  <Badge variant="outline">{key}</Badge>
+                  <Badge variant="outline">{sourceListKindLabel(connection, key)}</Badge>
                   <Badge variant="muted">{connection.fetch_frequency}</Badge>
                   <Badge variant="muted">{connection.capture_policy}</Badge>
                   <Badge variant="muted">{connection.trust_level}</Badge>
+                  {connection.repair_status && <Badge variant="muted">{connection.repair_status}</Badge>}
                 </div>
-                <div className="flex items-center justify-between gap-2 mt-4">
-                  <p className="text-xs text-muted-foreground">Checked: {fmt(connection.last_checked_at)}</p>
+                <div className="flex items-end justify-between gap-2 mt-4">
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Checked: {fmt(connection.last_checked_at)}</p>
+                    <p className="text-xs text-muted-foreground">Next: {fmt(connection.next_check_at)}</p>
+                  </div>
                   <div className="flex gap-1.5">
+                    <Button type="button" size="sm" variant="outline" asChild>
+                      <Link to={`/intake/sources/${connection.id}`}>Details</Link>
+                    </Button>
                     {canScan && (
                       <Button
                         type="button"
@@ -327,15 +553,29 @@ export function ConnectionsSection(props: {
                         Scan
                       </Button>
                     )}
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      disabled={props.busy === `connection:${connection.id}`}
-                      onClick={() => props.onUpdateConnection(connection, connection.status === 'active' ? 'paused' : 'active')}
-                    >
-                      {connection.status === 'active' ? 'Pause' : 'Activate'}
-                    </Button>
+                    {isCustomSource ? (
+                      connection.status === 'active' && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          disabled={props.busy === `connection:${connection.id}`}
+                          onClick={() => props.onUpdateConnection(connection, 'paused')}
+                        >
+                          Pause
+                        </Button>
+                      )
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={props.busy === `connection:${connection.id}`}
+                        onClick={() => props.onUpdateConnection(connection, connection.status === 'active' ? 'paused' : 'active')}
+                      >
+                        {connection.status === 'active' ? 'Pause' : 'Activate'}
+                      </Button>
+                    )}
                   </div>
                 </div>
                 <SourceGovernanceEditor
@@ -387,9 +627,10 @@ const IMPORT_TARGET_OPTIONS = [
 function SourceGovernanceEditor(props: {
   connection: SourceConnection
   busy: boolean
-  onSave: (body: { consent: Record<string, unknown>; policy: Record<string, unknown> }) => void
+  onSave: (body: { capture_policy?: string; consent: Record<string, unknown>; policy: Record<string, unknown> }) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [capturePolicy, setCapturePolicy] = useState('metadata_only')
   const [retention, setRetention] = useState('metadata_only')
   const [egressClass, setEgressClass] = useState('internal_only')
   const [trust, setTrust] = useState('normal')
@@ -405,7 +646,9 @@ function SourceGovernanceEditor(props: {
   useEffect(() => {
     const consent = props.connection.consent_json ?? {}
     const policy = props.connection.policy_json ?? {}
-    setRetention(stringFrom(policy.retention_policy, props.connection.capture_policy === 'auto_extract_all_text' ? 'full_text' : 'metadata_only'))
+    const nextCapturePolicy = props.connection.capture_policy
+    setCapturePolicy(nextCapturePolicy)
+    setRetention(stringFrom(policy.retention_policy, minimumRetentionForCapturePolicy(nextCapturePolicy)))
     setEgressClass(stringFrom(policy.source_egress_class, 'internal_only'))
     setTrust(stringFrom(policy.import_trust_level, props.connection.trust_level))
     setDerivedWrite(stringFrom(policy.derived_write_policy, 'proposal_required'))
@@ -432,8 +675,14 @@ function SourceGovernanceEditor(props: {
     })
   }
 
+  function changeCapturePolicy(value: string) {
+    setCapturePolicy(value)
+    setRetention(current => retentionAtLeast(current, minimumRetentionForCapturePolicy(value)))
+  }
+
   function save() {
     props.onSave({
+      capture_policy: capturePolicy,
       consent: {
         ...props.connection.consent_json,
         subject_user_ids: csvList(subjects),
@@ -471,6 +720,10 @@ function SourceGovernanceEditor(props: {
       {open && (
         <div className="mt-3 space-y-3 rounded-md border border-border bg-muted/20 p-3">
           <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Capture</Label>
+              <Select options={CAPTURE_POLICIES} value={capturePolicy} onChange={changeCapturePolicy} />
+            </div>
             <div className="space-y-1.5">
               <Label>Retention</Label>
               <Select options={RETENTION_OPTIONS} value={retention} onChange={setRetention} />
@@ -518,7 +771,7 @@ function SourceGovernanceEditor(props: {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Reader, agent, and source-egress fields are stored for future read-path gates. Retention and proposal-target policy are enforced by current intake paths.
+            Capture controls how much source content is fetched. Feed sources need Extract text to queue full article retrieval after a scan.
           </p>
           <Button type="button" size="sm" onClick={save} disabled={props.busy}>
             {props.busy ? 'Saving...' : 'Save governance'}
@@ -569,85 +822,126 @@ function csvList(value: string): string[] {
 export function ItemsSection(props: {
   items: IntakeItem[]
   itemFilter: ItemFilter
+  itemQuery: string
+  scopedProjectId: string
+  scopedConnectionId: string
   busy: string | null
   summaryResults: Record<string, IntakeSummaryResult>
   onItemFilterChange: (value: ItemFilter) => void
+  onItemQueryChange: (value: string) => void
   onItemAction: (item: IntakeItem, action: string) => void
   onSummarizeItem: (item: IntakeItem) => void
 }) {
   return (
     <section className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Items</h2>
           <p className="text-xs text-muted-foreground">{props.items.length} visible</p>
+          {(props.scopedProjectId || props.scopedConnectionId) && (
+            <div className="flex gap-1.5 flex-wrap mt-2">
+              {props.scopedProjectId && <Badge variant="outline">project {short(props.scopedProjectId)}</Badge>}
+              {props.scopedConnectionId && <Badge variant="outline">source {short(props.scopedConnectionId)}</Badge>}
+            </div>
+          )}
         </div>
-        <Tabs value={props.itemFilter} onValueChange={value => props.onItemFilterChange(value as ItemFilter)}>
-          <TabsList>
-            <TabsTrigger value="open">Open</TabsTrigger>
-            <TabsTrigger value="new">New</TabsTrigger>
-            <TabsTrigger value="triaged">Triaged</TabsTrigger>
-            <TabsTrigger value="selected">Selected</TabsTrigger>
-            <TabsTrigger value="ignored">Ignored</TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <Input
+            value={props.itemQuery}
+            onChange={event => props.onItemQueryChange(event.target.value)}
+            placeholder="Search title, excerpt, URI, domain"
+            className="h-9 w-full sm:w-72"
+          />
+          <Tabs value={props.itemFilter} onValueChange={value => props.onItemFilterChange(value as ItemFilter)}>
+            <TabsList>
+              <TabsTrigger value="open">Open</TabsTrigger>
+              <TabsTrigger value="new">New</TabsTrigger>
+              <TabsTrigger value="triaged">Triaged</TabsTrigger>
+              <TabsTrigger value="selected">Selected</TabsTrigger>
+              <TabsTrigger value="ignored">Ignored</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
       </div>
       {props.items.length === 0 ? (
-        <EmptyState title="No intake items" description="Candidate items appear after manual URL capture or a connection scan." />
+        <EmptyState title="No intake items" description="Saved URLs and source scan results appear here." />
       ) : (
-        props.items.map(item => (
-          <Card key={item.id}>
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <p className="font-medium text-sm truncate">{item.title}</p>
-                <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{preview(item.excerpt, item.source_uri ?? 'No source URI')}</p>
+        props.items.map(item => {
+          const textExtractionReason = textExtractionDisabledReason(item)
+          const textExtractionLabel = textExtractionActionLabel(item)
+          const itemBusy = props.busy?.startsWith(`item:${item.id}`) ?? false
+          return (
+            <Card key={item.id}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <Link
+                    to={`/intake/items/${item.id}`}
+                    className="block font-medium text-sm truncate hover:underline"
+                  >
+                    {item.title}
+                  </Link>
+                  <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{preview(item.excerpt, item.source_uri ?? 'No source URI')}</p>
+                </div>
+                <StatusBadge status={item.status} />
               </div>
-              <StatusBadge status={item.status} />
-            </div>
-            <div className="flex gap-1.5 flex-wrap mt-3">
-              <Badge variant="outline">{item.item_type}</Badge>
-              <Badge variant="muted">{item.content_state}</Badge>
-              {item.source_domain && <Badge variant="muted">{item.source_domain}</Badge>}
-              {item.connection_id && <Badge variant="muted">conn {short(item.connection_id)}</Badge>}
-            </div>
-            <div className="flex flex-wrap gap-1.5 mt-4">
-              <Button type="button" size="sm" variant="outline" disabled={props.busy?.startsWith(`item:${item.id}`) ?? false} onClick={() => props.onItemAction(item, 'queue_content')}>
-                <FileText className="size-3.5" />
-                Extract
-              </Button>
-              <Button type="button" size="sm" variant="outline" disabled={props.busy?.startsWith(`item:${item.id}`) ?? false} onClick={() => props.onItemAction(item, 'extract_evidence')}>
-                <Sparkles className="size-3.5" />
-                Evidence
-              </Button>
-              {(item.excerpt || item.title) && (
+              <div className="flex gap-1.5 flex-wrap mt-3">
+                <Badge variant="outline">{item.item_type}</Badge>
+                <Badge variant="muted">{item.content_state}</Badge>
+                {item.source_domain && <Badge variant="muted">{item.source_domain}</Badge>}
+                {item.connection_id && <Badge variant="muted">source {short(item.connection_id)}</Badge>}
+              </div>
+              <div className="flex flex-wrap gap-1.5 mt-4">
+                <Button asChild size="sm" variant="default">
+                  <Link to={`/intake/items/${item.id}/read`}>
+                    <BookOpen className="size-3.5" />
+                    Read
+                  </Link>
+                </Button>
                 <Button
                   type="button"
                   size="sm"
-                  variant="secondary"
-                  disabled={props.busy === `item:summarize:${item.id}`}
-                  onClick={() => props.onSummarizeItem(item)}
-                  title={!item.excerpt ? 'Only metadata available — summary will be limited' : undefined}
+                  variant="outline"
+                  disabled={itemBusy || textExtractionReason !== null}
+                  title={textExtractionReason ?? undefined}
+                  onClick={() => props.onItemAction(item, 'queue_content')}
                 >
-                  <Sparkles className="size-3.5" />
-                  {item.excerpt ? 'Summarize' : 'Summarize metadata'}
+                  {item.content_state === 'content_saved' ? <RefreshCw className="size-3.5" /> : <FileText className="size-3.5" />}
+                  {textExtractionLabel}
                 </Button>
-              )}
-              <Button type="button" size="sm" variant="ghost" disabled={props.busy?.startsWith(`item:${item.id}`) ?? false} onClick={() => props.onItemAction(item, 'read_later')}>
-                <Bookmark className="size-3.5" />
-                Later
-              </Button>
-              <Button type="button" size="sm" variant="ghost" disabled={props.busy?.startsWith(`item:${item.id}`) ?? false} onClick={() => props.onItemAction(item, 'mark_selected')}>
-                <CheckCircle2 className="size-3.5" />
-                Select
-              </Button>
-              <Button type="button" size="sm" variant="ghost" disabled={props.busy?.startsWith(`item:${item.id}`) ?? false} onClick={() => props.onItemAction(item, 'mark_ignored')}>
-                <XCircle className="size-3.5" />
-                Ignore
-              </Button>
-            </div>
-            {props.summaryResults[item.id] && <IntakeSummaryLinks result={props.summaryResults[item.id]} />}
-          </Card>
-        ))
+                <Button type="button" size="sm" variant="outline" disabled={itemBusy} onClick={() => props.onItemAction(item, 'extract_evidence')}>
+                  <Sparkles className="size-3.5" />
+                  Evidence
+                </Button>
+                {(item.excerpt || item.title) && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={props.busy === `item:summarize:${item.id}`}
+                    onClick={() => props.onSummarizeItem(item)}
+                    title={!item.excerpt ? 'Only metadata available — summary will be limited' : undefined}
+                  >
+                    <Sparkles className="size-3.5" />
+                    {item.excerpt ? 'Summarize' : 'Summarize metadata'}
+                  </Button>
+                )}
+                <Button type="button" size="sm" variant="ghost" disabled={itemBusy} onClick={() => props.onItemAction(item, 'read_later')}>
+                  <Bookmark className="size-3.5" />
+                  Later
+                </Button>
+                <Button type="button" size="sm" variant="ghost" disabled={itemBusy} onClick={() => props.onItemAction(item, 'mark_selected')}>
+                  <CheckCircle2 className="size-3.5" />
+                  Select
+                </Button>
+                <Button type="button" size="sm" variant="ghost" disabled={itemBusy} onClick={() => props.onItemAction(item, 'mark_ignored')}>
+                  <XCircle className="size-3.5" />
+                  Ignore
+                </Button>
+              </div>
+              {props.summaryResults[item.id] && <IntakeSummaryLinks result={props.summaryResults[item.id]} />}
+            </Card>
+          )
+        })
       )}
     </section>
   )
@@ -679,7 +973,7 @@ export function JobsSection(props: {
               </div>
               <div className="flex gap-1.5 flex-wrap mt-3">
                 {job.intake_item_id && <Badge variant="muted">item {short(job.intake_item_id)}</Badge>}
-                {job.connection_id && <Badge variant="muted">conn {short(job.connection_id)}</Badge>}
+                {job.connection_id && <Badge variant="muted">source {short(job.connection_id)}</Badge>}
                 {job.items_created !== null && <Badge variant="outline">{job.items_created} created</Badge>}
               </div>
               {job.error_message && <p className="text-xs text-destructive mt-3 line-clamp-2">{job.error_message}</p>}

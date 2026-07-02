@@ -65,11 +65,11 @@ async function seedSystemMemories(client: PoolClient, spaceId: string): Promise<
   for (const seed of SYSTEM_MEMORY_SEEDS) {
     await client.query(
       `INSERT INTO memory_entries
-         (id, space_id, scope_type, scope_id, memory_type, content, status,
+         (id, space_id, scope_type, memory_type, content, status,
           created_at, updated_at, subject_user_id, owner_user_id, sensitivity_level,
           namespace, title, visibility, confidence, importance, created_by,
           version, access_count)
-       SELECT $1::varchar(36), $2::varchar(36), 'system', NULL, 'semantic',
+       SELECT $1::varchar(36), $2::varchar(36), 'system', 'semantic',
               $3::text, 'active',
               now(), now(), NULL, NULL, 'normal',
               $4::varchar(128), $5::varchar(256), 'space_shared', 1.0,

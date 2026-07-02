@@ -65,7 +65,7 @@ beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
     `TRUNCATE retrieval_objects, retrieval_aliases, retrieval_chunks, retrieval_edges,
-              knowledge_items, space_objects, space_retrieval_settings, spaces CASCADE`,
+              knowledge_items, space_objects, settings, spaces CASCADE`,
   );
   await pool.query(`INSERT INTO spaces (id, name, type, created_at, updated_at) VALUES ($1, 'Egress', 'personal', now(), now())`, [SPACE]);
 });

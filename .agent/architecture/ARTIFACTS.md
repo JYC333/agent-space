@@ -2,7 +2,11 @@
 
 Date: 2026-06-16
 
-Artifacts are durable outputs produced by runs. They let users inspect generated content after sandbox cleanup and can be linked to proposals or activities.
+Artifacts are durable managed content records. Most are durable outputs produced
+by runs; Intake also writes artifacts for captured source material and reader
+documents. Artifacts let users inspect generated or captured content after
+sandbox/source processing and can be linked to proposals, activities, source
+snapshots, or other domain records.
 
 An `Artifact` records its production context with `artifacts.run_id` when it was
 produced by a run. Task attachment is a separate product relationship:
@@ -34,6 +38,10 @@ artifact's production context remains unchanged.
 
 - Content-backed artifacts come from `output_json.artifacts`.
 - File-backed artifacts come from `produced_artifact_paths`.
+- Intake raw snapshots and reader documents are server-produced artifacts.
+  `intake_reader_document` artifacts use
+  `canonical_format="reader_document_json"` and store structured Reader JSON
+  with remote image references, not downloaded image binaries.
 
 ## Storage Rules
 

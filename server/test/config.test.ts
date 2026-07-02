@@ -176,7 +176,7 @@ describe("loadConfig", () => {
 describe("config snapshot", () => {
   it("is immutable and identifies the config by schema version + content hash", () => {
     const snapshot = loadConfigSnapshot({});
-    expect(snapshot.schema_version).toBe(20);
+    expect(snapshot.schema_version).toBe(21);
     expect(snapshot.content_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(snapshot.loaded_at).toBeTruthy();
     expect(Object.isFrozen(snapshot)).toBe(true);

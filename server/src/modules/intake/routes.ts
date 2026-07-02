@@ -11,37 +11,18 @@ import {
   resolveIdentity,
   sendRouteError,
   toDbDate,
-  type SpaceUserIdentity,
 } from "../routeUtils/common";
-import { enforce } from "../policy";
-import { loadActionRegistry } from "../policy/actionRegistry";
+import { enforceIntake } from "./enforceIntake";
 import { PgIntakeRepository } from "./repository";
-
-async function enforceIntake(
-  context: ModuleContext,
-  identity: SpaceUserIdentity,
-  action: string,
-  resourceType: string,
-  resourceId?: string,
-): Promise<{ blocked: boolean; reply403: Record<string, string> | null }> {
-  const registry = await loadActionRegistry();
-  const result = await enforce(context.config, registry, {
-    action,
-    actor_type: "user",
-    actor_id: identity.userId,
-    space_id: identity.spaceId,
-    resource_type: resourceType,
-    resource_id: resourceId ?? null,
-    force_record: false,
-  });
-  if (result.status === "blocked") {
-    return { blocked: true, reply403: { detail: result.message ?? "Policy denied" } };
-  }
-  return { blocked: false, reply403: null };
-}
+import { registerCustomSourceRoutes } from "./customSourceRoutes";
+import { registerSourceRecipeRoutes } from "./sourceRecipeRoutes";
+import { listSourceRuns } from "./sourceRunReadModel";
+import { PgAnnotationRepository, PgCommentRepository, PgReaderActionRepository, PgReaderRepository } from "./readerRepository";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
   const repository = () => new PgIntakeRepository(dbPool(context.config), context.config);
+  registerCustomSourceRoutes(app, context);
+  registerSourceRecipeRoutes(app, context);
 
   app.get("/api/v1/intake", intakeHealth(context));
   app.get("/api/v1/intake/", intakeHealth(context));
@@ -87,6 +68,20 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const connection = await repository().getConnection(identity, params(request).connectionId ?? "");
       if (!connection) return reply.code(404).send({ detail: "Source connection not found" });
       return reply.send(connection);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/intake/connections/:connectionId/source-runs", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const { limit, offset } = parsePage(query(request));
+      return reply.send(await listSourceRuns(dbPool(context.config), identity, params(request).connectionId ?? "", {
+        limit,
+        offset,
+      }));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -148,6 +143,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         includeIgnored: boolQuery(q.include_ignored, false),
         includeArchived: boolQuery(q.include_archived, false),
         q: optionalString(q.q),
+        projectId: optionalString(q.project_id),
         limit,
         offset,
       }));
@@ -188,7 +184,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const body = jsonBody(request);
       const action = typeof body.action === "string" ? body.action : "";
       const policyAction =
-        action === "queue_content" || action === "snapshot"
+        action === "queue_content" || action === "archive_snapshot"
           ? "intake.item_create"
           : "intake.item_update";
       const gate = await enforceIntake(context, identity, policyAction, "intake_item", itemId);
@@ -241,6 +237,8 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         status: optionalString(q.status),
         evidenceType: optionalString(q.evidence_type),
         intakeItemId: optionalString(q.intake_item_id),
+        projectId: optionalString(q.project_id),
+        connectionId: optionalString(q.connection_id),
         limit,
         offset,
       }));
@@ -343,7 +341,12 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      return reply.send(await repository().listWorkspaceBindings(identity));
+      const q = query(request);
+      return reply.send(await repository().listWorkspaceBindings(identity, {
+        workspaceId: optionalString(q.workspace_id),
+        sourceConnectionId: optionalString(q.source_connection_id),
+        projectId: optionalString(q.project_id),
+      }));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -375,6 +378,165 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     return reply.code(405).send({ detail: "Use POST /api/v1/intake/summary-runs to create a summary run" });
+  });
+
+  // ── Reader routes ────────────────────────────────────────────────────────────
+
+  const readerRepo = () => new PgReaderRepository(dbPool(context.config), context.config);
+  const annotationRepo = () => new PgAnnotationRepository(dbPool(context.config));
+  const commentRepo = () => new PgCommentRepository(dbPool(context.config));
+  const actionRepo = () => new PgReaderActionRepository(dbPool(context.config));
+
+  app.get("/api/v1/intake/reader/documents/:documentType/:documentId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const doc = await readerRepo().getDocument(identity, p.documentType ?? "", p.documentId ?? "");
+      if (!doc) return reply.code(404).send({ detail: "Document not found or not accessible" });
+      return reply.send(doc);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/intake/reader/documents/:documentType/:documentId/annotations", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const items = await annotationRepo().listAnnotations(identity, p.documentType ?? "", p.documentId ?? "");
+      return reply.send({ items });
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/intake/reader/annotations", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const result = await annotationRepo().createAnnotation(identity, jsonBody(request));
+      return reply.code(201).send(result);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.patch("/api/v1/intake/reader/annotations/:annotationId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const result = await annotationRepo().updateAnnotation(identity, p.annotationId ?? "", jsonBody(request));
+      return reply.send(result);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.delete("/api/v1/intake/reader/annotations/:annotationId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      await annotationRepo().archiveAnnotation(identity, p.annotationId ?? "");
+      return reply.code(204).send();
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/intake/reader/annotations/:annotationId/comments", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const result = await commentRepo().createComment(identity, p.annotationId ?? "", jsonBody(request));
+      return reply.code(201).send(result);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/intake/reader/annotations/:annotationId/threads", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const threads = await commentRepo().listThreads(identity, p.annotationId ?? "");
+      return reply.send({ items: threads });
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.patch("/api/v1/intake/reader/comments/:commentId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const result = await commentRepo().updateComment(identity, p.commentId ?? "", jsonBody(request));
+      return reply.send(result);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.patch("/api/v1/intake/reader/comment-threads/:threadId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const result = await commentRepo().updateThread(identity, p.threadId ?? "", jsonBody(request));
+      return reply.send(result);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  // Evidence and proposal creation from reader annotations
+
+  app.post("/api/v1/intake/reader/annotations/:annotationId/evidence", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const result = await actionRepo().createEvidence(identity, p.annotationId ?? "", jsonBody(request));
+      return reply.code(201).send(result);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/intake/reader/annotations/:annotationId/proposals", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const result = await actionRepo().createProposal(identity, p.annotationId ?? "", jsonBody(request));
+      return reply.code(201).send(result);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  // Project-scoped annotation summaries
+
+  app.get("/api/v1/intake/reader/annotations", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = query(request);
+      const projectId = optionalString(q.project_id);
+      if (!projectId) return reply.code(400).send({ detail: "project_id is required" });
+      const limitRaw = Number(q.limit ?? "20");
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 20;
+      const items = await actionRepo().listProjectAnnotations(identity, projectId, limit);
+      return reply.send({ items });
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
   });
 }
 

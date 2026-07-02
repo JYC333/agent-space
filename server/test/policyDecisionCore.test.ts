@@ -362,6 +362,31 @@ describe("proposal.apply gate", () => {
     expect(d.decision).toBe("allow");
     expect(d.audit_code).toBe("approved_owner");
   });
+  it("honors proposal required_approver_role before risk-based approval", () => {
+    const reviewer = checkProposalApplyPolicy(
+      { ...base, required_approver_role: "owner" },
+      "reviewer",
+      SUPPORTED_PROPOSAL_TYPES,
+    );
+    expect(reviewer.decision).toBe("require_approval");
+    expect(reviewer.audit_code).toBe("insufficient_required_approver_role");
+
+    const admin = checkProposalApplyPolicy(
+      { ...base, required_approver_role: "owner" },
+      "admin",
+      SUPPORTED_PROPOSAL_TYPES,
+    );
+    expect(admin.decision).toBe("require_approval");
+    expect(admin.audit_code).toBe("insufficient_required_approver_role");
+
+    const owner = checkProposalApplyPolicy(
+      { ...base, required_approver_role: "owner" },
+      "owner",
+      SUPPORTED_PROPOSAL_TYPES,
+    );
+    expect(owner.decision).toBe("allow");
+    expect(owner.required_approver_role).toBe("owner");
+  });
   it("claim and object relation proposal types are supported", () => {
     expect(SUPPORTED_PROPOSAL_TYPES.has("claim_create")).toBe(true);
     expect(SUPPORTED_PROPOSAL_TYPES.has("object_relation_create")).toBe(true);

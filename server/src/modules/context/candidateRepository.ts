@@ -16,6 +16,7 @@ import {
   sourceConnectionIdsFromSourceRefs,
   type SourcePolicySnapshot,
 } from "../retrieval/sourcePolicy";
+import { readSpaceRetrievalSettings } from "../retrieval/settings";
 
 /**
  * Native server reads for chat context candidate sources.
@@ -328,14 +329,7 @@ export class PgChatCandidateRepository {
   }
 
   async loadExternalEgressEnabled(spaceId: string): Promise<boolean> {
-    const result = await this.db.query<{ external_egress_enabled: boolean }>(
-      `SELECT external_egress_enabled
-         FROM space_retrieval_settings
-        WHERE space_id = $1
-        LIMIT 1`,
-      [spaceId],
-    );
-    return result.rows[0]?.external_egress_enabled !== false;
+    return (await readSpaceRetrievalSettings(this.db, spaceId)).externalEgressEnabled;
   }
 }
 

@@ -345,10 +345,10 @@ describe("object kind proposal routes", () => {
         return {
           rows: [proposalRow({
             id: "proposal-1",
-            proposal_type: String(params[2]),
-            title: String(params[3]),
-            payload_json: JSON.parse(String(params[4])),
-            risk_level: String(params[10]),
+            proposal_type: String(params[3]),
+            title: String(params[8]),
+            payload_json: JSON.parse(String(params[10])),
+            risk_level: String(params[5]),
           })],
           rowCount: 1,
         };
@@ -487,10 +487,10 @@ describe("object kind proposal routes", () => {
         return {
           rows: [proposalRow({
             id: "proposal-activate",
-            proposal_type: String(params[2]),
-            title: String(params[3]),
-            payload_json: JSON.parse(String(params[4])),
-            risk_level: String(params[10]),
+            proposal_type: String(params[3]),
+            title: String(params[8]),
+            payload_json: JSON.parse(String(params[10])),
+            risk_level: String(params[5]),
           })],
           rowCount: 1,
         };
@@ -638,15 +638,15 @@ describe("object kind proposal routes", () => {
         return { rows: [], rowCount: 0 };
       }
       if (/INSERT INTO proposals/.test(sql)) {
-        const payload = JSON.parse(String(params[4])) as Record<string, unknown>;
+        const payload = JSON.parse(String(params[10])) as Record<string, unknown>;
         insertedPayloads.push(payload);
         return {
           rows: [proposalRow({
             id: `proposal-${insertedPayloads.length}`,
-            proposal_type: String(params[2]),
-            title: String(params[3]),
+            proposal_type: String(params[3]),
+            title: String(params[8]),
             payload_json: payload,
-            risk_level: String(params[10]),
+            risk_level: String(params[5]),
           })],
           rowCount: 1,
         };

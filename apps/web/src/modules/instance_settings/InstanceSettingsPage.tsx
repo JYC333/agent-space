@@ -2,6 +2,7 @@ import { ServerCog, ShieldAlert } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { Card, CardTitle } from '../../components/ui/card'
 import { InstanceRuntimeToolsPanel } from '../runtime_tools/RuntimeToolsPage'
+import { CustomSourceRunnerSettingsPanel } from './CustomSourceRunnerSettingsPanel'
 
 export default function InstanceSettingsPage() {
   const { currentUser } = useAuth()
@@ -34,7 +35,12 @@ export default function InstanceSettingsPage() {
             Only the configured instance admin can view and change instance settings.
           </p>
         </Card>
-      ) : <InstanceRuntimeToolsPanel />}
+      ) : (
+        <>
+          <CustomSourceRunnerSettingsPanel />
+          <InstanceRuntimeToolsPanel />
+        </>
+      )}
     </div>
   )
 }

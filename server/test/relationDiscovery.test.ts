@@ -429,7 +429,8 @@ class FakeApplyDb implements Queryable {
         proposal_type: String(params[3]),
         payload_json: JSON.parse(String(params[10])),
       });
-      return { rows: [] as Row[], rowCount: 1 };
+      // insertProposalRow relies on RETURNING id.
+      return { rows: [{ id: params[0] }] as Row[], rowCount: 1 };
     }
     if (norm.startsWith("UPDATE proposals")) {
       this.updatedPayload = JSON.parse(String(params[2]));
@@ -523,9 +524,12 @@ describe("relation_discovery_packet applier", () => {
     expect(db.inserted[1]!.payload_json).toMatchObject({ operation: "object_relation_create", from_object_id: "note-a", to_object_id: "item-b" });
     expect(db.inserted[2]!.proposal_type).toBe("knowledge_create");
     expect(db.inserted[2]!.payload_json).toMatchObject({ operation: "create", title: "Ghost Page" });
-    expect(db.updatedPayload?.generated_child_proposal_count).toBe(3);
-    expect(db.updatedPayload?.review_only_candidate_count).toBe(1);
-    expect(db.updatedPayload?.skipped_child_proposals).toEqual([
+    // The applier/registry only return proposalPayloadPatch;
+    // ProposalApplyService is the layer that actually issues
+    // `UPDATE proposals` from that patch, and is covered by its own tests.
+    expect(result.proposalPayloadPatch?.generated_child_proposal_count).toBe(3);
+    expect(result.proposalPayloadPatch?.review_only_candidate_count).toBe(1);
+    expect(result.proposalPayloadPatch?.skipped_child_proposals).toEqual([
       expect.objectContaining({ candidate_id: "cand-review-only", reason: "review_only_candidate" }),
     ]);
   });
@@ -581,8 +585,8 @@ describe("relation_discovery_packet applier", () => {
 
     expect(result.result.review_only_candidate_count).toBe(1);
     expect(db.inserted).toHaveLength(40);
-    expect(db.updatedPayload?.review_only_candidate_count).toBe(1);
-    expect(db.updatedPayload?.skipped_child_proposals).toEqual([
+    expect(result.proposalPayloadPatch?.review_only_candidate_count).toBe(1);
+    expect(result.proposalPayloadPatch?.skipped_child_proposals).toEqual([
       expect.objectContaining({
         candidate_id: "cand-review-only-after-cap",
         reason: "review_only_candidate",

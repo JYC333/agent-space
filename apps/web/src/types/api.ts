@@ -927,6 +927,11 @@ export interface SourceConnection {
   config_json: Record<string, unknown>
   last_checked_at: string | null
   next_check_at: string | null
+  handler_kind?: 'built_in' | 'generated_custom' | 'recipe'
+  active_handler_version_id?: string | null
+  active_recipe_version_id?: string | null
+  repair_status?: 'ok' | 'repair_required' | 'repair_pending' | 'disabled'
+  last_handler_run_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -998,6 +1003,354 @@ export interface ExtractionJob {
   error_message: string | null
   metadata_json: Record<string, unknown> | null
   created_at: string
+}
+
+export interface CustomSourcePolicyLimits {
+  timeout_ms: number
+  max_download_bytes: number
+  max_output_bytes: number
+  max_files: number
+  max_items: number
+  max_evidence_items: number
+  log_max_bytes: number
+  [key: string]: unknown
+}
+
+export interface CustomSourcePolicyEnvelope {
+  allowed_network_origins: string[]
+  capture_policy: string
+  retention_policy: string
+  credential_ref?: string | null
+  language: 'typescript_node' | string
+  browser_automation_enabled: boolean
+  shell_enabled: boolean
+  dependency_installation_enabled: boolean
+  log_redaction_enabled: boolean
+  limits: CustomSourcePolicyLimits
+  [key: string]: unknown
+}
+
+export interface CustomSourceHandlerVersion {
+  id: string
+  space_id: string
+  source_connection_id: string
+  version_number: number
+  language: string
+  entrypoint: string
+  handler_artifact_id: string | null
+  manifest_json: Record<string, unknown>
+  input_schema_json: Record<string, unknown> | null
+  output_schema_json: Record<string, unknown> | null
+  policy_envelope_json: CustomSourcePolicyEnvelope
+  requested_capabilities_json: Record<string, unknown> | null
+  checksum: string
+  status: 'draft' | 'test_failed' | 'pending_approval' | 'active' | 'superseded' | 'disabled'
+  created_by_user_id: string | null
+  created_by_run_id: string | null
+  proposal_id: string | null
+  test_result_json: Record<string, unknown> | null
+  created_at: string
+  activated_at: string | null
+  superseded_at: string | null
+}
+
+export interface CustomSourceHandlerRun {
+  id: string
+  space_id: string
+  source_connection_id: string
+  handler_version_id: string
+  extraction_job_id: string | null
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'validation_failed' | 'blocked'
+  input_artifact_id: string | null
+  output_artifact_id: string | null
+  logs_artifact_id: string | null
+  failure_class: string | null
+  failure_detail_json: Record<string, unknown> | null
+  validation_result_json: Record<string, unknown> | null
+  resource_usage_json: Record<string, unknown> | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface CustomSourcePendingProposal {
+  proposal_id: string
+  proposal_type: string
+  created_at: string
+}
+
+export interface CustomSourceHandlerSummary {
+  active_handler_version: CustomSourceHandlerVersion | null
+  latest_handler_run: CustomSourceHandlerRun | null
+  repair_status: 'ok' | 'repair_required' | 'repair_pending' | 'disabled'
+  recent_run_status_counts: Record<string, number>
+  pending_proposals: CustomSourcePendingProposal[]
+}
+
+export interface CustomSourceTestOutcome {
+  run: CustomSourceHandlerRun
+  version: CustomSourceHandlerVersion
+  test_result: Record<string, unknown>
+}
+
+export interface CustomSourceActivationResult {
+  status: 'active' | 'pending_approval'
+  deltas: string[]
+  proposal_id: string | null
+  handler_version: CustomSourceHandlerVersion
+}
+
+export interface CustomSourceCreateDraftRequest {
+  name: string
+  endpoint_url: string
+  fetch_frequency?: 'manual' | 'hourly' | 'daily' | 'weekly'
+  config?: Record<string, unknown>
+}
+
+export type CustomSourceCreatorRole = 'owner' | 'admin' | 'reviewer' | 'member'
+export type CustomSourceCapturePolicy =
+  | 'metadata_only'
+  | 'excerpt_only'
+  | 'auto_extract_relevant'
+  | 'auto_extract_all_text'
+  | 'archive_all_snapshots'
+export type CustomSourceRetentionPolicy =
+  | 'metadata_only'
+  | 'summary_only'
+  | 'full_text'
+  | 'full_snapshot'
+  | 'archived'
+
+export interface CustomSourceSpacePolicy {
+  space_id: string
+  creator_roles: CustomSourceCreatorRole[]
+  default_capture_policy: CustomSourceCapturePolicy
+  default_retention_policy: CustomSourceRetentionPolicy
+  allowed_domains: string[]
+  credentialed_sources_allowed: boolean
+  same_envelope_repair_auto_apply: boolean
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface CustomSourceInstanceRunnerSettings {
+  runner_enabled: boolean
+  allowed_languages: string[]
+  network_hard_deny_rules: string[]
+  timeout_ms_max: number
+  output_bytes_max: number
+  download_bytes_max: number
+  log_bytes_max: number
+  max_files: number
+  browser_automation_available: boolean
+  shell_available: boolean
+  dependency_installation_available: boolean
+  generate_rate_limit_per_hour: number
+  artifact_retention_enabled: boolean
+  artifact_retention_days: number
+}
+
+export interface CustomSourceInstanceRunnerSettingsUpdate {
+  runner_enabled?: boolean
+}
+
+export interface CustomSourceSpacePolicyUpdate {
+  creator_roles?: CustomSourceCreatorRole[]
+  default_capture_policy?: CustomSourceCapturePolicy
+  default_retention_policy?: CustomSourceRetentionPolicy
+  allowed_domains?: string[]
+  credentialed_sources_allowed?: boolean
+  same_envelope_repair_auto_apply?: boolean
+}
+
+export type SourceRecipePrimitiveName =
+  | 'fetch_page'
+  | 'parse_rss'
+  | 'parse_atom'
+  | 'extract_list'
+  | 'extract_single'
+  | 'follow_link'
+  | 'download_asset'
+  | 'paginate'
+  | 'dedupe'
+
+export type SourceRecipeSourceType = 'rss' | 'atom' | 'web_list' | 'web_page'
+export type SourceRecipeVersionStatus = 'draft' | 'test_failed' | 'pending_approval' | 'active' | 'superseded' | 'disabled'
+export type SourceRecipeDryRunStatus = 'succeeded' | 'failed' | 'validation_failed'
+export type SourceRecipeStepTraceStatus = 'succeeded' | 'failed' | 'skipped'
+
+export interface SourcePolicyEnvelope {
+  allowed_network_origins: string[]
+  capture_policy: string
+  retention_policy: string
+  credential_ref?: string | null
+  log_redaction_enabled: boolean
+  limits: CustomSourcePolicyLimits
+  [key: string]: unknown
+}
+
+export interface SourceRecipeStepTrace {
+  step_path: string
+  primitive: SourceRecipePrimitiveName
+  status: SourceRecipeStepTraceStatus
+  detail?: string | null
+  item_count?: number | null
+  fetched_url?: string | null
+  duration_ms: number
+  [key: string]: unknown
+}
+
+export interface SourceRecipeOutputItem {
+  external_id: string
+  title: string
+  source_uri: string
+  excerpt?: string | null
+  author?: string | null
+  published_at?: string | null
+  snapshots?: Array<Record<string, unknown>>
+  evidence?: Array<Record<string, unknown>>
+  metadata?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface SourceRecipeDefinition {
+  recipe_version: 'source.recipe.v1'
+  steps: Array<Record<string, unknown> & { type: SourceRecipePrimitiveName }>
+  output: { items_var: string; [key: string]: unknown }
+  [key: string]: unknown
+}
+
+export interface SourceRecipeAnalysis {
+  primitives: SourceRecipePrimitiveName[]
+  primitive_versions: Record<string, number>
+  network_access: 'none' | 'primary_endpoint' | 'live_fetch'
+  live_fetch_urls: string[]
+  writes_files: boolean
+  [key: string]: unknown
+}
+
+export interface SourceRecipePreview {
+  status: 'succeeded' | 'failed' | 'blocked'
+  item_count: number
+  sample_items: SourceRecipeOutputItem[]
+  warnings: string[]
+  step_traces: SourceRecipeStepTrace[]
+  error?: string | null
+}
+
+export interface SourceRecipePlanRequest {
+  endpoint_url: string
+  name?: string
+  source_type?: SourceRecipeSourceType | 'auto'
+  fetch_frequency?: 'manual' | 'hourly' | 'daily' | 'weekly'
+  capture_policy?: string
+  retention_policy?: string
+  list_selector?: string
+  credential_id?: string | null
+  fixture_content?: string
+  config?: Record<string, unknown>
+}
+
+export interface SourceRecipePlanResponse {
+  source_type: SourceRecipeSourceType
+  recipe: SourceRecipeDefinition
+  policy_envelope: SourcePolicyEnvelope
+  analysis: SourceRecipeAnalysis
+  preview: SourceRecipePreview
+  defaults: {
+    fetch_frequency: 'manual' | 'hourly' | 'daily' | 'weekly'
+    capture_policy: string
+    retention_policy: string
+  }
+}
+
+export interface SourceRecipeVersion {
+  id: string
+  space_id: string
+  source_connection_id: string
+  version_number: number
+  recipe_json: SourceRecipeDefinition
+  policy_envelope_json: SourcePolicyEnvelope
+  primitive_versions_json: Record<string, number> | null
+  status: SourceRecipeVersionStatus
+  created_by_user_id: string | null
+  proposal_id: string | null
+  test_result_json: SourceRecipeDryRunResult | Record<string, unknown> | null
+  created_at: string
+  activated_at: string | null
+  superseded_at: string | null
+}
+
+export interface SourceRecipeCreateRequest extends SourceRecipePlanRequest {
+  name: string
+  recipe?: SourceRecipeDefinition
+}
+
+export interface SourceRecipeCreateResponse {
+  connection: SourceConnection
+  recipe_version: SourceRecipeVersion
+}
+
+export interface SourceRecipePipelineBridgeRequest {
+  handler_version_id?: string
+  name?: string
+  fetch_frequency?: string
+}
+
+export interface SourceRecipePipelineBridgeResponse {
+  connection: SourceConnection
+  recipe_version: SourceRecipeVersion
+  bridged_from_connection_id: string
+  bridged_from_handler_version_id: string
+}
+
+export interface SourceRecipeDryRunResult {
+  status: SourceRecipeDryRunStatus
+  item_count: number
+  sample_items: SourceRecipeOutputItem[]
+  followed_urls: string[]
+  skipped_urls: string[]
+  warnings: string[]
+  errors: string[]
+  step_traces: SourceRecipeStepTrace[]
+  policy_envelope: SourcePolicyEnvelope
+  started_at: string
+  completed_at: string
+  failure_fixture?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface SourceRecipeDryRunResponse {
+  recipe_version: SourceRecipeVersion
+  dry_run: SourceRecipeDryRunResult
+}
+
+export interface SourceRecipeActivationResult {
+  status: 'active' | 'pending_approval'
+  deltas: string[]
+  proposal_id: string | null
+  recipe_version: SourceRecipeVersion
+}
+
+export type SourceRunKind = 'scan' | 'dry_run' | 'test' | 'manual_url' | 'extract' | 'other'
+export type SourceRunImplementation = 'built_in' | 'recipe' | 'generated_handler'
+export type SourceRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'validation_failed' | 'blocked' | 'skipped'
+
+export interface SourceRunSummary {
+  id: string
+  space_id: string
+  source_connection_id: string
+  run_kind: SourceRunKind
+  implementation: SourceRunImplementation
+  status: SourceRunStatus
+  items_created?: number | null
+  error?: string | null
+  extraction_job_id?: string | null
+  handler_run_id?: string | null
+  recipe_version_id?: string | null
+  created_at: string
+  started_at?: string | null
+  completed_at?: string | null
 }
 
 export interface ExtractedEvidence {
@@ -1925,6 +2278,16 @@ export type ProposalAcceptOut = {
   result: {
     generated_child_proposal_ids?: string[]
     generated_child_proposal_count?: number
+  }
+} | {
+  proposal: Proposal
+  result_type: 'custom_source_handler_version'
+  result: {
+    source_connection_id: string
+    handler_version_id: string
+    previous_handler_version_id?: string | null
+    status: 'active'
+    handler_version?: Record<string, unknown>
   }
 }
 
@@ -3304,6 +3667,154 @@ export interface SummaryRunOut {
   proposal_ids: string[]
   status: string
   summary_preview: string
+}
+
+// ── Reader ─────────────────────────────────────────────────────────────────────
+
+export interface ReaderDocumentRef {
+  document_type: string
+  document_id: string
+}
+
+export interface ReaderDocumentPayload {
+  document_type: string
+  document_id: string
+  space_id: string
+  title: string
+  plain_text: string
+  /** Canonical normalized form used for content_hash, text_range offsets, and context slicing. */
+  normalized_text: string
+  content_hash: string
+  content_format: 'tiptap_json'
+  content_schema_version: 1
+  content_json: Record<string, unknown>
+  intake_item_id: string | null
+  artifact_id: string | null
+  source_snapshot_id: string | null
+  raw_artifact_id: string | null
+  extracted_artifact_id: string | null
+  source_uri: string | null
+  content_state: string | null
+  retention_policy: string | null
+  can_annotate: true
+}
+
+export interface ReaderAnnotation {
+  id: string
+  space_id: string
+  intake_item_id: string | null
+  artifact_id: string | null
+  source_snapshot_id: string | null
+  annotation_type: 'highlight' | 'comment' | 'excerpt' | 'bookmark'
+  quote_text: string
+  anchor_json: ReaderAnchorJson
+  color: string | null
+  label: string | null
+  visibility: 'private' | 'space_shared'
+  status: 'active' | 'archived'
+  anchor_state: 'verified' | 'unverified'
+  created_by_user_id: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ReaderAnchorJson {
+  schema_version: 1
+  normalizer: string
+  quote_text: string
+  text_range: { start: number; end: number; unit: 'utf16' }
+  before_context: string
+  after_context: string
+  tiptap_range?: { from: number; to: number }
+  block_ref?: { index: number; node_type: string; from: number; to: number }
+  content_hash?: string
+  document_ref?: ReaderDocumentRef
+  [key: string]: unknown
+}
+
+export interface ReaderAnnotationsResponse {
+  items: ReaderAnnotation[]
+}
+
+export interface ReaderAnnotationCreate {
+  intake_item_id?: string
+  artifact_id?: string
+  source_snapshot_id?: string
+  annotation_type: 'highlight' | 'comment' | 'excerpt' | 'bookmark'
+  quote_text: string
+  anchor_json: ReaderAnchorJson
+  color?: string
+  label?: string
+  visibility?: 'private' | 'space_shared'
+}
+
+export interface ReaderAnnotationUpdate {
+  color?: string | null
+  label?: string | null
+  visibility?: 'private' | 'space_shared'
+  status?: 'active' | 'archived'
+}
+
+export interface ReaderComment {
+  id: string
+  space_id: string
+  thread_id: string
+  body: string
+  status: 'active' | 'archived'
+  created_by_user_id: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ReaderCommentThread {
+  id: string
+  space_id: string
+  annotation_id: string
+  status: 'open' | 'resolved' | 'archived'
+  created_by_user_id: string
+  created_at: string
+  updated_at: string
+  comments: ReaderComment[]
+}
+
+export interface ReaderCommentCreate {
+  body: string
+}
+
+export interface ReaderCommentUpdate {
+  body?: string
+  status?: 'active' | 'archived'
+}
+
+export interface ReaderThreadUpdate {
+  status: 'open' | 'resolved' | 'archived'
+}
+
+export interface ReaderCreateEvidenceRequest {
+  title?: string
+}
+
+export interface ReaderCreatedEvidence {
+  id: string
+  title: string
+  status: string
+  evidence_type: string
+  intake_item_id: string | null
+  source_object_type: string
+  source_object_id: string
+}
+
+export interface ReaderCreateProposalRequest {
+  proposal_type: 'memory_create' | 'knowledge_create'
+  title?: string
+  rationale?: string
+}
+
+export interface ReaderCreatedProposal {
+  id: string
+  proposal_type: string
+  status: string
+  title: string
 }
 
 // ── Personal perspective (`GET /api/v1/me/*`) ─────────────────────────────

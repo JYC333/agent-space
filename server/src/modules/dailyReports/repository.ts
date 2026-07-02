@@ -1,5 +1,14 @@
-import { randomUUID } from "node:crypto";
 import { HttpError, type Queryable } from "../routeUtils/common";
+import {
+  ScopedSettingsStore,
+  SETTINGS_KEYS,
+  defineScopedSetting,
+  parseSpaceUserSettingsScopeId,
+  settingsRecord,
+  spaceUserSettingsScopeId,
+  type ScopedSettingsRead,
+} from "../settings";
+import { PgSchedulerTaskStore, type SchedulerTaskRow } from "../scheduler/taskStore";
 
 export interface DailyReportSettingRow {
   id: string;
@@ -21,58 +30,84 @@ export interface DailyReportSettingRow {
   updated_at: string;
 }
 
-const SETTING_COLUMNS = `
-  id, space_id, user_id, enabled, local_time, timezone, include_source_types_json,
-  create_experience_proposals, create_memory_proposals, experience_confidence_threshold,
-  memory_confidence_threshold, max_experience_proposals_per_day, max_memory_proposals_per_day,
-  last_report_date, next_run_at, created_at, updated_at
-`;
+interface DailyReportSettingsValue {
+  enabled: boolean;
+  local_time: string;
+  timezone: string;
+  include_source_types: string[];
+  create_experience_proposals: boolean;
+  create_memory_proposals: boolean;
+  experience_confidence_threshold: number;
+  memory_confidence_threshold: number;
+  max_experience_proposals_per_day: number;
+  max_memory_proposals_per_day: number;
+}
 
 const VALID_SOURCE_TYPES = new Set(["user_capture"]);
+export const DAILY_CAPTURE_REPORT_SETTINGS_KEY = SETTINGS_KEYS.dailyCaptureReport;
+const DAILY_REPORT_SCHEDULER_TASK_TYPE = "daily_capture_report";
+
+const DEFAULT_DAILY_REPORT_SETTINGS: DailyReportSettingsValue = {
+  enabled: false,
+  local_time: "09:00",
+  timezone: "UTC",
+  include_source_types: ["user_capture"],
+  create_experience_proposals: true,
+  create_memory_proposals: true,
+  experience_confidence_threshold: 0.6,
+  memory_confidence_threshold: 0.7,
+  max_experience_proposals_per_day: 5,
+  max_memory_proposals_per_day: 3,
+};
+
+const DAILY_CAPTURE_REPORT_SETTINGS_DEFINITION = defineScopedSetting<DailyReportSettingsValue>({
+  key: DAILY_CAPTURE_REPORT_SETTINGS_KEY,
+  scopeType: "space_user",
+  defaults: DEFAULT_DAILY_REPORT_SETTINGS,
+  parse: parseDailyReportSettings,
+  serialize: dailyReportSettingsJson,
+});
 
 export class PgDailyReportSettingsRepository {
-  constructor(private readonly db: Queryable) {}
+  private readonly settingsStore: ScopedSettingsStore;
+  private readonly schedulerTaskStore: PgSchedulerTaskStore;
+
+  constructor(db: Queryable) {
+    this.settingsStore = new ScopedSettingsStore(db);
+    this.schedulerTaskStore = new PgSchedulerTaskStore(db);
+  }
 
   async getOrCreate(spaceId: string, userId: string): Promise<DailyReportSettingRow> {
-    const existing = await this.get(spaceId, userId);
-    if (existing) return existing;
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    const result = await this.db.query<DailyReportSettingRow>(
-      `INSERT INTO daily_capture_report_settings (
-         id, space_id, user_id, enabled, local_time, timezone, include_source_types_json,
-         create_experience_proposals, create_memory_proposals, experience_confidence_threshold,
-         memory_confidence_threshold, max_experience_proposals_per_day, max_memory_proposals_per_day,
-         created_at, updated_at
-       ) VALUES (
-         $1, $2, $3, false, '09:00', 'UTC', '["user_capture"]'::jsonb,
-         true, true, 0.6, 0.7, 5, 3,
-         $4, $4
-       )
-       RETURNING ${SETTING_COLUMNS}`,
-      [id, spaceId, userId, now],
+    const read = await this.settingsStore.getOrCreate(
+      DAILY_CAPTURE_REPORT_SETTINGS_DEFINITION,
+      dailyReportSettingsScopeId(spaceId, userId),
     );
-    return result.rows[0]!;
+    return settingRowFromRead(spaceId, userId, read, await this.getSchedulerTask(spaceId, userId));
   }
 
   async get(spaceId: string, userId: string): Promise<DailyReportSettingRow | null> {
-    const result = await this.db.query<DailyReportSettingRow>(
-      `SELECT ${SETTING_COLUMNS}
-         FROM daily_capture_report_settings
-        WHERE space_id = $1 AND user_id = $2`,
-      [spaceId, userId],
+    const read = await this.settingsStore.get(
+      DAILY_CAPTURE_REPORT_SETTINGS_DEFINITION,
+      dailyReportSettingsScopeId(spaceId, userId),
     );
-    return result.rows[0] ?? null;
+    if (!read.row) return null;
+    return settingRowFromRead(spaceId, userId, read, await this.getSchedulerTask(spaceId, userId));
   }
 
   async getById(spaceId: string, settingId: string): Promise<DailyReportSettingRow | null> {
-    const result = await this.db.query<DailyReportSettingRow>(
-      `SELECT ${SETTING_COLUMNS}
-         FROM daily_capture_report_settings
-        WHERE space_id = $1 AND id = $2`,
-      [spaceId, settingId],
+    const read = await this.settingsStore.getById(
+      DAILY_CAPTURE_REPORT_SETTINGS_DEFINITION,
+      settingId,
     );
-    return result.rows[0] ?? null;
+    if (!read?.row) return null;
+    const parsed = parseSpaceUserSettingsScopeId(read.row.scope_id);
+    if (!parsed || parsed.spaceId !== spaceId) return null;
+    return settingRowFromRead(
+      parsed.spaceId,
+      parsed.userId,
+      read,
+      await this.getSchedulerTask(parsed.spaceId, parsed.userId),
+    );
   }
 
   async update(
@@ -91,96 +126,130 @@ export class PgDailyReportSettingsRepository {
     const includeSourceTypes =
       body.include_source_types !== undefined
         ? requiredSourceTypes(body.include_source_types)
-        : undefined;
+        : sourceTypesFromSettingRow(row);
     const createExperienceProposals =
       body.create_experience_proposals !== undefined
         ? requiredBoolean(body.create_experience_proposals, "create_experience_proposals")
-        : undefined;
+        : row.create_experience_proposals;
     const createMemoryProposals =
       body.create_memory_proposals !== undefined
         ? requiredBoolean(body.create_memory_proposals, "create_memory_proposals")
-        : undefined;
+        : row.create_memory_proposals;
     const experienceConfidenceThreshold =
       body.experience_confidence_threshold !== undefined
-        ? requiredThreshold(body.experience_confidence_threshold, "experience_confidence_threshold")
-        : undefined;
+        ? requiredThreshold(
+            body.experience_confidence_threshold,
+            "experience_confidence_threshold",
+          )
+        : row.experience_confidence_threshold;
     const memoryConfidenceThreshold =
       body.memory_confidence_threshold !== undefined
         ? requiredThreshold(body.memory_confidence_threshold, "memory_confidence_threshold")
-        : undefined;
+        : row.memory_confidence_threshold;
     const maxExperienceProposalsPerDay =
       body.max_experience_proposals_per_day !== undefined
-        ? requiredIntegerRange(body.max_experience_proposals_per_day, "max_experience_proposals_per_day", 0, 20)
-        : undefined;
+        ? requiredIntegerRange(
+            body.max_experience_proposals_per_day,
+            "max_experience_proposals_per_day",
+            0,
+            20,
+          )
+        : row.max_experience_proposals_per_day;
     const maxMemoryProposalsPerDay =
       body.max_memory_proposals_per_day !== undefined
-        ? requiredIntegerRange(body.max_memory_proposals_per_day, "max_memory_proposals_per_day", 0, 10)
-        : undefined;
+        ? requiredIntegerRange(
+            body.max_memory_proposals_per_day,
+            "max_memory_proposals_per_day",
+            0,
+            10,
+          )
+        : row.max_memory_proposals_per_day;
     const scheduleChanged =
       body.enabled !== undefined || body.local_time !== undefined || body.timezone !== undefined;
     if (scheduleChanged) {
       requiredLocalTime(localTime);
       requiredTimezone(timezone);
     }
-    const nextRunAt = scheduleChanged
-      ? computeInitialNextRunAt({ ...row, enabled, local_time: localTime, timezone })
-      : row.next_run_at;
-    const result = await this.db.query<DailyReportSettingRow>(
-      `UPDATE daily_capture_report_settings
-          SET enabled = $3,
-              local_time = $4,
-              timezone = $5,
-              include_source_types_json = COALESCE($6::jsonb, include_source_types_json),
-              create_experience_proposals = COALESCE($7, create_experience_proposals),
-              create_memory_proposals = COALESCE($8, create_memory_proposals),
-              experience_confidence_threshold = COALESCE($9, experience_confidence_threshold),
-              memory_confidence_threshold = COALESCE($10, memory_confidence_threshold),
-              max_experience_proposals_per_day = COALESCE($11, max_experience_proposals_per_day),
-              max_memory_proposals_per_day = COALESCE($12, max_memory_proposals_per_day),
-              next_run_at = $13,
-              updated_at = $14
-        WHERE space_id = $1 AND user_id = $2
-        RETURNING ${SETTING_COLUMNS}`,
-      [
-        spaceId,
-        userId,
-        enabled,
-        localTime,
-        timezone,
-        includeSourceTypes ? JSON.stringify(includeSourceTypes) : null,
-        createExperienceProposals ?? null,
-        createMemoryProposals ?? null,
-        experienceConfidenceThreshold ?? null,
-        memoryConfidenceThreshold ?? null,
-        maxExperienceProposalsPerDay ?? null,
-        maxMemoryProposalsPerDay ?? null,
-        nextRunAt,
-        now,
-      ],
+
+    const nextValue: DailyReportSettingsValue = {
+      enabled,
+      local_time: localTime,
+      timezone,
+      include_source_types: includeSourceTypes,
+      create_experience_proposals: createExperienceProposals,
+      create_memory_proposals: createMemoryProposals,
+      experience_confidence_threshold: experienceConfidenceThreshold,
+      memory_confidence_threshold: memoryConfidenceThreshold,
+      max_experience_proposals_per_day: maxExperienceProposalsPerDay,
+      max_memory_proposals_per_day: maxMemoryProposalsPerDay,
+    };
+    const updated = await this.settingsStore.upsert(
+      DAILY_CAPTURE_REPORT_SETTINGS_DEFINITION,
+      dailyReportSettingsScopeId(spaceId, userId),
+      nextValue,
+      { updatedByUserId: userId },
     );
-    return result.rows[0] ?? row;
+    const state = scheduleChanged
+      ? await this.setNextRunAt(
+          spaceId,
+          userId,
+          computeInitialNextRunAt({ enabled, local_time: localTime, timezone }),
+          now,
+        )
+      : await this.getSchedulerTask(spaceId, userId);
+    return settingRowFromRead(spaceId, userId, updated, state);
   }
 
   async listDue(nowIso: string): Promise<DailyReportSettingRow[]> {
-    const result = await this.db.query<DailyReportSettingRow>(
-      `SELECT ${SETTING_COLUMNS}
-         FROM daily_capture_report_settings
-        WHERE enabled = true
-          AND next_run_at IS NOT NULL
-          AND next_run_at <= $1`,
-      [nowIso],
-    );
-    return result.rows;
+    const tasks = await this.schedulerTaskStore.listDue(DAILY_REPORT_SCHEDULER_TASK_TYPE, nowIso);
+    const due: DailyReportSettingRow[] = [];
+    for (const task of tasks) {
+      const parsed = parseSpaceUserSettingsScopeId(task.scope_id);
+      const spaceId = task.space_id ?? parsed?.spaceId;
+      const userId = task.user_id ?? parsed?.userId;
+      if (!spaceId || !userId) continue;
+      const read = await this.settingsStore.get(
+        DAILY_CAPTURE_REPORT_SETTINGS_DEFINITION,
+        dailyReportSettingsScopeId(spaceId, userId),
+      );
+      if (!read.row) continue;
+      const setting = settingRowFromRead(spaceId, userId, read, task);
+      if (setting.enabled) due.push(setting);
+    }
+    return due;
   }
 
   async advanceNextRun(setting: DailyReportSettingRow, slotUtcIso: string): Promise<void> {
-    const next = computeNextRunAfterSlot(setting, slotUtcIso);
-    await this.db.query(
-      `UPDATE daily_capture_report_settings
-          SET next_run_at = $3, updated_at = $4
-        WHERE id = $1 AND space_id = $2`,
-      [setting.id, setting.space_id, next, new Date().toISOString()],
+    await this.setNextRunAt(
+      setting.space_id,
+      setting.user_id,
+      computeNextRunAfterSlot(setting, slotUtcIso),
     );
+  }
+
+  async recordReportCompleted(
+    spaceId: string,
+    userId: string,
+    localDate: string,
+    nextRunAt: string | null,
+    completedAt: string = new Date().toISOString(),
+  ): Promise<void> {
+    const existing = await this.getSchedulerTask(spaceId, userId);
+    await this.schedulerTaskStore.upsert({
+      taskType: DAILY_REPORT_SCHEDULER_TASK_TYPE,
+      taskKey: dailyReportSchedulerTaskKey(spaceId, userId),
+      scopeType: "space_user",
+      scopeId: dailyReportSettingsScopeId(spaceId, userId),
+      spaceId,
+      userId,
+      nextRunAt,
+      lastRunAt: completedAt,
+      stateJson: {
+        ...(existing?.state_json ?? {}),
+        last_report_date: localDate,
+      },
+      updatedAt: completedAt,
+    });
   }
 
   toOut(row: DailyReportSettingRow): Record<string, unknown> {
@@ -204,6 +273,184 @@ export class PgDailyReportSettingsRepository {
       updated_at: row.updated_at,
     };
   }
+
+  private async getSchedulerTask(
+    spaceId: string,
+    userId: string,
+  ): Promise<SchedulerTaskRow | null> {
+    return this.schedulerTaskStore.get(
+      DAILY_REPORT_SCHEDULER_TASK_TYPE,
+      dailyReportSchedulerTaskKey(spaceId, userId),
+    );
+  }
+
+  private async setNextRunAt(
+    spaceId: string,
+    userId: string,
+    nextRunAt: string | null,
+    updatedAt: string = new Date().toISOString(),
+  ): Promise<SchedulerTaskRow> {
+    const existing = await this.getSchedulerTask(spaceId, userId);
+    return this.schedulerTaskStore.upsert({
+      taskType: DAILY_REPORT_SCHEDULER_TASK_TYPE,
+      taskKey: dailyReportSchedulerTaskKey(spaceId, userId),
+      scopeType: "space_user",
+      scopeId: dailyReportSettingsScopeId(spaceId, userId),
+      spaceId,
+      userId,
+      nextRunAt,
+      stateJson: existing?.state_json ?? {},
+      updatedAt,
+    });
+  }
+}
+
+function dailyReportSettingsScopeId(spaceId: string, userId: string): string {
+  return spaceUserSettingsScopeId(spaceId, userId);
+}
+
+function dailyReportSchedulerTaskKey(spaceId: string, userId: string): string {
+  return dailyReportSettingsScopeId(spaceId, userId);
+}
+
+function settingRowFromRead(
+  spaceId: string,
+  userId: string,
+  read: ScopedSettingsRead<DailyReportSettingsValue>,
+  task: SchedulerTaskRow | null,
+): DailyReportSettingRow {
+  if (!read.row) {
+    throw new Error("daily capture report settings row was not created");
+  }
+  const value = read.value;
+  return {
+    id: read.row.id,
+    space_id: spaceId,
+    user_id: userId,
+    enabled: value.enabled,
+    local_time: value.local_time,
+    timezone: value.timezone,
+    include_source_types_json: value.include_source_types,
+    create_experience_proposals: value.create_experience_proposals,
+    create_memory_proposals: value.create_memory_proposals,
+    experience_confidence_threshold: value.experience_confidence_threshold,
+    memory_confidence_threshold: value.memory_confidence_threshold,
+    max_experience_proposals_per_day: value.max_experience_proposals_per_day,
+    max_memory_proposals_per_day: value.max_memory_proposals_per_day,
+    last_report_date: stringValue(task?.state_json.last_report_date),
+    next_run_at: nullableTimestampString(task?.next_run_at),
+    created_at: timestampString(read.row.created_at),
+    updated_at: timestampString(read.row.updated_at),
+  };
+}
+
+function parseDailyReportSettings(value: unknown): DailyReportSettingsValue {
+  const record = settingsRecord(value);
+  return {
+    enabled: booleanValue(record.enabled, DEFAULT_DAILY_REPORT_SETTINGS.enabled),
+    local_time:
+      typeof record.local_time === "string" && record.local_time.trim()
+        ? record.local_time
+        : DEFAULT_DAILY_REPORT_SETTINGS.local_time,
+    timezone:
+      typeof record.timezone === "string" && record.timezone.trim()
+        ? record.timezone
+        : DEFAULT_DAILY_REPORT_SETTINGS.timezone,
+    include_source_types: sourceTypesFromStored(
+      record.include_source_types ?? record.include_source_types_json,
+    ),
+    create_experience_proposals: booleanValue(
+      record.create_experience_proposals,
+      DEFAULT_DAILY_REPORT_SETTINGS.create_experience_proposals,
+    ),
+    create_memory_proposals: booleanValue(
+      record.create_memory_proposals,
+      DEFAULT_DAILY_REPORT_SETTINGS.create_memory_proposals,
+    ),
+    experience_confidence_threshold: numberInRange(
+      record.experience_confidence_threshold,
+      0,
+      1,
+      DEFAULT_DAILY_REPORT_SETTINGS.experience_confidence_threshold,
+    ),
+    memory_confidence_threshold: numberInRange(
+      record.memory_confidence_threshold,
+      0,
+      1,
+      DEFAULT_DAILY_REPORT_SETTINGS.memory_confidence_threshold,
+    ),
+    max_experience_proposals_per_day: integerInRange(
+      record.max_experience_proposals_per_day,
+      0,
+      20,
+      DEFAULT_DAILY_REPORT_SETTINGS.max_experience_proposals_per_day,
+    ),
+    max_memory_proposals_per_day: integerInRange(
+      record.max_memory_proposals_per_day,
+      0,
+      10,
+      DEFAULT_DAILY_REPORT_SETTINGS.max_memory_proposals_per_day,
+    ),
+  };
+}
+
+function dailyReportSettingsJson(value: DailyReportSettingsValue): Record<string, unknown> {
+  return {
+    enabled: value.enabled,
+    local_time: value.local_time,
+    timezone: value.timezone,
+    include_source_types: value.include_source_types,
+    create_experience_proposals: value.create_experience_proposals,
+    create_memory_proposals: value.create_memory_proposals,
+    experience_confidence_threshold: value.experience_confidence_threshold,
+    memory_confidence_threshold: value.memory_confidence_threshold,
+    max_experience_proposals_per_day: value.max_experience_proposals_per_day,
+    max_memory_proposals_per_day: value.max_memory_proposals_per_day,
+  };
+}
+
+function sourceTypesFromSettingRow(row: DailyReportSettingRow): string[] {
+  return sourceTypesFromStored(row.include_source_types_json);
+}
+
+function sourceTypesFromStored(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((item): item is string => typeof item === "string")) {
+    return [...DEFAULT_DAILY_REPORT_SETTINGS.include_source_types];
+  }
+  const valid = value.filter((item) => VALID_SOURCE_TYPES.has(item));
+  return valid.length > 0 || value.length === 0
+    ? valid
+    : [...DEFAULT_DAILY_REPORT_SETTINGS.include_source_types];
+}
+
+function booleanValue(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function numberInRange(value: unknown, min: number, max: number, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max
+    ? value
+    : fallback;
+}
+
+function integerInRange(value: unknown, min: number, max: number, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max
+    ? value
+    : fallback;
+}
+
+function timestampString(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  return String(value ?? "");
+}
+
+function nullableTimestampString(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return timestampString(value);
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
 function computeNextRunAfterSlot(setting: DailyReportSettingRow, slotUtcIso: string): string | null {
@@ -213,13 +460,16 @@ function computeNextRunAfterSlot(setting: DailyReportSettingRow, slotUtcIso: str
   try {
     const tz = setting.timezone || "UTC";
     const slotLocal = zonedParts(new Date(slotUtcIso), tz);
-    const nextLocal = addLocalDays({
-      year: slotLocal.year,
-      month: slotLocal.month,
-      day: slotLocal.day,
-      hour: localTime.hour,
-      minute: localTime.minute,
-    }, 1);
+    const nextLocal = addLocalDays(
+      {
+        year: slotLocal.year,
+        month: slotLocal.month,
+        day: slotLocal.day,
+        hour: localTime.hour,
+        minute: localTime.minute,
+      },
+      1,
+    );
     return zonedLocalToUtc(nextLocal, tz).toISOString();
   } catch {
     return null;
@@ -414,7 +664,9 @@ function zonedLocalToUtc(parts: LocalDateTimeParts, timeZone: string): Date {
 }
 
 function addLocalDays(parts: LocalDateTimeParts, days: number): LocalDateTimeParts {
-  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, parts.hour, parts.minute));
+  const date = new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day + days, parts.hour, parts.minute),
+  );
   return {
     year: date.getUTCFullYear(),
     month: date.getUTCMonth() + 1,

@@ -8,7 +8,7 @@ Memory maintenance is separate from Knowledge retrieval maintenance. Memory can
 carry private, selected-user, summary-only, restricted, highly restricted,
 system, template, project-scoped, and per-user content. The default implemented
 surface is therefore a private review path initiated by a space owner/admin.
-`space_retrieval_settings.context_ops_scan_mode = members` additionally permits
+`retrieval.space.settings` `context_ops_scan_mode = members` additionally permits
 active members/reviewers to initiate their own scans. A caller may explicitly
 ask for a shared `space_ops` report/packet only when the Space Context Ops review
 setting allows that reviewer; this does not scan other users' private Memory.
@@ -22,7 +22,7 @@ Primary code paths:
 - Durable job runner: `server/src/modules/memory/maintenanceJobs.ts`
 - Artifact and packet helpers:
   `server/src/modules/memory/maintenanceArtifacts.ts`
-- Scheduler wiring: `server/src/modules/jobs/backgroundServices.ts`
+- Scheduler wiring: `server/src/modules/scheduler/backgroundServices.ts`
 - Scheduler config: `server/src/config.ts`
 - Read tracing: `server/src/modules/memory/repository.ts`
 - Memory auth: `server/src/modules/memory/memoryReadAuth.ts`
@@ -55,7 +55,7 @@ Implemented endpoints:
 The route resolves the authenticated user and current space through the normal
 Memory route identity path. It requires `SERVER_DATABASE_URL`; without it the
 route returns 502. Scan initiation is gated by
-`space_retrieval_settings.context_ops_scan_mode`: `admins` permits owners/admins;
+`retrieval.space.settings` `context_ops_scan_mode`: `admins` permits owners/admins;
 `members` also permits active members/reviewers. This gate is separate from
 `context_ops_review_mode`, which controls shared packet review.
 
@@ -75,7 +75,7 @@ Request schema (`MemoryMaintenanceScanRequestSchema`):
 
 `create_packet=true` with `persist_report=false` is rejected with 422 because
 packets point at a persisted report artifact. `review_scope=space_ops` is
-rejected unless `space_retrieval_settings.context_ops_review_mode` allows the
+rejected unless `retrieval.space.settings` `context_ops_review_mode` allows the
 current reviewer.
 
 Response schema (`MemoryMaintenanceReportSchema`) contains findings, counts,
@@ -376,7 +376,7 @@ Accepting a packet:
 - requires the accepting user to match `created_by_user_id` for private packets
 - allows a non-creator only when the proposal is `visibility = space_shared`,
   payload `review_scope = space_ops`, and
-  `space_retrieval_settings.context_ops_review_mode` permits that role
+  `retrieval.space.settings` `context_ops_review_mode` permits that role
 - updates the proposal to `status = accepted`
 - records `reviewed_at`, `reviewed_by`, `accepted_by_user_id`, and
   `accepted_at`

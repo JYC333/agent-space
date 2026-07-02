@@ -15,12 +15,14 @@ import {
   describeConfig,
   loadConfig,
 } from "./config";
-import { startBackgroundServices } from "./modules/jobs/backgroundServices";
+import { startBackgroundServices } from "./modules/scheduler/backgroundServices";
 import { enforceBackupPolicy, BackupPolicyError } from "./modules/backups/guard";
 import { startProviderProxyServer } from "./modules/providers/providerProxyServer";
 import { PluginHost } from "./modules/plugins/host";
 import { BUILT_IN_PLUGINS } from "./modules/plugins/builtInPlugins";
 import { registerSystemCoreWorkspace } from "./modules/workspaces/systemCore";
+import { runBuiltInSeeds } from "./db/seeds";
+import { getDbPool } from "./db/pool";
 
 async function main(): Promise<void> {
   let config;
@@ -90,6 +92,12 @@ async function main(): Promise<void> {
     await providerProxy?.close();
     app.log.error(err, "[server] failed to start");
     process.exit(1);
+  }
+
+  if (config.databaseUrl) {
+    void runBuiltInSeeds(getDbPool(config.databaseUrl), {
+      info: (msg) => app.log.info(msg),
+    }).catch((err) => app.log.error(err, "[seeds] built-in seed failed"));
   }
 
   void registerSystemCoreWorkspace(config, {

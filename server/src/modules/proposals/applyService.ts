@@ -54,6 +54,7 @@ interface ApplyProposalRow {
   created_by_run_id: string | null;
   project_id: string | null;
   title: string | null;
+  required_approver_role: string | null;
 }
 
 interface GrantRow {
@@ -176,19 +177,30 @@ export class PgProposalApplyService {
     const client = await this.connect();
     try {
       await client.query("BEGIN");
+      const proposal = await this.getProposalForUpdate(client, proposalId);
+      if (
+        !proposal ||
+        proposal.space_id !== identity.spaceId ||
+        proposal.status !== "pending" ||
+        !(await canRejectProposal(client, proposal, identity.userId))
+      ) {
+        await client.query("ROLLBACK");
+        return null;
+      }
       const updated = await client.query(
         `UPDATE proposals
-            SET status = 'rejected', reviewed_at = $3
+            SET status = 'rejected', reviewed_at = $3, reviewed_by = $4, updated_at = $3
           WHERE id = $1
             AND space_id = $2
-            AND status = 'pending'
-            AND created_by_user_id = $4`,
+            AND status = 'pending'`,
         [proposalId, identity.spaceId, new Date().toISOString(), identity.userId],
       );
       if ((updated.rowCount ?? 0) === 0) {
         await client.query("ROLLBACK");
         return null;
       }
+      await releaseRejectedCustomSourceHandlerVersion(client, proposalId, identity.spaceId);
+      await releaseRejectedSourceRecipeVersion(client, proposalId, identity.spaceId);
       const out = await new PgProposalRepository(client).getVisible(
         identity.spaceId,
         identity.userId,
@@ -385,7 +397,7 @@ export class PgProposalApplyService {
     const result = await client.query<ApplyProposalRow>(
       `SELECT id, space_id, proposal_type, status, risk_level, preview,
               payload_json, workspace_id, created_by_user_id, created_by_run_id,
-              visibility, project_id, title
+              visibility, project_id, title, required_approver_role
          FROM proposals
         WHERE id = $1
         FOR UPDATE`,
@@ -443,6 +455,7 @@ export class PgProposalApplyService {
         proposal_id: proposal.id,
         proposal_type: proposal.proposal_type,
         declared_risk: proposal.risk_level,
+        required_approver_role: proposal.required_approver_role,
         proposal_payload: proposal.payload_json,
         metadata_json: { server_apply: true },
       },
@@ -537,6 +550,38 @@ export class PgProposalApplyService {
   }
 }
 
+async function releaseRejectedCustomSourceHandlerVersion(
+  client: PoolClient,
+  proposalId: string,
+  spaceId: string,
+): Promise<void> {
+  await client.query(
+    `UPDATE source_handler_versions
+        SET status = 'draft',
+            proposal_id = NULL
+      WHERE space_id = $1
+        AND proposal_id = $2
+        AND status = 'pending_approval'`,
+    [spaceId, proposalId],
+  );
+}
+
+async function releaseRejectedSourceRecipeVersion(
+  client: PoolClient,
+  proposalId: string,
+  spaceId: string,
+): Promise<void> {
+  await client.query(
+    `UPDATE source_recipe_versions
+        SET status = 'draft',
+            proposal_id = NULL
+      WHERE space_id = $1
+        AND proposal_id = $2
+        AND status = 'pending_approval'`,
+    [spaceId, proposalId],
+  );
+}
+
 export function assertIncompleteCodePatchConfirmation(
   proposalType: string,
   payloadJson: Record<string, unknown> | null,
@@ -565,6 +610,45 @@ function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+export function canRejectProposalWithRole(
+  proposal: { created_by_user_id: string | null; required_approver_role: string | null },
+  userId: string,
+  role: string | null,
+): boolean {
+  if (proposal.created_by_user_id === userId) return true;
+  const requiredRole = normalizeRequiredApproverRole(proposal.required_approver_role);
+  return Boolean(requiredRole && role && roleSatisfiesRequiredApprover(role, requiredRole));
+}
+
+async function canRejectProposal(
+  client: PoolClient,
+  proposal: ApplyProposalRow,
+  userId: string,
+): Promise<boolean> {
+  const role = await getMembershipRole(client, userId, proposal.space_id);
+  return canRejectProposalWithRole(proposal, userId, role);
+}
+
+function normalizeRequiredApproverRole(role: string | null | undefined): "owner" | "admin" | "reviewer" | null {
+  if (!role) return null;
+  if (role === "owner" || role === "admin" || role === "reviewer") return role;
+  return "owner";
+}
+
+function roleSatisfiesRequiredApprover(
+  actorRole: string,
+  requiredRole: "owner" | "admin" | "reviewer",
+): boolean {
+  return roleRank(actorRole) >= roleRank(requiredRole);
+}
+
+function roleRank(role: string): number {
+  if (role === "owner") return 3;
+  if (role === "admin") return 2;
+  if (role === "reviewer") return 1;
+  return 0;
 }
 
 async function getMembershipRole(

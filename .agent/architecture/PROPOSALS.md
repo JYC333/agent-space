@@ -20,13 +20,15 @@ Proposals are the product review and application boundary for durable mutations.
   `knowledge_update`, `knowledge_archive`, `claim_create`, `claim_update`,
   `claim_archive`, `object_relation_create`, `object_relation_delete`,
   `claim_candidate_packet`, `memory_maintenance_packet`,
-  `retrieval_maintenance_packet`, and `retrieval_diagnostics_packet`.
+  `retrieval_maintenance_packet`, `retrieval_diagnostics_packet`,
+  `custom_source_policy_delta`, `custom_source_credentialed_source`, and
+  `custom_source_repair_activation`.
 - Registered server apply types include `memory_create`, `memory_update`,
   `memory_archive`, `policy_change`, `code_patch`, Knowledge proposal types,
   Claim Candidate Packet, retrieval review packet types, task proposal types,
   workspace proposal types, and capability proposal types contributed through
-  the server
-  `ProposalApplierRegistry`. Unregistered proposal types fail closed on accept
+  the server `ProposalApplierRegistry`, plus the Custom Source proposal types
+  registered by the Intake module. Unregistered proposal types fail closed on accept
   until their owning domain registers a server applier. `egress_review` approval
   rows are supported, but `egress_review` does not currently have a registered applier.
 - Accept returns the general `ProposalAcceptOut` response shape.
@@ -42,6 +44,10 @@ Proposals are the product review and application boundary for durable mutations.
 
 - The server apply service must run the `proposal.apply` policy gate before
   dispatching any registered applier.
+- `proposal.apply` honors `proposals.required_approver_role` before the generic
+  risk/role matrix. For example, an owner-required medium-risk proposal cannot
+  be accepted by an admin or reviewer even though medium risk would otherwise
+  permit reviewer approval.
 - `memory_create`, `memory_update`, and `memory_archive` mutate durable memory
   only when accepted.
 - Knowledge proposal records are reviewable through the proposal API, and
@@ -92,6 +98,9 @@ Proposals are the product review and application boundary for durable mutations.
 - `policy_change`, `follow_up_task`, `agent_config_update`, and other
   non-memory target mutations are not currently registered server appliers. They
   fail closed until their owning domain registers a server applier.
+- Custom Source proposal apply validates the handler version/proposal binding,
+  rejects stale active-pointer or envelope changes, and then activates the
+  named handler version while superseding the previous active version.
 - `code_patch` proposals are accepted via the server applier; pre-apply file
   snapshots are captured automatically and pruned by retention policy (default
   7 days / 20 max per workspace, configurable per-workspace and per-space).

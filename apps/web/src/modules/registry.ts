@@ -195,11 +195,12 @@ export const MODULE_REGISTRY: Module[] = [
   {
     id: 'intake', label: 'Intake', path: '/intake',
     section: 'capture', group: 'daily', icon: 'radio',
-    description: 'Connect source streams, triage candidate items, and select evidence for context.',
+    description: 'Unified information stream control plane for source connections, candidate items, scan state, and evidence.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
-    component: lazy(() => import('./intake/IntakePage')),
+    hasSubRoutes: true,
+    component: lazy(() => import('./intake/IntakeModule')),
   },
   {
     id: 'daily_reports', label: 'Daily Report', path: '/daily-report',

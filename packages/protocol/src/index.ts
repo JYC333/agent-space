@@ -97,3 +97,9 @@ export * from "./plugins.js";
 export * from "./capabilities.js";
 export * from "./workflows.js";
 export * from "./skills.js";
+
+// Intake Custom Source handler contracts
+export * from "./intakeCustomSourceHandlers.js";
+
+// Intake Level 2 Source recipe contracts
+export * from "./intakeSourceRecipes.js";

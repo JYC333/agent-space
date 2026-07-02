@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { intakeApi, workspacesApi } from '../../api/client'
 import { EmptyState } from '../../components/ui/empty-state'
@@ -9,6 +10,10 @@ import type {
   ExtractedEvidence,
   ExtractionJob,
   IntakeItem,
+  SourceRecipeActivationResult,
+  SourceRecipeDryRunResult,
+  SourceRecipePlanResponse,
+  SourceRecipeSourceType,
   SourceConnection,
   SourceConnector,
   Workspace,
@@ -21,18 +26,24 @@ import {
   type ItemFilter,
 } from './intakePageModel'
 import {
-  ConnectionCard,
-  ConnectionsSection,
+  AdvancedSourceHandlerCard,
+  AdvancedSourceTools,
+  CreateSourceCard,
   EvidenceSection,
   IntakePageHeader,
   ItemsSection,
   JobsSection,
   ManualUrlCard,
+  SourcesSection,
   WorkspaceRoutingCard,
 } from './IntakePageSections'
+import { runPendingItemJob } from './intakeActions'
 
 export default function IntakePage() {
   const { activeSpaceId, activeSpaceName } = useSpace()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const scopedProjectId = searchParams.get('project_id')?.trim() ?? ''
+  const scopedConnectionId = searchParams.get('connection_id')?.trim() ?? ''
 
   const [connectors, setConnectors] = useState<SourceConnector[]>([])
   const [connections, setConnections] = useState<SourceConnection[]>([])
@@ -50,12 +61,21 @@ export default function IntakePage() {
 
   const [itemFilter, setItemFilter] = useState<ItemFilter>('open')
   const [evidenceFilter, setEvidenceFilter] = useState<EvidenceFilter>('candidate')
+  const [itemQuery, setItemQuery] = useState(searchParams.get('q') ?? '')
 
-  const [connectorKey, setConnectorKey] = useState('rss')
-  const [connectionName, setConnectionName] = useState('')
-  const [endpointUrl, setEndpointUrl] = useState('')
-  const [fetchFrequency, setFetchFrequency] = useState('manual')
-  const [capturePolicy, setCapturePolicy] = useState('metadata_only')
+  const [recipeSourceName, setRecipeSourceName] = useState('')
+  const [recipeEndpointUrl, setRecipeEndpointUrl] = useState('')
+  const [recipeFetchFrequency, setRecipeFetchFrequency] = useState('daily')
+  const [recipeCapturePolicy, setRecipeCapturePolicy] = useState('auto_extract_relevant')
+  const [recipeSourceType, setRecipeSourceType] = useState('auto')
+  const [recipeListSelector, setRecipeListSelector] = useState('article')
+  const [recipePlan, setRecipePlan] = useState<SourceRecipePlanResponse | null>(null)
+  const [recipeDryRun, setRecipeDryRun] = useState<SourceRecipeDryRunResult | null>(null)
+  const [recipeActivation, setRecipeActivation] = useState<SourceRecipeActivationResult | null>(null)
+  const [customSourceName, setCustomSourceName] = useState('')
+  const [customSourceEndpointUrl, setCustomSourceEndpointUrl] = useState('')
+  const [customSourceFetchFrequency, setCustomSourceFetchFrequency] = useState('manual')
+  const [customSourceListSelector, setCustomSourceListSelector] = useState('article')
 
   const [manualUrl, setManualUrl] = useState('')
   const [manualTitle, setManualTitle] = useState('')
@@ -66,13 +86,9 @@ export default function IntakePage() {
   const [bindingConnectionId, setBindingConnectionId] = useState('')
 
   const connectorById = useMemo(() => new Map(connectors.map(c => [c.id, c])), [connectors])
-  const connectorOptions = useMemo(
-    () => connectors.map(c => ({ value: c.connector_key, label: c.display_name })),
-    [connectors],
-  )
   const connectionOptions = useMemo(
     () => [
-      { value: '', label: 'No connection' },
+      { value: '', label: 'No source' },
       ...connections.map(c => ({ value: c.id, label: c.name })),
     ],
     [connections],
@@ -84,10 +100,26 @@ export default function IntakePage() {
     ],
     [workspaces],
   )
-  const selectedConnector = useMemo(
-    () => connectors.find(c => c.connector_key === connectorKey) ?? null,
-    [connectors, connectorKey],
+  const visibleConnections = useMemo(
+    () => scopedConnectionId ? connections.filter(connection => connection.id === scopedConnectionId) : connections,
+    [connections, scopedConnectionId],
   )
+
+  useEffect(() => {
+    const q = searchParams.get('q') ?? ''
+    setItemQuery(current => current === q ? current : q)
+  }, [searchParams])
+
+  const updateItemQuery = useCallback((value: string) => {
+    setItemQuery(value)
+    setSearchParams(current => {
+      const next = new URLSearchParams(current)
+      const trimmed = value.trim()
+      if (trimmed) next.set('q', trimmed)
+      else next.delete('q')
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
 
   const load = useCallback(async () => {
     if (!activeSpaceId) {
@@ -108,6 +140,9 @@ export default function IntakePage() {
     try {
       const itemStatus = itemFilter === 'open' ? undefined : itemFilter
       const evidenceStatus = evidenceFilter === 'all' ? undefined : evidenceFilter
+      const connectionFilter = scopedConnectionId || undefined
+      const projectFilter = scopedProjectId || undefined
+      const queryFilter = itemQuery.trim() || undefined
       const [
         connectorRows,
         connectionPage,
@@ -121,13 +156,13 @@ export default function IntakePage() {
       ] = await Promise.all([
         intakeApi.connectors(),
         intakeApi.connections({ limit: 100 }),
-        intakeApi.items({ status: itemStatus, limit: 80 }),
-        intakeApi.jobs({ limit: 60 }),
-        intakeApi.evidence({ status: evidenceStatus, limit: 80 }),
+        intakeApi.items({ status: itemStatus, connection_id: connectionFilter, project_id: projectFilter, q: queryFilter, limit: 80 }),
+        intakeApi.jobs({ connection_id: connectionFilter, limit: 60 }),
+        intakeApi.evidence({ status: evidenceStatus, project_id: projectFilter, limit: 80 }),
         intakeApi.evidenceLinks({ status: 'active' }),
         workspacesApi.list({ limit: '100' }),
         intakeApi.workspaceProfiles(),
-        intakeApi.workspaceBindings(),
+        intakeApi.workspaceBindings({ source_connection_id: connectionFilter, project_id: projectFilter }),
       ])
       setConnectors(connectorRows)
       setConnections(connectionPage.items)
@@ -138,41 +173,46 @@ export default function IntakePage() {
       setWorkspaces(workspacePage.items)
       setProfiles(profileRows)
       setBindings(bindingRows)
-
-      if (!connectorRows.some(c => c.connector_key === connectorKey)) {
-        setConnectorKey(connectorRows[0]?.connector_key ?? 'rss')
-      }
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
       setLoading(false)
     }
-  }, [activeSpaceId, itemFilter, evidenceFilter, connectorKey])
+  }, [activeSpaceId, itemFilter, evidenceFilter, scopedConnectionId, scopedProjectId, itemQuery])
 
   useEffect(() => { load() }, [load])
 
-  async function createConnection(event: FormEvent) {
-    event.preventDefault()
-    setBusy('connection:create')
+  const refreshDynamicIntakeState = useCallback(async () => {
+    if (!activeSpaceId) return
+    const itemStatus = itemFilter === 'open' ? undefined : itemFilter
+    const evidenceStatus = evidenceFilter === 'all' ? undefined : evidenceFilter
+    const connectionFilter = scopedConnectionId || undefined
+    const projectFilter = scopedProjectId || undefined
+    const queryFilter = itemQuery.trim() || undefined
     try {
-      const name = connectionName.trim() || selectedConnector?.display_name || connectorKey
-      const row = await intakeApi.createConnection({
-        connector_key: connectorKey,
-        name,
-        endpoint_url: endpointUrl.trim() || null,
-        fetch_frequency: fetchFrequency as 'manual' | 'hourly' | 'daily' | 'weekly',
-        capture_policy: capturePolicy,
-      })
-      toast.success(`Connection created: ${row.name}`)
-      setConnectionName('')
-      setEndpointUrl('')
-      await load()
-    } catch (e) {
-      toast.error(errMsg(e))
-    } finally {
-      setBusy(null)
+      const [itemPage, jobPage, evidencePage, linkPage] = await Promise.all([
+        intakeApi.items({ status: itemStatus, connection_id: connectionFilter, project_id: projectFilter, q: queryFilter, limit: 80 }),
+        intakeApi.jobs({ connection_id: connectionFilter, limit: 60 }),
+        intakeApi.evidence({ status: evidenceStatus, project_id: projectFilter, limit: 80 }),
+        intakeApi.evidenceLinks({ status: 'active' }),
+      ])
+      setItems(itemPage.items)
+      setJobs(jobPage.items)
+      setEvidence(evidencePage.items)
+      setLinks(linkPage.items)
+    } catch {
+      // Keep polling quiet; explicit user actions still surface toast errors.
     }
-  }
+  }, [activeSpaceId, itemFilter, evidenceFilter, scopedConnectionId, scopedProjectId, itemQuery])
+
+  useEffect(() => {
+    const hasActiveJobs = jobs.some(job => job.status === 'pending' || job.status === 'running')
+    if (!activeSpaceId || (!hasActiveJobs && !busy)) return
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshDynamicIntakeState()
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [activeSpaceId, busy, jobs, refreshDynamicIntakeState])
 
   async function createManualUrl(event: FormEvent) {
     event.preventDefault()
@@ -185,9 +225,108 @@ export default function IntakePage() {
         queue_content: queueContent,
       })
       toast.success(`Intake item saved: ${row.title}`)
+      if (queueContent) {
+        await runQueuedItemJob(row.id, 'manual_url', 'Text extraction')
+      }
       setManualUrl('')
       setManualTitle('')
       setQueueContent(false)
+      await load()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function createCustomSource(event: FormEvent) {
+    event.preventDefault()
+    setBusy('custom-source:create')
+    try {
+      const row = await intakeApi.createCustomSourceDraft({
+        name: customSourceName.trim() || 'Advanced Source',
+        endpoint_url: customSourceEndpointUrl.trim(),
+        fetch_frequency: customSourceFetchFrequency as 'manual' | 'hourly' | 'daily' | 'weekly',
+        config: customSourceListSelector.trim()
+          ? { list_selector: customSourceListSelector.trim() }
+          : {},
+      })
+      toast.success(`Handler source created: ${row.name}`)
+      setCustomSourceName('')
+      setCustomSourceEndpointUrl('')
+      setCustomSourceListSelector('article')
+      await load()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  function recipeRequestBase() {
+    const sourceType = recipeSourceType === 'auto' ? undefined : recipeSourceType as SourceRecipeSourceType
+    return {
+      name: recipeSourceName.trim() || recipeEndpointUrl.trim(),
+      endpoint_url: recipeEndpointUrl.trim(),
+      fetch_frequency: recipeFetchFrequency as 'manual' | 'hourly' | 'daily' | 'weekly',
+      capture_policy: recipeCapturePolicy,
+      ...(sourceType ? { source_type: sourceType } : {}),
+      ...(recipeSourceType === 'web_list' && recipeListSelector.trim()
+        ? { list_selector: recipeListSelector.trim().replace(/^\./, '') }
+        : {}),
+    }
+  }
+
+  async function previewRecipeSource(event: FormEvent) {
+    event.preventDefault()
+    setBusy('recipe:plan')
+    setRecipeDryRun(null)
+    setRecipeActivation(null)
+    try {
+      const plan = await intakeApi.planSourceRecipe(recipeRequestBase())
+      setRecipePlan(plan)
+      toast.success(`Plan preview: ${plan.preview.item_count} sample item${plan.preview.item_count === 1 ? '' : 's'}`)
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function createRecipeSource() {
+    if (!recipePlan) return
+    setBusy('recipe:create')
+    setRecipeDryRun(null)
+    setRecipeActivation(null)
+    try {
+      const created = await intakeApi.createSourceRecipe({
+        ...recipeRequestBase(),
+        name: recipeSourceName.trim() || 'Source',
+        source_type: recipePlan.source_type,
+        recipe: recipePlan.recipe,
+      })
+      const dryRun = await intakeApi.dryRunSourceRecipe(created.connection.id, {
+        recipe_version_id: created.recipe_version.id,
+      })
+      setRecipeDryRun(dryRun.dry_run)
+      if (dryRun.dry_run.status !== 'succeeded') {
+        toast.error(`Preview ${dryRun.dry_run.status}`)
+        await load()
+        return
+      }
+
+      const activation = await intakeApi.activateSourceRecipe(created.connection.id, {
+        recipe_version_id: dryRun.recipe_version.id,
+      })
+      setRecipeActivation(activation)
+      if (activation.status === 'pending_approval') {
+        toast.success(`Approval proposal created: ${activation.proposal_id}`)
+      } else {
+        toast.success(`Source activated: ${created.connection.name}`)
+      }
+      setRecipeSourceName('')
+      setRecipeEndpointUrl('')
+      setRecipePlan(null)
       await load()
     } catch (e) {
       toast.error(errMsg(e))
@@ -200,12 +339,24 @@ export default function IntakePage() {
     setBusy(`scan:${connection.id}`)
     try {
       const job = await intakeApi.scanConnection(connection.id)
-      toast.success(`Scan ${job.status}: ${job.items_created ?? 0} new`)
+      toast.success('Scan queued')
+      void runQueuedScan(job.id)
       await load()
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
       setBusy(null)
+    }
+  }
+
+  async function runQueuedScan(jobId: string) {
+    try {
+      const result = await intakeApi.runJob(jobId)
+      toast.success(`Scan ${result.status}: ${result.items_created ?? 0} new`)
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      await load()
     }
   }
 
@@ -223,12 +374,12 @@ export default function IntakePage() {
 
   async function saveConnectionGovernance(
     connection: SourceConnection,
-    body: { consent: Record<string, unknown>; policy: Record<string, unknown> },
+    body: { capture_policy?: string; consent: Record<string, unknown>; policy: Record<string, unknown> },
   ) {
     setBusy(`governance:${connection.id}`)
     try {
       await intakeApi.updateConnection(connection.id, body)
-      toast.success('Connection governance updated')
+      toast.success('Source governance updated')
       await load()
     } catch (e) {
       toast.error(errMsg(e))
@@ -241,12 +392,26 @@ export default function IntakePage() {
     setBusy(`item:${item.id}:${action}`)
     try {
       await intakeApi.itemAction(item.id, action)
+      if (action === 'queue_content') {
+        await runQueuedItemJob(item.id, 'extract_text', 'Text extraction')
+      } else if (action === 'archive_snapshot') {
+        await runQueuedItemJob(item.id, 'snapshot', 'Snapshot capture')
+      }
       await load()
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
       setBusy(null)
     }
+  }
+
+  async function runQueuedItemJob(itemId: string, jobType: string, label: string) {
+    const result = await runPendingItemJob(itemId, jobType)
+    if (!result) {
+      toast.success(`${label} queued`)
+      return
+    }
+    toast.success(`${label} ${result.status}`)
   }
 
   async function runJob(job: ExtractionJob) {
@@ -347,7 +512,7 @@ export default function IntakePage() {
     }
   }
 
-  function connectorName(connection: SourceConnection) {
+  function sourceBackendKey(connection: SourceConnection) {
     return connectorById.get(connection.connector_id)?.connector_key ?? 'connector'
   }
 
@@ -370,6 +535,37 @@ export default function IntakePage() {
 
       <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
         <div className="space-y-6">
+          <CreateSourceCard
+            name={recipeSourceName}
+            endpointUrl={recipeEndpointUrl}
+            fetchFrequency={recipeFetchFrequency}
+            capturePolicy={recipeCapturePolicy}
+            sourceType={recipeSourceType}
+            listSelector={recipeListSelector}
+            plan={recipePlan}
+            dryRun={recipeDryRun}
+            activation={recipeActivation}
+            busy={busy}
+            onNameChange={setRecipeSourceName}
+            onEndpointUrlChange={(value) => {
+              setRecipeEndpointUrl(value)
+              setRecipePlan(null)
+              setRecipeDryRun(null)
+              setRecipeActivation(null)
+            }}
+            onFetchFrequencyChange={setRecipeFetchFrequency}
+            onCapturePolicyChange={setRecipeCapturePolicy}
+            onSourceTypeChange={(value) => {
+              setRecipeSourceType(value)
+              setRecipePlan(null)
+            }}
+            onListSelectorChange={(value) => {
+              setRecipeListSelector(value)
+              setRecipePlan(null)
+            }}
+            onPreview={previewRecipeSource}
+            onCreateActivate={createRecipeSource}
+          />
           <ManualUrlCard
             manualUrl={manualUrl}
             manualTitle={manualTitle}
@@ -382,22 +578,6 @@ export default function IntakePage() {
             onManualConnectionChange={setManualConnectionId}
             onQueueContentChange={setQueueContent}
             onSubmit={createManualUrl}
-          />
-          <ConnectionCard
-            connectorOptions={connectorOptions}
-            connectorKey={connectorKey}
-            connectionName={connectionName}
-            endpointUrl={endpointUrl}
-            fetchFrequency={fetchFrequency}
-            capturePolicy={capturePolicy}
-            selectedConnector={selectedConnector}
-            busy={busy}
-            onConnectorKeyChange={setConnectorKey}
-            onConnectionNameChange={setConnectionName}
-            onEndpointUrlChange={setEndpointUrl}
-            onFetchFrequencyChange={setFetchFrequency}
-            onCapturePolicyChange={setCapturePolicy}
-            onSubmit={createConnection}
           />
           <WorkspaceRoutingCard
             workspaceId={workspaceId}
@@ -414,14 +594,28 @@ export default function IntakePage() {
             onCreateWorkspaceProfile={createWorkspaceProfile}
             onCreateWorkspaceBinding={createWorkspaceBinding}
           />
+          <AdvancedSourceTools>
+            <AdvancedSourceHandlerCard
+              name={customSourceName}
+              endpointUrl={customSourceEndpointUrl}
+              fetchFrequency={customSourceFetchFrequency}
+              listSelector={customSourceListSelector}
+              busy={busy}
+              onNameChange={setCustomSourceName}
+              onEndpointUrlChange={setCustomSourceEndpointUrl}
+              onFetchFrequencyChange={setCustomSourceFetchFrequency}
+              onListSelectorChange={setCustomSourceListSelector}
+              onSubmit={createCustomSource}
+            />
+          </AdvancedSourceTools>
         </div>
 
         <div className="space-y-6 min-w-0">
-          <ConnectionsSection
-            connections={connections}
+          <SourcesSection
+            connections={visibleConnections}
             loading={loading}
             busy={busy}
-            connectorName={connectorName}
+            sourceBackendKey={sourceBackendKey}
             onScanConnection={scanConnection}
             onUpdateConnection={updateConnection}
             onSaveGovernance={saveConnectionGovernance}
@@ -429,9 +623,13 @@ export default function IntakePage() {
           <ItemsSection
             items={items}
             itemFilter={itemFilter}
+            itemQuery={itemQuery}
+            scopedProjectId={scopedProjectId}
+            scopedConnectionId={scopedConnectionId}
             busy={busy}
             summaryResults={itemSummaryResults}
             onItemFilterChange={setItemFilter}
+            onItemQueryChange={updateItemQuery}
             onItemAction={itemAction}
             onSummarizeItem={summarizeItem}
           />

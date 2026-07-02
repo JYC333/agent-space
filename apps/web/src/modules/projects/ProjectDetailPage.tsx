@@ -3,15 +3,17 @@ import { useParams } from 'react-router-dom'
 import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/spaceNav'
 import {
   FolderKanban, Target, Edit2, Archive, Plus, Trash2, ChevronLeft,
-  Activity, Package, CheckCircle, Folder, Cpu, Database,
+  Activity, Package, CheckCircle, Folder, Cpu, Database, Radio, Link2, FileText,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { projectsApi, workspacesApi, activityApi, artifactsApi, proposalsApi, runsApi, memoryApi } from '../../api/client'
+import { projectsApi, workspacesApi, activityApi, artifactsApi, proposalsApi, runsApi, memoryApi, intakeApi, intakeReaderApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg, isNotFoundError } from '../../lib/utils'
 import type {
   Project, ProjectSummary, ProjectWorkspaceLinkOut, Workspace,
   ActivityInboxRecord, Artifact, Proposal, Run, Memory,
+  SourceConnection, WorkspaceSourceBinding, IntakeItem, ExtractedEvidence,
+  ReaderAnnotation,
 } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
@@ -245,6 +247,11 @@ export default function ProjectDetailPage() {
   const [pendingProposals, setPendingProposals] = useState<Proposal[]>([])
   const [recentRuns, setRecentRuns] = useState<Run[]>([])
   const [projectMemory, setProjectMemory] = useState<Memory[]>([])
+  const [intakeConnections, setIntakeConnections] = useState<SourceConnection[]>([])
+  const [intakeBindings, setIntakeBindings] = useState<WorkspaceSourceBinding[]>([])
+  const [recentIntakeItems, setRecentIntakeItems] = useState<IntakeItem[]>([])
+  const [recentEvidence, setRecentEvidence] = useState<ExtractedEvidence[]>([])
+  const [readerAnnotations, setReaderAnnotations] = useState<ReaderAnnotation[]>([])
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -272,18 +279,28 @@ export default function ProjectDetailPage() {
       allWs.items.forEach(w => { map[w.id] = w })
       setWorkspaceMap(map)
 
-      const [acts, arts, props, runs, mems] = await Promise.all([
+      const [acts, arts, props, runs, mems, sourceConnections, sourceBindings, intakeItems, evidenceItems, readerAnns] = await Promise.all([
         activityApi.list({ project_id: projectId, limit: 5 }),
         artifactsApi.list({ project_id: projectId, limit: 5 }),
         proposalsApi.list({ project_id: projectId, status: 'pending', limit: 5 }),
         runsApi.list({ project_id: projectId, limit: 5 }),
         memoryApi.list({ project_id: projectId, limit: 5 }),
+        intakeApi.connections({ limit: 100 }),
+        intakeApi.workspaceBindings({ project_id: projectId }),
+        intakeApi.items({ project_id: projectId, limit: 5 }),
+        intakeApi.evidence({ project_id: projectId, status: 'active', limit: 5 }),
+        intakeReaderApi.listByProject(projectId, 5).catch(() => ({ items: [] as ReaderAnnotation[] })),
       ])
       setRecentActivities(acts)
       setRecentArtifacts(arts.items)
       setPendingProposals(props.items)
       setRecentRuns(runs)
       setProjectMemory(mems.items)
+      setIntakeConnections(sourceConnections.items)
+      setIntakeBindings(sourceBindings)
+      setRecentIntakeItems(intakeItems.items)
+      setRecentEvidence(evidenceItems.items)
+      setReaderAnnotations(readerAnns.items)
     } catch (e) {
       if (isNotFoundError(e)) {
         setNotFound(true)
@@ -354,6 +371,10 @@ export default function ProjectDetailPage() {
       root_path: ws?.root_path ?? null,
     }
   })
+  const intakeConnectionById = Object.fromEntries(intakeConnections.map(connection => [connection.id, connection])) as Record<string, SourceConnection>
+  const linkedIntakeConnections = intakeBindings
+    .map(binding => intakeConnectionById[binding.source_connection_id])
+    .filter((connection): connection is SourceConnection => Boolean(connection))
 
   return (
     <div className="p-6 space-y-6">
@@ -447,6 +468,113 @@ export default function ProjectDetailPage() {
           workspaceOptions={workflowWorkspaceOptions}
           onRunCreated={loadAll}
         />
+      </section>
+
+      {/* Intake consumption */}
+      <section className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Intake</h2>
+          <Button variant="outline" size="sm" asChild>
+            <Link to={`/intake?project_id=${project.id}`}>
+              <Radio className="size-3.5" />
+              Manage in Intake
+            </Link>
+          </Button>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-3">
+          <Card className="p-4">
+            <div className="flex items-center gap-2 text-muted-foreground mb-3">
+              <Link2 className="size-3.5" />
+              <span className="text-xs font-medium uppercase tracking-wide">Linked sources</span>
+            </div>
+            {intakeBindings.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No Intake bindings are scoped to this project.</p>
+            ) : (
+              <div className="space-y-2">
+                {intakeBindings.slice(0, 4).map(binding => {
+                  const connection = intakeConnectionById[binding.source_connection_id]
+                  return (
+                    <div key={binding.id} className="min-w-0">
+                      <p className="text-sm font-medium truncate">{connection?.name ?? binding.source_connection_id}</p>
+                      <p className="text-xs text-muted-foreground truncate">{connection?.endpoint_url ?? binding.binding_key}</p>
+                    </div>
+                  )
+                })}
+                {intakeBindings.length > 4 && <p className="text-xs text-muted-foreground">+{intakeBindings.length - 4} more</p>}
+              </div>
+            )}
+            <div className="flex gap-1.5 flex-wrap mt-3">
+              <Badge variant="outline">{intakeBindings.length} bindings</Badge>
+              <Badge variant="muted">{linkedIntakeConnections.length} connections</Badge>
+            </div>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center gap-2 text-muted-foreground mb-3">
+              <FileText className="size-3.5" />
+              <span className="text-xs font-medium uppercase tracking-wide">Recent items</span>
+            </div>
+            {recentIntakeItems.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No project-linked intake items yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {recentIntakeItems.map(item => (
+                  <div key={item.id} className="min-w-0">
+                    <p className="text-sm font-medium truncate">{item.title || 'Untitled item'}</p>
+                    <p className="text-xs text-muted-foreground truncate">{item.source_domain ?? item.source_uri ?? item.status}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center gap-2 text-muted-foreground mb-3">
+              <CheckCircle className="size-3.5" />
+              <span className="text-xs font-medium uppercase tracking-wide">Active evidence</span>
+            </div>
+            {recentEvidence.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No active Intake evidence is linked to this project.</p>
+            ) : (
+              <div className="space-y-2">
+                {recentEvidence.map(row => (
+                  <div key={row.id} className="min-w-0">
+                    <p className="text-sm font-medium truncate">{row.title}</p>
+                    <p className="text-xs text-muted-foreground line-clamp-2">{row.content_excerpt ?? row.source_uri ?? row.evidence_type}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          <Card className="p-4">
+            <div className="flex items-center gap-2 text-muted-foreground mb-3">
+              <FileText className="size-3.5" />
+              <span className="text-xs font-medium uppercase tracking-wide">Reader annotations</span>
+            </div>
+            {readerAnnotations.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No shared reader annotations from sources bound to this project.</p>
+            ) : (
+              <div className="space-y-2">
+                {readerAnnotations.map(ann => (
+                  ann.intake_item_id ? (
+                    <Link
+                      key={ann.id}
+                      to={`/intake/items/${ann.intake_item_id}/read`}
+                      className="block min-w-0 rounded hover:bg-muted/50 -mx-1 px-1 py-0.5 transition-colors"
+                    >
+                      <p className="text-xs text-muted-foreground capitalize">{ann.annotation_type}</p>
+                      <p className="text-sm line-clamp-2 italic">{ann.quote_text}</p>
+                    </Link>
+                  ) : (
+                    <div key={ann.id} className="min-w-0">
+                      <p className="text-xs text-muted-foreground capitalize">{ann.annotation_type}</p>
+                      <p className="text-sm line-clamp-2 italic">{ann.quote_text}</p>
+                    </div>
+                  )
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
       </section>
 
       {/* Linked workspaces */}

@@ -1,14 +1,21 @@
 # Credential Storage
 
-The system stores secrets in **two distinct channels**. Do not conflate them.
+The system stores secrets in **three distinct channels**. Do not conflate them.
 
 | Channel | What | Where stored | Doc |
 |---|---|---|---|
 | **ModelProvider API key** | API keys for in-process LLM calls (OpenAI, Anthropic, …) | AES-256-GCM ciphertext in a DB `Credential` row | this doc |
 | **CLI login state** | Claude Code / Codex CLI login profiles for sandboxed runs | files under `instance/secrets/cli-credentials/…`, brokered per run | [modules/credentials.md](../modules/credentials.md) |
+| **Custom Source fetch credential** | Header-based credential (API key / bearer token) for an Intake Custom Source's outbound fetches | AES-256-GCM ciphertext in the same DB `credentials` table, distinct `credential_type` and `secret_ref` prefix | [modules/intake.md](../modules/intake.md), [architecture/INTAKE_CUSTOM_SOURCE_HANDLERS.md](INTAKE_CUSTOM_SOURCE_HANDLERS.md) |
 
 This doc covers the **ModelProvider API key** channel — the keys a user configures on the
 Providers page, used by the `model_api` runtime adapter, the reflector, and `/providers/chat`.
+The **Custom Source fetch credential** channel reuses this channel's DB table and master key
+(`server/src/modules/intake/customSourceCredentialCrypto.ts`,
+`server/src/modules/intake/customSourceCredentialService.ts`) but is functionally distinct: it
+resolves to a request header injected only by the trusted Custom Source fetch layer
+(`customSourceEndpointFetch.ts`, `customSourcePipelineInterpreter.ts`), never by generated or
+interpreted handler code, and it is never pooled/rotated the way ModelProvider keys are.
 
 ## At-rest encryption
 

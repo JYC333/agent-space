@@ -5,8 +5,12 @@ import type { Queryable } from "../src/modules/routeUtils/common";
 
 class FakeDb implements Queryable {
   readonly calls: Array<{ sql: string; params: readonly unknown[] }> = [];
+  private status = "running";
 
-  constructor(private readonly jobType: "extract_text" | "snapshot") {}
+  constructor(
+    private readonly jobType: "extract_text" | "snapshot",
+    private readonly policyRetention: "metadata_only" | "full_text" | "full_snapshot" = "metadata_only",
+  ) {}
 
   async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
     this.calls.push({ sql, params });
@@ -36,19 +40,38 @@ class FakeDb implements Queryable {
           capture_policy: "metadata_only",
           trust_level: "normal",
           consent_json: {},
-          policy_json: { retention_policy: "metadata_only" },
+          policy_json: { retention_policy: this.policyRetention },
         }],
         rowCount: 1,
       } as { rows: Row[]; rowCount: number };
     }
+    if (sql.includes("FROM scheduler_tasks")) {
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql.includes("INSERT INTO artifacts")) {
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("INSERT INTO source_snapshots")) {
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("UPDATE intake_items")) {
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("INSERT INTO extracted_evidence")) {
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("UPDATE extraction_jobs SET source_snapshot_id")) {
+      return { rows: [], rowCount: 1 };
+    }
     if (sql.includes("SET status = $3")) {
+      this.status = String(params[2]);
       return { rows: [], rowCount: 1 };
     }
     if (sql.includes("SET content_state = 'extraction_failed'")) {
       return { rows: [], rowCount: 1 };
     }
     if (sql.includes("SELECT") && sql.includes("FROM extraction_jobs")) {
-      return { rows: [{ ...jobRow(this.jobType), status: "failed" }], rowCount: 1 } as { rows: Row[]; rowCount: number };
+      return { rows: [{ ...jobRow(this.jobType), status: this.status }], rowCount: 1 } as { rows: Row[]; rowCount: number };
     }
     throw new Error(`unexpected SQL: ${sql}`);
   }
@@ -82,6 +105,26 @@ describe("IntakeExtractionWorker source retention policy", () => {
     const finish = db.calls.find((call) => call.sql.includes("SET status = $3"));
     expect(finish?.params[4]).toBe("403");
     expect(finish?.params[5]).toBe("Source retention policy does not allow full_snapshot");
+  });
+
+  it("writes extract_text artifacts as structured reader documents", async () => {
+    const db = new FakeDb("extract_text", "full_text");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      "<html><body><article><h1>Readable article</h1><p>Article text.</p><img src='/image.png'></article></body></html>",
+      { status: 200 },
+    ));
+
+    const result = await new IntakeExtractionWorker(db, config()).runPendingJob("job-1", "space-1");
+
+    expect(result.status).toBe("succeeded");
+    const artifactInsert = db.calls.find((call) => call.sql.includes("INSERT INTO artifacts"));
+    expect(artifactInsert?.sql).toContain("'intake_reader_document'");
+    expect(artifactInsert?.sql).toContain("'application/json'");
+    expect(artifactInsert?.sql).toContain("'reader_document_json'");
+    expect(artifactInsert?.sql).toContain("export_formats_json");
+    expect(artifactInsert?.params).toContain(JSON.stringify(["json"]));
+    expect(String(artifactInsert?.params[3])).toContain("\"image_policy\":\"remote_reference\"");
+    expect(String(artifactInsert?.params[3])).toContain("\"src\":\"https://example.test/image.png\"");
   });
 });
 

@@ -13,22 +13,23 @@ function fakeDb(input: {
 }): Queryable {
   return {
     async query<Row = Record<string, unknown>>(sql: string): Promise<{ rows: Row[]; rowCount: number | null }> {
-      if (sql.includes("FROM space_retrieval_settings")) {
+      if (sql.includes("FROM settings")) {
         return {
           rows: [{
-            space_id: "space-1",
-            default_search_mode: "hybrid",
-            rerank_enabled: false,
-            query_rewrite_enabled: false,
-            query_rewrite_default: false,
-            use_query_cache: true,
-            include_trace: false,
-            external_egress_enabled: true,
-            retrieval_tool_mode: "off",
-            context_ops_review_mode: input.mode,
-            context_ops_scan_mode: input.scanMode ?? "admins",
-            embedding_dimensions: 2560,
-            max_results_default: 50,
+            settings_json: {
+              default_search_mode: "hybrid",
+              rerank_enabled: false,
+              query_rewrite_enabled: false,
+              query_rewrite_default: false,
+              use_query_cache: true,
+              include_trace: false,
+              external_egress_enabled: true,
+              retrieval_tool_mode: "off",
+              context_ops_review_mode: input.mode,
+              context_ops_scan_mode: input.scanMode ?? "admins",
+              embedding_dimensions: 2560,
+              max_results_default: 50,
+            },
             created_at: "2026-06-26T00:00:00.000Z",
             updated_at: "2026-06-26T00:00:00.000Z",
           }] as Row[],

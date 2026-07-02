@@ -170,6 +170,104 @@ const memoryMaintenancePacket = z
   .object({ proposal_type: z.literal("memory_maintenance_packet") })
   .passthrough();
 
+const customSourcePolicyEnvelope = z
+  .object({
+    allowed_network_origins: z.array(z.string()),
+    capture_policy: z.string(),
+    retention_policy: z.string(),
+    credential_ref: z.string().nullish(),
+    language: z.enum(["typescript_node", "declarative_pipeline_v1"]),
+    browser_automation_enabled: z.boolean().default(false),
+    shell_enabled: z.boolean().default(false),
+    dependency_installation_enabled: z.boolean().default(false),
+    log_redaction_enabled: z.boolean().default(true),
+    limits: z
+      .object({
+        timeout_ms: z.number().int().positive(),
+        max_download_bytes: z.number().int().positive(),
+        max_output_bytes: z.number().int().positive(),
+        max_files: z.number().int().positive(),
+        max_items: z.number().int().positive(),
+        max_evidence_items: z.number().int().positive(),
+        log_max_bytes: z.number().int().positive(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+const customSourcePolicyDelta = z
+  .object({
+    proposal_type: z.literal("custom_source_policy_delta"),
+    source_connection_id: z.string().min(1),
+    handler_version_id: z.string().min(1),
+    current_handler_version_id: z.string().min(1).nullable(),
+    current_policy_envelope_json: customSourcePolicyEnvelope.nullable(),
+    proposed_policy_envelope_json: customSourcePolicyEnvelope,
+    envelope_diff_json: z.record(z.unknown()),
+  })
+  .passthrough();
+
+const customSourceCredentialedSource = z
+  .object({
+    proposal_type: z.literal("custom_source_credentialed_source"),
+    source_connection_id: z.string().min(1),
+    handler_version_id: z.string().min(1),
+    current_handler_version_id: z.string().min(1).nullable(),
+    current_policy_envelope_json: customSourcePolicyEnvelope.nullable(),
+    proposed_policy_envelope_json: customSourcePolicyEnvelope,
+    credential_scope_json: z.record(z.unknown()),
+    requested_by_user_id: z.string().min(1),
+  })
+  .passthrough();
+
+// Shared Level 2 recipe envelope (SourcePolicyEnvelopeSchema subset): no
+// language/browser/shell/dependency fields — those are structurally
+// impossible for the in-process recipe interpreter.
+const sourceRecipePolicyEnvelope = z
+  .object({
+    allowed_network_origins: z.array(z.string()),
+    capture_policy: z.string(),
+    retention_policy: z.string(),
+    credential_ref: z.string().nullish(),
+    log_redaction_enabled: z.boolean().default(true),
+    limits: z
+      .object({
+        timeout_ms: z.number().int().positive(),
+        max_download_bytes: z.number().int().positive(),
+        max_output_bytes: z.number().int().positive(),
+        max_files: z.number().int().positive(),
+        max_items: z.number().int().positive(),
+        max_evidence_items: z.number().int().positive(),
+        log_max_bytes: z.number().int().positive(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+const sourceRecipeActivation = z
+  .object({
+    proposal_type: z.literal("source_recipe_activation"),
+    source_connection_id: z.string().min(1),
+    recipe_version_id: z.string().min(1),
+    current_recipe_version_id: z.string().min(1).nullable(),
+    current_policy_envelope_json: sourceRecipePolicyEnvelope.nullable(),
+    proposed_policy_envelope_json: sourceRecipePolicyEnvelope,
+    envelope_diff_json: z.record(z.unknown()),
+    requested_by_user_id: z.string().min(1),
+  })
+  .passthrough();
+
+const customSourceRepairActivation = z
+  .object({
+    proposal_type: z.literal("custom_source_repair_activation"),
+    source_connection_id: z.string().min(1),
+    previous_handler_version_id: z.string().min(1),
+    new_handler_version_id: z.string().min(1),
+    envelope_unchanged: z.boolean(),
+    fixture_comparison_json: z.record(z.unknown()),
+  })
+  .passthrough();
+
 export const ProposalPayloadSchema = z.discriminatedUnion("proposal_type", [
   memoryCreate,
   memoryUpdate,
@@ -200,6 +298,10 @@ export const ProposalPayloadSchema = z.discriminatedUnion("proposal_type", [
   retrievalDiagnosticsPacket,
   retrievalMaintenancePacket,
   memoryMaintenancePacket,
+  customSourcePolicyDelta,
+  customSourceCredentialedSource,
+  customSourceRepairActivation,
+  sourceRecipeActivation,
 ]);
 
 export type ProposalPayload = z.infer<typeof ProposalPayloadSchema>;

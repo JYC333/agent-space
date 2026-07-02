@@ -23,6 +23,9 @@ export function registerDailyCaptureReportHandler(
     const setting =
       (settingId ? await settingsRepo.getById(spaceId, settingId) : null) ??
       (await settingsRepo.getOrCreate(spaceId, userId));
+    if (setting.user_id !== userId) {
+      throw new Error("daily_capture_report handler: setting_id does not match user_id");
+    }
     const service = new DailyCaptureReportService(db, config);
     const result = await service.generateForDate({
       spaceId,

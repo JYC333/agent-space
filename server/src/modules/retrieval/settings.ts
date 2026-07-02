@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   ContextOpsReviewMode,
   ContextOpsScanMode,
@@ -9,6 +8,13 @@ import type {
   SpaceRetrievalSettingsUpdate,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { Queryable } from "../routeUtils/common";
+import {
+  ScopedSettingsStore,
+  SETTINGS_KEYS,
+  defineScopedSetting,
+  settingsRecord,
+  type ScopedSettingsRead,
+} from "../settings";
 import { RetrievalEmbeddingStore } from "./embeddingStore";
 import { DEFAULT_EMBED_DIMENSIONS } from "../retrievalEmbedding/config";
 
@@ -66,24 +72,17 @@ export interface RetrievalControlRequest {
   max_results?: number;
 }
 
-interface SpaceRetrievalSettingsRow {
-  space_id: string;
-  default_search_mode: RetrievalSearchMode;
-  rerank_enabled: boolean;
-  query_rewrite_enabled: boolean;
-  query_rewrite_default: boolean;
-  use_query_cache: boolean;
-  include_trace: boolean;
-  external_egress_enabled: boolean;
-  retrieval_tool_mode: RetrievalToolMode;
-  context_ops_review_mode: ContextOpsReviewMode;
-  context_ops_scan_mode: ContextOpsScanMode;
-  embedding_dimensions: number | string;
-  max_results_default: number | string;
-  ranking_config_json: unknown;
-  created_at: Date | string;
-  updated_at: Date | string;
-}
+export const SPACE_RETRIEVAL_SETTINGS_KEY = SETTINGS_KEYS.retrievalSpace;
+
+const RETRIEVAL_SEARCH_MODES: readonly RetrievalSearchMode[] = ["exact", "lexical", "hybrid", "hybrid_rerank"];
+const RETRIEVAL_TOOL_MODES: readonly RetrievalToolMode[] = [
+  "off",
+  "manual_tool_only",
+  "preflight_search",
+  "preflight_brief",
+];
+const CONTEXT_OPS_REVIEW_MODES: readonly ContextOpsReviewMode[] = ["private_only", "admins", "members"];
+const CONTEXT_OPS_SCAN_MODES: readonly ContextOpsScanMode[] = ["admins", "members"];
 
 type ShippableRetrievalMechanic = Exclude<RetrievalCalibrationMechanic, "semantic_results_cache">;
 
@@ -132,32 +131,28 @@ export const DEFAULT_SPACE_RETRIEVAL_SETTINGS: ResolvedSpaceRetrievalSettings = 
   rankingConfig: DEFAULT_RETRIEVAL_RANKING_CONFIG,
 };
 
+const SPACE_RETRIEVAL_SETTINGS_DEFINITION = defineScopedSetting<ResolvedSpaceRetrievalSettings>({
+  key: SPACE_RETRIEVAL_SETTINGS_KEY,
+  scopeType: "space",
+  defaults: DEFAULT_SPACE_RETRIEVAL_SETTINGS,
+  parse: parseRetrievalSettings,
+  serialize: retrievalSettingsJson,
+});
+
 export async function readSpaceRetrievalSettings(
   db: Queryable,
   spaceId: string,
 ): Promise<ResolvedSpaceRetrievalSettings> {
-  const row = await selectSettingsRow(db, spaceId);
-  return row ? resolvedFromRow(row) : { ...DEFAULT_SPACE_RETRIEVAL_SETTINGS };
+  return (await new ScopedSettingsStore(db).get(SPACE_RETRIEVAL_SETTINGS_DEFINITION, spaceId)).value;
 }
 
 export async function getOrCreateSpaceRetrievalSettings(
   db: Queryable,
   spaceId: string,
 ): Promise<SpaceRetrievalSettingsOut> {
-  await db.query(
-    `INSERT INTO space_retrieval_settings (
-        id, space_id, default_search_mode, rerank_enabled,
-        query_rewrite_enabled, query_rewrite_default, use_query_cache,
-        include_trace, external_egress_enabled, retrieval_tool_mode, context_ops_review_mode, context_ops_scan_mode,
-        embedding_dimensions, max_results_default, ranking_config_json, created_at, updated_at
-      )
-      VALUES ($1, $2, 'hybrid', false, false, false, true, false, true, 'off', 'private_only', 'admins', $3, 50, $4::jsonb, now(), now())
-      ON CONFLICT (space_id) DO NOTHING`,
-    [randomUUID(), spaceId, DEFAULT_EMBED_DIMENSIONS, JSON.stringify(DEFAULT_RETRIEVAL_RANKING_CONFIG)],
-  );
-  const row = await selectSettingsRow(db, spaceId);
-  if (!row) throw new Error("space retrieval settings row was not created");
-  return outFromRow(row);
+  const read = await new ScopedSettingsStore(db).getOrCreate(SPACE_RETRIEVAL_SETTINGS_DEFINITION, spaceId);
+  if (!read.row) throw new Error("space retrieval settings row was not created");
+  return outFromRead(spaceId, read);
 }
 
 export async function updateSpaceRetrievalSettings(
@@ -166,72 +161,35 @@ export async function updateSpaceRetrievalSettings(
   patch: SpaceRetrievalSettingsUpdate,
   options: { actorUserId?: string | null } = {},
 ): Promise<SpaceRetrievalSettingsOut> {
-  await getOrCreateSpaceRetrievalSettings(db, spaceId);
-  const current = await selectSettingsRow(db, spaceId);
-  if (!current) throw new Error("space retrieval settings row was not found");
+  const store = new ScopedSettingsStore(db);
+  const current = await store.getOrCreate(SPACE_RETRIEVAL_SETTINGS_DEFINITION, spaceId);
   const next = {
-    defaultSearchMode: patch.default_search_mode ?? current.default_search_mode,
-    rerankEnabled: patch.rerank_enabled ?? current.rerank_enabled,
-    queryRewriteEnabled: patch.query_rewrite_enabled ?? current.query_rewrite_enabled,
-    queryRewriteDefault: patch.query_rewrite_default ?? current.query_rewrite_default,
-    useQueryCache: patch.use_query_cache ?? current.use_query_cache,
-    includeTrace: patch.include_trace ?? current.include_trace,
-    externalEgressEnabled: patch.external_egress_enabled ?? current.external_egress_enabled,
-    retrievalToolMode: patch.retrieval_tool_mode ?? current.retrieval_tool_mode,
-    contextOpsReviewMode: patch.context_ops_review_mode ?? current.context_ops_review_mode,
-    contextOpsScanMode: patch.context_ops_scan_mode ?? current.context_ops_scan_mode,
-    embeddingDimensions: patch.embedding_dimensions ?? Number(current.embedding_dimensions),
-    maxResultsDefault: patch.max_results_default ?? Number(current.max_results_default),
+    defaultSearchMode: patch.default_search_mode ?? current.value.defaultSearchMode,
+    rerankEnabled: patch.rerank_enabled ?? current.value.rerankEnabled,
+    queryRewriteEnabled: patch.query_rewrite_enabled ?? current.value.queryRewriteEnabled,
+    queryRewriteDefault: patch.query_rewrite_default ?? current.value.queryRewriteDefault,
+    useQueryCache: patch.use_query_cache ?? current.value.useQueryCache,
+    includeTrace: patch.include_trace ?? current.value.includeTrace,
+    externalEgressEnabled: patch.external_egress_enabled ?? current.value.externalEgressEnabled,
+    retrievalToolMode: patch.retrieval_tool_mode ?? current.value.retrievalToolMode,
+    contextOpsReviewMode: patch.context_ops_review_mode ?? current.value.contextOpsReviewMode,
+    contextOpsScanMode: patch.context_ops_scan_mode ?? current.value.contextOpsScanMode,
+    embeddingDimensions: patch.embedding_dimensions ?? current.value.embeddingDimensions,
+    maxResultsDefault: patch.max_results_default ?? current.value.maxResultsDefault,
     rankingConfig: await normalizeRankingConfigForUpdate(
       db,
       spaceId,
-      patch.ranking_config ?? current.ranking_config_json,
+      patch.ranking_config ?? current.value.rankingConfig,
       options.actorUserId ?? null,
     ),
   };
-  const updated = await db.query<SpaceRetrievalSettingsRow>(
-    `UPDATE space_retrieval_settings
-        SET default_search_mode = $2,
-            rerank_enabled = $3,
-            query_rewrite_enabled = $4,
-            query_rewrite_default = $5,
-            use_query_cache = $6,
-            include_trace = $7,
-            external_egress_enabled = $8,
-            retrieval_tool_mode = $9,
-            context_ops_review_mode = $10,
-            context_ops_scan_mode = $11,
-            embedding_dimensions = $12,
-            max_results_default = $13,
-            ranking_config_json = $14::jsonb,
-            updated_at = now()
-      WHERE space_id = $1
-      RETURNING space_id, default_search_mode, rerank_enabled,
-                query_rewrite_enabled, query_rewrite_default, use_query_cache,
-                include_trace, external_egress_enabled, retrieval_tool_mode,
-                context_ops_review_mode, context_ops_scan_mode, embedding_dimensions, max_results_default,
-                ranking_config_json, created_at, updated_at`,
-    [
-      spaceId,
-      next.defaultSearchMode,
-      next.rerankEnabled,
-      next.queryRewriteEnabled,
-      next.queryRewriteDefault,
-      next.useQueryCache,
-      next.includeTrace,
-      next.externalEgressEnabled,
-      next.retrievalToolMode,
-      next.contextOpsReviewMode,
-      next.contextOpsScanMode,
-      next.embeddingDimensions,
-      next.maxResultsDefault,
-      JSON.stringify(next.rankingConfig),
-    ],
-  );
-  if (next.embeddingDimensions !== Number(current.embedding_dimensions)) {
+  const updated = await store.upsert(SPACE_RETRIEVAL_SETTINGS_DEFINITION, spaceId, next, {
+    updatedByUserId: options.actorUserId ?? null,
+  });
+  if (next.embeddingDimensions !== current.value.embeddingDimensions) {
     await new RetrievalEmbeddingStore(db).resetEmbeddingsForSpace(spaceId);
   }
-  return outFromRow(updated.rows[0]!);
+  return outFromRead(spaceId, updated);
 }
 
 export function resolveRetrievalSearchControls(
@@ -249,60 +207,113 @@ export function resolveRetrievalSearchControls(
   };
 }
 
-async function selectSettingsRow(
-  db: Queryable,
-  spaceId: string,
-): Promise<SpaceRetrievalSettingsRow | null> {
-  const result = await db.query<SpaceRetrievalSettingsRow>(
-    `SELECT space_id, default_search_mode, rerank_enabled,
-            query_rewrite_enabled, query_rewrite_default, use_query_cache,
-            include_trace, external_egress_enabled, retrieval_tool_mode,
-            context_ops_review_mode, context_ops_scan_mode, embedding_dimensions, max_results_default,
-            ranking_config_json, created_at, updated_at
-       FROM space_retrieval_settings
-      WHERE space_id = $1
-      LIMIT 1`,
-    [spaceId],
-  );
-  return result.rows[0] ?? null;
-}
-
-function resolvedFromRow(row: SpaceRetrievalSettingsRow): ResolvedSpaceRetrievalSettings {
+function retrievalSettingsJson(settings: ResolvedSpaceRetrievalSettings): Record<string, unknown> {
   return {
-    defaultSearchMode: row.default_search_mode,
-    rerankEnabled: row.rerank_enabled,
-    queryRewriteEnabled: row.query_rewrite_enabled,
-    queryRewriteDefault: row.query_rewrite_default,
-    useQueryCache: row.use_query_cache,
-    includeTrace: row.include_trace,
-    externalEgressEnabled: row.external_egress_enabled,
-    retrievalToolMode: row.retrieval_tool_mode,
-    contextOpsReviewMode: row.context_ops_review_mode,
-    contextOpsScanMode: row.context_ops_scan_mode,
-    embeddingDimensions: Number(row.embedding_dimensions),
-    maxResultsDefault: Number(row.max_results_default),
-    rankingConfig: normalizeRuntimeRankingConfig(row.ranking_config_json),
+    default_search_mode: settings.defaultSearchMode,
+    rerank_enabled: settings.rerankEnabled,
+    query_rewrite_enabled: settings.queryRewriteEnabled,
+    query_rewrite_default: settings.queryRewriteDefault,
+    use_query_cache: settings.useQueryCache,
+    include_trace: settings.includeTrace,
+    external_egress_enabled: settings.externalEgressEnabled,
+    retrieval_tool_mode: settings.retrievalToolMode,
+    context_ops_review_mode: settings.contextOpsReviewMode,
+    context_ops_scan_mode: settings.contextOpsScanMode,
+    embedding_dimensions: settings.embeddingDimensions,
+    max_results_default: settings.maxResultsDefault,
+    ranking_config: settings.rankingConfig,
   };
 }
 
-function outFromRow(row: SpaceRetrievalSettingsRow): SpaceRetrievalSettingsOut {
+function parseRetrievalSettings(value: unknown): ResolvedSpaceRetrievalSettings {
+  const settings = settingsRecord(value);
   return {
-    space_id: row.space_id,
-    default_search_mode: row.default_search_mode,
-    rerank_enabled: row.rerank_enabled,
-    query_rewrite_enabled: row.query_rewrite_enabled,
-    query_rewrite_default: row.query_rewrite_default,
-    use_query_cache: row.use_query_cache,
-    include_trace: row.include_trace,
-    external_egress_enabled: row.external_egress_enabled,
-    retrieval_tool_mode: row.retrieval_tool_mode,
-    context_ops_review_mode: row.context_ops_review_mode,
-    context_ops_scan_mode: row.context_ops_scan_mode,
-    embedding_dimensions: Number(row.embedding_dimensions),
-    max_results_default: Number(row.max_results_default),
-    ranking_config: normalizeRuntimeRankingConfig(row.ranking_config_json),
-    created_at: asIso(row.created_at),
-    updated_at: asIso(row.updated_at),
+    defaultSearchMode: enumValue(
+      settings.default_search_mode,
+      RETRIEVAL_SEARCH_MODES,
+      DEFAULT_SPACE_RETRIEVAL_SETTINGS.defaultSearchMode,
+    ),
+    rerankEnabled: boolValue(settings.rerank_enabled, DEFAULT_SPACE_RETRIEVAL_SETTINGS.rerankEnabled),
+    queryRewriteEnabled: boolValue(
+      settings.query_rewrite_enabled,
+      DEFAULT_SPACE_RETRIEVAL_SETTINGS.queryRewriteEnabled,
+    ),
+    queryRewriteDefault: boolValue(
+      settings.query_rewrite_default,
+      DEFAULT_SPACE_RETRIEVAL_SETTINGS.queryRewriteDefault,
+    ),
+    useQueryCache: boolValue(settings.use_query_cache, DEFAULT_SPACE_RETRIEVAL_SETTINGS.useQueryCache),
+    includeTrace: boolValue(settings.include_trace, DEFAULT_SPACE_RETRIEVAL_SETTINGS.includeTrace),
+    externalEgressEnabled: boolValue(
+      settings.external_egress_enabled,
+      DEFAULT_SPACE_RETRIEVAL_SETTINGS.externalEgressEnabled,
+    ),
+    retrievalToolMode: enumValue(
+      settings.retrieval_tool_mode,
+      RETRIEVAL_TOOL_MODES,
+      DEFAULT_SPACE_RETRIEVAL_SETTINGS.retrievalToolMode,
+    ),
+    contextOpsReviewMode: enumValue(
+      settings.context_ops_review_mode,
+      CONTEXT_OPS_REVIEW_MODES,
+      DEFAULT_SPACE_RETRIEVAL_SETTINGS.contextOpsReviewMode,
+    ),
+    contextOpsScanMode: enumValue(
+      settings.context_ops_scan_mode,
+      CONTEXT_OPS_SCAN_MODES,
+      DEFAULT_SPACE_RETRIEVAL_SETTINGS.contextOpsScanMode,
+    ),
+    embeddingDimensions: intBounded(
+      settings.embedding_dimensions,
+      DEFAULT_SPACE_RETRIEVAL_SETTINGS.embeddingDimensions,
+      64,
+      4096,
+    ),
+    maxResultsDefault: intBounded(
+      settings.max_results_default,
+      DEFAULT_SPACE_RETRIEVAL_SETTINGS.maxResultsDefault,
+      1,
+      50,
+    ),
+    rankingConfig: normalizeRuntimeRankingConfig(settings.ranking_config ?? DEFAULT_RETRIEVAL_RANKING_CONFIG),
+  };
+}
+
+function enumValue<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof value === "string" && allowed.includes(value as T) ? (value as T) : fallback;
+}
+
+function boolValue(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function intBounded(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = intValue(value, fallback);
+  return parsed >= min && parsed <= max ? parsed : fallback;
+}
+
+function outFromRead(
+  spaceId: string,
+  read: ScopedSettingsRead<ResolvedSpaceRetrievalSettings>,
+): SpaceRetrievalSettingsOut {
+  if (!read.row) throw new Error("space retrieval settings row was not created");
+  return {
+    space_id: spaceId,
+    default_search_mode: read.value.defaultSearchMode,
+    rerank_enabled: read.value.rerankEnabled,
+    query_rewrite_enabled: read.value.queryRewriteEnabled,
+    query_rewrite_default: read.value.queryRewriteDefault,
+    use_query_cache: read.value.useQueryCache,
+    include_trace: read.value.includeTrace,
+    external_egress_enabled: read.value.externalEgressEnabled,
+    retrieval_tool_mode: read.value.retrievalToolMode,
+    context_ops_review_mode: read.value.contextOpsReviewMode,
+    context_ops_scan_mode: read.value.contextOpsScanMode,
+    embedding_dimensions: read.value.embeddingDimensions,
+    max_results_default: read.value.maxResultsDefault,
+    ranking_config: read.value.rankingConfig,
+    created_at: asIso(read.row.created_at as Date | string),
+    updated_at: asIso(read.row.updated_at as Date | string),
   };
 }
 

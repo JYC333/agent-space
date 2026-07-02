@@ -3,6 +3,7 @@ import type { Pool } from "../../db/pool";
 import { withTransaction } from "../../db/tx";
 import type { Queryable } from "../routeUtils/common";
 import { HttpError } from "../routeUtils/common";
+import { PgSchedulerTaskStore, type SchedulerTaskRow } from "../scheduler/taskStore";
 import { computeNextRunAt } from "./schedule";
 
 export interface AutomationRow {
@@ -67,12 +68,16 @@ export interface AutomationRepositoryPort {
 
 const AUTOMATION_COLUMNS = `
   id, space_id, owner_user_id, agent_id, workspace_id, name, description,
-  trigger_type, status, preflight_snapshot_json, config_json, next_run_at,
-  last_fired_at, created_at, updated_at
+  trigger_type, status, preflight_snapshot_json, config_json, created_at, updated_at
 `;
+const AUTOMATION_SCHEDULER_TASK_TYPE = "automation";
 
 export class PgAutomationRepository implements AutomationRepositoryPort {
-  constructor(private readonly db: Queryable) {}
+  private readonly schedulerTaskStore: PgSchedulerTaskStore;
+
+  constructor(private readonly db: Queryable) {
+    this.schedulerTaskStore = new PgSchedulerTaskStore(db);
+  }
 
   async list(spaceId: string): Promise<AutomationRow[]> {
     const result = await this.db.query<AutomationRow>(
@@ -82,7 +87,7 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
         ORDER BY created_at DESC`,
       [spaceId],
     );
-    return result.rows;
+    return Promise.all(result.rows.map((row) => this.withScheduleState(row)));
   }
 
   async get(spaceId: string, automationId: string): Promise<AutomationRow | null> {
@@ -92,7 +97,7 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
         WHERE space_id = $1 AND id = $2`,
       [spaceId, automationId],
     );
-    return result.rows[0] ?? null;
+    return result.rows[0] ? this.withScheduleState(result.rows[0]) : null;
   }
 
   async getMembershipRole(spaceId: string, userId: string): Promise<string | null> {
@@ -168,12 +173,12 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
     const result = await this.db.query<AutomationRow>(
       `INSERT INTO automations (
          id, space_id, owner_user_id, agent_id, workspace_id, name, description,
-         trigger_type, status, preflight_snapshot_json, config_json, next_run_at,
+         trigger_type, status, preflight_snapshot_json, config_json,
          created_at, updated_at
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7,
-         $8, 'active', $9::jsonb, $10::jsonb, $11,
-         $12, $12
+         $8, 'active', $9::jsonb, $10::jsonb,
+         $11, $11
        )
        RETURNING ${AUTOMATION_COLUMNS}`,
       [
@@ -187,12 +192,17 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
         input.triggerType,
         JSON.stringify(input.preflightSnapshot),
         JSON.stringify(input.configJson),
-        nextRunAt,
         now,
       ],
     );
     const row = result.rows[0];
     if (!row) throw new Error("Automation insert returned no row");
+    const task = await this.upsertSchedulerTask({
+      automation: row,
+      nextRunAt,
+      status: "active",
+      updatedAt: now,
+    });
     if (input.triggerType === "schedule") {
       await this.db.query(
         `INSERT INTO automation_credential_grants (
@@ -201,7 +211,7 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
         [randomUUID(), input.spaceId, id, input.ownerUserId, now],
       );
     }
-    return row;
+    return automationWithTask(row, task);
   }
 
   async update(
@@ -219,12 +229,22 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
     const now = new Date().toISOString();
     const configJson = patch.config_json ?? existing.config_json;
     let nextRunAt = existing.next_run_at;
+    let taskStatus = schedulerStatusFromAutomationStatus(patch.status ?? existing.status);
     if (existing.trigger_type === "schedule" && patch.config_json) {
       nextRunAt = computeNextRunAt(configJson).toISOString();
     }
     if (patch.status === "archived") {
       nextRunAt = null;
+      taskStatus = "archived";
       await this.revokeGrants(spaceId, automationId, existing.owner_user_id);
+    }
+    if (patch.status === "paused") {
+      nextRunAt = null;
+      taskStatus = "paused";
+    }
+    if (patch.status === "active" && existing.trigger_type === "schedule") {
+      nextRunAt = computeNextRunAt(configJson).toISOString();
+      taskStatus = "active";
     }
     const result = await this.db.query<AutomationRow>(
       `UPDATE automations
@@ -232,8 +252,7 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
               description = COALESCE($4, description),
               status = COALESCE($5, status),
               config_json = COALESCE($6::jsonb, config_json),
-              next_run_at = $7,
-              updated_at = $8
+              updated_at = $7
         WHERE space_id = $1 AND id = $2
         RETURNING ${AUTOMATION_COLUMNS}`,
       [
@@ -243,24 +262,28 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
         patch.description ?? null,
         patch.status ?? null,
         patch.config_json ? JSON.stringify(patch.config_json) : null,
-        nextRunAt,
         now,
       ],
     );
-    return result.rows[0]!;
+    const row = result.rows[0]!;
+    const task = await this.upsertSchedulerTask({
+      automation: row,
+      nextRunAt,
+      status: taskStatus,
+      updatedAt: now,
+    });
+    return automationWithTask(row, task);
   }
 
   async listDue(nowIso: string): Promise<AutomationRow[]> {
-    const result = await this.db.query<AutomationRow>(
-      `SELECT ${AUTOMATION_COLUMNS}
-         FROM automations
-        WHERE trigger_type = 'schedule'
-          AND status = 'active'
-          AND next_run_at IS NOT NULL
-          AND next_run_at <= $1`,
-      [nowIso],
-    );
-    return result.rows;
+    const tasks = await this.schedulerTaskStore.listDue(AUTOMATION_SCHEDULER_TASK_TYPE, nowIso);
+    const due: AutomationRow[] = [];
+    for (const task of tasks) {
+      const row = await this.getBase(task.space_id ?? "", task.task_key);
+      if (!row || row.trigger_type !== "schedule" || row.status !== "active") continue;
+      due.push(automationWithTask(row, task));
+    }
+    return due;
   }
 
   async advanceSchedule(automation: AutomationRow): Promise<void> {
@@ -271,25 +294,26 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
     } catch {
       nextRunAt = null;
     }
-    await this.db.query(
-      `UPDATE automations
-          SET last_fired_at = $3,
-              next_run_at = $4,
-              updated_at = $3
-        WHERE id = $1 AND space_id = $2`,
-      [automation.id, automation.space_id, now, nextRunAt],
-    );
+    await this.upsertSchedulerTask({
+      automation,
+      nextRunAt,
+      lastRunAt: now,
+      status: schedulerStatusFromAutomationStatus(automation.status),
+      updatedAt: now,
+    });
   }
 
   async recordFire(spaceId: string, automationId: string): Promise<void> {
     const now = new Date().toISOString();
-    await this.db.query(
-      `UPDATE automations
-          SET last_fired_at = $3,
-              updated_at = $3
-        WHERE id = $1 AND space_id = $2`,
-      [automationId, spaceId, now],
-    );
+    const automation = await this.get(spaceId, automationId);
+    if (!automation) return;
+    await this.upsertSchedulerTask({
+      automation,
+      nextRunAt: automation.next_run_at,
+      lastRunAt: now,
+      status: schedulerStatusFromAutomationStatus(automation.status),
+      updatedAt: now,
+    });
   }
 
   async hasActiveGrant(spaceId: string, automationId: string): Promise<boolean> {
@@ -342,10 +366,79 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
       [spaceId, automationId, now, actorUserId],
     );
   }
+
+  private async getBase(spaceId: string, automationId: string): Promise<AutomationRow | null> {
+    if (!spaceId) return null;
+    const result = await this.db.query<AutomationRow>(
+      `SELECT ${AUTOMATION_COLUMNS}
+         FROM automations
+        WHERE space_id = $1 AND id = $2`,
+      [spaceId, automationId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async withScheduleState(row: AutomationRow): Promise<AutomationRow> {
+    const task = await this.schedulerTaskStore.get(
+      AUTOMATION_SCHEDULER_TASK_TYPE,
+      automationSchedulerTaskKey(row.id),
+    );
+    return automationWithTask(row, task);
+  }
+
+  private async upsertSchedulerTask(input: {
+    automation: AutomationRow;
+    nextRunAt: string | null;
+    lastRunAt?: string | null;
+    status: "active" | "paused" | "archived";
+    updatedAt: string;
+  }): Promise<SchedulerTaskRow> {
+    const existing = await this.schedulerTaskStore.get(
+      AUTOMATION_SCHEDULER_TASK_TYPE,
+      automationSchedulerTaskKey(input.automation.id),
+    );
+    return this.schedulerTaskStore.upsert({
+      taskType: AUTOMATION_SCHEDULER_TASK_TYPE,
+      taskKey: automationSchedulerTaskKey(input.automation.id),
+      scopeType: "space",
+      scopeId: input.automation.space_id,
+      spaceId: input.automation.space_id,
+      userId: input.automation.owner_user_id,
+      status: input.status,
+      nextRunAt: input.status === "active" ? input.nextRunAt : null,
+      lastRunAt: input.lastRunAt ?? null,
+      stateJson: existing?.state_json ?? {},
+      updatedAt: input.updatedAt,
+    });
+  }
 }
 
 function isTransactionCapable(db: Queryable): db is Queryable & Pool {
   return "connect" in db && typeof (db as { connect?: unknown }).connect === "function";
+}
+
+function automationSchedulerTaskKey(automationId: string): string {
+  return automationId;
+}
+
+function schedulerStatusFromAutomationStatus(status: string): "active" | "paused" | "archived" {
+  if (status === "archived") return "archived";
+  if (status === "paused") return "paused";
+  return "active";
+}
+
+function automationWithTask(row: AutomationRow, task: SchedulerTaskRow | null): AutomationRow {
+  return {
+    ...row,
+    next_run_at: dateString(task?.next_run_at),
+    last_fired_at: dateString(task?.last_run_at),
+  };
+}
+
+function dateString(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
 }
 
 export function automationToOut(row: AutomationRow): Record<string, unknown> {

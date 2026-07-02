@@ -80,9 +80,10 @@ claim `metadata_only` retention, and `archive_all_snapshots` requires
 
 `source_egress_class` is connected to retrieval provider content egress for
 rerank, synthesis, and embedding backfill. The source gate composes with the
-space-level `space_retrieval_settings.external_egress_enabled` switch and
-provider destination classification. Connector schedulers and context assembly
-remain deferred.
+space-level `retrieval.space.settings` `external_egress_enabled` switch and
+provider destination classification. RSS/Atom/web page connector scheduling and
+worker ingest consume capture/retention policy; full context assembly remains
+deferred.
 
 `derived_write_policy` is intentionally limited to `proposal_required` or
 `disabled`. Source-derived Knowledge and Memory writes must not bypass the
@@ -222,9 +223,9 @@ Still deferred:
   if added, they must reuse the same read and egress gates before prompt
   assembly.
 - Connector schedulers and workers consume capture/retention and derived-write
-  target policy on ingest; a future end-to-end audit can extend the source gate
-  to refresh/purge edge cases. The connector→projection→search linkage is now
-  covered by a real-DB test (`retrievalSourcePolicyDb.test.ts`).
+  target policy for RSS/Atom/web page ingest; a future end-to-end audit can
+  extend the source gate to refresh/purge edge cases. The connector→projection→search
+  linkage is now covered by a real-DB test (`retrievalSourcePolicyDb.test.ts`).
 - Diagnostics reports aggregate only the operator's own private artifact
   metadata, so they carry no source-derived titles/snippets; if a future
   diagnostic reads source-connected content directly it must add the gate.
@@ -309,18 +310,19 @@ Implementation should add leak tests for:
 
 This pass defines and validates the model at source-connection create / update
 time, exposes the normalized fields in the Intake UI, enforces the policy on
-connected intake retention escalation, worker-side full-text/snapshot writes,
-connected summary proposal creation, source-aware retrieval reads, context
-artifact attachment, DB-backed chat candidates with explicit source ids,
-maintenance/Context Ops reads, claim evidence rendering, and retrieval provider
-content egress. Future work is mostly connector scheduler edge cases and product
-surfaces that do not exist yet. A dedicated source table should be considered
-only if multiple connectors need to share one consent grant or if source
-subjects/readers become independently mutable objects.
+connected intake retention escalation, RSS/Atom/web page scan scheduling,
+worker-side full-text/snapshot writes, connected summary proposal creation,
+source-aware retrieval reads, context artifact attachment, DB-backed chat
+candidates with explicit source ids, maintenance/Context Ops reads, claim
+evidence rendering, and retrieval provider content egress. Future work is
+mostly connector refresh/purge edge cases and product surfaces that do not
+exist yet. A dedicated source table should be considered only if multiple
+connectors need to share one consent grant or if source subjects/readers become
+independently mutable objects.
 
 Deferred product surfaces:
 
-- Connector scheduler / ingestion job policy gates beyond the current worker
-  retention checks.
+- Connector refresh/purge edge cases beyond the current scheduler and worker
+  ingest policy gates.
 - Chat-turn artifact attachments or future Evidence Packs.
 - Space-wide source governance docs and API affordances.

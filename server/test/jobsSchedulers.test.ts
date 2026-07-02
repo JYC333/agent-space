@@ -7,7 +7,7 @@ import {
 import { JobWorker } from "../src/modules/jobs/worker";
 import type { JobRecord } from "../src/modules/jobs/repository";
 import { jobEventToOut, jobNotFoundForSpace, jobToOut } from "../src/modules/jobs/routes";
-import { SchedulerRegistry, startSchedulerRegistry } from "../src/modules/jobs/schedulerRegistry";
+import { SchedulerRegistry, startSchedulerRegistry } from "../src/modules/scheduler/registry";
 import type { QueryResult, Queryable } from "../src/modules/routeUtils/common";
 import { computeNextRunAt, InvalidScheduleError } from "../src/modules/automations/schedule";
 import { AutomationService } from "../src/modules/automations/service";
@@ -780,6 +780,29 @@ describe("DailyCaptureReport settings validation", () => {
     expect(db.updateCount).toBe(0);
   });
 
+  it("keeps user settings in scoped settings and scheduler state separate", async () => {
+    const db = new DailySettingsFakeDb();
+    const repo = new PgDailyReportSettingsRepository(db);
+
+    const row = await repo.update("space-1", "user-1", {
+      enabled: true,
+      local_time: "10:30",
+      timezone: "UTC",
+      max_memory_proposals_per_day: 2,
+    });
+
+    expect(db.settingsJson).toMatchObject({
+      enabled: true,
+      local_time: "10:30",
+      timezone: "UTC",
+      max_memory_proposals_per_day: 2,
+    });
+    expect(db.schedulerTask?.state_json.last_report_date).toBeUndefined();
+    expect(db.schedulerTask?.next_run_at).toEqual(expect.any(String));
+    expect(row.next_run_at).toBe(db.schedulerTask?.next_run_at);
+    expect(db.updateCount).toBe(2);
+  });
+
   it("rejects invalid timezones and unsupported source types", async () => {
     const repo = new PgDailyReportSettingsRepository(new DailySettingsFakeDb());
     await expect(
@@ -876,6 +899,7 @@ class FakeAutomationRepository {
 class MaintenanceAutomationFakePool implements Queryable {
   advanceScheduleCalls = 0;
   terminalStatuses: string[] = [];
+  private schedulerTask: Record<string, unknown> | null = null;
 
   async connect(): Promise<Queryable & { release(): void }> {
     return {
@@ -933,9 +957,29 @@ class MaintenanceAutomationFakePool implements Queryable {
         rows: [{ id: "run-1", status: params[2] }] as Row[],
       };
     }
-    if (sql.includes("UPDATE automations")) {
+    if (sql.includes("FROM scheduler_tasks")) {
+      return this.schedulerTask
+        ? { rowCount: 1, rows: [this.schedulerTask as Row] }
+        : { rowCount: 0, rows: [] };
+    }
+    if (sql.includes("INSERT INTO scheduler_tasks")) {
       this.advanceScheduleCalls += 1;
-      return { rowCount: 1, rows: [] };
+      this.schedulerTask = {
+        id: this.schedulerTask?.id ?? params[0],
+        task_type: params[1],
+        task_key: params[2],
+        scope_type: params[3],
+        scope_id: params[4],
+        space_id: params[5] ?? null,
+        user_id: params[6] ?? null,
+        status: params[7],
+        next_run_at: params[8] ?? null,
+        last_run_at: params[9] ?? this.schedulerTask?.last_run_at ?? null,
+        state_json: JSON.parse(String(params[10] ?? "{}")),
+        created_at: this.schedulerTask?.created_at ?? params[11],
+        updated_at: params[11],
+      };
+      return { rowCount: 1, rows: [this.schedulerTask as Row] };
     }
     throw new Error(`Unexpected SQL: ${sql}`);
   }
@@ -1062,31 +1106,102 @@ class AgentAutomationFireFakePool implements Queryable {
 
 class DailySettingsFakeDb implements Queryable {
   updateCount = 0;
+  settingsJson: Record<string, unknown> = sampleDailySettingsJson();
+  schedulerTask: {
+    id: string;
+    task_type: string;
+    task_key: string;
+    scope_type: string;
+    scope_id: string;
+    space_id: string | null;
+    user_id: string | null;
+    status: string;
+    next_run_at: string | null;
+    last_run_at: string | null;
+    state_json: Record<string, unknown>;
+    created_at: string;
+    updated_at: string;
+  } | null = null;
 
   async query<Row = Record<string, unknown>>(
     sql: string,
     params: readonly unknown[] = [],
   ): Promise<QueryResult<Row>> {
-    if (sql.includes("SELECT") && sql.includes("FROM daily_capture_report_settings")) {
-      return { rowCount: 1, rows: [sampleDailyReportSetting()] as Row[] };
+    const norm = sql.replace(/\s+/g, " ").trim();
+    if (norm.startsWith("INSERT INTO settings") && !norm.includes("RETURNING")) {
+      return { rowCount: 0, rows: [] };
     }
-    if (sql.includes("UPDATE daily_capture_report_settings")) {
+    if (norm.startsWith("SELECT") && sql.includes("FROM settings")) {
+      if (sql.includes("WHERE id = $1")) {
+        return params[0] === "setting-1"
+          ? { rowCount: 1, rows: [this.settingsRow()] as Row[] }
+          : { rowCount: 0, rows: [] };
+      }
+      return params[0] === "space_user" &&
+        params[1] === "space-1:user-1" &&
+        params[2] === "daily_capture_report.settings"
+        ? { rowCount: 1, rows: [this.settingsRow()] as Row[] }
+        : { rowCount: 0, rows: [] };
+    }
+    if (norm.startsWith("INSERT INTO settings") && norm.includes("RETURNING")) {
       this.updateCount += 1;
-      return {
-        rowCount: 1,
-        rows: [
-          {
-            ...sampleDailyReportSetting(),
-            enabled: params[2],
-            local_time: params[3],
-            timezone: params[4],
-            next_run_at: params[12],
-          },
-        ] as Row[],
+      this.settingsJson = JSON.parse(String(params[4] ?? "{}")) as Record<string, unknown>;
+      return { rowCount: 1, rows: [this.settingsRow()] as Row[] };
+    }
+    if (norm.startsWith("SELECT") && sql.includes("FROM scheduler_tasks")) {
+      return this.schedulerTask
+        ? { rowCount: 1, rows: [this.schedulerTask as Row] }
+        : { rowCount: 0, rows: [] };
+    }
+    if (norm.startsWith("INSERT INTO scheduler_tasks") && norm.includes("RETURNING")) {
+      this.updateCount += 1;
+      this.schedulerTask = {
+        id: "scheduler-task-1",
+        task_type: String(params[1]),
+        task_key: String(params[2]),
+        scope_type: String(params[3]),
+        scope_id: String(params[4]),
+        space_id: params[5] === null ? null : String(params[5]),
+        user_id: params[6] === null ? null : String(params[6]),
+        status: String(params[7]),
+        next_run_at: params[8] === null ? null : String(params[8]),
+        last_run_at: params[9] === null ? this.schedulerTask?.last_run_at ?? null : String(params[9]),
+        state_json: JSON.parse(String(params[10] ?? "{}")) as Record<string, unknown>,
+        created_at: this.schedulerTask?.created_at ?? String(params[11]),
+        updated_at: String(params[11]),
       };
+      return { rowCount: 1, rows: [this.schedulerTask as Row] };
     }
     throw new Error(`Unexpected SQL: ${sql}`);
   }
+
+  private settingsRow(): Record<string, unknown> {
+    return {
+      id: "setting-1",
+      scope_type: "space_user",
+      scope_id: "space-1:user-1",
+      settings_key: "daily_capture_report.settings",
+      settings_json: this.settingsJson,
+      updated_by_user_id: "user-1",
+      created_at: "2026-06-16T00:00:00.000Z",
+      updated_at: "2026-06-16T00:00:00.000Z",
+    };
+  }
+}
+
+function sampleDailySettingsJson(): Record<string, unknown> {
+  return {
+    enabled: false,
+    local_time: "09:00",
+    timezone: "UTC",
+    include_source_types: ["user_capture"],
+    create_experience_proposals: true,
+    create_memory_proposals: true,
+    experience_confidence_threshold: 0.6,
+    memory_confidence_threshold: 0.7,
+    max_experience_proposals_per_day: 5,
+    max_memory_proposals_per_day: 3,
+  };
 }
 
 function sampleDailyReportSetting(): DailyReportSettingRow {

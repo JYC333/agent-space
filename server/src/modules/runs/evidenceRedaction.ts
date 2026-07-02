@@ -30,12 +30,18 @@ const SECRET_VALUE_PATTERNS = [
   /\b(api[_-]?key|token|password)\s*[:=]\s*["']?[^"',\s}]+/gi,
 ];
 
-export function redactEvidenceText(value: string | null | undefined): string | null {
-  if (value == null) return null;
+/** Applies only the secret-pattern substitutions, with no length truncation. Callers needing a different size cap than the fixed 4000-char evidence-field limit (e.g. a policy-configured log byte budget) should truncate separately. */
+export function redactSecretPatterns(value: string): string {
   let out = value;
   for (const pattern of SECRET_VALUE_PATTERNS) {
     out = out.replace(pattern, "[REDACTED_SECRET]");
   }
+  return out;
+}
+
+export function redactEvidenceText(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const out = redactSecretPatterns(value);
   return out.length > 4_000 ? `${out.slice(0, 4_000)}...[truncated]` : out;
 }
 

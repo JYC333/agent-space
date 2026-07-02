@@ -150,6 +150,26 @@ describe("PgRunContextRepository digest source revalidation", () => {
     expect(evidenceQuery?.params).not.toContain("project-1");
   });
 
+  it("selects only active evidence with active context-candidate links", async () => {
+    const db = new CapturingDb();
+
+    await new PgRunContextRepository(db).selectEvidenceForContext({
+      spaceId: "space-1",
+      userId: "user-1",
+      workspaceId: null,
+      projectId: null,
+      runId: null,
+    });
+
+    const evidenceQuery = db.queries.find((query) =>
+      query.sql.includes("FROM extracted_evidence"),
+    );
+    const sql = evidenceQuery?.sql.replace(/\s+/g, " ") ?? "";
+    expect(sql).toContain("ev.status = 'active'");
+    expect(sql).toContain("el.status = 'active'");
+    expect(evidenceQuery?.params[1]).toEqual(["context_candidate", "supports", "mentions"]);
+  });
+
   it("filters context evidence by source read policy and treats used_in_context as best-effort audit", async () => {
     const db = new CapturingDb();
     db.failUsedInContextInsert = true;

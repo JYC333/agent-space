@@ -21,7 +21,7 @@ import type {
   PluginActivationResult,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { JobHandlerRegistry } from "../../jobs/handlerRegistry";
-import type { ScheduledTask } from "../../jobs/schedulerRegistry";
+import type { ScheduledTask } from "../../scheduler/registry";
 import type { ProposalApplierRegistry } from "../../proposals/applierRegistry";
 import type { ServerConfig } from "../../../config";
 import { PluginHostContextImpl, type PluginContributions } from "./context";

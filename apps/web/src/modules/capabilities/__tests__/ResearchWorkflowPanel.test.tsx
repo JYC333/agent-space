@@ -196,6 +196,16 @@ describe('ResearchWorkflowPanel', () => {
     vi.clearAllMocks()
   })
 
+  it('labels project source mode as linked context, not source management', async () => {
+    render(<ResearchWorkflowPanel projectId="project-1" projectName="Project" />)
+
+    await screen.findByText('No saved preset')
+    expect(screen.getByText('Linked project context')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Linked project context'))
+    expect(screen.getByText('Prompt URLs')).toBeInTheDocument()
+  })
+
   it('keeps a run draft launchable when the agent is selected after building the draft', async () => {
     render(<ResearchWorkflowPanel projectId="project-1" projectName="Project" />)
 

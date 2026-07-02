@@ -229,7 +229,7 @@ installed when implemented:
   environment variables.
 - Runs default to `tool_mode: disabled`. Managed runs can expose authorized
   internal retrieval tools through the runtime host when enabled per space
-  (`space_retrieval_settings.retrieval_tool_mode`) or per run. Knowledge tools
+  (`retrieval.space.settings` `retrieval_tool_mode`) or per run. Knowledge tools
   are `retrieval.search` / `retrieval.brief`; Memory and Project public-summary
   tools are exposed only by explicit domain opt-in as
   `memory.retrieval.search`, `memory.retrieval.brief`,

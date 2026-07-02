@@ -6,6 +6,7 @@ import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContex
 import { introspectIdentity } from "../auth/identity";
 
 export { canReadByVisibility } from "../access/visibility";
+export type { Pool };
 
 export interface QueryResult<Row> {
   rows: Row[];

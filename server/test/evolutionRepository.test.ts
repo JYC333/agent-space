@@ -9,6 +9,7 @@ import {
 } from "@testcontainers/postgresql";
 import * as poolModule from "../src/db/pool";
 import { migrate } from "../src/db/migrator";
+import { runBuiltInSeeds } from "../src/db/seeds";
 import { loadConfig } from "../src/config";
 import { buildServer } from "../src/server";
 import { __setAuthIdentityForTests } from "../src/modules/auth";
@@ -29,6 +30,11 @@ beforeAll(async () => {
     container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
     pool = new Pool({ connectionString: container.getConnectionUri(), max: 3 });
     await migrate(pool, MIGRATIONS_DIR);
+    // Built-in evolution strategy assets (e.g. "repair.runtime_failure") are
+    // seeded at runtime, not embedded in the migration — see
+    // server/src/db/seeds.ts. Tests below select strategies by key and need
+    // them present.
+    await runBuiltInSeeds(pool, { info: () => {} });
     available = true;
   } catch (err) {
     console.warn(
@@ -210,8 +216,8 @@ describe("EvolutionRepository core", () => {
 });
 
 async function seedIdentity(): Promise<SpaceUserIdentity> {
-  const userId = `user-${randomUUID()}`;
-  const spaceId = `space-${randomUUID()}`;
+  const userId = randomUUID();
+  const spaceId = randomUUID();
   const now = new Date().toISOString();
   await pool!.query(
     `INSERT INTO users (id, display_name, status, created_at, updated_at)
@@ -227,9 +233,9 @@ async function seedIdentity(): Promise<SpaceUserIdentity> {
 }
 
 async function seedAgent(identity: SpaceUserIdentity): Promise<string> {
-  const agentId = `agent-${randomUUID()}`;
-  const versionId = `version-${randomUUID()}`;
-  const runtimeProfileId = `runtime-${randomUUID()}`;
+  const agentId = randomUUID();
+  const versionId = randomUUID();
+  const runtimeProfileId = randomUUID();
   const now = new Date().toISOString();
   await pool!.query(
     `INSERT INTO agents (
@@ -267,7 +273,7 @@ async function seedTarget(
   identity: SpaceUserIdentity,
   options: { agentId: string | null; maxStrategyRisk: string; validation?: Record<string, unknown> },
 ): Promise<string> {
-  const targetId = `target-${randomUUID()}`;
+  const targetId = randomUUID();
   const now = new Date().toISOString();
   const metadata = {
     target_name: "Runtime repair target",
@@ -303,7 +309,7 @@ async function seedSignal(
        id, space_id, target_id, signal_type, source_type, severity,
        summary, payload_json, created_at
      ) VALUES ($1, $2, $3, $4, 'manual', 'medium', 'Runtime failed.', '{}'::jsonb, $5)`,
-    [`signal-${randomUUID()}`, identity.spaceId, targetId, signalType, new Date().toISOString()],
+    [randomUUID(), identity.spaceId, targetId, signalType, new Date().toISOString()],
   );
 }
 
@@ -323,6 +329,6 @@ async function seedStrategy(spaceId: string, strategyKey: string): Promise<void>
        '{}'::jsonb, '{}'::jsonb, 'user_authored', '{}'::jsonb,
        0, 0, 0.5, $4, $4
      )`,
-    [`strategy-${randomUUID()}`, spaceId, strategyKey, now],
+    [randomUUID(), spaceId, strategyKey, now],
   );
 }

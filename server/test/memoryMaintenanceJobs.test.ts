@@ -95,7 +95,8 @@ class FakeJobDb implements Queryable {
     }
 
     if (normalized.startsWith("INSERT INTO proposals")) {
-      return { rows: [], rowCount: 1 };
+      // insertProposalRow relies on RETURNING id.
+      return { rows: [{ id: params[0] }] as Row[], rowCount: 1 };
     }
 
     if (normalized.startsWith("INSERT INTO memory_access_logs")) {

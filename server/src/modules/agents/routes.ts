@@ -286,7 +286,9 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       return reply.send(
-        await agentRepository().updateAssistantSettings(identity.spaceId, jsonBody(request)),
+        await agentRepository().updateAssistantSettings(identity.spaceId, jsonBody(request), {
+          actorUserId: identity.userId,
+        }),
       );
     } catch (error) {
       return sendRouteError(reply, error);

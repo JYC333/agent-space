@@ -99,7 +99,7 @@ Keep facades narrow so tests and peer modules do not couple to internal helpers.
 | Need | How to extend |
 |---|---|
 | HTTP route | Add or update `routes.ts` and register the module in `routeRegistry.ts`. |
-| Periodic work | Keep tick behavior in the owning module; register `ScheduledTask` in lifespan with `SchedulerRegistry`. |
+| Periodic work | Keep tick behavior in the owning module; register `ScheduledTask` through `server/src/modules/scheduler/backgroundServices.ts` and `SchedulerRegistry`. |
 | Durable async job | Add a handler in the owning module and register it with the server job worker registry. |
 | Per-space initialization | Register the hook through the server module/service path; hooks run in the caller transaction and must not commit. |
 | Post-run side effect | Register a run-finalized hook with `PostRunFinalizationService` integration. |
@@ -107,6 +107,45 @@ Keep facades narrow so tests and peer modules do not couple to internal helpers.
 | Runtime adapter | Register adapter/spec in `server/src/modules/runtimeAdapters`; adapters return `RuntimeAdapterResult` and use server runtime services. |
 | Model API runtime | Use `model_api` for no-tools provider-backed execution; it calls server providers and does not use CLI credentials, terminal, local-host, or sandbox capabilities. |
 | Capability/workflow/open-skill control plane | Add or change `server/src/modules/capabilities`; do not widen `catalog` into remote import, marketplace, or execution ownership. |
+
+## Shared Settings And Scheduler State
+
+New modules must reuse the shared infrastructure for sparse settings and
+recurring scheduler cursors. Do not create one settings table or one scheduler
+state table per feature.
+
+### Adding Settings
+
+- Use `server/src/modules/settings/ScopedSettingsStore`.
+- Define a typed scoped setting descriptor with a stable `settings_key`, exact
+  scope (`instance`, `space`, `user`, or `space_user`), defaults, parser, and
+  serializer.
+- Use `spaceUserSettingsScopeId()` for composite `space_user` scope ids.
+- Put cross-module keys in `server/src/modules/settings/keys.ts`.
+- Keep authorization, validation errors, and public DTO shaping in the owning
+  module; the settings module is only persistence infrastructure.
+- Do not add feature-specific settings tables (`space_*_settings`,
+  `user_*_settings`, `instance_*_settings`) or hand-write CRUD against
+  `settings`.
+- Use env/config for deployment hard limits only. User-, space-, or
+  instance-admin-adjustable product policy belongs in scoped settings.
+
+### Adding Scheduler Work
+
+- Register periodic in-process work through `server/src/modules/scheduler`.
+- Keep tick behavior in the owning module, but put scheduler startup wiring in
+  `scheduler/backgroundServices.ts` and task registry concerns in
+  `scheduler/registry.ts`.
+- Store recurring cursor/state in `scheduler_tasks` through
+  `PgSchedulerTaskStore`. Define a stable `task_type` and `task_key`; populate
+  scope columns (`space_id`, `user_id`) where applicable.
+- Do not add feature-specific scheduler state tables or product-table cursor
+  columns such as `next_run_at`, `next_check_at`, `last_run_at`, or
+  `last_checked_at` for recurring scheduler state.
+- Keep `jobs` for executable queued work. `jobs.scheduled_at` is queue timing,
+  not scheduler cursor state. Domain work-item due fields such as
+  `memory_maintenance_jobs.run_after` may stay with the work item when the row
+  itself is the durable unit being processed.
 
 ## Adding An Official Optional Module
 

@@ -57,20 +57,21 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
 
 function retrievalSettingsRow(overrides: Record<string, unknown> = {}) {
   return {
-    space_id: "space-1",
-    default_search_mode: "hybrid",
-    rerank_enabled: false,
-    query_rewrite_enabled: false,
-    query_rewrite_default: false,
-    use_query_cache: true,
-    include_trace: false,
-    external_egress_enabled: true,
-    retrieval_tool_mode: "off",
-    embedding_dimensions: 2560,
-    max_results_default: 10,
+    settings_json: {
+      default_search_mode: "hybrid",
+      rerank_enabled: false,
+      query_rewrite_enabled: false,
+      query_rewrite_default: false,
+      use_query_cache: true,
+      include_trace: false,
+      external_egress_enabled: true,
+      retrieval_tool_mode: "off",
+      embedding_dimensions: 2560,
+      max_results_default: 10,
+      ...overrides,
+    },
     created_at: "2026-06-12T10:00:00.000Z",
     updated_at: "2026-06-12T10:00:00.000Z",
-    ...overrides,
   };
 }
 
@@ -1388,7 +1389,7 @@ class DomainRetrievalToolFakePool implements Queryable {
     sql: string,
     params: readonly unknown[] = [],
   ): Promise<QueryResult<Row>> {
-    if (sql.includes("FROM space_retrieval_settings")) {
+    if (sql.includes("FROM settings")) {
       return rows([this.settings] as Row[]);
     }
     if (sql.includes("INSERT INTO policy_decision_records")) {

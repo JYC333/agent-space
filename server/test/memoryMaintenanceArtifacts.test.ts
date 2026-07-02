@@ -21,9 +21,12 @@ function fakeDb(): Queryable & { calls: CapturedQuery[] } {
   const calls: CapturedQuery[] = [];
   return {
     calls,
-    async query(sql: string, params: readonly unknown[] = []) {
+    async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
       calls.push({ sql, params });
-      return { rows: [], rowCount: 1 };
+      // Every INSERT this fake handles (proposals, artifacts) puts the
+      // generated id first; echo it back so callers relying on
+      // `RETURNING id` (e.g. insertProposalRow) get a usable row.
+      return { rows: [{ id: params[0] }] as Row[], rowCount: 1 };
     },
   };
 }
@@ -160,10 +163,11 @@ describe("Memory maintenance artifacts", () => {
     });
     expect(db.calls.some((call) => /INSERT INTO memory_entries/.test(call.sql))).toBe(false);
     expect(db.calls.some((call) => /INSERT INTO proposals/.test(call.sql))).toBe(false);
-    const update = db.calls.find((call) => /UPDATE proposals/.test(call.sql));
-    expect(update).toBeDefined();
-    const finalPayload = JSON.parse(String(update!.params[2]));
-    expect(finalPayload).toMatchObject({
+    // The applier only returns proposalPayloadPatch; ProposalApplyService
+    // is the layer that actually issues `UPDATE proposals` from that patch,
+    // and is covered by its own tests — this test exercises the applier in
+    // isolation.
+    expect(result.proposalPayloadPatch).toMatchObject({
       accepted_by_user_id: "user-1",
       generated_child_proposal_count: 0,
       canonical_write_performed: false,
@@ -269,10 +273,8 @@ describe("Memory maintenance artifacts", () => {
       source_maintenance_packet_id: "packet-1",
       canonical_write_performed: false,
     });
-    const update = db.calls.find((call) => /UPDATE proposals/.test(call.sql));
-    const finalPayload = JSON.parse(String(update!.params[2]));
-    expect(finalPayload.generated_child_proposal_count).toBe(3);
-    expect(finalPayload.generated_child_proposal_ids).toHaveLength(3);
+    expect(result.proposalPayloadPatch?.generated_child_proposal_count).toBe(3);
+    expect(result.proposalPayloadPatch?.generated_child_proposal_ids).toHaveLength(3);
   });
 
   it("keeps packet acceptance private to the creator", async () => {

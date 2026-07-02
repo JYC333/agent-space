@@ -12,6 +12,7 @@ import { Badge } from '../../components/ui/badge'
 import { UserAvatar } from '../../components/UserAvatar'
 import { cn, errMsg } from '../../lib/utils'
 import { SpaceRuntimePolicyPanel } from '../runtime_tools/SpaceRuntimePolicyPanel'
+import { CustomSourceSpacePolicyPanel } from './CustomSourceSpacePolicyPanel'
 import { ObjectSchemaPanel } from './ObjectSchemaPanel'
 import type { MemberRole, SpaceMember } from '../../types/api'
 
@@ -111,6 +112,8 @@ export default function SpaceSettingsPage() {
       ) : (
         <>
           <SpaceRuntimePolicyPanel />
+
+          <CustomSourceSpacePolicyPanel />
 
           <ObjectSchemaPanel />
 

@@ -98,8 +98,12 @@ export class RetrievalProjectionService {
     adapter: RetrievalDomainAdapter,
   ): Promise<void> {
     await this.deleteObjectProjectionRow(spaceId, object.objectType, object.objectId);
+    // Only outgoing edges are cleared here: projectEdgesForObject below only
+    // ever recomputes edges *from* this object (extracted links, then
+    // adapter.projectEdges). Deleting incoming edges too would orphan other
+    // objects' edges pointing at this one — they're only recomputed when
+    // *their* source object is reindexed.
     await this.deleteOutgoingEdgesForObject(spaceId, object.objectType, object.objectId);
-    await this.deleteIncomingEdgesForObject(spaceId, object.objectType, object.objectId);
     await this.insertObjectProjection(object, spaceId);
     await this.projectEdgesForObject(spaceId, object, adapter);
   }
@@ -141,18 +145,6 @@ export class RetrievalProjectionService {
     await this.db.query(
       `DELETE FROM retrieval_edges
         WHERE space_id = $1 AND from_object_type = $2 AND from_object_id = $3`,
-      [spaceId, objectType, objectId],
-    );
-  }
-
-  private async deleteIncomingEdgesForObject(
-    spaceId: string,
-    objectType: RetrievalObjectType,
-    objectId: string,
-  ): Promise<void> {
-    await this.db.query(
-      `DELETE FROM retrieval_edges
-        WHERE space_id = $1 AND to_object_type = $2 AND to_object_id = $3`,
       [spaceId, objectType, objectId],
     );
   }

@@ -81,6 +81,9 @@ vi.mock('../../../api/client', () => {
       }),
     },
     sourcesApi: { list: vi.fn().mockResolvedValue(emptyPage) },
+    objectSchemaApi: {
+      listKinds: vi.fn().mockResolvedValue(emptyPage),
+    },
   }
 })
 

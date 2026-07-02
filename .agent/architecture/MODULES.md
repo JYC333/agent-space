@@ -77,9 +77,10 @@ Core modules are `always_on=True`. Optional product routes are still mounted by 
 | `tasks` | product | `/tasks*`, `/boards*`, `/me/tasks` | empty | Boards, tasks, task-run links, task evaluation, run-finalized hook. |
 | `workspace_profiles` | product | `/workspace-profiles*` | empty | Workspace profile list/create/read/update. |
 | `workspaces` | product | `/workspaces*`, `/workspace-console*` | yes | Workspace records, system-core workspace logic, PathPolicy, sandbox/worktree helpers, and workspace-console read routes. There is no separate workspace-console route module. |
-| `jobs` | infra | `/jobs*` | yes | Durable job queue, worker, scheduler registry, and registry-dispatched handlers. |
-| `automations` | product | `/spaces/{spaceId}/automations*` | empty | Server-owned automations, schedule/manual fire, credential preflight. |
-| `dailyReports` | product | `/daily-capture-report*` | empty | Daily capture report settings, manual run, scheduler scan, durable job handler. |
+| `jobs` | infra | `/jobs*` | yes | Durable job queue, worker, and registry-dispatched handlers. Re-exports scheduler types for compatibility only; new scheduler code imports `scheduler`. |
+| `scheduler` | infra | none | yes | In-process periodic task registry, background service startup composition, and scheduler-owned `scheduler_tasks` cursor/state store. |
+| `automations` | product | `/spaces/{spaceId}/automations*` | empty | Server-owned automations, schedule/manual fire, credential preflight, scheduler state in `scheduler_tasks`. |
+| `dailyReports` | product | `/daily-capture-report*` | empty | Daily capture report user settings, manual run, scheduler scan, scheduler state in `scheduler_tasks`, durable job handler. |
 | `backups` | infra | `/system/backups*` | empty | Server-owned full-system backup service and scheduled backup ticks. |
 | `deployment` | infra | `/deployments/jobs*` | empty | Deployer client edge; create/detail currently fail closed with 501. |
 | `frontendSupport` | frontend-support | `/home/summary`, `/me/summary`, `/me/timeline`, `/me/pending` | empty | Backend aggregate read models for Home and personal cross-space views. There are no separate `home` or `me` modules. |
@@ -100,7 +101,8 @@ These routes are not `ServerModule` entries. They are mounted by `PluginHost` af
 | `runtimeAdapters` | support-package / infra | yes | Runtime adapter specs/types only. Consumed by `agents`, `automations`, `runtimeTools`, and `runs`; not route-registered. |
 | `routeUtils` | support-package / kernel | empty | Shared route helpers for DB pool access, identity resolution, pagination, parsing, and route error handling. |
 | `access` | support-package / kernel | empty | Shared resource visibility predicates, common SQL read predicates, and space role helpers. It does not replace PolicyGateway or domain-owned ACLs. |
-| `jobs/schedulerRegistry` | support-package / infra | yes via `jobs` | In-process periodic task registry used by server startup/background services. |
+| `settings` | support-package / infra | yes | Generic scoped settings store for low-frequency instance, space, user, and space-user settings. Product modules own validation and DTOs; new code must not add feature-specific settings tables. |
+| `scheduler` | support-package / infra | yes | In-process periodic task registry, scheduler task state store, and background service startup composition. |
 | `workspaces/pathPolicy`, `workspaces/sandbox`, `workspaces/codePatch` | module-internal infra | yes via `workspaces` | Workspace path validation, worktree/sandbox preparation, and code-patch collection/apply ports. |
 
 `memory/consolidation/` is part of the registered `memory` module.
@@ -110,7 +112,8 @@ These routes are not `ServerModule` entries. They are mounted by `PluginHost` af
 | Concern | Owner | Registration model |
 |---|---|---|
 | HTTP routes | server `gateway/routeRegistry.ts` + `PluginHost` | `ServerModule` entries mounted under `/api/v1`, then PluginHost mounts official plugin routes, then the catch-all. |
-| Periodic tasks | server `modules/jobs/SchedulerRegistry` | Server startup registers `ScheduledTask`; owning server modules keep tick behavior. |
+| Periodic tasks | server `modules/scheduler/SchedulerRegistry` | Server startup registers `ScheduledTask`; owning server modules keep tick behavior. |
+| Scoped settings | server `modules/settings/ScopedSettingsStore` | Owning modules define typed descriptors and product validation; the settings module owns generic persistence for instance/space/user/space-user settings. |
 | Durable job handlers | server `modules/jobs/JobHandlerRegistry` | server worker runtime registers allowlisted handlers (`agent_run`, `memory_consolidation`, `daily_capture_report`); unregistered types fail fast. |
 | Official plugin routes/jobs/scheduler/proposal appliers | server `modules/plugins/host` | Built-in official plugins register synchronously through `PluginHostContext`; host wraps job handlers and proposal appliers with enablement checks. |
 | Space-created initialization | server space hooks | server modules register space-created hooks; hook runs in caller transaction and must not commit. |

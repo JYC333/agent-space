@@ -1,6 +1,7 @@
 import {
   Home, Inbox, CheckCircle, BookOpen, ListTodo, Bot, Folder, FolderKanban, Settings,
   GitBranch, Building2, ServerCog,
+  Radio,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -45,6 +46,7 @@ export interface RailItem {
 export const RAIL_ITEMS: RailItem[] = [
   { id: 'home',       label: 'Home',       to: '/home',        icon: Home,        scope: 'home',  mobile: true },
   { id: 'inbox',      label: 'Inbox',      to: '/activity',    icon: Inbox,       scope: 'space', mobile: true },
+  { id: 'intake',     label: 'Intake',     to: '/intake',      icon: Radio,       scope: 'space' },
   { id: 'review',     label: 'Review',     to: '/proposals',   icon: CheckCircle, scope: 'space', mobile: true },
   { id: 'knowledge',  label: 'Knowledge',  to: '/knowledge',   icon: BookOpen,    scope: 'space' },
   { id: 'tasks',      label: 'Tasks',      to: '/tasks',       icon: ListTodo,    scope: 'space', mobile: true },
@@ -105,7 +107,7 @@ export const SCENES: Scene[] = [
     id: 'inbox',
     title: 'Inbox',
     icon: Inbox,
-    segments: ['activity', 'intake'],
+    segments: ['activity'],
     base: '/activity',
     filterKey: 'status',
     defaultValue: 'raw',

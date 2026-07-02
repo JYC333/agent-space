@@ -22,7 +22,7 @@ Per-module current-state lives in `.agent/modules/knowledge-base.md` and
 | Projection tables + engine ⊀ domain-adapter boundary | solid |
 | Recall: exact/alias/lexical/graph/relational/vector, max-pool, RRF, evidence, create-safety | solid |
 | Access revalidation / memory gating / project-summary gating | strongest area |
-| Eval harness (recall@k + MRR/nDCG/NamedThing/relational/staleness/per-mode/leak-fuzz) | solid eval/report substrate; aggregate-only eval reports can persist as owner-private `retrieval_eval_report` artifacts; manual brief diagnostics can generate aggregate eval reports from saved owner-private Context Brief gap metadata; Artifacts UI can trigger/render diagnostics and record evidence-backed `retrieval_calibration_decision` artifacts for per-mechanic adopt/defer/reject decisions; `space_retrieval_settings.ranking_config` can ship gated mechanics only when the referenced `space_shared` calibration artifact passes the configured aggregate eval/evidence gate |
+| Eval harness (recall@k + MRR/nDCG/NamedThing/relational/staleness/per-mode/leak-fuzz) | solid eval/report substrate; aggregate-only eval reports can persist as owner-private `retrieval_eval_report` artifacts; manual brief diagnostics can generate aggregate eval reports from saved owner-private Context Brief gap metadata; Artifacts UI can trigger/render diagnostics and record evidence-backed `retrieval_calibration_decision` artifacts for per-mechanic adopt/defer/reject decisions; the `retrieval.space.settings` scoped setting's `ranking_config` can ship gated mechanics only when the referenced `space_shared` calibration artifact passes the configured aggregate eval/evidence gate |
 | Vector + ANN (halfvec HNSW at default dim) + intent ranking | solid; access-neutral ranking calibrated with floor-ratio gating + deterministic post-RRF cosine blend + runtime-gated visible-edge backlink / candidate-owned salience / richer dedup / autocut mechanics + aggregate boost-attribution/score-bucket/drop telemetry; true BM25 / non-default-dim ANN deferred |
 | Reranker + query rewriter (gated, skippable, audited) | solid; rerank payload bounded by a token (char-proxy) budget |
 | Context Brief: synthesis + citations + two-tier gap analysis | solid; selected Knowledge, Memory, and Project briefs can persist as owner-private `retrieval_brief` artifacts through separate routes; gap findings are advisory artifact metadata, not a proposal channel |
@@ -33,7 +33,7 @@ Per-module current-state lives in `.agent/modules/knowledge-base.md` and
 | Source / connector consent | implemented across the retrieval read plane; intake source connections normalize versioned consent/policy JSON and enforce connected retention/proposal-target checks; the reader/agent/admin read gate + source-egress gate are consumed by search, Context Brief, graph/relational traversal, managed-run tools, rerank/synthesis/embedding egress, maintenance scans, relation discovery, Context Ops drill-down, claim evidence rendering, non-creator artifact attachment, and DB-backed chat candidates with explicit source ids; the connector→projection linkage is covered by a real-DB test; connector refresh/purge edge cases and future chat artifact/evidence-pack attachments remain deferred |
 | Agent retrieval tool surface (viewer-scoped, audited) | solid; opt-in managed `model_api` / `ts_agent_host` tool loop for Knowledge `retrieval.search` / `retrieval.brief`; explicit Memory and Project public-summary domain tools; manual and preflight modes; runtime-host tool calling supports OpenAI-compatible and Anthropic providers; Agent UI exposes the Memory/Project opt-in |
 | Explicit context artifact attachments | productized for `/context/build` and first managed-run forms; context build/run create accept `context_artifact_ids`; the shared Context Artifact picker selects/removes/revokes visible attachable retrieval/maintenance/eval/explain artifacts in Context Preview, Task run creation, and Research workflow launch, loading each attachable type through server-side filters; previews approved/blocked attachment entries and displays policy/source-policy snapshots including `source_connection_ids`, normalized source-policy snapshots, and the current reader gate; Artifacts list/detail pages link attachable reports into that workflow; attached artifacts render as bounded evidence packs with artifact refs, domain labels, workspace/project policy snapshots, included evidence-pack refs, and prepare-time revalidation; workspace/project-scoped active revocation rows block future attachment without mutating existing snapshots; `workspace_shared` artifacts require `artifacts.workspace_id`, matching workspace context, and Project-inherited workspace ACL for non-owner attachment/list/read paths; unsupported, revoked, or hidden artifacts are recorded as blocked |
-| Context Ops read model + Context Health page | operator console; `GET /api/v1/context-ops/summary` and the web `Context Health` page aggregate whole-space index/embedding/source health plus the current operator's private maintenance, diagnostics, explain, brief, feedback, and Memory provenance loop; `GET /api/v1/context-ops/drilldown` turns the index-freshness, embedding-backlog, source-warning, maintenance-report, diagnostics-report, explain-report, and recent-brief aggregates into bounded, access-safe detail lists/summaries (object lists pass the same adapter read gate **and** source read policy as search; source-warning details are owner-scoped unless owner/admin; artifact sections reuse owner-scoped/`space_ops`-gated summary queries); the page also exposes maintenance-scan, diagnostics-report, targeted explain, explain preset/comparison, Context Review Cycle scan triggers, and artifact-level or batched Claim Candidate Packet actions for supported recent briefs/reports (with optional packet creation and a Memory maintenance toggle) gated by `context_ops_scan_mode`; `POST /api/v1/context-ops/review-cycle/run` and Automation target `context_ops_review_cycle` run the broader read-only/proposal-first cycle and return `degraded`/`warnings` when optional packet stages fail after reports are saved; `space_retrieval_settings.context_ops_review_mode` can additionally expose shared `space_ops` reports/packets to owners/admins or all members without weakening private packet creator-only review |
+| Context Ops read model + Context Health page | operator console; `GET /api/v1/context-ops/summary` and the web `Context Health` page aggregate whole-space index/embedding/source health plus the current operator's private maintenance, diagnostics, explain, brief, feedback, and Memory provenance loop; `GET /api/v1/context-ops/drilldown` turns the index-freshness, embedding-backlog, source-warning, maintenance-report, diagnostics-report, explain-report, and recent-brief aggregates into bounded, access-safe detail lists/summaries (object lists pass the same adapter read gate **and** source read policy as search; source-warning details are owner-scoped unless owner/admin; artifact sections reuse owner-scoped/`space_ops`-gated summary queries); the page also exposes maintenance-scan, diagnostics-report, targeted explain, explain preset/comparison, Context Review Cycle scan triggers, and artifact-level or batched Claim Candidate Packet actions for supported recent briefs/reports (with optional packet creation and a Memory maintenance toggle) gated by `context_ops_scan_mode`; `POST /api/v1/context-ops/review-cycle/run` and Automation target `context_ops_review_cycle` run the broader read-only/proposal-first cycle and return `degraded`/`warnings` when optional packet stages fail after reports are saved; the `retrieval.space.settings` scoped setting's `context_ops_review_mode` can additionally expose shared `space_ops` reports/packets to owners/admins or all members without weakening private packet creator-only review |
 | Context observation reports | implemented lightweight Context Ops entry; `POST /api/v1/context-ops/context-observations/scan` summarizes the current Context Ops window into red/yellow/green observations, daily observation text, periodic distillation suggestions via `suggested_target`, and source refs; it can persist a private `context_observation_report` artifact with `canonical_format = context_observation_report.v1`; response and artifact payload always include `canonical_write_performed = false` and do not write Memory, Knowledge, Capability, or Assistant preference rows |
 | Object Schema Registry / object schema | implemented core runtime slices; fixed `object_type` plus governed per-space `object_kind`, active-kind retrieval filters/metadata, Space Settings registry UI, field-schema proposal validation, relation hints, object-schema export/import, and deterministic Context Ops schema suggestions |
 
@@ -389,8 +389,8 @@ Shipping is controlled separately by the Space Retrieval Settings runtime gate.
 The protocol rejects adopting a cross-viewer semantic results cache; only the
 existing query-embedding cache is allowed.
 
-Live ranking mechanics are configured through
-`space_retrieval_settings.ranking_config`. For each runtime mechanic, operators
+Live ranking mechanics are configured through the `ranking_config` field in the
+`retrieval.space.settings` scoped setting. For each runtime mechanic, operators
 can leave it `disabled`, mark it `adopted`, or request `shipped` with a
 calibration artifact id. Because this is a space-wide runtime setting whose
 resolved config is visible through Space settings, `adopted`/`shipped` mechanics
@@ -470,8 +470,8 @@ counts/trend metric deltas, recent `retrieval_brief` artifact summaries,
 retrieval feedback signal/surface counts, and Memory access-log counters
 (`context_injection`, `maintenance_scan`, total recent access).
 
-Space-wide review is explicit. `space_retrieval_settings.context_ops_review_mode`
-defaults to `private_only`; `admins` permits owners/admins to review
+Space-wide review is explicit. The `context_ops_review_mode` field in
+`retrieval.space.settings` defaults to `private_only`; `admins` permits owners/admins to review
 `visibility = 'space_shared'` packets whose payload has
 `review_scope = 'space_ops'`; `members` permits space members/reviewers as well.
 Private `retrieval_diagnostics_packet`, `retrieval_maintenance_packet`, and
@@ -554,7 +554,8 @@ remains future product work.
 
 ## Governance
 
-- **Egress switch (private context).** `space_retrieval_settings.external_egress_enabled`
+- **Egress switch (private context).** The `retrieval.space.settings`
+  `external_egress_enabled` field
   (default true) is enforced through the `retrievalEgressAllowed(ref, policy)`
   seam at every content-egress point. The policy distinguishes
   `external_provider`, `local_provider`, and `internal_process`: external
@@ -612,7 +613,7 @@ remains future product work.
   are returned, never auto-injected. Managed `model_api` / `ts_agent_host` runs
   expose `retrieval.search` and `retrieval.brief` as internal tools only when
   there is an instructing user and either the space-level
-  `space_retrieval_settings.retrieval_tool_mode` or the run/runtime config opts
+  `retrieval.space.settings` `retrieval_tool_mode` field or the run/runtime config opts
   in (for example `manual_tool_only`, `preflight_search`, `preflight_brief`, or
   `retrieval_tools.enabled = true`). Knowledge tools stay named
   `retrieval.search` / `retrieval.brief`; Memory and Project are never silently

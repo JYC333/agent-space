@@ -156,8 +156,6 @@ describe("agents CRUD routes", () => {
     let agentId = "";
     let versionId = "";
     let runtimeProfileId = "";
-    let sourceTemplateId: unknown = null;
-    let sourceTemplateVersionId: unknown = null;
     let insertedRuntimeConfig: Record<string, unknown> = {};
     let insertedContextPolicy: Record<string, unknown> = {};
     let insertedScheduleConfig: Record<string, unknown> = {};
@@ -169,8 +167,6 @@ describe("agents CRUD routes", () => {
         }
         if (sql.startsWith("INSERT INTO agents")) {
           agentId = String(params[0]);
-          sourceTemplateId = params[8];
-          sourceTemplateVersionId = params[9];
           return { rows: [], rowCount: 1 };
         }
         if (sql.startsWith("INSERT INTO agent_versions")) {
@@ -219,8 +215,6 @@ describe("agents CRUD routes", () => {
                 role_instruction: null,
                 status: "active",
                 agent_kind: "standard",
-                source_template_id: sourceTemplateId,
-                source_template_version_id: sourceTemplateVersionId,
                 current_version_id: versionId,
                 visibility: "private",
                 created_at: "2026-06-17T00:00:00.000Z",
@@ -270,8 +264,6 @@ describe("agents CRUD routes", () => {
       id: agentId,
       name: "Reviewer",
       adapter_type: "capability",
-      source_template_id: "coding_reviewer",
-      source_template_version_id: "coding_reviewer:v1",
     });
     expect(insertedRuntimeConfig).toMatchObject({ adapter_type: "capability" });
     expect(insertedContextPolicy).toMatchObject({ condenser: { profile: "coding" } });

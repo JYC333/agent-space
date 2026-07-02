@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../config";
 import type { Queryable } from "../routeUtils/common";
+import { canAccessProject } from "../memory/projectAccess";
 import {
   HttpError,
   countFromRow,
@@ -15,6 +16,9 @@ import {
   type SpaceUserIdentity,
 } from "../routeUtils/common";
 import { IntakeExtractionWorker } from "./extractionWorker";
+import { CustomSourceCredentialService } from "./customSourceCredentialService";
+import { runCustomSourceHandlerScanJob } from "./customSourceScanWorker";
+import { RECIPE_SCAN_JOB_IMPLEMENTATION, runSourceRecipeScanJob } from "./sourceRecipes/recipeScanWorker";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import {
   bindingOut,
@@ -50,6 +54,12 @@ import {
   type WorkspaceProfileRow,
 } from "./intakeRepositoryRows";
 import {
+  getSourceConnectionScanTask,
+  nextRunAtForSourceConnection,
+  sourceConnectionWithSchedule,
+  upsertSourceConnectionScanTask,
+} from "./sourceConnectionScheduler";
+import {
   enforceSourceDerivedImportTarget,
   enforceSourceRetentionPolicy,
   normalizeSourceConnectionCreateGovernance,
@@ -65,6 +75,7 @@ const EVIDENCE_LINK_TYPES = new Set([
   "context_candidate",
   "used_in_context",
 ]);
+const EVIDENCE_STATUSES = new Set(["candidate", "active", "rejected", "archived"]);
 
 export class PgIntakeRepository {
   constructor(
@@ -93,11 +104,19 @@ export class PgIntakeRepository {
        ORDER BY updated_at DESC, id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, filters.limit, filters.offset],
     );
-    return page(rows.rows.map(connectionOut), countFromRow(total.rows[0]), filters.limit, filters.offset);
+    const rowsWithSchedule = await this.withConnectionSchedules(rows.rows);
+    return page(rowsWithSchedule.map(connectionOut), countFromRow(total.rows[0]), filters.limit, filters.offset);
   }
 
-  async createConnection(identity: SpaceUserIdentity, body: Record<string, unknown>) {
+  async createConnection(
+    identity: SpaceUserIdentity,
+    body: Record<string, unknown>,
+    options: { allowCustomSourceConnector?: boolean } = {},
+  ) {
     const connectorKey = requiredString(body.connector_key, "connector_key");
+    if (connectorKey === "custom_source" && !options.allowCustomSourceConnector) {
+      throw new HttpError(422, "Custom Source connections must be created through the Custom Source draft flow");
+    }
     const connector = await this.db.query<{ id: string }>(
       `SELECT id FROM source_connectors WHERE connector_key = $1 AND status = 'active'`,
       [connectorKey],
@@ -133,7 +152,13 @@ export class PgIntakeRepository {
         now,
       ],
     );
-    return connectionOut(result.rows[0]!);
+    const row = result.rows[0]!;
+    const task = await upsertSourceConnectionScanTask(this.db, {
+      connection: row,
+      nextRunAt: nextRunAtForSourceConnection(row, now),
+      updatedAt: now,
+    });
+    return connectionOut(sourceConnectionWithSchedule(row, task));
   }
 
   async getConnection(identity: SpaceUserIdentity, connectionId: string) {
@@ -141,12 +166,26 @@ export class PgIntakeRepository {
       `SELECT ${CONNECTION_COLUMNS} FROM source_connections WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
       [identity.spaceId, connectionId],
     );
-    return result.rows[0] ? connectionOut(result.rows[0]) : null;
+    return result.rows[0] ? connectionOut(await this.withConnectionSchedule(result.rows[0])) : null;
   }
 
   async updateConnection(identity: SpaceUserIdentity, connectionId: string, body: Record<string, unknown>) {
     const existing = await this.getConnectionRow(identity, connectionId);
     if (!existing) throw new HttpError(404, "Source connection not found");
+    if (Object.hasOwn(body, "credential_id") && body.credential_id != null) {
+      if (existing.handler_kind !== "generated_custom") {
+        throw new HttpError(422, "credential_id can only be set on a Custom Source connection");
+      }
+      // Mirrors createDraft's validation — without this, a generic
+      // intake.connection_manage caller (not necessarily a space admin)
+      // could attach an arbitrary/cross-space/wrong-type credentials row id
+      // that a Custom Source handler version would later carry into its
+      // policy envelope's credential_ref.
+      await new CustomSourceCredentialService(this.db, this.config).requireOwnCredential(
+        identity,
+        requiredString(body.credential_id, "credential_id"),
+      );
+    }
     const now = new Date().toISOString();
     const governance = normalizeSourceConnectionUpdateGovernance(identity, existing, body);
     const result = await this.db.query<SourceConnectionRow>(
@@ -186,14 +225,46 @@ export class PgIntakeRepository {
         now,
       ],
     );
-    return connectionOut(result.rows[0]!);
+    const row = result.rows[0]!;
+    const task = await upsertSourceConnectionScanTask(this.db, {
+      connection: row,
+      nextRunAt: nextRunAtForSourceConnection(row, now, existing.next_check_at),
+      updatedAt: now,
+    });
+    return connectionOut(sourceConnectionWithSchedule(row, task));
   }
 
   async scanConnection(identity: SpaceUserIdentity, connectionId: string) {
-    if (!(await this.getConnection(identity, connectionId))) throw new HttpError(404, "Source connection not found");
-    const job = await this.createJob({ identity, connectionId, intakeItemId: null, jobType: "connection_scan", metadata: { created_by: "server" } });
-    await this.db.query(`UPDATE source_connections SET last_checked_at = $3, updated_at = $3 WHERE space_id = $1 AND id = $2`, [identity.spaceId, connectionId, new Date().toISOString()]);
-    return job;
+    const connection = await this.getConnection(identity, connectionId);
+    if (!connection) throw new HttpError(404, "Source connection not found");
+    if (connection.handler_kind === "generated_custom") {
+      if (!connection.active_handler_version_id) {
+        throw new HttpError(409, "Custom Source connection has no active handler version");
+      }
+      return this.createCustomSourceScanJob({
+        identity,
+        connectionId,
+        handlerVersionId: connection.active_handler_version_id,
+        metadata: { created_by: "manual_scan", handler_kind: "generated_custom" },
+      });
+    }
+    if (connection.handler_kind === "recipe") {
+      if (!connection.active_recipe_version_id) {
+        throw new HttpError(409, "Recipe Source connection has no active recipe version");
+      }
+      return this.createJob({
+        identity,
+        connectionId,
+        intakeItemId: null,
+        jobType: "connection_scan",
+        metadata: {
+          created_by: "manual_scan",
+          implementation: RECIPE_SCAN_JOB_IMPLEMENTATION,
+          recipe_version_id: connection.active_recipe_version_id,
+        },
+      });
+    }
+    return this.createJob({ identity, connectionId, intakeItemId: null, jobType: "connection_scan", metadata: { created_by: "manual_scan" } });
   }
 
   async listItems(identity: SpaceUserIdentity, filters: {
@@ -208,9 +279,13 @@ export class PgIntakeRepository {
     includeIgnored: boolean;
     includeArchived: boolean;
     q: string | null;
+    projectId: string | null;
     limit: number;
     offset: number;
   }) {
+    if (filters.projectId && !(await canAccessProject(this.db, identity.spaceId, filters.projectId, identity.userId))) {
+      throw new HttpError(404, "Project not found");
+    }
     const params: unknown[] = [identity.spaceId];
     const clauses = ["space_id = $1", "deleted_at IS NULL"];
     const add = (value: unknown) => {
@@ -227,7 +302,20 @@ export class PgIntakeRepository {
     if (filters.sourceDomain) clauses.push(`source_domain = ${add(filters.sourceDomain)}`);
     if (filters.createdAfter) clauses.push(`created_at >= ${add(filters.createdAfter)}::timestamptz`);
     if (filters.occurredAfter) clauses.push(`occurred_at >= ${add(filters.occurredAfter)}::timestamptz`);
-    if (filters.q) clauses.push(`(title ILIKE ${add(`%${filters.q}%`)} OR excerpt ILIKE $${params.length} OR source_uri ILIKE $${params.length})`);
+    if (filters.projectId) {
+      clauses.push(
+        `connection_id IN (
+           SELECT source_connection_id
+             FROM workspace_source_bindings
+            WHERE space_id = $1
+              AND project_id = ${add(filters.projectId)}
+              AND status = 'active'
+         )`,
+      );
+    }
+    if (filters.q) {
+      clauses.push(`(title ILIKE ${add(`%${filters.q}%`)} OR excerpt ILIKE $${params.length} OR source_uri ILIKE $${params.length} OR source_domain ILIKE $${params.length})`);
+    }
     const where = `WHERE ${clauses.join(" AND ")}`;
     const total = await this.db.query<{ total: string }>(`SELECT count(*)::text AS total FROM intake_items ${where}`, params);
     const rows = await this.db.query<IntakeItemRow>(
@@ -299,12 +387,15 @@ export class PgIntakeRepository {
     if (action === "queue_content" || action === "archive_snapshot") {
       const contentState = action === "queue_content" ? "content_queued" : "snapshot_queued";
       const retention = action === "queue_content" ? "full_text" : "full_snapshot";
+      const jobType = action === "queue_content" ? "extract_text" : "snapshot";
       await this.enforceItemRetentionPolicy(identity, item, retention);
       await this.db.query(
         `UPDATE intake_items SET content_state = $3, retention_policy = $4, updated_at = $5 WHERE space_id = $1 AND id = $2`,
         [identity.spaceId, itemId, contentState, retention, new Date().toISOString()],
       );
-      await this.createJob({ identity, connectionId: item.connection_id, intakeItemId: item.id, jobType: action === "queue_content" ? "extract_text" : "snapshot", metadata: { action } });
+      if (!(await this.hasActiveItemJob(identity, item.id, jobType))) {
+        await this.createJob({ identity, connectionId: item.connection_id, intakeItemId: item.id, jobType, metadata: { action } });
+      }
       return this.getItem(identity, itemId);
     }
     if (action === "mark_selected" || action === "mark_ignored" || action === "read_later" || action === "mark_discussed") {
@@ -370,6 +461,8 @@ export class PgIntakeRepository {
   }
 
   async runJob(identity: SpaceUserIdentity, jobId: string) {
+    await runSourceRecipeScanJob(this.db, this.config, jobId, identity.spaceId);
+    await runCustomSourceHandlerScanJob(this.db, this.config, jobId, identity.spaceId);
     const worker = new IntakeExtractionWorker(this.db, this.config);
     await worker.runPendingJob(jobId, identity.spaceId);
     const result = await this.db.query<ExtractionJobRow>(
@@ -380,7 +473,13 @@ export class PgIntakeRepository {
     return jobOut(result.rows[0]);
   }
 
-  async listEvidence(identity: SpaceUserIdentity, filters: { status: string | null; evidenceType: string | null; intakeItemId: string | null; limit: number; offset: number }) {
+  async listEvidence(identity: SpaceUserIdentity, filters: { status: string | null; evidenceType: string | null; intakeItemId: string | null; projectId: string | null; connectionId: string | null; limit: number; offset: number }) {
+    if (filters.projectId && !(await canAccessProject(this.db, identity.spaceId, filters.projectId, identity.userId))) {
+      throw new HttpError(404, "Project not found");
+    }
+    if (filters.connectionId && !(await this.getConnectionRow(identity, filters.connectionId))) {
+      throw new HttpError(404, "Source connection not found");
+    }
     const params: unknown[] = [identity.spaceId];
     const clauses = ["space_id = $1", "deleted_at IS NULL"];
     const add = (value: unknown) => {
@@ -390,6 +489,53 @@ export class PgIntakeRepository {
     if (filters.status) clauses.push(`status = ${add(filters.status)}`);
     if (filters.evidenceType) clauses.push(`evidence_type = ${add(filters.evidenceType)}`);
     if (filters.intakeItemId) clauses.push(`intake_item_id = ${add(filters.intakeItemId)}`);
+    if (filters.connectionId) {
+      const connectionParam = add(filters.connectionId);
+      clauses.push(
+        `(
+          EXISTS (
+            SELECT 1
+              FROM intake_items ii
+             WHERE ii.space_id = extracted_evidence.space_id
+               AND ii.id = extracted_evidence.intake_item_id
+               AND ii.connection_id = ${connectionParam}
+          )
+          OR EXISTS (
+            SELECT 1
+              FROM source_snapshots ss
+             WHERE ss.space_id = extracted_evidence.space_id
+               AND ss.id = extracted_evidence.source_snapshot_id
+               AND ss.connection_id = ${connectionParam}
+          )
+        )`,
+      );
+    }
+    if (filters.projectId) {
+      clauses.push(
+        `(
+          EXISTS (
+            SELECT 1
+              FROM intake_items ii
+              JOIN workspace_source_bindings wsb
+                ON wsb.space_id = ii.space_id
+               AND wsb.source_connection_id = ii.connection_id
+               AND wsb.status = 'active'
+             WHERE ii.space_id = extracted_evidence.space_id
+               AND ii.id = extracted_evidence.intake_item_id
+               AND wsb.project_id = ${add(filters.projectId)}
+          )
+          OR EXISTS (
+            SELECT 1
+              FROM evidence_links el
+             WHERE el.space_id = extracted_evidence.space_id
+               AND el.evidence_id = extracted_evidence.id
+               AND el.target_type = 'project'
+               AND el.target_id = $${params.length}
+               AND el.status = 'active'
+          )
+        )`,
+      );
+    }
     const where = `WHERE ${clauses.join(" AND ")}`;
     const total = await this.db.query<{ total: string }>(`SELECT count(*)::text AS total FROM extracted_evidence ${where}`, params);
     const rows = await this.db.query<EvidenceRow>(
@@ -402,6 +548,7 @@ export class PgIntakeRepository {
   async createEvidence(identity: SpaceUserIdentity, body: Record<string, unknown>) {
     const status = optionalString(body.status) ?? "candidate";
     if (status === "active") throw new HttpError(409, "Intake evidence remains candidate-only");
+    if (!EVIDENCE_STATUSES.has(status)) throw new HttpError(422, "invalid evidence status");
     const intakeItemId = optionalString(body.intake_item_id);
     const item = intakeItemId ? await this.getItemRow(identity, intakeItemId) : null;
     if (intakeItemId && !item) throw new HttpError(404, "Intake item not found");
@@ -464,7 +611,7 @@ export class PgIntakeRepository {
   async updateEvidence(identity: SpaceUserIdentity, evidenceId: string, body: Record<string, unknown>) {
     if (!(await this.getEvidenceRow(identity, evidenceId))) throw new HttpError(404, "Evidence not found");
     const status = optionalString(body.status);
-    if (status === "active") throw new HttpError(409, "Intake evidence remains candidate-only");
+    if (status && !EVIDENCE_STATUSES.has(status)) throw new HttpError(422, "invalid evidence status");
     const now = new Date().toISOString();
     const result = await this.db.query<EvidenceRow>(
       `UPDATE extracted_evidence SET
@@ -624,10 +771,25 @@ export class PgIntakeRepository {
     return profileOut(result.rows[0]!);
   }
 
-  async listWorkspaceBindings(identity: SpaceUserIdentity) {
+  async listWorkspaceBindings(identity: SpaceUserIdentity, filters: { workspaceId: string | null; sourceConnectionId: string | null; projectId: string | null } = { workspaceId: null, sourceConnectionId: null, projectId: null }) {
+    if (filters.projectId && !(await canAccessProject(this.db, identity.spaceId, filters.projectId, identity.userId))) {
+      throw new HttpError(404, "Project not found");
+    }
+    const params: unknown[] = [identity.spaceId];
+    const clauses = ["space_id = $1"];
+    const add = (value: unknown) => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    if (filters.workspaceId) clauses.push(`workspace_id = ${add(filters.workspaceId)}`);
+    if (filters.sourceConnectionId) clauses.push(`source_connection_id = ${add(filters.sourceConnectionId)}`);
+    if (filters.projectId) clauses.push(`project_id = ${add(filters.projectId)}`);
     const rows = await this.db.query<WorkspaceBindingRow>(
-      `SELECT ${BINDING_COLUMNS} FROM workspace_source_bindings WHERE space_id = $1 ORDER BY priority DESC, updated_at DESC, id DESC`,
-      [identity.spaceId],
+      `SELECT ${BINDING_COLUMNS}
+         FROM workspace_source_bindings
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY priority DESC, updated_at DESC, id DESC`,
+      params,
     );
     return rows.rows.map(bindingOut);
   }
@@ -785,7 +947,16 @@ export class PgIntakeRepository {
       `SELECT ${CONNECTION_COLUMNS} FROM source_connections WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
       [identity.spaceId, connectionId],
     );
-    return result.rows[0] ?? null;
+    return result.rows[0] ? this.withConnectionSchedule(result.rows[0]) : null;
+  }
+
+  private async withConnectionSchedules(rows: SourceConnectionRow[]): Promise<SourceConnectionRow[]> {
+    return Promise.all(rows.map((row) => this.withConnectionSchedule(row)));
+  }
+
+  private async withConnectionSchedule(row: SourceConnectionRow): Promise<SourceConnectionRow> {
+    const task = await getSourceConnectionScanTask(this.db, row.id);
+    return sourceConnectionWithSchedule(row, task);
   }
 
   private async getEvidenceRow(identity: SpaceUserIdentity, evidenceId: string) {
@@ -807,6 +978,55 @@ export class PgIntakeRepository {
       [randomUUID(), input.identity.spaceId, input.connectionId, input.intakeItemId, input.jobType, JSON.stringify(input.metadata), now],
     );
     return jobOut(result.rows[0]!);
+  }
+
+  private async createCustomSourceScanJob(input: {
+    identity: SpaceUserIdentity;
+    connectionId: string;
+    handlerVersionId: string;
+    metadata: Record<string, unknown>;
+  }) {
+    const now = new Date().toISOString();
+    const jobId = randomUUID();
+    const runId = randomUUID();
+    const result = await this.db.query<ExtractionJobRow>(
+      `WITH inserted_job AS (
+         INSERT INTO extraction_jobs (
+           id, space_id, connection_id, intake_item_id, job_type, status,
+           metadata_json, created_at
+         ) VALUES ($1, $2, $3, NULL, 'connection_scan', 'pending', $4::jsonb, $5)
+         RETURNING ${JOB_COLUMNS}
+       ), inserted_run AS (
+         INSERT INTO source_handler_runs (
+           id, space_id, source_connection_id, handler_version_id, extraction_job_id, status, created_at
+         )
+         SELECT $6, space_id, connection_id, $7, id, 'queued', $5 FROM inserted_job
+       )
+       SELECT ${JOB_COLUMNS} FROM inserted_job`,
+      [
+        jobId,
+        input.identity.spaceId,
+        input.connectionId,
+        JSON.stringify(input.metadata),
+        now,
+        runId,
+        input.handlerVersionId,
+      ],
+    );
+    return jobOut(result.rows[0]!);
+  }
+
+  private async hasActiveItemJob(identity: SpaceUserIdentity, intakeItemId: string, jobType: string) {
+    const result = await this.db.query<{ id: string }>(
+      `SELECT id FROM extraction_jobs
+        WHERE space_id = $1
+          AND intake_item_id = $2
+          AND job_type = $3
+          AND status IN ('pending', 'running')
+        LIMIT 1`,
+      [identity.spaceId, intakeItemId, jobType],
+    );
+    return Boolean(result.rows[0]);
   }
 
   private async insertSummaryProposal(identity: SpaceUserIdentity, proposalType: string, title: string, summary: string, artifactId: string, evidenceIds: string[], intakeItemIds: string[]) {

@@ -15,7 +15,7 @@ Approval workflow. Durable memory and code changes must go through a Proposal be
 ```
 Proposal:
   id, space_id, workspace_id
-  proposal_type (memory_create|memory_update|memory_archive|memory_maintenance_packet|object_kind_create|object_kind_update|object_kind_deprecate|object_kind_archive|policy_change|code_patch|egress_review|follow_up_task)
+  proposal_type (memory_create|memory_update|memory_archive|memory_maintenance_packet|object_kind_create|object_kind_update|object_kind_deprecate|object_kind_archive|policy_change|code_patch|egress_review|follow_up_task|custom_source_policy_delta|custom_source_credentialed_source|custom_source_repair_activation|source_recipe_activation)
   title, summary, rationale, payload_json
   risk_level (low|medium|high|critical)
   status (pending|accepted|rejected|superseded|expired)
@@ -65,7 +65,8 @@ The public proposal review/apply surface is owned by the server:
 - The server owns the external accept/reject/egress-approval HTTP routes and the
   proposal-apply transaction boundary for registered appliers.
 - The server runs the `proposal.apply` policy gate before dispatching through its
-  `ProposalApplierRegistry`.
+  `ProposalApplierRegistry`. The gate enforces a proposal row's
+  `required_approver_role` before applying the normal risk/role matrix.
 - The currently registered appliers are: `memory_create`, `memory_update`,
   `memory_archive`, `knowledge_create`, `knowledge_update`, `knowledge_archive`,
   `follow_up_task`, `claim_create`, `claim_update`, `claim_archive`,
@@ -76,7 +77,10 @@ The public proposal review/apply surface is owned by the server:
   `retrieval_diagnostics_packet`, `code_patch`,
   `skill_import_approve`, `capability_install`, `capability_update`,
   `capability_enable`, `capability_disable`, and
-  `runtime_skill_binding_update`. Unregistered proposal types fail closed until
+  `runtime_skill_binding_update`, plus `custom_source_policy_delta`,
+  `custom_source_credentialed_source`, `custom_source_repair_activation`, and
+  `source_recipe_activation`.
+  Unregistered proposal types fail closed until
   their owning domain registers an applier.
 - `memory_maintenance_packet`, `retrieval_maintenance_packet`, and
   `retrieval_diagnostics_packet` are owner-private, creator-owned review

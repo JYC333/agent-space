@@ -77,6 +77,23 @@ export interface ServerConfig {
   memoryMaintenanceSchedulerBatchLimit: number;
   intakeExtractionSchedulerEnabled: boolean;
   intakeExtractionSchedulerIntervalSeconds: number;
+  /** Instance hard limits for Intake Custom Source handler execution. Runner availability is DB-backed. */
+  customSourceAllowedLanguages: string[];
+  /** Additional operator-specified network deny rules, on top of the always-applied private/metadata blocks. */
+  customSourceNetworkHardDenyRules: string[];
+  customSourceTimeoutMsMax: number;
+  customSourceOutputBytesMax: number;
+  customSourceDownloadBytesMax: number;
+  customSourceLogBytesMax: number;
+  customSourceMaxFiles: number;
+  customSourceBrowserAutomationAvailable: boolean;
+  customSourceShellAvailable: boolean;
+  customSourceDependencyInstallationAvailable: boolean;
+  /** Instance hard limit: max generate-handler/repair calls per connection per rolling hour. */
+  customSourceGenerateRateLimitPerHour: number;
+  customSourceArtifactRetentionEnabled: boolean;
+  customSourceArtifactRetentionDays: number;
+  customSourceArtifactRetentionIntervalSeconds: number;
   /** Legacy env gate parsed for older env files; route enablement is space-scoped. */
   retrievalRerankEnabled: boolean;
   /** Legacy env gate parsed for older env files; route enablement is space-scoped. */
@@ -149,6 +166,20 @@ const KNOWN_ENV_KEYS = new Set([
   "SERVER_MEMORY_MAINTENANCE_SCHEDULER_BATCH_LIMIT",
   "SERVER_INTAKE_EXTRACTION_SCHEDULER_ENABLED",
   "SERVER_INTAKE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS",
+  "SERVER_CUSTOM_SOURCE_ALLOWED_LANGUAGES",
+  "SERVER_CUSTOM_SOURCE_NETWORK_HARD_DENY_RULES",
+  "SERVER_CUSTOM_SOURCE_TIMEOUT_MS_MAX",
+  "SERVER_CUSTOM_SOURCE_OUTPUT_BYTES_MAX",
+  "SERVER_CUSTOM_SOURCE_DOWNLOAD_BYTES_MAX",
+  "SERVER_CUSTOM_SOURCE_LOG_BYTES_MAX",
+  "SERVER_CUSTOM_SOURCE_MAX_FILES",
+  "SERVER_CUSTOM_SOURCE_BROWSER_AUTOMATION_AVAILABLE",
+  "SERVER_CUSTOM_SOURCE_SHELL_AVAILABLE",
+  "SERVER_CUSTOM_SOURCE_DEPENDENCY_INSTALLATION_AVAILABLE",
+  "SERVER_CUSTOM_SOURCE_GENERATE_RATE_LIMIT_PER_HOUR",
+  "SERVER_CUSTOM_SOURCE_ARTIFACT_RETENTION_ENABLED",
+  "SERVER_CUSTOM_SOURCE_ARTIFACT_RETENTION_DAYS",
+  "SERVER_CUSTOM_SOURCE_ARTIFACT_RETENTION_INTERVAL_SECONDS",
   "AGENT_SPACE_ENV",
   "APP_VERSION",
   "BACKUP_ENABLED",
@@ -277,6 +308,19 @@ function normalizeWebhookUrl(value: string): string {
     );
   }
   return url.toString();
+}
+
+/** Comma-separated list parser. Returns `null` (not `[]`) when unset, so callers can fall back to a default list. */
+function parseStringList(value: string | undefined): string[] | null {
+  if (value === undefined || value.trim() === "") return null;
+  return [
+    ...new Set(
+      value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0),
+    ),
+  ];
 }
 
 function parseWebhookAllowlist(value: string | undefined): string[] {
@@ -477,9 +521,86 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     5,
     3600,
   );
+  // Intake Custom Source runner/sandbox instance hard limits. Runner
+  // availability itself is DB-backed through Instance Settings.
+  const customSourceAllowedLanguages = parseStringList(env.SERVER_CUSTOM_SOURCE_ALLOWED_LANGUAGES) ?? [
+    "typescript_node",
+    "declarative_pipeline_v1",
+  ];
+  const customSourceNetworkHardDenyRules =
+    parseStringList(env.SERVER_CUSTOM_SOURCE_NETWORK_HARD_DENY_RULES) ?? [];
+  const customSourceTimeoutMsMax = parseBoundedInt(
+    env.SERVER_CUSTOM_SOURCE_TIMEOUT_MS_MAX,
+    30_000,
+    "SERVER_CUSTOM_SOURCE_TIMEOUT_MS_MAX",
+    1_000,
+    300_000,
+  );
+  const customSourceOutputBytesMax = parseBoundedInt(
+    env.SERVER_CUSTOM_SOURCE_OUTPUT_BYTES_MAX,
+    1_048_576,
+    "SERVER_CUSTOM_SOURCE_OUTPUT_BYTES_MAX",
+    1_024,
+    104_857_600,
+  );
+  const customSourceDownloadBytesMax = parseBoundedInt(
+    env.SERVER_CUSTOM_SOURCE_DOWNLOAD_BYTES_MAX,
+    5_242_880,
+    "SERVER_CUSTOM_SOURCE_DOWNLOAD_BYTES_MAX",
+    1_024,
+    104_857_600,
+  );
+  const customSourceLogBytesMax = parseBoundedInt(
+    env.SERVER_CUSTOM_SOURCE_LOG_BYTES_MAX,
+    65_536,
+    "SERVER_CUSTOM_SOURCE_LOG_BYTES_MAX",
+    1_024,
+    10_485_760,
+  );
+  const customSourceMaxFiles = parseBoundedInt(
+    env.SERVER_CUSTOM_SOURCE_MAX_FILES,
+    50,
+    "SERVER_CUSTOM_SOURCE_MAX_FILES",
+    1,
+    1_000,
+  );
+  const customSourceBrowserAutomationAvailable = parseBool(
+    env.SERVER_CUSTOM_SOURCE_BROWSER_AUTOMATION_AVAILABLE,
+    false,
+  );
+  const customSourceShellAvailable = parseBool(env.SERVER_CUSTOM_SOURCE_SHELL_AVAILABLE, false);
+  const customSourceDependencyInstallationAvailable = parseBool(
+    env.SERVER_CUSTOM_SOURCE_DEPENDENCY_INSTALLATION_AVAILABLE,
+    false,
+  );
+  const customSourceGenerateRateLimitPerHour = parseBoundedInt(
+    env.SERVER_CUSTOM_SOURCE_GENERATE_RATE_LIMIT_PER_HOUR,
+    30,
+    "SERVER_CUSTOM_SOURCE_GENERATE_RATE_LIMIT_PER_HOUR",
+    1,
+    1_000,
+  );
+  const customSourceArtifactRetentionEnabled = parseBool(
+    env.SERVER_CUSTOM_SOURCE_ARTIFACT_RETENTION_ENABLED,
+    true,
+  );
+  const customSourceArtifactRetentionDays = parseBoundedInt(
+    env.SERVER_CUSTOM_SOURCE_ARTIFACT_RETENTION_DAYS,
+    30,
+    "SERVER_CUSTOM_SOURCE_ARTIFACT_RETENTION_DAYS",
+    1,
+    3650,
+  );
+  const customSourceArtifactRetentionIntervalSeconds = parseBoundedInt(
+    env.SERVER_CUSTOM_SOURCE_ARTIFACT_RETENTION_INTERVAL_SECONDS,
+    3600,
+    "SERVER_CUSTOM_SOURCE_ARTIFACT_RETENTION_INTERVAL_SECONDS",
+    300,
+    86_400,
+  );
   // Legacy compatibility for pre-space-setting local env files. The active
-  // retrieval LLM-stage gate is `space_retrieval_settings`; these keys remain
-  // deliberately absent from KNOWN_ENV_KEYS.
+  // retrieval LLM-stage gate is the `retrieval.space.settings` scoped setting;
+  // these keys remain deliberately absent from KNOWN_ENV_KEYS.
   const retrievalRerankEnabled = parseBool(env.SERVER_RETRIEVAL_RERANK_ENABLED, false);
   const retrievalQueryRewriteEnabled = parseBool(env.SERVER_RETRIEVAL_QUERY_REWRITE_ENABLED, false);
   const agentSpaceEnv = env.AGENT_SPACE_ENV?.trim() || "";
@@ -548,6 +669,20 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     memoryMaintenanceSchedulerBatchLimit,
     intakeExtractionSchedulerEnabled,
     intakeExtractionSchedulerIntervalSeconds,
+    customSourceAllowedLanguages,
+    customSourceNetworkHardDenyRules,
+    customSourceTimeoutMsMax,
+    customSourceOutputBytesMax,
+    customSourceDownloadBytesMax,
+    customSourceLogBytesMax,
+    customSourceMaxFiles,
+    customSourceBrowserAutomationAvailable,
+    customSourceShellAvailable,
+    customSourceDependencyInstallationAvailable,
+    customSourceGenerateRateLimitPerHour,
+    customSourceArtifactRetentionEnabled,
+    customSourceArtifactRetentionDays,
+    customSourceArtifactRetentionIntervalSeconds,
     retrievalRerankEnabled,
     retrievalQueryRewriteEnabled,
     agentSpaceEnv,
@@ -604,7 +739,7 @@ export function describeConfig(config: ServerConfig): string {
 // ---------------------------------------------------------------------------
 
 /** Bumped when the shape of {@link ServerConfig} changes incompatibly. */
-export const CONFIG_SCHEMA_VERSION = 20 as const;
+export const CONFIG_SCHEMA_VERSION = 21 as const;
 
 /**
  * An immutable, hash-identified view of the validated config. Built once at

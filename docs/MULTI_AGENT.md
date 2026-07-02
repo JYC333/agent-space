@@ -122,7 +122,8 @@ is the per-space **system-managed default Assistant Agent** instead.
   (`get_default_assistant` / `get_or_create_default_assistant`;
   `GET`/`POST /api/v1/agents/default-assistant`) — an ordinary copy-on-create Agent at runtime.
 - Soft preferences (response style, verbosity, default context toggles, default project, proposal
-  style, model preferences) live in `space_assistant_settings`
+  style, model preferences) live under the scoped settings key
+  `agent.default_assistant.settings`
   (`GET`/`PATCH /api/v1/agents/default-assistant/settings`) and never edit the core prompt or any
   hard policy.
 

@@ -14,6 +14,8 @@ import { registerRetrievalMaintenanceProposalAppliers } from "../retrieval/maint
 import { registerMemoryMaintenanceProposalAppliers } from "../memory/maintenanceArtifacts";
 import { registerClaimCandidatePacketProposalAppliers } from "../knowledge/claimCandidatePackets";
 import { registerRelationDiscoveryProposalAppliers } from "../knowledge/relationDiscoveryArtifacts";
+import { registerCustomSourceProposalAppliers } from "../intake/customSourceProposalApplier";
+import { registerSourceRecipeProposalAppliers } from "../intake/sourceRecipes/recipeProposalApplier";
 import {
   PgMemoryApplyRepository,
   type ApplyProposal,
@@ -107,6 +109,8 @@ export function createDefaultProposalApplierRegistry(
   registerMemoryMaintenanceProposalAppliers(registry);
   registerTaskProposalAppliers(registry);
   registerWorkspaceProposalAppliers(registry);
+  registerCustomSourceProposalAppliers(registry);
+  registerSourceRecipeProposalAppliers(registry);
   contributor?.applyProposalAppliers(registry);
   return registry;
 }
