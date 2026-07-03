@@ -162,6 +162,15 @@ export const MODULE_REGISTRY: Module[] = [
     perspectiveType: 'personal',
     component: lazy(() => import('../plugins/diary/DiaryPageAdapter')),
   },
+  {
+    id: 'finance', label: 'Finance', path: '/finance',
+    section: 'knowledge', group: 'work', icon: 'landmark',
+    description: 'Double-entry finance ledger for this space: books, accounts, commodities, and transactions with Beancount import/export.',
+    source: 'official_plugin', pluginId: 'finance_ledger', capabilityId: undefined,
+    enabled: false, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    component: lazy(() => import('../plugins/finance_ledger/FinancePageAdapter')),
+  },
 
   // ── Daily ─────────────────────────────────────────────────────────────────
   {

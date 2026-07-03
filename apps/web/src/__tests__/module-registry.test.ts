@@ -12,6 +12,19 @@ describe('module registry official plugin overlay', () => {
     expect(diary?.visible).toBe(false)
   })
 
+  it('overlays finance_ledger effective state onto the finance module', () => {
+    const staticFinance = MODULE_REGISTRY.find(module => module.id === 'finance')
+    expect(staticFinance?.pluginId).toBe('finance_ledger')
+    expect(staticFinance?.enabled).toBe(false)
+
+    const modules = modulesWithEffectivePlugins(MODULE_REGISTRY, {
+      finance_ledger: { enabled: true, visible: true },
+    })
+    const finance = modules.find(module => module.id === 'finance')
+    expect(finance?.enabled).toBe(true)
+    expect(finance?.visible).toBe(true)
+  })
+
   it('leaves built-in modules on their static registration state', () => {
     const original = MODULE_REGISTRY.find(module => module.id === 'today')
     const modules = modulesWithEffectivePlugins(MODULE_REGISTRY, {

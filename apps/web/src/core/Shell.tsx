@@ -173,8 +173,11 @@ export default function Shell() {
   const canManageInstance = Boolean(currentUser?.is_instance_admin)
 
   const pluginNavItems: PluginNavItem[] = effectiveModules
-    .filter(m => m.source === 'official_plugin' && m.enabled && m.perspectiveType === 'personal')
-    .map(m => ({ id: m.id, label: m.label, path: m.path, icon: m.icon }))
+    .filter(m => m.source === 'official_plugin' && m.enabled && m.perspectiveType !== 'neutral')
+    .map(m => ({
+      id: m.id, label: m.label, path: m.path, icon: m.icon,
+      scope: m.perspectiveType === 'space-scoped' ? 'space' as const : 'personal' as const,
+    }))
 
   function setSceneCollapsed(collapsed: boolean) {
     if (!scene) return

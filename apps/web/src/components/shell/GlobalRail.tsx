@@ -1,11 +1,12 @@
 import { Link, useLocation } from 'react-router-dom'
-import { PanelLeftOpen, PanelLeftClose, Puzzle, BookOpen, type LucideIcon } from 'lucide-react'
+import { PanelLeftOpen, PanelLeftClose, Puzzle, BookOpen, Landmark, type LucideIcon } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { RAIL_ITEMS, sceneForPath, spacePath, stripSpacePrefix, type RailItem } from '../../core/navigation'
 
 /** Map lucide icon names (kebab-case) used by official plugins to icon components. */
 const PLUGIN_ICON_MAP: Record<string, LucideIcon> = {
   book: BookOpen,
+  landmark: Landmark,
 }
 function pluginIcon(name: string): LucideIcon {
   return PLUGIN_ICON_MAP[name] ?? Puzzle
@@ -14,9 +15,11 @@ function pluginIcon(name: string): LucideIcon {
 export interface PluginNavItem {
   id: string
   label: string
-  /** Logical top-level path, e.g. '/diary'. Never space-scoped. */
+  /** Logical path, e.g. '/diary' or '/finance'. Space-scoped items are composed with the active Space. */
   path: string
   icon: string
+  /** Whether the destination lives inside a Space (`/spaces/:id/…`) or at the top level. */
+  scope: 'personal' | 'space'
 }
 
 function ApertureMark({ size = 22 }: { size?: number }) {
@@ -58,7 +61,7 @@ export function GlobalRail({
   spaceId: string | null
   canManageSpace?: boolean
   canManageInstance?: boolean
-  /** Enabled official plugin modules with personal scope — shown dynamically below core nav. */
+  /** Enabled official plugin modules — shown dynamically below core nav. */
   pluginModules?: PluginNavItem[]
 }) {
   const { pathname } = useLocation()
@@ -118,11 +121,12 @@ export function GlobalRail({
           <div className="flex flex-col gap-0.5">
             {pluginModules.map(m => {
               const Icon = pluginIcon(m.icon)
-              const active = stripSpacePrefix(pathname) === m.path || pathname.startsWith(`${m.path}/`)
+              const logical = stripSpacePrefix(pathname)
+              const active = logical === m.path || logical.startsWith(`${m.path}/`)
               return (
                 <Link
                   key={m.id}
-                  to={m.path}
+                  to={m.scope === 'space' ? spacePath(spaceId, m.path) : m.path}
                   title={m.label}
                   aria-label={m.label}
                   aria-current={active ? 'page' : undefined}

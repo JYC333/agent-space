@@ -1538,6 +1538,171 @@ export interface DiaryReflection {
   created_at: string
 }
 
+// ── finance ledger ────────────────────────────────────────────────────────
+export interface FinanceBook {
+  id: string
+  space_id: string
+  name: string
+  base_currency: string
+  operating_currency: string
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface FinanceAccount {
+  id: string
+  name: string
+  display_name: string | null
+  root_type: string
+  parent_account_id: string | null
+  commodity_constraints: string[] | null
+  opened_at: string
+  closed_at: string | null
+  booking_method: string | null
+  default_commodity: string | null
+  owner_user_id: string | null
+  visibility: 'space' | 'private'
+}
+
+export type FinanceBalanceScope = 'all' | 'shared' | 'personal'
+
+export interface CreateFinanceAccountInput {
+  root_type: string
+  group: string
+  leaf: string
+  display_name?: string
+  opened_at: string
+  currencies?: string[]
+  default_currency?: string
+  owner?: 'shared' | 'personal'
+  visible_to_space?: boolean
+}
+
+export interface FinanceCommodity {
+  id: string
+  symbol: string
+  commodity_type: string
+  name: string | null
+}
+
+export interface FinanceDirective {
+  id: string
+  directive_type: string
+  date: string
+  sequence: number
+  status: string
+}
+
+export interface FinanceTransaction {
+  directive_id: string
+  flag: string
+  payee: string | null
+  narration: string | null
+  tags: string[]
+  links: string[]
+  directive: FinanceDirective
+}
+
+export interface FinancePosting {
+  id: string
+  transaction_directive_id: string
+  account_id: string
+  account_name: string
+  amount_text: string | null
+  commodity_symbol: string | null
+  price_number_text: string | null
+  price_commodity_symbol: string | null
+  price_is_total: boolean
+  flag: string | null
+  sort_order: number
+}
+
+export interface FinanceBalancePosition {
+  accountId: string
+  accountName: string
+  positions: string[]
+}
+
+export interface FinanceValidationError {
+  code: string
+  message: string
+  directiveId?: string
+}
+
+export interface FinanceLedgerError {
+  code: string
+  message: string
+  source?: { filename: string; lineno: number }
+}
+
+export interface FinanceTransactionInput {
+  date: string
+  payee?: string | null
+  narration?: string | null
+  post?: boolean
+  postings: Array<{
+    account_id: string
+    amount?: { number: string; commodity: string } | null
+  }>
+}
+
+export interface FinanceImportResult {
+  import_source_id: string | null
+  deduplicated: boolean
+  created_directives: number
+  errors: FinanceLedgerError[]
+}
+
+export interface FinanceExportResult {
+  export_id: string
+  content: string
+  content_hash: string
+  errors: FinanceLedgerError[]
+}
+
+export const financeApi = {
+  listBooks: () => get<{ books: FinanceBook[] }>('/finance/books'),
+  createBook: (input: { name: string; base_currency: string; operating_currency?: string }) =>
+    post<{ book: FinanceBook }>('/finance/books', input),
+  listAccounts: (bookId: string) =>
+    get<{ accounts: FinanceAccount[] }>(`/finance/books/${encodeURIComponent(bookId)}/accounts`),
+  createAccount: (bookId: string, input: CreateFinanceAccountInput) =>
+    post<{ account: FinanceAccount }>(`/finance/books/${encodeURIComponent(bookId)}/accounts`, input),
+  closeAccount: (bookId: string, accountId: string, date: string) =>
+    post<{ account: FinanceAccount }>(
+      `/finance/books/${encodeURIComponent(bookId)}/accounts/${encodeURIComponent(accountId)}/close`,
+      { date },
+    ),
+  setAccountVisibility: (bookId: string, accountId: string, visibility: 'space' | 'private') =>
+    post<{ account: FinanceAccount }>(
+      `/finance/books/${encodeURIComponent(bookId)}/accounts/${encodeURIComponent(accountId)}/visibility`,
+      { visibility },
+    ),
+  listCommodities: (bookId: string) =>
+    get<{ commodities: FinanceCommodity[] }>(`/finance/books/${encodeURIComponent(bookId)}/commodities`),
+  createCommodity: (bookId: string, input: { symbol: string; commodity_type?: string }) =>
+    post<{ commodity: FinanceCommodity }>(`/finance/books/${encodeURIComponent(bookId)}/commodities`, input),
+  listTransactions: (bookId: string) =>
+    get<{ transactions: FinanceTransaction[] }>(`/finance/books/${encodeURIComponent(bookId)}/transactions`),
+  createTransaction: (bookId: string, input: FinanceTransactionInput) =>
+    post<{ directive: FinanceDirective }>(`/finance/books/${encodeURIComponent(bookId)}/transactions`, input),
+  getAccountLedger: (bookId: string, accountId: string) =>
+    get<{ postings: FinancePosting[] }>(
+      `/finance/books/${encodeURIComponent(bookId)}/accounts/${encodeURIComponent(accountId)}/ledger`,
+    ),
+  getBalances: (bookId: string, scope: FinanceBalanceScope = 'all') =>
+    get<{ balances: FinanceBalancePosition[] }>(
+      `/finance/books/${encodeURIComponent(bookId)}/balances?scope=${scope}`,
+    ),
+  validateBook: (bookId: string) =>
+    post<{ errors: FinanceValidationError[] }>(`/finance/books/${encodeURIComponent(bookId)}/validate`),
+  importBeancount: (bookId: string, input: { text: string; filename?: string; post_directly?: boolean }) =>
+    post<FinanceImportResult>(`/finance/books/${encodeURIComponent(bookId)}/import/beancount`, input),
+  exportBeancount: (bookId: string) =>
+    post<FinanceExportResult>(`/finance/books/${encodeURIComponent(bookId)}/export/beancount`),
+}
+
 export const diaryApi = {
   today: () => get<{ date: string; entry: DiaryEntry | null }>('/diary/today'),
   listEntries: (params: { limit?: number; before?: string } = {}) => {

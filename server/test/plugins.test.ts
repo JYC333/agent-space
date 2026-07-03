@@ -26,6 +26,7 @@ import { pluginService } from "../src/modules/plugins/service";
 import { installOfficialPlugin } from "../src/modules/plugins/installer";
 import { BUILT_IN_PLUGINS } from "../src/modules/plugins/builtInPlugins";
 import { DIARY_PLUGIN_ID } from "../src/modules/plugins/official/diary";
+import { FINANCE_LEDGER_PLUGIN_ID } from "../src/modules/plugins/official/financeLedger";
 import type {
   AgentSpacePlugin,
   PluginHostContext,
@@ -198,6 +199,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  await pool!.query("DROP TABLE IF EXISTS finance_books CASCADE");
   await pool!.query("DROP TABLE IF EXISTS diary_reflections");
   await pool!.query("DROP TABLE IF EXISTS diary_entries");
   await pool!.query("DELETE FROM plugin_migrations");
@@ -208,6 +210,13 @@ beforeEach(async () => {
 
 async function installDiary(): Promise<void> {
   await installOfficialPlugin(db, DIARY_PLUGIN_ID, BUILT_IN_PLUGINS, {
+    actorUserId: USER_1,
+    source: "official",
+  });
+}
+
+async function installFinanceLedger(): Promise<void> {
+  await installOfficialPlugin(db, FINANCE_LEDGER_PLUGIN_ID, BUILT_IN_PLUGINS, {
     actorUserId: USER_1,
     source: "official",
   });
@@ -315,6 +324,31 @@ describe("pluginService.installPlugin", () => {
       "2026-06-19",
       "Installed table works",
     ]);
+  });
+
+  it("installs finance_ledger and creates directive stream tables through plugin migrations", async () => {
+    await installFinanceLedger();
+
+    const tables = await pool!.query<{ table_name: string }>(
+      `SELECT table_name
+         FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name IN ('finance_books', 'finance_directives', 'finance_postings', 'finance_exports')
+        ORDER BY table_name`,
+    );
+    expect(tables.rows.map((row) => row.table_name)).toEqual([
+      "finance_books",
+      "finance_directives",
+      "finance_exports",
+      "finance_postings",
+    ]);
+
+    await pool!.query(
+      `INSERT INTO finance_books
+         (space_id, name, base_currency, operating_currency, created_by_user_id)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [SPACE_A, "Household", "USD", "USD", USER_1],
+    );
   });
 
   it("fails when an already-applied plugin migration checksum changes", async () => {
