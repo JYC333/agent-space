@@ -7,7 +7,8 @@
 ## Purpose
 
 `packages/protocol` is the shared contract package for DTOs, command
-envelopes, events, and internal server boundary payloads.
+envelopes, events, internal server boundary payloads, and shared contract value
+sets.
 
 It exists so server and client consumers validate the same shapes at runtime and compile time
 instead of re-deriving API payloads in multiple places.
@@ -34,6 +35,9 @@ bucket and weaken its contracts-only role.
 - Common primitives and exported value sets.
 - Shared contracts only when the shape is a server/client or internal server
   boundary, not a purely local web view model.
+  Provider-specific preset taxonomies and connector UI metadata stay with the
+  owning module, not in `packages/protocol`.
+
 
 Field names use the public API's `snake_case` JSON convention. Types are derived from
 Zod schemas, so runtime validators and TypeScript types stay together.

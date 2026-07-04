@@ -145,6 +145,7 @@ Space Settings owns product policy:
 - creator roles;
 - default Custom Source policy;
 - allowed domains;
+- per-space download cap;
 - capture defaults;
 - credentialed source policy;
 - same-envelope repair auto-apply policy.
@@ -154,7 +155,7 @@ Instance Settings owns runner and sandbox safety:
 - runner availability;
 - allowed handler languages;
 - network hard denies;
-- time, memory, output, download, file, and log limits;
+- time, output, file, and log limits;
 - browser automation availability;
 - shell availability;
 - dependency installation availability.
@@ -172,7 +173,9 @@ The implemented settings API keeps that ownership split explicit:
 - `PUT /api/v1/intake/custom-source-settings/instance` lets an instance admin
   update runner availability. Absent a row, runner availability defaults to on.
 - Instance hard sandbox limits remain server safety config and read-only in the
-  web app; Space Settings never exposes those hard-limit controls.
+  web app; Space Settings never exposes those hard-limit controls. The download
+  byte cap is the exception because it is a space boundary and is stored in the
+  space policy as `download_bytes_max`.
 
 ## Runner Expectations
 
@@ -190,7 +193,7 @@ closed.
 
 ### Phase 4 implementation status
 
-`server/src/modules/intake/customSourceRunner.ts` implements: separate
+`server/src/modules/intake/customSources/customSourceRunner.ts` implements: separate
 OS-process execution (`node:child_process.spawn`, `shell: false`), a
 per-run temp sandbox directory with an `input.json` and a `files/`
 directory, a minimal explicit environment (no `process.env` inheritance),
@@ -236,7 +239,7 @@ sandbox `files/` root, before the materializer ever reads or copies it.
 
 ### Phase 5 implementation status
 
-`server/src/modules/intake/customSourceCreateFlowService.ts` implements the
+`server/src/modules/intake/customSources/customSourceCreateFlowService.ts` implements the
 backend draft -> generate-handler -> test-handler -> activate flow. Handler
 generation is deterministic/template-based, not LLM-driven. Fixture testing
 uses the same runner/validator path as scans and records `source_handler_runs`
@@ -288,7 +291,7 @@ Unlike `typescript_node` (generated code executed in a sandboxed child
 process because the code cannot be fully trusted), a `declarative_pipeline_v1`
 handler version has no generated/untrusted code at all — its
 `manifest_json.pipeline` is a JSON step list interpreted in-process by a
-fixed, reviewed step catalog (`server/src/modules/intake/customSourcePipelineInterpreter.ts`).
+fixed, reviewed step catalog (`server/src/modules/intake/customSources/customSourcePipelineInterpreter.ts`).
 There is nothing to sandbox; every live network request still goes through
 the same origin-allowlist + redirect-revalidation guard
 (`fetchAllowedOriginResponse` in `customSourceEndpointFetch.ts`) the
@@ -413,7 +416,7 @@ policy envelopes, recipe JSON, and extraction jobs are kept in Advanced.
 
 ## Repair
 
-Status: implemented (`server/src/modules/intake/customSourceRepairService.ts`,
+Status: implemented (`server/src/modules/intake/customSources/customSourceRepairService.ts`,
 `POST /api/v1/intake/custom-sources/:connectionId/repair` and `.../rollback`).
 Works identically for both handler execution models — repair calls
 `CustomSourceCreateFlowService.generateHandler`/`testHandler` internally, so
@@ -478,7 +481,7 @@ rollback target.
 ## Credentialed Sources
 
 Status: implemented
-(`server/src/modules/intake/customSourceCredentialCrypto.ts`,
+(`server/src/modules/intake/customSources/customSourceCredentialCrypto.ts`,
 `customSourceCredentialService.ts`, `POST/GET /api/v1/intake/custom-source-credentials`).
 See [Credential Storage](CREDENTIAL_STORAGE.md) for how this channel relates
 to ModelProvider API keys and CLI login state.
@@ -586,15 +589,20 @@ tables:
 - `scope_type='space'`, `scope_id=<space_id>`,
   `settings_key='intake.custom_source.space_policy'`: Space Settings product
   policy fields (creator roles, default capture/retention policy, allowed
-  domains, credentialed-source allowance, same-envelope repair auto-apply).
+  domains, download byte cap, credentialed-source allowance,
+  same-envelope repair auto-apply).
 
 Absent a space policy row, the read API returns system defaults rather than
 failing, mirroring how Space Settings panels read other not-yet-configured
 policies. The update API normalizes allowed domains to hostnames, always keeps
 `owner` and `admin` in creator roles, and rejects non-owner/admin updates.
-Instance-level sandbox hard limits are config-driven (`server/src/config.ts`),
-not stored in the space policy settings payload, matching other instance-only
-hard limits in this codebase.
+Instance-level sandbox hard limits other than download are config-driven
+(`server/src/config.ts`), not stored in the space policy settings payload,
+matching other instance-only hard limits in this codebase. The effective runner
+settings for a space combine the instance runner read model with
+`intake.custom_source.space_policy.download_bytes_max`; Save URL/PDF
+extraction, Source Recipe fetches, and Custom Source fetches use that space
+download cap.
 
 Shared wire DTOs and the handler `input.json`/`output.json` contract live in
 `packages/protocol/src/intakeCustomSourceHandlers.ts`
@@ -610,7 +618,7 @@ fields are added to Knowledge `sources`.
 ## Phase 6 Proposal Payloads
 
 Phase 6 ("Policy and proposals") is implemented by
-`server/src/modules/intake/customSourceProposalApplier.ts`,
+`server/src/modules/intake/customSources/customSourceProposalApplier.ts`,
 `server/src/modules/proposals/payloadSchemas.ts`, and
 `CustomSourceCreateFlowService.activateHandler`.
 

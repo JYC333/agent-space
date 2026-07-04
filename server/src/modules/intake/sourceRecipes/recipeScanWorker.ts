@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../../config";
 import type { Queryable } from "../../routeUtils/common";
 import { loadProtocol } from "../../providers/protocolRuntime";
-import { PgCustomSourceHandlerRepository } from "../customSourceHandlerRepository";
-import { CustomSourceCredentialService } from "../customSourceCredentialService";
-import { CustomSourceMaterializationService } from "../customSourceMaterializer";
-import { fetchCustomSourceEndpointHtml } from "../customSourceEndpointFetch";
-import { cleanupSandbox } from "../customSourceRunner";
+import { PgCustomSourceHandlerRepository } from "../customSources/customSourceHandlerRepository";
+import { CustomSourceCredentialService } from "../customSources/customSourceCredentialService";
+import { CustomSourceMaterializationService } from "../customSources/customSourceMaterializer";
+import { emitIntakeItemsMaterializedEvent } from "../automationEventEmitter";
+import { fetchCustomSourceEndpointHtml } from "../customSources/customSourceEndpointFetch";
+import { cleanupSandbox } from "../customSources/customSourceRunner";
 import { computeNextCheckAt } from "../scanSchedule";
 import {
   getSourceConnectionScanTask,
@@ -153,10 +154,11 @@ async function runOne(db: Queryable, config: ServerConfig, job: PendingRecipeJob
     name: string;
     endpoint_url: string | null;
     fetch_frequency: string;
+    schedule_rule_json: unknown;
     status: string;
     active_recipe_version_id: string | null;
   }>(
-    `SELECT id, space_id, owner_user_id, name, endpoint_url, fetch_frequency, status, active_recipe_version_id
+    `SELECT id, space_id, owner_user_id, name, endpoint_url, fetch_frequency, schedule_rule_json, status, active_recipe_version_id
        FROM source_connections
       WHERE id = $1 AND space_id = $2`,
     [job.connection_id, job.space_id],
@@ -178,7 +180,7 @@ async function runOne(db: Queryable, config: ServerConfig, job: PendingRecipeJob
     const protocol = await loadProtocol();
     const recipe = protocol.SourceRecipeDefinitionSchema.parse(versionRow.recipe_json);
     const envelope = protocol.SourcePolicyEnvelopeSchema.parse(versionRow.policy_envelope_json);
-    const settings = await new PgCustomSourceHandlerRepository(db, config).getInstanceRunnerSettings();
+    const settings = await new PgCustomSourceHandlerRepository(db, config).getRunnerSettingsForSpace(job.space_id);
     const credential = await new CustomSourceCredentialService(db, config).resolveCredentialHeader(
       job.space_id,
       envelope.credential_ref,
@@ -249,6 +251,13 @@ async function runOne(db: Queryable, config: ServerConfig, job: PendingRecipeJob
           result.errors.length > 0 ? result.errors.join("; ").slice(0, 512) : null,
         ],
       );
+      if (result.status === "succeeded" && result.itemsCreated > 0) {
+        await emitIntakeItemsMaterializedEvent(db, {
+          spaceId: job.space_id,
+          sourceConnectionId: job.connection_id,
+          newItemCount: result.itemsCreated,
+        });
+      }
     } finally {
       await cleanupSandbox(runResult.sandbox_files_root).catch(() => undefined);
     }
@@ -262,6 +271,7 @@ async function runOne(db: Queryable, config: ServerConfig, job: PendingRecipeJob
       connection,
       nextRunAt: computeNextCheckAt(connection.fetch_frequency, completedAt, {
         existingNextCheckAt: scheduleTask?.next_run_at,
+        scheduleRule: connection.schedule_rule_json,
       }),
       lastRunAt: completedAt,
       updatedAt: completedAt,

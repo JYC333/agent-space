@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config";
 import { IntakeExtractionWorker } from "../src/modules/intake/extractionWorker";
 import type { Queryable } from "../src/modules/routeUtils/common";
+import { simplePdfBytes } from "./fixtures/simplePdf";
 
 class FakeDb implements Queryable {
   readonly calls: Array<{ sql: string; params: readonly unknown[] }> = [];
@@ -10,6 +11,7 @@ class FakeDb implements Queryable {
   constructor(
     private readonly jobType: "extract_text" | "snapshot",
     private readonly policyRetention: "metadata_only" | "full_text" | "full_snapshot" = "metadata_only",
+    private readonly downloadBytesMax: number | null = null,
   ) {}
 
   async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
@@ -37,7 +39,7 @@ class FakeDb implements Queryable {
           space_id: "space-1",
           connector_id: "connector-1",
           owner_user_id: "user-1",
-          capture_policy: "metadata_only",
+          capture_policy: "reference_only",
           trust_level: "normal",
           consent_json: {},
           policy_json: { retention_policy: this.policyRetention },
@@ -46,6 +48,24 @@ class FakeDb implements Queryable {
       } as { rows: Row[]; rowCount: number };
     }
     if (sql.includes("FROM scheduler_tasks")) {
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql.includes("FROM settings")) {
+      if (this.downloadBytesMax !== null && params.includes("intake.custom_source.space_policy")) {
+        return {
+          rows: [{
+            id: "settings-1",
+            scope_type: "space",
+            scope_id: "space-1",
+            settings_key: "intake.custom_source.space_policy",
+            settings_json: { download_bytes_max: this.downloadBytesMax },
+            updated_by_user_id: "user-1",
+            created_at: "2026-07-01T00:00:00.000Z",
+            updated_at: "2026-07-01T00:00:00.000Z",
+          }],
+          rowCount: 1,
+        } as { rows: Row[]; rowCount: number };
+      }
       return { rows: [], rowCount: 0 };
     }
     if (sql.includes("INSERT INTO artifacts")) {
@@ -59,6 +79,9 @@ class FakeDb implements Queryable {
     }
     if (sql.includes("INSERT INTO extracted_evidence")) {
       return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("INSERT INTO evidence_links")) {
+      return { rows: [], rowCount: 0 };
     }
     if (sql.includes("UPDATE extraction_jobs SET source_snapshot_id")) {
       return { rows: [], rowCount: 1 };
@@ -125,6 +148,80 @@ describe("IntakeExtractionWorker source retention policy", () => {
     expect(artifactInsert?.params).toContain(JSON.stringify(["json"]));
     expect(String(artifactInsert?.params[3])).toContain("\"image_policy\":\"remote_reference\"");
     expect(String(artifactInsert?.params[3])).toContain("\"src\":\"https://example.test/image.png\"");
+  });
+
+  it("stores PDF extract_text responses as raw binary snapshots and pdf reader documents", async () => {
+    const db = new FakeDb("extract_text", "full_text");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      simplePdfBytes("Project Research PDF"),
+      { status: 200, headers: { "content-type": "text/plain" } },
+    ));
+
+    const result = await new IntakeExtractionWorker(db, config()).runPendingJob("job-1", "space-1");
+
+    expect(result.status).toBe("succeeded");
+    const artifactInserts = db.calls.filter((call) => call.sql.includes("INSERT INTO artifacts"));
+    expect(artifactInserts).toHaveLength(2);
+    const rawInsert = artifactInserts[0];
+    expect(rawInsert?.sql).toContain("'intake_raw_snapshot'");
+    expect(rawInsert?.params[4]).toBe("application/pdf");
+    expect(rawInsert?.params[5]).toBe(JSON.stringify(["pdf"]));
+    expect(rawInsert?.params[6]).toBe("pdf");
+    const readerInsert = artifactInserts[1];
+    expect(readerInsert?.sql).toContain("'intake_reader_document'");
+    expect(String(readerInsert?.params[3])).toContain("\"extraction_method\":\"pdf_text_v1\"");
+    expect(String(readerInsert?.params[3])).toContain("Project Research PDF");
+    const evidenceInsert = db.calls.find((call) => call.sql.includes("INSERT INTO extracted_evidence"));
+    expect(evidenceInsert?.params[12]).toBe("pdf_text_v1");
+  });
+
+  it("uses the space download limit when extracting source URLs", async () => {
+    const db = new FakeDb("extract_text", "full_text", 1_024);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      new Uint8Array(1_025),
+      { status: 200, headers: { "content-type": "application/pdf" } },
+    ));
+
+    const result = await new IntakeExtractionWorker(db, config()).runPendingJob("job-1", "space-1");
+
+    expect(result.status).toBe("failed");
+    const finish = db.calls.find((call) => call.sql.includes("SET status = $3"));
+    expect(finish?.params[4]).toBe("413");
+    expect(finish?.params[5]).toBe("Downloaded source exceeds max size (1 KiB)");
+  });
+
+  it("stores PDF snapshot jobs as raw binary snapshots and derived reader documents", async () => {
+    const db = new FakeDb("snapshot", "full_snapshot");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      simplePdfBytes("Snapshot PDF Text"),
+      { status: 200, headers: { "content-type": "application/pdf" } },
+    ));
+
+    const result = await new IntakeExtractionWorker(db, config()).runPendingJob("job-1", "space-1");
+
+    expect(result.status).toBe("succeeded");
+    const artifactInserts = db.calls.filter((call) => call.sql.includes("INSERT INTO artifacts"));
+    expect(artifactInserts).toHaveLength(2);
+    expect(artifactInserts[0]?.params[4]).toBe("application/pdf");
+    expect(artifactInserts[0]?.params[6]).toBe("pdf");
+    expect(String(artifactInserts[1]?.params[3])).toContain("\"extraction_method\":\"pdf_text_v1\"");
+    expect(String(artifactInserts[1]?.params[3])).toContain("Snapshot PDF Text");
+  });
+
+  it("stores non-PDF binary snapshot jobs without deriving reader documents", async () => {
+    const db = new FakeDb("snapshot", "full_snapshot");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      new Uint8Array([0, 1, 2, 3]),
+      { status: 200, headers: { "content-type": "application/octet-stream" } },
+    ));
+
+    const result = await new IntakeExtractionWorker(db, config()).runPendingJob("job-1", "space-1");
+
+    expect(result.status).toBe("succeeded");
+    const artifactInserts = db.calls.filter((call) => call.sql.includes("INSERT INTO artifacts"));
+    expect(artifactInserts).toHaveLength(1);
+    expect(artifactInserts[0]?.params[4]).toBe("application/octet-stream");
+    expect(artifactInserts[0]?.params[6]).toBe("bin");
   });
 });
 

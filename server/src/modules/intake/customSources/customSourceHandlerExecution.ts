@@ -3,9 +3,9 @@ import type {
   CustomSourceHandlerInput,
   CustomSourcePolicyEnvelope,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import type { ServerConfig } from "../../config";
-import { HttpError, type Queryable } from "../routeUtils/common";
-import { loadProtocol } from "../providers/protocolRuntime";
+import type { ServerConfig } from "../../../config";
+import { HttpError, type Queryable } from "../../routeUtils/common";
+import { loadProtocol } from "../../providers/protocolRuntime";
 import type { CustomSourceFetchCredential } from "./customSourceEndpointFetch";
 import type { HandlerVersionRow } from "./customSourceHandlerRepository";
 import { runCustomSourcePipeline } from "./customSourcePipelineInterpreter";

@@ -29,6 +29,7 @@ export interface SourceConnectionRow {
   config_json: unknown;
   last_checked_at: unknown;
   next_check_at: unknown;
+  schedule_rule_json: unknown;
   handler_kind: string;
   active_handler_version_id: string | null;
   active_recipe_version_id: string | null;
@@ -139,27 +140,11 @@ export interface EvidenceLinkRow {
   updated_at: unknown;
 }
 
-export interface WorkspaceProfileRow {
-  id: string;
-  space_id: string;
-  workspace_id: string;
-  name: string;
-  status: string;
-  observation_policy: string;
-  routing_policy_json: unknown;
-  filters_json: unknown;
-  extraction_policy_json: unknown;
-  context_policy_json: unknown;
-  created_by_user_id: string | null;
-  created_at: unknown;
-  updated_at: unknown;
-}
-
 export interface WorkspaceBindingRow {
   id: string;
   space_id: string;
   workspace_id: string;
-  project_id: string | null;
+  project_id: string;
   source_connection_id: string;
   binding_key: string;
   status: string;
@@ -188,6 +173,7 @@ const CONNECTION_TABLE_COLUMNS = [
   "consent_json",
   "policy_json",
   "config_json",
+  "schedule_rule_json",
   "handler_kind",
   "active_handler_version_id",
   "active_recipe_version_id",
@@ -217,5 +203,4 @@ export const ITEM_COLUMNS = `id, space_id, connection_id, item_type, source_obje
 export const JOB_COLUMNS = `id, space_id, connection_id, intake_item_id, source_snapshot_id, source_object_type, source_object_id, job_type, status, started_at, completed_at, items_seen, items_created, items_updated, error_code, error_message, metadata_json, created_at`;
 export const EVIDENCE_COLUMNS = `id, space_id, intake_item_id, extraction_job_id, source_snapshot_id, source_object_type, source_object_id, evidence_type, title, content_excerpt, content_hash, artifact_id, source_uri, source_title, source_author, occurred_at, trust_level, extraction_method, confidence, status, metadata_json, created_by_user_id, created_by_agent_id, created_by_run_id, created_at, updated_at`;
 export const EVIDENCE_LINK_COLUMNS = `id, space_id, evidence_id, target_type, target_id, link_type, status, confidence, reason, created_by_user_id, created_by_agent_id, created_by_run_id, created_at, updated_at`;
-export const PROFILE_COLUMNS = `id, space_id, workspace_id, name, status, observation_policy, routing_policy_json, filters_json, extraction_policy_json, context_policy_json, created_by_user_id, created_at, updated_at`;
 export const BINDING_COLUMNS = `id, space_id, workspace_id, project_id, source_connection_id, binding_key, status, priority, filters_json, routing_policy_json, extraction_policy_json, created_by_user_id, created_at, updated_at`;

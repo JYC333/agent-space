@@ -10,15 +10,15 @@ import {
   runSourceRecipe,
   type SourceRecipeRunInput,
 } from "../src/modules/intake/sourceRecipes/recipeInterpreter";
-import { validateCustomSourceHandlerOutput } from "../src/modules/intake/customSourceContractValidator";
-import type { CustomSourceRunnerSettings } from "../src/modules/intake/customSourceRunner";
+import { validateCustomSourceHandlerOutput } from "../src/modules/intake/customSources/customSourceContractValidator";
+import type { CustomSourceRunnerSettings } from "../src/modules/intake/customSources/customSourceRunner";
 
 const ORIGIN = "https://source.example";
 
 function policyEnvelope(overrides: Partial<SourcePolicyEnvelope> = {}): SourcePolicyEnvelope {
   return {
     allowed_network_origins: [ORIGIN],
-    capture_policy: "auto_extract_relevant",
+    capture_policy: "extract_text",
     retention_policy: "full_text",
     credential_ref: null,
     log_redaction_enabled: true,

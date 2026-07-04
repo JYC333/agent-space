@@ -74,9 +74,9 @@ New and updated source connections normalize policy to:
 
 Allowed egress classes are `internal_only`, `local_provider_allowed`, and
 `external_provider_allowed`. The source egress class must be backed by consent.
-Retention is tied to capture policy: for example, `auto_extract_all_text` cannot
-claim `metadata_only` retention, and `archive_all_snapshots` requires
-`full_snapshot`.
+Retention is tied to capture policy: `reference_only` may keep
+`metadata_only` retention, `extract_text` requires at least `full_text`, and
+`archive_original` requires `full_snapshot`.
 
 `source_egress_class` is connected to retrieval provider content egress for
 rerank, synthesis, and embedding backfill. The source gate composes with the

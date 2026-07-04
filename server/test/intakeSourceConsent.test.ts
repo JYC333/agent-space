@@ -16,7 +16,7 @@ describe("source connection consent policy", () => {
     const governance = normalizeSourceConnectionCreateGovernance(identity, {});
 
     expect(governance).toMatchObject({
-      capturePolicy: "metadata_only",
+      capturePolicy: "reference_only",
       trustLevel: "normal",
       consent: {
         schema_version: 1,
@@ -66,15 +66,15 @@ describe("source connection consent policy", () => {
   it("keeps retention at least as broad as the capture policy on update", () => {
     expect(() =>
       normalizeSourceConnectionUpdateGovernance(identity, existingConnection(), {
-        capture_policy: "auto_extract_all_text",
+        capture_policy: "extract_text",
       }),
     ).toThrowError(HttpError);
 
     const governance = normalizeSourceConnectionUpdateGovernance(identity, existingConnection(), {
-      capture_policy: "auto_extract_all_text",
+      capture_policy: "extract_text",
       policy: { retention_policy: "full_text" },
     });
-    expect(governance.capturePolicy).toBe("auto_extract_all_text");
+    expect(governance.capturePolicy).toBe("extract_text");
     expect(governance.policy?.retention_policy).toBe("full_text");
   });
 
@@ -89,7 +89,7 @@ describe("source connection consent policy", () => {
 
   it("lazy-normalizes legacy connection policy from capture policy on read", () => {
     const legacy = existingConnection({
-      capture_policy: "auto_extract_all_text",
+      capture_policy: "extract_text",
       policy_json: {},
     });
     const governance = normalizeSourceConnectionReadGovernance(legacy);
@@ -128,7 +128,7 @@ function existingConnection(overrides: Partial<SourceConnectionRow> = {}): Sourc
     endpoint_url: null,
     status: "active",
     fetch_frequency: "manual",
-    capture_policy: "metadata_only",
+    capture_policy: "reference_only",
     trust_level: "normal",
     topic_hints_json: null,
     consent_json: {
@@ -153,6 +153,7 @@ function existingConnection(overrides: Partial<SourceConnectionRow> = {}): Sourc
     config_json: {},
     last_checked_at: null,
     next_check_at: null,
+    schedule_rule_json: null,
     handler_kind: "built_in",
     active_handler_version_id: null,
     active_recipe_version_id: null,

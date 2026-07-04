@@ -6,11 +6,14 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import type { CustomSourcePolicyEnvelope } from "@agent-space/protocol" with {
+  "resolution-mode": "import",
+};
 import { loadConfig, type ServerConfig } from "../src/config";
 import {
   CustomSourceCreateFlowService,
   evaluateCustomSourceActivation,
-} from "../src/modules/intake/customSourceCreateFlowService";
+} from "../src/modules/intake/customSources/customSourceCreateFlowService";
 import { SourceRecipeCreateService } from "../src/modules/intake/sourceRecipes/recipeCreateService";
 import { SourceRecipeDryRunService } from "../src/modules/intake/sourceRecipes/recipeDryRunService";
 import { SourceRecipePipelineBridgeService } from "../src/modules/intake/sourceRecipes/pipelineBridgeService";
@@ -121,7 +124,7 @@ async function insertCustomSourceSpacePolicy(overrides: Record<string, unknown> 
       CUSTOM_SOURCE_SPACE_POLICY_SETTINGS_KEY,
       JSON.stringify({
         creator_roles: ["owner", "admin"],
-        default_capture_policy: "auto_extract_relevant",
+        default_capture_policy: "extract_text",
         default_retention_policy: "full_text",
         allowed_domains: [],
         credentialed_sources_allowed: false,
@@ -771,9 +774,9 @@ describe("CustomSourceCreateFlowService (real Postgres + real sandboxed runner)"
 });
 
 describe("evaluateCustomSourceActivation", () => {
-  const baseEnvelope = {
+  const baseEnvelope: CustomSourcePolicyEnvelope = {
     allowed_network_origins: ["https://example.com"],
-    capture_policy: "auto_extract_relevant",
+    capture_policy: "extract_text",
     retention_policy: "full_text",
     credential_ref: null,
     language: "typescript_node" as const,
@@ -822,28 +825,28 @@ describe("evaluateCustomSourceActivation", () => {
     const result = evaluateCustomSourceActivation(
       {
         ...baseEnvelope,
-        capture_policy: "archive_all_snapshots",
+        capture_policy: "archive_original",
         retention_policy: "full_snapshot",
       },
       { activeEnvelope: baseEnvelope, spaceAllowedDomains: [] },
     );
     expect(result.withinEnvelope).toBe(false);
-    expect(result.deltas).toContain("capture policy broadened: auto_extract_relevant -> archive_all_snapshots");
+    expect(result.deltas).toContain("capture policy broadened: extract_text -> archive_original");
     expect(result.deltas).toContain("retention policy broadened: full_text -> full_snapshot");
   });
 
   it("flags first-activation capture broadening beyond Space defaults", () => {
     const result = evaluateCustomSourceActivation(
-      { ...baseEnvelope, capture_policy: "auto_extract_all_text" },
+      { ...baseEnvelope, capture_policy: "extract_text" },
       {
         activeEnvelope: null,
         spaceAllowedDomains: [],
-        spaceDefaultCapturePolicy: "metadata_only",
+        spaceDefaultCapturePolicy: "reference_only",
         spaceDefaultRetentionPolicy: "full_text",
       },
     );
     expect(result.withinEnvelope).toBe(false);
-    expect(result.deltas).toContain("capture policy broadened: metadata_only -> auto_extract_all_text");
+    expect(result.deltas).toContain("capture policy broadened: reference_only -> extract_text");
   });
 
   it("flags policy limit increases but allows narrower repairs", () => {
@@ -857,7 +860,7 @@ describe("evaluateCustomSourceActivation", () => {
     const narrower = evaluateCustomSourceActivation(
       {
         ...baseEnvelope,
-        capture_policy: "excerpt_only",
+        capture_policy: "reference_only",
         retention_policy: "summary_only",
         limits: { ...baseEnvelope.limits, max_items: 5 },
       },

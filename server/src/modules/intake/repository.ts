@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../config";
 import type { Queryable } from "../routeUtils/common";
 import { canAccessProject } from "../memory/projectAccess";
+import { assertProjectWriter, assertWorkspaceLinkedToProject } from "../projects/access";
 import {
   HttpError,
   countFromRow,
@@ -16,8 +17,8 @@ import {
   type SpaceUserIdentity,
 } from "../routeUtils/common";
 import { IntakeExtractionWorker } from "./extractionWorker";
-import { CustomSourceCredentialService } from "./customSourceCredentialService";
-import { runCustomSourceHandlerScanJob } from "./customSourceScanWorker";
+import { CustomSourceCredentialService } from "./customSources/customSourceCredentialService";
+import { runCustomSourceHandlerScanJob } from "./customSources/customSourceScanWorker";
 import { RECIPE_SCAN_JOB_IMPLEMENTATION, runSourceRecipeScanJob } from "./sourceRecipes/recipeScanWorker";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import {
@@ -30,7 +31,6 @@ import {
   itemOut,
   jobOut,
   normalizeUrl,
-  profileOut,
   sha256,
   sourceDomain,
   stringList,
@@ -43,7 +43,6 @@ import {
   EVIDENCE_LINK_COLUMNS,
   ITEM_COLUMNS,
   JOB_COLUMNS,
-  PROFILE_COLUMNS,
   type EvidenceLinkRow,
   type EvidenceRow,
   type ExtractionJobRow,
@@ -51,14 +50,13 @@ import {
   type SourceConnectionRow,
   type SourceConnectorRow,
   type WorkspaceBindingRow,
-  type WorkspaceProfileRow,
 } from "./intakeRepositoryRows";
 import {
   getSourceConnectionScanTask,
-  nextRunAtForSourceConnection,
   sourceConnectionWithSchedule,
   upsertSourceConnectionScanTask,
 } from "./sourceConnectionScheduler";
+import { resolveRequestedSourceSchedule } from "./sourceScheduleInput";
 import {
   enforceSourceDerivedImportTarget,
   enforceSourceRetentionPolicy,
@@ -76,6 +74,21 @@ const EVIDENCE_LINK_TYPES = new Set([
   "used_in_context",
 ]);
 const EVIDENCE_STATUSES = new Set(["candidate", "active", "rejected", "archived"]);
+
+function isManualUrlItem(item: IntakeItemRow): boolean {
+  return item.item_type === "external_url" && objectValue(item.metadata_json).created_by === "manual_url";
+}
+
+function itemRetentionPolicy(item: IntakeItemRow): "metadata_only" | "summary_only" | "full_text" | "full_snapshot" {
+  if (
+    item.retention_policy === "summary_only" ||
+    item.retention_policy === "full_text" ||
+    item.retention_policy === "full_snapshot"
+  ) {
+    return item.retention_policy;
+  }
+  return "metadata_only";
+}
 
 export class PgIntakeRepository {
   constructor(
@@ -124,15 +137,21 @@ export class PgIntakeRepository {
     if (!connector.rows[0]) throw new HttpError(404, "Source connector not found");
     const now = new Date().toISOString();
     const governance = normalizeSourceConnectionCreateGovernance(identity, body);
+    const fetchFrequency = optionalString(body.fetch_frequency) ?? "manual";
+    const schedule = resolveRequestedSourceSchedule({
+      body,
+      status: "active",
+      fetchFrequency,
+    });
     const result = await this.db.query<SourceConnectionRow>(
       `INSERT INTO source_connections (
          id, space_id, connector_id, owner_user_id, credential_id, name, endpoint_url,
          status, fetch_frequency, capture_policy, trust_level, topic_hints_json,
-         consent_json, policy_json, config_json, created_at, updated_at
+         consent_json, policy_json, config_json, schedule_rule_json, created_at, updated_at
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7,
          'active', $8, $9, $10, $11::jsonb,
-         $12::jsonb, $13::jsonb, $14::jsonb, $15, $15
+         $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $16
        ) RETURNING ${CONNECTION_COLUMNS}`,
       [
         randomUUID(),
@@ -142,20 +161,21 @@ export class PgIntakeRepository {
         optionalString(body.credential_id),
         requiredString(body.name, "name"),
         optionalString(body.endpoint_url),
-        optionalString(body.fetch_frequency) ?? "manual",
+        fetchFrequency,
         governance.capturePolicy,
         governance.trustLevel,
         JSON.stringify(Array.isArray(body.topic_hints) ? body.topic_hints : null),
         JSON.stringify(governance.consent),
         JSON.stringify(governance.policy),
         JSON.stringify(objectValue(body.config)),
+        JSON.stringify(schedule.scheduleRule),
         now,
       ],
     );
     const row = result.rows[0]!;
     const task = await upsertSourceConnectionScanTask(this.db, {
       connection: row,
-      nextRunAt: nextRunAtForSourceConnection(row, now),
+      nextRunAt: schedule.nextRunAt,
       updatedAt: now,
     });
     return connectionOut(sourceConnectionWithSchedule(row, task));
@@ -187,6 +207,16 @@ export class PgIntakeRepository {
       );
     }
     const now = new Date().toISOString();
+    const requestedStatus = optionalString(body.status) ?? existing.status;
+    const requestedFrequency = optionalString(body.fetch_frequency) ?? existing.fetch_frequency;
+    const schedule = resolveRequestedSourceSchedule({
+      body,
+      status: requestedStatus,
+      fetchFrequency: requestedFrequency,
+      existingNextCheckAt: existing.next_check_at,
+      existingScheduleRule: existing.schedule_rule_json,
+      now: new Date(now),
+    });
     const governance = normalizeSourceConnectionUpdateGovernance(identity, existing, body);
     const result = await this.db.query<SourceConnectionRow>(
       `UPDATE source_connections SET
@@ -200,8 +230,9 @@ export class PgIntakeRepository {
          consent_json = CASE WHEN $12::boolean THEN $13::jsonb ELSE consent_json END,
          policy_json = CASE WHEN $14::boolean THEN $15::jsonb ELSE policy_json END,
          config_json = CASE WHEN $16::boolean THEN $17::jsonb ELSE config_json END,
-         deleted_at = CASE WHEN $4 = 'archived' THEN $18::timestamptz ELSE deleted_at END,
-         updated_at = $18
+         schedule_rule_json = $18::jsonb,
+         deleted_at = CASE WHEN $4 = 'archived' THEN $19::timestamptz ELSE deleted_at END,
+         updated_at = $19
        WHERE space_id = $1 AND id = $2
        RETURNING ${CONNECTION_COLUMNS}`,
       [
@@ -222,13 +253,14 @@ export class PgIntakeRepository {
         JSON.stringify(governance.policy),
         Object.hasOwn(body, "config"),
         JSON.stringify(optionalObject(body.config)),
+        JSON.stringify(schedule.scheduleRule),
         now,
       ],
     );
     const row = result.rows[0]!;
     const task = await upsertSourceConnectionScanTask(this.db, {
       connection: row,
-      nextRunAt: nextRunAtForSourceConnection(row, now, existing.next_check_at),
+      nextRunAt: schedule.nextRunAt,
       updatedAt: now,
     });
     return connectionOut(sourceConnectionWithSchedule(row, task));
@@ -303,14 +335,42 @@ export class PgIntakeRepository {
     if (filters.createdAfter) clauses.push(`created_at >= ${add(filters.createdAfter)}::timestamptz`);
     if (filters.occurredAfter) clauses.push(`occurred_at >= ${add(filters.occurredAfter)}::timestamptz`);
     if (filters.projectId) {
+      const projectParam = add(filters.projectId);
       clauses.push(
-        `connection_id IN (
-           SELECT source_connection_id
-             FROM workspace_source_bindings
-            WHERE space_id = $1
-              AND project_id = ${add(filters.projectId)}
-              AND status = 'active'
-         )`,
+        `(
+          connection_id IN (
+            SELECT wsb.source_connection_id
+              FROM workspace_source_bindings wsb
+             WHERE wsb.space_id = $1
+               AND wsb.project_id = ${projectParam}
+               AND wsb.status = 'active'
+               AND EXISTS (
+                 SELECT 1
+                   FROM project_workspaces pw
+                  WHERE pw.space_id = wsb.space_id
+                    AND pw.project_id = wsb.project_id
+                    AND pw.workspace_id = wsb.workspace_id
+               )
+          )
+          OR EXISTS (
+            SELECT 1
+              FROM source_snapshots ss
+              JOIN workspace_source_bindings wsb
+                ON wsb.space_id = ss.space_id
+               AND wsb.source_connection_id = ss.connection_id
+               AND wsb.project_id = ${projectParam}
+               AND wsb.status = 'active'
+               AND EXISTS (
+                 SELECT 1
+                   FROM project_workspaces pw
+                  WHERE pw.space_id = wsb.space_id
+                    AND pw.project_id = wsb.project_id
+                    AND pw.workspace_id = wsb.workspace_id
+               )
+             WHERE ss.space_id = $1
+               AND ss.intake_item_id = intake_items.id
+          )
+        )`,
       );
     }
     if (filters.q) {
@@ -425,6 +485,43 @@ export class PgIntakeRepository {
     throw new HttpError(422, "Unsupported intake action");
   }
 
+  async updateItem(identity: SpaceUserIdentity, itemId: string, body: Record<string, unknown>) {
+    const item = await this.getItemRow(identity, itemId);
+    if (!item) throw new HttpError(404, "Intake item not found");
+    if (!Object.hasOwn(body, "connection_id")) throw new HttpError(422, "connection_id is required");
+    if (!isManualUrlItem(item)) {
+      throw new HttpError(422, "Only manually saved URL items can change source");
+    }
+
+    const connectionId = optionalString(body.connection_id);
+    const connection = connectionId ? await this.getConnectionRow(identity, connectionId) : null;
+    if (connectionId && !connection) throw new HttpError(404, "Source connection not found");
+    if (connection) enforceSourceRetentionPolicy(normalizeSourceConnectionReadGovernance(connection).policy, itemRetentionPolicy(item));
+
+    const now = new Date().toISOString();
+    await this.db.query(
+      `UPDATE intake_items
+          SET connection_id = $3, updated_at = $4
+        WHERE space_id = $1 AND id = $2`,
+      [identity.spaceId, itemId, connectionId, now],
+    );
+    await this.db.query(
+      `UPDATE source_snapshots
+          SET connection_id = $3
+        WHERE space_id = $1 AND intake_item_id = $2`,
+      [identity.spaceId, itemId, connectionId],
+    );
+    await this.db.query(
+      `UPDATE extraction_jobs
+          SET connection_id = $3
+        WHERE space_id = $1
+          AND intake_item_id = $2
+          AND status IN ('pending', 'queued')`,
+      [identity.spaceId, itemId, connectionId],
+    );
+    return this.getItem(identity, itemId);
+  }
+
   async listJobs(identity: SpaceUserIdentity, filters: {
     status: string | null;
     intakeItemId: string | null;
@@ -507,10 +604,18 @@ export class PgIntakeRepository {
                AND ss.id = extracted_evidence.source_snapshot_id
                AND ss.connection_id = ${connectionParam}
           )
+          OR EXISTS (
+            SELECT 1
+              FROM source_snapshots ss
+             WHERE ss.space_id = extracted_evidence.space_id
+               AND ss.intake_item_id = extracted_evidence.intake_item_id
+               AND ss.connection_id = ${connectionParam}
+          )
         )`,
       );
     }
     if (filters.projectId) {
+      const projectParam = add(filters.projectId);
       clauses.push(
         `(
           EXISTS (
@@ -518,11 +623,27 @@ export class PgIntakeRepository {
               FROM intake_items ii
               JOIN workspace_source_bindings wsb
                 ON wsb.space_id = ii.space_id
-               AND wsb.source_connection_id = ii.connection_id
+               AND (
+                 wsb.source_connection_id = ii.connection_id
+                 OR EXISTS (
+                   SELECT 1
+                     FROM source_snapshots ss
+                    WHERE ss.space_id = ii.space_id
+                      AND ss.intake_item_id = ii.id
+                      AND ss.connection_id = wsb.source_connection_id
+                 )
+               )
                AND wsb.status = 'active'
+               AND EXISTS (
+                 SELECT 1
+                   FROM project_workspaces pw
+                  WHERE pw.space_id = wsb.space_id
+                    AND pw.project_id = wsb.project_id
+                    AND pw.workspace_id = wsb.workspace_id
+               )
              WHERE ii.space_id = extracted_evidence.space_id
                AND ii.id = extracted_evidence.intake_item_id
-               AND wsb.project_id = ${add(filters.projectId)}
+               AND wsb.project_id = ${projectParam}
           )
           OR EXISTS (
             SELECT 1
@@ -530,7 +651,7 @@ export class PgIntakeRepository {
              WHERE el.space_id = extracted_evidence.space_id
                AND el.evidence_id = extracted_evidence.id
                AND el.target_type = 'project'
-               AND el.target_id = $${params.length}
+               AND el.target_id = ${projectParam}
                AND el.status = 'active'
           )
         )`,
@@ -678,26 +799,34 @@ export class PgIntakeRepository {
       await this.assertTargetInSpace(identity.spaceId, targetType, targetId);
     }
     const now = new Date().toISOString();
-    const result = await this.db.query<EvidenceLinkRow>(
-      `INSERT INTO evidence_links (
-         id, space_id, evidence_id, target_type, target_id, link_type,
-         status, confidence, reason, created_by_user_id, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::float, $9, $10, $11, $11)
-       RETURNING ${EVIDENCE_LINK_COLUMNS}`,
-      [
-        randomUUID(),
-        identity.spaceId,
-        evidence.id,
-        targetType,
-        targetId,
-        linkType,
-        optionalString(body.status) ?? "active",
-        numberValue(body.confidence),
-        optionalString(body.reason),
-        identity.userId,
-        now,
-      ],
-    );
+    let result;
+    try {
+      result = await this.db.query<EvidenceLinkRow>(
+        `INSERT INTO evidence_links (
+           id, space_id, evidence_id, target_type, target_id, link_type,
+           status, confidence, reason, created_by_user_id, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::float, $9, $10, $11, $11)
+         RETURNING ${EVIDENCE_LINK_COLUMNS}`,
+        [
+          randomUUID(),
+          identity.spaceId,
+          evidence.id,
+          targetType,
+          targetId,
+          linkType,
+          optionalString(body.status) ?? "active",
+          numberValue(body.confidence),
+          optionalString(body.reason),
+          identity.userId,
+          now,
+        ],
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505") {
+        throw new HttpError(409, "An active link with this evidence, target, and link_type already exists");
+      }
+      throw error;
+    }
     return evidenceLinkOut(result.rows[0]!);
   }
 
@@ -729,48 +858,6 @@ export class PgIntakeRepository {
     if (!rows.rows[0]) throw new HttpError(403, "Target is not accessible in this space");
   }
 
-  async listWorkspaceProfiles(identity: SpaceUserIdentity) {
-    const rows = await this.db.query<WorkspaceProfileRow>(
-      `SELECT ${PROFILE_COLUMNS} FROM workspace_intake_profiles WHERE space_id = $1 ORDER BY updated_at DESC, id DESC`,
-      [identity.spaceId],
-    );
-    return rows.rows.map(profileOut);
-  }
-
-  async createWorkspaceProfile(identity: SpaceUserIdentity, body: Record<string, unknown>) {
-    const now = new Date().toISOString();
-    const result = await this.db.query<WorkspaceProfileRow>(
-      `INSERT INTO workspace_intake_profiles (
-         id, space_id, workspace_id, name, status, observation_policy, routing_policy_json,
-         filters_json, extraction_policy_json, context_policy_json, created_by_user_id,
-         created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, 'active', $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $11)
-       ON CONFLICT (space_id, workspace_id) DO UPDATE SET
-         name = EXCLUDED.name,
-         observation_policy = EXCLUDED.observation_policy,
-         routing_policy_json = EXCLUDED.routing_policy_json,
-         filters_json = EXCLUDED.filters_json,
-         extraction_policy_json = EXCLUDED.extraction_policy_json,
-         context_policy_json = EXCLUDED.context_policy_json,
-         updated_at = EXCLUDED.updated_at
-       RETURNING ${PROFILE_COLUMNS}`,
-      [
-        randomUUID(),
-        identity.spaceId,
-        requiredString(body.workspace_id, "workspace_id"),
-        optionalString(body.name) ?? "Default intake profile",
-        optionalString(body.observation_policy) ?? "manual",
-        JSON.stringify(objectValue(body.routing_policy)),
-        JSON.stringify(objectValue(body.filters)),
-        JSON.stringify(objectValue(body.extraction_policy)),
-        JSON.stringify(objectValue(body.context_policy)),
-        identity.userId,
-        now,
-      ],
-    );
-    return profileOut(result.rows[0]!);
-  }
-
   async listWorkspaceBindings(identity: SpaceUserIdentity, filters: { workspaceId: string | null; sourceConnectionId: string | null; projectId: string | null } = { workspaceId: null, sourceConnectionId: null, projectId: null }) {
     if (filters.projectId && !(await canAccessProject(this.db, identity.spaceId, filters.projectId, identity.userId))) {
       throw new HttpError(404, "Project not found");
@@ -795,9 +882,14 @@ export class PgIntakeRepository {
   }
 
   async createWorkspaceBinding(identity: SpaceUserIdentity, body: Record<string, unknown>) {
-    if (!(await this.getConnection(identity, requiredString(body.source_connection_id, "source_connection_id")))) {
+    const workspaceId = requiredString(body.workspace_id, "workspace_id");
+    const sourceConnectionId = requiredString(body.source_connection_id, "source_connection_id");
+    const projectId = requiredString(body.project_id, "project_id");
+    if (!(await this.getConnection(identity, sourceConnectionId))) {
       throw new HttpError(404, "Source connection not found");
     }
+    await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
+    await assertWorkspaceLinkedToProject(this.db, identity.spaceId, projectId, workspaceId);
     const now = new Date().toISOString();
     const result = await this.db.query<WorkspaceBindingRow>(
       `INSERT INTO workspace_source_bindings (
@@ -809,9 +901,9 @@ export class PgIntakeRepository {
       [
         randomUUID(),
         identity.spaceId,
-        requiredString(body.workspace_id, "workspace_id"),
-        optionalString(body.project_id),
-        requiredString(body.source_connection_id, "source_connection_id"),
+        workspaceId,
+        projectId,
+        sourceConnectionId,
         optionalString(body.binding_key) ?? "default",
         numberValue(body.priority) ?? 0,
         JSON.stringify(objectValue(body.filters)),

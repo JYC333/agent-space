@@ -136,10 +136,6 @@ export function CustomSourceRunnerSettingsPanel() {
               <div className="mt-1 text-sm font-medium">{msLabel(settings.timeout_ms_max)}</div>
             </div>
             <div className="rounded-md border border-border p-3">
-              <div className="text-xs text-muted-foreground">Download max</div>
-              <div className="mt-1 text-sm font-medium">{bytesLabel(settings.download_bytes_max)}</div>
-            </div>
-            <div className="rounded-md border border-border p-3">
               <div className="text-xs text-muted-foreground">Output max</div>
               <div className="mt-1 text-sm font-medium">{bytesLabel(settings.output_bytes_max)}</div>
             </div>

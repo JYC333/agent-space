@@ -12,11 +12,11 @@ import {
   type SpaceUserIdentity,
 } from "../../routeUtils/common";
 import { loadProtocol } from "../../providers/protocolRuntime";
-import { PgCustomSourceHandlerRepository } from "../customSourceHandlerRepository";
-import { CustomSourceCredentialService } from "../customSourceCredentialService";
-import { fetchCustomSourceEndpointHtml } from "../customSourceEndpointFetch";
-import { validateCustomSourceHandlerOutput } from "../customSourceContractValidator";
-import { cleanupSandbox, effectiveCustomSourceLimits } from "../customSourceRunner";
+import { PgCustomSourceHandlerRepository } from "../customSources/customSourceHandlerRepository";
+import { CustomSourceCredentialService } from "../customSources/customSourceCredentialService";
+import { fetchCustomSourceEndpointHtml } from "../customSources/customSourceEndpointFetch";
+import { validateCustomSourceHandlerOutput } from "../customSources/customSourceContractValidator";
+import { cleanupSandbox, effectiveCustomSourceLimits } from "../customSources/customSourceRunner";
 import { sha256 } from "../intakeRepositoryMappers";
 import { runSourceRecipe } from "./recipeInterpreter";
 import {
@@ -67,7 +67,7 @@ export class SourceRecipeDryRunService {
       versionRow.policy_envelope_json,
     );
 
-    const settings = await new PgCustomSourceHandlerRepository(this.pool, this.config).getSettings(identity);
+    const settings = await new PgCustomSourceHandlerRepository(this.pool, this.config).getEffectiveSettings(identity);
     const credential = await new CustomSourceCredentialService(this.pool, this.config).resolveCredentialHeader(
       identity.spaceId,
       envelope.credential_ref,
@@ -77,9 +77,9 @@ export class SourceRecipeDryRunService {
     const fixtureContent = optionalString(body.fixture_content);
     const primaryEndpointContent =
       fixtureContent ??
-      (await fetchCustomSourceEndpointHtml(connection.endpoint_url, settings.instance, envelope, credential));
+      (await fetchCustomSourceEndpointHtml(connection.endpoint_url, settings.runner, envelope, credential));
 
-    const runResult = await runSourceRecipe(settings.instance, {
+    const runResult = await runSourceRecipe(settings.runner, {
       policyEnvelope: envelope,
       recipe,
       mode: "dry_run",
@@ -103,7 +103,7 @@ export class SourceRecipeDryRunService {
       } else {
         const validation = await validateCustomSourceHandlerOutput({
           raw: JSON.parse(runResult.raw_output_json),
-          limits: effectiveCustomSourceLimits(settings.instance, envelope.limits),
+          limits: effectiveCustomSourceLimits(settings.runner, envelope.limits),
           allowedNetworkOrigins: envelope.allowed_network_origins,
           sandboxFilesRoot: runResult.sandbox_files_root,
         });

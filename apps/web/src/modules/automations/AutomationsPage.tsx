@@ -1,8 +1,8 @@
 import { useState, useEffect, useId } from 'react'
 import { Archive, Clock, Loader2, Pause, Play, Plus, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
-import { automationsApi, agentsApi } from '../../api/client'
-import type { AutomationOut, AutomationTargetType, AutomationTriggerType, AgentOut } from '../../types/api'
+import { automationsApi, agentsApi, projectsApi } from '../../api/client'
+import type { AutomationOut, AutomationTargetType, AutomationTriggerType, AgentOut, Project } from '../../types/api'
 import { useSpace } from '../../contexts/SpaceContext'
 import { Card, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
@@ -42,7 +42,7 @@ function cfgBoolDefault(cfg: Record<string, unknown> | null, key: string, fallba
 }
 
 function automationTarget(auto: AutomationOut): AutomationTargetType {
-  const target = cfgString(auto.config_json, 'target_type') || cfgString(auto.config_json, 'target')
+  const target = cfgString(auto.config_json, 'target_type')
   if (target === 'knowledge_retrieval_maintenance') return 'knowledge_retrieval_maintenance'
   if (target === 'context_ops_review_cycle') return 'context_ops_review_cycle'
   return 'agent_run'
@@ -60,14 +60,16 @@ function defaultName(target: AutomationTargetType): string {
   return 'Automation'
 }
 
-function AddAutomationForm({ agents, onAdded, canCreate }: {
+function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
   agents: AgentOut[]
+  projects: Project[]
   onAdded: () => void
   canCreate: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const [name, setName] = useState('')
   const [agentId, setAgentId] = useState('')
+  const [projectId, setProjectId] = useState('')
   const [targetType, setTargetType] = useState<AutomationTargetType>('agent_run')
   const [triggerType, setTriggerType] = useState<AutomationTriggerType>('schedule')
   const [cron, setCron] = useState('0 9 * * *')
@@ -78,12 +80,13 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
   const [saving, setSaving] = useState(false)
 
   function reset() {
-    setName(''); setAgentId(''); setTargetType('agent_run'); setTriggerType('schedule')
+    setName(''); setAgentId(''); setProjectId(''); setTargetType('agent_run'); setTriggerType('schedule')
     setCron('0 9 * * *'); setTimezone(BROWSER_TZ); setPrompt(''); setCreatePacket(false); setIncludeMemoryMaintenance(true); setExpanded(false)
   }
 
   function handleTargetChange(next: AutomationTargetType) {
     setTargetType(next)
+    if (next !== 'agent_run' && triggerType === 'event') setTriggerType('schedule')
     if (next === 'context_ops_review_cycle') {
       setCreatePacket(true)
       setIncludeMemoryMaintenance(true)
@@ -96,9 +99,15 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
     if (!canCreate) { toast.error('Select an operational space first'); return }
     if (!agentId) { toast.error('Pick an agent for this automation'); return }
     if (triggerType === 'schedule' && !cron.trim()) { toast.error('A cron expression is required'); return }
+    if (triggerType === 'event' && targetType !== 'agent_run') { toast.error('Event automations only support agent runs'); return }
+    if (triggerType === 'event' && !projectId) { toast.error('Pick a project for this event automation'); return }
 
     const config: Record<string, unknown> = { target_type: targetType }
     if (triggerType === 'schedule') { config.cron = cron.trim(); config.timezone = timezone.trim() || 'UTC' }
+    if (triggerType === 'event') {
+      config.event = { type: 'intake.items_materialized', min_new_items: 1, cooldown_seconds: 900 }
+      config.skip_when_no_new_items = true
+    }
     if (targetType === 'agent_run' && prompt.trim()) config.prompt = prompt.trim()
     if (targetType === 'knowledge_retrieval_maintenance') {
       config.create_packet = createPacket
@@ -113,6 +122,7 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
       await automationsApi.create({
         name: name.trim() || defaultName(targetType),
         agent_id: agentId,
+        project_id: targetType === 'agent_run' && projectId ? projectId : undefined,
         trigger_type: triggerType,
         config_json: config,
       })
@@ -160,6 +170,17 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
         </select>
       </div>
 
+      {targetType === 'agent_run' && (
+        <div className="space-y-1.5">
+          <label className={fieldLabel}>Project {triggerType === 'event' ? '(required)' : '(optional)'}</label>
+          <select value={projectId} onChange={e => setProjectId(e.target.value)} className={selectCls}>
+            <option value="">No project</option>
+            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <p className="text-xs text-muted-foreground">Bound runs read project evidence and memory, and their outputs are attributed to the project.</p>
+        </div>
+      )}
+
       <div className="space-y-1.5">
         <label className={fieldLabel}>Name</label>
         <Input
@@ -174,6 +195,7 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
         <label className={fieldLabel}>Trigger</label>
         <select value={triggerType} onChange={e => setTriggerType(e.target.value as AutomationTriggerType)} className={selectCls}>
           <option value="schedule">Schedule (cron)</option>
+          {targetType === 'agent_run' && <option value="event">Event (new intake items)</option>}
           <option value="manual">Manual only</option>
         </select>
       </div>
@@ -209,6 +231,13 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
             </div>
           )}
         </>
+      )}
+
+      {triggerType === 'event' && targetType === 'agent_run' && (
+        <div className="flex items-start gap-2 text-xs text-muted-foreground p-2 rounded-md bg-amber-500/10">
+          <ShieldCheck className="size-3.5 mt-0.5 shrink-0 text-amber-600" />
+          <span>Fires when a source bound to the selected project materializes new Intake items. Event fires are pre-authorized and use the automation cursor to avoid duplicate delivery.</span>
+        </div>
       )}
 
       {targetType === 'agent_run' ? (
@@ -251,21 +280,43 @@ function AddAutomationForm({ agents, onAdded, canCreate }: {
   )
 }
 
-function AutomationCard({ auto, agentName, onChanged }: {
+function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
   auto: AutomationOut
   agentName: string
+  projectName: string | null
+  projects: Project[]
   onChanged: () => void
 }) {
   const [busy, setBusy] = useState(false)
+  const [projectDraft, setProjectDraft] = useState(auto.project_id ?? '')
+  const [savingProject, setSavingProject] = useState(false)
   const isSchedule = auto.trigger_type === 'schedule'
+  const isEvent = auto.trigger_type === 'event'
   const archived = auto.status === 'archived'
   const target = automationTarget(auto)
+
+  useEffect(() => {
+    setProjectDraft(auto.project_id ?? '')
+  }, [auto.project_id])
 
   async function act(fn: () => Promise<unknown>, ok: string) {
     setBusy(true)
     try { await fn(); toast.success(ok); onChanged() }
     catch (err) { toast.error(errMsg(err)) }
     finally { setBusy(false) }
+  }
+
+  async function saveProjectBinding() {
+    setSavingProject(true)
+    try {
+      await automationsApi.update(auto.id, { project_id: projectDraft || null })
+      toast.success(projectDraft ? 'Project binding updated' : 'Project binding cleared')
+      onChanged()
+    } catch (err) {
+      toast.error(errMsg(err))
+    } finally {
+      setSavingProject(false)
+    }
   }
 
   return (
@@ -276,7 +327,8 @@ function AutomationCard({ auto, agentName, onChanged }: {
           <Badge variant="muted" className="text-[10px]">
             {shortTargetLabel(target)}
           </Badge>
-          <Badge variant={isSchedule ? 'default' : 'muted'} className="text-[10px]">{auto.trigger_type}</Badge>
+          <Badge variant={isSchedule || isEvent ? 'default' : 'muted'} className="text-[10px]">{auto.trigger_type}</Badge>
+          {projectName && <Badge variant="muted" className="text-[10px]">{projectName}</Badge>}
           {auto.status === 'active' && <Badge variant="muted" className="text-[10px]">active</Badge>}
           {auto.status === 'paused' && <Badge variant="muted" className="text-[10px]">paused</Badge>}
           {archived && <Badge variant="muted" className="text-[10px]">archived</Badge>}
@@ -291,8 +343,33 @@ function AutomationCard({ auto, agentName, onChanged }: {
           <p>Last fired: {fmt(auto.last_fired_at)}</p>
         </div>
       )}
+      {isEvent && (
+        <div className="text-xs text-muted-foreground space-y-0.5 mb-3">
+          <p>Event: <span className="text-foreground">new Intake items</span></p>
+          <p>Last fired: {fmt(auto.last_fired_at)}</p>
+        </div>
+      )}
       {cfgString(auto.config_json, 'prompt') && (
         <p className="text-xs mb-3 line-clamp-2"><span className="text-muted-foreground">Prompt: </span>{cfgString(auto.config_json, 'prompt')}</p>
+      )}
+      {target === 'agent_run' && !archived && (
+        <div className="flex flex-wrap items-end gap-2 mb-3">
+          <label className="min-w-48 flex-1 space-y-1">
+            <span className={fieldLabel}>Project binding</span>
+            <select value={projectDraft} onChange={e => setProjectDraft(e.target.value)} className={selectCls}>
+              <option value="">No project</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={savingProject || projectDraft === (auto.project_id ?? '')}
+            onClick={saveProjectBinding}
+          >
+            {savingProject ? <Loader2 className="size-3.5 animate-spin" /> : 'Save'}
+          </Button>
+        </div>
       )}
       {target !== 'agent_run' && (
         <p className="text-xs mb-3 flex items-center gap-1.5 text-muted-foreground">
@@ -306,13 +383,22 @@ function AutomationCard({ auto, agentName, onChanged }: {
       {!archived && (
         <div className="flex gap-2">
           <Button size="sm" variant="outline" disabled={busy}
-            onClick={() => act(
-              () => automationsApi.fire(
-                auto.id,
-                target === 'agent_run' ? { prompt: cfgString(auto.config_json, 'prompt') || undefined } : {},
-              ),
-              target === 'agent_run' ? 'Run queued' : 'Scan completed',
-            )}>
+            onClick={async () => {
+              setBusy(true)
+              try {
+                const result = await automationsApi.fire(
+                  auto.id,
+                  target === 'agent_run' ? { prompt: cfgString(auto.config_json, 'prompt') || undefined } : {},
+                )
+                if (result.skipped) toast.info('Skipped — no new intake items since the last run')
+                else toast.success(target === 'agent_run' ? 'Run queued' : 'Scan completed')
+                onChanged()
+              } catch (err) {
+                toast.error(errMsg(err))
+              } finally {
+                setBusy(false)
+              }
+            }}>
             <Play className="size-3.5 mr-1" /> {target === 'agent_run' ? 'Run now' : 'Scan now'}
           </Button>
           {auto.status === 'active' ? (
@@ -340,6 +426,7 @@ export default function AutomationsPage() {
   const { activeSpaceId, activeSpaceName } = useSpace()
   const [autos, setAutos] = useState<AutomationOut[]>([])
   const [agents, setAgents] = useState<AgentOut[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const headingId = useId()
 
@@ -348,10 +435,15 @@ export default function AutomationsPage() {
   async function loadAll() {
     setLoading(true)
     try {
-      if (!activeSpaceId) { setAutos([]); setAgents([]); return }
-      const [a, ag] = await Promise.all([automationsApi.list(), agentsApi.list()])
+      if (!activeSpaceId) { setAutos([]); setAgents([]); setProjects([]); return }
+      const [a, ag, pr] = await Promise.all([
+        automationsApi.list(),
+        agentsApi.list(),
+        projectsApi.list({ status: 'active' }),
+      ])
       setAutos(a)
       setAgents(ag)
+      setProjects(pr.items)
     } catch (err) {
       toast.error(errMsg(err))
     } finally {
@@ -360,6 +452,7 @@ export default function AutomationsPage() {
   }
 
   const agentName = (id: string) => agents.find(a => a.id === id)?.name ?? id.slice(0, 8)
+  const projectName = (id: string | null) => (id ? projects.find(p => p.id === id)?.name ?? id.slice(0, 8) : null)
   const visible = autos.filter(a => a.status !== 'archived')
 
   return (
@@ -381,7 +474,7 @@ export default function AutomationsPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          <AddAutomationForm agents={agents} onAdded={loadAll} canCreate={Boolean(activeSpaceId)} />
+          <AddAutomationForm agents={agents} projects={projects} onAdded={loadAll} canCreate={Boolean(activeSpaceId)} />
           {visible.length === 0 ? (
             <Card>
               <p className="text-sm text-muted-foreground p-4">
@@ -392,7 +485,7 @@ export default function AutomationsPage() {
             </Card>
           ) : (
             visible.map(a => (
-              <AutomationCard key={a.id} auto={a} agentName={agentName(a.agent_id)} onChanged={loadAll} />
+              <AutomationCard key={a.id} auto={a} agentName={agentName(a.agent_id)} projectName={projectName(a.project_id)} projects={projects} onChanged={loadAll} />
             ))
           )}
         </div>

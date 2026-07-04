@@ -87,7 +87,7 @@ const FEED_RECIPE: SourceRecipeDefinition = {
 
 const ENVELOPE: SourcePolicyEnvelope = {
   allowed_network_origins: [ORIGIN],
-  capture_policy: "auto_extract_relevant",
+  capture_policy: "extract_text",
   retention_policy: "full_text",
   credential_ref: null,
   log_redaction_enabled: true,
@@ -110,7 +110,7 @@ async function seedRecipeConnection(handlerKind = "recipe"): Promise<string> {
        fetch_frequency, capture_policy, trust_level, consent_json, policy_json,
        config_json, handler_kind, created_at, updated_at
      ) VALUES ($1, $2, 'connector-custom-source', $3, 'Feed Source', $4, 'paused',
-       'manual', 'auto_extract_relevant', 'normal', '{}'::jsonb, '{}'::jsonb,
+       'manual', 'extract_text', 'normal', '{}'::jsonb, '{}'::jsonb,
        '{}'::jsonb, $5, now(), now())`,
     [connectionId, SPACE_A, IDENTITY.userId, `${ORIGIN}/feed.xml`, handlerKind],
   );

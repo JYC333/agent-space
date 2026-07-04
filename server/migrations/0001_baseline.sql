@@ -269,6 +269,7 @@ CREATE TABLE public.automation_runs (
     triggered_by_user_id character varying(36),
     trigger_type character varying(64) DEFAULT 'manual'::character varying NOT NULL,
     preflight_snapshot_json jsonb,
+    trigger_context_json jsonb,
     created_at timestamp with time zone NOT NULL
 );
 
@@ -283,16 +284,18 @@ CREATE TABLE public.automations (
     owner_user_id character varying(36) NOT NULL,
     agent_id character varying(36) NOT NULL,
     workspace_id character varying(36),
+    project_id character varying(36),
     name character varying(256) NOT NULL,
     description text,
     trigger_type character varying(64) DEFAULT 'manual'::character varying NOT NULL,
     status character varying(32) DEFAULT 'active'::character varying NOT NULL,
     preflight_snapshot_json jsonb,
     config_json jsonb,
+    cursor_json jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_automations_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'paused'::character varying, 'archived'::character varying])::text[]))),
-    CONSTRAINT ck_automations_trigger_type CHECK (((trigger_type)::text = ANY ((ARRAY['manual'::character varying, 'schedule'::character varying])::text[])))
+    CONSTRAINT ck_automations_trigger_type CHECK (((trigger_type)::text = ANY ((ARRAY['manual'::character varying, 'schedule'::character varying, 'event'::character varying])::text[])))
 );
 
 
@@ -2398,6 +2401,7 @@ CREATE TABLE public.source_connections (
     consent_json jsonb NOT NULL,
     policy_json jsonb NOT NULL,
     config_json jsonb NOT NULL,
+    schedule_rule_json jsonb,
     handler_kind character varying(32) NOT NULL DEFAULT 'built_in',
     active_handler_version_id character varying(36),
     active_recipe_version_id character varying(36),
@@ -2406,7 +2410,7 @@ CREATE TABLE public.source_connections (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     deleted_at timestamp with time zone,
-    CONSTRAINT ck_source_connections_capture_policy CHECK (((capture_policy)::text = ANY ((ARRAY['metadata_only'::character varying, 'excerpt_only'::character varying, 'auto_extract_relevant'::character varying, 'auto_extract_all_text'::character varying, 'archive_all_snapshots'::character varying])::text[]))),
+    CONSTRAINT ck_source_connections_capture_policy CHECK (((capture_policy)::text = ANY ((ARRAY['reference_only'::character varying, 'extract_text'::character varying, 'archive_original'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_fetch_frequency CHECK (((fetch_frequency)::text = ANY ((ARRAY['manual'::character varying, 'hourly'::character varying, 'daily'::character varying, 'weekly'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'paused'::character varying, 'archived'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_trust_level CHECK (((trust_level)::text = ANY ((ARRAY['trusted'::character varying, 'normal'::character varying, 'untrusted'::character varying])::text[]))),
@@ -3032,29 +3036,6 @@ CREATE TABLE public.working_dirs (
 
 
 --
--- Name: workspace_intake_profiles; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.workspace_intake_profiles (
-    id character varying(36) NOT NULL,
-    space_id character varying(36) NOT NULL,
-    workspace_id character varying(36) NOT NULL,
-    name character varying(256) NOT NULL,
-    status character varying(32) NOT NULL,
-    observation_policy character varying(32) NOT NULL,
-    routing_policy_json jsonb NOT NULL,
-    filters_json jsonb NOT NULL,
-    extraction_policy_json jsonb NOT NULL,
-    context_policy_json jsonb NOT NULL,
-    created_by_user_id character varying(36),
-    created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_workspace_intake_profiles_observation_policy CHECK (((observation_policy)::text = ANY ((ARRAY['disabled'::character varying, 'manual'::character varying, 'auto_select'::character varying, 'auto_extract'::character varying])::text[]))),
-    CONSTRAINT ck_workspace_intake_profiles_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'paused'::character varying, 'archived'::character varying])::text[])))
-);
-
-
---
 -- Name: workspace_profiles; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3090,7 +3071,7 @@ CREATE TABLE public.workspace_source_bindings (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     workspace_id character varying(36) NOT NULL,
-    project_id character varying(36),
+    project_id character varying(36) NOT NULL,
     source_connection_id character varying(36) NOT NULL,
     binding_key character varying(128) DEFAULT 'default'::character varying NOT NULL,
     status character varying(32) NOT NULL,
@@ -4362,14 +4343,6 @@ ALTER TABLE ONLY public.task_runs
 
 
 --
--- Name: workspace_intake_profiles uq_workspace_intake_profiles_workspace; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.workspace_intake_profiles
-    ADD CONSTRAINT uq_workspace_intake_profiles_workspace UNIQUE (space_id, workspace_id);
-
-
---
 -- Name: workspace_profiles uq_workspace_profiles_workspace; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4378,11 +4351,11 @@ ALTER TABLE ONLY public.workspace_profiles
 
 
 --
--- Name: workspace_source_bindings uq_workspace_source_bindings_connection; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: workspace_source_bindings uq_workspace_source_bindings_project_connection; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.workspace_source_bindings
-    ADD CONSTRAINT uq_workspace_source_bindings_connection UNIQUE (space_id, workspace_id, source_connection_id, binding_key);
+    ADD CONSTRAINT uq_workspace_source_bindings_project_connection UNIQUE (space_id, project_id, workspace_id, source_connection_id, binding_key);
 
 
 --
@@ -4423,14 +4396,6 @@ ALTER TABLE ONLY public.validation_recipes
 
 ALTER TABLE ONLY public.working_dirs
     ADD CONSTRAINT working_dirs_pkey PRIMARY KEY (id);
-
-
---
--- Name: workspace_intake_profiles workspace_intake_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.workspace_intake_profiles
-    ADD CONSTRAINT workspace_intake_profiles_pkey PRIMARY KEY (id);
 
 
 --
@@ -4876,6 +4841,13 @@ CREATE INDEX ix_automations_owner_user_id ON public.automations USING btree (own
 --
 
 CREATE INDEX ix_automations_space_id ON public.automations USING btree (space_id);
+
+
+--
+-- Name: ix_automations_space_project; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_automations_space_project ON public.automations USING btree (space_id, project_id);
 
 
 --
@@ -5500,6 +5472,13 @@ CREATE INDEX ix_evidence_links_status ON public.evidence_links USING btree (stat
 --
 
 CREATE INDEX ix_evidence_links_target ON public.evidence_links USING btree (space_id, target_type, target_id);
+
+
+--
+-- Name: uq_evidence_links_active_dedupe; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_evidence_links_active_dedupe ON public.evidence_links USING btree (space_id, evidence_id, target_type, target_id, link_type) WHERE ((status)::text = 'active'::text);
 
 
 --
@@ -8569,34 +8548,6 @@ CREATE INDEX ix_working_dirs_status ON public.working_dirs USING btree (status);
 
 
 --
--- Name: ix_workspace_intake_profiles_created_by_user_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_workspace_intake_profiles_created_by_user_id ON public.workspace_intake_profiles USING btree (created_by_user_id);
-
-
---
--- Name: ix_workspace_intake_profiles_space_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_workspace_intake_profiles_space_id ON public.workspace_intake_profiles USING btree (space_id);
-
-
---
--- Name: ix_workspace_intake_profiles_status; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_workspace_intake_profiles_status ON public.workspace_intake_profiles USING btree (status);
-
-
---
--- Name: ix_workspace_intake_profiles_workspace_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_workspace_intake_profiles_workspace_id ON public.workspace_intake_profiles USING btree (workspace_id);
-
-
---
 -- Name: ix_workspace_profiles_space_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -9081,6 +9032,14 @@ ALTER TABLE ONLY public.automations
 
 ALTER TABLE ONLY public.automations
     ADD CONSTRAINT automations_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: automations automations_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.automations
+    ADD CONSTRAINT automations_project_id_fkey FOREIGN KEY (space_id, project_id) REFERENCES public.projects(space_id, id) ON DELETE SET NULL (project_id);
 
 
 --
@@ -11921,30 +11880,6 @@ ALTER TABLE ONLY public.working_dirs
 
 ALTER TABLE ONLY public.working_dirs
     ADD CONSTRAINT working_dirs_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
-
-
---
--- Name: workspace_intake_profiles workspace_intake_profiles_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.workspace_intake_profiles
-    ADD CONSTRAINT workspace_intake_profiles_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
-
-
---
--- Name: workspace_intake_profiles workspace_intake_profiles_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.workspace_intake_profiles
-    ADD CONSTRAINT workspace_intake_profiles_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
-
-
---
--- Name: workspace_intake_profiles workspace_intake_profiles_workspace_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.workspace_intake_profiles
-    ADD CONSTRAINT workspace_intake_profiles_workspace_id_fkey FOREIGN KEY (space_id, workspace_id) REFERENCES public.workspaces(space_id, id);
 
 
 --

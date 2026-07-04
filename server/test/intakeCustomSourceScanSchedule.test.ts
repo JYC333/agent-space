@@ -12,9 +12,9 @@ import { enqueueDueSourceConnectionScans } from "../src/modules/intake/scanSched
 import {
   enqueueDueCustomSourceHandlerRuns,
   reclaimStuckCustomSourceHandlerRuns,
-} from "../src/modules/intake/customSourceScanSchedule";
-import { runPendingCustomSourceHandlerRuns } from "../src/modules/intake/customSourceScanWorker";
-import { generateCustomSourceHandlerSource } from "../src/modules/intake/customSourceHandlerTemplate";
+} from "../src/modules/intake/customSources/customSourceScanSchedule";
+import { runPendingCustomSourceHandlerRuns } from "../src/modules/intake/customSources/customSourceScanWorker";
+import { generateCustomSourceHandlerSource } from "../src/modules/intake/customSources/customSourceHandlerTemplate";
 import { sha256 } from "../src/modules/intake/intakeRepositoryMappers";
 import { PgIntakeRepository } from "../src/modules/intake/repository";
 
@@ -96,7 +96,7 @@ afterEach(async () => {
 
 const POLICY_ENVELOPE = {
   allowed_network_origins: [`http://127.0.0.1:0`], // overridden per-test with the real port
-  capture_policy: "auto_extract_relevant",
+  capture_policy: "extract_text",
   retention_policy: "full_text",
   credential_ref: null,
   language: "typescript_node" as const,
@@ -132,7 +132,7 @@ async function insertConnection(input: {
        handler_kind, active_handler_version_id, repair_status,
        created_at, updated_at
      ) VALUES ($1, $2, $3, 'user-1', 'Test source', $4, $5, $6,
-       'auto_extract_relevant', 'normal', '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
+       'extract_text', 'normal', '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
        $7, $8, $9, now(), now())`,
     [
       input.id,

@@ -5,15 +5,15 @@ import type {
   CustomSourcePipelineDefinition,
   CustomSourcePolicyEnvelope,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import { runCustomSourcePipeline } from "../src/modules/intake/customSourcePipelineInterpreter";
-import type { CustomSourceRunnerSettings } from "../src/modules/intake/customSourceRunner";
+import { runCustomSourcePipeline } from "../src/modules/intake/customSources/customSourcePipelineInterpreter";
+import type { CustomSourceRunnerSettings } from "../src/modules/intake/customSources/customSourceRunner";
 
 const ORIGIN = "https://source.example";
 
 function policyEnvelope(overrides: Partial<CustomSourcePolicyEnvelope> = {}): CustomSourcePolicyEnvelope {
   return {
     allowed_network_origins: [ORIGIN],
-    capture_policy: "auto_extract_relevant",
+    capture_policy: "extract_text",
     retention_policy: "full_text",
     credential_ref: null,
     language: "declarative_pipeline_v1",
@@ -73,7 +73,7 @@ function handlerInput(
     },
     policy: {
       allowed_network_origins: [ORIGIN],
-      capture_policy: "auto_extract_relevant",
+      capture_policy: "extract_text",
       retention_policy: "full_text",
       credential_ref: null,
       limits: policyEnvelope().limits,

@@ -34,6 +34,7 @@ const ALLOWED_BARE = new Set(["fastify", "fast-xml-parser", "undici", "yaml", "z
 const ALLOWED_BARE_BY_FILE = new Map<string, string>([
   ["pg", join("src", "db")],
   ["node-pty", join("src", "modules", "providers", "cliLoginEngine.ts")],
+  ["unpdf", join("src", "modules", "intake", "pdfExtract.ts")],
 ]);
 
 /** Substrings that must never appear in any import specifier. */

@@ -95,6 +95,7 @@ const RSS_FIXTURE = `<?xml version="1.0"?>
   <item><title>One</title><link>/one</link><guid>guid-1</guid><description>First body</description></item>
   <item><title>Two</title><link>/two</link><guid>guid-2</guid><description>Second body</description></item>
 </channel></rss>`;
+const HOURLY_SCHEDULE_RULE = { frequency: "hourly", minute: 0 };
 
 async function startFixtureServer(body: string): Promise<string> {
   fixtureServer = createServer((_req, res) => {
@@ -111,7 +112,7 @@ async function createDryRunActivatedRecipeSource(endpointUrl: string) {
     name: "Recipe Feed",
     endpoint_url: endpointUrl,
     fetch_frequency: "hourly",
-    capture_policy: "auto_extract_relevant",
+    capture_policy: "extract_text",
     fixture_content: RSS_FIXTURE,
   });
   expect(plan.source_type).toBe("rss");
@@ -122,12 +123,13 @@ async function createDryRunActivatedRecipeSource(endpointUrl: string) {
     name: "Recipe Feed",
     endpoint_url: endpointUrl,
     fetch_frequency: "hourly",
-    capture_policy: "auto_extract_relevant",
+    schedule_rule: HOURLY_SCHEDULE_RULE,
+    capture_policy: "extract_text",
     recipe: plan.recipe,
   });
   expect(created.connection.handler_kind).toBe("recipe");
   expect(created.connection.status).toBe("paused");
-  expect(created.connection.next_check_at).toBeNull();
+  expect(created.connection.next_check_at).toEqual(expect.any(String));
 
   const dryRun = await dryRunService!.dryRunRecipeVersion(IDENTITY, created.connection.id, {
     recipe_version_id: created.recipe_version.id,
@@ -138,6 +140,7 @@ async function createDryRunActivatedRecipeSource(endpointUrl: string) {
 
   const activation = await createService!.activateRecipe(IDENTITY, created.connection.id, {
     recipe_version_id: dryRun.recipe_version.id,
+    schedule_rule: HOURLY_SCHEDULE_RULE,
   });
   expect(activation.status).toBe("active");
 
@@ -157,7 +160,7 @@ async function insertCustomSourceSpacePolicy(overrides: Record<string, unknown> 
       CUSTOM_SOURCE_SPACE_POLICY_SETTINGS_KEY,
       JSON.stringify({
         creator_roles: ["owner", "admin"],
-        default_capture_policy: "auto_extract_relevant",
+        default_capture_policy: "extract_text",
         default_retention_policy: "full_text",
         allowed_domains: [],
         credentialed_sources_allowed: false,
@@ -278,14 +281,15 @@ describe("SourceRecipeCreateService (real Postgres)", () => {
       name: "Policy Recipe Feed",
       endpoint_url: endpointUrl,
       fetch_frequency: "hourly",
-      capture_policy: "auto_extract_relevant",
+      capture_policy: "extract_text",
       fixture_content: RSS_FIXTURE,
     });
     const created = await createService!.createSource(IDENTITY, {
       name: "Policy Recipe Feed",
       endpoint_url: endpointUrl,
       fetch_frequency: "hourly",
-      capture_policy: "auto_extract_relevant",
+      schedule_rule: HOURLY_SCHEDULE_RULE,
+      capture_policy: "extract_text",
       recipe: plan.recipe,
     });
     const dryRun = await dryRunService!.dryRunRecipeVersion(IDENTITY, created.connection.id, {
@@ -296,6 +300,7 @@ describe("SourceRecipeCreateService (real Postgres)", () => {
     await insertCustomSourceSpacePolicy({ allowed_domains: ["other.example"] });
     const activation = await createService!.activateRecipe(IDENTITY, created.connection.id, {
       recipe_version_id: dryRun.recipe_version.id,
+      schedule_rule: HOURLY_SCHEDULE_RULE,
     });
     expect(activation.status).toBe("pending_approval");
     expect(activation.proposal_id).toEqual(expect.any(String));

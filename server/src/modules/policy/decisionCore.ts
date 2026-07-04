@@ -474,6 +474,16 @@ const ruleAutomation: Rule = (ctx) => {
       audit_code: "automation_allowed",
     });
   }
+  if (ctx.target_type === "agent_run" && ctx.project_writer === true && str(ctx.project_id)) {
+    return makeDecision({
+      decision: "allow",
+      message: `${action} allowed for project writer`,
+      risk_level: "high",
+      reason_code: "automation_project_writer_allow",
+      policy_rule_id: "automation_project_writer_allow",
+      audit_code: "automation_project_writer_allowed",
+    });
+  }
   return makeDecision({
     decision: "deny",
     message: `${action} requires admin or owner authority; role=${role}`,

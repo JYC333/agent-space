@@ -34,6 +34,8 @@
 import { z } from "zod";
 import { IdSchema, ISODateTimeSchema } from "./common.js";
 import {
+  CUSTOM_SOURCE_CAPTURE_POLICY_VALUES,
+  CUSTOM_SOURCE_RETENTION_POLICY_VALUES,
   CustomSourceHandlerOutputItemSchema,
   CustomSourcePolicyLimitsSchema,
 } from "./intakeCustomSourceHandlers.js";
@@ -309,8 +311,8 @@ export type SourceRecipeDefinition = z.infer<typeof SourceRecipeDefinitionSchema
 export const SourcePolicyEnvelopeSchema = z
   .object({
     allowed_network_origins: z.array(z.string()),
-    capture_policy: z.string(),
-    retention_policy: z.string(),
+    capture_policy: z.enum(CUSTOM_SOURCE_CAPTURE_POLICY_VALUES),
+    retention_policy: z.enum(CUSTOM_SOURCE_RETENTION_POLICY_VALUES),
     credential_ref: z.string().nullish(),
     log_redaction_enabled: z.boolean().default(true),
     limits: CustomSourcePolicyLimitsSchema,

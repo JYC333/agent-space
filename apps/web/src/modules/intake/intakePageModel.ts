@@ -1,4 +1,4 @@
-import type { EvidenceLink, ExtractedEvidence, IntakeItem } from '../../types/api'
+import type { EvidenceLink, ExtractedEvidence, IntakeItem, SourceCapturePolicy, SourceConnection, SourceScheduleRule } from '../../types/api'
 
 export type ItemFilter = 'open' | 'new' | 'triaged' | 'selected' | 'ignored'
 export type EvidenceFilter = 'candidate' | 'active' | 'all'
@@ -10,13 +10,27 @@ export interface IntakeSummaryResult {
   proposal_ids: string[]
 }
 
-export const CAPTURE_POLICIES = [
-  { value: 'metadata_only', label: 'Metadata' },
-  { value: 'excerpt_only', label: 'Excerpt' },
-  { value: 'auto_extract_relevant', label: 'Extract relevant' },
-  { value: 'auto_extract_all_text', label: 'Extract text' },
-  { value: 'archive_all_snapshots', label: 'Archive snapshots' },
+export const CAPTURE_POLICIES: Array<{ value: SourceCapturePolicy; label: string }> = [
+  { value: 'reference_only', label: 'Save reference' },
+  { value: 'extract_text', label: 'Extract text' },
+  { value: 'archive_original', label: 'Archive original' },
 ]
+
+const CAPTURE_POLICY_VALUES = new Set(CAPTURE_POLICIES.map(policy => policy.value))
+
+export function sourceCapturePolicyValue(value: string, fallback: SourceCapturePolicy = 'reference_only'): SourceCapturePolicy {
+  return CAPTURE_POLICY_VALUES.has(value as SourceCapturePolicy) ? value as SourceCapturePolicy : fallback
+}
+
+const CAPTURE_POLICY_DESCRIPTIONS: Record<string, string> = {
+  reference_only: 'Save title, URL, source metadata, scan timestamps, and any feed/API excerpt without fetching the original page.',
+  extract_text: 'Fetch the source and store a reader document/plain text for reading, search, and evidence extraction.',
+  archive_original: 'Store the original HTML/PDF snapshot, then derive the reader document/plain text from that archived copy.',
+}
+
+export function capturePolicyDescription(capturePolicy: string) {
+  return CAPTURE_POLICY_DESCRIPTIONS[capturePolicy] ?? CAPTURE_POLICY_DESCRIPTIONS.reference_only
+}
 
 export const FREQUENCIES = [
   { value: 'manual', label: 'Manual' },
@@ -25,10 +39,130 @@ export const FREQUENCIES = [
   { value: 'weekly', label: 'Weekly' },
 ]
 
+export const WEEKDAY_OPTIONS = [
+  { value: '1', label: 'Monday' },
+  { value: '2', label: 'Tuesday' },
+  { value: '3', label: 'Wednesday' },
+  { value: '4', label: 'Thursday' },
+  { value: '5', label: 'Friday' },
+  { value: '6', label: 'Saturday' },
+  { value: '7', label: 'Sunday' },
+]
+
+export interface ScheduleFormValue {
+  minute: string
+  hour: string
+  weekday: string
+}
+
+export function emptyScheduleFormValue(): ScheduleFormValue {
+  return { minute: '', hour: '', weekday: '' }
+}
+
+export function isScheduledFrequency(fetchFrequency: string) {
+  return fetchFrequency === 'hourly' || fetchFrequency === 'daily' || fetchFrequency === 'weekly'
+}
+
+export function isScheduleFormComplete(fetchFrequency: string, value: ScheduleFormValue) {
+  if (fetchFrequency === 'manual') return true
+  if (fetchFrequency === 'hourly') return validMinute(value.minute)
+  if (fetchFrequency === 'daily') return validHour(value.hour) && validMinute(value.minute)
+  if (fetchFrequency === 'weekly') return validWeekday(value.weekday) && validHour(value.hour) && validMinute(value.minute)
+  return false
+}
+
+export function scheduleRuleFromForm(fetchFrequency: string, value: ScheduleFormValue, now = new Date()): SourceScheduleRule | null | undefined {
+  if (!isScheduledFrequency(fetchFrequency)) return null
+  if (!isScheduleFormComplete(fetchFrequency, value)) return undefined
+  if (fetchFrequency === 'hourly') {
+    return { frequency: 'hourly', minute: Number(value.minute) }
+  }
+  if (fetchFrequency === 'daily') {
+    return utcRuleFromLocalCandidate('daily', nextDailyLocalOccurrence(Number(value.hour), Number(value.minute), now))
+  }
+  return utcRuleFromLocalCandidate('weekly', nextWeeklyLocalOccurrence(Number(value.weekday), Number(value.hour), Number(value.minute), now))
+}
+
+export function scheduleFormValueFromConnection(connection: Pick<SourceConnection, 'fetch_frequency' | 'next_check_at' | 'schedule_rule_json'>): ScheduleFormValue {
+  if (!isScheduledFrequency(connection.fetch_frequency)) return emptyScheduleFormValue()
+  if (connection.next_check_at) {
+    const date = new Date(connection.next_check_at)
+    if (!Number.isNaN(date.getTime())) {
+      return {
+        minute: String(date.getMinutes()),
+        hour: connection.fetch_frequency === 'hourly' ? '' : String(date.getHours()),
+        weekday: connection.fetch_frequency === 'weekly' ? String(isoLocalWeekday(date)) : '',
+      }
+    }
+  }
+  const rule = connection.schedule_rule_json
+  if (!rule || rule.frequency !== connection.fetch_frequency) return emptyScheduleFormValue()
+  if (rule.frequency === 'hourly') return { minute: String(rule.minute), hour: '', weekday: '' }
+  const local = new Date()
+  local.setUTCSeconds(0, 0)
+  if (rule.frequency === 'daily') {
+    local.setUTCHours(rule.hour, rule.minute, 0, 0)
+    return { minute: String(local.getMinutes()), hour: String(local.getHours()), weekday: '' }
+  }
+  local.setUTCDate(local.getUTCDate() + (rule.weekday - isoUtcWeekday(local) + 7) % 7)
+  local.setUTCHours(rule.hour, rule.minute, 0, 0)
+  return { minute: String(local.getMinutes()), hour: String(local.getHours()), weekday: String(isoLocalWeekday(local)) }
+}
+
+function nextDailyLocalOccurrence(hour: number, minute: number, now: Date) {
+  const candidate = new Date(now)
+  candidate.setHours(hour, minute, 0, 0)
+  if (candidate.getTime() <= now.getTime()) candidate.setDate(candidate.getDate() + 1)
+  return candidate
+}
+
+function nextWeeklyLocalOccurrence(weekday: number, hour: number, minute: number, now: Date) {
+  const candidate = new Date(now)
+  let daysToAdd = weekday - isoLocalWeekday(candidate)
+  if (daysToAdd < 0) daysToAdd += 7
+  candidate.setDate(candidate.getDate() + daysToAdd)
+  candidate.setHours(hour, minute, 0, 0)
+  if (candidate.getTime() <= now.getTime()) candidate.setDate(candidate.getDate() + 7)
+  return candidate
+}
+
+function utcRuleFromLocalCandidate(frequency: 'daily' | 'weekly', candidate: Date): SourceScheduleRule {
+  const hour = candidate.getUTCHours()
+  const minute = candidate.getUTCMinutes()
+  if (frequency === 'daily') return { frequency, hour, minute }
+  return { frequency, weekday: isoUtcWeekday(candidate), hour, minute }
+}
+
+function validMinute(value: string) {
+  return validIntegerRange(value, 0, 59)
+}
+
+function validHour(value: string) {
+  return validIntegerRange(value, 0, 23)
+}
+
+function validWeekday(value: string) {
+  return validIntegerRange(value, 1, 7)
+}
+
+function validIntegerRange(value: string, min: number, max: number) {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= min && parsed <= max
+}
+
+function isoLocalWeekday(date: Date) {
+  const day = date.getDay()
+  return day === 0 ? 7 : day
+}
+
+function isoUtcWeekday(date: Date) {
+  const day = date.getUTCDay()
+  return day === 0 ? 7 : day
+}
+
 export function minimumRetentionForCapturePolicy(capturePolicy: string) {
-  if (capturePolicy === 'archive_all_snapshots') return 'full_snapshot'
-  if (capturePolicy === 'auto_extract_relevant' || capturePolicy === 'auto_extract_all_text') return 'full_text'
-  if (capturePolicy === 'excerpt_only') return 'summary_only'
+  if (capturePolicy === 'archive_original') return 'full_snapshot'
+  if (capturePolicy === 'extract_text') return 'full_text'
   return 'metadata_only'
 }
 

@@ -125,11 +125,11 @@ Adds a product-level control plane **above** (not replacing) the `ServerModule`/
 - `space` — one enablement row per (plugin_id, space_id); all users in the space share the setting; writes require space owner/admin
 - `user` — one enablement row per (plugin_id, user_id); user-scoped setting works across all spaces; self-service
 
-**dairy built-in plugin** (`plugins/official/dairy/`)
-- Routes: `GET /api/v1/dairy/today`, `PUT/DELETE /api/v1/dairy/entries/:date`, `GET /api/v1/dairy/entries`, `GET /api/v1/dairy/on-this-day`, `GET /api/v1/dairy/entries/:date/reflections`
+**diary built-in plugin** (`plugins/official/diary/`)
+- Routes: `GET /api/v1/diary/today`, `PUT/DELETE /api/v1/diary/entries/:date`, `GET /api/v1/diary/entries`, `GET /api/v1/diary/on-this-day`, `GET /api/v1/diary/entries/:date/reflections`
 - Reflection job and reminder scheduler registered through PluginHost
-- Plugin-owned tables `dairy_entries` and `dairy_reflections` created from plugin SQL files during install, not by core baseline or PluginHost activation
-- Dairy entries are editor-owned user documents, not raw `ActivityRecord` intake; extracting content into memory/context/knowledge remains opt-in proposal/intake work
+- Plugin-owned tables `diary_entries` and `diary_reflections` created from plugin SQL files during install, not by core baseline or PluginHost activation
+- Diary entries are editor-owned user documents, not raw `ActivityRecord` intake; extracting content into memory/context/knowledge remains opt-in proposal/intake work
 
 **Frontend overlay**
 - New `AppSource` value `'official_plugin'` in `registry.ts`; `Module.pluginId?` field
@@ -175,9 +175,9 @@ Adds a product-level control plane **above** (not replacing) the `ServerModule`/
 **Still deferred:**
 - Remote official plugin package download and signature/hash verification
 - Frontend plugin bundle loading from plugin packages (still monorepo source via app-owned adapter)
-- Real dairy AI reflection (current job is a stub; no LLM call)
-- Context provider contribution points for opt-in dairy context
-- Memory proposal generation from dairy entries
+- Real diary AI reflection (current job is a stub; no LLM call)
+- Context provider contribution points for opt-in diary context
+- Memory proposal generation from diary entries
 - Typed settings schema per plugin
 - Third-party plugin marketplace, review process, sandbox/worker isolation
 - True hot load/unload of plugin code without restart

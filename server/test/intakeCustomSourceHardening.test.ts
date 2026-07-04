@@ -7,10 +7,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { Pool } from "pg";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { loadConfig, type ServerConfig } from "../src/config";
-import { CustomSourceCreateFlowService } from "../src/modules/intake/customSourceCreateFlowService";
-import { CustomSourceRepairService } from "../src/modules/intake/customSourceRepairService";
-import { PgCustomSourceHandlerRepository } from "../src/modules/intake/customSourceHandlerRepository";
-import { pruneSupersededCustomSourceHandlerArtifacts } from "../src/modules/intake/customSourceArtifactRetention";
+import { CustomSourceCreateFlowService } from "../src/modules/intake/customSources/customSourceCreateFlowService";
+import { CustomSourceRepairService } from "../src/modules/intake/customSources/customSourceRepairService";
+import { PgCustomSourceHandlerRepository } from "../src/modules/intake/customSources/customSourceHandlerRepository";
+import { pruneSupersededCustomSourceHandlerArtifacts } from "../src/modules/intake/customSources/customSourceArtifactRetention";
 import { HttpError } from "../src/modules/routeUtils/common";
 import { getDbPool } from "../src/db/pool";
 
@@ -190,7 +190,7 @@ describe("PgCustomSourceHandlerRepository.getHandlerSummary observability fields
         SPACE_A,
         JSON.stringify({
           creator_roles: ["owner", "admin"],
-          default_capture_policy: "auto_extract_relevant",
+          default_capture_policy: "extract_text",
           default_retention_policy: "full_text",
           allowed_domains: ["other.example"],
           credentialed_sources_allowed: false,
@@ -226,12 +226,12 @@ describe("PgCustomSourceHandlerRepository.getHandlerSummary observability fields
     // the still-active v1 (so each requires its own proposal), generated
     // and tested without the earlier one's proposal ever being resolved —
     // nothing prevents this today.
-    const v2 = await flow.generateHandler(IDENTITY, connection.id, { capture_policy: "archive_all_snapshots" });
+    const v2 = await flow.generateHandler(IDENTITY, connection.id, { capture_policy: "archive_original" });
     await flow.testHandler(IDENTITY, connection.id, { handler_version_id: v2.id, fixture_html: FIXTURE_HTML });
     const activation2 = await flow.activateHandler(IDENTITY, connection.id, { handler_version_id: v2.id });
     expect(activation2.status).toBe("pending_approval");
 
-    const v3 = await flow.generateHandler(IDENTITY, connection.id, { capture_policy: "archive_all_snapshots" });
+    const v3 = await flow.generateHandler(IDENTITY, connection.id, { capture_policy: "archive_original" });
     await flow.testHandler(IDENTITY, connection.id, { handler_version_id: v3.id, fixture_html: FIXTURE_HTML });
     const activation3 = await flow.activateHandler(IDENTITY, connection.id, { handler_version_id: v3.id });
     expect(activation3.status).toBe("pending_approval");

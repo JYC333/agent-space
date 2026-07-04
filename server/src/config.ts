@@ -83,7 +83,6 @@ export interface ServerConfig {
   customSourceNetworkHardDenyRules: string[];
   customSourceTimeoutMsMax: number;
   customSourceOutputBytesMax: number;
-  customSourceDownloadBytesMax: number;
   customSourceLogBytesMax: number;
   customSourceMaxFiles: number;
   customSourceBrowserAutomationAvailable: boolean;
@@ -170,7 +169,6 @@ const KNOWN_ENV_KEYS = new Set([
   "SERVER_CUSTOM_SOURCE_NETWORK_HARD_DENY_RULES",
   "SERVER_CUSTOM_SOURCE_TIMEOUT_MS_MAX",
   "SERVER_CUSTOM_SOURCE_OUTPUT_BYTES_MAX",
-  "SERVER_CUSTOM_SOURCE_DOWNLOAD_BYTES_MAX",
   "SERVER_CUSTOM_SOURCE_LOG_BYTES_MAX",
   "SERVER_CUSTOM_SOURCE_MAX_FILES",
   "SERVER_CUSTOM_SOURCE_BROWSER_AUTOMATION_AVAILABLE",
@@ -543,13 +541,6 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     1_024,
     104_857_600,
   );
-  const customSourceDownloadBytesMax = parseBoundedInt(
-    env.SERVER_CUSTOM_SOURCE_DOWNLOAD_BYTES_MAX,
-    5_242_880,
-    "SERVER_CUSTOM_SOURCE_DOWNLOAD_BYTES_MAX",
-    1_024,
-    104_857_600,
-  );
   const customSourceLogBytesMax = parseBoundedInt(
     env.SERVER_CUSTOM_SOURCE_LOG_BYTES_MAX,
     65_536,
@@ -673,7 +664,6 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     customSourceNetworkHardDenyRules,
     customSourceTimeoutMsMax,
     customSourceOutputBytesMax,
-    customSourceDownloadBytesMax,
     customSourceLogBytesMax,
     customSourceMaxFiles,
     customSourceBrowserAutomationAvailable,

@@ -2,13 +2,16 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { CustomSourcePolicyEnvelope } from "@agent-space/protocol" with {
+  "resolution-mode": "import",
+};
 import {
   CustomSourceRunner,
   cleanupSandbox,
   type CustomSourceRunnerSettings,
-} from "../src/modules/intake/customSourceRunner";
-import { validateCustomSourceHandlerOutput } from "../src/modules/intake/customSourceContractValidator";
-import { generateCustomSourceHandlerSource } from "../src/modules/intake/customSourceHandlerTemplate";
+} from "../src/modules/intake/customSources/customSourceRunner";
+import { validateCustomSourceHandlerOutput } from "../src/modules/intake/customSources/customSourceContractValidator";
+import { generateCustomSourceHandlerSource } from "../src/modules/intake/customSources/customSourceHandlerTemplate";
 
 function enabledSettings(): CustomSourceRunnerSettings {
   return {
@@ -28,7 +31,7 @@ function enabledSettings(): CustomSourceRunnerSettings {
 
 const POLICY_ENVELOPE = {
   allowed_network_origins: ["https://example.com"],
-  capture_policy: "auto_extract_relevant",
+  capture_policy: "extract_text",
   retention_policy: "full_text",
   language: "typescript_node" as const,
   browser_automation_enabled: false,
@@ -44,7 +47,7 @@ const POLICY_ENVELOPE = {
     max_evidence_items: 20,
     log_max_bytes: 65536,
   },
-};
+} satisfies CustomSourcePolicyEnvelope;
 
 async function runGeneratedHandler(
   settings: CustomSourceRunnerSettings,

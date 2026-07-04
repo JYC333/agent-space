@@ -739,7 +739,8 @@ describe("AutomationService policy preflight", () => {
 
   it("records last_fired_at for a successful manual agent-run fire", async () => {
     vi.mocked(enforce).mockResolvedValue({ status: "allow" });
-    dbPoolMock.current = new AgentAutomationFireFakePool();
+    const fakePool = new AgentAutomationFireFakePool();
+    dbPoolMock.current = fakePool;
     const repo = new FakeAutomationRepository(
       sampleAutomation(),
       "owner",
@@ -763,6 +764,75 @@ describe("AutomationService policy preflight", () => {
     expect(result.run_id).toEqual(expect.any(String));
     expect(result.automation_run_id).toEqual(expect.any(String));
     expect(repo.recordFireCalls).toBe(1);
+    expect(fakePool.runPrompts).toEqual(["Run now"]);
+  });
+
+  it("uses the configured prompt for unattended agent-run fires", async () => {
+    vi.mocked(enforce).mockResolvedValue({ status: "allow" });
+    const fakePool = new AgentAutomationFireFakePool();
+    dbPoolMock.current = fakePool;
+    const automation = sampleAutomation({
+      trigger_type: "schedule",
+      config_json: {
+        target_type: "agent_run",
+        prompt: "Analyze the newly collected papers.",
+      },
+    });
+    const repo = new FakeAutomationRepository(
+      automation,
+      "owner",
+      [],
+      { status: "active", current_version_id: "agent-version-1", version_id: "agent-version-1" },
+      true,
+    );
+    const service = new AutomationService(config, repo);
+
+    await service.fire({
+      spaceId: "space-1",
+      automationId: "auto-1",
+      actorUserId: "owner-1",
+      triggerType: "schedule",
+    });
+
+    expect(fakePool.runPrompts).toEqual(["Analyze the newly collected papers."]);
+  });
+
+  it("records intake event payloads in automation run trigger context", async () => {
+    vi.mocked(enforce).mockResolvedValue({ status: "allow" });
+    const fakePool = new AgentAutomationFireFakePool();
+    dbPoolMock.current = fakePool;
+    const automation = sampleAutomation({
+      trigger_type: "event",
+      config_json: {
+        target_type: "agent_run",
+        event: { type: "intake.items_materialized", cooldown_seconds: 0 },
+      },
+    });
+    const repo = new FakeAutomationRepository(
+      automation,
+      "owner",
+      [],
+      { status: "active", current_version_id: "agent-version-1", version_id: "agent-version-1" },
+      true,
+      [automation],
+    );
+    const service = new AutomationService(config, repo);
+
+    const result = await service.fireIntakeEventAutomations({
+      spaceId: "space-1",
+      sourceConnectionId: "source-connection-1",
+      newItemCount: 3,
+    });
+
+    expect(result.fired).toBe(1);
+    expect(fakePool.automationRunTriggerContexts).toHaveLength(1);
+    expect(JSON.parse(String(fakePool.automationRunTriggerContexts[0]))).toMatchObject({
+      event: {
+        type: "intake.items_materialized",
+        source_connection_id: "source-connection-1",
+        new_item_count: 3,
+      },
+    });
   });
 });
 
@@ -846,6 +916,7 @@ class FakeAutomationRepository {
       version_id: string | null;
     } | null = { status: "active", current_version_id: "agent-version-1", version_id: "agent-version-1" },
     private readonly activeGrant = false,
+    private readonly eventAutomations: AutomationRow[] = [],
   ) {}
 
   async get(spaceId: string, automationId: string): Promise<AutomationRow | null> {
@@ -860,6 +931,18 @@ class FakeAutomationRepository {
 
   async getMembershipRole(): Promise<string | null> {
     return this.membershipRole;
+  }
+
+  async assertProjectWriter(): Promise<void> {
+    return;
+  }
+
+  async canWriteProject(): Promise<boolean> {
+    return true;
+  }
+
+  async projectInSpace(): Promise<boolean> {
+    return true;
   }
 
   async getAgentPreflight(): Promise<{
@@ -885,6 +968,18 @@ class FakeAutomationRepository {
 
   async listDue(): Promise<AutomationRow[]> {
     return this.dueAutomations;
+  }
+
+  async listEventAutomationsForConnection(): Promise<AutomationRow[]> {
+    return this.eventAutomations;
+  }
+
+  async currentIntakeWatermark(): Promise<null> {
+    return null;
+  }
+
+  async hasInFlightRun(): Promise<boolean> {
+    return false;
   }
 
   async advanceSchedule(): Promise<void> {
@@ -986,6 +1081,10 @@ class MaintenanceAutomationFakePool implements Queryable {
 }
 
 class AgentAutomationFireFakePool implements Queryable {
+  runPrompts: Array<unknown> = [];
+  runInstructions: Array<unknown> = [];
+  automationRunTriggerContexts: Array<unknown> = [];
+
   async connect(): Promise<Queryable & { release(): void }> {
     return {
       query: this.query.bind(this),
@@ -1078,6 +1177,8 @@ class AgentAutomationFireFakePool implements Queryable {
       return { rowCount: 1, rows: [] };
     }
     if (sql.includes("INSERT INTO runs")) {
+      this.runPrompts.push(params[13]);
+      this.runInstructions.push(params[14]);
       return {
         rowCount: 1,
         rows: [
@@ -1098,6 +1199,7 @@ class AgentAutomationFireFakePool implements Queryable {
       return { rowCount: 1, rows: [makeJob({ id: String(params[0]) })] as Row[] };
     }
     if (sql.includes("INSERT INTO automation_runs")) {
+      this.automationRunTriggerContexts.push(params[6]);
       return { rowCount: 1, rows: [] };
     }
     throw new Error(`Unexpected SQL: ${sql}`);
@@ -1233,12 +1335,14 @@ function sampleAutomation(overrides: Partial<AutomationRow> = {}): AutomationRow
     owner_user_id: "owner-1",
     agent_id: "agent-1",
     workspace_id: null,
+    project_id: null,
     name: "Nightly",
     description: null,
     trigger_type: "manual",
     status: "active",
     preflight_snapshot_json: { executable: true },
     config_json: null,
+    cursor_json: null,
     next_run_at: null,
     last_fired_at: null,
     created_at: "2026-06-16T00:00:00.000Z",

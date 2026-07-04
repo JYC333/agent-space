@@ -7,8 +7,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Pool } from "pg";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { loadConfig, type ServerConfig } from "../src/config";
-import { CustomSourceCreateFlowService } from "../src/modules/intake/customSourceCreateFlowService";
-import { CustomSourceCredentialService } from "../src/modules/intake/customSourceCredentialService";
+import { CustomSourceCreateFlowService } from "../src/modules/intake/customSources/customSourceCreateFlowService";
+import { CustomSourceCredentialService } from "../src/modules/intake/customSources/customSourceCredentialService";
 import { HttpError } from "../src/modules/routeUtils/common";
 import { getDbPool } from "../src/db/pool";
 
@@ -99,7 +99,7 @@ async function insertCustomSourceSpacePolicy(overrides: Record<string, unknown> 
       CUSTOM_SOURCE_SPACE_POLICY_SETTINGS_KEY,
       JSON.stringify({
         creator_roles: ["owner", "admin"],
-        default_capture_policy: "auto_extract_relevant",
+        default_capture_policy: "extract_text",
         default_retention_policy: "full_text",
         allowed_domains: [],
         credentialed_sources_allowed: false,

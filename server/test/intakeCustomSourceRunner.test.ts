@@ -1,18 +1,21 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { CustomSourcePolicyEnvelope } from "@agent-space/protocol" with {
+  "resolution-mode": "import",
+};
 import {
   CustomSourceRunner,
   cleanupSandbox,
   type CustomSourceRunnerSettings,
   type CustomSourceRunnerCompletedResult,
-} from "../src/modules/intake/customSourceRunner";
+} from "../src/modules/intake/customSources/customSourceRunner";
 
 const FIXTURES_DIR = join(process.cwd(), "test/fixtures/customSourceHandlers");
 
-const POLICY_ENVELOPE = {
+const POLICY_ENVELOPE: CustomSourcePolicyEnvelope = {
   allowed_network_origins: [],
-  capture_policy: "auto_extract_relevant",
+  capture_policy: "extract_text",
   retention_policy: "full_text",
   language: "typescript_node" as const,
   browser_automation_enabled: false,
@@ -42,7 +45,7 @@ const HANDLER_INPUT = {
   source: { name: "Example Feed", config: {} },
   policy: {
     allowed_network_origins: [],
-    capture_policy: "auto_extract_relevant" as const,
+    capture_policy: "extract_text" as const,
     retention_policy: "full_text" as const,
     limits: POLICY_ENVELOPE.limits,
   },
@@ -70,7 +73,7 @@ function enabledSettings(
 async function runFixture(
   fixtureFile: string,
   settings: CustomSourceRunnerSettings,
-  policyOverrides: Partial<typeof POLICY_ENVELOPE> = {},
+  policyOverrides: Partial<CustomSourcePolicyEnvelope> = {},
 ) {
   const runner = new CustomSourceRunner(settings);
   return runner.run({

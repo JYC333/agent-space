@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchCustomSourceEndpointHtml } from "../src/modules/intake/customSourceEndpointFetch";
-import type { CustomSourceRunnerSettings } from "../src/modules/intake/customSourceRunner";
+import type { SourcePolicyEnvelope } from "@agent-space/protocol" with {
+  "resolution-mode": "import",
+};
+import { fetchCustomSourceEndpointHtml } from "../src/modules/intake/customSources/customSourceEndpointFetch";
+import type { CustomSourceRunnerSettings } from "../src/modules/intake/customSources/customSourceRunner";
 
 const ORIGIN = "https://source.example";
 
 const POLICY_ENVELOPE = {
   allowed_network_origins: [ORIGIN],
-  capture_policy: "auto_extract_relevant",
+  capture_policy: "extract_text",
   retention_policy: "full_text",
   credential_ref: null,
   language: "typescript_node" as const,
@@ -23,9 +26,9 @@ const POLICY_ENVELOPE = {
     max_evidence_items: 20,
     log_max_bytes: 65536,
   },
-};
+} satisfies SourcePolicyEnvelope;
 
-function instanceSettings(
+function runnerSettings(
   overrides: Partial<CustomSourceRunnerSettings> = {},
 ): CustomSourceRunnerSettings {
   return {
@@ -57,7 +60,7 @@ describe("fetchCustomSourceEndpointHtml", () => {
       return new Response("hello pi world", { status: 200 });
     });
 
-    const html = await fetchCustomSourceEndpointHtml(`${ORIGIN}/redirect-same-origin`, instanceSettings(), POLICY_ENVELOPE);
+    const html = await fetchCustomSourceEndpointHtml(`${ORIGIN}/redirect-same-origin`, runnerSettings(), POLICY_ENVELOPE);
     expect(html).toBe("hello pi world");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1]?.[0]).toBe(`${ORIGIN}/ok`);
@@ -69,7 +72,7 @@ describe("fetchCustomSourceEndpointHtml", () => {
     );
 
     await expect(
-      fetchCustomSourceEndpointHtml(`${ORIGIN}/redirect-off-origin`, instanceSettings(), POLICY_ENVELOPE),
+      fetchCustomSourceEndpointHtml(`${ORIGIN}/redirect-off-origin`, runnerSettings(), POLICY_ENVELOPE),
     ).rejects.toThrow("not allowed by the handler policy envelope");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -79,7 +82,7 @@ describe("fetchCustomSourceEndpointHtml", () => {
 
     const html = await fetchCustomSourceEndpointHtml(
       `${ORIGIN}/ok`,
-      instanceSettings({ download_bytes_max: 8 }),
+      runnerSettings({ download_bytes_max: 8 }),
       { ...POLICY_ENVELOPE, limits: { ...POLICY_ENVELOPE.limits, max_download_bytes: 8 } },
     );
     expect(Buffer.byteLength(html, "utf8")).toBeLessThanOrEqual(8);

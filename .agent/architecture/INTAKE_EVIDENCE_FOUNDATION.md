@@ -13,17 +13,23 @@ There is no Area concept in this foundation.
   credential reference, consent, policy, trust, and connector config.
 - `IntakeItem` is raw candidate material. Every item belongs to exactly one
   `Space`. It does not require a workspace or project, and general space intake
-  is valid.
+  is valid. Manually saved URL items may attach to or change a
+  `SourceConnection`; scanned items keep their original connection as source
+  provenance.
 - `SourceSnapshot` records immutable captures of raw/extracted/summary material
-  stored in `Artifact`.
+  stored in `Artifact`. Its `connection_id` is source provenance for that
+  capture. Because `IntakeItem` is deduped by canonical/source URI and has one
+  primary `connection_id`, same-item snapshots from additional source
+  connections are also used by project source filters and evidence auto-linking.
 - `ExtractionJob` audits scans, manual URL intake, extraction, snapshots, and
   internal normalization jobs.
 - Structured reader documents are extracted artifacts owned by Intake. New
   full-text extraction writes `artifact_type="intake_reader_document"` with
   `canonical_format="reader_document_json"` and `mime_type="application/json"`.
   The JSON contains `plain_text` plus read-only Tiptap `content_json`.
-  Older `artifact_type="intake_extracted_text"` text artifacts remain readable
-  for compatibility.
+  HTML uses `extraction_method="structured_html_v1"`; PDF uses
+  `extraction_method="pdf_text_v1"` and is derived from a file-backed raw PDF
+  `intake_raw_snapshot` artifact.
 - `ExtractedEvidence` is the citable context unit derived from intake, activity,
   artifacts, run events, files, logs, or documents.
 - Intake reader annotations and comments are Intake-owned records over reader
@@ -34,12 +40,12 @@ There is no Area concept in this foundation.
   or task. Service-layer validation requires each non-space target to exist in
   the same space. `target_type="space"` may omit `target_id`; it is normalized
   to the current `space_id`.
-- `WorkspaceIntakeProfile` configures workspace observation and routing policy.
-- `WorkspaceSourceBinding` binds a workspace-scoped source stream to a
+- `WorkspaceSourceBinding` binds a project-scoped workspace source stream to a
   space-level source connection without duplicating raw source data or
-  credentials. `binding_key` distinguishes multiple filtered bindings over the
-  same workspace/connection. If a binding carries `project_id`, that project
-  must already be linked to the workspace through `ProjectWorkspace`.
+  credentials. `project_id` is required, creation requires project writer
+  authority, and the workspace must already be linked to the project through
+  `ProjectWorkspace`. `binding_key` distinguishes multiple filtered bindings
+  over the same project/workspace/connection.
 
 Projects do not own raw intake. Project relevance is expressed primarily with
 `EvidenceLink(target_type="project")`.

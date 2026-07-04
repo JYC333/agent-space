@@ -1,7 +1,7 @@
 import type { CustomSourcePolicyEnvelope } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import type { ServerConfig } from "../../config";
-import { HttpError, optionalString, withDbTransaction, type Pool, type SpaceUserIdentity } from "../routeUtils/common";
-import { insertProposalRow } from "../proposals/reviewPackets";
+import type { ServerConfig } from "../../../config";
+import { HttpError, optionalString, withDbTransaction, type Pool, type SpaceUserIdentity } from "../../routeUtils/common";
+import { insertProposalRow } from "../../proposals/reviewPackets";
 import {
   HANDLER_VERSION_COLUMNS,
   PgCustomSourceHandlerRepository,

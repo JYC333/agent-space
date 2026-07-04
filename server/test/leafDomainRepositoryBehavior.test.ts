@@ -53,7 +53,6 @@ function intakeConfig(): ServerConfig {
     customSourceNetworkHardDenyRules: [],
     customSourceTimeoutMsMax: 30_000,
     customSourceOutputBytesMax: 1_048_576,
-    customSourceDownloadBytesMax: 5_242_880,
     customSourceLogBytesMax: 65_536,
     customSourceMaxFiles: 50,
     customSourceBrowserAutomationAvailable: false,
@@ -258,8 +257,14 @@ function sourceConnectionRow(policyOverrides: Record<string, unknown> = {}) {
     space_id: "space-1",
     connector_id: "connector-1",
     owner_user_id: "user-1",
-    capture_policy: "metadata_only",
+    credential_id: null,
+    name: "Source",
+    endpoint_url: "https://example.test/feed",
+    status: "active",
+    fetch_frequency: "manual",
+    capture_policy: "reference_only",
     trust_level: "normal",
+    topic_hints_json: null,
     consent_json: {},
     policy_json: {
       schema_version: 1,
@@ -271,6 +276,16 @@ function sourceConnectionRow(policyOverrides: Record<string, unknown> = {}) {
       revalidation: { required: true, viewer_scoped: true },
       ...policyOverrides,
     },
+    config_json: {},
+    last_checked_at: null,
+    next_check_at: null,
+    handler_kind: "built_in",
+    active_handler_version_id: null,
+    active_recipe_version_id: null,
+    repair_status: "ok",
+    last_handler_run_id: null,
+    created_at: "2026-06-16T00:00:00.000Z",
+    updated_at: "2026-06-16T00:00:00.000Z",
   };
 }
 
@@ -298,7 +313,60 @@ function extractionJobRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function workspaceBindingRow(params: readonly unknown[]) {
+  return {
+    id: String(params[0] ?? "binding-1"),
+    space_id: String(params[1] ?? "space-1"),
+    workspace_id: String(params[2] ?? "workspace-1"),
+    project_id: String(params[3] ?? "project-1"),
+    source_connection_id: String(params[4] ?? "conn-1"),
+    binding_key: String(params[5] ?? "default"),
+    status: "active",
+    priority: Number(params[6] ?? 0),
+    filters_json: JSON.parse(String(params[7] ?? "{}")) as Record<string, unknown>,
+    routing_policy_json: JSON.parse(String(params[8] ?? "{}")) as Record<string, unknown>,
+    extraction_policy_json: JSON.parse(String(params[9] ?? "{}")) as Record<string, unknown>,
+    created_by_user_id: typeof params[10] === "string" ? params[10] : null,
+    created_at: String(params[11] ?? "2026-06-16T00:00:00.000Z"),
+    updated_at: String(params[11] ?? "2026-06-16T00:00:00.000Z"),
+  };
+}
+
 describe("Leaf domain repository behavior", () => {
+  it("project intake item filters include items captured by a bound source snapshot", async () => {
+    const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
+    const db = new FakeDb((sql, params) => {
+      calls.push({ sql, params });
+      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
+      if (sql.includes("FROM spaces")) return [{ type: "personal" }];
+      if (sql.includes("count(*)::text AS total")) return [{ total: "0" }];
+      if (sql.includes("FROM intake_items")) return [];
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    await new PgIntakeRepository(db, intakeConfig()).listItems(identity, {
+      status: null,
+      readStatus: null,
+      contentState: null,
+      connectionId: null,
+      itemType: null,
+      sourceDomain: null,
+      createdAfter: null,
+      occurredAfter: null,
+      includeIgnored: false,
+      includeArchived: false,
+      q: null,
+      projectId: "project-1",
+      limit: 20,
+      offset: 0,
+    });
+
+    const listSql = calls.find((call) => call.sql.includes("FROM intake_items") && call.sql.includes("ORDER BY"));
+    expect(listSql?.sql).toContain("FROM source_snapshots ss");
+    expect(listSql?.sql).toContain("ss.intake_item_id = intake_items.id");
+    expect(listSql?.sql).toContain("wsb.source_connection_id = ss.connection_id");
+  });
+
   it("captures raw input as an activity record", async () => {
     const db = new FakeDb((sql) => {
       if (sql.includes("INSERT INTO activity_records")) return [activityRow()];
@@ -439,6 +507,72 @@ describe("Leaf domain repository behavior", () => {
     });
   });
 
+  it("requires project scope when creating workspace source bindings", async () => {
+    const db = new FakeDb(() => {
+      throw new Error("no DB call expected");
+    });
+
+    await expect(new PgIntakeRepository(db, intakeConfig()).createWorkspaceBinding(identity, {
+      workspace_id: "workspace-1",
+      source_connection_id: "conn-1",
+    })).rejects.toMatchObject({ statusCode: 422, message: "project_id is required" });
+  });
+
+  it("rejects workspace source bindings for workspaces outside the project", async () => {
+    let attemptedInsert = false;
+    const db = new FakeDb((sql) => {
+      if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
+      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
+      if (sql.includes("FROM workspaces")) return [{ id: "workspace-1" }];
+      if (sql.includes("FROM project_workspaces")) return [];
+      if (sql.includes("INSERT INTO workspace_source_bindings")) {
+        attemptedInsert = true;
+        throw new Error("binding insert should not run");
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    await expect(new PgIntakeRepository(db, intakeConfig()).createWorkspaceBinding(identity, {
+      workspace_id: "workspace-1",
+      project_id: "project-1",
+      source_connection_id: "conn-1",
+    })).rejects.toMatchObject({
+      statusCode: 422,
+      message: "Workspace must be linked to the project before binding intake sources",
+    });
+    expect(attemptedInsert).toBe(false);
+  });
+
+  it("creates workspace source bindings only after project writer and workspace link validation", async () => {
+    let insertParams: readonly unknown[] | null = null;
+    const db = new FakeDb((sql, params) => {
+      if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
+      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
+      if (sql.includes("FROM workspaces")) return [{ id: "workspace-1" }];
+      if (sql.includes("FROM project_workspaces")) return [{ id: "project-workspace-1" }];
+      if (sql.includes("INSERT INTO workspace_source_bindings")) {
+        insertParams = params;
+        return [workspaceBindingRow(params)];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const out = await new PgIntakeRepository(db, intakeConfig()).createWorkspaceBinding(identity, {
+      workspace_id: "workspace-1",
+      project_id: "project-1",
+      source_connection_id: "conn-1",
+    });
+
+    expect(out).toMatchObject({
+      workspace_id: "workspace-1",
+      project_id: "project-1",
+      source_connection_id: "conn-1",
+    });
+    expect(insertParams?.[2]).toBe("workspace-1");
+    expect(insertParams?.[3]).toBe("project-1");
+    expect(insertParams?.[4]).toBe("conn-1");
+  });
+
   it("blocks connected manual URL content queueing beyond source retention policy", async () => {
     const db = new FakeDb((sql) => {
       if (sql.includes("FROM source_connections")) {
@@ -505,6 +639,54 @@ describe("Leaf domain repository behavior", () => {
     });
 
     expect(calls.some((call) => call.sql.includes("INSERT INTO extraction_jobs"))).toBe(false);
+  });
+
+  it("updates the source for manually saved URL items", async () => {
+    const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
+    const db = new FakeDb((sql, params) => {
+      calls.push({ sql, params });
+      if (sql.includes("FROM intake_items")) {
+        return [intakeItemRow({
+          connection_id: "conn-old",
+          item_type: "external_url",
+          metadata_json: { created_by: "manual_url" },
+          retention_policy: "metadata_only",
+        })];
+      }
+      if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
+      if (sql.includes("UPDATE intake_items")) return [];
+      if (sql.includes("UPDATE source_snapshots")) return [];
+      if (sql.includes("UPDATE extraction_jobs")) return [];
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    await new PgIntakeRepository(db, intakeConfig()).updateItem(identity, "item-1", {
+      connection_id: "conn-1",
+    });
+
+    const itemUpdate = calls.find((call) => call.sql.includes("UPDATE intake_items"));
+    const snapshotUpdate = calls.find((call) => call.sql.includes("UPDATE source_snapshots"));
+    const jobUpdate = calls.find((call) => call.sql.includes("UPDATE extraction_jobs"));
+    expect(itemUpdate?.params[2]).toBe("conn-1");
+    expect(snapshotUpdate?.params[2]).toBe("conn-1");
+    expect(jobUpdate?.params[2]).toBe("conn-1");
+  });
+
+  it("does not allow source reassignment for scanned intake items", async () => {
+    const db = new FakeDb((sql) => {
+      if (sql.includes("FROM intake_items")) {
+        return [intakeItemRow({
+          connection_id: "conn-1",
+          item_type: "feed_entry",
+          metadata_json: { capture_method: "connection_scan" },
+        })];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    await expect(new PgIntakeRepository(db, intakeConfig()).updateItem(identity, "item-1", {
+      connection_id: "conn-2",
+    })).rejects.toThrow("Only manually saved URL items can change source");
   });
 
   it("blocks source-derived summary proposals unless the source policy allows the target", async () => {

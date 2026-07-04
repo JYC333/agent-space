@@ -2,7 +2,8 @@
 
 ## Status
 
-Implemented for built-in RSS, Atom, web page, manual URL, candidate evidence,
+Implemented for built-in RSS, Atom, web page, arXiv (Academic source preset
+with HTML-first extraction), manual URL, candidate evidence,
 reader, structured reader document extraction, workspace/project routing flows,
 Level 2 Source Recipe creation through Phase 8, and the Custom Source backend
 create flow through Phase 8.
@@ -29,14 +30,15 @@ proposal gates for durable writes.
 - Source connector catalog for intake connectors.
 - Space-scoped `SourceConnection` configuration, consent, policy, trust, and
   scan behavior. Scheduler cursor/state for scans is stored as
-  `source_connection_scan` rows in `scheduler_tasks`.
+  `source_connection_scan` rows in `scheduler_tasks`; recurring source scan
+  rules live on `source_connections.schedule_rule_json`.
 - `IntakeItem` candidate records.
 - `ExtractionJob` scan, extraction, snapshot, manual URL, and normalization
   jobs.
 - `SourceSnapshot` records backed by artifacts.
 - `ExtractedEvidence` candidate citable evidence.
 - `EvidenceLink` relevance and context-selection links.
-- `WorkspaceIntakeProfile` and `WorkspaceSourceBinding` routing.
+- Project-scoped `WorkspaceSourceBinding` routing.
 - Intake reader annotations and comments.
 - Custom Source handler versions, handler runs, backend create/test/activate
   flow, and first scan-job integration.
@@ -57,10 +59,94 @@ proposal gates for durable writes.
 
 ## Current Implementation
 
-Built-in source connections are seeded for RSS, Atom, and web page connectors.
-The extraction worker scans feeds and pages, creates candidate items, queues
-follow-up extraction or snapshot jobs, writes artifacts for captured content,
-and creates candidate evidence where appropriate.
+Built-in source connections are seeded for RSS, Atom, web page, and arXiv
+connectors. The extraction worker scans feeds and pages, creates candidate
+items, queues follow-up extraction or snapshot jobs, writes artifacts for
+captured content, and creates candidate evidence where appropriate.
+
+### Academic source presets (arXiv)
+
+Academic Sources is a UX grouping over normal `source_connections`, not a
+database boundary. A code-defined preset registry (no table) is exposed under
+`GET /api/v1/intake/source-presets`; v1 ships only the `arxiv` preset
+(`category: academic`). `POST /api/v1/intake/source-presets/arxiv/preview`
+runs a bounded arXiv Atom API query and returns parsed sample papers without
+writing durable rows. `POST /api/v1/intake/source-presets/arxiv` validates the
+query config (`mode`, `search_query` required/<=500 chars for `search` mode,
+one or more `categories` required for `recent_by_category`, `max_results`
+1..100, and `sort_by`/`sort_order` from the arXiv API enums), then creates a
+normal active built-in connection with `connector_key='arxiv'`, `endpoint_url`
+set to the generated `export.arxiv.org/api/query` URL, and the normalized
+query config in `config_json` (`preset_id: "arxiv"`). `recent_by_category`
+creates `cat:<category>` queries, or `cat:A OR cat:B` for multiple categories,
+sorted by `submittedDate` descending, so daily scans behave like an arXiv
+new-papers stream with normal Intake dedupe. Use one source for multiple
+categories when they share the same schedule, capture policy, and project
+binding; create separate sources only when those controls need to differ. Both
+POST endpoints enforce the same `intake.connection_manage` policy action as
+`POST /api/v1/intake/connections`. No credentials are accepted in v1.
+
+arXiv-specific parsing lives in `connectors/arxiv.ts` (query URL building, Atom
+response parsing, and id/URL normalization for abs/pdf/html URLs, `arXiv:`
+prefixes, versioned ids, and legacy slash ids), deliberately outside the generic
+feed parser. `connectors/arxivThrottle.ts` is a best-effort process-local polite throttle
+(default 3s minimum interval, injectable clock/sleep for tests) that wraps
+only arXiv network calls.
+
+`connection_scan` for `connector_key='arxiv'` parses the Atom response into
+paper records and upserts `feed_entry` items with the base arXiv id (no
+version) as `source_external_id`, the canonical abs URL as
+`canonical_uri`/`source_uri`, comma-joined authors, the abstract as excerpt,
+and arXiv metadata (id/version/authors/categories/primary category/doi/
+journal ref/comment/abs/html/pdf URLs) in `metadata_json`. Each scan fetches
+the configured `max_results` and relies on item dedupe; incremental query
+rewriting is not implemented.
+
+Text extraction and snapshot jobs detect arXiv abs/pdf/html source URLs and
+resolve content HTML-first: try `arxiv.org/html/<baseId>` (succeeds only when
+structured reader extraction yields non-empty plain text), fall back to
+`arxiv.org/pdf/<baseId>` (raw PDF artifact plus `pdf_text_v1` reader
+document), then the original URL if distinct. Snapshots store the raw content
+actually used. Created snapshots/reader artifacts record
+`content_source_format`, `content_source_url`, `arxiv_id`, and
+`fallback_from`/`fallback_reason` when PDF fallback occurred. Non-arXiv URLs
+keep the existing single-fetch behavior.
+
+The Intake page links to a dedicated `/intake/source-presets` page for preset
+sources. That page groups presets by category; Academic v1 shows the arXiv
+form with `Recent by category` and `Search query` modes plus name, max results,
+frequency, and capture policy. Recent mode uses a multi-select category control
+for the full official arXiv category taxonomy
+(`https://arxiv.org/category_taxonomy`), grouped by archive/category family.
+The taxonomy is source-preset-owned code in
+`server/src/modules/intake/sourcePresets/arxivCategoryTaxonomy.ts`; the preset
+list API returns it as `category_options`, and the backend validates requested
+categories against that same value set.
+Preview and create are wired to the preset API.
+The main `/intake` Create Source card remains for Web/Feed source recipes.
+Project binding still goes through the existing project-scoped workspace source
+binding flow.
+
+Scheduled source connections use frequency-specific rules rather than a raw
+"next run" picker. Hourly schedules choose a minute, daily schedules choose
+hour/minute, and weekly schedules choose weekday/hour/minute. The API stores
+the normalized UTC rule in `source_connections.schedule_rule_json` and returns
+it as `schedule_rule_json` alongside the computed `next_check_at`.
+After each scheduled scan, the next run is recomputed from the rule so schedules
+do not drift based on job completion time. The scheduler task owns only runtime
+cursor/state (`next_run_at`, `last_run_at`, status, and operational metadata),
+not the user-facing recurring rule. Source Detail can edit both
+`fetch_frequency` and the schedule rule; manual sources have no recurring rule
+and run only through explicit `Run now`/Scan actions.
+
+Capture policy behavior:
+
+- `reference_only`: save the item record, source metadata, scan timestamps, and
+  any feed/API excerpt; do not fetch the original page/document.
+- `extract_text`: queue `extract_text` follow-up jobs after scans and store a
+  reader document/plain text when extraction succeeds.
+- `archive_original`: queue `snapshot` follow-up jobs, persist the original
+  HTML/PDF snapshot, and derive reader text from that archived copy.
 
 Custom Source backend support is implemented for draft connection creation,
 deterministic handler generation, fixture testing, inside-envelope activation,
@@ -87,8 +173,10 @@ shared Intake source materializer. Source Detail presents product tabs
 (Overview, Plan, Preview, Items, Evidence, Runs) and keeps handler versions,
 raw JSON, raw runs, and policy/sandbox details under Advanced.
 
-Manual URL intake is a separate item creation route. It can optionally queue
-content extraction.
+Manual URL intake is a separate item creation route. It can optionally attach
+the saved URL to a `SourceConnection` and queue content extraction. A manually
+saved URL may later change its attached source; source-scanned items keep their
+original connection as provenance and are not source-reassignable.
 
 ### Reader and structured extraction
 
@@ -99,14 +187,15 @@ materialize an `intake_reader_document` artifact. This artifact is JSON
 - `plain_text` for content hashes, text-range anchors, search/excerpts, and
   annotation verification.
 - `content_json` as read-only Tiptap JSON for the Reader UI.
-- `image_policy="remote_reference"`; image nodes keep resolved remote
-  `http`/`https` URLs and do not download image binaries.
-- `extraction_method="structured_html_v1"`.
+- HTML reader documents use `image_policy="remote_reference"`; image nodes keep
+  resolved remote `http`/`https` URLs and do not download image binaries.
+- `extraction_method="structured_html_v1"` for HTML and `pdf_text_v1` for PDF.
 
-The reader repository remains backward compatible with older `text/plain`
-`intake_extracted_text` artifacts. New reader documents preserve common article
-structure such as headings, paragraphs, lists, blockquotes, code blocks,
-horizontal rules, links, and remote image references.
+Reader documents preserve common article structure such as headings,
+paragraphs, lists, blockquotes, code blocks, horizontal rules, links, and
+remote image references. PDF URLs store the raw PDF as an
+`intake_raw_snapshot` artifact (`mime_type="application/pdf"`, file-backed
+`storage_path`) and derive a `pdf_text_v1` reader document from those bytes.
 
 The Reader UI is a read-only workspace. It supports block-level reading rhythm,
 selection toolbar annotation creation, annotation notebook/inspector, comment
@@ -118,9 +207,40 @@ or Reader header. Re-extraction uses the existing `queue_content` item action
 and `extract_text` job path; it creates a new extracted source snapshot/artifact
 and updates `intake_items.extracted_artifact_id`.
 
-Projects consume Intake through workspace source bindings, project filters, and
-evidence links. Project pages link back to Intake for management. Projects do
-not own raw source connections.
+Projects consume Intake through project-scoped workspace source bindings,
+project filters, and evidence links. `WorkspaceSourceBinding.project_id` is
+required, and the referenced workspace must already be linked to the project
+through `project_workspaces`. Project pages can create these project-scoped
+source bindings directly, save URLs into the project by attaching them to a
+project-bound source, change the source for manually saved URL items, and link
+back to Intake for source creation, scan state, and advanced management.
+Projects do not own raw source connections.
+
+An `IntakeItem` keeps one primary `connection_id`, but deduped items may have
+`SourceSnapshot` rows from multiple source connections. Project filters and
+evidence auto-linking treat both the primary item connection and same-item
+snapshot connections as source provenance, so one paper or URL captured by
+multiple bound sources remains visible to each bound project without duplicating
+the raw item.
+
+### Project automation integration
+
+When a source connection has an active `workspace_source_bindings` row for a
+project, and that binding's workspace is still linked to the project, all three
+materialization paths (built-in scan, `extract_text`, custom/recipe materializer)
+auto-create active `context_candidate` `evidence_links` targeting that project
+(`evidenceProjectLinker.ts`). These links are idempotent via the partial unique index
+`uq_evidence_links_active_dedupe` and are what run-context evidence selection
+reads for project-bound agent runs.
+
+For deduped items, auto-linking also considers `SourceSnapshot.connection_id`
+rows for the same item, not only `IntakeItem.connection_id`.
+
+After a scan materializes new items, the scan paths emit a best-effort
+`automation_intake_event` job (`automationEventEmitter.ts`). The automations
+module consumes it to fire `trigger_type='event'` automations. Emission is
+at-least-once; the automation intake delta cursor makes duplicates harmless.
+See [modules/automations.md](automations.md).
 
 ## Custom Source Boundary
 
@@ -132,7 +252,7 @@ Generated/template handler expansion (`typescript_node`) is frozen as the
 Level 3 advanced fallback — no new handler languages or arbitrary code
 execution features; bug/safety fixes only. See
 [Intake Custom Source Handlers](../architecture/INTAKE_CUSTOM_SOURCE_HANDLERS.md#level-3-freeze-2026-07-01)
-and `.agent/plans/intake-source-levels-plan.md` for the Level 1/2/3 split.
+for the Level 1/2/3 split.
 
 Handler code may only read `input.json`, write `output.json`, write files under
 sandbox `files/`, and emit captured logs. It must not write
@@ -153,16 +273,18 @@ credentials, runtime language, browser automation, shell, dependency
 installation, resource limits, output limits, and log retention.
 
 Space Settings owns product policy such as who can create custom sources,
-default source policy, allowed domains, credentialed source policy, and whether
-same-envelope repair may auto-apply.
+default source policy, allowed domains, per-space download cap, credentialed
+source policy, and whether same-envelope repair may auto-apply.
 
 Instance Settings owns runner and sandbox safety such as whether the runner is
-enabled, allowed languages, hard network denies, time/memory/output/download
-limits, browser automation availability, shell availability, and dependency
-installation availability.
+enabled, allowed languages, hard network denies, time/output/log/file limits,
+browser automation availability, shell availability, and dependency
+installation availability. The download cap is intentionally space policy, not
+environment or instance config.
 
 `GET/PUT /api/v1/intake/custom-source-settings/space` reads and updates only
-the Space product policy. `GET/PUT /api/v1/intake/custom-source-settings/instance`
+the Space product policy, including `download_bytes_max`.
+`GET/PUT /api/v1/intake/custom-source-settings/instance`
 requires instance-admin authority; it stores the runner availability toggle in
 Instance Settings with default `runner_enabled=true`, while hard sandbox limits
 remain instance-level server safety config.
@@ -194,6 +316,9 @@ Policy envelope behavior:
 - Raw external source material enters through Intake before becoming durable
   Knowledge or Memory.
 - Intake `SourceConnection` is not Knowledge `Source`.
+- Intake `WorkspaceSourceBinding` is project-scoped: `project_id` is required,
+  creation requires project writer authority, and the workspace must be linked
+  to that project.
 - Custom Source handlers never directly write durable product objects.
 - Projects do not create a second source model.
 - Source-derived Memory and Knowledge writes remain proposal-gated.

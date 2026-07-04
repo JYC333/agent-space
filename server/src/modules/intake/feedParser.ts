@@ -36,7 +36,7 @@ function parseRss(rootValue: unknown): ParsedFeedItem[] {
   return items.map((itemValue) => {
     const item = record(itemValue);
     const title = text(item.title) ?? text(item.link) ?? text(item.guid) ?? "Untitled feed item";
-    const url = text(item.link);
+    const url = pdfEnclosureUrl(item.enclosure) ?? text(item.link);
     const externalId = text(item.guid) ?? url ?? title;
     const body = text(item["content:encoded"]) ?? text(item.description) ?? text(item.summary);
     return {
@@ -78,6 +78,11 @@ function parseAtom(rootValue: unknown): ParsedFeedItem[] {
 
 function atomLink(value: unknown): string | null {
   const links = asArray(value);
+  const pdfEnclosure = links.find((item) => {
+    const row = record(item);
+    return text(row["@rel"]) === "enclosure" && isPdfLink(text(row["@href"]), text(row["@type"]));
+  });
+  if (pdfEnclosure) return text(record(pdfEnclosure)["@href"]) ?? text(pdfEnclosure);
   const preferred =
     links.find((item) => {
       const row = record(item);
@@ -86,6 +91,25 @@ function atomLink(value: unknown): string | null {
     }) ?? links[0];
   const row = record(preferred);
   return text(row["@href"]) ?? text(preferred);
+}
+
+function pdfEnclosureUrl(value: unknown): string | null {
+  for (const item of asArray(value)) {
+    const row = record(item);
+    const url = text(row["@url"]) ?? text(row.url) ?? text(item);
+    if (isPdfLink(url, text(row["@type"]) ?? text(row.type))) return url;
+  }
+  return null;
+}
+
+function isPdfLink(url: string | null, mimeType: string | null): url is string {
+  if (!url) return false;
+  if (mimeType?.toLowerCase().split(";")[0]?.trim() === "application/pdf") return true;
+  try {
+    return new URL(url).pathname.toLowerCase().endsWith(".pdf");
+  } catch {
+    return url.split("?")[0]?.toLowerCase().endsWith(".pdf") ?? false;
+  }
 }
 
 function atomAuthor(value: unknown): string | null {

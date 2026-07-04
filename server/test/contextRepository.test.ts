@@ -150,7 +150,7 @@ describe("PgRunContextRepository digest source revalidation", () => {
     expect(evidenceQuery?.params).not.toContain("project-1");
   });
 
-  it("selects only active evidence with active context-candidate links", async () => {
+  it("selects candidate or active evidence with active context-candidate links", async () => {
     const db = new CapturingDb();
 
     await new PgRunContextRepository(db).selectEvidenceForContext({
@@ -165,7 +165,7 @@ describe("PgRunContextRepository digest source revalidation", () => {
       query.sql.includes("FROM extracted_evidence"),
     );
     const sql = evidenceQuery?.sql.replace(/\s+/g, " ") ?? "";
-    expect(sql).toContain("ev.status = 'active'");
+    expect(sql).toContain("ev.status IN ('candidate', 'active')");
     expect(sql).toContain("el.status = 'active'");
     expect(evidenceQuery?.params[1]).toEqual(["context_candidate", "supports", "mentions"]);
   });
@@ -256,7 +256,14 @@ describe("PgRunContextRepository digest source revalidation", () => {
     const evidenceQuery = db.queries.find((query) =>
       query.sql.includes("FROM extracted_evidence"),
     );
+    const usedInContextQuery = db.queries.find((query) =>
+      query.sql.includes("link_type, status") && query.sql.includes("used_in_context"),
+    );
+    const usedInContextSql = usedInContextQuery?.sql.replace(/\s+/g, " ") ?? "";
     expect(evidenceQuery?.params[1]).toEqual(["context_candidate", "supports", "mentions"]);
+    expect(usedInContextSql).toContain(
+      "ON CONFLICT (space_id, evidence_id, target_type, target_id, link_type) WHERE status = 'active' DO NOTHING",
+    );
   });
 
   it("applies personal memory grant filters before generating summary context", async () => {

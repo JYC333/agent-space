@@ -90,6 +90,38 @@ export async function assertProjectWriter(
   }
 }
 
+export async function assertWorkspaceLinkedToProject(
+  db: Queryable,
+  spaceId: string,
+  projectId: string,
+  workspaceId: string,
+): Promise<void> {
+  const workspace = await db.query<{ id: string }>(
+    `SELECT id
+       FROM workspaces
+      WHERE id = $1
+        AND space_id = $2
+        AND status = 'active'`,
+    [workspaceId, spaceId],
+  );
+  if ((workspace.rowCount ?? workspace.rows.length) === 0) {
+    throw new HttpError(404, "Workspace not found");
+  }
+
+  const link = await db.query<{ id: string }>(
+    `SELECT id
+       FROM project_workspaces
+      WHERE space_id = $1
+        AND project_id = $2
+        AND workspace_id = $3
+      LIMIT 1`,
+    [spaceId, projectId, workspaceId],
+  );
+  if ((link.rowCount ?? link.rows.length) === 0) {
+    throw new HttpError(422, "Workspace must be linked to the project before binding intake sources");
+  }
+}
+
 /**
  * Owner-level authority: the project `owner_user_id` or a space `owner`/`admin`.
  * Unlike `canWriteProject`, an active project member role of `owner`/`member`

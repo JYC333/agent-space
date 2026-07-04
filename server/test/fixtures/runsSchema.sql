@@ -569,3 +569,36 @@ CREATE INDEX ix_runs_task_id ON public.runs USING btree (task_id);
 CREATE INDEX ix_runs_trigger_origin ON public.runs USING btree (trigger_origin);
 
 CREATE INDEX ix_runs_workspace_id ON public.runs USING btree (workspace_id);
+
+-- Automation intake-cursor surface: run finalization commits the intake
+-- watermark proposed at fire time (automations/intakeCursor.ts).
+CREATE TABLE public.automations (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36) NOT NULL,
+    agent_id character varying(36) NOT NULL,
+    workspace_id character varying(36),
+    project_id character varying(36),
+    name character varying(256) NOT NULL,
+    description text,
+    trigger_type character varying(64) DEFAULT 'manual'::character varying NOT NULL,
+    status character varying(32) DEFAULT 'active'::character varying NOT NULL,
+    preflight_snapshot_json jsonb,
+    config_json jsonb,
+    cursor_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT automations_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.automation_runs (
+    id character varying(36) NOT NULL,
+    automation_id character varying(36) NOT NULL,
+    run_id character varying(36) NOT NULL,
+    triggered_by_user_id character varying(36),
+    trigger_type character varying(64) DEFAULT 'manual'::character varying NOT NULL,
+    preflight_snapshot_json jsonb,
+    trigger_context_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT automation_runs_pkey PRIMARY KEY (id)
+);

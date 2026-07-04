@@ -10,13 +10,20 @@ import {
   type SourceConnectionRow,
 } from "./intakeRepositoryRows";
 import {
+  excerpt,
   extractStructuredReaderContent,
   htmlTitle,
   stripHtml,
   type StructuredReaderContent,
 } from "./contentParsing";
+import { extractPdfReaderContent } from "./pdfExtract";
 import { parseFeed } from "./feedParser";
+import { arxivHtmlUrl, arxivPdfUrl, parseArxivFeed, parseArxivReference } from "./connectors/arxiv";
+import { acquireArxivRequestSlot } from "./connectors/arxivThrottle";
+import { fetchIntakeSource, type IntakeSourceFetchResult } from "./sourceFetch";
 import { normalizeUrl, sourceDomain } from "./intakeRepositoryMappers";
+import { linkEvidenceToBoundProjects } from "./evidenceProjectLinker";
+import { emitIntakeItemsMaterializedEvent } from "./automationEventEmitter";
 import { computeNextCheckAt } from "./scanSchedule";
 import {
   getSourceConnectionScanTask,
@@ -27,6 +34,8 @@ import {
   enforceSourceRetentionPolicy,
   normalizeSourceConnectionReadGovernance,
 } from "./sourceConsent";
+import { PgCustomSourceHandlerRepository } from "./customSources/customSourceHandlerRepository";
+import { capturePolicyScanState } from "./capturePolicy";
 
 interface ExtractionJobRow {
   id: string;
@@ -175,7 +184,7 @@ export class IntakeExtractionWorker {
     createdAt: string,
   ): Promise<void> {
     if (!this.isManualScan(job)) return;
-    const policy = capturePolicyState(connection.capture_policy);
+    const policy = capturePolicyScanState(connection.capture_policy);
     if (!policy.followUpJobType) return;
     if (policy.retention !== "metadata_only") {
       enforceSourceRetentionPolicy(
@@ -254,9 +263,13 @@ export class IntakeExtractionWorker {
     if (cursor.etag) headers["If-None-Match"] = cursor.etag;
     if (cursor.last_modified) headers["If-Modified-Since"] = cursor.last_modified;
 
-    const response = await fetch(connection.endpoint_url, { redirect: "follow", headers });
+    if (connection.connector_key === "arxiv") await acquireArxivRequestSlot();
+    const response = await fetchIntakeSource(connection.endpoint_url, {
+      headers,
+      maxDownloadBytes: await this.maxDownloadBytes(job.space_id),
+    });
     const completedAt = new Date().toISOString();
-    if (response.status === 304) {
+    if (response.notModified) {
       await this.queueFailedFollowUpsForConnection(job, connection, completedAt);
       await this.updateConnectionAfterScan(connection, cursor, completedAt, this.isManualScan(job));
       await this.updateJobStats(job, { seen: 0, created: 0, updated: 0, metadata: { not_modified: true } });
@@ -265,8 +278,11 @@ export class IntakeExtractionWorker {
     if (!response.ok) {
       throw new HttpError(502, `Failed to fetch source connection (${response.status})`);
     }
+    if (!response.isText || response.text === null) {
+      throw new HttpError(415, `Source connection returned unsupported binary content (${response.contentType ?? "unknown"})`);
+    }
 
-    const raw = await response.text();
+    const raw = response.text;
     const nextCursor = {
       ...cursor,
       etag: response.headers.get("etag") ?? cursor.etag,
@@ -274,7 +290,9 @@ export class IntakeExtractionWorker {
     };
     const result = connection.connector_key === "web_page"
       ? await this.scanWebPage(job, connection, raw, completedAt)
-      : await this.scanFeed(job, connection, raw, completedAt);
+      : connection.connector_key === "arxiv"
+        ? await this.scanArxiv(job, connection, raw, completedAt)
+        : await this.scanFeed(job, connection, raw, completedAt);
     await this.updateConnectionAfterScan(connection, {
       ...nextCursor,
       ...result.cursor,
@@ -287,6 +305,11 @@ export class IntakeExtractionWorker {
         connector_key: connection.connector_key,
         endpoint_url: connection.endpoint_url,
       },
+    });
+    await emitIntakeItemsMaterializedEvent(this.db, {
+      spaceId: job.space_id,
+      sourceConnectionId: job.connection_id,
+      newItemCount: result.created,
     });
   }
 
@@ -374,6 +397,69 @@ export class IntakeExtractionWorker {
     };
   }
 
+  private async scanArxiv(
+    job: ExtractionJobRow,
+    connection: ConnectionWithConnectorRow,
+    raw: string,
+    capturedAt: string,
+  ): Promise<{ seen: number; created: number; updated: number; cursor: ScanCursor }> {
+    const papers = parseArxivFeed(raw).slice(0, 100);
+    let created = 0;
+    let updated = 0;
+    let lastGuid: string | undefined;
+    let lastPublishedAt: string | undefined;
+    for (const paper of papers) {
+      if (!lastGuid) lastGuid = paper.arxiv_id;
+      if (!lastPublishedAt) lastPublishedAt = paper.published_at ?? paper.updated_at ?? undefined;
+      const outcome = await this.upsertScannedItem({
+        job,
+        connection,
+        itemType: "feed_entry",
+        title: paper.title,
+        sourceUri: paper.abs_url,
+        canonicalUri: safeNormalizeUrl(paper.abs_url),
+        sourceExternalId: paper.arxiv_id,
+        author: paper.authors.length ? paper.authors.join(", ").slice(0, 512) : null,
+        occurredAt: paper.published_at ?? paper.updated_at,
+        contentHash: sha256([
+          paper.arxiv_id,
+          paper.arxiv_version ?? "",
+          paper.title,
+          paper.summary ?? "",
+          paper.updated_at ?? "",
+        ].join("\n")),
+        excerpt: paper.summary ? excerpt(paper.summary) : null,
+        metadata: {
+          arxiv_id: paper.arxiv_id,
+          arxiv_version: paper.arxiv_version,
+          authors: paper.authors,
+          categories: paper.categories,
+          primary_category: paper.primary_category,
+          published_at: paper.published_at,
+          updated_at: paper.updated_at,
+          abs_url: paper.abs_url,
+          html_url: paper.html_url,
+          pdf_url: paper.pdf_url,
+          doi: paper.doi,
+          journal_ref: paper.journal_ref,
+          comment: paper.comment,
+        },
+        capturedAt,
+      });
+      if (outcome.created) created += 1;
+      else updated += 1;
+    }
+    return {
+      seen: papers.length,
+      created,
+      updated,
+      cursor: {
+        last_guid: lastGuid,
+        last_published_at: lastPublishedAt,
+      },
+    };
+  }
+
   private async upsertScannedItem(input: {
     job: ExtractionJobRow;
     connection: ConnectionWithConnectorRow;
@@ -409,7 +495,7 @@ export class IntakeExtractionWorker {
         input.contentHash,
       ],
     );
-    const policy = capturePolicyState(input.connection.capture_policy);
+    const policy = capturePolicyScanState(input.connection.capture_policy);
     if (policy.retention !== "metadata_only") {
       enforceSourceRetentionPolicy(
         normalizeSourceConnectionReadGovernance(input.connection).policy,
@@ -518,24 +604,10 @@ export class IntakeExtractionWorker {
       metadata,
       capturedAt: now,
     });
-    if (created && input.connection.capture_policy === "excerpt_only" && input.excerpt) {
-      await this.createCandidateEvidence({
+    if (!created) {
+      await linkEvidenceToBoundProjects(this.db, {
         spaceId: input.job.space_id,
         intakeItemId: itemId,
-        extractionJobId: input.job.id,
-        sourceSnapshotId,
-        title: input.title,
-        contentExcerpt: input.excerpt,
-        contentHash: input.contentHash,
-        sourceUri: input.sourceUri,
-        sourceTitle: input.title,
-        sourceAuthor: input.author,
-        occurredAt: input.occurredAt,
-        trustLevel: input.connection.trust_level,
-        extractionMethod: "connection_scan",
-        confidence: 0.55,
-        metadata,
-        createdAt: now,
       });
     }
     const needsFollowUp =
@@ -569,17 +641,39 @@ export class IntakeExtractionWorker {
     if (!item?.source_uri) throw new HttpError(422, "Intake item is missing source_uri");
     await this.enforceItemRetentionPolicy(job.space_id, item, "full_text");
 
-    const response = await fetch(item.source_uri, { redirect: "follow" });
-    if (!response.ok) {
-      throw new HttpError(502, `Failed to fetch source URL (${response.status})`);
+    const resolved = await this.fetchItemSourceContent(job.space_id, item.source_uri);
+    const response = resolved.response;
+    let rawSnapshotId: string | null = null;
+    let rawArtifactId: string | null = null;
+    if (response.isPdf) {
+      if (!response.bytes) throw new HttpError(415, "PDF response did not include binary content");
+      rawArtifactId = await this.writeRawArtifact(job.space_id, item.title ?? "snapshot", {
+        content: response.bytes,
+        mimeType: "application/pdf",
+      });
+      rawSnapshotId = await this.createSourceSnapshot({
+        spaceId: job.space_id,
+        intakeItemId: item.id,
+        connectionId: item.connection_id,
+        snapshotType: "raw",
+        artifactId: rawArtifactId,
+        contentHash: sha256(response.bytes),
+        sourceUri: item.source_uri,
+        captureMethod: "full_text",
+        trustLevel: "normal",
+        metadata: { job_id: job.id, ...resolved.contentMeta },
+        capturedAt: new Date().toISOString(),
+      });
     }
-    const raw = await response.text();
-    const readerContent = extractStructuredReaderContent(raw, item.source_uri);
+    const readerContent = resolved.readerContent
+      ?? await this.readerContentFromFetched(response, item.source_uri);
     const text = readerContent.plain_text;
+    const evidenceExtractionMethod = response.isPdf ? "pdf_text_v1" : "full_text";
     const artifactId = await this.writeReaderDocumentArtifact(
       job.space_id,
       item.title ?? readerContent.title ?? "extracted",
       readerContent,
+      resolved.contentMeta,
     );
     const contentHash = sha256(text);
     const now = new Date().toISOString();
@@ -593,7 +687,11 @@ export class IntakeExtractionWorker {
       sourceUri: item.source_uri,
       captureMethod: "full_text",
       trustLevel: "normal",
-      metadata: { job_id: job.id },
+      metadata: {
+        job_id: job.id,
+        ...(rawSnapshotId ? { raw_source_snapshot_id: rawSnapshotId } : {}),
+        ...resolved.contentMeta,
+      },
       capturedAt: now,
     });
 
@@ -601,11 +699,12 @@ export class IntakeExtractionWorker {
       `UPDATE intake_items
           SET content_state = 'content_saved',
               retention_policy = 'full_text',
+              raw_artifact_id = COALESCE($6, raw_artifact_id),
               extracted_artifact_id = $3,
               content_hash = $4,
               updated_at = $5
         WHERE space_id = $1 AND id = $2`,
-      [job.space_id, item.id, artifactId, contentHash, now],
+      [job.space_id, item.id, artifactId, contentHash, now, rawArtifactId],
     );
 
     await this.db.query(
@@ -618,7 +717,7 @@ export class IntakeExtractionWorker {
          $1, $2, $3, 'intake_item', $3,
          $4, $5, 'document', $6, $7,
          $8, $9, $10, $11,
-         'full_text', 'normal', 0.7, 'candidate', '{}'::jsonb, $12, $12
+         $13, 'normal', 0.7, 'candidate', '{}'::jsonb, $12, $12
        )`,
       [
         randomUUID(),
@@ -633,8 +732,13 @@ export class IntakeExtractionWorker {
         item.source_uri,
         item.title,
         now,
+        evidenceExtractionMethod,
       ],
     );
+    await linkEvidenceToBoundProjects(this.db, {
+      spaceId: job.space_id,
+      intakeItemId: item.id,
+    });
 
     await this.db.query(
       `UPDATE extraction_jobs SET source_snapshot_id = $3 WHERE id = $1 AND space_id = $2`,
@@ -648,13 +752,11 @@ export class IntakeExtractionWorker {
     if (!item?.source_uri) throw new HttpError(422, "Intake item is missing source_uri");
     await this.enforceItemRetentionPolicy(job.space_id, item, "full_snapshot");
 
-    const response = await fetch(item.source_uri, { redirect: "follow" });
-    if (!response.ok) {
-      throw new HttpError(502, `Failed to fetch source URL (${response.status})`);
-    }
-    const raw = await response.text();
-    const artifactId = await this.writeRawArtifact(job.space_id, item.title ?? "snapshot", raw);
-    const contentHash = sha256(raw);
+    const resolved = await this.fetchItemSourceContent(job.space_id, item.source_uri);
+    const response = resolved.response;
+    const rawContent = this.rawContentFromFetched(response);
+    const artifactId = await this.writeRawArtifact(job.space_id, item.title ?? "snapshot", rawContent);
+    const contentHash = sha256(rawContent.content);
     const now = new Date().toISOString();
     const rawSnapshotId = await this.createSourceSnapshot({
       spaceId: job.space_id,
@@ -666,7 +768,7 @@ export class IntakeExtractionWorker {
       sourceUri: item.source_uri,
       captureMethod: "snapshot",
       trustLevel: "normal",
-      metadata: { job_id: job.id },
+      metadata: { job_id: job.id, ...resolved.contentMeta },
       capturedAt: now,
     });
     await this.db.query(
@@ -681,13 +783,15 @@ export class IntakeExtractionWorker {
     );
 
     try {
-      const readerContent = extractStructuredReaderContent(raw, item.source_uri);
+      const readerContent = resolved.readerContent
+        ?? await this.readerContentFromFetched(response, item.source_uri);
       const text = readerContent.plain_text;
       if (text || readerContent.content_json.content.length > 0) {
         const extractedId = await this.writeReaderDocumentArtifact(
           job.space_id,
           item.title ?? readerContent.title ?? "extracted",
           readerContent,
+          resolved.contentMeta,
         );
         await this.createSourceSnapshot({
           spaceId: job.space_id,
@@ -699,7 +803,7 @@ export class IntakeExtractionWorker {
           sourceUri: item.source_uri,
           captureMethod: "snapshot",
           trustLevel: "normal",
-          metadata: { job_id: job.id, raw_source_snapshot_id: rawSnapshotId },
+          metadata: { job_id: job.id, raw_source_snapshot_id: rawSnapshotId, ...resolved.contentMeta },
           capturedAt: now,
         });
         await this.db.query(
@@ -834,6 +938,90 @@ export class IntakeExtractionWorker {
     throw new HttpError(422, `Unsupported internal source_object_type: ${sourceType}`);
   }
 
+  /**
+   * Fetches an item's content for extraction/snapshot. Non-arXiv URLs keep the
+   * existing single-fetch behavior. arXiv abs/pdf/html URLs resolve HTML-first
+   * candidates (html -> pdf -> original URL) and pre-validate reader extraction
+   * so extraction can fall back from HTML to PDF.
+   */
+  private async fetchItemSourceContent(
+    spaceId: string,
+    sourceUri: string,
+  ): Promise<{
+    response: IntakeSourceFetchResult;
+    readerContent: StructuredReaderContent | null;
+    contentMeta: Record<string, unknown>;
+  }> {
+    const maxDownloadBytes = await this.maxDownloadBytes(spaceId);
+    const arxivRef = parseArxivReference(sourceUri);
+    if (!arxivRef) {
+      const response = await fetchIntakeSource(sourceUri, { maxDownloadBytes });
+      if (!response.ok) {
+        throw new HttpError(502, `Failed to fetch source URL (${response.status})`);
+      }
+      return { response, readerContent: null, contentMeta: {} };
+    }
+
+    const candidates: Array<{ url: string; format: "html" | "pdf" | "auto" }> = [
+      { url: arxivHtmlUrl(arxivRef.baseId), format: "html" },
+      { url: arxivPdfUrl(arxivRef.baseId), format: "pdf" },
+    ];
+    if (!candidates.some((candidate) => candidate.url === sourceUri)) {
+      candidates.push({ url: sourceUri, format: "auto" });
+    }
+
+    let lastError: unknown = null;
+    let htmlFallbackReason: string | null = null;
+    for (const candidate of candidates) {
+      await acquireArxivRequestSlot();
+      try {
+        const response = await fetchIntakeSource(candidate.url, { maxDownloadBytes });
+        if (!response.ok) {
+          throw new HttpError(502, `Failed to fetch source URL (${response.status})`);
+        }
+        const format = candidate.format === "auto"
+          ? (response.isPdf ? "pdf" : "html")
+          : candidate.format;
+        let readerContent: StructuredReaderContent;
+        if (format === "html") {
+          if (!response.isText || response.text === null) {
+            throw new HttpError(415, `Unsupported source content type (${response.contentType ?? "unknown"})`);
+          }
+          readerContent = extractStructuredReaderContent(response.text, candidate.url);
+          if (!readerContent.plain_text.trim()) {
+            throw new HttpError(422, "HTML extraction produced no text");
+          }
+        } else {
+          if (!response.isPdf || !response.bytes) {
+            throw new HttpError(415, `Unsupported source content type (${response.contentType ?? "unknown"})`);
+          }
+          // Copy the bytes: pdf.js detaches the buffer it parses, and the
+          // caller still writes response.bytes as the raw artifact.
+          readerContent = await extractPdfReaderContent(response.bytes.slice(), candidate.url);
+        }
+        return {
+          response,
+          readerContent,
+          contentMeta: {
+            content_source_format: format,
+            content_source_url: candidate.url,
+            arxiv_id: arxivRef.baseId,
+            ...(htmlFallbackReason
+              ? { fallback_from: "html", fallback_reason: htmlFallbackReason.slice(0, 300) }
+              : {}),
+          },
+        };
+      } catch (error) {
+        lastError = error;
+        if (htmlFallbackReason === null) {
+          htmlFallbackReason = error instanceof Error ? error.message : String(error);
+        }
+      }
+    }
+    if (lastError instanceof Error) throw lastError;
+    throw new HttpError(502, "Failed to fetch arXiv source content");
+  }
+
   private async getItem(spaceId: string, itemId: string): Promise<IntakeItemRow | null> {
     const result = await this.db.query<IntakeItemRow>(
       `SELECT id, space_id, connection_id, source_uri, canonical_uri, source_external_id,
@@ -843,6 +1031,10 @@ export class IntakeExtractionWorker {
       [spaceId, itemId],
     );
     return result.rows[0] ?? null;
+  }
+
+  private async maxDownloadBytes(spaceId: string): Promise<number> {
+    return (await new PgCustomSourceHandlerRepository(this.db, this.config).getRunnerSettingsForSpace(spaceId)).download_bytes_max;
   }
 
   private async enforceItemRetentionPolicy(
@@ -894,6 +1086,7 @@ export class IntakeExtractionWorker {
     const nextCheckAt = computeNextCheckAt(connection.fetch_frequency, completedAt, {
       manualRun,
       existingNextCheckAt: connection.next_check_at,
+      scheduleRule: connection.schedule_rule_json,
     });
     await this.db.query(
       `UPDATE source_connections
@@ -1040,60 +1233,6 @@ export class IntakeExtractionWorker {
     return Boolean(result.rows[0]);
   }
 
-  private async createCandidateEvidence(input: {
-    spaceId: string;
-    intakeItemId: string;
-    extractionJobId: string;
-    sourceSnapshotId: string;
-    title: string;
-    contentExcerpt: string;
-    contentHash: string;
-    sourceUri: string | null;
-    sourceTitle: string | null;
-    sourceAuthor: string | null;
-    occurredAt: string | null;
-    trustLevel: string;
-    extractionMethod: string;
-    confidence: number;
-    metadata: Record<string, unknown>;
-    createdAt: string;
-  }): Promise<void> {
-    await this.db.query(
-      `INSERT INTO extracted_evidence (
-         id, space_id, intake_item_id, extraction_job_id, source_snapshot_id,
-         source_object_type, source_object_id, evidence_type, title,
-         content_excerpt, content_hash, source_uri, source_title, source_author,
-         occurred_at, trust_level, extraction_method, confidence, status,
-         metadata_json, created_at, updated_at
-       ) VALUES (
-         $1, $2, $3, $4, $5,
-         'intake_item', $3, 'excerpt', $6,
-         $7, $8, $9, $10, $11,
-         $12::timestamptz, $13, $14, $15::float, 'candidate',
-         $16::jsonb, $17, $17
-       )`,
-      [
-        randomUUID(),
-        input.spaceId,
-        input.intakeItemId,
-        input.extractionJobId,
-        input.sourceSnapshotId,
-        input.title.slice(0, 1024),
-        input.contentExcerpt.slice(0, 4096),
-        input.contentHash,
-        input.sourceUri,
-        input.sourceTitle,
-        input.sourceAuthor,
-        input.occurredAt,
-        input.trustLevel,
-        input.extractionMethod,
-        input.confidence,
-        JSON.stringify(input.metadata),
-        input.createdAt,
-      ],
-    );
-  }
-
   private isManualScan(job: ExtractionJobRow): boolean {
     return record(job.metadata_json).created_by === "manual_scan";
   }
@@ -1102,6 +1241,7 @@ export class IntakeExtractionWorker {
     spaceId: string,
     title: string,
     content: StructuredReaderContent,
+    extraMetadata: Record<string, unknown> = {},
   ): Promise<string> {
     const artifactId = randomUUID();
     const relPath = join(spaceId, `${artifactId}.reader.json`);
@@ -1134,6 +1274,7 @@ export class IntakeExtractionWorker {
           image_policy: content.image_policy,
           image_count: content.image_count,
           source_uri: content.source_uri,
+          ...extraMetadata,
         }),
         now,
       ],
@@ -1141,12 +1282,21 @@ export class IntakeExtractionWorker {
     return artifactId;
   }
 
-  private async writeRawArtifact(spaceId: string, title: string, content: string): Promise<string> {
+  private async writeRawArtifact(
+    spaceId: string,
+    title: string,
+    input: { content: string | Uint8Array; mimeType: string },
+  ): Promise<string> {
     const artifactId = randomUUID();
-    const relPath = join(spaceId, `${artifactId}.raw`);
+    const format = exportFormatForMime(input.mimeType);
+    const relPath = join(spaceId, `${artifactId}.${format === "html" ? "raw" : format}`);
     const absPath = join(this.config.artifactStorageRoot, relPath);
     await mkdir(join(this.config.artifactStorageRoot, spaceId), { recursive: true });
-    await writeFile(absPath, content, "utf8");
+    if (typeof input.content === "string") {
+      await writeFile(absPath, input.content, "utf8");
+    } else {
+      await writeFile(absPath, input.content);
+    }
     const now = new Date().toISOString();
     await this.db.query(
       `INSERT INTO artifacts (
@@ -1154,37 +1304,67 @@ export class IntakeExtractionWorker {
          exportable, export_formats_json, canonical_format, preview,
          created_at, updated_at, visibility, trust_level
        ) VALUES (
-         $1, $2, 'intake_raw_snapshot', $3, NULL, $4, 'text/html',
-         false, $5::jsonb, 'html', false,
-         $6, $6, 'space_shared', 'medium'
+         $1, $2, 'intake_raw_snapshot', $3, NULL, $4, $5,
+         false, $6::jsonb, $7, false,
+         $8, $8, 'space_shared', 'medium'
        )`,
-      [artifactId, spaceId, title, relPath, JSON.stringify(["html"]), now],
+      [
+        artifactId,
+        spaceId,
+        title.slice(0, 512),
+        relPath,
+        input.mimeType,
+        JSON.stringify([format]),
+        format,
+        now,
+      ],
     );
     return artifactId;
   }
+
+  private async readerContentFromFetched(
+    response: IntakeSourceFetchResult,
+    sourceUri: string,
+  ): Promise<StructuredReaderContent> {
+    if (response.isPdf) {
+      if (!response.bytes) throw new HttpError(415, "PDF response did not include binary content");
+      return extractPdfReaderContent(response.bytes, sourceUri);
+    }
+    if (response.isText && response.text !== null) {
+      return extractStructuredReaderContent(response.text, sourceUri);
+    }
+    throw new HttpError(415, `Unsupported source content type (${response.contentType ?? "unknown"})`);
+  }
+
+  private rawContentFromFetched(
+    response: IntakeSourceFetchResult,
+  ): { content: string | Uint8Array; mimeType: string } {
+    if (response.isPdf) {
+      if (!response.bytes) throw new HttpError(415, "PDF response did not include binary content");
+      return { content: response.bytes, mimeType: "application/pdf" };
+    }
+    if (response.isText && response.text !== null) {
+      return { content: response.text, mimeType: response.contentType ?? "text/html" };
+    }
+    if (response.bytes) {
+      return { content: response.bytes, mimeType: response.contentType ?? "application/octet-stream" };
+    }
+    throw new HttpError(415, `Unsupported source content type (${response.contentType ?? "unknown"})`);
+  }
 }
 
-function sha256(value: string): string {
+function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function capturePolicyState(capturePolicy: string): {
-  contentState: "metadata_only" | "excerpt_saved" | "content_queued" | "snapshot_queued";
-  retention: "metadata_only" | "summary_only" | "full_text" | "full_snapshot";
-  followUpJobType: "extract_text" | "snapshot" | null;
-} {
-  switch (capturePolicy) {
-    case "excerpt_only":
-      return { contentState: "excerpt_saved", retention: "summary_only", followUpJobType: null };
-    case "auto_extract_relevant":
-    case "auto_extract_all_text":
-      return { contentState: "content_queued", retention: "full_text", followUpJobType: "extract_text" };
-    case "archive_all_snapshots":
-      return { contentState: "snapshot_queued", retention: "full_snapshot", followUpJobType: "snapshot" };
-    case "metadata_only":
-    default:
-      return { contentState: "metadata_only", retention: "metadata_only", followUpJobType: null };
-  }
+function exportFormatForMime(mimeType: string): string {
+  const normalized = mimeType.toLowerCase().split(";")[0]?.trim();
+  if (normalized === "application/pdf") return "pdf";
+  if (normalized === "text/html" || normalized === "application/xhtml+xml") return "html";
+  if (normalized === "application/json") return "json";
+  if (normalized?.endsWith("+xml") || normalized === "application/xml") return "xml";
+  if (normalized?.startsWith("text/")) return "txt";
+  return "bin";
 }
 
 function scanCursor(configJson: unknown): ScanCursor {

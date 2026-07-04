@@ -9,13 +9,13 @@ import { enqueueDueSourceConnectionScans } from "../intake/scanSchedule";
 import {
   enqueueDueCustomSourceHandlerRuns,
   reclaimStuckCustomSourceHandlerRuns,
-} from "../intake/customSourceScanSchedule";
-import { runPendingCustomSourceHandlerRuns } from "../intake/customSourceScanWorker";
+} from "../intake/customSources/customSourceScanSchedule";
+import { runPendingCustomSourceHandlerRuns } from "../intake/customSources/customSourceScanWorker";
 import {
   enqueueDueSourceRecipeScans,
   runPendingSourceRecipeScans,
 } from "../intake/sourceRecipes/recipeScanWorker";
-import { pruneSupersededCustomSourceHandlerArtifacts } from "../intake/customSourceArtifactRetention";
+import { pruneSupersededCustomSourceHandlerArtifacts } from "../intake/customSources/customSourceArtifactRetention";
 import { runDueMemoryMaintenanceJobs } from "../memory/maintenanceJobs";
 import { withDbTransaction } from "../routeUtils/common";
 import { PgJobQueueRepository } from "../jobs/repository";

@@ -1,11 +1,12 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import SourceConnectionDetailPage from '../SourceConnectionDetailPage'
 import { intakeApi } from '../../../api/client'
-import type { CustomSourceHandlerVersion, SourceConnection, SourceRecipeVersion } from '../../../types/api'
+import type { CustomSourceHandlerVersion, ExtractionJob, SourceConnection, SourceRecipeVersion } from '../../../types/api'
+import { scheduleRuleFromForm } from '../intakePageModel'
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -35,6 +36,9 @@ vi.mock('../../../api/client', () => ({
     generateCustomSourceHandler: vi.fn(),
     testCustomSourceHandler: vi.fn(),
     activateCustomSourceHandler: vi.fn(),
+    updateConnection: vi.fn(),
+    scanConnection: vi.fn(),
+    runJob: vi.fn(),
   },
 }))
 
@@ -48,7 +52,7 @@ const baseConnection = {
   endpoint_url: 'https://example.test/feed.xml',
   status: 'active',
   fetch_frequency: 'daily',
-  capture_policy: 'auto_extract_relevant',
+  capture_policy: 'extract_text',
   trust_level: 'normal',
   topic_hints_json: null,
   consent_json: {},
@@ -78,7 +82,7 @@ const recipeVersion = {
   },
   policy_envelope_json: {
     allowed_network_origins: ['https://example.test'],
-    capture_policy: 'auto_extract_relevant',
+    capture_policy: 'extract_text',
     retention_policy: 'full_text',
     credential_ref: null,
     log_redaction_enabled: true,
@@ -188,6 +192,15 @@ function renderPage() {
   )
 }
 
+function chooseSelect(currentLabel: string, nextLabel: string, index = 0) {
+  fireEvent.click(screen.getAllByRole('button', { name: currentLabel })[index])
+  fireEvent.click(screen.getByRole('button', { name: nextLabel }))
+}
+
+function typeScheduleNumber(label: string, value: string, index = 0) {
+  fireEvent.change(screen.getAllByLabelText(label)[index], { target: { value } })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   setupCommonMocks()
@@ -277,7 +290,7 @@ describe('SourceConnectionDetailPage', () => {
       output_schema_json: null,
       policy_envelope_json: {
         allowed_network_origins: ['https://example.test'],
-        capture_policy: 'auto_extract_relevant',
+        capture_policy: 'extract_text',
         retention_policy: 'full_text',
         credential_ref: null,
         language: 'typescript_node',
@@ -339,5 +352,53 @@ describe('SourceConnectionDetailPage', () => {
     await user.click(screen.getByRole('tab', { name: 'Advanced' }))
     expect(screen.getByText('Handler Versions')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /generate/i })).toBeInTheDocument()
+  })
+
+  it('updates frequency and schedule rule, and can run the source immediately', async () => {
+    const user = userEvent.setup()
+    vi.mocked(intakeApi.getConnection).mockResolvedValue({
+      ...baseConnection,
+      next_check_at: '2026-07-04T08:00:00.000Z',
+      handler_kind: 'recipe',
+      active_handler_version_id: null,
+      active_recipe_version_id: 'recipe-version-1',
+    } as SourceConnection)
+    vi.mocked(intakeApi.sourceRuns).mockResolvedValue(page([]))
+    vi.mocked(intakeApi.sourceRecipeVersions).mockResolvedValue(page([recipeVersion as SourceRecipeVersion]))
+    vi.mocked(intakeApi.updateConnection).mockResolvedValue({
+      ...baseConnection,
+      fetch_frequency: 'weekly',
+      next_check_at: '2026-07-06T09:30:00.000Z',
+      schedule_rule_json: { frequency: 'weekly', weekday: 1, hour: 9, minute: 30 },
+      handler_kind: 'recipe',
+      active_handler_version_id: null,
+      active_recipe_version_id: 'recipe-version-1',
+    } as SourceConnection)
+    vi.mocked(intakeApi.scanConnection).mockResolvedValue({ id: 'scan-job-1', items_created: null } as ExtractionJob)
+    vi.mocked(intakeApi.runJob).mockResolvedValue({ id: 'scan-job-1', status: 'succeeded', items_created: 2 } as ExtractionJob)
+
+    renderPage()
+
+    await screen.findByText('Recipe Feed')
+    chooseSelect('Daily', 'Weekly')
+    chooseSelect('Weekday', 'Monday')
+    typeScheduleNumber('Hour', '10')
+    typeScheduleNumber('Minute', '30')
+    const scheduleRule = scheduleRuleFromForm('weekly', { weekday: '1', hour: '10', minute: '30' })
+    await user.click(screen.getByRole('button', { name: /save schedule/i }))
+
+    await waitFor(() => {
+      expect(intakeApi.updateConnection).toHaveBeenCalledWith('conn-1', {
+        fetch_frequency: 'weekly',
+        schedule_rule: scheduleRule,
+      })
+    })
+
+    await user.click(screen.getByRole('button', { name: /run now/i }))
+
+    await waitFor(() => {
+      expect(intakeApi.scanConnection).toHaveBeenCalledWith('conn-1')
+      expect(intakeApi.runJob).toHaveBeenCalledWith('scan-job-1')
+    })
   })
 })

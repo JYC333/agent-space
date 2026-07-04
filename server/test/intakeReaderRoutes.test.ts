@@ -92,14 +92,28 @@ function fakeEvidenceRow(overrides: Record<string, unknown> = {}): Record<string
 }
 
 function fakeArtifact(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const content = {
+    schema_version: 1,
+    kind: "reader_document",
+    extraction_method: "structured_html_v1",
+    image_policy: "remote_reference",
+    title: "Extracted article",
+    source_uri: null,
+    plain_text: "Full article text.",
+    content_json: {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "Full article text." }] }],
+    },
+    image_count: 0,
+  };
   return {
     id: "artifact-1",
     space_id: SPACE,
-    artifact_type: "intake_extracted_text",
+    artifact_type: "intake_reader_document",
     title: "Extracted article",
-    content: "Full article text.",
+    content: JSON.stringify(content),
     storage_path: null,
-    mime_type: "text/plain",
+    mime_type: "application/json",
     visibility: "space_shared",
     owner_user_id: null,
     ...overrides,
@@ -212,7 +226,7 @@ describe("intake reader routes — auth and input validation", () => {
 // ── PgReaderRepository unit tests ─────────────────────────────────────────────
 
 describe("PgReaderRepository.getDocument", () => {
-  it("reads artifact text without filtering on a non-existent artifacts.deleted_at column", async () => {
+  it("reads reader document artifacts without filtering on a non-existent artifacts.deleted_at column", async () => {
     const { db, calls } = sequentialDb([
       [fakeArtifact()],
       [{ title: "Extracted article" }],
@@ -225,6 +239,21 @@ describe("PgReaderRepository.getDocument", () => {
     const artifactQueries = calls.filter((call) => call.sql.includes("FROM artifacts"));
     expect(artifactQueries.length).toBeGreaterThan(0);
     expect(artifactQueries.some((call) => call.sql.includes("deleted_at"))).toBe(false);
+  });
+
+  it("does not read legacy text/plain extracted-text artifacts as reader documents", async () => {
+    const { db } = sequentialDb([
+      [fakeArtifact({
+        artifact_type: "intake_extracted_text",
+        content: "Full article text.",
+        mime_type: "text/plain",
+      })],
+    ]);
+    const repo = new PgReaderRepository(db, config());
+
+    const result = await repo.getDocument(identity, "artifact", "artifact-1");
+
+    expect(result).toBeNull();
   });
 
   it("reads structured reader document artifacts without flattening content_json", async () => {

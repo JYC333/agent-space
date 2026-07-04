@@ -11,6 +11,7 @@ import {
   type RuntimeAdapterType,
 } from "../runtimeAdapters/specs";
 import { assertProjectInSpace } from "../projects/access";
+import { advanceAutomationIntakeCursor } from "../automations/intakeCursor";
 import {
   addOptionalFilter,
   extractErrorMessage,
@@ -101,6 +102,10 @@ export class PgRunRepository {
       throw new Error("Run repository requires SERVER_DATABASE_URL");
     }
     return new PgRunRepository(getDbPool(config.databaseUrl));
+  }
+
+  async advanceAutomationIntakeCursorForRun(spaceId: string, runId: string): Promise<boolean> {
+    return advanceAutomationIntakeCursor(this.db, { spaceId, runId });
   }
 
   async recoverStaleRuns(staleAfterSeconds = 3600, now = new Date()): Promise<number> {

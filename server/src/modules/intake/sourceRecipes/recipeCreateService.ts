@@ -16,11 +16,17 @@ import {
 import { loadProtocol } from "../../providers/protocolRuntime";
 import { insertProposalRow } from "../../proposals/reviewPackets";
 import { PgIntakeRepository } from "../repository";
-import { PgCustomSourceHandlerRepository } from "../customSourceHandlerRepository";
-import { CustomSourceCredentialService } from "../customSourceCredentialService";
-import { evaluateCustomSourceActivation } from "../customSourceCreateFlowService";
-import { fetchAllowedOriginResponse, truncateToByteLimit } from "../customSourceEndpointFetch";
-import { cleanupSandbox } from "../customSourceRunner";
+import { PgCustomSourceHandlerRepository } from "../customSources/customSourceHandlerRepository";
+import { CustomSourceCredentialService } from "../customSources/customSourceCredentialService";
+import {
+  parseSourceCapturePolicy,
+  parseSourceRetentionPolicy,
+  type SourceCapturePolicy,
+  type SourceRetentionPolicy,
+} from "../capturePolicy";
+import { evaluateCustomSourceActivation } from "../customSources/customSourceCreateFlowService";
+import { fetchAllowedOriginResponse, truncateToByteLimit } from "../customSources/customSourceEndpointFetch";
+import { cleanupSandbox } from "../customSources/customSourceRunner";
 import { upsertSourceConnectionScanTask } from "../sourceConnectionScheduler";
 import { analyzeSourceRecipe } from "./primitiveRegistry";
 import { buildRecipeForSourceType, detectPlannedSourceType, type PlannedSourceType } from "./recipePlanner";
@@ -66,10 +72,10 @@ export class SourceRecipeCreateService {
     if (fixtureContent === null) {
       try {
         const response = await fetchAllowedOriginResponse(endpointUrl, [endpointOrigin], {
-          signal: AbortSignal.timeout(Math.min(15_000, settings.instance.timeout_ms_max)),
+          signal: AbortSignal.timeout(Math.min(15_000, settings.runner.timeout_ms_max)),
         });
         if (response.ok) {
-          contentSample = truncateToByteLimit(await response.text(), settings.instance.download_bytes_max);
+          contentSample = truncateToByteLimit(await response.text(), settings.runner.download_bytes_max);
         } else {
           fetchWarning = `endpoint returned HTTP ${response.status} during planning`;
         }
@@ -87,7 +93,7 @@ export class SourceRecipeCreateService {
     const recipe = this.buildPlannedRecipe(sourceType, listSelector);
     const analysis = analyzeSourceRecipe(recipe);
 
-    const preview = await runSourceRecipe(settings.instance, {
+    const preview = await runSourceRecipe(settings.runner, {
       policyEnvelope: envelope,
       recipe,
       mode: "dry_run",
@@ -159,6 +165,8 @@ export class SourceRecipeCreateService {
           endpoint_url: endpointUrl,
           credential_id: optionalString(body.credential_id) ?? null,
           fetch_frequency: optionalString(body.fetch_frequency) ?? "daily",
+          next_check_at: body.next_check_at,
+          schedule_rule: body.schedule_rule,
           capture_policy: envelope.capture_policy,
           policy: { retention_policy: envelope.retention_policy },
           config: {
@@ -187,7 +195,7 @@ export class SourceRecipeCreateService {
       if (schedulerConnection) {
         await upsertSourceConnectionScanTask(client, {
           connection: schedulerConnection,
-          nextRunAt: null,
+          nextRunAt: connection.next_check_at,
           updatedAt: now,
         });
       }
@@ -200,7 +208,7 @@ export class SourceRecipeCreateService {
         createdByUserId: identity.userId,
       });
       return {
-        connection: { ...connection, handler_kind: "recipe", status: "paused", next_check_at: null },
+        connection: { ...connection, handler_kind: "recipe", status: "paused" },
         recipe_version: recipeVersionOut(version),
       };
     });
@@ -223,7 +231,7 @@ export class SourceRecipeCreateService {
     const envelope: SourcePolicyEnvelope = protocol.SourcePolicyEnvelopeSchema.parse(
       versionRow.policy_envelope_json,
     );
-    const settings = await new PgCustomSourceHandlerRepository(this.pool, this.config).getSettings(identity);
+    const settings = await new PgCustomSourceHandlerRepository(this.pool, this.config).getEffectiveSettings(identity);
     const activeVersionId = connection.active_recipe_version_id;
     const activeRow = activeVersionId
       ? await getSourceRecipeVersion(this.pool, identity.spaceId, connectionId, activeVersionId)
@@ -245,22 +253,25 @@ export class SourceRecipeCreateService {
 
     if (!evaluation.withinEnvelope) {
       const created = await withDbTransaction(this.pool, async (client) => {
+        const payload: Record<string, unknown> = {
+          proposal_type: "source_recipe_activation",
+          source_connection_id: connectionId,
+          recipe_version_id: versionId,
+          current_recipe_version_id: activeVersionId,
+          current_policy_envelope_json: activeEnvelope,
+          proposed_policy_envelope_json: envelope,
+          envelope_diff_json: { deltas: evaluation.deltas },
+          requested_by_user_id: identity.userId,
+          proposed_content: recipeProposalReviewText(connectionId, versionId, evaluation.deltas, envelope),
+        };
+        if (body.next_check_at !== undefined) payload.next_check_at = body.next_check_at;
+        if (body.schedule_rule !== undefined) payload.schedule_rule = body.schedule_rule;
         const proposal = await insertProposalRow(client, {
           spaceId: identity.spaceId,
           proposalType: "source_recipe_activation",
           title: "Approve Source recipe activation",
           summary: `Source recipe requires approval: ${evaluation.deltas.join("; ")}`,
-          payload: {
-            proposal_type: "source_recipe_activation",
-            source_connection_id: connectionId,
-            recipe_version_id: versionId,
-            current_recipe_version_id: activeVersionId,
-            current_policy_envelope_json: activeEnvelope,
-            proposed_policy_envelope_json: envelope,
-            envelope_diff_json: { deltas: evaluation.deltas },
-            requested_by_user_id: identity.userId,
-            proposed_content: recipeProposalReviewText(connectionId, versionId, evaluation.deltas, envelope),
-          },
+          payload,
           rationale: "Activating this Source recipe would broaden the approved policy envelope.",
           createdByUserId: identity.userId,
           visibility: "space_shared",
@@ -292,6 +303,8 @@ export class SourceRecipeCreateService {
         connectionId,
         versionId,
         previousActiveVersionId: activeVersionId,
+        nextCheckAt: body.next_check_at,
+        scheduleRule: body.schedule_rule,
       }),
     );
     const activated = await getSourceRecipeVersion(this.pool, identity.spaceId, connectionId, versionId);
@@ -314,7 +327,7 @@ export class SourceRecipeCreateService {
     const endpointOrigin = originOf(endpointUrl);
     if (!endpointOrigin) throw new HttpError(422, "endpoint_url must be a valid HTTP(S) URL");
     const settingsRepo = new PgCustomSourceHandlerRepository(this.pool, this.config);
-    const settings = await settingsRepo.getSettings(identity);
+    const settings = await settingsRepo.getEffectiveSettings(identity);
     await settingsRepo.requireCustomSourceCreator(identity, settings.space.creator_roles);
     const hostname = new URL(endpointUrl).hostname;
     if (
@@ -333,23 +346,23 @@ export class SourceRecipeCreateService {
   private buildEnvelope(
     identity: SpaceUserIdentity,
     body: Record<string, unknown>,
-    settings: Awaited<ReturnType<PgCustomSourceHandlerRepository["getSettings"]>>,
+    settings: Awaited<ReturnType<PgCustomSourceHandlerRepository["getEffectiveSettings"]>>,
     endpointOrigin: string,
   ): SourcePolicyEnvelope {
     return {
       allowed_network_origins: [endpointOrigin],
-      capture_policy: optionalString(body.capture_policy) ?? settings.space.default_capture_policy,
-      retention_policy: optionalString(body.retention_policy) ?? settings.space.default_retention_policy,
+      capture_policy: requireCapturePolicy(optionalString(body.capture_policy) ?? settings.space.default_capture_policy),
+      retention_policy: requireRetentionPolicy(optionalString(body.retention_policy) ?? settings.space.default_retention_policy),
       credential_ref: optionalString(body.credential_id) ?? null,
       log_redaction_enabled: true,
       limits: {
-        timeout_ms: Math.min(30_000, settings.instance.timeout_ms_max),
-        max_download_bytes: Math.min(5_242_880, settings.instance.download_bytes_max),
-        max_output_bytes: Math.min(1_048_576, settings.instance.output_bytes_max),
-        max_files: Math.min(10, settings.instance.max_files),
+        timeout_ms: Math.min(30_000, settings.runner.timeout_ms_max),
+        max_download_bytes: settings.runner.download_bytes_max,
+        max_output_bytes: Math.min(1_048_576, settings.runner.output_bytes_max),
+        max_files: Math.min(10, settings.runner.max_files),
         max_items: 50,
         max_evidence_items: 50,
-        log_max_bytes: Math.min(65_536, settings.instance.log_bytes_max),
+        log_max_bytes: Math.min(65_536, settings.runner.log_bytes_max),
       },
     };
   }
@@ -388,6 +401,18 @@ function originOf(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+function requireCapturePolicy(value: string): SourceCapturePolicy {
+  const parsed = parseSourceCapturePolicy(value);
+  if (!parsed) throw new HttpError(422, "Unsupported Source Recipe capture policy");
+  return parsed;
+}
+
+function requireRetentionPolicy(value: string): SourceRetentionPolicy {
+  const parsed = parseSourceRetentionPolicy(value);
+  if (!parsed) throw new HttpError(422, "Unsupported Source Recipe retention policy");
+  return parsed;
 }
 
 function recipeProposalReviewText(

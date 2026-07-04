@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { ModuleContext } from "../../gateway/routeRegistry";
+import type { ModuleContext } from "../../../gateway/routeRegistry";
 import {
   dbPool,
   jsonBody,
@@ -8,14 +8,14 @@ import {
   query,
   resolveIdentity,
   sendRouteError,
-} from "../routeUtils/common";
-import { requireInstanceAdmin } from "../routeUtils/access";
-import { enforceIntake } from "./enforceIntake";
+} from "../../routeUtils/common";
+import { requireInstanceAdmin } from "../../routeUtils/access";
+import { enforceIntake } from "../enforceIntake";
 import { PgCustomSourceHandlerRepository } from "./customSourceHandlerRepository";
 import { CustomSourceCreateFlowService } from "./customSourceCreateFlowService";
 import { CustomSourceRepairService } from "./customSourceRepairService";
 import { CustomSourceCredentialService } from "./customSourceCredentialService";
-import { loadProtocol } from "../providers/protocolRuntime";
+import { loadProtocol } from "../../providers/protocolRuntime";
 
 /** Custom Source create-flow (Phase 5), repair/rollback (Phase 9), credentials (Phase 10), and read-model (Phase 2) routes, split out of routes.ts per its own size. */
 export function registerCustomSourceRoutes(app: FastifyInstance, context: ModuleContext): void {

@@ -909,6 +909,11 @@ export interface SourceConnector {
   updated_at: string
 }
 
+export type SourceCapturePolicy =
+  | 'reference_only'
+  | 'extract_text'
+  | 'archive_original'
+
 export interface SourceConnection {
   id: string
   space_id: string
@@ -919,7 +924,7 @@ export interface SourceConnection {
   endpoint_url: string | null
   status: 'active' | 'paused' | 'archived'
   fetch_frequency: 'manual' | 'hourly' | 'daily' | 'weekly'
-  capture_policy: string
+  capture_policy: SourceCapturePolicy
   trust_level: 'trusted' | 'normal' | 'untrusted'
   topic_hints_json: string[] | null
   consent_json: Record<string, unknown>
@@ -927,6 +932,7 @@ export interface SourceConnection {
   config_json: Record<string, unknown>
   last_checked_at: string | null
   next_check_at: string | null
+  schedule_rule_json?: SourceScheduleRule | null
   handler_kind?: 'built_in' | 'generated_custom' | 'recipe'
   active_handler_version_id?: string | null
   active_recipe_version_id?: string | null
@@ -936,18 +942,93 @@ export interface SourceConnection {
   updated_at: string
 }
 
+export type SourceScheduleRule =
+  | { frequency: 'hourly'; minute: number }
+  | { frequency: 'daily'; hour: number; minute: number }
+  | { frequency: 'weekly'; weekday: number; hour: number; minute: number }
+
 export interface SourceConnectionCreate {
   connector_key: string
   name: string
   endpoint_url?: string | null
   credential_id?: string | null
   fetch_frequency?: 'manual' | 'hourly' | 'daily' | 'weekly'
-  capture_policy?: string
+  next_check_at?: string | null
+  schedule_rule?: SourceScheduleRule | null
+  capture_policy?: SourceCapturePolicy
   trust_level?: 'trusted' | 'normal' | 'untrusted'
   topic_hints?: string[] | null
   consent?: Record<string, unknown>
   policy?: Record<string, unknown>
   config?: Record<string, unknown>
+}
+
+export interface SourcePreset {
+  id: string
+  category: string
+  display_name: string
+  description: string
+  connector_key: string
+  fields: string[]
+  category_options?: SourcePresetCategoryGroup[]
+}
+
+export interface SourcePresetCategoryOption {
+  value: string
+  label: string
+}
+
+export interface SourcePresetCategoryGroup {
+  group: string
+  options: SourcePresetCategoryOption[]
+}
+
+export interface SourcePresetListResponse {
+  items: SourcePreset[]
+}
+
+export type ArxivPresetMode = 'search' | 'recent_by_category'
+
+export interface ArxivPresetPreviewRequest {
+  mode?: ArxivPresetMode
+  search_query?: string
+  categories?: string[]
+  max_results?: number
+  sort_by?: 'relevance' | 'lastUpdatedDate' | 'submittedDate'
+  sort_order?: 'ascending' | 'descending'
+}
+
+export interface ArxivPresetPaper {
+  arxiv_id: string
+  arxiv_version: string | null
+  title: string
+  authors: string[]
+  summary: string | null
+  published_at: string | null
+  updated_at: string | null
+  categories: string[]
+  primary_category: string | null
+  doi: string | null
+  journal_ref: string | null
+  comment: string | null
+  abs_url: string
+  html_url: string
+  pdf_url: string
+}
+
+export interface ArxivPresetPreviewResponse {
+  preset_id: 'arxiv'
+  query_url: string
+  items: ArxivPresetPaper[]
+  warnings: string[]
+}
+
+export interface ArxivPresetCreateRequest extends ArxivPresetPreviewRequest {
+  name?: string
+  fetch_frequency?: 'manual' | 'hourly' | 'daily' | 'weekly'
+  next_check_at?: string | null
+  schedule_rule?: SourceScheduleRule | null
+  capture_policy?: SourceCapturePolicy
 }
 
 export interface IntakeItem {
@@ -1018,7 +1099,7 @@ export interface CustomSourcePolicyLimits {
 
 export interface CustomSourcePolicyEnvelope {
   allowed_network_origins: string[]
-  capture_policy: string
+  capture_policy: SourceCapturePolicy
   retention_policy: string
   credential_ref?: string | null
   language: 'typescript_node' | string
@@ -1104,16 +1185,13 @@ export interface CustomSourceCreateDraftRequest {
   name: string
   endpoint_url: string
   fetch_frequency?: 'manual' | 'hourly' | 'daily' | 'weekly'
+  next_check_at?: string | null
+  schedule_rule?: SourceScheduleRule | null
   config?: Record<string, unknown>
 }
 
 export type CustomSourceCreatorRole = 'owner' | 'admin' | 'reviewer' | 'member'
-export type CustomSourceCapturePolicy =
-  | 'metadata_only'
-  | 'excerpt_only'
-  | 'auto_extract_relevant'
-  | 'auto_extract_all_text'
-  | 'archive_all_snapshots'
+export type CustomSourceCapturePolicy = SourceCapturePolicy
 export type CustomSourceRetentionPolicy =
   | 'metadata_only'
   | 'summary_only'
@@ -1127,6 +1205,7 @@ export interface CustomSourceSpacePolicy {
   default_capture_policy: CustomSourceCapturePolicy
   default_retention_policy: CustomSourceRetentionPolicy
   allowed_domains: string[]
+  download_bytes_max: number
   credentialed_sources_allowed: boolean
   same_envelope_repair_auto_apply: boolean
   created_at: string | null
@@ -1139,7 +1218,6 @@ export interface CustomSourceInstanceRunnerSettings {
   network_hard_deny_rules: string[]
   timeout_ms_max: number
   output_bytes_max: number
-  download_bytes_max: number
   log_bytes_max: number
   max_files: number
   browser_automation_available: boolean
@@ -1159,6 +1237,7 @@ export interface CustomSourceSpacePolicyUpdate {
   default_capture_policy?: CustomSourceCapturePolicy
   default_retention_policy?: CustomSourceRetentionPolicy
   allowed_domains?: string[]
+  download_bytes_max?: number
   credentialed_sources_allowed?: boolean
   same_envelope_repair_auto_apply?: boolean
 }
@@ -1181,7 +1260,7 @@ export type SourceRecipeStepTraceStatus = 'succeeded' | 'failed' | 'skipped'
 
 export interface SourcePolicyEnvelope {
   allowed_network_origins: string[]
-  capture_policy: string
+  capture_policy: SourceCapturePolicy
   retention_policy: string
   credential_ref?: string | null
   log_redaction_enabled: boolean
@@ -1243,7 +1322,9 @@ export interface SourceRecipePlanRequest {
   name?: string
   source_type?: SourceRecipeSourceType | 'auto'
   fetch_frequency?: 'manual' | 'hourly' | 'daily' | 'weekly'
-  capture_policy?: string
+  next_check_at?: string | null
+  schedule_rule?: SourceScheduleRule | null
+  capture_policy?: SourceCapturePolicy
   retention_policy?: string
   list_selector?: string
   credential_id?: string | null
@@ -1259,7 +1340,7 @@ export interface SourceRecipePlanResponse {
   preview: SourceRecipePreview
   defaults: {
     fetch_frequency: 'manual' | 'hourly' | 'daily' | 'weekly'
-    capture_policy: string
+    capture_policy: SourceCapturePolicy
     retention_policy: string
   }
 }
@@ -1399,27 +1480,11 @@ export interface EvidenceLink {
   updated_at: string
 }
 
-export interface WorkspaceIntakeProfile {
-  id: string
-  space_id: string
-  workspace_id: string
-  name: string
-  status: string
-  observation_policy: string
-  routing_policy_json: Record<string, unknown>
-  filters_json: Record<string, unknown>
-  extraction_policy_json: Record<string, unknown>
-  context_policy_json: Record<string, unknown>
-  created_by_user_id: string | null
-  created_at: string
-  updated_at: string
-}
-
 export interface WorkspaceSourceBinding {
   id: string
   space_id: string
   workspace_id: string
-  project_id: string | null
+  project_id: string
   source_connection_id: string
   binding_key: string
   status: string
@@ -3955,7 +4020,7 @@ export interface ProjectSummary {
 }
 
 // ── Automations ─────────────────────────────────────────────────────────────
-export type AutomationTriggerType = 'manual' | 'schedule'
+export type AutomationTriggerType = 'manual' | 'schedule' | 'event'
 export type AutomationTargetType = 'agent_run' | 'knowledge_retrieval_maintenance' | 'context_ops_review_cycle'
 
 export interface AutomationOut {
@@ -3964,6 +4029,7 @@ export interface AutomationOut {
   owner_user_id: string
   agent_id: string
   workspace_id: string | null
+  project_id: string | null
   name: string
   description: string | null
   trigger_type: string
@@ -3980,6 +4046,7 @@ export interface AutomationCreateBody {
   name: string
   agent_id: string
   workspace_id?: string | null
+  project_id?: string | null
   description?: string | null
   trigger_type?: AutomationTriggerType
   config_json?: Record<string, unknown> | null
@@ -3990,13 +4057,17 @@ export interface AutomationUpdateBody {
   description?: string | null
   status?: string | null
   config_json?: Record<string, unknown> | null
+  project_id?: string | null
 }
 
 export interface AutomationFireResult {
-  run_id: string
-  automation_run_id: string
+  run_id?: string
+  automation_run_id?: string
   trigger_origin: string
   preflight_executable: boolean
+  skipped?: boolean
+  skip_reason?: string
+  intake_delta_count?: number
   target_type?: AutomationTargetType
   artifact_id?: string | null
   proposal_id?: string | null

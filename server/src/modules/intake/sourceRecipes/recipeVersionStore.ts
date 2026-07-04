@@ -5,10 +5,8 @@ import type {
   SourceRecipeDryRunResult,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { dateIso, type Queryable } from "../../routeUtils/common";
-import {
-  nextRunAtForSourceConnection,
-  upsertSourceConnectionScanTask,
-} from "../sourceConnectionScheduler";
+import { getSourceConnectionScanTask, upsertSourceConnectionScanTask } from "../sourceConnectionScheduler";
+import { resolveRequestedSourceSchedule } from "../sourceScheduleInput";
 
 /**
  * SQL access for `source_recipe_versions` (Level 2 Source recipes). Follows
@@ -179,9 +177,35 @@ export async function activateSourceRecipeVersionTx(
     connectionId: string;
     versionId: string;
     previousActiveVersionId: string | null;
+    nextCheckAt?: unknown;
+    scheduleRule?: unknown;
   },
 ): Promise<string> {
   const now = new Date().toISOString();
+  const existingScheduleTask = await getSourceConnectionScanTask(db, input.connectionId);
+  const currentConnection = await db.query<{
+    id: string;
+    space_id: string;
+    owner_user_id: string;
+    fetch_frequency: string;
+    schedule_rule_json: unknown;
+  }>(
+    `SELECT id, space_id, owner_user_id, fetch_frequency, schedule_rule_json
+       FROM source_connections
+      WHERE id = $1 AND space_id = $2
+      FOR UPDATE`,
+    [input.connectionId, input.spaceId],
+  );
+  const current = currentConnection.rows[0];
+  const schedule = current
+    ? resolveRequestedSourceSchedule({
+        body: { next_check_at: input.nextCheckAt, schedule_rule: input.scheduleRule },
+        status: "active",
+        fetchFrequency: current.fetch_frequency,
+        existingNextCheckAt: existingScheduleTask?.next_run_at,
+        existingScheduleRule: current.schedule_rule_json,
+      })
+    : null;
   if (input.previousActiveVersionId) {
     await db.query(
       `UPDATE source_recipe_versions SET status = 'superseded', superseded_at = $3 WHERE id = $1 AND space_id = $2`,
@@ -200,18 +224,20 @@ export async function activateSourceRecipeVersionTx(
     fetch_frequency: string;
   }>(
     `UPDATE source_connections
-        SET active_recipe_version_id = $3, repair_status = 'ok', status = 'active',
-            fetch_frequency = CASE WHEN fetch_frequency = 'manual' THEN 'hourly' ELSE fetch_frequency END,
-            updated_at = $4
+        SET active_recipe_version_id = $3,
+            repair_status = 'ok',
+            status = 'active',
+            schedule_rule_json = $4::jsonb,
+            updated_at = $5
       WHERE id = $1 AND space_id = $2
       RETURNING id, space_id, owner_user_id, status, fetch_frequency`,
-    [input.connectionId, input.spaceId, input.versionId, now],
+    [input.connectionId, input.spaceId, input.versionId, JSON.stringify(schedule?.scheduleRule ?? null), now],
   );
   const connection = updatedConnection.rows[0];
-  if (connection) {
+  if (connection && schedule) {
     await upsertSourceConnectionScanTask(db, {
       connection,
-      nextRunAt: nextRunAtForSourceConnection(connection, now),
+      nextRunAt: schedule.nextRunAt,
       updatedAt: now,
     });
   }

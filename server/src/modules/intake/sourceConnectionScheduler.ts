@@ -57,6 +57,8 @@ export async function upsertSourceConnectionScanTask(
     sourceConnectionSchedulerTaskKey(input.connection.id),
   );
   const status = sourceConnectionSchedulerStatus(input.connection.status);
+  const stateJson = { ...(existing?.state_json ?? {}) };
+  delete stateJson.schedule_rule;
   return taskStore.upsert({
     taskType: SOURCE_CONNECTION_SCAN_TASK_TYPE,
     taskKey: sourceConnectionSchedulerTaskKey(input.connection.id),
@@ -65,21 +67,11 @@ export async function upsertSourceConnectionScanTask(
     spaceId: input.connection.space_id,
     userId: input.connection.owner_user_id,
     status,
-    nextRunAt: status === "active" ? input.nextRunAt : null,
+    nextRunAt: status === "archived" ? null : input.nextRunAt,
     lastRunAt: input.lastRunAt ?? null,
-    stateJson: existing?.state_json ?? {},
+    stateJson,
     updatedAt: input.updatedAt,
   });
-}
-
-export function nextRunAtForSourceConnection(
-  connection: SourceConnectionScheduleTarget,
-  fallbackIso: string,
-  existingNextRunAt: unknown = null,
-): string | null {
-  if (sourceConnectionSchedulerStatus(connection.status) !== "active") return null;
-  if (connection.fetch_frequency === "manual") return null;
-  return timestampString(existingNextRunAt) ?? fallbackIso;
 }
 
 export function sourceConnectionWithSchedule(

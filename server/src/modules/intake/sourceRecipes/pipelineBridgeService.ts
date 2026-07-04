@@ -14,8 +14,8 @@ import {
 import { loadProtocol } from "../../providers/protocolRuntime";
 import { PgIntakeRepository } from "../repository";
 import { CONNECTION_COLUMNS, type SourceConnectionRow } from "../intakeRepositoryRows";
-import { PgCustomSourceHandlerRepository } from "../customSourceHandlerRepository";
-import { upsertSourceConnectionScanTask } from "../sourceConnectionScheduler";
+import { PgCustomSourceHandlerRepository } from "../customSources/customSourceHandlerRepository";
+import { getSourceConnectionScanTask, upsertSourceConnectionScanTask } from "../sourceConnectionScheduler";
 import { analyzeSourceRecipe } from "./primitiveRegistry";
 import { recipeFromPipelineDefinition } from "./recipeInterpreter";
 import {
@@ -92,6 +92,7 @@ export class SourceRecipePipelineBridgeService {
 
     return withDbTransaction(this.pool, async (client) => {
       const intakeRepo = new PgIntakeRepository(client, this.config);
+      const sourceScheduleTask = await getSourceConnectionScanTask(client, sourceConnection.id);
       const connection = await intakeRepo.createConnection(
         identity,
         {
@@ -100,6 +101,8 @@ export class SourceRecipePipelineBridgeService {
           endpoint_url: sourceConnection.endpoint_url,
           credential_id: sourceConnection.credential_id,
           fetch_frequency: optionalString(body.fetch_frequency) ?? sourceConnection.fetch_frequency,
+          next_check_at: optionalString(body.next_check_at) ?? timestampString(sourceScheduleTask?.next_run_at),
+          schedule_rule: body.schedule_rule ?? sourceConnection.schedule_rule_json,
           capture_policy: policyEnvelope.capture_policy,
           trust_level: sourceConnection.trust_level,
           topic_hints: Array.isArray(sourceConnection.topic_hints_json) ? sourceConnection.topic_hints_json : undefined,
@@ -130,7 +133,7 @@ export class SourceRecipePipelineBridgeService {
       if (schedulerConnection) {
         await upsertSourceConnectionScanTask(client, {
           connection: schedulerConnection,
-          nextRunAt: null,
+          nextRunAt: connection.next_check_at,
           updatedAt: now,
         });
       }
@@ -143,7 +146,7 @@ export class SourceRecipePipelineBridgeService {
         createdByUserId: identity.userId,
       });
       return {
-        connection: { ...connection, handler_kind: "recipe", status: "paused", next_check_at: null, config_json: bridgedConfig },
+        connection: { ...connection, handler_kind: "recipe", status: "paused", config_json: bridgedConfig },
         recipe_version: recipeVersionOut(version),
         bridged_from_connection_id: sourceConnection.id,
         bridged_from_handler_version_id: handlerVersion.id,
@@ -186,4 +189,11 @@ function originOf(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+function timestampString(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return value.toISOString();
+  const raw = String(value);
+  return raw.length > 0 ? raw : null;
 }

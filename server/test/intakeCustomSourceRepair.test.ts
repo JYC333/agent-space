@@ -7,8 +7,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { Pool } from "pg";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { loadConfig, type ServerConfig } from "../src/config";
-import { CustomSourceCreateFlowService } from "../src/modules/intake/customSourceCreateFlowService";
-import { CustomSourceRepairService } from "../src/modules/intake/customSourceRepairService";
+import { CustomSourceCreateFlowService } from "../src/modules/intake/customSources/customSourceCreateFlowService";
+import { CustomSourceRepairService } from "../src/modules/intake/customSources/customSourceRepairService";
 import { HttpError } from "../src/modules/routeUtils/common";
 import { createDefaultProposalApplierRegistry } from "../src/modules/proposals/applierRegistry";
 import { getDbPool } from "../src/db/pool";
@@ -104,7 +104,7 @@ async function insertCustomSourceSpacePolicy(overrides: Record<string, unknown> 
       CUSTOM_SOURCE_SPACE_POLICY_SETTINGS_KEY,
       JSON.stringify({
         creator_roles: ["owner", "admin"],
-        default_capture_policy: "auto_extract_relevant",
+        default_capture_policy: "extract_text",
         default_retention_policy: "full_text",
         allowed_domains: [],
         credentialed_sources_allowed: false,
@@ -301,13 +301,13 @@ describe("CustomSourceRepairService.repairHandler", () => {
     const { connectionId, activeVersionId } = await createActiveConnection();
     await insertCustomSourceSpacePolicy({ same_envelope_repair_auto_apply: true });
 
-    // capture_policy broadens auto_extract_relevant -> archive_all_snapshots
+    // capture_policy broadens extract_text -> archive_original
     // relative to the active version's envelope, independent of any fixture
     // content — this is what should make evaluateCustomSourceActivation
     // report a delta and route through the non-repair proposal types.
     const result = await repairService!.repairHandler(IDENTITY, connectionId, {
       fixture_html: FIXTURE_HTML,
-      capture_policy: "archive_all_snapshots",
+      capture_policy: "archive_original",
     });
     expect(result.status).toBe("pending_approval");
     if (result.status !== "pending_approval") throw new Error("unreachable");

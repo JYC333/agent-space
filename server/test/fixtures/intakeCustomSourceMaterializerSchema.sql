@@ -120,3 +120,47 @@ CREATE TABLE public.extracted_evidence (
     CONSTRAINT ck_extracted_evidence_status CHECK (((status)::text = ANY ((ARRAY['candidate'::character varying, 'active'::character varying, 'rejected'::character varying, 'archived'::character varying])::text[]))),
     CONSTRAINT ck_extracted_evidence_trust_level CHECK (((trust_level)::text = ANY ((ARRAY['trusted'::character varying, 'normal'::character varying, 'untrusted'::character varying])::text[])))
 );
+
+-- Evidence→project auto-link surface (evidenceProjectLinker) — the linker joins
+-- intake_items/extracted_evidence with active project bindings and inserts
+-- idempotent context_candidate links.
+ALTER TABLE public.intake_items ADD COLUMN deleted_at timestamp with time zone;
+ALTER TABLE public.extracted_evidence ADD COLUMN deleted_at timestamp with time zone;
+
+CREATE TABLE public.workspace_source_bindings (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    workspace_id character varying(36) NOT NULL,
+    project_id character varying(36) NOT NULL,
+    source_connection_id character varying(36) NOT NULL,
+    binding_key character varying(128) DEFAULT 'default'::character varying NOT NULL,
+    status character varying(32) NOT NULL,
+    priority integer NOT NULL,
+    filters_json jsonb NOT NULL,
+    routing_policy_json jsonb NOT NULL,
+    extraction_policy_json jsonb NOT NULL,
+    created_by_user_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT workspace_source_bindings_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.evidence_links (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    evidence_id character varying(36) NOT NULL,
+    target_type character varying(64) NOT NULL,
+    target_id character varying(36),
+    link_type character varying(64) NOT NULL,
+    status character varying(32) NOT NULL,
+    confidence double precision,
+    reason character varying(1024),
+    created_by_user_id character varying(36),
+    created_by_agent_id character varying(36),
+    created_by_run_id character varying(36),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT evidence_links_pkey PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX uq_evidence_links_active_dedupe ON public.evidence_links USING btree (space_id, evidence_id, target_type, target_id, link_type) WHERE ((status)::text = 'active'::text);

@@ -34,6 +34,7 @@ CREATE TABLE public.source_connections (
     consent_json jsonb NOT NULL,
     policy_json jsonb NOT NULL,
     config_json jsonb NOT NULL,
+    schedule_rule_json jsonb,
     handler_kind character varying(32) NOT NULL DEFAULT 'built_in',
     active_handler_version_id character varying(36),
     repair_status character varying(32) NOT NULL DEFAULT 'ok',

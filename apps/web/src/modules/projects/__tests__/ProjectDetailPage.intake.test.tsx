@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import ProjectDetailPage from '../ProjectDetailPage'
-import { intakeApi, intakeReaderApi } from '../../../api/client'
+import { intakeApi, intakeReaderApi, projectsApi, workspacesApi } from '../../../api/client'
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -87,7 +87,7 @@ vi.mock('../../../api/client', () => ({
         endpoint_url: 'https://example.test/feed.xml',
         status: 'active',
         fetch_frequency: 'daily',
-        capture_policy: 'metadata_only',
+        capture_policy: 'reference_only',
         trust_level: 'normal',
         topic_hints_json: null,
         consent_json: {},
@@ -118,6 +118,88 @@ vi.mock('../../../api/client', () => ({
       created_at: '2026-06-30T00:00:00.000Z',
       updated_at: '2026-06-30T00:00:00.000Z',
     }]),
+    createWorkspaceBinding: vi.fn().mockResolvedValue({
+      id: 'binding-new',
+      space_id: 'space-1',
+      workspace_id: 'workspace-1',
+      project_id: 'project-1',
+      source_connection_id: 'conn-1',
+      binding_key: 'default',
+      status: 'active',
+      priority: 0,
+      filters_json: {},
+      routing_policy_json: {},
+      extraction_policy_json: {},
+      created_by_user_id: 'user-1',
+      created_at: '2026-06-30T00:00:00.000Z',
+      updated_at: '2026-06-30T00:00:00.000Z',
+    }),
+    createManualUrl: vi.fn().mockResolvedValue({
+      id: 'item-new',
+      space_id: 'space-1',
+      connection_id: 'conn-1',
+      item_type: 'external_url',
+      source_object_type: null,
+      source_object_id: null,
+      title: 'Saved URL',
+      source_uri: 'https://example.test/saved',
+      canonical_uri: 'https://example.test/saved',
+      source_domain: 'example.test',
+      source_external_id: null,
+      author: null,
+      occurred_at: null,
+      first_seen_at: '2026-06-30T00:00:00.000Z',
+      last_seen_at: '2026-06-30T00:00:00.000Z',
+      content_hash: null,
+      excerpt: null,
+      status: 'new',
+      read_status: 'unread',
+      content_state: 'metadata_only',
+      retention_policy: 'metadata_only',
+      relevance_score: null,
+      novelty_score: null,
+      raw_artifact_id: null,
+      extracted_artifact_id: null,
+      summary_artifact_id: null,
+      search_index_ref: null,
+      embedding_index_ref: null,
+      metadata_json: { created_by: 'manual_url' },
+      created_at: '2026-06-30T00:00:00.000Z',
+      updated_at: '2026-06-30T00:00:00.000Z',
+    }),
+    updateItem: vi.fn().mockResolvedValue({
+      id: 'item-1',
+      space_id: 'space-1',
+      connection_id: 'conn-1',
+      item_type: 'external_url',
+      source_object_type: null,
+      source_object_id: null,
+      title: 'Release item',
+      source_uri: 'https://example.test/item',
+      canonical_uri: 'https://example.test/item',
+      source_domain: 'example.test',
+      source_external_id: null,
+      author: null,
+      occurred_at: null,
+      first_seen_at: '2026-06-30T00:00:00.000Z',
+      last_seen_at: '2026-06-30T00:00:00.000Z',
+      content_hash: null,
+      excerpt: null,
+      status: 'new',
+      read_status: 'unread',
+      content_state: 'metadata_only',
+      retention_policy: 'metadata_only',
+      relevance_score: null,
+      novelty_score: null,
+      raw_artifact_id: null,
+      extracted_artifact_id: null,
+      summary_artifact_id: null,
+      search_index_ref: null,
+      embedding_index_ref: null,
+      metadata_json: { created_by: 'manual_url' },
+      created_at: '2026-06-30T00:00:00.000Z',
+      updated_at: '2026-06-30T00:00:00.000Z',
+    }),
     items: vi.fn().mockResolvedValue({
       items: [{
         id: 'item-1',
@@ -193,6 +275,9 @@ vi.mock('../../../api/client', () => ({
   intakeReaderApi: {
     listByProject: vi.fn().mockResolvedValue({ items: [] }),
   },
+  automationsApi: {
+    list: vi.fn().mockResolvedValue([]),
+  },
 }))
 
 function renderPage() {
@@ -209,13 +294,14 @@ function renderPage() {
 }
 
 describe('ProjectDetailPage Intake consumption', () => {
-  it('shows read-only Intake summaries and links management back to Intake', async () => {
+  it('shows Intake summaries and links management back to Intake', async () => {
     renderPage()
 
     expect(await screen.findByText('Project One')).toBeInTheDocument()
     expect(screen.getByText('Engineering feed')).toBeInTheDocument()
     expect(screen.getByText('Release item')).toBeInTheDocument()
     expect(screen.getByText('Useful evidence')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^link source$/i })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /manage in intake/i })).toHaveAttribute('href', '/intake?project_id=project-1')
     expect(screen.queryByText(/create connection/i)).toBeNull()
 
@@ -226,6 +312,303 @@ describe('ProjectDetailPage Intake consumption', () => {
       expect(intakeApi.createConnection).not.toHaveBeenCalled()
       expect(intakeApi.createSourceRecipe).not.toHaveBeenCalled()
       expect(intakeApi.createCustomSourceDraft).not.toHaveBeenCalled()
+    })
+  })
+
+  it('links an Intake source directly from the Project page', async () => {
+    vi.mocked(projectsApi.listWorkspaces).mockResolvedValue([
+      {
+        id: 'project-workspace-1',
+        project_id: 'project-1',
+        workspace_id: 'workspace-1',
+        role: 'reference',
+        created_at: '2026-06-30T00:00:00.000Z',
+        updated_at: '2026-06-30T00:00:00.000Z',
+      },
+    ])
+    vi.mocked(workspacesApi.list).mockResolvedValue({
+      items: [{
+        id: 'workspace-1',
+        owner_space_id: 'space-1',
+        created_by_user_id: 'user-1',
+        name: 'Project workspace',
+        slug: 'project-workspace',
+        description: null,
+        workspace_type: 'project',
+        kind: 'standard',
+        repo_url: null,
+        root_path: null,
+        default_branch: null,
+        visibility: 'space_shared',
+        status: 'active',
+        protected: false,
+        system_managed: false,
+        registered_from: null,
+        metadata_json: null,
+        snapshot_retention_days: null,
+        snapshot_max_count: null,
+        created_at: '2026-06-30T00:00:00.000Z',
+        updated_at: '2026-06-30T00:00:00.000Z',
+      }],
+      total: 1,
+      limit: 200,
+      offset: 0,
+    })
+    vi.mocked(intakeApi.workspaceBindings).mockResolvedValue([])
+
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: /^link source$/i }))
+    expect(await screen.findByRole('dialog', { name: /^link source$/i })).toBeInTheDocument()
+    expect(screen.getByText('Project workspace · reference')).toBeInTheDocument()
+    expect(screen.getByText('Engineering feed')).toBeInTheDocument()
+
+    const buttons = screen.getAllByRole('button', { name: /^link source$/i })
+    fireEvent.click(buttons[buttons.length - 1]!)
+
+    await waitFor(() => {
+      expect(intakeApi.createWorkspaceBinding).toHaveBeenCalledWith({
+        project_id: 'project-1',
+        workspace_id: 'workspace-1',
+        source_connection_id: 'conn-1',
+      })
+    })
+  })
+
+  it('saves a URL directly to a project-linked Intake source', async () => {
+    vi.mocked(intakeApi.workspaceBindings).mockResolvedValue([{
+      id: 'binding-1',
+      space_id: 'space-1',
+      workspace_id: 'workspace-1',
+      project_id: 'project-1',
+      source_connection_id: 'conn-1',
+      binding_key: 'default',
+      status: 'active',
+      priority: 0,
+      filters_json: {},
+      routing_policy_json: {},
+      extraction_policy_json: {},
+      created_by_user_id: 'user-1',
+      created_at: '2026-06-30T00:00:00.000Z',
+      updated_at: '2026-06-30T00:00:00.000Z',
+    }])
+
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: /^save url$/i }))
+    expect(await screen.findByRole('dialog', { name: /^save url$/i })).toBeInTheDocument()
+
+    fireEvent.change(screen.getByPlaceholderText('https://example.com/post'), { target: { value: 'https://example.test/saved' } })
+    fireEvent.change(screen.getByPlaceholderText('Optional'), { target: { value: 'Saved article' } })
+
+    const buttons = screen.getAllByRole('button', { name: /^save url$/i })
+    fireEvent.click(buttons[buttons.length - 1]!)
+
+    await waitFor(() => {
+      expect(intakeApi.createManualUrl).toHaveBeenCalledWith({
+        url: 'https://example.test/saved',
+        title: 'Saved article',
+        connection_id: 'conn-1',
+        queue_content: false,
+      })
+    })
+  })
+
+  it('attaches an already saved URL to the selected project source', async () => {
+    vi.mocked(intakeApi.workspaceBindings).mockResolvedValue([{
+      id: 'binding-1',
+      space_id: 'space-1',
+      workspace_id: 'workspace-1',
+      project_id: 'project-1',
+      source_connection_id: 'conn-1',
+      binding_key: 'default',
+      status: 'active',
+      priority: 0,
+      filters_json: {},
+      routing_policy_json: {},
+      extraction_policy_json: {},
+      created_by_user_id: 'user-1',
+      created_at: '2026-06-30T00:00:00.000Z',
+      updated_at: '2026-06-30T00:00:00.000Z',
+    }])
+    vi.mocked(intakeApi.createManualUrl).mockResolvedValueOnce({
+      id: 'item-existing',
+      space_id: 'space-1',
+      connection_id: null,
+      item_type: 'external_url',
+      source_object_type: null,
+      source_object_id: null,
+      title: 'Existing URL',
+      source_uri: 'https://example.test/existing',
+      canonical_uri: 'https://example.test/existing',
+      source_domain: 'example.test',
+      source_external_id: null,
+      author: null,
+      occurred_at: null,
+      first_seen_at: '2026-06-30T00:00:00.000Z',
+      last_seen_at: '2026-06-30T00:00:00.000Z',
+      content_hash: null,
+      excerpt: null,
+      status: 'new',
+      read_status: 'unread',
+      content_state: 'metadata_only',
+      retention_policy: 'metadata_only',
+      relevance_score: null,
+      novelty_score: null,
+      raw_artifact_id: null,
+      extracted_artifact_id: null,
+      summary_artifact_id: null,
+      search_index_ref: null,
+      embedding_index_ref: null,
+      metadata_json: { created_by: 'manual_url' },
+      created_at: '2026-06-30T00:00:00.000Z',
+      updated_at: '2026-06-30T00:00:00.000Z',
+    })
+    vi.mocked(intakeApi.updateItem).mockClear()
+
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: /^save url$/i }))
+    fireEvent.change(await screen.findByPlaceholderText('https://example.com/post'), { target: { value: 'https://example.test/existing' } })
+
+    const buttons = screen.getAllByRole('button', { name: /^save url$/i })
+    fireEvent.click(buttons[buttons.length - 1]!)
+
+    await waitFor(() => {
+      expect(intakeApi.updateItem).toHaveBeenCalledWith('item-existing', { connection_id: 'conn-1' })
+    })
+  })
+
+  it('changes the source for a manually saved URL item from the Project page', async () => {
+    vi.mocked(intakeApi.connections).mockResolvedValue({
+      items: [
+        {
+          id: 'conn-1',
+          space_id: 'space-1',
+          connector_id: 'connector-1',
+          owner_user_id: 'user-1',
+          credential_id: null,
+          name: 'Engineering feed',
+          endpoint_url: 'https://example.test/feed.xml',
+          status: 'active',
+          fetch_frequency: 'daily',
+          capture_policy: 'reference_only',
+          trust_level: 'normal',
+          topic_hints_json: null,
+          consent_json: {},
+          policy_json: {},
+          config_json: {},
+          last_checked_at: null,
+          next_check_at: null,
+          created_at: '2026-06-30T00:00:00.000Z',
+          updated_at: '2026-06-30T00:00:00.000Z',
+        },
+        {
+          id: 'conn-2',
+          space_id: 'space-1',
+          connector_id: 'connector-1',
+          owner_user_id: 'user-1',
+          credential_id: null,
+          name: 'Research feed',
+          endpoint_url: 'https://example.test/research.xml',
+          status: 'active',
+          fetch_frequency: 'daily',
+          capture_policy: 'reference_only',
+          trust_level: 'normal',
+          topic_hints_json: null,
+          consent_json: {},
+          policy_json: {},
+          config_json: {},
+          last_checked_at: null,
+          next_check_at: null,
+          created_at: '2026-06-30T00:00:00.000Z',
+          updated_at: '2026-06-30T00:00:00.000Z',
+        },
+      ],
+      total: 2,
+      limit: 100,
+      offset: 0,
+    })
+    vi.mocked(intakeApi.workspaceBindings).mockResolvedValue([
+      {
+        id: 'binding-1',
+        space_id: 'space-1',
+        workspace_id: 'workspace-1',
+        project_id: 'project-1',
+        source_connection_id: 'conn-1',
+        binding_key: 'default',
+        status: 'active',
+        priority: 0,
+        filters_json: {},
+        routing_policy_json: {},
+        extraction_policy_json: {},
+        created_by_user_id: 'user-1',
+        created_at: '2026-06-30T00:00:00.000Z',
+        updated_at: '2026-06-30T00:00:00.000Z',
+      },
+      {
+        id: 'binding-2',
+        space_id: 'space-1',
+        workspace_id: 'workspace-1',
+        project_id: 'project-1',
+        source_connection_id: 'conn-2',
+        binding_key: 'default',
+        status: 'active',
+        priority: 0,
+        filters_json: {},
+        routing_policy_json: {},
+        extraction_policy_json: {},
+        created_by_user_id: 'user-1',
+        created_at: '2026-06-30T00:00:00.000Z',
+        updated_at: '2026-06-30T00:00:00.000Z',
+      },
+    ])
+    vi.mocked(intakeApi.items).mockResolvedValue({
+      items: [{
+        id: 'item-1',
+        space_id: 'space-1',
+        connection_id: 'conn-1',
+        item_type: 'external_url',
+        source_object_type: null,
+        source_object_id: null,
+        title: 'Saved URL',
+        source_uri: 'https://example.test/item',
+        canonical_uri: 'https://example.test/item',
+        source_domain: 'example.test',
+        source_external_id: null,
+        author: null,
+        occurred_at: null,
+        first_seen_at: '2026-06-30T00:00:00.000Z',
+        last_seen_at: '2026-06-30T00:00:00.000Z',
+        content_hash: null,
+        excerpt: null,
+        status: 'new',
+        read_status: 'unread',
+        content_state: 'metadata_only',
+        retention_policy: 'metadata_only',
+        relevance_score: null,
+        novelty_score: null,
+        raw_artifact_id: null,
+        extracted_artifact_id: null,
+        summary_artifact_id: null,
+        search_index_ref: null,
+        embedding_index_ref: null,
+        metadata_json: { created_by: 'manual_url' },
+        created_at: '2026-06-30T00:00:00.000Z',
+        updated_at: '2026-06-30T00:00:00.000Z',
+      }],
+      total: 1,
+      limit: 5,
+      offset: 0,
+    })
+
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: /^engineering feed$/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^research feed$/i }))
+
+    await waitFor(() => {
+      expect(intakeApi.updateItem).toHaveBeenCalledWith('item-1', { connection_id: 'conn-2' })
     })
   })
 

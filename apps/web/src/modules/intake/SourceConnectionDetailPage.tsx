@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { ArrowLeft, CheckCircle2, Code2, RefreshCw, ShieldCheck, TestTube2 } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Code2, Play, RefreshCw, ShieldCheck, TestTube2 } from 'lucide-react'
 import { intakeApi } from '../../api/client'
 import { Badge, StatusBadge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Card, CardHeader, CardTitle } from '../../components/ui/card'
 import { EmptyState } from '../../components/ui/empty-state'
+import { Label } from '../../components/ui/label'
+import { Select } from '../../components/ui/select'
 import { Skeleton } from '../../components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs'
@@ -27,7 +29,17 @@ import type {
   SourceRecipeVersion,
   SourceRunSummary,
 } from '../../types/api'
-import { fmt, short } from './intakePageModel'
+import {
+  emptyScheduleFormValue,
+  FREQUENCIES,
+  fmt,
+  isScheduleFormComplete,
+  scheduleFormValueFromConnection,
+  scheduleRuleFromForm,
+  short,
+  type ScheduleFormValue,
+} from './intakePageModel'
+import { ScheduleRuleFields } from './IntakePageSections'
 
 const DEFAULT_FIXTURE = '<html><body><article><a href="/item">Title</a><p>Excerpt text.</p></article></body></html>'
 
@@ -44,6 +56,8 @@ export default function SourceConnectionDetailPage() {
   const [evidence, setEvidence] = useState<ExtractedEvidence[]>([])
   const [jobs, setJobs] = useState<ExtractionJob[]>([])
   const [fixtureHtml, setFixtureHtml] = useState(DEFAULT_FIXTURE)
+  const [scheduleFrequency, setScheduleFrequency] = useState<SourceConnection['fetch_frequency']>('manual')
+  const [scheduleForm, setScheduleForm] = useState<ScheduleFormValue>(() => emptyScheduleFormValue())
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
 
@@ -69,6 +83,8 @@ export default function SourceConnectionDetailPage() {
   const load = useCallback(async () => {
     if (!activeSpaceId || !connectionId) {
       setConnection(null)
+      setScheduleFrequency('manual')
+      setScheduleForm(emptyScheduleFormValue())
       setLoading(false)
       return
     }
@@ -76,6 +92,8 @@ export default function SourceConnectionDetailPage() {
     try {
       const row = await intakeApi.getConnection(connectionId)
       setConnection(row)
+      setScheduleFrequency(row.fetch_frequency)
+      setScheduleForm(scheduleFormValueFromConnection(row))
       const [itemPage, jobPage, evidencePage, runPage] = await Promise.all([
         intakeApi.items({ connection_id: connectionId, limit: 20 }),
         intakeApi.jobs({ connection_id: connectionId, limit: 20 }),
@@ -111,6 +129,8 @@ export default function SourceConnectionDetailPage() {
     } catch (error) {
       if (!isNotFoundError(error)) toast.error(errMsg(error))
       setConnection(null)
+      setScheduleFrequency('manual')
+      setScheduleForm(emptyScheduleFormValue())
     } finally {
       setLoading(false)
     }
@@ -151,16 +171,63 @@ export default function SourceConnectionDetailPage() {
 
   async function activateHandler(version: CustomSourceHandlerVersion) {
     if (!connection) return
+    const scheduleRule = scheduleRuleFromForm(scheduleFrequency, scheduleForm)
+    if (scheduleRule === undefined) {
+      toast.error('Complete the schedule before activation')
+      return
+    }
     setBusy(`activate:${version.id}`)
     try {
       const result = await intakeApi.activateCustomSourceHandler(connection.id, {
         handler_version_id: version.id,
+        schedule_rule: scheduleRule,
       })
       if (result.status === 'pending_approval') {
         toast.success(`Approval proposal created: ${short(result.proposal_id)}`)
       } else {
         toast.success(`Handler v${result.handler_version.version_number} activated`)
       }
+      await load()
+    } catch (error) {
+      toast.error(errMsg(error))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function runSourceNow() {
+    if (!connection) return
+    setBusy('source:scan')
+    try {
+      const job = await intakeApi.scanConnection(connection.id)
+      toast.success('Scan queued')
+      const result = await intakeApi.runJob(job.id)
+      toast.success(`Scan ${result.status}: ${result.items_created ?? 0} new`)
+      await load()
+    } catch (error) {
+      toast.error(errMsg(error))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function saveNextRun() {
+    if (!connection) return
+    const scheduleRule = scheduleRuleFromForm(scheduleFrequency, scheduleForm)
+    if (scheduleRule === undefined) {
+      toast.error('Complete the schedule')
+      return
+    }
+    setBusy('source:schedule')
+    try {
+      const row = await intakeApi.updateConnection(connection.id, {
+        fetch_frequency: scheduleFrequency,
+        schedule_rule: scheduleRule,
+      })
+      setConnection(row)
+      setScheduleFrequency(row.fetch_frequency)
+      setScheduleForm(scheduleFormValueFromConnection(row))
+      toast.success('Schedule updated')
       await load()
     } catch (error) {
       toast.error(errMsg(error))
@@ -208,10 +275,16 @@ export default function SourceConnectionDetailPage() {
             {connection.repair_status && <Badge variant="muted">{connection.repair_status}</Badge>}
           </div>
         </div>
-        <Button variant="outline" onClick={load} disabled={loading || Boolean(busy)}>
-          <RefreshCw className="size-4" />
-          Refresh
-        </Button>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" onClick={runSourceNow} disabled={!canRunConnectionNow(connection) || Boolean(busy)}>
+            <Play className="size-4" />
+            Run now
+          </Button>
+          <Button variant="outline" onClick={load} disabled={loading || Boolean(busy)}>
+            <RefreshCw className="size-4" />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <Tabs defaultValue="overview" className="space-y-4">
@@ -226,7 +299,20 @@ export default function SourceConnectionDetailPage() {
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
-          <OverviewPanel connection={connection} activeRecipe={activeRecipe} activeHandler={summary?.active_handler_version ?? null} />
+          <OverviewPanel
+            connection={connection}
+            activeRecipe={activeRecipe}
+            activeHandler={summary?.active_handler_version ?? null}
+            scheduleFrequency={scheduleFrequency}
+            scheduleForm={scheduleForm}
+            busy={busy}
+            onScheduleFrequencyChange={value => {
+              setScheduleFrequency(value)
+              setScheduleForm(emptyScheduleFormValue())
+            }}
+            onScheduleFormChange={setScheduleForm}
+            onSaveNextRun={saveNextRun}
+          />
         </TabsContent>
 
         <TabsContent value="plan" className="space-y-4">
@@ -277,6 +363,12 @@ function OverviewPanel(props: {
   connection: SourceConnection
   activeRecipe: SourceRecipeVersion | null
   activeHandler: CustomSourceHandlerVersion | null
+  scheduleFrequency: SourceConnection['fetch_frequency']
+  scheduleForm: ScheduleFormValue
+  busy: string | null
+  onScheduleFrequencyChange: (value: SourceConnection['fetch_frequency']) => void
+  onScheduleFormChange: (value: ScheduleFormValue) => void
+  onSaveNextRun: () => void
 }) {
   const implementationId = props.connection.handler_kind === 'recipe'
     ? (props.activeRecipe ? recipeVersionLabel(props.activeRecipe) : 'none')
@@ -303,11 +395,34 @@ function OverviewPanel(props: {
         </CardHeader>
         <KeyValueGrid rows={[
           ['Status', props.connection.status],
-          ['Frequency', props.connection.fetch_frequency],
           ['Last checked', fmt(props.connection.last_checked_at)],
-          ['Next check', fmt(props.connection.next_check_at)],
+          ['Next run', fmt(props.connection.next_check_at)],
           ['Capture', props.connection.capture_policy],
         ]} />
+        <div className="space-y-3 border-t border-border pt-3">
+          <div className="space-y-1.5">
+            <Label>Frequency</Label>
+            <Select
+              options={FREQUENCIES}
+              value={props.scheduleFrequency}
+              onChange={value => props.onScheduleFrequencyChange(value as SourceConnection['fetch_frequency'])}
+            />
+          </div>
+          <ScheduleRuleFields
+            fetchFrequency={props.scheduleFrequency}
+            value={props.scheduleForm}
+            onChange={props.onScheduleFormChange}
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={props.onSaveNextRun}
+            disabled={props.busy === 'source:schedule' || !isScheduleFormComplete(props.scheduleFrequency, props.scheduleForm)}
+          >
+            <CheckCircle2 className="size-4" />
+            Save schedule
+          </Button>
+        </div>
       </Card>
       <Card className="space-y-3 lg:col-span-2">
         <CardHeader>
@@ -932,6 +1047,13 @@ function sourceKindLabel(connection: SourceConnection, activeRecipe?: SourceReci
   if (connection.handler_kind === 'recipe') return recipeIsFeed(activeRecipe) ? 'Feed source' : 'Recipe source'
   if (connection.handler_kind === 'generated_custom') return 'Advanced handler'
   return 'Built-in source'
+}
+
+function canRunConnectionNow(connection: SourceConnection) {
+  if (connection.status === 'archived') return false
+  if (connection.handler_kind === 'generated_custom') return Boolean(connection.active_handler_version_id)
+  if (connection.handler_kind === 'recipe') return Boolean(connection.active_recipe_version_id)
+  return true
 }
 
 function recipeVersionLabel(version: SourceRecipeVersion) {

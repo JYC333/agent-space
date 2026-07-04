@@ -5,7 +5,7 @@ import type {
   CustomSourceHandlerInput,
   CustomSourcePolicyEnvelope,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import type { ServerConfig } from "../../config";
+import type { ServerConfig } from "../../../config";
 import {
   HttpError,
   objectValue,
@@ -15,8 +15,8 @@ import {
   type Pool,
   type Queryable,
   type SpaceUserIdentity,
-} from "../routeUtils/common";
-import { PgIntakeRepository } from "./repository";
+} from "../../routeUtils/common";
+import { PgIntakeRepository } from "../repository";
 import {
   HANDLER_RUN_COLUMNS,
   HANDLER_VERSION_COLUMNS,
@@ -26,7 +26,7 @@ import {
   type HandlerRunRow,
   type HandlerVersionRow,
 } from "./customSourceHandlerRepository";
-import { sha256 } from "./intakeRepositoryMappers";
+import { sha256 } from "../intakeRepositoryMappers";
 import { cleanupSandbox, effectiveCustomSourceLimits, evaluateCustomSourceRunnerBlockReason } from "./customSourceRunner";
 import { fetchCustomSourceEndpointHtml } from "./customSourceEndpointFetch";
 import { executeCustomSourceHandler } from "./customSourceHandlerExecution";
@@ -35,14 +35,19 @@ import {
   CUSTOM_SOURCE_HANDLER_ENTRYPOINT,
   generateCustomSourceHandlerSource,
 } from "./customSourceHandlerTemplate";
-import { insertProposalRow } from "../proposals/reviewPackets";
-import {
-  nextRunAtForSourceConnection,
-  upsertSourceConnectionScanTask,
-} from "./sourceConnectionScheduler";
-import { loadProtocol } from "../providers/protocolRuntime";
+import { insertProposalRow } from "../../proposals/reviewPackets";
+import { getSourceConnectionScanTask, upsertSourceConnectionScanTask } from "../sourceConnectionScheduler";
+import { resolveRequestedSourceSchedule } from "../sourceScheduleInput";
+import { loadProtocol } from "../../providers/protocolRuntime";
 import { CUSTOM_SOURCE_PIPELINE_HANDLER_ENTRYPOINT } from "./customSourcePipelineInterpreter";
 import { CustomSourceCredentialService } from "./customSourceCredentialService";
+import {
+  parseSourceCapturePolicy,
+  parseSourceRetentionPolicy,
+  SOURCE_CAPTURE_POLICY_RANK,
+  type SourceCapturePolicy,
+  type SourceRetentionPolicy,
+} from "../capturePolicy";
 
 /**
  * Phase 5 create-flow: draft -> generate -> test -> activate. Owns every
@@ -68,7 +73,7 @@ export class CustomSourceCreateFlowService {
     const hostname = parseHostname(endpointUrl);
 
     const settingsRepo = new PgCustomSourceHandlerRepository(this.pool, this.config);
-    const settings = await settingsRepo.getSettings(identity);
+    const settings = await settingsRepo.getEffectiveSettings(identity);
     await settingsRepo.requireCustomSourceCreator(identity, settings.space.creator_roles);
     if (settings.space.allowed_domains.length > 0 && !domainAllowed(hostname, settings.space.allowed_domains)) {
       throw new HttpError(422, `Domain not allowed by Space Custom Source policy: ${hostname}`);
@@ -86,6 +91,8 @@ export class CustomSourceCreateFlowService {
         endpoint_url: endpointUrl,
         credential_id: credentialId,
         fetch_frequency: optionalString(body.fetch_frequency) ?? "manual",
+        next_check_at: body.next_check_at,
+        schedule_rule: body.schedule_rule,
         capture_policy: optionalString(config.capture_policy) ?? settings.space.default_capture_policy,
         policy: { retention_policy: optionalString(config.retention_policy) ?? settings.space.default_retention_policy },
         config,
@@ -108,7 +115,7 @@ export class CustomSourceCreateFlowService {
       if (schedulerConnection) {
         await upsertSourceConnectionScanTask(client, {
           connection: schedulerConnection,
-          nextRunAt: null,
+          nextRunAt: connection.next_check_at,
           updatedAt: now,
         });
       }
@@ -118,15 +125,16 @@ export class CustomSourceCreateFlowService {
 
   async generateHandler(identity: SpaceUserIdentity, connectionId: string, body: Record<string, unknown>) {
     const connection = await this.requireCustomSourceConnection(identity, connectionId);
-    const settings = await new PgCustomSourceHandlerRepository(this.pool, this.config).getSettings(identity);
+    const settings = await new PgCustomSourceHandlerRepository(this.pool, this.config).getEffectiveSettings(identity);
     const config = objectValue(connection.config_json);
     const endpointOrigin = parseOrigin(connection.endpoint_url ?? "");
 
-    const capturePolicy = optionalString(body.capture_policy) ?? connection.capture_policy;
-    const retentionPolicy =
+    const capturePolicy = requireCapturePolicy(optionalString(body.capture_policy) ?? connection.capture_policy);
+    const retentionPolicy = requireRetentionPolicy(
       optionalString(body.retention_policy) ??
       optionalString((connection.policy_json as Record<string, unknown> | null)?.retention_policy) ??
-      settings.space.default_retention_policy;
+      settings.space.default_retention_policy,
+    );
 
     const generationMode = optionalString(body.generation_mode) ?? "code_template";
     if (generationMode !== "code_template" && generationMode !== "pipeline") {
@@ -134,12 +142,12 @@ export class CustomSourceCreateFlowService {
     }
 
     const baseLimits = {
-      timeout_ms: Math.min(30_000, settings.instance.timeout_ms_max),
-      max_download_bytes: Math.min(5_242_880, settings.instance.download_bytes_max),
-      max_output_bytes: Math.min(1_048_576, settings.instance.output_bytes_max),
-      max_files: Math.min(10, settings.instance.max_files),
+      timeout_ms: Math.min(30_000, settings.runner.timeout_ms_max),
+      max_download_bytes: settings.runner.download_bytes_max,
+      max_output_bytes: Math.min(1_048_576, settings.runner.output_bytes_max),
+      max_files: Math.min(10, settings.runner.max_files),
       max_evidence_items: 50,
-      log_max_bytes: Math.min(65_536, settings.instance.log_bytes_max),
+      log_max_bytes: Math.min(65_536, settings.runner.log_bytes_max),
     };
 
     if (generationMode === "pipeline") {
@@ -222,9 +230,9 @@ export class CustomSourceCreateFlowService {
       throw new HttpError(409, `Handler version must be draft or test_failed to test (was ${version.status})`);
     }
 
-    const settings = await new PgCustomSourceHandlerRepository(this.pool, this.config).getSettings(identity);
+    const settings = await new PgCustomSourceHandlerRepository(this.pool, this.config).getEffectiveSettings(identity);
     const policyEnvelope = envelopeOf(version);
-    const blockReason = evaluateCustomSourceRunnerBlockReason(settings.instance, policyEnvelope);
+    const blockReason = evaluateCustomSourceRunnerBlockReason(settings.runner, policyEnvelope);
     const credential = await new CustomSourceCredentialService(this.pool, this.config).resolveCredentialHeader(
       identity.spaceId,
       policyEnvelope.credential_ref,
@@ -232,7 +240,7 @@ export class CustomSourceCreateFlowService {
     const fixtureHtml = optionalString(body.fixture_html);
     const fetchedHtml =
       fixtureHtml ??
-      (blockReason ? "" : await fetchCustomSourceEndpointHtml(connection.endpoint_url, settings.instance, policyEnvelope, credential));
+      (blockReason ? "" : await fetchCustomSourceEndpointHtml(connection.endpoint_url, settings.runner, policyEnvelope, credential));
 
     const runId = randomUUID();
     const now = new Date().toISOString();
@@ -248,7 +256,7 @@ export class CustomSourceCreateFlowService {
       runnerResult = { status: "blocked", reason: blockReason } as const;
     } else {
       try {
-        runnerResult = await executeCustomSourceHandler(this.pool, this.config, settings.instance, {
+        runnerResult = await executeCustomSourceHandler(this.pool, this.config, settings.runner, {
           version,
           policyEnvelope,
           credential,
@@ -326,7 +334,7 @@ export class CustomSourceCreateFlowService {
 
       const validation = await validateCustomSourceHandlerOutput({
         raw: parsedOutput,
-        limits: effectiveCustomSourceLimits(settings.instance, policyEnvelope.limits),
+        limits: effectiveCustomSourceLimits(settings.runner, policyEnvelope.limits),
         allowedNetworkOrigins: policyEnvelope.allowed_network_origins,
         sandboxFilesRoot: runnerResult.sandbox_files_root,
       });
@@ -367,9 +375,9 @@ export class CustomSourceCreateFlowService {
       throw new HttpError(409, "Handler version must pass a fixture test before activation");
     }
 
-    const settings = await new PgCustomSourceHandlerRepository(this.pool, this.config).getSettings(identity);
-    const activePointer = await this.pool.query<{ active_handler_version_id: string | null }>(
-      `SELECT active_handler_version_id FROM source_connections WHERE space_id = $1 AND id = $2`,
+    const settings = await new PgCustomSourceHandlerRepository(this.pool, this.config).getEffectiveSettings(identity);
+    const activePointer = await this.pool.query<{ active_handler_version_id: string | null; fetch_frequency: string }>(
+      `SELECT active_handler_version_id, fetch_frequency FROM source_connections WHERE space_id = $1 AND id = $2`,
       [identity.spaceId, connectionId],
     );
     const activeVersionId = activePointer.rows[0]?.active_handler_version_id ?? null;
@@ -402,6 +410,8 @@ export class CustomSourceCreateFlowService {
         proposedEnvelope: envelopeOf(version),
         deltas: evaluation.deltas,
         requestedByUserId: identity.userId,
+        nextCheckAt: body.next_check_at,
+        scheduleRule: body.schedule_rule,
       });
       const reviewText = customSourceProposalReviewText({
         proposalType,
@@ -448,7 +458,15 @@ export class CustomSourceCreateFlowService {
       };
     }
 
-    await activateCustomSourceHandlerVersion(this.pool, identity, connectionId, versionId, activeVersionId);
+    await activateCustomSourceHandlerVersion(
+      this.pool,
+      identity,
+      connectionId,
+      versionId,
+      activeVersionId,
+      body.next_check_at,
+      body.schedule_rule,
+    );
     const activated = await new PgCustomSourceHandlerRepository(this.pool, this.config).getHandlerVersion(
       identity,
       connectionId,
@@ -715,9 +733,35 @@ export async function activateCustomSourceHandlerVersion(
   connectionId: string,
   versionId: string,
   previousActiveVersionId: string | null,
+  nextCheckAt?: unknown,
+  scheduleRule?: unknown,
 ): Promise<string> {
   const now = new Date().toISOString();
   await withDbTransaction(pool, async (client) => {
+    const existingScheduleTask = await getSourceConnectionScanTask(client, connectionId);
+    const currentConnection = await client.query<{
+      id: string;
+      space_id: string;
+      owner_user_id: string;
+      fetch_frequency: string;
+      schedule_rule_json: unknown;
+    }>(
+      `SELECT id, space_id, owner_user_id, fetch_frequency, schedule_rule_json
+         FROM source_connections
+        WHERE id = $1 AND space_id = $2
+        FOR UPDATE`,
+      [connectionId, identity.spaceId],
+    );
+    const current = currentConnection.rows[0];
+    const schedule = current
+      ? resolveRequestedSourceSchedule({
+          body: { next_check_at: nextCheckAt, schedule_rule: scheduleRule },
+          status: "active",
+          fetchFrequency: current.fetch_frequency,
+          existingNextCheckAt: existingScheduleTask?.next_run_at,
+          existingScheduleRule: current.schedule_rule_json,
+        })
+      : null;
     if (previousActiveVersionId) {
       await client.query(
         `UPDATE source_handler_versions SET status = 'superseded', superseded_at = $3 WHERE id = $1 AND space_id = $2`,
@@ -736,18 +780,20 @@ export async function activateCustomSourceHandlerVersion(
       fetch_frequency: string;
     }>(
       `UPDATE source_connections
-          SET active_handler_version_id = $3, repair_status = 'ok', status = 'active',
-              fetch_frequency = CASE WHEN fetch_frequency = 'manual' THEN 'hourly' ELSE fetch_frequency END,
-              updated_at = $4
+          SET active_handler_version_id = $3,
+              repair_status = 'ok',
+              status = 'active',
+              schedule_rule_json = $4::jsonb,
+              updated_at = $5
         WHERE id = $1 AND space_id = $2
         RETURNING id, space_id, owner_user_id, status, fetch_frequency`,
-      [connectionId, identity.spaceId, versionId, now],
+      [connectionId, identity.spaceId, versionId, JSON.stringify(schedule?.scheduleRule ?? null), now],
     );
     const connection = updatedConnection.rows[0];
-    if (connection) {
+    if (connection && schedule) {
       await upsertSourceConnectionScanTask(client, {
         connection,
-        nextRunAt: nextRunAtForSourceConnection(connection, now),
+        nextRunAt: schedule.nextRunAt,
         updatedAt: now,
       });
     }
@@ -794,7 +840,7 @@ export function evaluateCustomSourceActivation(
     "capture policy",
     candidate.capture_policy,
     captureBaseline,
-    CAPTURE_POLICY_RANK,
+    SOURCE_CAPTURE_POLICY_RANK,
   );
   if (captureDelta) deltas.push(captureDelta);
   const retentionDelta = broadeningPolicyDelta(
@@ -838,6 +884,18 @@ export function evaluateCustomSourceActivation(
   return { withinEnvelope: deltas.length === 0, deltas };
 }
 
+function requireCapturePolicy(value: string): SourceCapturePolicy {
+  const parsed = parseSourceCapturePolicy(value);
+  if (!parsed) throw new HttpError(422, "Unsupported Custom Source capture policy");
+  return parsed;
+}
+
+function requireRetentionPolicy(value: string): SourceRetentionPolicy {
+  const parsed = parseSourceRetentionPolicy(value);
+  if (!parsed) throw new HttpError(422, "Unsupported Custom Source retention policy");
+  return parsed;
+}
+
 function parseHostname(url: string): string {
   try {
     const parsed = new URL(url);
@@ -875,14 +933,6 @@ function parseHostnameSafe(url: string): string | null {
 function domainAllowed(hostname: string, allowedDomains: string[]): boolean {
   return allowedDomains.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
 }
-
-const CAPTURE_POLICY_RANK: Record<string, number> = {
-  metadata_only: 0,
-  excerpt_only: 1,
-  auto_extract_relevant: 2,
-  auto_extract_all_text: 3,
-  archive_all_snapshots: 4,
-};
 
 const RETENTION_POLICY_RANK: Record<string, number> = {
   metadata_only: 0,
@@ -942,6 +992,8 @@ export function customSourceProposalPayload(input: {
   proposedEnvelope: CustomSourcePolicyEnvelope;
   deltas: string[];
   requestedByUserId: string;
+  nextCheckAt?: unknown;
+  scheduleRule?: unknown;
 }): Record<string, unknown> {
   const base = {
     proposal_type: input.proposalType,
@@ -952,6 +1004,8 @@ export function customSourceProposalPayload(input: {
     proposed_policy_envelope_json: input.proposedEnvelope,
     envelope_diff_json: { deltas: input.deltas },
   };
+  if (input.nextCheckAt !== undefined) Object.assign(base, { next_check_at: input.nextCheckAt });
+  if (input.scheduleRule !== undefined) Object.assign(base, { schedule_rule: input.scheduleRule });
   if (input.proposalType === "custom_source_credentialed_source") {
     return {
       ...base,

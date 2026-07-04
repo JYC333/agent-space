@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { intakeApi, workspacesApi } from '../../api/client'
+import { intakeApi, projectsApi, workspacesApi } from '../../api/client'
 import { EmptyState } from '../../components/ui/empty-state'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
@@ -14,16 +14,20 @@ import type {
   SourceRecipeDryRunResult,
   SourceRecipePlanResponse,
   SourceRecipeSourceType,
+  SourceCapturePolicy,
   SourceConnection,
   SourceConnector,
   Workspace,
-  WorkspaceIntakeProfile,
   WorkspaceSourceBinding,
 } from '../../types/api'
 import {
+  emptyScheduleFormValue,
   type EvidenceFilter,
   type IntakeSummaryResult,
   type ItemFilter,
+  scheduleRuleFromForm,
+  sourceCapturePolicyValue,
+  type ScheduleFormValue,
 } from './intakePageModel'
 import {
   AdvancedSourceHandlerCard,
@@ -34,6 +38,7 @@ import {
   ItemsSection,
   JobsSection,
   ManualUrlCard,
+  PresetSourcesEntryCard,
   SourcesSection,
   WorkspaceRoutingCard,
 } from './IntakePageSections'
@@ -52,7 +57,7 @@ export default function IntakePage() {
   const [evidence, setEvidence] = useState<ExtractedEvidence[]>([])
   const [links, setLinks] = useState<EvidenceLink[]>([])
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
-  const [profiles, setProfiles] = useState<WorkspaceIntakeProfile[]>([])
+  const [projectWorkspaceIds, setProjectWorkspaceIds] = useState<Set<string> | null>(null)
   const [bindings, setBindings] = useState<WorkspaceSourceBinding[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
@@ -66,7 +71,8 @@ export default function IntakePage() {
   const [recipeSourceName, setRecipeSourceName] = useState('')
   const [recipeEndpointUrl, setRecipeEndpointUrl] = useState('')
   const [recipeFetchFrequency, setRecipeFetchFrequency] = useState('daily')
-  const [recipeCapturePolicy, setRecipeCapturePolicy] = useState('auto_extract_relevant')
+  const [recipeSchedule, setRecipeSchedule] = useState<ScheduleFormValue>(() => emptyScheduleFormValue())
+  const [recipeCapturePolicy, setRecipeCapturePolicy] = useState<SourceCapturePolicy>('extract_text')
   const [recipeSourceType, setRecipeSourceType] = useState('auto')
   const [recipeListSelector, setRecipeListSelector] = useState('article')
   const [recipePlan, setRecipePlan] = useState<SourceRecipePlanResponse | null>(null)
@@ -75,6 +81,7 @@ export default function IntakePage() {
   const [customSourceName, setCustomSourceName] = useState('')
   const [customSourceEndpointUrl, setCustomSourceEndpointUrl] = useState('')
   const [customSourceFetchFrequency, setCustomSourceFetchFrequency] = useState('manual')
+  const [customSourceSchedule, setCustomSourceSchedule] = useState<ScheduleFormValue>(() => emptyScheduleFormValue())
   const [customSourceListSelector, setCustomSourceListSelector] = useState('article')
 
   const [manualUrl, setManualUrl] = useState('')
@@ -93,17 +100,37 @@ export default function IntakePage() {
     ],
     [connections],
   )
+  const projectBoundConnectionOptions = useMemo(
+    () => {
+      if (!scopedProjectId) return connectionOptions
+      const boundIds = new Set(bindings.map(binding => binding.source_connection_id))
+      return connections
+        .filter(connection => boundIds.has(connection.id))
+        .map(connection => ({ value: connection.id, label: connection.name }))
+    },
+    [bindings, connectionOptions, connections, scopedProjectId],
+  )
+  const urlConnectionOptions = scopedProjectId ? projectBoundConnectionOptions : connectionOptions
+  const routableWorkspaces = useMemo(
+    () => projectWorkspaceIds ? workspaces.filter(w => projectWorkspaceIds.has(w.id)) : workspaces,
+    [projectWorkspaceIds, workspaces],
+  )
   const workspaceOptions = useMemo(
     () => [
       { value: '', label: 'Select workspace' },
-      ...workspaces.map(w => ({ value: w.id, label: w.name })),
+      ...routableWorkspaces.map(w => ({ value: w.id, label: w.name })),
     ],
-    [workspaces],
+    [routableWorkspaces],
   )
   const visibleConnections = useMemo(
     () => scopedConnectionId ? connections.filter(connection => connection.id === scopedConnectionId) : connections,
     [connections, scopedConnectionId],
   )
+
+  useEffect(() => {
+    if (urlConnectionOptions.some(option => option.value === manualConnectionId)) return
+    setManualConnectionId(urlConnectionOptions[0]?.value ?? '')
+  }, [manualConnectionId, urlConnectionOptions])
 
   useEffect(() => {
     const q = searchParams.get('q') ?? ''
@@ -130,7 +157,7 @@ export default function IntakePage() {
       setEvidence([])
       setLinks([])
       setWorkspaces([])
-      setProfiles([])
+      setProjectWorkspaceIds(null)
       setBindings([])
       setLoading(false)
       return
@@ -151,7 +178,7 @@ export default function IntakePage() {
         evidencePage,
         linkPage,
         workspacePage,
-        profileRows,
+        projectWorkspaceLinks,
         bindingRows,
       ] = await Promise.all([
         intakeApi.connectors(),
@@ -161,7 +188,7 @@ export default function IntakePage() {
         intakeApi.evidence({ status: evidenceStatus, project_id: projectFilter, limit: 80 }),
         intakeApi.evidenceLinks({ status: 'active' }),
         workspacesApi.list({ limit: '100' }),
-        intakeApi.workspaceProfiles(),
+        scopedProjectId ? projectsApi.listWorkspaces(scopedProjectId) : Promise.resolve(null),
         intakeApi.workspaceBindings({ source_connection_id: connectionFilter, project_id: projectFilter }),
       ])
       setConnectors(connectorRows)
@@ -171,7 +198,7 @@ export default function IntakePage() {
       setEvidence(evidencePage.items)
       setLinks(linkPage.items)
       setWorkspaces(workspacePage.items)
-      setProfiles(profileRows)
+      setProjectWorkspaceIds(projectWorkspaceLinks ? new Set(projectWorkspaceLinks.map(link => link.workspace_id)) : null)
       setBindings(bindingRows)
     } catch (e) {
       toast.error(errMsg(e))
@@ -216,6 +243,10 @@ export default function IntakePage() {
 
   async function createManualUrl(event: FormEvent) {
     event.preventDefault()
+    if (scopedProjectId && !manualConnectionId) {
+      toast.error('Link a source to this project before saving URLs')
+      return
+    }
     setBusy('manual:create')
     try {
       const row = await intakeApi.createManualUrl({
@@ -224,6 +255,9 @@ export default function IntakePage() {
         connection_id: manualConnectionId || null,
         queue_content: queueContent,
       })
+      if (manualConnectionId && row.connection_id !== manualConnectionId) {
+        await intakeApi.updateItem(row.id, { connection_id: manualConnectionId })
+      }
       toast.success(`Intake item saved: ${row.title}`)
       if (queueContent) {
         await runQueuedItemJob(row.id, 'manual_url', 'Text extraction')
@@ -247,6 +281,7 @@ export default function IntakePage() {
         name: customSourceName.trim() || 'Advanced Source',
         endpoint_url: customSourceEndpointUrl.trim(),
         fetch_frequency: customSourceFetchFrequency as 'manual' | 'hourly' | 'daily' | 'weekly',
+        schedule_rule: scheduleRuleFromForm(customSourceFetchFrequency, customSourceSchedule),
         config: customSourceListSelector.trim()
           ? { list_selector: customSourceListSelector.trim() }
           : {},
@@ -254,6 +289,7 @@ export default function IntakePage() {
       toast.success(`Handler source created: ${row.name}`)
       setCustomSourceName('')
       setCustomSourceEndpointUrl('')
+      setCustomSourceSchedule(emptyScheduleFormValue())
       setCustomSourceListSelector('article')
       await load()
     } catch (e) {
@@ -269,6 +305,7 @@ export default function IntakePage() {
       name: recipeSourceName.trim() || recipeEndpointUrl.trim(),
       endpoint_url: recipeEndpointUrl.trim(),
       fetch_frequency: recipeFetchFrequency as 'manual' | 'hourly' | 'daily' | 'weekly',
+      schedule_rule: scheduleRuleFromForm(recipeFetchFrequency, recipeSchedule),
       capture_policy: recipeCapturePolicy,
       ...(sourceType ? { source_type: sourceType } : {}),
       ...(recipeSourceType === 'web_list' && recipeListSelector.trim()
@@ -317,6 +354,7 @@ export default function IntakePage() {
 
       const activation = await intakeApi.activateSourceRecipe(created.connection.id, {
         recipe_version_id: dryRun.recipe_version.id,
+        schedule_rule: scheduleRuleFromForm(recipeFetchFrequency, recipeSchedule),
       })
       setRecipeActivation(activation)
       if (activation.status === 'pending_approval') {
@@ -326,6 +364,7 @@ export default function IntakePage() {
       }
       setRecipeSourceName('')
       setRecipeEndpointUrl('')
+      setRecipeSchedule(emptyScheduleFormValue())
       setRecipePlan(null)
       await load()
     } catch (e) {
@@ -333,6 +372,16 @@ export default function IntakePage() {
     } finally {
       setBusy(null)
     }
+  }
+
+  function changeRecipeFetchFrequency(value: string) {
+    setRecipeFetchFrequency(value)
+    setRecipeSchedule(emptyScheduleFormValue())
+  }
+
+  function changeCustomSourceFetchFrequency(value: string) {
+    setCustomSourceFetchFrequency(value)
+    setCustomSourceSchedule(emptyScheduleFormValue())
   }
 
   async function scanConnection(connection: SourceConnection) {
@@ -374,7 +423,7 @@ export default function IntakePage() {
 
   async function saveConnectionGovernance(
     connection: SourceConnection,
-    body: { capture_policy?: string; consent: Record<string, unknown>; policy: Record<string, unknown> },
+    body: { capture_policy?: SourceCapturePolicy; consent: Record<string, unknown>; policy: Record<string, unknown> },
   ) {
     setBusy(`governance:${connection.id}`)
     try {
@@ -397,6 +446,20 @@ export default function IntakePage() {
       } else if (action === 'archive_snapshot') {
         await runQueuedItemJob(item.id, 'snapshot', 'Snapshot capture')
       }
+      await load()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function updateItemSource(item: IntakeItem, connectionId: string | null) {
+    if ((item.connection_id ?? null) === connectionId) return
+    setBusy(`item:${item.id}:source`)
+    try {
+      await intakeApi.updateItem(item.id, { connection_id: connectionId })
+      toast.success('Item source updated')
       await load()
     } catch (e) {
       toast.error(errMsg(e))
@@ -475,34 +538,20 @@ export default function IntakePage() {
     }
   }
 
-  async function createWorkspaceProfile() {
-    const targetWorkspaceId = workspaceId || workspaces[0]?.id || ''
-    const workspace = workspaces.find(w => w.id === targetWorkspaceId)
-    if (!targetWorkspaceId) return
-    setBusy('workspace:profile')
-    try {
-      await intakeApi.createWorkspaceProfile({
-        workspace_id: targetWorkspaceId,
-        name: `${workspace?.name ?? 'Workspace'} intake`,
-        observation_policy: 'manual',
-      })
-      await load()
-    } catch (e) {
-      toast.error(errMsg(e))
-    } finally {
-      setBusy(null)
-    }
-  }
-
   async function createWorkspaceBinding() {
-    const targetWorkspaceId = workspaceId || workspaces[0]?.id || ''
+    const targetWorkspaceId = workspaceId || routableWorkspaces[0]?.id || ''
     const targetConnectionId = bindingConnectionId || connections[0]?.id || ''
+    if (!scopedProjectId) {
+      toast.error('Open Intake from a project before binding a source.')
+      return
+    }
     if (!targetWorkspaceId || !targetConnectionId) return
     setBusy('workspace:binding')
     try {
       await intakeApi.createWorkspaceBinding({
         workspace_id: targetWorkspaceId,
         source_connection_id: targetConnectionId,
+        project_id: scopedProjectId,
       })
       await load()
     } catch (e) {
@@ -535,10 +584,12 @@ export default function IntakePage() {
 
       <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
         <div className="space-y-6">
+          <PresetSourcesEntryCard />
           <CreateSourceCard
             name={recipeSourceName}
             endpointUrl={recipeEndpointUrl}
             fetchFrequency={recipeFetchFrequency}
+            schedule={recipeSchedule}
             capturePolicy={recipeCapturePolicy}
             sourceType={recipeSourceType}
             listSelector={recipeListSelector}
@@ -553,8 +604,9 @@ export default function IntakePage() {
               setRecipeDryRun(null)
               setRecipeActivation(null)
             }}
-            onFetchFrequencyChange={setRecipeFetchFrequency}
-            onCapturePolicyChange={setRecipeCapturePolicy}
+            onFetchFrequencyChange={changeRecipeFetchFrequency}
+            onScheduleChange={setRecipeSchedule}
+            onCapturePolicyChange={value => setRecipeCapturePolicy(sourceCapturePolicyValue(value, recipeCapturePolicy))}
             onSourceTypeChange={(value) => {
               setRecipeSourceType(value)
               setRecipePlan(null)
@@ -571,7 +623,7 @@ export default function IntakePage() {
             manualTitle={manualTitle}
             manualConnectionId={manualConnectionId}
             queueContent={queueContent}
-            connectionOptions={connectionOptions}
+            connectionOptions={urlConnectionOptions}
             busy={busy}
             onManualUrlChange={setManualUrl}
             onManualTitleChange={setManualTitle}
@@ -584,14 +636,13 @@ export default function IntakePage() {
             bindingConnectionId={bindingConnectionId}
             workspaceOptions={workspaceOptions}
             connectionOptions={connectionOptions}
-            workspaces={workspaces}
+            workspaces={routableWorkspaces}
             connections={connections}
-            profiles={profiles}
             bindings={bindings}
             busy={busy}
+            projectScoped={Boolean(scopedProjectId)}
             onWorkspaceIdChange={setWorkspaceId}
             onBindingConnectionIdChange={setBindingConnectionId}
-            onCreateWorkspaceProfile={createWorkspaceProfile}
             onCreateWorkspaceBinding={createWorkspaceBinding}
           />
           <AdvancedSourceTools>
@@ -599,11 +650,13 @@ export default function IntakePage() {
               name={customSourceName}
               endpointUrl={customSourceEndpointUrl}
               fetchFrequency={customSourceFetchFrequency}
+              schedule={customSourceSchedule}
               listSelector={customSourceListSelector}
               busy={busy}
               onNameChange={setCustomSourceName}
               onEndpointUrlChange={setCustomSourceEndpointUrl}
-              onFetchFrequencyChange={setCustomSourceFetchFrequency}
+              onFetchFrequencyChange={changeCustomSourceFetchFrequency}
+              onScheduleChange={setCustomSourceSchedule}
               onListSelectorChange={setCustomSourceListSelector}
               onSubmit={createCustomSource}
             />
@@ -626,10 +679,12 @@ export default function IntakePage() {
             itemQuery={itemQuery}
             scopedProjectId={scopedProjectId}
             scopedConnectionId={scopedConnectionId}
+            connectionOptions={urlConnectionOptions}
             busy={busy}
             summaryResults={itemSummaryResults}
             onItemFilterChange={setItemFilter}
             onItemQueryChange={updateItemQuery}
+            onItemConnectionChange={updateItemSource}
             onItemAction={itemAction}
             onSummarizeItem={summarizeItem}
           />

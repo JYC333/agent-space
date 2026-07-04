@@ -6,14 +6,14 @@ import {
   Activity, Package, CheckCircle, Folder, Cpu, Database, Radio, Link2, FileText,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { projectsApi, workspacesApi, activityApi, artifactsApi, proposalsApi, runsApi, memoryApi, intakeApi, intakeReaderApi } from '../../api/client'
+import { projectsApi, workspacesApi, activityApi, artifactsApi, proposalsApi, runsApi, memoryApi, intakeApi, intakeReaderApi, automationsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg, isNotFoundError } from '../../lib/utils'
 import type {
   Project, ProjectSummary, ProjectWorkspaceLinkOut, Workspace,
   ActivityInboxRecord, Artifact, Proposal, Run, Memory,
   SourceConnection, WorkspaceSourceBinding, IntakeItem, ExtractedEvidence,
-  ReaderAnnotation,
+  ReaderAnnotation, AutomationOut,
 } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
@@ -232,6 +232,262 @@ function LinkWorkspaceDialog({ projectId, existingIds, open, onOpenChange, onLin
   )
 }
 
+/* ── Link Intake source dialog ────────────────────────────────────────────── */
+interface LinkIntakeSourceDialogProps {
+  projectId: string
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  workspaceLinks: ProjectWorkspaceLinkOut[]
+  workspaceMap: Record<string, Workspace>
+  connections: SourceConnection[]
+  bindings: WorkspaceSourceBinding[]
+  onLinked: () => void
+}
+
+function LinkIntakeSourceDialog({
+  projectId,
+  open,
+  onOpenChange,
+  workspaceLinks,
+  workspaceMap,
+  connections,
+  bindings,
+  onLinked,
+}: LinkIntakeSourceDialogProps) {
+  const [workspaceId, setWorkspaceId] = useState('')
+  const [connectionId, setConnectionId] = useState('')
+  const [linking, setLinking] = useState(false)
+
+  const workspaceOptions = workspaceLinks.map(link => {
+    const workspace = workspaceMap[link.workspace_id]
+    return {
+      value: link.workspace_id,
+      label: workspace ? `${workspace.name} · ${link.role}` : `${link.workspace_id} · ${link.role}`,
+    }
+  })
+
+  function sourceOptionsForWorkspace(targetWorkspaceId: string) {
+    return connections
+      .filter(connection => !bindings.some(binding =>
+        binding.workspace_id === targetWorkspaceId &&
+        binding.source_connection_id === connection.id &&
+        binding.binding_key === 'default'
+      ))
+      .map(connection => ({
+        value: connection.id,
+        label: connection.name,
+      }))
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const nextWorkspaceId = workspaceOptions[0]?.value ?? ''
+    setWorkspaceId(nextWorkspaceId)
+    setConnectionId(sourceOptionsForWorkspace(nextWorkspaceId)[0]?.value ?? '')
+  }, [open, workspaceLinks, workspaceMap, connections, bindings])
+
+  const sourceOptions = sourceOptionsForWorkspace(workspaceId)
+
+  function changeWorkspace(nextWorkspaceId: string) {
+    setWorkspaceId(nextWorkspaceId)
+    setConnectionId(sourceOptionsForWorkspace(nextWorkspaceId)[0]?.value ?? '')
+  }
+
+  async function submit() {
+    if (!workspaceId) {
+      toast.error('Link a workspace before linking a source')
+      return
+    }
+    if (!connectionId) {
+      toast.error('Select a source')
+      return
+    }
+    setLinking(true)
+    try {
+      await intakeApi.createWorkspaceBinding({
+        project_id: projectId,
+        workspace_id: workspaceId,
+        source_connection_id: connectionId,
+      })
+      toast.success('Source linked')
+      onLinked()
+      onOpenChange(false)
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setLinking(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Link source</DialogTitle>
+          <DialogDescription>
+            Bind an existing Intake source to this project through one of its linked workspaces.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label>Workspace</Label>
+            {workspaceOptions.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No linked workspaces are available.</p>
+            ) : (
+              <Select
+                value={workspaceId}
+                options={workspaceOptions}
+                onChange={changeWorkspace}
+              />
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label>Source</Label>
+            {connections.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No Intake sources are configured yet.</p>
+            ) : sourceOptions.length === 0 ? (
+              <p className="text-xs text-muted-foreground">All available sources are already linked for this workspace.</p>
+            ) : (
+              <Select
+                value={connectionId}
+                options={sourceOptions}
+                onChange={setConnectionId}
+              />
+            )}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={submit} disabled={linking || !workspaceId || !connectionId}>
+            {linking ? 'Linking…' : 'Link source'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function isManualUrlItem(item: IntakeItem) {
+  return item.item_type === 'external_url' && item.metadata_json?.created_by === 'manual_url'
+}
+
+interface ProjectSourceOption {
+  value: string
+  label: string
+}
+
+interface SaveProjectUrlDialogProps {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  sourceOptions: ProjectSourceOption[]
+  onSaved: () => void
+}
+
+function SaveProjectUrlDialog({ open, onOpenChange, sourceOptions, onSaved }: SaveProjectUrlDialogProps) {
+  const [url, setUrl] = useState('')
+  const [title, setTitle] = useState('')
+  const [connectionId, setConnectionId] = useState('')
+  const [queueContent, setQueueContent] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    setUrl('')
+    setTitle('')
+    setQueueContent(false)
+    setConnectionId(sourceOptions[0]?.value ?? '')
+  }, [open, sourceOptions])
+
+  async function submit() {
+    if (!url.trim()) {
+      toast.error('URL is required')
+      return
+    }
+    if (!connectionId) {
+      toast.error('Link a source before saving URLs to this project')
+      return
+    }
+    setSaving(true)
+    try {
+      const row = await intakeApi.createManualUrl({
+        url: url.trim(),
+        title: title.trim() || undefined,
+        connection_id: connectionId,
+        queue_content: queueContent,
+      })
+      if (row.connection_id !== connectionId) {
+        await intakeApi.updateItem(row.id, { connection_id: connectionId })
+      }
+      toast.success('URL saved')
+      onSaved()
+      onOpenChange(false)
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Save URL</DialogTitle>
+          <DialogDescription>
+            Save a URL into this project by attaching it to one of the project-linked Intake sources.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label>Page URL</Label>
+            <Input
+              value={url}
+              onChange={event => setUrl(event.target.value)}
+              placeholder="https://example.com/post"
+              required
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Title</Label>
+            <Input
+              value={title}
+              onChange={event => setTitle(event.target.value)}
+              placeholder="Optional"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Source</Label>
+            {sourceOptions.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Link an Intake source before saving URLs to this project.</p>
+            ) : (
+              <Select
+                value={connectionId}
+                options={sourceOptions}
+                onChange={setConnectionId}
+              />
+            )}
+          </div>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              className="size-4 rounded border-border"
+              checked={queueContent}
+              onChange={event => setQueueContent(event.target.checked)}
+            />
+            Queue extraction
+          </label>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={submit} disabled={saving || !url.trim() || !connectionId}>
+            {saving ? 'Saving…' : 'Save URL'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /* ── Main page ─────────────────────────────────────────────────────────────── */
 export default function ProjectDetailPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -252,10 +508,14 @@ export default function ProjectDetailPage() {
   const [recentIntakeItems, setRecentIntakeItems] = useState<IntakeItem[]>([])
   const [recentEvidence, setRecentEvidence] = useState<ExtractedEvidence[]>([])
   const [readerAnnotations, setReaderAnnotations] = useState<ReaderAnnotation[]>([])
+  const [automations, setAutomations] = useState<AutomationOut[]>([])
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
+  const [intakeLinkOpen, setIntakeLinkOpen] = useState(false)
+  const [saveUrlOpen, setSaveUrlOpen] = useState(false)
+  const [updatingItemSourceId, setUpdatingItemSourceId] = useState<string | null>(null)
   const [archiving, setArchiving] = useState(false)
 
   const loadAll = useCallback(async () => {
@@ -279,7 +539,7 @@ export default function ProjectDetailPage() {
       allWs.items.forEach(w => { map[w.id] = w })
       setWorkspaceMap(map)
 
-      const [acts, arts, props, runs, mems, sourceConnections, sourceBindings, intakeItems, evidenceItems, readerAnns] = await Promise.all([
+      const [acts, arts, props, runs, mems, sourceConnections, sourceBindings, intakeItems, evidenceItems, readerAnns, allAutomations] = await Promise.all([
         activityApi.list({ project_id: projectId, limit: 5 }),
         artifactsApi.list({ project_id: projectId, limit: 5 }),
         proposalsApi.list({ project_id: projectId, status: 'pending', limit: 5 }),
@@ -290,6 +550,7 @@ export default function ProjectDetailPage() {
         intakeApi.items({ project_id: projectId, limit: 5 }),
         intakeApi.evidence({ project_id: projectId, status: 'active', limit: 5 }),
         intakeReaderApi.listByProject(projectId, 5).catch(() => ({ items: [] as ReaderAnnotation[] })),
+        automationsApi.list().catch(() => [] as AutomationOut[]),
       ])
       setRecentActivities(acts)
       setRecentArtifacts(arts.items)
@@ -301,6 +562,7 @@ export default function ProjectDetailPage() {
       setRecentIntakeItems(intakeItems.items)
       setRecentEvidence(evidenceItems.items)
       setReaderAnnotations(readerAnns.items)
+      setAutomations(allAutomations.filter(a => a.project_id === projectId && a.status !== 'archived'))
     } catch (e) {
       if (isNotFoundError(e)) {
         setNotFound(true)
@@ -336,6 +598,20 @@ export default function ProjectDetailPage() {
       setLinks(prev => prev.filter(l => l.id !== link.id))
     } catch (e) {
       toast.error(errMsg(e))
+    }
+  }
+
+  async function updateProjectItemSource(item: IntakeItem, connectionId: string) {
+    if (item.connection_id === connectionId) return
+    setUpdatingItemSourceId(item.id)
+    try {
+      await intakeApi.updateItem(item.id, { connection_id: connectionId })
+      toast.success('Item source updated')
+      await loadAll()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setUpdatingItemSourceId(null)
     }
   }
 
@@ -375,6 +651,14 @@ export default function ProjectDetailPage() {
   const linkedIntakeConnections = intakeBindings
     .map(binding => intakeConnectionById[binding.source_connection_id])
     .filter((connection): connection is SourceConnection => Boolean(connection))
+  const projectSourceOptions = Array.from(
+    new Map(
+      linkedIntakeConnections.map(connection => [
+        connection.id,
+        { value: connection.id, label: connection.name },
+      ]),
+    ).values(),
+  )
 
   return (
     <div className="p-6 space-y-6">
@@ -474,12 +758,26 @@ export default function ProjectDetailPage() {
       <section className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Intake</h2>
-          <Button variant="outline" size="sm" asChild>
-            <Link to={`/intake?project_id=${project.id}`}>
-              <Radio className="size-3.5" />
-              Manage in Intake
-            </Link>
-          </Button>
+          <div className="flex gap-2">
+            {project.status === 'active' && (
+              <>
+                <Button variant="secondary" size="sm" className="gap-1.5" onClick={() => setSaveUrlOpen(true)}>
+                  <FileText className="size-3.5" />
+                  Save URL
+                </Button>
+                <Button variant="secondary" size="sm" className="gap-1.5" onClick={() => setIntakeLinkOpen(true)}>
+                  <Link2 className="size-3.5" />
+                  Link source
+                </Button>
+              </>
+            )}
+            <Button variant="outline" size="sm" asChild>
+              <Link to={`/intake?project_id=${project.id}`}>
+                <Radio className="size-3.5" />
+                Manage in Intake
+              </Link>
+            </Button>
+          </div>
         </div>
         <div className="grid gap-3 lg:grid-cols-3">
           <Card className="p-4">
@@ -521,6 +819,17 @@ export default function ProjectDetailPage() {
                   <div key={item.id} className="min-w-0">
                     <p className="text-sm font-medium truncate">{item.title || 'Untitled item'}</p>
                     <p className="text-xs text-muted-foreground truncate">{item.source_domain ?? item.source_uri ?? item.status}</p>
+                    {isManualUrlItem(item) && projectSourceOptions.length > 0 && (
+                      <div className="mt-2">
+                        <Select
+                          size="sm"
+                          value={item.connection_id ?? ''}
+                          options={projectSourceOptions}
+                          disabled={updatingItemSourceId === item.id}
+                          onChange={value => updateProjectItemSource(item, value)}
+                        />
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -720,6 +1029,29 @@ export default function ProjectDetailPage() {
           )}
         </div>
 
+        {/* Automations bound to this project */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted-foreground">Automations</span>
+            <Link to="/automations" className="text-xs text-accent-foreground hover:underline">View all →</Link>
+          </div>
+          {automations.length === 0 ? (
+            <Card className="p-3"><p className="text-xs text-muted-foreground">No automations bound to this project.</p></Card>
+          ) : (
+            <div className="space-y-1.5">
+              {automations.map(a => (
+                <Card key={a.id} className="px-3 py-2 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium truncate">{a.name}</p>
+                    <p className="text-xs text-muted-foreground">{a.trigger_type}{a.next_run_at ? ` · next ${new Date(a.next_run_at).toLocaleString()}` : ''}</p>
+                  </div>
+                  <Badge variant="outline">{a.status}</Badge>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Project memory */}
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
@@ -758,6 +1090,24 @@ export default function ProjectDetailPage() {
         open={linkOpen}
         onOpenChange={setLinkOpen}
         onLinked={loadAll}
+      />
+
+      <LinkIntakeSourceDialog
+        projectId={project.id}
+        open={intakeLinkOpen}
+        onOpenChange={setIntakeLinkOpen}
+        workspaceLinks={links}
+        workspaceMap={workspaceMap}
+        connections={intakeConnections}
+        bindings={intakeBindings}
+        onLinked={loadAll}
+      />
+
+      <SaveProjectUrlDialog
+        open={saveUrlOpen}
+        onOpenChange={setSaveUrlOpen}
+        sourceOptions={projectSourceOptions}
+        onSaved={loadAll}
       />
     </div>
   )

@@ -1066,7 +1066,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     default_required_approver_role: null,
     current_enforcement_point: "server/src/modules/intake/routes.ts",
     description:
-      "Configure workspace intake profiles and workspace source bindings.",
+      "Configure workspace source bindings for Intake.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "best_effort",
   },

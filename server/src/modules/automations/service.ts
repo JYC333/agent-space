@@ -18,13 +18,26 @@ import { PgRunRepository } from "../runs/repository";
 import { BUILTIN_RUNTIME_ADAPTER_SPECS, type RuntimeAdapterType } from "../runtimeAdapters";
 import { computeNextRunAt, InvalidScheduleError } from "./schedule";
 import {
+  computeIntakeDelta,
+  intakeCursorWatermark,
+  intakeDeltaConfig,
+  intakeDeltaScopeKey,
+  renderIntakeDeltaInstruction,
+  type IntakeDelta,
+} from "./intakeDelta";
+import {
+  INTAKE_ITEMS_MATERIALIZED_EVENT,
+  isInEventCooldown,
+  parseIntakeEventTriggerConfig,
+} from "./eventTrigger";
+import {
   PgAutomationRepository,
   automationToOut,
   type AutomationRepositoryPort,
   type AutomationRow,
 } from "./repository";
 
-const VALID_TRIGGER_TYPES = new Set(["manual", "schedule"]);
+const VALID_TRIGGER_TYPES = new Set(["manual", "schedule", "event"]);
 const VALID_STATUSES = new Set(["active", "paused", "archived"]);
 const AUTOMATION_TARGET_AGENT_RUN = "agent_run";
 const AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE = "knowledge_retrieval_maintenance";
@@ -39,11 +52,12 @@ const CREATE_KEYS = new Set([
   "name",
   "agent_id",
   "workspace_id",
+  "project_id",
   "description",
   "trigger_type",
   "config_json",
 ]);
-const UPDATE_KEYS = new Set(["name", "description", "status", "config_json"]);
+const UPDATE_KEYS = new Set(["name", "description", "status", "config_json", "project_id"]);
 const FORBIDDEN_CONFIG_KEYS = new Set([
   "api_key",
   "token",
@@ -103,6 +117,7 @@ export class AutomationService {
     const name = requiredString(input.body.name, "name", 256);
     const agentId = requiredString(input.body.agent_id, "agent_id");
     const workspaceId = optionalString(input.body.workspace_id, "workspace_id");
+    const projectId = optionalString(input.body.project_id, "project_id");
     const triggerType = optionalString(input.body.trigger_type, "trigger_type") ?? "manual";
     if (!VALID_TRIGGER_TYPES.has(triggerType)) {
       throw new HttpError(422, `Unsupported trigger_type ${JSON.stringify(triggerType)}`);
@@ -117,10 +132,21 @@ export class AutomationService {
       }
     }
     const targetType = automationTargetType(configJson);
+    if (projectId) {
+      if (targetType !== AUTOMATION_TARGET_AGENT_RUN) {
+        throw new HttpError(422, "project_id is only supported for agent_run automations");
+      }
+      await this.repo.assertProjectWriter(input.spaceId, projectId, input.ownerUserId);
+    }
+    if (triggerType === "event") {
+      assertIntakeEventAutomationShape(targetType, projectId, configJson);
+    }
     await this.enforceAction("automation.create", input.spaceId, input.ownerUserId, {
       agent_id: agentId,
       trigger_type: triggerType,
       target_type: targetType,
+      project_id: projectId ?? null,
+      project_writer: Boolean(projectId),
     });
     const preflightSnapshot = await this.runTargetPreflight({
       targetType,
@@ -128,9 +154,22 @@ export class AutomationService {
       actorUserId: input.ownerUserId,
       agentId,
       workspaceId,
-      automationPreAuthorized: triggerType === "schedule",
+      projectId,
+      automationPreAuthorized: isUnattendedTrigger(triggerType),
       configJson,
     });
+    // Start the intake cursor at "now" for the bound scope so the first fires
+    // deliver new items only, not the project's historical backlog.
+    const deltaConfig = intakeDeltaConfig(configJson);
+    let cursorJson: Record<string, unknown> | null = null;
+    if (projectId || deltaConfig.sourceConnectionIds.length > 0) {
+      const watermark = await this.repo.currentIntakeWatermark(
+        input.spaceId,
+        projectId,
+        deltaConfig.sourceConnectionIds,
+      );
+      if (watermark) cursorJson = { intake_watermark: watermark };
+    }
     return this.repo.create({
       spaceId: input.spaceId,
       ownerUserId: input.ownerUserId,
@@ -138,9 +177,11 @@ export class AutomationService {
       description: optionalNullableString(input.body.description, "description"),
       agentId,
       workspaceId,
+      projectId,
       triggerType,
       configJson,
       preflightSnapshot,
+      cursorJson,
     });
   }
 
@@ -170,9 +211,27 @@ export class AutomationService {
       }
     }
     const nextTargetType = automationTargetType(configJson ?? existing.config_json);
+    const hasProjectKey = Object.prototype.hasOwnProperty.call(input.body, "project_id");
+    const nextProjectId = hasProjectKey
+      ? optionalString(input.body.project_id, "project_id")
+      : existing.project_id;
+    if (nextProjectId && nextTargetType !== AUTOMATION_TARGET_AGENT_RUN) {
+      throw new HttpError(422, "project_id is only supported for agent_run automations");
+    }
+    const authorityProjectId = nextProjectId ?? existing.project_id;
+    let hasProjectWriterAuthority = false;
+    if (authorityProjectId) {
+      await this.repo.assertProjectWriter(input.spaceId, authorityProjectId, input.actorUserId);
+      hasProjectWriterAuthority = true;
+    }
+    if (existing.trigger_type === "event") {
+      assertIntakeEventAutomationShape(nextTargetType, nextProjectId, configJson ?? existing.config_json);
+    }
     await this.enforceAction("automation.update", input.spaceId, input.actorUserId, {
       agent_id: existing.agent_id,
       target_type: nextTargetType,
+      project_id: authorityProjectId ?? null,
+      project_writer: hasProjectWriterAuthority,
     }, input.automationId);
     if (nextTargetType !== AUTOMATION_TARGET_AGENT_RUN) {
       await this.runTargetPreflight({
@@ -181,9 +240,31 @@ export class AutomationService {
         actorUserId: input.actorUserId,
         agentId: existing.agent_id,
         workspaceId: existing.workspace_id,
-        automationPreAuthorized: existing.trigger_type === "schedule",
+        projectId: null,
+        automationPreAuthorized: isUnattendedTrigger(existing.trigger_type),
         configJson: configJson ?? existing.config_json,
       });
+    }
+    // A changed delta scope invalidates the committed watermark: keeping it
+    // would silently skip the new scope's items (or replay the old scope's).
+    // Re-initialize the cursor at the new scope's current watermark.
+    const prevScope = intakeDeltaScopeKey(
+      existing.project_id,
+      intakeDeltaConfig(existing.config_json).sourceConnectionIds,
+    );
+    const nextDeltaConfig = intakeDeltaConfig(configJson ?? existing.config_json);
+    const nextScope = intakeDeltaScopeKey(nextProjectId, nextDeltaConfig.sourceConnectionIds);
+    let cursorPatch: Record<string, unknown> | null | undefined;
+    if (nextScope !== prevScope) {
+      const watermark =
+        nextProjectId || nextDeltaConfig.sourceConnectionIds.length > 0
+          ? await this.repo.currentIntakeWatermark(
+              input.spaceId,
+              nextProjectId,
+              nextDeltaConfig.sourceConnectionIds,
+            )
+          : null;
+      cursorPatch = watermark ? { intake_watermark: watermark } : null;
     }
     return this.repo.update(input.spaceId, input.automationId, {
       name: optionalString(input.body.name, "name", 256) ?? undefined,
@@ -193,6 +274,8 @@ export class AutomationService {
           : optionalNullableString(input.body.description, "description"),
       status: status ?? undefined,
       config_json: configJson,
+      project_id: hasProjectKey ? nextProjectId : undefined,
+      cursor_json: cursorPatch,
     });
   }
 
@@ -203,6 +286,7 @@ export class AutomationService {
     prompt?: string | null;
     instruction?: string | null;
     triggerType?: string;
+    triggerContext?: Record<string, unknown> | null;
   }): Promise<Record<string, unknown>> {
     const auto = await this.repo.get(input.spaceId, input.automationId);
     if (!auto) throw new HttpError(404, `Automation '${input.automationId}' not found`);
@@ -214,6 +298,11 @@ export class AutomationService {
       throw new HttpError(422, `Unsupported trigger_type ${JSON.stringify(triggerType)}`);
     }
     const targetType = automationTargetType(auto.config_json);
+    let hasProjectWriterAuthority = false;
+    if (auto.project_id) {
+      await this.repo.assertProjectWriter(input.spaceId, auto.project_id, input.actorUserId);
+      hasProjectWriterAuthority = true;
+    }
     const preAuthorized = await this.repo.hasActiveGrant(input.spaceId, auto.id);
     await this.enforceAction("automation.fire", input.spaceId, input.actorUserId, {
       agent_id: auto.agent_id,
@@ -221,6 +310,8 @@ export class AutomationService {
       trigger_origin: "automation",
       automation_pre_authorized: preAuthorized,
       target_type: targetType,
+      project_id: auto.project_id ?? null,
+      project_writer: hasProjectWriterAuthority,
     }, auto.id);
     const preflightSnapshot = await this.runTargetPreflight({
       targetType,
@@ -228,6 +319,7 @@ export class AutomationService {
       actorUserId: input.actorUserId,
       agentId: auto.agent_id,
       workspaceId: auto.workspace_id,
+      projectId: auto.project_id,
       automationPreAuthorized: preAuthorized,
       configJson: auto.config_json,
     });
@@ -252,6 +344,15 @@ export class AutomationService {
     const result = await withTransaction(getDbPool(this.config.databaseUrl), async (client) => {
       return this.persistFire(client, auto, input, triggerType, preflightSnapshot);
     });
+    if (result.skipped) {
+      return {
+        skipped: true,
+        skip_reason: "no_new_intake_items",
+        trigger_origin: "automation",
+        preflight_executable: Boolean(preflightSnapshot.executable),
+        intake_delta_count: 0,
+      };
+    }
     if (triggerType === "manual") {
       await this.repo.recordFire(input.spaceId, auto.id);
     }
@@ -260,7 +361,74 @@ export class AutomationService {
       automation_run_id: result.automationRunId,
       trigger_origin: "automation",
       preflight_executable: Boolean(preflightSnapshot.executable),
+      intake_delta_count: result.intakeDeltaCount,
     };
+  }
+
+  /**
+   * Fire matching `trigger_type='event'` automations for an intake
+   * "items materialized" event. Consumed from the `automation_intake_event`
+   * job; delivery is at-least-once, so matching is idempotent-by-effect: the
+   * cooldown suppresses bursts and the intake delta cursor makes a duplicate
+   * fire a no-op (empty delta skips by default for event fires).
+   */
+  async fireIntakeEventAutomations(input: {
+    spaceId: string;
+    sourceConnectionId: string;
+    newItemCount: number;
+  }): Promise<{ matched: number; fired: number; skipped: Array<{ automation_id: string; reason: string }> }> {
+    const autos = await this.repo.listEventAutomationsForConnection(
+      input.spaceId,
+      input.sourceConnectionId,
+    );
+    const skipped: Array<{ automation_id: string; reason: string }> = [];
+    let fired = 0;
+    for (const auto of autos) {
+      try {
+        const eventConfig = parseIntakeEventTriggerConfig(auto.config_json);
+        if (input.newItemCount < eventConfig.minNewItems) {
+          skipped.push({ automation_id: auto.id, reason: "below_min_new_items" });
+          continue;
+        }
+        if (isInEventCooldown(auto.last_fired_at, eventConfig.cooldownSeconds)) {
+          skipped.push({ automation_id: auto.id, reason: "cooldown" });
+          continue;
+        }
+        // While a previous fire's run is still queued/running the cursor has
+        // not been committed yet, so a new fire would re-deliver the same
+        // delta. Skip; the unconsumed items surface on the next event or
+        // scheduled fire after the run settles.
+        if (await this.repo.hasInFlightRun(auto.space_id, auto.id)) {
+          skipped.push({ automation_id: auto.id, reason: "run_in_flight" });
+          continue;
+        }
+        const result = await this.fire({
+          spaceId: auto.space_id,
+          automationId: auto.id,
+          actorUserId: auto.owner_user_id,
+          triggerType: "event",
+          triggerContext: {
+            event: {
+              type: INTAKE_ITEMS_MATERIALIZED_EVENT,
+              source_connection_id: input.sourceConnectionId,
+              new_item_count: input.newItemCount,
+            },
+          },
+        });
+        if (result.skipped) {
+          skipped.push({ automation_id: auto.id, reason: String(result.skip_reason ?? "skipped") });
+          continue;
+        }
+        await this.repo.recordFire(auto.space_id, auto.id);
+        fired += 1;
+      } catch (error) {
+        skipped.push({
+          automation_id: auto.id,
+          reason: error instanceof Error ? error.message : "fire_failed",
+        });
+      }
+    }
+    return { matched: autos.length, fired, skipped };
   }
 
   async scanAndFire(): Promise<number> {
@@ -271,6 +439,11 @@ export class AutomationService {
     for (const auto of due) {
       try {
         const targetType = automationTargetType(auto.config_json);
+        let hasProjectWriterAuthority = false;
+        if (auto.project_id) {
+          await this.repo.assertProjectWriter(auto.space_id, auto.project_id, auto.owner_user_id);
+          hasProjectWriterAuthority = true;
+        }
         const fireInput = {
           spaceId: auto.space_id,
           automationId: auto.id,
@@ -284,6 +457,8 @@ export class AutomationService {
           trigger_origin: "automation",
           automation_pre_authorized: preAuthorized,
           target_type: targetType,
+          project_id: auto.project_id ?? null,
+          project_writer: hasProjectWriterAuthority,
         }, auto.id);
         const preflightSnapshot = await this.runTargetPreflight({
           targetType,
@@ -291,6 +466,7 @@ export class AutomationService {
           actorUserId: auto.owner_user_id,
           agentId: auto.agent_id,
           workspaceId: auto.workspace_id,
+          projectId: auto.project_id,
           automationPreAuthorized: preAuthorized,
           configJson: auto.config_json,
         });
@@ -303,11 +479,13 @@ export class AutomationService {
             advanceSchedule: true,
           });
         } else {
-          await withTransaction(pool, async (client) => {
+          const result = await withTransaction(pool, async (client) => {
             const automations = new PgAutomationRepository(client);
-            await this.persistFire(client, auto, fireInput, "schedule", preflightSnapshot);
+            const persisted = await this.persistFire(client, auto, fireInput, "schedule", preflightSnapshot);
             await automations.advanceSchedule(auto);
+            return persisted;
           });
+          if (result.skipped) continue;
         }
         fired += 1;
       } catch (error) {
@@ -327,20 +505,49 @@ export class AutomationService {
       actorUserId: string;
       prompt?: string | null;
       instruction?: string | null;
+      triggerContext?: Record<string, unknown> | null;
     },
     triggerType: string,
     preflightSnapshot: Record<string, unknown>,
-  ): Promise<{ runId: string; automationRunId: string }> {
+  ): Promise<
+    | { skipped: false; runId: string; automationRunId: string; intakeDeltaCount: number }
+    | { skipped: true }
+  > {
     const runs = new PgRunRepository(client);
     const queue = new PgJobQueueRepository(client);
     const automations = new PgAutomationRepository(client);
+
+    const deltaConfig = intakeDeltaConfig(auto.config_json, triggerType === "event");
+    let delta: IntakeDelta | null = null;
+    if (auto.project_id || deltaConfig.sourceConnectionIds.length > 0) {
+      delta = await computeIntakeDelta(client, {
+        spaceId: input.spaceId,
+        projectId: auto.project_id,
+        sourceConnectionIds: deltaConfig.sourceConnectionIds,
+        cursor: intakeCursorWatermark(auto.cursor_json),
+        limit: deltaConfig.limit,
+      });
+      if (delta.items.length === 0 && deltaConfig.skipWhenNoNewItems) {
+        return { skipped: true };
+      }
+    }
+    const instruction =
+      delta && delta.items.length > 0
+        ? [input.instruction, renderIntakeDeltaInstruction(delta.items)]
+            .filter((part): part is string => Boolean(part))
+            .join("\n\n")
+        : input.instruction ?? null;
+    const prompt = input.prompt ?? automationConfiguredPrompt(auto.config_json);
+    const triggerContext = buildAutomationRunTriggerContext(input.triggerContext, delta);
+
     const run = await runs.createQueuedRun({
       space_id: input.spaceId,
       user_id: input.actorUserId,
       agent_id: auto.agent_id,
       workspace_id: auto.workspace_id,
-      prompt: input.prompt ?? null,
-      instruction: input.instruction ?? null,
+      project_id: auto.project_id,
+      prompt,
+      instruction,
       trigger_origin: "automation",
       run_type: "agent",
       mode: "live",
@@ -359,8 +566,9 @@ export class AutomationService {
       triggeredByUserId: input.actorUserId,
       triggerType,
       preflightSnapshot,
+      triggerContext,
     });
-    return { runId: run.id, automationRunId };
+    return { skipped: false, runId: run.id, automationRunId, intakeDeltaCount: delta?.items.length ?? 0 };
   }
 
   private async executeMaintenanceFire(
@@ -657,8 +865,10 @@ export class AutomationService {
 
   private async runPreflight(
     spaceId: string,
+    actorUserId: string,
     agentId: string,
     workspaceId: string | null | undefined,
+    projectId: string | null | undefined,
     automationPreAuthorized: boolean,
   ): Promise<Record<string, unknown>> {
     if (!this.config.databaseUrl) return { executable: true, skipped: "database_not_configured" };
@@ -682,6 +892,7 @@ export class AutomationService {
     let riskLevel: string | null = null;
     let requiredSandboxLevel: string | null = null;
     let modelProviderId: string | null = null;
+    let projectPreflight: Record<string, unknown> | null = null;
 
     if (!row) {
       runtimeErrors.push("Agent not found");
@@ -719,6 +930,22 @@ export class AutomationService {
           [spaceId, workspaceId],
         );
         if (!workspace.rows[0]) runtimeErrors.push("Workspace not found");
+      }
+      if (projectId) {
+        const projectExists = await this.repo.projectInSpace(spaceId, projectId);
+        const actorHasWriterAuthority = projectExists
+          ? await this.repo.canWriteProject(spaceId, projectId, actorUserId)
+          : false;
+        projectPreflight = {
+          id: projectId,
+          exists: projectExists,
+          actor_has_writer_authority: actorHasWriterAuthority,
+        };
+        if (!projectExists) {
+          runtimeErrors.push("Project not found");
+        } else if (!actorHasWriterAuthority) {
+          runtimeErrors.push("Project writer authority is required");
+        }
       }
       modelProviderId = row.model_provider_id ?? null;
       if (!modelProviderId && spec?.model.model_provider_mode === "required") {
@@ -797,6 +1024,7 @@ export class AutomationService {
         executable: runtimeErrors.length === 0,
         adapter_type: adapterType,
         required_sandbox_level: requiredSandboxLevel,
+        project: projectPreflight,
         errors: runtimeErrors,
         warnings: runtimeWarnings,
       },
@@ -819,6 +1047,7 @@ export class AutomationService {
     actorUserId: string;
     agentId: string;
     workspaceId: string | null | undefined;
+    projectId: string | null | undefined;
     automationPreAuthorized: boolean;
     configJson: Record<string, unknown> | null | undefined;
   }): Promise<Record<string, unknown>> {
@@ -840,8 +1069,10 @@ export class AutomationService {
     }
     return this.runPreflight(
       input.spaceId,
+      input.actorUserId,
       input.agentId,
       input.workspaceId,
+      input.projectId,
       input.automationPreAuthorized,
     );
   }
@@ -957,20 +1188,33 @@ type AutomationTargetType =
   | typeof AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE;
 type ScheduleHandledError = Error & { [AUTOMATION_SCHEDULE_HANDLED]?: true };
 
+function isUnattendedTrigger(triggerType: string): boolean {
+  return triggerType === "schedule" || triggerType === "event";
+}
+
+function assertIntakeEventAutomationShape(
+  targetType: AutomationTargetType,
+  projectId: string | null,
+  configJson: Record<string, unknown> | null | undefined,
+): void {
+  if (targetType !== AUTOMATION_TARGET_AGENT_RUN) {
+    throw new HttpError(422, "Event automations only support the agent_run target");
+  }
+  const eventConfig = parseIntakeEventTriggerConfig(configJson);
+  if (!projectId && eventConfig.sourceConnectionIds.length === 0) {
+    throw new HttpError(
+      422,
+      "Event automations require a project binding or config_json.event.source_connection_ids",
+    );
+  }
+}
+
 function automationTargetType(configJson: Record<string, unknown> | null | undefined): AutomationTargetType {
-  const record = recordValue(configJson);
-  const raw =
-    stringValue(record.target_type) ??
-    stringValue(record.target) ??
-    stringValue(record.kind) ??
-    AUTOMATION_TARGET_AGENT_RUN;
-  const normalized = raw === "knowledge_maintenance_scan"
-    ? AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE
-    : raw;
-  if (!VALID_AUTOMATION_TARGETS.has(normalized)) {
+  const raw = stringValue(recordValue(configJson).target_type) ?? AUTOMATION_TARGET_AGENT_RUN;
+  if (!VALID_AUTOMATION_TARGETS.has(raw)) {
     throw new HttpError(422, `Unsupported automation target_type ${JSON.stringify(raw)}`);
   }
-  return normalized as AutomationTargetType;
+  return raw as AutomationTargetType;
 }
 
 function shouldCreateMaintenancePacket(configJson: Record<string, unknown> | null | undefined): boolean {
@@ -1003,6 +1247,26 @@ function reviewCycleRequestFromConfig(configJson: Record<string, unknown> | null
     memory_max_findings: optionalPositiveInt(config.memory_max_findings, "memory_max_findings", 100, 200),
     max_claim_candidates: optionalPositiveInt(config.max_claim_candidates, "max_claim_candidates", 40, 100),
   };
+}
+
+function automationConfiguredPrompt(configJson: Record<string, unknown> | null | undefined): string | null {
+  return stringValue(recordValue(configJson).prompt);
+}
+
+function buildAutomationRunTriggerContext(
+  baseContext: Record<string, unknown> | null | undefined,
+  delta: IntakeDelta | null,
+): Record<string, unknown> | null {
+  const context: Record<string, unknown> = {};
+  if (baseContext && typeof baseContext === "object" && !Array.isArray(baseContext)) {
+    Object.assign(context, baseContext);
+  }
+  if (delta?.proposedWatermark) {
+    context.proposed_intake_watermark = delta.proposedWatermark;
+    context.intake_delta_count = delta.items.length;
+    context.intake_delta_item_ids = delta.items.map((item) => item.id);
+  }
+  return Object.keys(context).length > 0 ? context : null;
 }
 
 function optionalPositiveInt(value: unknown, field: string, fallback: number, max: number): number {

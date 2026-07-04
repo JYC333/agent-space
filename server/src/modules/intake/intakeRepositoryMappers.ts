@@ -11,7 +11,6 @@ import type {
   SourceConnectionRow,
   SourceConnectorRow,
   WorkspaceBindingRow,
-  WorkspaceProfileRow,
 } from "./intakeRepositoryRows";
 import { normalizeSourceConnectionReadGovernance } from "./sourceConsent";
 
@@ -50,6 +49,7 @@ export function connectionOut(row: SourceConnectionRow) {
     config_json: row.config_json ?? {},
     last_checked_at: dateIso(row.last_checked_at),
     next_check_at: dateIso(row.next_check_at),
+    schedule_rule_json: row.schedule_rule_json ?? null,
     handler_kind: row.handler_kind,
     active_handler_version_id: row.active_handler_version_id,
     active_recipe_version_id: row.active_recipe_version_id,
@@ -164,24 +164,6 @@ export function evidenceLinkOut(row: EvidenceLinkRow) {
     created_by_user_id: row.created_by_user_id,
     created_by_agent_id: row.created_by_agent_id,
     created_by_run_id: row.created_by_run_id,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-  };
-}
-
-export function profileOut(row: WorkspaceProfileRow) {
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    workspace_id: row.workspace_id,
-    name: row.name,
-    status: row.status,
-    observation_policy: row.observation_policy,
-    routing_policy_json: row.routing_policy_json ?? {},
-    filters_json: row.filters_json ?? {},
-    extraction_policy_json: row.extraction_policy_json ?? {},
-    context_policy_json: row.context_policy_json ?? {},
-    created_by_user_id: row.created_by_user_id,
     created_at: dateIso(row.created_at),
     updated_at: dateIso(row.updated_at),
   };

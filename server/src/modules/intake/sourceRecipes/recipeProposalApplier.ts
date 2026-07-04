@@ -112,6 +112,8 @@ async function applySourceRecipeActivation(context: ProposalApplyContext): Promi
     connectionId,
     versionId,
     previousActiveVersionId: connection.active_recipe_version_id,
+    nextCheckAt: payload.next_check_at,
+    scheduleRule: payload.schedule_rule,
   });
 
   const activatedResult = await context.db.query<RecipeVersionRow>(

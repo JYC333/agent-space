@@ -225,6 +225,13 @@ async function seedSourceConnectors(pool: Pool): Promise<void> {
       '{"formats":["html"],"supports_cursor":false,"supports_conditional_fetch":false,"item_type":"external_url","handler_kind":"generated_custom"}',
       '{"type":"object","required":["endpoint_url"],"properties":{"endpoint_url":{"type":"string","format":"uri"}}}',
       '2026-07-01 00:00:00+00', '2026-07-01 00:00:00+00'
+    ),
+    (
+      '00000000-0000-4000-8000-00000000f005', 'arxiv', 'arXiv',
+      'external_feed', 'pull', 'active',
+      '{"category":"academic","formats":["atom","html","pdf"],"supports_cursor":true,"supports_conditional_fetch":false,"item_type":"feed_entry"}',
+      '{"type":"object","required":["mode"],"properties":{"mode":{"type":"string","enum":["search","recent_by_category"]},"search_query":{"type":"string","maxLength":500},"categories":{"type":"array","items":{"type":"string","maxLength":64},"maxItems":10},"max_results":{"type":"integer","minimum":1,"maximum":100},"sort_by":{"type":"string","enum":["relevance","lastUpdatedDate","submittedDate"]},"sort_order":{"type":"string","enum":["ascending","descending"]}}}',
+      '2026-07-03 00:00:00+00', '2026-07-03 00:00:00+00'
     )
     ON CONFLICT (id) DO UPDATE SET
       connector_key     = EXCLUDED.connector_key,

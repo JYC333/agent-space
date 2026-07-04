@@ -92,7 +92,8 @@ These routes are not `ServerModule` entries. They are mounted by `PluginHost` af
 
 | Plugin | Kind | Routes | Main ownership / notes |
 |---|---|---|---|
-| `dairy` | product (official_plugin) | `/dairy*` | Personal diary editor, same-day history, reflection job, reminder scheduler. Routes use `ctx.http.pluginGuard()`. dairy entries are editor-owned user documents, not raw ActivityRecord intake; memory/context extraction remains opt-in proposal/intake work. |
+| `diary` | product (official_plugin) | `/diary*` | Personal diary editor, same-day history, reflection job, reminder scheduler. Routes use `ctx.http.pluginGuard()`. Diary entries are editor-owned user documents, not raw ActivityRecord intake; memory/context extraction remains opt-in proposal/intake work. |
+| `finance_ledger` | product (official_plugin) | `/finance*` | Space-scoped double-entry finance ledger: books, accounts, commodities, directives, postings, prices, and Beancount import/export. Routes use `ctx.http.pluginGuard()`. Proposal appliers are registered through PluginHost and plugin migrations own finance tables. |
 
 ## Code-Only Support Surfaces
 

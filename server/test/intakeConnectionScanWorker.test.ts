@@ -2,14 +2,14 @@ import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config";
 import { IntakeExtractionWorker } from "../src/modules/intake/extractionWorker";
+import { __setArxivThrottleForTests } from "../src/modules/intake/connectors/arxivThrottle";
 import type { Queryable } from "../src/modules/routeUtils/common";
 
-type ConnectorKey = "rss" | "atom" | "web_page";
+type ConnectorKey = "rss" | "atom" | "web_page" | "arxiv";
 type CapturePolicy =
-  | "metadata_only"
-  | "excerpt_only"
-  | "auto_extract_all_text"
-  | "archive_all_snapshots";
+  | "reference_only"
+  | "extract_text"
+  | "archive_original";
 type ChildJob = {
   id: string;
   connection_id: string | null;
@@ -72,6 +72,9 @@ class ScanDb implements Queryable {
         rowCount: this.schedulerTask ? 1 : 0,
       };
     }
+    if (sql.includes("FROM settings")) {
+      return { rows: [] as Row[], rowCount: 0 };
+    }
     if (sql.includes("INSERT INTO scheduler_tasks")) {
       this.schedulerTask = {
         id: this.schedulerTask?.id ?? params[0],
@@ -126,6 +129,9 @@ class ScanDb implements Queryable {
     }
     if (sql.includes("INSERT INTO extracted_evidence")) {
       return { rows: [] as Row[], rowCount: 1 };
+    }
+    if (sql.includes("INSERT INTO evidence_links")) {
+      return { rows: [] as Row[], rowCount: 0 };
     }
     if (sql.includes("INSERT INTO extraction_jobs")) {
       this.childJobs.push({
@@ -239,14 +245,15 @@ class ScanDb implements Queryable {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  __setArxivThrottleForTests(null);
 });
 
 describe("IntakeExtractionWorker connection_scan", () => {
-  it("fetches an RSS feed, writes item/snapshot/evidence, and stores the new scan cursor", async () => {
+  it("fetches an RSS feed, writes item/snapshot metadata, and stores the new scan cursor", async () => {
     const db = new ScanDb({
       connectorKey: "rss",
-      capturePolicy: "excerpt_only",
-      policyRetention: "summary_only",
+      capturePolicy: "reference_only",
+      policyRetention: "metadata_only",
     });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(rssFeed(), {
       status: 200,
@@ -261,7 +268,7 @@ describe("IntakeExtractionWorker connection_scan", () => {
 
     expect(db.calls.some(call => call.sql.includes("INSERT INTO intake_items"))).toBe(true);
     expect(db.calls.some(call => call.sql.includes("INSERT INTO source_snapshots"))).toBe(true);
-    expect(db.calls.some(call => call.sql.includes("INSERT INTO extracted_evidence"))).toBe(true);
+    expect(db.calls.some(call => call.sql.includes("INSERT INTO extracted_evidence"))).toBe(false);
     const connectionUpdate = db.calls.find(call => call.sql.includes("UPDATE source_connections"));
     expect(JSON.parse(String(connectionUpdate?.params[2])).scan_cursor).toEqual({
       etag: "\"feed-v1\"",
@@ -276,7 +283,7 @@ describe("IntakeExtractionWorker connection_scan", () => {
   it("updates an existing feed item when canonical/source/hash dedupe finds one", async () => {
     const db = new ScanDb({
       connectorKey: "rss",
-      capturePolicy: "metadata_only",
+      capturePolicy: "reference_only",
       policyRetention: "metadata_only",
       existingItemId: "item-existing",
     });
@@ -294,7 +301,7 @@ describe("IntakeExtractionWorker connection_scan", () => {
     const raw = "<html><head><title>Hello page</title></head><body><p>Visible text.</p></body></html>";
     const db = new ScanDb({
       connectorKey: "web_page",
-      capturePolicy: "metadata_only",
+      capturePolicy: "reference_only",
       policyRetention: "metadata_only",
     });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(raw, { status: 200 }));
@@ -311,7 +318,7 @@ describe("IntakeExtractionWorker connection_scan", () => {
   it("sends conditional fetch headers and advances scan state on 304 responses", async () => {
     const db = new ScanDb({
       connectorKey: "rss",
-      capturePolicy: "metadata_only",
+      capturePolicy: "reference_only",
       policyRetention: "metadata_only",
       configJson: {
         scan_cursor: {
@@ -338,10 +345,10 @@ describe("IntakeExtractionWorker connection_scan", () => {
     expect(JSON.parse(String(stats?.params[5]))).toEqual({ not_modified: true });
   });
 
-  it("queues extract_text follow-up jobs for auto_extract_all_text scans", async () => {
+  it("queues extract_text follow-up jobs for extract_text scans", async () => {
     const db = new ScanDb({
       connectorKey: "rss",
-      capturePolicy: "auto_extract_all_text",
+      capturePolicy: "extract_text",
       policyRetention: "full_text",
     });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(rssFeed(), { status: 200 }));
@@ -359,7 +366,7 @@ describe("IntakeExtractionWorker connection_scan", () => {
   it("runs extract_text follow-up jobs after a successful full-text scan", async () => {
     const db = new ScanDb({
       connectorKey: "rss",
-      capturePolicy: "auto_extract_all_text",
+      capturePolicy: "extract_text",
       policyRetention: "full_text",
       runFollowUpJobs: true,
     });
@@ -381,14 +388,14 @@ describe("IntakeExtractionWorker connection_scan", () => {
     );
     expect(childFinish?.params[2]).toBe("succeeded");
     const artifactInsert = db.calls.find((call) => call.sql.includes("INSERT INTO artifacts"));
-    expect(artifactInsert?.sql).toContain("export_formats_json");
-    expect(artifactInsert?.params).toContain(JSON.stringify(["txt"]));
+    expect(artifactInsert?.sql).toContain("'intake_reader_document'");
+    expect(artifactInsert?.params).toContain(JSON.stringify(["json"]));
   });
 
   it("queues extract_text when an existing shallow feed item is upgraded to full-text capture", async () => {
     const db = new ScanDb({
       connectorKey: "rss",
-      capturePolicy: "auto_extract_all_text",
+      capturePolicy: "extract_text",
       policyRetention: "full_text",
       existingItemId: "item-existing",
       existingContentState: "metadata_only",
@@ -407,7 +414,7 @@ describe("IntakeExtractionWorker connection_scan", () => {
   it("queues extract_text when an existing failed feed item is rescanned", async () => {
     const db = new ScanDb({
       connectorKey: "rss",
-      capturePolicy: "auto_extract_all_text",
+      capturePolicy: "extract_text",
       policyRetention: "full_text",
       existingItemId: "item-existing",
       existingContentState: "extraction_failed",
@@ -430,7 +437,7 @@ describe("IntakeExtractionWorker connection_scan", () => {
   it("does not queue a duplicate extract_text job when one is already active", async () => {
     const db = new ScanDb({
       connectorKey: "rss",
-      capturePolicy: "auto_extract_all_text",
+      capturePolicy: "extract_text",
       policyRetention: "full_text",
       existingItemId: "item-existing",
       existingContentState: "extraction_failed",
@@ -443,10 +450,114 @@ describe("IntakeExtractionWorker connection_scan", () => {
     expect(db.calls.some(call => call.sql.includes("INSERT INTO extraction_jobs"))).toBe(false);
   });
 
+  it("scans arXiv connections into paper feed items with canonical abs URLs", async () => {
+    __setArxivThrottleForTests({ sleep: async () => {} });
+    const db = new ScanDb({
+      connectorKey: "arxiv",
+      capturePolicy: "extract_text",
+      policyRetention: "full_text",
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(arxivFeed(), { status: 200 }));
+
+    await expect(new IntakeExtractionWorker(db, config()).runPendingJob("job-1", "space-1"))
+      .resolves.toMatchObject({ status: "succeeded" });
+
+    const insert = db.calls.find(call => call.sql.includes("INSERT INTO intake_items"));
+    expect(insert?.params[3]).toBe("feed_entry");
+    expect(insert?.params[4]).toBe("Agent Paper Title");
+    expect(insert?.params[5]).toBe("https://arxiv.org/abs/2402.08954");
+    expect(insert?.params[6]).toBe("https://arxiv.org/abs/2402.08954");
+    expect(insert?.params[8]).toBe("2402.08954");
+    expect(insert?.params[9]).toBe("Author One, Author Two");
+    expect(insert?.params[10]).toBe("2024-02-14T05:19:17.000Z");
+    expect(insert?.params[13]).toBe("Abstract text for the agent paper.");
+    expect(JSON.parse(String(insert?.params[16]))).toMatchObject({
+      arxiv_id: "2402.08954",
+      arxiv_version: "v2",
+      authors: ["Author One", "Author Two"],
+      categories: ["cs.AI", "cs.LG"],
+      primary_category: "cs.AI",
+      abs_url: "https://arxiv.org/abs/2402.08954",
+      html_url: "https://arxiv.org/html/2402.08954",
+      pdf_url: "https://arxiv.org/pdf/2402.08954",
+      doi: "10.1234/example",
+      capture_method: "connection_scan",
+      connector_key: "arxiv",
+    });
+    const followUp = db.calls.find(call =>
+      call.sql.includes("INSERT INTO extraction_jobs") && call.params[5] === "extract_text"
+    );
+    expect(followUp).toBeTruthy();
+    const connectionUpdate = db.calls.find(call => call.sql.includes("UPDATE source_connections"));
+    expect(JSON.parse(String(connectionUpdate?.params[2])).scan_cursor).toMatchObject({
+      last_guid: "2402.08954",
+      last_published_at: "2024-02-14T05:19:17.000Z",
+    });
+    const stats = db.calls.find(call => call.sql.includes("items_seen"));
+    expect(stats?.params.slice(2, 5)).toEqual([1, 1, 0]);
+  });
+
+  it("truncates arXiv author and excerpt values to their intake_items column widths", async () => {
+    __setArxivThrottleForTests({ sleep: async () => {} });
+    const db = new ScanDb({
+      connectorKey: "arxiv",
+      capturePolicy: "reference_only",
+      policyRetention: "metadata_only",
+    });
+    const authors = Array.from({ length: 120 }, (_, index) => `<author><name>Author ${index}</name></author>`).join("");
+    const longFeed = arxivFeed()
+      .replace("<author><name>Author One</name></author>\n        <author><name>Author Two</name></author>", authors)
+      .replace("Abstract text for the agent paper.", "A".repeat(3000));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(longFeed, { status: 200 }));
+
+    await expect(new IntakeExtractionWorker(db, config()).runPendingJob("job-1", "space-1"))
+      .resolves.toMatchObject({ status: "succeeded" });
+
+    const insert = db.calls.find(call => call.sql.includes("INSERT INTO intake_items"));
+    expect(String(insert?.params[9]).length).toBeLessThanOrEqual(512);
+    expect(String(insert?.params[13]).length).toBeLessThanOrEqual(2048);
+  });
+
+  it("updates an existing arXiv item when a newer version is scanned", async () => {
+    __setArxivThrottleForTests({ sleep: async () => {} });
+    const db = new ScanDb({
+      connectorKey: "arxiv",
+      capturePolicy: "reference_only",
+      policyRetention: "metadata_only",
+      existingItemId: "item-existing",
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(arxivFeed(), { status: 200 }));
+
+    await new IntakeExtractionWorker(db, config()).runPendingJob("job-1", "space-1");
+
+    expect(db.calls.some(call => call.sql.includes("INSERT INTO intake_items"))).toBe(false);
+    expect(db.calls.some(call => call.sql.includes("UPDATE intake_items") && call.sql.includes("SET title = $3"))).toBe(true);
+    const stats = db.calls.find(call => call.sql.includes("items_seen"));
+    expect(stats?.params.slice(2, 5)).toEqual([1, 0, 1]);
+  });
+
+  it("relinks existing arXiv item evidence after another source scans the same paper", async () => {
+    __setArxivThrottleForTests({ sleep: async () => {} });
+    const db = new ScanDb({
+      connectorKey: "arxiv",
+      capturePolicy: "reference_only",
+      policyRetention: "metadata_only",
+      existingItemId: "item-existing",
+      existingContentState: "content_saved",
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(arxivFeed(), { status: 200 }));
+
+    await new IntakeExtractionWorker(db, config()).runPendingJob("job-1", "space-1");
+
+    const linkCall = db.calls.find(call => call.sql.includes("INSERT INTO evidence_links"));
+    expect(linkCall?.sql).toContain("FROM source_snapshots ss");
+    expect(linkCall?.params.slice(0, 2)).toEqual(["space-1", "item-existing"]);
+  });
+
   it("retries failed extract_text jobs on manual not-modified scans", async () => {
     const db = new ScanDb({
       connectorKey: "rss",
-      capturePolicy: "auto_extract_all_text",
+      capturePolicy: "extract_text",
       policyRetention: "full_text",
       existingItemId: "item-existing",
       existingContentState: "extraction_failed",
@@ -529,6 +640,27 @@ function rssFeed() {
         </item>
       </channel>
     </rss>`;
+}
+
+function arxivFeed() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+      <entry>
+        <id>http://arxiv.org/abs/2402.08954v2</id>
+        <updated>2024-02-15T05:19:17Z</updated>
+        <published>2024-02-14T05:19:17Z</published>
+        <title>Agent Paper Title</title>
+        <summary>Abstract text for the agent paper.</summary>
+        <author><name>Author One</name></author>
+        <author><name>Author Two</name></author>
+        <arxiv:doi>10.1234/example</arxiv:doi>
+        <link href="http://arxiv.org/abs/2402.08954v2" rel="alternate" type="text/html"/>
+        <link title="pdf" href="http://arxiv.org/pdf/2402.08954v2" rel="related" type="application/pdf"/>
+        <arxiv:primary_category term="cs.AI" scheme="http://arxiv.org/schemas/atom"/>
+        <category term="cs.AI" scheme="http://arxiv.org/schemas/atom"/>
+        <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+      </entry>
+    </feed>`;
 }
 
 function sha256(value: string): string {

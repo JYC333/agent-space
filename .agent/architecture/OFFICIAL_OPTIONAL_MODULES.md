@@ -1,6 +1,6 @@
 # Official Optional Modules
 
-_Last updated: 2026-06-19. See also ADR 0007._
+_Last updated: 2026-07-03. See also ADR 0007._
 
 This document defines the official optional module framework for agent-space: a product-level control plane that lets maintainers ship optional features that can be enabled or disabled per space or per user, while keeping core `ServerModule` registration stable.
 
@@ -44,7 +44,7 @@ package with runtime enablement state.
 ### Capability
 An **agent AI skill/behavior descriptor**. Defined in `catalog/capabilities/<name>/capability.yaml`. Loaded by `CapabilityRegistry` from the catalog. Represents a versioned, executable agent skill (e.g. `memory.reflect`).
 
-Capabilities are NOT product plugins. They do not have a per-space enable/disable toggle. They do not control product feature visibility. A capability may be *used by* an official optional module (e.g., an AI reflection capability used by dairy), but the two concepts are separate:
+Capabilities are NOT product plugins. They do not have a per-space enable/disable toggle. They do not control product feature visibility. A capability may be *used by* an official optional module (e.g., an AI reflection capability used by diary), but the two concepts are separate:
 
 | | Capability | Official Optional Module |
 |---|---|---|
@@ -94,10 +94,11 @@ Remote download, manifest verification, and compatibility checking for official 
 - `space` — module enabled/disabled for the entire space (all users in the space share the setting). Writes require space owner/admin.
 - `user` — module enabled/disabled for the user across spaces. This is for personal tools whose setting and data belong to the user rather than a particular space.
 
-MVP default: `dairy` uses `user` scope (personal diary).
+Current bundled modules use both scopes: `diary` uses `user` scope for personal
+entries, while `finance_ledger` uses `space` scope for shared finance books.
 
 ### Default state
-Each descriptor declares `default_enabled: boolean`. If no enablement row exists in the database, the module is treated as being in its default state. The canonical `dairy` descriptor has `default_enabled: false`.
+Each descriptor declares `default_enabled: boolean`. If no enablement row exists in the database, the module is treated as being in its default state. Current bundled descriptors (`diary`, `finance_ledger`) both have `default_enabled: false`.
 
 ### Behavior when disabled
 - **Scheduled behavior**: disabled modules must not run scheduled work for disabled scopes. User-scoped scheduled tasks fan out only to enabled users.
@@ -111,7 +112,7 @@ Each descriptor declares `default_enabled: boolean`. If no enablement row exists
 
 Response for disabled plugin:
 ```json
-{ "detail": "Plugin is not enabled", "error_code": "plugin_disabled", "plugin_id": "dairy" }
+{ "detail": "Plugin is not enabled", "error_code": "plugin_disabled", "plugin_id": "diary" }
 ```
 
 Response for unknown plugin:
@@ -126,10 +127,17 @@ Response for unknown plugin:
 ### Migrations
 Core plugin control-plane schema (`official_plugin_enablements`, `official_plugin_events`, `plugin_installs`, and `plugin_migrations`) uses the standard `server/migrations/` numbered SQL files.
 
-Plugin-owned domain tables do not live in the core baseline. The dairy plugin owns `dairy_entries` and `dairy_reflections` through SQL files under `plugins/official/dairy/migrations/`, copied into `server/dist/official-plugins/dairy/migrations/` during build. The installer executes those migrations only when the plugin is installed and records their checksums in `plugin_migrations`.
+Plugin-owned domain tables do not live in the core baseline. The `diary` plugin owns `diary_entries` and `diary_reflections` through SQL files under `plugins/official/diary/migrations/`. The `finance_ledger` plugin owns its finance book, account, directive, posting, price, import/export, and metadata tables through SQL files under `plugins/official/finance_ledger/migrations/`. Plugin migrations are copied into `server/dist/official-plugins/<plugin_id>/migrations/` during build. The installer executes those migrations only when the plugin is installed and records their checksums in `plugin_migrations`.
 
 ### Editor-owned content vs raw intake
-dairy entries are editor-owned user documents, similar to Notes. Direct dairy editing writes the dairy plugin tables and does not create an `ActivityRecord`. If dairy content is later extracted into Memory, Knowledge, ContextBuilder, FlashCards, or agent-readable summaries, that extraction must go through the proposal/intake boundary and remain opt-in where the descriptor says context contribution is `opt_in`.
+Diary entries are editor-owned user documents, similar to Notes. Direct diary editing writes the diary plugin tables and does not create an `ActivityRecord`. If diary content is later extracted into Memory, Knowledge, ContextBuilder, FlashCards, or agent-readable summaries, that extraction must go through the proposal/intake boundary and remain opt-in where the descriptor says context contribution is `opt_in`.
+
+Finance ledger rows are space-owned business data. Direct ledger editing writes
+the finance plugin tables and does not create an `ActivityRecord`. Beancount text
+is an import/export compatibility format, not the source of truth; PostgreSQL
+rows are authoritative at runtime. Finance import writes are proposal-gated
+through `finance_ledger.post_import_batch`, and direct directive proposal
+application uses `finance_ledger.post_directive`.
 
 ### Disable is not uninstall
 Disabling a module preserves all its data. `disabled_at` and `disabled_by_user_id` are recorded in the enablement row. Uninstall/data deletion is out of scope.
@@ -144,7 +152,7 @@ Disabling a module preserves all its data. `disabled_at` and `disabled_by_user_i
 - Official modules declare sensitive integrations in their `OfficialPluginDescriptor.permissions` field
 - Memory writes must still go through proposals (`B10`)
 - Raw capture inputs must enter via `ActivityRecord` first where applicable (`B24`); editor-owned documents such as diary entries are not raw intake records
-- Context contribution must be `opt_in` for private/personal data modules (e.g. dairy defaults to `can_contribute_context: "opt_in"` and `include_in_context: false` in settings)
+- Context contribution must be `opt_in` for private/personal or sensitive product data modules (e.g. diary and finance ledger default to `can_contribute_context: "opt_in"` and `include_in_context: false` in settings)
 - Plugin settings must not leak across spaces or users — the guard and repository enforce the descriptor's `space` or `user` scope
 - Future third-party modules require a much stricter sandbox and SDK model not covered here
 
@@ -169,9 +177,16 @@ An official optional module may contribute to these extension points:
 
 Future contribution types must preserve the same fail-closed enablement rule.
 
+## 7. Bundled Official Modules
+
+| Plugin | Scope | Frontend | Routes | Runtime contributions | Data ownership |
+|---|---|---|---|---|---|
+| `diary` | `user` | `/diary` | `/api/v1/diary*` | Routes, scheduler, reflection job | Plugin-owned diary entries/reflections; editor-owned personal documents; memory/context extraction remains opt-in and proposal/intake-gated. |
+| `finance_ledger` | `space` | `/finance` | `/api/v1/finance*` | Routes and proposal appliers | Plugin-owned finance books/accounts/directives/postings/prices/import-export records; PostgreSQL is the runtime source of truth; Beancount text is import/export compatibility. |
+
 ---
 
-## 7. Non-Goals for This Implementation
+## 8. Non-Goals for This Implementation
 
 The following are out of scope for the current implementation. Some are planned
 as Level 2 or further out.
@@ -186,7 +201,7 @@ as Level 2 or further out.
 
 ---
 
-## 8. Files
+## 9. Files
 
 | Path | Role |
 |---|---|
@@ -201,12 +216,17 @@ as Level 2 or further out.
 | `server/src/modules/plugins/routes.ts` | HTTP routes: GET/POST/PATCH /api/v1/plugins/* |
 | `server/src/modules/plugins/guards.ts` | `requireOfficialPluginEnabled()` reusable guard |
 | `server/src/modules/plugins/index.ts` | Module facade: exports pluginsModule + guard |
-| `server/src/modules/plugins/official/dairy.ts` | dairy descriptor |
-| `plugins/official/dairy/` | Bundled dairy plugin package source, manifest, server runtime, web page, and migrations |
-| `server/dist/official-plugins/dairy/` | Build output loaded by the server at startup |
+| `server/src/modules/plugins/official/diary.ts` | diary descriptor |
+| `server/src/modules/plugins/official/financeLedger.ts` | finance_ledger descriptor |
+| `plugins/official/diary/` | Bundled diary plugin package source, manifest, server runtime, web page, and migrations |
+| `plugins/official/finance_ledger/` | Bundled finance ledger plugin package source, manifest, server runtime, web page, and migrations |
+| `server/dist/official-plugins/diary/` | diary build output loaded by the server at startup |
+| `server/dist/official-plugins/finance_ledger/` | finance_ledger build output loaded by the server at startup |
 | `server/migrations/0001_baseline.sql` (appended) | DB migration — plugin control-plane and install tracking only |
 | `apps/web/src/api/client.ts` | Frontend API client |
-| `apps/web/src/plugins/dairy/DairyPageAdapter.tsx` | App-owned adapter that injects web host APIs into the dairy plugin page |
+| `apps/web/src/plugins/diary/DiaryPageAdapter.tsx` | App-owned adapter that injects web host APIs into the diary plugin page |
+| `apps/web/src/plugins/finance_ledger/FinancePageAdapter.tsx` | App-owned adapter that injects web host APIs into the finance ledger plugin page |
 | `apps/web/src/modules/plugins/useEffectivePlugins.ts` | Plugin state hook |
 | `apps/web/src/modules/plugins/PluginsPage.tsx` | Official plugins management page |
-| `plugins/official/dairy/web/src/DairyPage.tsx` | dairy editor page |
+| `plugins/official/diary/web/src/DiaryPage.tsx` | diary editor page |
+| `plugins/official/finance_ledger/web/src/FinancePage.tsx` | finance ledger page |

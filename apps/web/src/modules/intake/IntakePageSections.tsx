@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 import {
   Archive,
   Bookmark,
@@ -8,7 +8,6 @@ import {
   ChevronRight,
   Code2,
   FileText,
-  Folder,
   Link2,
   Play,
   Radio,
@@ -33,16 +32,19 @@ import type {
   SourceRecipeActivationResult,
   SourceRecipeDryRunResult,
   SourceRecipePlanResponse,
+  SourceCapturePolicy,
   SourceConnection,
   Workspace,
-  WorkspaceIntakeProfile,
   WorkspaceSourceBinding,
 } from '../../types/api'
 import { IntakeSummaryLinks } from './IntakeSummaryLinks'
 import { SpaceLink as Link } from '../../core/spaceNav'
 import {
   CAPTURE_POLICIES,
+  capturePolicyDescription,
   FREQUENCIES,
+  isScheduleFormComplete,
+  isScheduledFrequency,
   textExtractionDisabledReason,
   textExtractionActionLabel,
   evidenceLinked,
@@ -51,9 +53,12 @@ import {
   preview,
   retentionAtLeast,
   short,
+  sourceCapturePolicyValue,
+  WEEKDAY_OPTIONS,
   type EvidenceFilter,
   type IntakeSummaryResult,
   type ItemFilter,
+  type ScheduleFormValue,
 } from './intakePageModel'
 
 type SelectOption = { value: string; label: string }
@@ -136,11 +141,15 @@ export function ManualUrlCard(props: {
         </div>
         <div className="space-y-1.5">
           <Label>Attach to source</Label>
-          <Select
-            options={props.connectionOptions}
-            value={props.manualConnectionId}
-            onChange={props.onManualConnectionChange}
-          />
+          {props.connectionOptions.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No project-linked sources are available.</p>
+          ) : (
+            <Select
+              options={props.connectionOptions}
+              value={props.manualConnectionId}
+              onChange={props.onManualConnectionChange}
+            />
+          )}
         </div>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           <input
@@ -164,7 +173,8 @@ export function CreateSourceCard(props: {
   name: string
   endpointUrl: string
   fetchFrequency: string
-  capturePolicy: string
+  schedule: ScheduleFormValue
+  capturePolicy: SourceCapturePolicy
   sourceType: string
   listSelector: string
   plan: SourceRecipePlanResponse | null
@@ -174,6 +184,7 @@ export function CreateSourceCard(props: {
   onNameChange: (value: string) => void
   onEndpointUrlChange: (value: string) => void
   onFetchFrequencyChange: (value: string) => void
+  onScheduleChange: (value: ScheduleFormValue) => void
   onCapturePolicyChange: (value: string) => void
   onSourceTypeChange: (value: string) => void
   onListSelectorChange: (value: string) => void
@@ -187,6 +198,66 @@ export function CreateSourceCard(props: {
       <CardHeader>
         <CardTitle>Create Source</CardTitle>
       </CardHeader>
+      <WebFeedSourceForm {...props} isBusy={isBusy} canCreate={canCreate} />
+    </Card>
+  )
+}
+
+export function PresetSourcesEntryCard() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Preset Sources</CardTitle>
+      </CardHeader>
+      <div className="space-y-3">
+        <div className="flex items-center gap-3">
+          <div className="size-9 rounded-md border border-border bg-muted/40 flex items-center justify-center shrink-0">
+            <BookOpen className="size-4 text-muted-foreground" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Curated source presets</p>
+            <p className="text-xs text-muted-foreground truncate">Browse by category</p>
+          </div>
+        </div>
+        <Button type="button" className="w-full" asChild>
+          <Link to="/intake/source-presets">
+            Open presets
+            <ChevronRight className="size-4" />
+          </Link>
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+function WebFeedSourceForm(props: {
+  name: string
+  endpointUrl: string
+  fetchFrequency: string
+  schedule: ScheduleFormValue
+  capturePolicy: SourceCapturePolicy
+  sourceType: string
+  listSelector: string
+  plan: SourceRecipePlanResponse | null
+  dryRun: SourceRecipeDryRunResult | null
+  activation: SourceRecipeActivationResult | null
+  busy: string | null
+  isBusy: boolean
+  canCreate: boolean
+  onNameChange: (value: string) => void
+  onEndpointUrlChange: (value: string) => void
+  onFetchFrequencyChange: (value: string) => void
+  onScheduleChange: (value: ScheduleFormValue) => void
+  onCapturePolicyChange: (value: string) => void
+  onSourceTypeChange: (value: string) => void
+  onListSelectorChange: (value: string) => void
+  onPreview: (event: FormEvent<HTMLFormElement>) => void
+  onCreateActivate: () => void
+}) {
+  const { isBusy, canCreate } = props
+  const scheduleReady = isScheduleFormComplete(props.fetchFrequency, props.schedule)
+  return (
+    <>
       <form className="space-y-3" onSubmit={props.onPreview}>
         <div className="space-y-1.5">
           <Label>Source URL</Label>
@@ -205,17 +276,29 @@ export function CreateSourceCard(props: {
             placeholder="Source name"
           />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label>Frequency</Label>
-            <Select options={FREQUENCIES} value={props.fetchFrequency} onChange={props.onFetchFrequencyChange} />
+            <Select
+              options={FREQUENCIES}
+              value={props.fetchFrequency}
+              onChange={value => {
+                props.onFetchFrequencyChange(value)
+              }}
+            />
           </div>
+        </div>
+        <ScheduleRuleFields
+          fetchFrequency={props.fetchFrequency}
+          value={props.schedule}
+          onChange={props.onScheduleChange}
+        />
+        <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
             <Label>Capture</Label>
             <Select options={CAPTURE_POLICIES} value={props.capturePolicy} onChange={props.onCapturePolicyChange} />
+            <p className="text-xs text-muted-foreground">{capturePolicyDescription(props.capturePolicy)}</p>
           </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
             <Label>Source type</Label>
             <Select options={SOURCE_TYPE_OPTIONS} value={props.sourceType} onChange={props.onSourceTypeChange} />
@@ -235,7 +318,7 @@ export function CreateSourceCard(props: {
             <Sparkles className="size-4" />
             Preview
           </Button>
-          <Button type="button" disabled={!canCreate || isBusy} onClick={props.onCreateActivate}>
+          <Button type="button" disabled={!canCreate || !scheduleReady || isBusy} onClick={props.onCreateActivate}>
             <CheckCircle2 className="size-4" />
             Create and activate
           </Button>
@@ -290,7 +373,7 @@ export function CreateSourceCard(props: {
           )}
         </div>
       )}
-    </Card>
+    </>
   )
 }
 
@@ -341,11 +424,13 @@ export function AdvancedSourceHandlerCard(props: {
   name: string
   endpointUrl: string
   fetchFrequency: string
+  schedule: ScheduleFormValue
   listSelector: string
   busy: string | null
   onNameChange: (value: string) => void
   onEndpointUrlChange: (value: string) => void
   onFetchFrequencyChange: (value: string) => void
+  onScheduleChange: (value: ScheduleFormValue) => void
   onListSelectorChange: (value: string) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }) {
@@ -372,11 +457,24 @@ export function AdvancedSourceHandlerCard(props: {
             required
           />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label>Frequency</Label>
-            <Select options={FREQUENCIES} value={props.fetchFrequency} onChange={props.onFetchFrequencyChange} />
+            <Select
+              options={FREQUENCIES}
+              value={props.fetchFrequency}
+              onChange={value => {
+                props.onFetchFrequencyChange(value)
+              }}
+            />
           </div>
+        </div>
+        <ScheduleRuleFields
+          fetchFrequency={props.fetchFrequency}
+          value={props.schedule}
+          onChange={props.onScheduleChange}
+        />
+        <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
             <Label>List selector</Label>
             <Input
@@ -386,12 +484,126 @@ export function AdvancedSourceHandlerCard(props: {
             />
           </div>
         </div>
-        <Button className="w-full" disabled={props.busy === 'custom-source:create'}>
+        <Button
+          className="w-full"
+          disabled={props.busy === 'custom-source:create' || !isScheduleFormComplete(props.fetchFrequency, props.schedule)}
+        >
           <Code2 className="size-4" />
           Create handler source
         </Button>
       </form>
     </Card>
+  )
+}
+
+export function ScheduleRuleFields(props: {
+  fetchFrequency: string
+  value: ScheduleFormValue
+  onChange: (value: ScheduleFormValue) => void
+}) {
+  const set = (patch: Partial<ScheduleFormValue>) => props.onChange({ ...props.value, ...patch })
+  if (!isScheduledFrequency(props.fetchFrequency)) {
+    return (
+      <div className="space-y-1.5">
+        <Label>Schedule</Label>
+        <div className="flex h-9 items-center rounded-md border border-border bg-muted/30 px-3 text-sm text-muted-foreground">
+          Manual only
+        </div>
+      </div>
+    )
+  }
+  if (props.fetchFrequency === 'hourly') {
+    return (
+      <ScheduleNumberField
+        label="Minute"
+        value={props.value.minute}
+        min={0}
+        max={59}
+        placeholder="0"
+        onChange={minute => set({ minute })}
+      />
+    )
+  }
+  if (props.fetchFrequency === 'daily') {
+    return (
+      <div className="grid grid-cols-2 gap-3">
+        <ScheduleNumberField
+          label="Hour"
+          value={props.value.hour}
+          min={0}
+          max={23}
+          placeholder="9"
+          onChange={hour => set({ hour })}
+        />
+        <ScheduleNumberField
+          label="Minute"
+          value={props.value.minute}
+          min={0}
+          max={59}
+          placeholder="0"
+          onChange={minute => set({ minute })}
+        />
+      </div>
+    )
+  }
+  return (
+    <div className="grid gap-3 sm:grid-cols-3">
+      <div className="space-y-1.5">
+        <Label>Weekday</Label>
+        <Select
+          options={[{ value: '', label: 'Weekday' }, ...WEEKDAY_OPTIONS]}
+          value={props.value.weekday}
+          onChange={weekday => set({ weekday })}
+        />
+      </div>
+      <ScheduleNumberField
+        label="Hour"
+        value={props.value.hour}
+        min={0}
+        max={23}
+        placeholder="9"
+        onChange={hour => set({ hour })}
+      />
+      <ScheduleNumberField
+        label="Minute"
+        value={props.value.minute}
+        min={0}
+        max={59}
+        placeholder="0"
+        onChange={minute => set({ minute })}
+      />
+    </div>
+  )
+}
+
+function ScheduleNumberField(props: {
+  label: string
+  value: string
+  min: number
+  max: number
+  placeholder: string
+  onChange: (value: string) => void
+}) {
+  const reactId = useId()
+  const inputId = `${reactId}-schedule-${props.label.toLowerCase()}`
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={inputId}>{props.label}</Label>
+      <Input
+        id={inputId}
+        type="number"
+        inputMode="numeric"
+        min={props.min}
+        max={props.max}
+        step={1}
+        value={props.value}
+        placeholder={props.placeholder}
+        onChange={event => {
+          const raw = event.target.value
+          if (raw === '' || /^\d{1,2}$/.test(raw)) props.onChange(raw)
+        }}
+      />
+    </div>
   )
 }
 
@@ -428,12 +640,11 @@ export function WorkspaceRoutingCard(props: {
   connectionOptions: SelectOption[]
   workspaces: Workspace[]
   connections: SourceConnection[]
-  profiles: WorkspaceIntakeProfile[]
   bindings: WorkspaceSourceBinding[]
   busy: string | null
+  projectScoped: boolean
   onWorkspaceIdChange: (value: string) => void
   onBindingConnectionIdChange: (value: string) => void
-  onCreateWorkspaceProfile: () => void
   onCreateWorkspaceBinding: () => void
 }) {
   return (
@@ -459,17 +670,7 @@ export function WorkspaceRoutingCard(props: {
             type="button"
             variant="outline"
             className="flex-1"
-            disabled={!props.workspaces.length || props.busy === 'workspace:profile'}
-            onClick={props.onCreateWorkspaceProfile}
-          >
-            <Folder className="size-4" />
-            Profile
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            className="flex-1"
-            disabled={!props.workspaces.length || !props.connections.length || props.busy === 'workspace:binding'}
+            disabled={!props.projectScoped || !props.workspaces.length || !props.connections.length || props.busy === 'workspace:binding'}
             onClick={props.onCreateWorkspaceBinding}
           >
             <Link2 className="size-4" />
@@ -477,7 +678,6 @@ export function WorkspaceRoutingCard(props: {
           </Button>
         </div>
         <div className="flex gap-1.5 flex-wrap">
-          <Badge variant="outline">{props.profiles.length} profiles</Badge>
           <Badge variant="outline">{props.bindings.length} bindings</Badge>
         </div>
       </div>
@@ -494,7 +694,7 @@ export function SourcesSection(props: {
   onUpdateConnection: (connection: SourceConnection, status: 'active' | 'paused' | 'archived') => void
   onSaveGovernance: (
     connection: SourceConnection,
-    body: { capture_policy?: string; consent: Record<string, unknown>; policy: Record<string, unknown> },
+    body: { capture_policy?: SourceCapturePolicy; consent: Record<string, unknown>; policy: Record<string, unknown> },
   ) => void
 }) {
   return (
@@ -515,7 +715,7 @@ export function SourcesSection(props: {
             const key = props.sourceBackendKey(connection)
             const isCustomSource = connection.handler_kind === 'generated_custom' || (!connection.handler_kind && key === 'custom_source')
             const isRecipeSource = connection.handler_kind === 'recipe'
-            const canScan = key === 'rss' || key === 'atom' || key === 'web_page' || (isCustomSource && Boolean(connection.active_handler_version_id)) || (isRecipeSource && Boolean(connection.active_recipe_version_id))
+            const canScan = key === 'rss' || key === 'atom' || key === 'web_page' || key === 'arxiv' || (isCustomSource && Boolean(connection.active_handler_version_id)) || (isRecipeSource && Boolean(connection.active_recipe_version_id))
             return (
               <Card key={connection.id} className="mb-0">
                 <div className="flex items-start justify-between gap-3">
@@ -627,10 +827,10 @@ const IMPORT_TARGET_OPTIONS = [
 function SourceGovernanceEditor(props: {
   connection: SourceConnection
   busy: boolean
-  onSave: (body: { capture_policy?: string; consent: Record<string, unknown>; policy: Record<string, unknown> }) => void
+  onSave: (body: { capture_policy?: SourceCapturePolicy; consent: Record<string, unknown>; policy: Record<string, unknown> }) => void
 }) {
   const [open, setOpen] = useState(false)
-  const [capturePolicy, setCapturePolicy] = useState('metadata_only')
+  const [capturePolicy, setCapturePolicy] = useState<SourceCapturePolicy>('reference_only')
   const [retention, setRetention] = useState('metadata_only')
   const [egressClass, setEgressClass] = useState('internal_only')
   const [trust, setTrust] = useState('normal')
@@ -676,8 +876,9 @@ function SourceGovernanceEditor(props: {
   }
 
   function changeCapturePolicy(value: string) {
-    setCapturePolicy(value)
-    setRetention(current => retentionAtLeast(current, minimumRetentionForCapturePolicy(value)))
+    const nextCapturePolicy = sourceCapturePolicyValue(value, capturePolicy)
+    setCapturePolicy(nextCapturePolicy)
+    setRetention(current => retentionAtLeast(current, minimumRetentionForCapturePolicy(nextCapturePolicy)))
   }
 
   function save() {
@@ -723,6 +924,7 @@ function SourceGovernanceEditor(props: {
             <div className="space-y-1.5">
               <Label>Capture</Label>
               <Select options={CAPTURE_POLICIES} value={capturePolicy} onChange={changeCapturePolicy} />
+              <p className="text-xs text-muted-foreground">{capturePolicyDescription(capturePolicy)}</p>
             </div>
             <div className="space-y-1.5">
               <Label>Retention</Label>
@@ -819,16 +1021,22 @@ function csvList(value: string): string[] {
   return value.split(',').map(item => item.trim()).filter(Boolean)
 }
 
+function isManualUrlItem(item: IntakeItem) {
+  return item.item_type === 'external_url' && item.metadata_json?.created_by === 'manual_url'
+}
+
 export function ItemsSection(props: {
   items: IntakeItem[]
   itemFilter: ItemFilter
   itemQuery: string
   scopedProjectId: string
   scopedConnectionId: string
+  connectionOptions: SelectOption[]
   busy: string | null
   summaryResults: Record<string, IntakeSummaryResult>
   onItemFilterChange: (value: ItemFilter) => void
   onItemQueryChange: (value: string) => void
+  onItemConnectionChange: (item: IntakeItem, connectionId: string | null) => void
   onItemAction: (item: IntakeItem, action: string) => void
   onSummarizeItem: (item: IntakeItem) => void
 }) {
@@ -890,6 +1098,21 @@ export function ItemsSection(props: {
                 {item.source_domain && <Badge variant="muted">{item.source_domain}</Badge>}
                 {item.connection_id && <Badge variant="muted">source {short(item.connection_id)}</Badge>}
               </div>
+              {isManualUrlItem(item) && (
+                <div className="mt-3 max-w-sm space-y-1.5">
+                  <Label>Source</Label>
+                  {props.connectionOptions.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No project-linked sources are available.</p>
+                  ) : (
+                    <Select
+                      value={item.connection_id ?? ''}
+                      options={props.connectionOptions}
+                      disabled={itemBusy}
+                      onChange={value => props.onItemConnectionChange(item, value || null)}
+                    />
+                  )}
+                </div>
+              )}
               <div className="flex flex-wrap gap-1.5 mt-4">
                 <Button asChild size="sm" variant="default">
                   <Link to={`/intake/items/${item.id}/read`}>
@@ -901,6 +1124,7 @@ export function ItemsSection(props: {
                   type="button"
                   size="sm"
                   variant="outline"
+                  aria-label={`${textExtractionLabel} ${item.title}`}
                   disabled={itemBusy || textExtractionReason !== null}
                   title={textExtractionReason ?? undefined}
                   onClick={() => props.onItemAction(item, 'queue_content')}

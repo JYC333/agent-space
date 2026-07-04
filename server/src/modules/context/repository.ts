@@ -629,7 +629,7 @@ export class PgRunContextRepository {
           AND sc.status <> 'archived'
           AND sc.deleted_at IS NULL
         WHERE ev.space_id = $1
-          AND ev.status = 'active'
+          AND ev.status IN ('candidate', 'active')
           AND ev.deleted_at IS NULL
           AND el.status = 'active'
           AND el.link_type = ANY($2::varchar[])
@@ -1513,17 +1513,10 @@ export class PgRunContextRepository {
           id, space_id, evidence_id, target_type, target_id,
           link_type, status, created_by_run_id, created_at, updated_at
        )
-       SELECT $1, $2, $3, 'run', $4, 'used_in_context', 'active', $4, $5, $5
-        WHERE NOT EXISTS (
-          SELECT 1
-            FROM evidence_links
-           WHERE space_id = $2
-             AND evidence_id = $3
-             AND target_type = 'run'
-             AND target_id = $4
-             AND link_type = 'used_in_context'
-             AND status = 'active'
-        )`,
+       VALUES ($1, $2, $3, 'run', $4, 'used_in_context', 'active', $4, $5, $5)
+       ON CONFLICT (space_id, evidence_id, target_type, target_id, link_type)
+        WHERE status = 'active'
+        DO NOTHING`,
       [randomUUID(), input.spaceId, input.evidenceId, input.runId, now],
     );
   }

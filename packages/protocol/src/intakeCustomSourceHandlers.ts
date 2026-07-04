@@ -73,11 +73,9 @@ export const CUSTOM_SOURCE_CREATOR_ROLE_VALUES = ["owner", "admin", "reviewer", 
 export type CustomSourceCreatorRole = (typeof CUSTOM_SOURCE_CREATOR_ROLE_VALUES)[number];
 
 export const CUSTOM_SOURCE_CAPTURE_POLICY_VALUES = [
-  "metadata_only",
-  "excerpt_only",
-  "auto_extract_relevant",
-  "auto_extract_all_text",
-  "archive_all_snapshots",
+  "reference_only",
+  "extract_text",
+  "archive_original",
 ] as const;
 export type CustomSourceCapturePolicy = (typeof CUSTOM_SOURCE_CAPTURE_POLICY_VALUES)[number];
 
@@ -112,8 +110,8 @@ export type CustomSourcePolicyLimits = z.infer<typeof CustomSourcePolicyLimitsSc
 export const CustomSourcePolicyEnvelopeSchema = z
   .object({
     allowed_network_origins: z.array(z.string()),
-    capture_policy: z.string(),
-    retention_policy: z.string(),
+    capture_policy: z.enum(CUSTOM_SOURCE_CAPTURE_POLICY_VALUES),
+    retention_policy: z.enum(CUSTOM_SOURCE_RETENTION_POLICY_VALUES),
     credential_ref: z.string().nullish(),
     language: z.enum(CUSTOM_SOURCE_HANDLER_LANGUAGE_VALUES),
     browser_automation_enabled: z.boolean().default(false),
@@ -391,8 +389,8 @@ export const CustomSourceHandlerInputSchema = z
     policy: z
       .object({
         allowed_network_origins: z.array(z.string()),
-        capture_policy: z.string(),
-        retention_policy: z.string(),
+        capture_policy: z.enum(CUSTOM_SOURCE_CAPTURE_POLICY_VALUES),
+        retention_policy: z.enum(CUSTOM_SOURCE_RETENTION_POLICY_VALUES),
         credential_ref: z.string().nullish(),
         limits: CustomSourcePolicyLimitsSchema,
       })
@@ -463,6 +461,7 @@ export const CustomSourceSpacePolicyDTOSchema = z
     default_capture_policy: z.enum(CUSTOM_SOURCE_CAPTURE_POLICY_VALUES),
     default_retention_policy: z.enum(CUSTOM_SOURCE_RETENTION_POLICY_VALUES),
     allowed_domains: z.array(z.string()),
+    download_bytes_max: z.number().int().min(1024).max(104857600),
     credentialed_sources_allowed: z.boolean(),
     same_envelope_repair_auto_apply: z.boolean(),
     // Nullish: a space with no configured row yet gets system defaults with
@@ -480,6 +479,7 @@ export const CustomSourceSpacePolicyUpdateSchema = z
     default_capture_policy: z.enum(CUSTOM_SOURCE_CAPTURE_POLICY_VALUES).optional(),
     default_retention_policy: z.enum(CUSTOM_SOURCE_RETENTION_POLICY_VALUES).optional(),
     allowed_domains: z.array(z.string().trim().min(1)).max(200).optional(),
+    download_bytes_max: z.number().int().min(1024).max(104857600).optional(),
     credentialed_sources_allowed: z.boolean().optional(),
     same_envelope_repair_auto_apply: z.boolean().optional(),
   })
@@ -493,7 +493,6 @@ export const CustomSourceInstanceRunnerSettingsDTOSchema = z
     network_hard_deny_rules: z.array(z.string()),
     timeout_ms_max: z.number().int().positive(),
     output_bytes_max: z.number().int().positive(),
-    download_bytes_max: z.number().int().positive(),
     log_bytes_max: z.number().int().positive(),
     max_files: z.number().int().positive(),
     browser_automation_available: z.boolean(),

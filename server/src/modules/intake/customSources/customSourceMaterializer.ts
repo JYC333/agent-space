@@ -5,9 +5,10 @@ import type {
   CustomSourceHandlerOutput,
   SourcePolicyEnvelope,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import type { ServerConfig } from "../../config";
-import type { Queryable } from "../routeUtils/common";
-import { sha256, sourceDomain } from "./intakeRepositoryMappers";
+import type { ServerConfig } from "../../../config";
+import type { Queryable } from "../../routeUtils/common";
+import { sha256, sourceDomain } from "../intakeRepositoryMappers";
+import { linkEvidenceToBoundProjects } from "../evidenceProjectLinker";
 import {
   validateCustomSourceHandlerOutput,
   type CustomSourceContractValidationResult,
@@ -165,6 +166,12 @@ export class CustomSourceMaterializationService {
         for (const evidence of item.evidence) {
           await this.materializeEvidence(run, itemId, evidence, descriptor);
           evidenceCreated++;
+        }
+        if (item.evidence.length > 0) {
+          await linkEvidenceToBoundProjects(this.db, {
+            spaceId: run.spaceId,
+            intakeItemId: itemId,
+          });
         }
       } catch (error) {
         errors.push(

@@ -106,9 +106,7 @@ async function readArtifactForReader(
   const row = await loadVisibleArtifactForReader(db, spaceId, userId, artifactId);
   if (!row) return null;
 
-  // Only text-compatible types for reader v1
-  const textMime = !row.mime_type || row.mime_type.startsWith("text/") || row.mime_type === "application/json";
-  if (!textMime) return null;
+  if (row.mime_type !== "application/json") return null;
 
   const raw = row.content
     ? row.content
@@ -117,18 +115,15 @@ async function readArtifactForReader(
       : null;
   if (raw === null) return null;
 
-  if (row.mime_type === "application/json") {
-    const structured = parseStructuredReaderContent(raw);
-    if (structured) {
-      return {
-        text: structured.plain_text,
-        title: structured.title ?? row.title,
-        contentJson: structured.content_json,
-      };
-    }
+  const structured = parseStructuredReaderContent(raw);
+  if (structured) {
+    return {
+      text: structured.plain_text,
+      title: structured.title ?? row.title,
+      contentJson: structured.content_json,
+    };
   }
-
-  return { text: raw, title: row.title };
+  return null;
 }
 
 async function safeReadTextFile(
@@ -217,13 +212,14 @@ async function enforceConnectionReadConsent(
     endpoint_url: null,
     status: "active",
     fetch_frequency: "manual",
-    capture_policy: "metadata_only",
+    capture_policy: "reference_only",
     trust_level: "normal",
     topic_hints_json: null,
     config_json: null,
     credential_id: null,
     last_checked_at: null,
     next_check_at: null,
+    schedule_rule_json: null,
     handler_kind: "built_in",
     active_handler_version_id: null,
     active_recipe_version_id: null,
@@ -347,30 +343,7 @@ export class PgReaderRepository {
       }
     }
 
-    // Priority 3: raw_artifact_id (stripped to plain text)
-    if (item.raw_artifact_id) {
-      const text = await readArtifactForReader(this.db, this.config, identity.spaceId, identity.userId, item.raw_artifact_id);
-      if (text) {
-        const stripped = stripToPlainText(text.text);
-        return this.buildDocOut({
-          documentType: "intake_item",
-          documentId: itemId,
-          spaceId: identity.spaceId,
-          title: item.title,
-          plainText: stripped,
-          intakeItemId: itemId,
-          artifactId: item.raw_artifact_id,
-          sourceSnapshotId: null,
-          rawArtifactId: item.raw_artifact_id,
-          extractedArtifactId: item.extracted_artifact_id,
-          sourceUri: item.source_uri,
-          contentState: item.content_state,
-          retentionPolicy: item.retention_policy,
-        });
-      }
-    }
-
-    // Priority 4: excerpt fallback
+    // Priority 3: excerpt fallback
     if (item.excerpt) {
       return this.buildDocOut({
         documentType: "intake_item",
@@ -706,14 +679,10 @@ async function tryVerifyAnchorRange(
       );
       if (!r.rows[0]?.content) return "unverified";
       const mimeType = r.rows[0].mime_type;
-      if (mimeType && !mimeType.startsWith("text/") && mimeType !== "application/json") return "unverified";
-      if (mimeType === "application/json") {
-        const structured = parseStructuredReaderContent(r.rows[0].content);
-        if (!structured) return "unverified";
-        inlineText = structured.plain_text;
-      } else {
-        inlineText = r.rows[0].content;
-      }
+      if (mimeType !== "application/json") return "unverified";
+      const structured = parseStructuredReaderContent(r.rows[0].content);
+      if (!structured) return "unverified";
+      inlineText = structured.plain_text;
     }
 
     if (!inlineText) return "unverified";
@@ -1409,6 +1378,13 @@ export class PgReaderActionRepository {
          JOIN workspace_source_bindings wsb
               ON wsb.source_connection_id = sc.id
               AND wsb.space_id = $1 AND wsb.project_id = $2 AND wsb.status = 'active'
+              AND EXISTS (
+                SELECT 1
+                  FROM project_workspaces pw
+                 WHERE pw.space_id = wsb.space_id
+                   AND pw.project_id = wsb.project_id
+                   AND pw.workspace_id = wsb.workspace_id
+              )
         WHERE ra.space_id = $1
           AND ra.status = 'active'
           AND ra.visibility = 'space_shared'
@@ -1430,22 +1406,4 @@ export class PgReaderActionRepository {
     );
     return r.rows.map(annotationOut);
   }
-}
-
-// ── Plain text strip helper ───────────────────────────────────────────────────
-
-function stripToPlainText(input: string): string {
-  // Remove common HTML tags
-  return input
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s{2,}/g, " ")
-    .trim();
 }

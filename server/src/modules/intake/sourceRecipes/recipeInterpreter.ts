@@ -17,7 +17,7 @@ import {
   fetchAllowedOriginResponse,
   truncateToByteLimit,
   type CustomSourceFetchCredential,
-} from "../customSourceEndpointFetch";
+} from "../customSources/customSourceEndpointFetch";
 import {
   bodyOnly,
   buildListItems,
@@ -26,10 +26,10 @@ import {
   resolveUrl,
   stripTags,
   type CustomSourcePipelineItem,
-} from "../customSourceHtmlExtract";
+} from "../customSources/customSourceHtmlExtract";
 import { parseFeed, type ParsedFeedItem } from "../feedParser";
 import { sha256 } from "../intakeRepositoryMappers";
-import { effectiveCustomSourceLimits, type CustomSourceRunnerSettings } from "../customSourceRunner";
+import { effectiveCustomSourceLimits, type CustomSourceRunnerSettings } from "../customSources/customSourceRunner";
 
 /**
  * Level 2 Source recipe interpreter: executes a `source.recipe.v1` definition

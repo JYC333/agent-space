@@ -8,7 +8,7 @@ import {
   type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
 import { loadConfig } from "../src/config";
-import { PgCustomSourceHandlerRepository } from "../src/modules/intake/customSourceHandlerRepository";
+import { PgCustomSourceHandlerRepository } from "../src/modules/intake/customSources/customSourceHandlerRepository";
 import { HttpError } from "../src/modules/routeUtils/common";
 
 // Real-PostgreSQL integration tests for PgCustomSourceHandlerRepository.
@@ -79,14 +79,14 @@ async function insertConnection(spaceId: string, id: string): Promise<void> {
        capture_policy, trust_level, consent_json, policy_json, config_json,
        created_at, updated_at
      ) VALUES ($1, $2, 'connector-1', 'user-1', 'Test source', 'active', 'manual',
-       'metadata_only', 'normal', '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, now(), now())`,
+       'reference_only', 'normal', '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, now(), now())`,
     [id, spaceId],
   );
 }
 
 const POLICY_ENVELOPE = {
   allowed_network_origins: ["https://example.com"],
-  capture_policy: "auto_extract_relevant",
+  capture_policy: "extract_text",
   retention_policy: "full_text",
   language: "typescript_node",
   limits: { timeout_ms: 30000, max_download_bytes: 1024, max_output_bytes: 1024, max_files: 5, max_items: 10, max_evidence_items: 10, log_max_bytes: 1024 },
@@ -164,8 +164,12 @@ describe("PgCustomSourceHandlerRepository (real Postgres)", () => {
     if (!available || !repo) return;
     const defaults = await repo!.getSettings({ spaceId: SPACE_A, userId: "u" });
     expect(defaults.space.credentialed_sources_allowed).toBe(false);
+    expect(defaults.space.download_bytes_max).toBe(5_242_880);
     expect(defaults.space.created_at).toBeNull();
     expect(defaults.instance.runner_enabled).toBe(true);
+    expect(defaults.instance).not.toHaveProperty("download_bytes_max");
+    const defaultEffective = await repo!.getEffectiveSettings({ spaceId: SPACE_A, userId: "u" });
+    expect(defaultEffective.runner.download_bytes_max).toBe(5_242_880);
 
     await pool!.query(
       `INSERT INTO settings (
@@ -177,9 +181,10 @@ describe("PgCustomSourceHandlerRepository (real Postgres)", () => {
         CUSTOM_SOURCE_SPACE_POLICY_SETTINGS_KEY,
         JSON.stringify({
           creator_roles: ["owner"],
-          default_capture_policy: "excerpt_only",
+          default_capture_policy: "reference_only",
           default_retention_policy: "full_text",
           allowed_domains: ["example.com"],
+          download_bytes_max: 2_097_152,
           credentialed_sources_allowed: true,
           same_envelope_repair_auto_apply: true,
         }),
@@ -188,7 +193,11 @@ describe("PgCustomSourceHandlerRepository (real Postgres)", () => {
     const configured = await repo!.getSettings({ spaceId: SPACE_A, userId: "u" });
     expect(configured.space.creator_roles).toEqual(["owner", "admin"]);
     expect(configured.space.credentialed_sources_allowed).toBe(true);
+    expect(configured.space.download_bytes_max).toBe(2_097_152);
     expect(configured.space.created_at).not.toBeNull();
+    expect(configured.instance).not.toHaveProperty("download_bytes_max");
+    const effective = await repo!.getEffectiveSettings({ spaceId: SPACE_A, userId: "u" });
+    expect(effective.runner.download_bytes_max).toBe(2_097_152);
   });
 
   it("updateInstanceRunnerSettings upserts the singleton runner toggle", async () => {
@@ -200,6 +209,7 @@ describe("PgCustomSourceHandlerRepository (real Postgres)", () => {
 
     const defaultRead = await repo!.getInstanceRunnerSettings();
     expect(defaultRead.runner_enabled).toBe(false);
+    expect(defaultRead).not.toHaveProperty("download_bytes_max");
 
     const enabled = await repo!.updateInstanceRunnerSettings({ spaceId: SPACE_A, userId: "admin-2" }, {
       runner_enabled: true,
@@ -227,18 +237,20 @@ describe("PgCustomSourceHandlerRepository (real Postgres)", () => {
     await insertMembership(SPACE_A, "admin-1", "admin");
     const updated = await repo!.updateSpacePolicy({ spaceId: SPACE_A, userId: "admin-1" }, {
       creator_roles: ["reviewer"],
-      default_capture_policy: "excerpt_only",
+      default_capture_policy: "reference_only",
       default_retention_policy: "summary_only",
       allowed_domains: ["https://Example.com/articles", "*.docs.example.com", "example.com"],
+      download_bytes_max: 1_048_576,
       credentialed_sources_allowed: true,
       same_envelope_repair_auto_apply: true,
     });
 
     expect(updated).toMatchObject({
       creator_roles: ["owner", "admin", "reviewer"],
-      default_capture_policy: "excerpt_only",
+      default_capture_policy: "reference_only",
       default_retention_policy: "summary_only",
       allowed_domains: ["example.com", "docs.example.com"],
+      download_bytes_max: 1_048_576,
       credentialed_sources_allowed: true,
       same_envelope_repair_auto_apply: true,
     });
@@ -248,6 +260,7 @@ describe("PgCustomSourceHandlerRepository (real Postgres)", () => {
       settings_json: {
         creator_roles: string[];
         allowed_domains: string[];
+        download_bytes_max: number;
       };
     }>(
       `SELECT updated_by_user_id, settings_json
@@ -260,6 +273,7 @@ describe("PgCustomSourceHandlerRepository (real Postgres)", () => {
       settings_json: {
         creator_roles: ["owner", "admin", "reviewer"],
         allowed_domains: ["example.com", "docs.example.com"],
+        download_bytes_max: 1_048_576,
       },
     });
   });

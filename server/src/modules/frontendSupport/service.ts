@@ -592,8 +592,8 @@ export class PgFrontendSupportService {
            WHERE space_id = $1 AND deleted_at IS NULL AND status = 'candidate') AS candidate_evidence,
          (SELECT count(*)::text FROM extracted_evidence
            WHERE space_id = $1 AND deleted_at IS NULL AND status = 'active') AS active_evidence,
-         (SELECT count(*)::text FROM workspace_intake_profiles
-           WHERE space_id = $1 AND status = 'active' AND observation_policy <> 'disabled') AS due_connections`,
+         (SELECT count(*)::text FROM source_connections
+           WHERE space_id = $1 AND deleted_at IS NULL AND status = 'active') AS due_connections`,
       [spaceId],
     );
     const row = result.rows[0];

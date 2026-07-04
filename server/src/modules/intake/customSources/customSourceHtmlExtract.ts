@@ -1,4 +1,4 @@
-import { sha256 } from "./intakeRepositoryMappers";
+import { sha256 } from "../intakeRepositoryMappers";
 
 /**
  * Real TypeScript port of the string-processing heuristics embedded as a
@@ -12,7 +12,8 @@ import { sha256 } from "./intakeRepositoryMappers";
  * Deliberately the same shallow heuristics as the code-template mode for
  * parity: one CSS class name identifies repeated list items, not a full CSS
  * selector or DOM parser. See
- * `.agent/plans/intake-source-levels-plan.md` Open Questions (selector depth).
+ * `.agent/architecture/INTAKE_CUSTOM_SOURCE_HANDLERS.md` for the Level 1/2/3
+ * split.
  */
 
 export interface CustomSourcePipelineSnapshot {

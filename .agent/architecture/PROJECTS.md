@@ -111,8 +111,9 @@ concrete project content.
 
 ### project_id on durable objects
 
-The following tables carry nullable `project_id` columns with database foreign keys to
-`projects.id`. Existing rows with `project_id = NULL` are unaffected.
+The following tables carry `project_id` columns with database foreign keys to
+`projects.id`. Unless noted otherwise, the column is nullable and existing rows
+with `project_id = NULL` are unaffected.
 
 | Table | Column added |
 |---|---|
@@ -121,6 +122,14 @@ The following tables carry nullable `project_id` columns with database foreign k
 | `artifacts` | `project_id` |
 | `proposals` | `project_id` |
 | `memory_entries` | `project_id` |
+| `automations` | `project_id` (composite FK `(space_id, project_id)`; optional, `agent_run` target only, requires project writer authority to bind — see [modules/automations.md](../modules/automations.md)) |
+| `workspace_source_bindings` | `project_id` (required; composite FK `(space_id, project_id)`; source consumption requires project writer authority and a current `project_workspaces` link) |
+
+`workspace_source_bindings` remain Intake-owned routing records, not Project-owned
+source records. `source_connections` stay space-scoped under Intake. The binding
+is the project boundary: the same workspace/source pair can be bound to multiple
+projects because the uniqueness constraint includes `(space_id, project_id,
+workspace_id, source_connection_id, binding_key)`.
 
 ## API routes
 
@@ -187,6 +196,16 @@ space.
   writer authority: the project `owner_user_id`, a space `owner`/`admin`, or an
   active `project_members.role` of `owner` or `member`. `viewer` is read-only for
   concrete project memory and cannot mutate project metadata or public summary.
+- Intake source binding creation requires project writer authority and rejects
+  workspaces that are not currently linked to the target project. Removing the
+  final `project_workspaces` link for a project/workspace archives matching
+  `workspace_source_bindings` and their auto-created `context_candidate`
+  evidence links.
+- The Project Detail Intake section supports creating a project-scoped source
+  binding directly from existing Intake sources and project-linked workspaces.
+  It also supports saving a URL into the project through an already-bound
+  source and changing the source for manually saved URL items. Source creation,
+  scans, and advanced source management remain on the Intake surface.
 - **Publishing a public summary** (`review_status` other than `draft`) requires
   project-**owner**-level authority — the project `owner_user_id` or a space
   `owner`/`admin`. A project `member` (writer) can stage drafts but cannot

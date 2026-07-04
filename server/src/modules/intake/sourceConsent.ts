@@ -1,23 +1,21 @@
 import { HttpError, objectValue, optionalString, type SpaceUserIdentity } from "../routeUtils/common";
+import {
+  retentionForCapturePolicy,
+  SOURCE_CAPTURE_POLICIES,
+  SOURCE_RETENTION_POLICIES,
+  type SourceCapturePolicy,
+  type SourceRetentionPolicy,
+} from "./capturePolicy";
 import type { SourceConnectionRow } from "./intakeRepositoryRows";
 
-const CAPTURE_POLICIES = [
-  "metadata_only",
-  "excerpt_only",
-  "auto_extract_relevant",
-  "auto_extract_all_text",
-  "archive_all_snapshots",
-] as const;
-
 const TRUST_LEVELS = ["trusted", "normal", "untrusted"] as const;
-const RETENTION_POLICIES = ["metadata_only", "summary_only", "full_text", "full_snapshot", "archived"] as const;
 const SOURCE_EGRESS_CLASSES = ["internal_only", "local_provider_allowed", "external_provider_allowed"] as const;
 const DERIVED_WRITE_POLICIES = ["proposal_required", "disabled"] as const;
 const IMPORT_TARGETS = ["activity", "knowledge", "memory_proposal", "source_artifact"] as const;
 
-type CapturePolicy = (typeof CAPTURE_POLICIES)[number];
+type CapturePolicy = SourceCapturePolicy;
 type TrustLevel = (typeof TRUST_LEVELS)[number];
-type RetentionPolicy = (typeof RETENTION_POLICIES)[number];
+type RetentionPolicy = SourceRetentionPolicy;
 type SourceEgressClass = (typeof SOURCE_EGRESS_CLASSES)[number];
 type DerivedWritePolicy = (typeof DERIVED_WRITE_POLICIES)[number];
 type ImportTarget = (typeof IMPORT_TARGETS)[number];
@@ -59,7 +57,7 @@ export function normalizeSourceConnectionReadGovernance(row: SourceConnectionRow
 } {
   const identity = { spaceId: row.space_id, userId: row.owner_user_id };
   const consent = normalizeConsent(identity, {}, sourceRecord(row.consent_json));
-  const capturePolicy = safeEnumValue(row.capture_policy, CAPTURE_POLICIES, "metadata_only");
+  const capturePolicy = safeEnumValue(row.capture_policy, SOURCE_CAPTURE_POLICIES, "reference_only");
   const trustLevel = safeEnumValue(row.trust_level, TRUST_LEVELS, "normal");
   const policy = normalizePolicyForRead({
     existing: sourceRecord(row.policy_json),
@@ -74,7 +72,7 @@ export function enforceSourceRetentionPolicy(policyJson: unknown, requested: Ret
   const policy = sourceRecord(policyJson);
   const retentionPolicy = enumValue(
     policy.retention_policy,
-    RETENTION_POLICIES,
+    SOURCE_RETENTION_POLICIES,
     "policy.retention_policy",
     "metadata_only",
   );
@@ -110,7 +108,7 @@ export function normalizeSourceConnectionCreateGovernance(
   identity: SpaceUserIdentity,
   body: Record<string, unknown>,
 ): SourceConnectionGovernance {
-  const capturePolicy = enumValue(body.capture_policy, CAPTURE_POLICIES, "capture_policy", "metadata_only");
+  const capturePolicy = enumValue(body.capture_policy, SOURCE_CAPTURE_POLICIES, "capture_policy", "reference_only");
   const trustLevel = enumValue(body.trust_level, TRUST_LEVELS, "trust_level", "normal");
   const consent = normalizeConsent(identity, objectValue(body.consent));
   const policy = normalizePolicy({
@@ -133,7 +131,7 @@ export function normalizeSourceConnectionUpdateGovernance(
   policy: SourceConnectionPolicy | null;
 } {
   const capturePolicy = Object.hasOwn(body, "capture_policy")
-    ? enumValue(body.capture_policy, CAPTURE_POLICIES, "capture_policy", null)
+    ? enumValue(body.capture_policy, SOURCE_CAPTURE_POLICIES, "capture_policy", null)
     : null;
   const trustLevel = Object.hasOwn(body, "trust_level")
     ? enumValue(body.trust_level, TRUST_LEVELS, "trust_level", null)
@@ -149,7 +147,7 @@ export function normalizeSourceConnectionUpdateGovernance(
     ? normalizePolicy({
         raw: Object.hasOwn(body, "policy") ? objectValue(body.policy) : {},
         existing: sourceRecord(existing.policy_json),
-        capturePolicy: capturePolicy ?? enumValue(existing.capture_policy, CAPTURE_POLICIES, "capture_policy", "metadata_only"),
+        capturePolicy: capturePolicy ?? enumValue(existing.capture_policy, SOURCE_CAPTURE_POLICIES, "capture_policy", "reference_only"),
         trustLevel: trustLevel ?? enumValue(existing.trust_level, TRUST_LEVELS, "trust_level", "normal"),
         consent: consent ?? normalizeConsent(identity, {}, sourceRecord(existing.consent_json)),
       })
@@ -200,7 +198,7 @@ function normalizePolicy(input: {
   const minimumRetention = retentionForCapture(input.capturePolicy);
   const retentionPolicy = enumValue(
     input.raw.retention_policy ?? existing.retention_policy,
-    RETENTION_POLICIES,
+    SOURCE_RETENTION_POLICIES,
     "policy.retention_policy",
     minimumRetention,
   );
@@ -248,7 +246,7 @@ function normalizePolicyForRead(input: {
   consent: SourceConnectionConsent;
 }): SourceConnectionPolicy {
   const minimumRetention = retentionForCapture(input.capturePolicy);
-  const rawRetention = safeEnumValue(input.existing.retention_policy, RETENTION_POLICIES, minimumRetention);
+  const rawRetention = safeEnumValue(input.existing.retention_policy, SOURCE_RETENTION_POLICIES, minimumRetention);
   const retentionPolicy = retentionRank(rawRetention) < retentionRank(minimumRetention)
     ? minimumRetention
     : rawRetention;
@@ -307,21 +305,11 @@ function egressClassForConsent(consent: SourceConnectionConsent): SourceEgressCl
 }
 
 function retentionForCapture(capturePolicy: CapturePolicy): RetentionPolicy {
-  switch (capturePolicy) {
-    case "metadata_only":
-      return "metadata_only";
-    case "excerpt_only":
-      return "summary_only";
-    case "auto_extract_relevant":
-    case "auto_extract_all_text":
-      return "full_text";
-    case "archive_all_snapshots":
-      return "full_snapshot";
-  }
+  return retentionForCapturePolicy(capturePolicy);
 }
 
 function retentionRank(value: RetentionPolicy): number {
-  return RETENTION_POLICIES.indexOf(value);
+  return SOURCE_RETENTION_POLICIES.indexOf(value);
 }
 
 function enumValue<const Values extends readonly string[]>(

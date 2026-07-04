@@ -72,7 +72,6 @@ function config(): ServerConfig {
     customSourceNetworkHardDenyRules: [],
     customSourceTimeoutMsMax: 30_000,
     customSourceOutputBytesMax: 1_048_576,
-    customSourceDownloadBytesMax: 5_242_880,
     customSourceLogBytesMax: 65_536,
     customSourceMaxFiles: 50,
     customSourceBrowserAutomationAvailable: false,

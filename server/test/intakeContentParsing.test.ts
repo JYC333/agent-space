@@ -63,6 +63,26 @@ describe("extractStructuredReaderContent", () => {
     expect(parseStructuredReaderContent(JSON.stringify(result))).toEqual(result);
   });
 
+  it("accepts PDF reader document JSON", () => {
+    const result = parseStructuredReaderContent(JSON.stringify({
+      schema_version: 1,
+      kind: "reader_document",
+      extraction_method: "pdf_text_v1",
+      image_policy: "none",
+      title: null,
+      source_uri: "https://example.test/paper.pdf",
+      plain_text: "PDF text.",
+      content_json: {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text: "PDF text." }] }],
+      },
+      image_count: 0,
+    }));
+
+    expect(result?.extraction_method).toBe("pdf_text_v1");
+    expect(result?.plain_text).toBe("PDF text.");
+  });
+
   it("rejects structured reader JSON with an unsupported schema marker", () => {
     const result = extractStructuredReaderContent(
       "<article><p>Readable text.</p></article>",

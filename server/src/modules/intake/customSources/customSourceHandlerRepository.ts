@@ -2,8 +2,8 @@ import type {
   CustomSourceInstanceRunnerSettingsUpdate,
   CustomSourceSpacePolicyUpdate,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import type { ServerConfig } from "../../config";
-import { isSpaceOwnerOrAdmin } from "../access/roles";
+import type { ServerConfig } from "../../../config";
+import { isSpaceOwnerOrAdmin } from "../../access/roles";
 import {
   HttpError,
   countFromRow,
@@ -11,14 +11,16 @@ import {
   page,
   type Queryable,
   type SpaceUserIdentity,
-} from "../routeUtils/common";
+} from "../../routeUtils/common";
 import {
   ScopedSettingsStore,
   SETTINGS_KEYS,
   defineScopedSetting,
   settingsRecord,
   type ScopedSettingsRead,
-} from "../settings";
+} from "../../settings";
+import { SOURCE_CAPTURE_POLICY_SET } from "../capturePolicy";
+import type { CustomSourceRunnerSettings } from "./customSourceRunner";
 
 export const HANDLER_VERSION_COLUMNS = `id, space_id, source_connection_id, version_number, language, entrypoint, handler_artifact_id, manifest_json, input_schema_json, output_schema_json, policy_envelope_json, requested_capabilities_json, checksum, status, created_by_user_id, created_by_run_id, proposal_id, test_result_json, created_at, activated_at, superseded_at`;
 export const HANDLER_RUN_COLUMNS = `id, space_id, source_connection_id, handler_version_id, extraction_job_id, status, input_artifact_id, output_artifact_id, logs_artifact_id, failure_class, failure_detail_json, validation_result_json, resource_usage_json, created_at, started_at, completed_at`;
@@ -69,13 +71,6 @@ export interface HandlerRunRow {
 }
 
 const CREATOR_ROLE_VALUES = new Set(["owner", "admin", "reviewer", "member"]);
-const CAPTURE_POLICY_VALUES = new Set([
-  "metadata_only",
-  "excerpt_only",
-  "auto_extract_relevant",
-  "auto_extract_all_text",
-  "archive_all_snapshots",
-]);
 const RETENTION_POLICY_VALUES = new Set([
   "metadata_only",
   "summary_only",
@@ -133,12 +128,15 @@ export function handlerRunOut(row: HandlerRunRow) {
 
 const SPACE_POLICY_DEFAULTS = {
   creator_roles: ["owner", "admin"] as string[],
-  default_capture_policy: "auto_extract_relevant",
+  default_capture_policy: "extract_text",
   default_retention_policy: "full_text",
   allowed_domains: [] as string[],
+  download_bytes_max: 5_242_880,
   credentialed_sources_allowed: false,
   same_envelope_repair_auto_apply: false,
 };
+const DOWNLOAD_BYTES_MIN = 1_024;
+const DOWNLOAD_BYTES_MAX = 104_857_600;
 
 const INSTANCE_SETTINGS_DEFAULTS = {
   runner_enabled: true,
@@ -149,6 +147,7 @@ interface CustomSourceSpacePolicySettings {
   default_capture_policy: string;
   default_retention_policy: string;
   allowed_domains: string[];
+  download_bytes_max: number;
   credentialed_sources_allowed: boolean;
   same_envelope_repair_auto_apply: boolean;
 }
@@ -172,7 +171,7 @@ function normalizeCreatorRoles(value: unknown): string[] {
 }
 
 function normalizeCapturePolicy(value: unknown): string {
-  if (typeof value === "string" && CAPTURE_POLICY_VALUES.has(value)) return value;
+  if (typeof value === "string" && SOURCE_CAPTURE_POLICY_SET.has(value)) return value;
   throw new HttpError(422, "Unsupported Custom Source capture policy");
 }
 
@@ -206,6 +205,19 @@ function normalizeAllowedDomains(value: unknown): string[] {
   return [...new Set(domains)];
 }
 
+function normalizeDownloadBytesMax(value: unknown): number {
+  const numberValue = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim()
+      ? Number(value)
+      : NaN;
+  if (!Number.isInteger(numberValue)) throw new HttpError(422, "download_bytes_max must be an integer byte count");
+  if (numberValue < DOWNLOAD_BYTES_MIN || numberValue > DOWNLOAD_BYTES_MAX) {
+    throw new HttpError(422, "download_bytes_max must be between 1024 and 104857600 bytes");
+  }
+  return numberValue;
+}
+
 function parseSpacePolicySettings(value: unknown): CustomSourceSpacePolicySettings {
   const settings = settingsRecord(value);
   return {
@@ -219,6 +231,10 @@ function parseSpacePolicySettings(value: unknown): CustomSourceSpacePolicySettin
         ? normalizeRetentionPolicy(settings.default_retention_policy)
         : SPACE_POLICY_DEFAULTS.default_retention_policy,
     allowed_domains: normalizeAllowedDomains(settings.allowed_domains),
+    download_bytes_max:
+      settings.download_bytes_max === undefined
+        ? SPACE_POLICY_DEFAULTS.download_bytes_max
+        : normalizeDownloadBytesMax(settings.download_bytes_max),
     credentialed_sources_allowed:
       typeof settings.credentialed_sources_allowed === "boolean"
         ? settings.credentialed_sources_allowed
@@ -275,7 +291,6 @@ export function instanceRunnerSettingsOut(
     network_hard_deny_rules: config.customSourceNetworkHardDenyRules,
     timeout_ms_max: config.customSourceTimeoutMsMax,
     output_bytes_max: config.customSourceOutputBytesMax,
-    download_bytes_max: config.customSourceDownloadBytesMax,
     log_bytes_max: config.customSourceLogBytesMax,
     max_files: config.customSourceMaxFiles,
     browser_automation_available: config.customSourceBrowserAutomationAvailable,
@@ -284,6 +299,19 @@ export function instanceRunnerSettingsOut(
     generate_rate_limit_per_hour: config.customSourceGenerateRateLimitPerHour,
     artifact_retention_enabled: config.customSourceArtifactRetentionEnabled,
     artifact_retention_days: config.customSourceArtifactRetentionDays,
+  };
+}
+
+function runnerSettingsOut(
+  config: ServerConfig,
+  instanceRead: ScopedSettingsRead<CustomSourceInstanceRunnerSettings> | null,
+  spaceRead: ScopedSettingsRead<CustomSourceSpacePolicySettings>,
+): CustomSourceRunnerSettings {
+  const instanceSettings = instanceRead?.value ?? INSTANCE_SETTINGS_DEFAULTS;
+  return {
+    ...instanceRunnerSettingsOut(config, instanceRead),
+    runner_enabled: instanceSettings.runner_enabled,
+    download_bytes_max: spaceRead.value.download_bytes_max,
   };
 }
 
@@ -319,6 +347,14 @@ export class PgCustomSourceHandlerRepository {
 
   private async getInstanceRunnerSettingsRead() {
     return this.settingsStore.get(CUSTOM_SOURCE_INSTANCE_RUNNER_DEFINITION, "instance");
+  }
+
+  async getRunnerSettingsForSpace(spaceId: string): Promise<CustomSourceRunnerSettings> {
+    const [instanceRead, spaceRead] = await Promise.all([
+      this.getInstanceRunnerSettingsRead(),
+      this.getSpacePolicySettings(spaceId),
+    ]);
+    return runnerSettingsOut(this.config, instanceRead, spaceRead);
   }
 
   private async getSpaceRole(identity: SpaceUserIdentity): Promise<string | null> {
@@ -492,9 +528,24 @@ export class PgCustomSourceHandlerRepository {
   }
 
   async getSettings(identity: SpaceUserIdentity) {
+    const [space, instance] = await Promise.all([
+      this.getSpacePolicy(identity),
+      this.getInstanceRunnerSettings(),
+    ]);
     return {
-      space: await this.getSpacePolicy(identity),
-      instance: await this.getInstanceRunnerSettings(),
+      space,
+      instance,
+    };
+  }
+
+  async getEffectiveSettings(identity: SpaceUserIdentity) {
+    const [space, runner] = await Promise.all([
+      this.getSpacePolicy(identity),
+      this.getRunnerSettingsForSpace(identity.spaceId),
+    ]);
+    return {
+      space,
+      runner,
     };
   }
 
@@ -523,6 +574,7 @@ export class PgCustomSourceHandlerRepository {
       default_capture_policy: normalizeCapturePolicy(input.default_capture_policy ?? current.default_capture_policy),
       default_retention_policy: normalizeRetentionPolicy(input.default_retention_policy ?? current.default_retention_policy),
       allowed_domains: normalizeAllowedDomains(input.allowed_domains ?? current.allowed_domains),
+      download_bytes_max: normalizeDownloadBytesMax(input.download_bytes_max ?? current.download_bytes_max),
       credentialed_sources_allowed: input.credentialed_sources_allowed ?? current.credentialed_sources_allowed,
       same_envelope_repair_auto_apply:
         input.same_envelope_repair_auto_apply ?? current.same_envelope_repair_auto_apply,

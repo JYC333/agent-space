@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  SOURCE_CAPTURE_POLICIES,
+  SOURCE_RETENTION_POLICIES,
+} from "../intake/capturePolicy";
 
 // Base for every proposal payload: at minimum a literal proposal_type.
 // All schemas use .passthrough() so unknown optional fields from agents are tolerated.
@@ -173,8 +177,8 @@ const memoryMaintenancePacket = z
 const customSourcePolicyEnvelope = z
   .object({
     allowed_network_origins: z.array(z.string()),
-    capture_policy: z.string(),
-    retention_policy: z.string(),
+    capture_policy: z.enum(SOURCE_CAPTURE_POLICIES),
+    retention_policy: z.enum(SOURCE_RETENTION_POLICIES),
     credential_ref: z.string().nullish(),
     language: z.enum(["typescript_node", "declarative_pipeline_v1"]),
     browser_automation_enabled: z.boolean().default(false),
@@ -226,8 +230,8 @@ const customSourceCredentialedSource = z
 const sourceRecipePolicyEnvelope = z
   .object({
     allowed_network_origins: z.array(z.string()),
-    capture_policy: z.string(),
-    retention_policy: z.string(),
+    capture_policy: z.enum(SOURCE_CAPTURE_POLICIES),
+    retention_policy: z.enum(SOURCE_RETENTION_POLICIES),
     credential_ref: z.string().nullish(),
     log_redaction_enabled: z.boolean().default(true),
     limits: z

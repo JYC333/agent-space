@@ -33,8 +33,9 @@ import type {
   CapabilityDefinition, CapabilityPackDescriptor, WorkflowTemplate, ProjectWorkflowProfile, WorkflowRunDraftRequest, WorkflowRunDraftResponse,
   SkillImportPreviewResponse, SkillPackage, SkillImportApprovalProposalResponse, SkillConvertToCapabilityResponse,
   SkillLibraryIndexResponse, SkillLocalOverlay, SkillLocalOverlayUpsertRequest,
-  SourceConnector, SourceConnection, SourceConnectionCreate, IntakeItem, ExtractionJob,
-  ExtractedEvidence, EvidenceLink, WorkspaceIntakeProfile, WorkspaceSourceBinding,
+  SourceConnector, SourceConnection, SourceConnectionCreate, SourceCapturePolicy, SourceScheduleRule, IntakeItem, ExtractionJob,
+  SourcePresetListResponse, ArxivPresetPreviewRequest, ArxivPresetPreviewResponse, ArxivPresetCreateRequest,
+  ExtractedEvidence, EvidenceLink, WorkspaceSourceBinding,
   CustomSourceActivationResult, CustomSourceCreateDraftRequest, CustomSourceHandlerRun,
   CustomSourceHandlerSummary, CustomSourceHandlerVersion, CustomSourceInstanceRunnerSettings,
   CustomSourceInstanceRunnerSettingsUpdate,
@@ -1023,6 +1024,12 @@ export const intakeApi = {
   },
   createConnection: (body: SourceConnectionCreate) =>
     post<SourceConnection>('/intake/connections', body),
+  sourcePresets: () =>
+    get<SourcePresetListResponse>('/intake/source-presets'),
+  previewArxivSourcePreset: (body: ArxivPresetPreviewRequest) =>
+    post<ArxivPresetPreviewResponse>('/intake/source-presets/arxiv/preview', body),
+  createArxivSourcePreset: (body: ArxivPresetCreateRequest) =>
+    post<SourceConnection>('/intake/source-presets/arxiv', body),
   getConnection: (id: string) =>
     get<SourceConnection>(`/intake/connections/${id}`),
   updateConnection: (id: string, body: Partial<SourceConnectionCreate> & { status?: string }) =>
@@ -1052,11 +1059,11 @@ export const intakeApi = {
     if (params.offset !== undefined) q.offset = String(params.offset)
     return get<Page<CustomSourceHandlerRun>>(`/intake/connections/${connectionId}/handler-runs?` + new URLSearchParams(q))
   },
-  generateCustomSourceHandler: (connectionId: string, body: { capture_policy?: string; retention_policy?: string } = {}) =>
+  generateCustomSourceHandler: (connectionId: string, body: { capture_policy?: SourceCapturePolicy; retention_policy?: string } = {}) =>
     post<CustomSourceHandlerVersion>(`/intake/custom-sources/${connectionId}/generate-handler`, body),
   testCustomSourceHandler: (connectionId: string, body: { handler_version_id: string; fixture_html?: string }) =>
     post<CustomSourceTestOutcome>(`/intake/custom-sources/${connectionId}/test-handler`, body),
-  activateCustomSourceHandler: (connectionId: string, body: { handler_version_id: string }) =>
+  activateCustomSourceHandler: (connectionId: string, body: { handler_version_id: string; next_check_at?: string | null; schedule_rule?: SourceScheduleRule | null }) =>
     post<CustomSourceActivationResult>(`/intake/custom-sources/${connectionId}/activate`, body),
   customSourceSpacePolicy: () =>
     get<CustomSourceSpacePolicy>('/intake/custom-source-settings/space'),
@@ -1072,7 +1079,7 @@ export const intakeApi = {
     post<SourceRecipeCreateResponse>('/intake/source-recipes', body),
   dryRunSourceRecipe: (connectionId: string, body: { recipe_version_id: string; fixture_content?: string }) =>
     post<SourceRecipeDryRunResponse>(`/intake/source-recipes/${connectionId}/dry-run`, body),
-  activateSourceRecipe: (connectionId: string, body: { recipe_version_id: string }) =>
+  activateSourceRecipe: (connectionId: string, body: { recipe_version_id: string; next_check_at?: string | null; schedule_rule?: SourceScheduleRule | null }) =>
     post<SourceRecipeActivationResult>(`/intake/source-recipes/${connectionId}/activate`, body),
   bridgePipelineSourceRecipe: (connectionId: string, body: SourceRecipePipelineBridgeRequest = {}) =>
     post<SourceRecipePipelineBridgeResponse>(`/intake/custom-sources/${connectionId}/bridge-pipeline`, body),
@@ -1104,6 +1111,8 @@ export const intakeApi = {
   },
   getItem: (id: string) =>
     get<IntakeItem>(`/intake/items/${id}`),
+  updateItem: (id: string, body: { connection_id?: string | null }) =>
+    patch<IntakeItem>(`/intake/items/${id}`, body),
   createManualUrl: (body: { url: string; title?: string; connection_id?: string | null; queue_content?: boolean }) =>
     post<IntakeItem>('/intake/items/manual-url', body),
   itemAction: (id: string, action: string) =>
@@ -1159,20 +1168,6 @@ export const intakeApi = {
     return get<Page<EvidenceLink>>('/intake/evidence-links?' + new URLSearchParams(q))
   },
 
-  workspaceProfiles: (params: { workspace_id?: string } = {}) => {
-    const q: Record<string, string> = {}
-    if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
-    return get<WorkspaceIntakeProfile[]>('/intake/workspace-profiles?' + new URLSearchParams(q))
-  },
-  createWorkspaceProfile: (body: {
-    workspace_id: string
-    name?: string
-    observation_policy?: string
-    routing_policy?: Record<string, unknown>
-    filters?: Record<string, unknown>
-    extraction_policy?: Record<string, unknown>
-    context_policy?: Record<string, unknown>
-  }) => post<WorkspaceIntakeProfile>('/intake/workspace-profiles', body),
   workspaceBindings: (params: { workspace_id?: string; source_connection_id?: string; project_id?: string } = {}) => {
     const q: Record<string, string> = {}
     if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
@@ -1183,8 +1178,8 @@ export const intakeApi = {
   createWorkspaceBinding: (body: {
     workspace_id: string
     source_connection_id: string
+    project_id: string
     binding_key?: string
-    project_id?: string | null
     priority?: number
     filters?: Record<string, unknown>
     routing_policy?: Record<string, unknown>

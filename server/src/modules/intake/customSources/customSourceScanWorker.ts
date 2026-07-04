@@ -2,8 +2,8 @@ import type {
   CustomSourceHandlerInput,
   CustomSourcePolicyEnvelope,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import type { ServerConfig } from "../../config";
-import type { Queryable } from "../routeUtils/common";
+import type { ServerConfig } from "../../../config";
+import type { Queryable } from "../../routeUtils/common";
 import {
   HANDLER_VERSION_COLUMNS,
   PgCustomSourceHandlerRepository,
@@ -12,13 +12,14 @@ import {
 import { cleanupSandbox, evaluateCustomSourceRunnerBlockReason } from "./customSourceRunner";
 import { executeCustomSourceHandler } from "./customSourceHandlerExecution";
 import { CustomSourceMaterializationService } from "./customSourceMaterializer";
+import { emitIntakeItemsMaterializedEvent } from "../automationEventEmitter";
 import { fetchCustomSourceEndpointHtml } from "./customSourceEndpointFetch";
 import { CustomSourceCredentialService } from "./customSourceCredentialService";
-import { computeNextCheckAt } from "./scanSchedule";
+import { computeNextCheckAt } from "../scanSchedule";
 import {
   getSourceConnectionScanTask,
   upsertSourceConnectionScanTask,
-} from "./sourceConnectionScheduler";
+} from "../sourceConnectionScheduler";
 
 interface QueuedRunRow {
   id: string;
@@ -108,9 +109,10 @@ async function runOne(db: Queryable, config: ServerConfig, run: QueuedRunRow): P
     owner_user_id: string;
     endpoint_url: string | null;
     fetch_frequency: string;
+    schedule_rule_json: unknown;
     status: string;
   }>(
-    `SELECT id, space_id, owner_user_id, endpoint_url, fetch_frequency, status
+    `SELECT id, space_id, owner_user_id, endpoint_url, fetch_frequency, schedule_rule_json, status
        FROM source_connections
       WHERE id = $1 AND space_id = $2`,
     [run.source_connection_id, run.space_id],
@@ -126,7 +128,7 @@ async function runOne(db: Queryable, config: ServerConfig, run: QueuedRunRow): P
   const version = versionResult.rows[0];
   if (!version) throw new Error(`Handler version ${run.handler_version_id} not found`);
   const policyEnvelope = version.policy_envelope_json as CustomSourcePolicyEnvelope;
-  const settings = await new PgCustomSourceHandlerRepository(db, config).getInstanceRunnerSettings();
+  const settings = await new PgCustomSourceHandlerRepository(db, config).getRunnerSettingsForSpace(run.space_id);
   const blockReason = evaluateCustomSourceRunnerBlockReason(settings, policyEnvelope);
   const credential = await new CustomSourceCredentialService(db, config).resolveCredentialHeader(
     run.space_id,
@@ -204,6 +206,13 @@ async function runOne(db: Queryable, config: ServerConfig, run: QueuedRunRow): P
       });
 
       await completeExtractionJob(db, run, result);
+      if (result.status === "succeeded" && result.itemsCreated > 0) {
+        await emitIntakeItemsMaterializedEvent(db, {
+          spaceId: run.space_id,
+          sourceConnectionId: run.source_connection_id,
+          newItemCount: result.itemsCreated,
+        });
+      }
     } finally {
       await cleanupSandbox(runnerResult.sandbox_files_root).catch(() => undefined);
     }
@@ -235,6 +244,7 @@ async function runOne(db: Queryable, config: ServerConfig, run: QueuedRunRow): P
       connection,
       nextRunAt: computeNextCheckAt(connection.fetch_frequency, completedAt, {
         existingNextCheckAt: scheduleTask?.next_run_at,
+        scheduleRule: connection.schedule_rule_json,
       }),
       lastRunAt: completedAt,
       updatedAt: completedAt,

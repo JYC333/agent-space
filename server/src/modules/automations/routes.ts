@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { ModuleContext } from "../../gateway/routeRegistry";
 import {
   dbPool,
+  HttpError,
   jsonBody,
   optionalString,
   params,
@@ -87,13 +88,17 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (spaceId !== identity.spaceId) return reply.code(403).send({ detail: "Access denied" });
     try {
       const body = jsonBody(request);
+      const triggerType = optionalString(body.trigger_type);
+      if (triggerType && triggerType !== "manual") {
+        throw new HttpError(422, "Public automation fire only supports trigger_type='manual'");
+      }
       const result = await service().fire({
         spaceId,
         automationId: params(request).automationId ?? "",
         actorUserId: identity.userId,
         prompt: optionalString(body.prompt),
         instruction: optionalString(body.instruction),
-        triggerType: optionalString(body.trigger_type) ?? "manual",
+        triggerType: "manual",
       });
       return reply.send(result);
     } catch (error) {

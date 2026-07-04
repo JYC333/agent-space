@@ -4,7 +4,7 @@ import type {
   CustomSourceHandlerOutput,
   CustomSourcePolicyLimits,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import { loadProtocol } from "../providers/protocolRuntime";
+import { loadProtocol } from "../../providers/protocolRuntime";
 
 /**
  * Validates untrusted Custom Source handler output (`output.json`) against

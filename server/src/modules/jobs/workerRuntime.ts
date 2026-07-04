@@ -10,6 +10,7 @@ import { registerContextDigestRefreshHandler } from "../context/digestJob";
 import { registerIntakeExtractionHandler } from "../intake/extractionJob";
 import { registerSessionCondenseHandler } from "../sessions/condenseJob";
 import { registerRetrievalEmbeddingHandler } from "../retrievalEmbedding/job";
+import { registerAutomationIntakeEventHandler } from "../automations/intakeEventHandler";
 import type { PluginHost } from "../plugins/host";
 import { PgRunRepository } from "../runs/repository";
 
@@ -42,6 +43,7 @@ export function buildJobHandlerRegistry(
   registerIntakeExtractionHandler(registry, config);
   registerSessionCondenseHandler(registry, config);
   registerRetrievalEmbeddingHandler(registry, config);
+  registerAutomationIntakeEventHandler(registry, config);
   // Plugin-contributed job handlers (enablement-gated by the host context).
   pluginHost?.applyJobHandlers(registry);
   return registry;

@@ -11,7 +11,7 @@ import type {
   CustomSourcePolicyEnvelope,
   CustomSourcePolicyLimits,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import { redactSecretPatterns } from "../runs/evidenceRedaction";
+import { redactSecretPatterns } from "../../runs/evidenceRedaction";
 import {
   fetchAllowedOriginResponse,
   truncateToByteLimit,
@@ -41,7 +41,7 @@ import {
  * performs a live network request goes through `fetchAllowedOriginResponse`,
  * the same origin-allowlist + redirect-revalidation guard the code-template
  * mode's pre-fetch uses. See
- * `.agent/plans/intake-source-levels-plan.md`.
+ * `.agent/architecture/INTAKE_CUSTOM_SOURCE_HANDLERS.md`.
  *
  * `mode: "test"` runs only ever read the already-provided/fixture-overridable
  * primary endpoint HTML (`handlerInput.source.config.fetched_html`) for a

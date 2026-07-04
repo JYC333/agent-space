@@ -64,6 +64,42 @@ describe("intake feed parser", () => {
       },
     });
   });
+
+  it("prefers RSS PDF enclosures over alternate article links", () => {
+    const items = parseFeed(
+      `<?xml version="1.0"?>
+       <rss version="2.0">
+         <channel>
+           <item>
+             <title>Paper</title>
+             <link>https://example.test/abs/1</link>
+             <enclosure url="https://example.test/pdf/1.pdf" type="application/pdf" />
+             <guid>paper-1</guid>
+           </item>
+         </channel>
+       </rss>`,
+      "rss",
+    );
+
+    expect(items[0]?.url).toBe("https://example.test/pdf/1.pdf");
+  });
+
+  it("prefers Atom PDF enclosures over alternate article links", () => {
+    const items = parseFeed(
+      `<?xml version="1.0"?>
+       <feed>
+         <entry>
+           <id>paper-1</id>
+           <title>Paper</title>
+           <link rel="alternate" href="https://example.test/abs/1" />
+           <link rel="enclosure" type="application/pdf" href="https://example.test/pdf/1.pdf" />
+         </entry>
+       </feed>`,
+      "atom",
+    );
+
+    expect(items[0]?.url).toBe("https://example.test/pdf/1.pdf");
+  });
 });
 
 describe("intake scan schedule", () => {
@@ -81,5 +117,14 @@ describe("intake scan schedule", () => {
       manualRun: true,
       existingNextCheckAt: "2026-07-03T12:00:00.000Z",
     })).toBe("2026-07-03T12:00:00.000Z");
+  });
+
+  it("uses schedule rules instead of completion-time intervals when present", () => {
+    expect(computeNextCheckAt("daily", "2026-06-30T12:34:00.000Z", {
+      scheduleRule: { frequency: "daily", hour: 9, minute: 15 },
+    })).toBe("2026-07-01T09:15:00.000Z");
+    expect(computeNextCheckAt("weekly", "2026-06-30T12:34:00.000Z", {
+      scheduleRule: { frequency: "weekly", weekday: 5, hour: 18, minute: 45 },
+    })).toBe("2026-07-03T18:45:00.000Z");
   });
 });

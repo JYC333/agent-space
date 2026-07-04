@@ -4,7 +4,9 @@ import { withTransaction } from "../../db/tx";
 import type { Queryable } from "../routeUtils/common";
 import { HttpError } from "../routeUtils/common";
 import { PgSchedulerTaskStore, type SchedulerTaskRow } from "../scheduler/taskStore";
+import { assertProjectWriter, canWriteProject } from "../projects/access";
 import { computeNextRunAt } from "./schedule";
+import { currentIntakeWatermark, type IntakeWatermark } from "./intakeDelta";
 
 export interface AutomationRow {
   id: string;
@@ -12,12 +14,14 @@ export interface AutomationRow {
   owner_user_id: string;
   agent_id: string;
   workspace_id: string | null;
+  project_id: string | null;
   name: string;
   description: string | null;
   trigger_type: string;
   status: string;
   preflight_snapshot_json: Record<string, unknown> | null;
   config_json: Record<string, unknown> | null;
+  cursor_json: Record<string, unknown> | null;
   next_run_at: string | null;
   last_fired_at: string | null;
   created_at: string;
@@ -32,6 +36,15 @@ export interface AutomationRepositoryPort {
     current_version_id: string | null;
     version_id: string | null;
   } | null>;
+  assertProjectWriter(spaceId: string, projectId: string, userId: string): Promise<void>;
+  canWriteProject(spaceId: string, projectId: string, userId: string): Promise<boolean>;
+  projectInSpace(spaceId: string, projectId: string): Promise<boolean>;
+  currentIntakeWatermark(
+    spaceId: string,
+    projectId: string | null,
+    sourceConnectionIds: string[],
+  ): Promise<IntakeWatermark | null>;
+  hasInFlightRun(spaceId: string, automationId: string): Promise<boolean>;
   create(input: {
     spaceId: string;
     ownerUserId: string;
@@ -39,9 +52,11 @@ export interface AutomationRepositoryPort {
     description?: string | null;
     agentId: string;
     workspaceId?: string | null;
+    projectId?: string | null;
     triggerType: string;
     configJson: Record<string, unknown>;
     preflightSnapshot: Record<string, unknown>;
+    cursorJson?: Record<string, unknown> | null;
   }): Promise<AutomationRow>;
   update(
     spaceId: string,
@@ -51,9 +66,12 @@ export interface AutomationRepositoryPort {
       description?: string | null;
       status?: string;
       config_json?: Record<string, unknown>;
+      project_id?: string | null;
+      cursor_json?: Record<string, unknown> | null;
     },
   ): Promise<AutomationRow>;
   listDue(nowIso: string): Promise<AutomationRow[]>;
+  listEventAutomationsForConnection(spaceId: string, sourceConnectionId: string): Promise<AutomationRow[]>;
   advanceSchedule(automation: AutomationRow): Promise<void>;
   recordFire(spaceId: string, automationId: string): Promise<void>;
   hasActiveGrant(spaceId: string, automationId: string): Promise<boolean>;
@@ -63,12 +81,13 @@ export interface AutomationRepositoryPort {
     triggeredByUserId: string;
     triggerType: string;
     preflightSnapshot: Record<string, unknown>;
+    triggerContext?: Record<string, unknown> | null;
   }): Promise<string>;
 }
 
 const AUTOMATION_COLUMNS = `
-  id, space_id, owner_user_id, agent_id, workspace_id, name, description,
-  trigger_type, status, preflight_snapshot_json, config_json, created_at, updated_at
+  id, space_id, owner_user_id, agent_id, workspace_id, project_id, name, description,
+  trigger_type, status, preflight_snapshot_json, config_json, cursor_json, created_at, updated_at
 `;
 const AUTOMATION_SCHEDULER_TASK_TYPE = "automation";
 
@@ -134,6 +153,48 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
     return result.rows[0] ?? null;
   }
 
+  async assertProjectWriter(spaceId: string, projectId: string, userId: string): Promise<void> {
+    await assertProjectWriter(this.db, spaceId, projectId, userId);
+  }
+
+  async canWriteProject(spaceId: string, projectId: string, userId: string): Promise<boolean> {
+    return canWriteProject(this.db, spaceId, projectId, userId);
+  }
+
+  async projectInSpace(spaceId: string, projectId: string): Promise<boolean> {
+    const result = await this.db.query<{ id: string }>(
+      `SELECT id
+         FROM projects
+        WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL
+        LIMIT 1`,
+      [spaceId, projectId],
+    );
+    return Boolean(result.rows[0]);
+  }
+
+  async currentIntakeWatermark(
+    spaceId: string,
+    projectId: string | null,
+    sourceConnectionIds: string[],
+  ): Promise<IntakeWatermark | null> {
+    return currentIntakeWatermark(this.db, { spaceId, projectId, sourceConnectionIds });
+  }
+
+  async hasInFlightRun(spaceId: string, automationId: string): Promise<boolean> {
+    const result = await this.db.query<{ id: string }>(
+      `SELECT ar.id
+         FROM automation_runs ar
+         JOIN runs r
+           ON r.id = ar.run_id
+          AND r.space_id = $1
+        WHERE ar.automation_id = $2
+          AND r.status IN ('queued', 'running')
+        LIMIT 1`,
+      [spaceId, automationId],
+    );
+    return Boolean(result.rows[0]);
+  }
+
   async create(input: {
     spaceId: string;
     ownerUserId: string;
@@ -141,13 +202,14 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
     description?: string | null;
     agentId: string;
     workspaceId?: string | null;
+    projectId?: string | null;
     triggerType: string;
     configJson: Record<string, unknown>;
     preflightSnapshot: Record<string, unknown>;
   }): Promise<AutomationRow> {
     if (isTransactionCapable(this.db)) {
       return withTransaction(this.db, async (client) =>
-        new PgAutomationRepository(client).create(input),
+        new PgAutomationRepository(client).createInCurrentUnit(input),
       );
     }
     return this.createInCurrentUnit(input);
@@ -160,9 +222,11 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
     description?: string | null;
     agentId: string;
     workspaceId?: string | null;
+    projectId?: string | null;
     triggerType: string;
     configJson: Record<string, unknown>;
     preflightSnapshot: Record<string, unknown>;
+    cursorJson?: Record<string, unknown> | null;
   }): Promise<AutomationRow> {
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -172,13 +236,13 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
         : null;
     const result = await this.db.query<AutomationRow>(
       `INSERT INTO automations (
-         id, space_id, owner_user_id, agent_id, workspace_id, name, description,
-         trigger_type, status, preflight_snapshot_json, config_json,
+         id, space_id, owner_user_id, agent_id, workspace_id, project_id, name, description,
+         trigger_type, status, preflight_snapshot_json, config_json, cursor_json,
          created_at, updated_at
        ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7,
-         $8, 'active', $9::jsonb, $10::jsonb,
-         $11, $11
+         $1, $2, $3, $4, $5, $6, $7, $8,
+         $9, 'active', $10::jsonb, $11::jsonb, $12::jsonb,
+         $13, $13
        )
        RETURNING ${AUTOMATION_COLUMNS}`,
       [
@@ -187,11 +251,13 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
         input.ownerUserId,
         input.agentId,
         input.workspaceId ?? null,
+        input.projectId ?? null,
         input.name,
         input.description ?? null,
         input.triggerType,
         JSON.stringify(input.preflightSnapshot),
         JSON.stringify(input.configJson),
+        input.cursorJson ? JSON.stringify(input.cursorJson) : null,
         now,
       ],
     );
@@ -203,7 +269,7 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
       status: "active",
       updatedAt: now,
     });
-    if (input.triggerType === "schedule") {
+    if (input.triggerType === "schedule" || input.triggerType === "event") {
       await this.db.query(
         `INSERT INTO automation_credential_grants (
            id, space_id, automation_id, granted_by_user_id, status, created_at
@@ -222,6 +288,8 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
       description?: string | null;
       status?: string;
       config_json?: Record<string, unknown>;
+      project_id?: string | null;
+      cursor_json?: Record<string, unknown> | null;
     },
   ): Promise<AutomationRow> {
     const existing = await this.get(spaceId, automationId);
@@ -246,12 +314,16 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
       nextRunAt = computeNextRunAt(configJson).toISOString();
       taskStatus = "active";
     }
+    const setProject = patch.project_id !== undefined;
+    const setCursor = patch.cursor_json !== undefined;
     const result = await this.db.query<AutomationRow>(
       `UPDATE automations
           SET name = COALESCE($3, name),
               description = COALESCE($4, description),
               status = COALESCE($5, status),
               config_json = COALESCE($6::jsonb, config_json),
+              project_id = CASE WHEN $8::boolean THEN $9 ELSE project_id END,
+              cursor_json = CASE WHEN $10::boolean THEN $11::jsonb ELSE cursor_json END,
               updated_at = $7
         WHERE space_id = $1 AND id = $2
         RETURNING ${AUTOMATION_COLUMNS}`,
@@ -263,6 +335,10 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
         patch.status ?? null,
         patch.config_json ? JSON.stringify(patch.config_json) : null,
         now,
+        setProject,
+        setProject ? patch.project_id : null,
+        setCursor,
+        setCursor && patch.cursor_json ? JSON.stringify(patch.cursor_json) : null,
       ],
     );
     const row = result.rows[0]!;
@@ -284,6 +360,49 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
       due.push(automationWithTask(row, task));
     }
     return due;
+  }
+
+  async listEventAutomationsForConnection(
+    spaceId: string,
+    sourceConnectionId: string,
+  ): Promise<AutomationRow[]> {
+    const result = await this.db.query<{ id: string }>(
+      `SELECT a.id
+         FROM automations a
+        WHERE a.space_id = $1
+          AND a.trigger_type = 'event'
+          AND a.status = 'active'
+          AND (
+            CASE
+              WHEN jsonb_typeof(a.config_json->'event'->'source_connection_ids') = 'array'
+               AND jsonb_array_length(a.config_json->'event'->'source_connection_ids') > 0
+              THEN a.config_json->'event'->'source_connection_ids' ? $2
+              ELSE a.project_id IS NOT NULL AND EXISTS (
+                SELECT 1
+                  FROM workspace_source_bindings wsb
+                 WHERE wsb.space_id = a.space_id
+                   AND wsb.project_id = a.project_id
+                   AND wsb.source_connection_id = $2
+                   AND wsb.status = 'active'
+                   AND EXISTS (
+                     SELECT 1
+                       FROM project_workspaces pw
+                      WHERE pw.space_id = wsb.space_id
+                        AND pw.project_id = wsb.project_id
+                        AND pw.workspace_id = wsb.workspace_id
+                   )
+              )
+            END
+          )
+        ORDER BY a.created_at`,
+      [spaceId, sourceConnectionId],
+    );
+    const rows: AutomationRow[] = [];
+    for (const { id } of result.rows) {
+      const row = await this.get(spaceId, id);
+      if (row) rows.push(row);
+    }
+    return rows;
   }
 
   async advanceSchedule(automation: AutomationRow): Promise<void> {
@@ -332,14 +451,15 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
     triggeredByUserId: string;
     triggerType: string;
     preflightSnapshot: Record<string, unknown>;
+    triggerContext?: Record<string, unknown> | null;
   }): Promise<string> {
     const id = randomUUID();
     const now = new Date().toISOString();
     await this.db.query(
       `INSERT INTO automation_runs (
          id, automation_id, run_id, triggered_by_user_id, trigger_type,
-         preflight_snapshot_json, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+         preflight_snapshot_json, trigger_context_json, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)`,
       [
         id,
         input.automationId,
@@ -347,6 +467,7 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
         input.triggeredByUserId,
         input.triggerType,
         JSON.stringify(input.preflightSnapshot),
+        input.triggerContext ? JSON.stringify(input.triggerContext) : null,
         now,
       ],
     );
@@ -448,12 +569,14 @@ export function automationToOut(row: AutomationRow): Record<string, unknown> {
     owner_user_id: row.owner_user_id,
     agent_id: row.agent_id,
     workspace_id: row.workspace_id,
+    project_id: row.project_id,
     name: row.name,
     description: row.description,
     trigger_type: row.trigger_type,
     status: row.status,
     preflight_snapshot_json: row.preflight_snapshot_json,
     config_json: row.config_json,
+    cursor_json: row.cursor_json,
     next_run_at: row.next_run_at,
     last_fired_at: row.last_fired_at,
     created_at: row.created_at,

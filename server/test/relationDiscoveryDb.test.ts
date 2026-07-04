@@ -125,7 +125,7 @@ async function insertSourceConnection(
        config_json, created_at, updated_at
      ) VALUES (
        $1, $2, $3, $4, 'Denied source', 'active', 'manual',
-       'metadata_only', 'normal', '[]'::jsonb, $5::jsonb, $6::jsonb,
+       'reference_only', 'normal', '[]'::jsonb, $5::jsonb, $6::jsonb,
        '{}'::jsonb, now(), now()
      )`,
     [input.id, SPACE, input.connectorId, input.ownerUserId, JSON.stringify(consent), JSON.stringify(policy)],

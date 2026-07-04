@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import IntakePage from '../IntakePage'
-import { intakeApi, workspacesApi } from '../../../api/client'
-import type { ExtractionJob, IntakeItem, SourceConnection, SourceRecipeDefinition, SourceRecipeVersion } from '../../../types/api'
+import SourcePresetsPage from '../sourcePresets/SourcePresetsPage'
+import { scheduleRuleFromForm } from '../intakePageModel'
+import { intakeApi, projectsApi, workspacesApi } from '../../../api/client'
+import type { ExtractionJob, IntakeItem, SourceConnection, SourceRecipeDefinition, SourceRecipeVersion, Workspace, WorkspaceSourceBinding } from '../../../types/api'
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -28,10 +30,13 @@ vi.mock('../../../api/client', () => ({
     jobs: vi.fn(),
     evidence: vi.fn(),
     evidenceLinks: vi.fn(),
-    workspaceProfiles: vi.fn(),
     workspaceBindings: vi.fn(),
     createConnection: vi.fn(),
+    sourcePresets: vi.fn(),
+    previewArxivSourcePreset: vi.fn(),
+    createArxivSourcePreset: vi.fn(),
     createManualUrl: vi.fn(),
+    updateItem: vi.fn(),
     createCustomSourceDraft: vi.fn(),
     planSourceRecipe: vi.fn(),
     createSourceRecipe: vi.fn(),
@@ -39,7 +44,6 @@ vi.mock('../../../api/client', () => ({
     activateSourceRecipe: vi.fn(),
     scanConnection: vi.fn(),
     updateConnection: vi.fn(),
-    createWorkspaceProfile: vi.fn(),
     createWorkspaceBinding: vi.fn(),
     itemAction: vi.fn(),
     runJob: vi.fn(),
@@ -49,6 +53,9 @@ vi.mock('../../../api/client', () => ({
   },
   workspacesApi: {
     list: vi.fn(),
+  },
+  projectsApi: {
+    listWorkspaces: vi.fn(),
   },
 }))
 
@@ -69,7 +76,7 @@ const recipeVersion: SourceRecipeVersion = {
   recipe_json: recipe,
   policy_envelope_json: {
     allowed_network_origins: ['https://example.test'],
-    capture_policy: 'auto_extract_relevant',
+    capture_policy: 'extract_text',
     retention_policy: 'full_text',
     credential_ref: null,
     log_redaction_enabled: true,
@@ -124,7 +131,7 @@ function recipeSourceConnection(): SourceConnection {
     endpoint_url: 'https://example.test/feed.xml',
     status: 'active',
     fetch_frequency: 'daily',
-    capture_policy: 'auto_extract_relevant',
+    capture_policy: 'extract_text',
     trust_level: 'normal',
     topic_hints_json: null,
     consent_json: {},
@@ -179,17 +186,69 @@ function intakeItem(overrides: Partial<IntakeItem> = {}): IntakeItem {
   }
 }
 
-function renderPage() {
+function workspace(overrides: Partial<Workspace> = {}): Workspace {
+  return {
+    id: 'workspace-1',
+    owner_space_id: 'space-1',
+    created_by_user_id: 'user-1',
+    name: 'Project workspace',
+    slug: 'project-workspace',
+    description: null,
+    workspace_type: 'project',
+    kind: 'standard',
+    repo_url: null,
+    root_path: null,
+    default_branch: null,
+    visibility: 'space_shared',
+    status: 'active',
+    protected: false,
+    system_managed: false,
+    registered_from: null,
+    metadata_json: null,
+    snapshot_retention_days: null,
+    snapshot_max_count: null,
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
+function workspaceBinding(overrides: Partial<WorkspaceSourceBinding> = {}): WorkspaceSourceBinding {
+  return {
+    id: 'binding-1',
+    space_id: 'space-1',
+    workspace_id: 'workspace-1',
+    project_id: 'project-1',
+    source_connection_id: 'recipe-conn-1',
+    binding_key: 'default',
+    status: 'active',
+    priority: 0,
+    filters_json: {},
+    routing_policy_json: {},
+    extraction_policy_json: {},
+    created_by_user_id: 'user-1',
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
+function renderPage(initialEntry = '/spaces/space-1/intake') {
   return render(
     <MemoryRouter
-      initialEntries={['/spaces/space-1/intake']}
+      initialEntries={[initialEntry]}
       future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
     >
       <Routes>
         <Route path="/spaces/:spaceId/intake" element={<IntakePage />} />
+        <Route path="/spaces/:spaceId/intake/source-presets" element={<SourcePresetsPage />} />
       </Routes>
     </MemoryRouter>,
   )
+}
+
+function typeScheduleNumber(label: string, value: string, index = 0) {
+  fireEvent.change(screen.getAllByLabelText(label)[index], { target: { value } })
 }
 
 beforeEach(() => {
@@ -221,11 +280,24 @@ beforeEach(() => {
     },
   ])
   vi.mocked(intakeApi.connections).mockResolvedValue(emptyPage(100))
+  vi.mocked(intakeApi.sourcePresets).mockResolvedValue({
+    items: [{
+      id: 'arxiv',
+      category: 'academic',
+      display_name: 'arXiv',
+      description: 'Monitor arXiv papers by API query.',
+      connector_key: 'arxiv',
+      fields: ['name', 'mode', 'search_query', 'categories', 'max_results', 'sort_by', 'sort_order', 'fetch_frequency', 'capture_policy'],
+      category_options: [{
+        group: 'Computer Science',
+        options: [{ value: 'cs.AI', label: 'Artificial Intelligence' }],
+      }],
+    }],
+  })
   vi.mocked(intakeApi.items).mockResolvedValue(emptyPage(80))
   vi.mocked(intakeApi.jobs).mockResolvedValue(emptyPage(60))
   vi.mocked(intakeApi.evidence).mockResolvedValue(emptyPage(80))
   vi.mocked(intakeApi.evidenceLinks).mockResolvedValue(emptyPage(20))
-  vi.mocked(intakeApi.workspaceProfiles).mockResolvedValue([])
   vi.mocked(intakeApi.workspaceBindings).mockResolvedValue([])
   vi.mocked(intakeApi.planSourceRecipe).mockResolvedValue({
     source_type: 'rss',
@@ -248,7 +320,7 @@ beforeEach(() => {
     },
     defaults: {
       fetch_frequency: 'daily',
-      capture_policy: 'auto_extract_relevant',
+      capture_policy: 'extract_text',
       retention_policy: 'full_text',
     },
   })
@@ -263,7 +335,7 @@ beforeEach(() => {
       endpoint_url: 'https://example.test/feed.xml',
       status: 'paused',
       fetch_frequency: 'daily',
-      capture_policy: 'auto_extract_relevant',
+      capture_policy: 'extract_text',
       trust_level: 'normal',
       topic_hints_json: null,
       consent_json: {},
@@ -304,6 +376,7 @@ beforeEach(() => {
     recipe_version: { ...recipeVersion, status: 'active', activated_at: '2026-07-01T00:01:00.000Z' },
   })
   vi.mocked(workspacesApi.list).mockResolvedValue(emptyPage(100))
+  vi.mocked(projectsApi.listWorkspaces).mockResolvedValue([])
 })
 
 describe('IntakePage Create Source', () => {
@@ -311,12 +384,19 @@ describe('IntakePage Create Source', () => {
     renderPage()
 
     expect(await screen.findByText('Create Source')).toBeInTheDocument()
+    expect(screen.getByText('Preset Sources')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /open presets/i })).toHaveAttribute('href', '/intake/source-presets')
+    expect(screen.queryByRole('tab', { name: 'Academic' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Web / Feed' })).not.toBeInTheDocument()
     expect(screen.queryByText('Connector Source')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Connector')).not.toBeInTheDocument()
 
     const urlInput = (await screen.findAllByPlaceholderText('https://example.com/feed.xml'))[0]
     fireEvent.change(urlInput, { target: { value: 'https://example.test/feed.xml' } })
     fireEvent.change(screen.getAllByPlaceholderText('Source name')[0], { target: { value: 'Engineering feed' } })
+    typeScheduleNumber('Hour', '9')
+    typeScheduleNumber('Minute', '0')
+    const scheduleRule = scheduleRuleFromForm('daily', { hour: '9', minute: '0', weekday: '' })
     fireEvent.click(screen.getByRole('button', { name: /preview/i }))
 
     expect(await screen.findByText('Planned item')).toBeInTheDocument()
@@ -331,11 +411,13 @@ describe('IntakePage Create Source', () => {
         name: 'Engineering feed',
         endpoint_url: 'https://example.test/feed.xml',
         fetch_frequency: 'daily',
-        capture_policy: 'auto_extract_relevant',
+        schedule_rule: scheduleRule,
+        capture_policy: 'extract_text',
       }))
       expect(intakeApi.createSourceRecipe).toHaveBeenCalledWith(expect.objectContaining({
         name: 'Engineering feed',
         endpoint_url: 'https://example.test/feed.xml',
+        schedule_rule: scheduleRule,
         source_type: 'rss',
         recipe,
       }))
@@ -344,10 +426,81 @@ describe('IntakePage Create Source', () => {
       })
       expect(intakeApi.activateSourceRecipe).toHaveBeenCalledWith('recipe-conn-1', {
         recipe_version_id: 'recipe-version-1',
+        schedule_rule: scheduleRule,
       })
     })
     expect(intakeApi.createCustomSourceDraft).not.toHaveBeenCalled()
     expect(intakeApi.createConnection).not.toHaveBeenCalled()
+  }, 10_000)
+
+  it('previews and creates a recent arXiv category source without a keyword', async () => {
+    vi.mocked(intakeApi.previewArxivSourcePreset).mockResolvedValue({
+      preset_id: 'arxiv',
+      query_url: 'https://export.arxiv.org/api/query?search_query=cat%3Acs.AI',
+      items: [{
+        arxiv_id: '2402.08954',
+        arxiv_version: 'v1',
+        title: 'Agent paper title',
+        authors: ['Author One', 'Author Two'],
+        summary: 'Abstract text for the agent paper.',
+        published_at: '2024-02-14T00:00:00.000Z',
+        updated_at: '2024-02-14T00:00:00.000Z',
+        categories: ['cs.AI'],
+        primary_category: 'cs.AI',
+        doi: null,
+        journal_ref: null,
+        comment: null,
+        abs_url: 'https://arxiv.org/abs/2402.08954',
+        html_url: 'https://arxiv.org/html/2402.08954',
+        pdf_url: 'https://arxiv.org/pdf/2402.08954',
+      }],
+      warnings: [],
+    })
+    vi.mocked(intakeApi.createArxivSourcePreset).mockResolvedValue({
+      ...recipeSourceConnection(),
+      id: 'arxiv-conn-1',
+      name: 'AI agent papers',
+      handler_kind: 'built_in',
+    })
+
+    renderPage('/spaces/space-1/intake/source-presets')
+
+    expect(await screen.findByRole('heading', { name: 'Academic' })).toBeInTheDocument()
+    expect(screen.getByText('Preset Sources')).toBeInTheDocument()
+    expect(screen.getByText('Monitor arXiv papers by API query.')).toBeInTheDocument()
+    expect((await screen.findAllByText('cs.AI')).length).toBeGreaterThan(0)
+    fireEvent.change(screen.getByPlaceholderText('arXiv source name'), {
+      target: { value: 'AI agent papers' },
+    })
+    typeScheduleNumber('Hour', '10')
+    typeScheduleNumber('Minute', '30')
+    const arxivScheduleRule = scheduleRuleFromForm('daily', { hour: '10', minute: '30', weekday: '' })
+    fireEvent.click(screen.getByRole('button', { name: /preview/i }))
+
+    expect(await screen.findByText('Agent paper title')).toBeInTheDocument()
+    expect(screen.getByText('Author One, Author Two')).toBeInTheDocument()
+    expect(screen.getAllByText('cs.AI').length).toBeGreaterThan(0)
+    expect(intakeApi.previewArxivSourcePreset).toHaveBeenCalledWith({
+      mode: 'recent_by_category',
+      categories: ['cs.AI'],
+      max_results: 10,
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /create source/i }))
+
+    await waitFor(() => {
+      expect(intakeApi.createArxivSourcePreset).toHaveBeenCalledWith({
+        mode: 'recent_by_category',
+        categories: ['cs.AI'],
+        max_results: 50,
+        name: 'AI agent papers',
+        fetch_frequency: 'daily',
+        schedule_rule: arxivScheduleRule,
+        capture_policy: 'extract_text',
+      })
+    })
+    expect(intakeApi.createConnection).not.toHaveBeenCalled()
+    expect(intakeApi.createSourceRecipe).not.toHaveBeenCalled()
   }, 10_000)
 
   it('runs a manually queued source scan without waiting for the scheduler', async () => {
@@ -401,7 +554,7 @@ describe('IntakePage Create Source', () => {
 
     renderPage()
 
-    fireEvent.click(await screen.findByRole('button', { name: /extract text/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /extract text feed item/i }))
 
     await waitFor(() => {
       expect(intakeApi.itemAction).toHaveBeenCalledWith('item-1', 'queue_content')
@@ -451,6 +604,50 @@ describe('IntakePage Create Source', () => {
     await waitFor(() => {
       expect(intakeApi.itemAction).toHaveBeenCalledWith('item-1', 'queue_content')
       expect(intakeApi.runJob).toHaveBeenCalledWith('extract-job-1')
+    })
+  })
+
+  it('creates workspace source bindings inside the scoped project boundary', async () => {
+    vi.mocked(intakeApi.connections).mockResolvedValue({
+      items: [recipeSourceConnection()],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    })
+    vi.mocked(workspacesApi.list).mockResolvedValue({
+      items: [
+        workspace({ id: 'workspace-1', name: 'Linked workspace' }),
+        workspace({ id: 'workspace-other', name: 'Other workspace' }),
+      ],
+      total: 2,
+      limit: 100,
+      offset: 0,
+    })
+    vi.mocked(projectsApi.listWorkspaces).mockResolvedValue([
+      {
+        id: 'project-workspace-1',
+        project_id: 'project-1',
+        workspace_id: 'workspace-1',
+        role: 'reference',
+        created_at: '2026-07-01T00:00:00.000Z',
+        updated_at: '2026-07-01T00:00:00.000Z',
+      },
+    ])
+    vi.mocked(intakeApi.createWorkspaceBinding).mockResolvedValue(workspaceBinding())
+
+    renderPage('/spaces/space-1/intake?project_id=project-1')
+
+    const bindButton = await screen.findByRole('button', { name: /bind source/i })
+    await waitFor(() => expect(bindButton).not.toBeDisabled())
+    fireEvent.click(bindButton)
+
+    await waitFor(() => {
+      expect(projectsApi.listWorkspaces).toHaveBeenCalledWith('project-1')
+      expect(intakeApi.createWorkspaceBinding).toHaveBeenCalledWith({
+        workspace_id: 'workspace-1',
+        source_connection_id: 'recipe-conn-1',
+        project_id: 'project-1',
+      })
     })
   })
 })

@@ -9,15 +9,15 @@ import {
   PostgreSqlContainer,
   type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
-import type { CustomSourceHandlerOutput } from "@agent-space/protocol" with {
+import type { CustomSourceHandlerOutput, CustomSourcePolicyEnvelope } from "@agent-space/protocol" with {
   "resolution-mode": "import",
 };
 import { loadConfig, type ServerConfig } from "../src/config";
 import {
   applyCustomSourceRetentionPolicy,
   CustomSourceMaterializationService,
-} from "../src/modules/intake/customSourceMaterializer";
-import type { CustomSourceRunnerSettings } from "../src/modules/intake/customSourceRunner";
+} from "../src/modules/intake/customSources/customSourceMaterializer";
+import type { CustomSourceRunnerSettings } from "../src/modules/intake/customSources/customSourceRunner";
 
 // Real-PostgreSQL integration tests for CustomSourceMaterializationService.
 // Exercises the actual INSERT statements against the real schema (CHECK
@@ -44,7 +44,7 @@ let available = false;
 
 const POLICY_ENVELOPE = {
   allowed_network_origins: ["https://example.com"],
-  capture_policy: "auto_extract_relevant",
+  capture_policy: "extract_text",
   retention_policy: "full_text",
   language: "typescript_node" as const,
   browser_automation_enabled: false,
@@ -60,7 +60,7 @@ const POLICY_ENVELOPE = {
     max_evidence_items: 10,
     log_max_bytes: 65536,
   },
-};
+} satisfies CustomSourcePolicyEnvelope;
 
 function instanceSettings(
   overrides: Partial<CustomSourceRunnerSettings> = {},
@@ -491,7 +491,7 @@ describe("CustomSourceMaterializationService (real Postgres)", () => {
     const { connId, runId } = await seedRun();
     await service.materialize({
       run: { runId, spaceId: SPACE_A, sourceConnectionId: connId, handlerVersionId: randomUUID() },
-      policyEnvelope: { ...POLICY_ENVELOPE, retention_policy: "not_a_real_policy" },
+      policyEnvelope: { ...POLICY_ENVELOPE, retention_policy: "not_a_real_policy" } as unknown as CustomSourcePolicyEnvelope,
       sandboxFilesRoot: sandboxFilesRoot!,
       rawOutputJson: validOutput(),
     });

@@ -11,8 +11,8 @@ The system stores secrets in **three distinct channels**. Do not conflate them.
 This doc covers the **ModelProvider API key** channel — the keys a user configures on the
 Providers page, used by the `model_api` runtime adapter, the reflector, and `/providers/chat`.
 The **Custom Source fetch credential** channel reuses this channel's DB table and master key
-(`server/src/modules/intake/customSourceCredentialCrypto.ts`,
-`server/src/modules/intake/customSourceCredentialService.ts`) but is functionally distinct: it
+(`server/src/modules/intake/customSources/customSourceCredentialCrypto.ts`,
+`server/src/modules/intake/customSources/customSourceCredentialService.ts`) but is functionally distinct: it
 resolves to a request header injected only by the trusted Custom Source fetch layer
 (`customSourceEndpointFetch.ts`, `customSourcePipelineInterpreter.ts`), never by generated or
 interpreted handler code, and it is never pooled/rotated the way ModelProvider keys are.

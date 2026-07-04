@@ -88,7 +88,7 @@ async function seedRestrictedAndOpen(): Promise<void> {
        capture_policy, trust_level, consent_json, policy_json, config_json, created_at, updated_at
      ) VALUES (
        $1, $2, $3, $4, 'Private feed', 'active', 'manual',
-       'auto_extract_relevant', 'normal', $5::jsonb, $6::jsonb, '{}'::jsonb, now(), now()
+       'extract_text', 'normal', $5::jsonb, $6::jsonb, '{}'::jsonb, now(), now()
      )`,
     [
       SOURCE, SPACE, CONNECTOR, OWNER,

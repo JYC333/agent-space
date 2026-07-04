@@ -1,5 +1,5 @@
 import type { SourcePolicyEnvelope } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import { HttpError } from "../routeUtils/common";
+import { HttpError } from "../../routeUtils/common";
 import { effectiveCustomSourceLimits, type CustomSourceRunnerSettings } from "./customSourceRunner";
 
 /**

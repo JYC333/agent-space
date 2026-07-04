@@ -499,6 +499,30 @@
   },
   {
     "request": {
+      "action": "automation.create",
+      "context": {
+        "membership_role": "member",
+        "target_type": "agent_run",
+        "project_id": "project-1",
+        "project_writer": true
+      }
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "high",
+      "reason_code": "automation_project_writer_allow",
+      "required_approver_role": null,
+      "policy_rule_id": "automation_project_writer_allow",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "automation_project_writer_allowed",
+      "resource_type": "automation",
+      "message": "automation.create allowed for project writer",
+      "action": null
+    }
+  },
+  {
+    "request": {
       "action": "automation.fire",
       "context": {
         "membership_role": "owner"

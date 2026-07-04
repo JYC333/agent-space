@@ -39,6 +39,7 @@ htmlcov/
 
 # Frontend dependencies and build output
 node_modules/
+server/dist/
 apps/web/dist/
 packages/protocol/dist/
 

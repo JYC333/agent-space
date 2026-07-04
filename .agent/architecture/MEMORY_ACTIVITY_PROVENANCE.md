@@ -142,7 +142,8 @@ Intake and extracted evidence content is **candidate-only**. It may be cited in 
 
 Current enforcement:
 - External and internal source material enters `IntakeItem`, `SourceSnapshot`, `ExtractionJob`, and `ExtractedEvidence` rows.
-- `EvidenceLink` controls which active evidence can be selected into a `ContextSnapshot`.
+- `EvidenceLink` controls which candidate/active evidence can be selected into a `ContextSnapshot`;
+  Intake-created evidence remains candidate-only, but active relevance links can make it citable in runtime context.
   Selector input link types are limited to `context_candidate`, `supports`,
   `contradicts`, `derived_from`, and `mentions`. Accepted source lineage belongs
   in `provenance_links`, not `evidence_links`.

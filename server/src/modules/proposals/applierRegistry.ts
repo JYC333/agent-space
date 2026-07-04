@@ -14,7 +14,7 @@ import { registerRetrievalMaintenanceProposalAppliers } from "../retrieval/maint
 import { registerMemoryMaintenanceProposalAppliers } from "../memory/maintenanceArtifacts";
 import { registerClaimCandidatePacketProposalAppliers } from "../knowledge/claimCandidatePackets";
 import { registerRelationDiscoveryProposalAppliers } from "../knowledge/relationDiscoveryArtifacts";
-import { registerCustomSourceProposalAppliers } from "../intake/customSourceProposalApplier";
+import { registerCustomSourceProposalAppliers } from "../intake/customSources/customSourceProposalApplier";
 import { registerSourceRecipeProposalAppliers } from "../intake/sourceRecipes/recipeProposalApplier";
 import {
   PgMemoryApplyRepository,

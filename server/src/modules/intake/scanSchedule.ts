@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable } from "../routeUtils/common";
 import { listDueSourceConnectionScanTasks } from "./sourceConnectionScheduler";
+import { computeNextRunAtFromScheduleRule, parseSourceScheduleRule } from "./sourceScheduleInput";
 
 const INTERVAL_MS: Record<string, number> = {
   hourly: 60 * 60 * 1000,
@@ -11,7 +12,7 @@ const INTERVAL_MS: Record<string, number> = {
 export function computeNextCheckAt(
   fetchFrequency: string,
   completedAt: Date | string = new Date(),
-  options: { manualRun?: boolean; existingNextCheckAt?: unknown } = {},
+  options: { manualRun?: boolean; existingNextCheckAt?: unknown; scheduleRule?: unknown } = {},
 ): string | null {
   if (fetchFrequency === "manual") return null;
   const interval = INTERVAL_MS[fetchFrequency];
@@ -21,6 +22,10 @@ export function computeNextCheckAt(
   const existing = dateValue(options.existingNextCheckAt);
   if (options.manualRun && existing && existing.getTime() > completedMs) {
     return existing.toISOString();
+  }
+  const scheduleRule = parseSourceScheduleRule(options.scheduleRule);
+  if (scheduleRule?.frequency === fetchFrequency) {
+    return computeNextRunAtFromScheduleRule(scheduleRule, new Date(completedMs));
   }
   return new Date(completedMs + interval).toISOString();
 }

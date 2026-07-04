@@ -19,8 +19,8 @@ export interface ReaderPmDoc {
 export interface StructuredReaderContent {
   schema_version: 1;
   kind: "reader_document";
-  extraction_method: "structured_html_v1";
-  image_policy: "remote_reference";
+  extraction_method: "structured_html_v1" | "pdf_text_v1";
+  image_policy: "remote_reference" | "none";
   title: string | null;
   source_uri: string | null;
   plain_text: string;
@@ -122,15 +122,15 @@ export function parseStructuredReaderContent(value: string): StructuredReaderCon
     const parsed = JSON.parse(value) as unknown;
     if (!isRecord(parsed)) return null;
     if (parsed.schema_version !== 1 || parsed.kind !== "reader_document") return null;
-    if (parsed.extraction_method !== "structured_html_v1") return null;
-    if (parsed.image_policy !== "remote_reference") return null;
+    if (parsed.extraction_method !== "structured_html_v1" && parsed.extraction_method !== "pdf_text_v1") return null;
+    if (parsed.image_policy !== "remote_reference" && parsed.image_policy !== "none") return null;
     if (typeof parsed.plain_text !== "string") return null;
     if (!isPmDoc(parsed.content_json)) return null;
     return {
       schema_version: 1,
       kind: "reader_document",
-      extraction_method: "structured_html_v1",
-      image_policy: "remote_reference",
+      extraction_method: parsed.extraction_method,
+      image_policy: parsed.image_policy,
       title: typeof parsed.title === "string" ? parsed.title : null,
       source_uri: typeof parsed.source_uri === "string" ? parsed.source_uri : null,
       plain_text: parsed.plain_text,

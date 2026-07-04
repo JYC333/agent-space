@@ -14,8 +14,9 @@ import {
 } from "../routeUtils/common";
 import { enforceIntake } from "./enforceIntake";
 import { PgIntakeRepository } from "./repository";
-import { registerCustomSourceRoutes } from "./customSourceRoutes";
+import { registerCustomSourceRoutes } from "./customSources/customSourceRoutes";
 import { registerSourceRecipeRoutes } from "./sourceRecipeRoutes";
+import { registerSourcePresetRoutes } from "./sourcePresets/routes";
 import { listSourceRuns } from "./sourceRunReadModel";
 import { PgAnnotationRepository, PgCommentRepository, PgReaderActionRepository, PgReaderRepository } from "./readerRepository";
 
@@ -23,6 +24,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   const repository = () => new PgIntakeRepository(dbPool(context.config), context.config);
   registerCustomSourceRoutes(app, context);
   registerSourceRecipeRoutes(app, context);
+  registerSourcePresetRoutes(app, context);
 
   app.get("/api/v1/intake", intakeHealth(context));
   app.get("/api/v1/intake/", intakeHealth(context));
@@ -176,6 +178,19 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
+  app.patch("/api/v1/intake/items/:itemId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const itemId = params(request).itemId ?? "";
+      const gate = await enforceIntake(context, identity, "intake.item_update", "intake_item", itemId);
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.send(await repository().updateItem(identity, itemId, jsonBody(request)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
   app.post("/api/v1/intake/items/:itemId/actions", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
@@ -310,28 +325,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const gate = await enforceIntake(context, identity, "evidence.link", "evidence");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.code(201).send(await repository().createEvidenceLink(identity, jsonBody(request)));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.get("/api/v1/intake/workspace-profiles", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      return reply.send(await repository().listWorkspaceProfiles(identity));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.post("/api/v1/intake/workspace-profiles", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const gate = await enforceIntake(context, identity, "workspace_intake.configure", "workspace_intake");
-      if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.code(201).send(await repository().createWorkspaceProfile(identity, jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
     }

@@ -24,11 +24,9 @@ const CREATOR_ROLE_OPTIONS: Array<{ value: CustomSourceCreatorRole; label: strin
 ]
 
 const CAPTURE_OPTIONS: Array<{ value: CustomSourceCapturePolicy; label: string }> = [
-  { value: 'metadata_only', label: 'Metadata only' },
-  { value: 'excerpt_only', label: 'Excerpt only' },
-  { value: 'auto_extract_relevant', label: 'Auto extract relevant' },
-  { value: 'auto_extract_all_text', label: 'Auto extract all text' },
-  { value: 'archive_all_snapshots', label: 'Archive all snapshots' },
+  { value: 'reference_only', label: 'Save reference' },
+  { value: 'extract_text', label: 'Extract text' },
+  { value: 'archive_original', label: 'Archive original' },
 ]
 
 const RETENTION_OPTIONS: Array<{ value: CustomSourceRetentionPolicy; label: string }> = [
@@ -44,8 +42,15 @@ interface PolicyForm {
   defaultCapturePolicy: CustomSourceCapturePolicy
   defaultRetentionPolicy: CustomSourceRetentionPolicy
   allowedDomainsText: string
+  downloadMiB: string
   credentialedSourcesAllowed: boolean
   sameEnvelopeRepairAutoApply: boolean
+}
+
+function formatMiB(bytes: number): string {
+  const value = bytes / (1024 * 1024)
+  if (Number.isInteger(value)) return String(value)
+  return value.toFixed(value < 0.01 ? 6 : value < 1 ? 3 : 2).replace(/0+$/, '').replace(/\.$/, '')
 }
 
 function formFromPolicy(policy: CustomSourceSpacePolicy): PolicyForm {
@@ -54,6 +59,7 @@ function formFromPolicy(policy: CustomSourceSpacePolicy): PolicyForm {
     defaultCapturePolicy: policy.default_capture_policy,
     defaultRetentionPolicy: policy.default_retention_policy,
     allowedDomainsText: policy.allowed_domains.join('\n'),
+    downloadMiB: formatMiB(policy.download_bytes_max),
     credentialedSourcesAllowed: policy.credentialed_sources_allowed,
     sameEnvelopeRepairAutoApply: policy.same_envelope_repair_auto_apply,
   }
@@ -64,6 +70,14 @@ function parseDomains(text: string): string[] {
     .split(/[\n,]+/)
     .map(item => item.trim())
     .filter(Boolean)
+}
+
+function parseDownloadBytes(value: string): number {
+  const mib = Number(value)
+  if (!Number.isFinite(mib) || mib <= 0) throw new Error('Download max must be a positive MiB value')
+  const bytes = Math.round(mib * 1024 * 1024)
+  if (bytes < 1024 || bytes > 104_857_600) throw new Error('Download max must be between 1 KiB and 100 MiB')
+  return bytes
 }
 
 export function CustomSourceSpacePolicyPanel() {
@@ -133,11 +147,13 @@ export function CustomSourceSpacePolicyPanel() {
     if (!form) return
     setSaving(true)
     try {
+      const downloadBytesMax = parseDownloadBytes(form.downloadMiB)
       const next = await intakeApi.updateCustomSourceSpacePolicy({
         creator_roles: form.creatorRoles,
         default_capture_policy: form.defaultCapturePolicy,
         default_retention_policy: form.defaultRetentionPolicy,
         allowed_domains: parseDomains(form.allowedDomainsText),
+        download_bytes_max: downloadBytesMax,
         credentialed_sources_allowed: form.credentialedSourcesAllowed,
         same_envelope_repair_auto_apply: form.sameEnvelopeRepairAutoApply,
       })
@@ -251,6 +267,23 @@ export function CustomSourceSpacePolicyPanel() {
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
               </select>
+            </div>
+            <div>
+              <Label htmlFor="custom-source-download-max">Download max (MiB)</Label>
+              <input
+                id="custom-source-download-max"
+                type="number"
+                min="0.000977"
+                max="100"
+                step="any"
+                value={form.downloadMiB}
+                disabled={disabled}
+                onChange={event => setForm(prev => prev ? {
+                  ...prev,
+                  downloadMiB: event.target.value,
+                } : prev)}
+                className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm"
+              />
             </div>
           </div>
 
